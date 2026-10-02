@@ -25,6 +25,13 @@
 //
 // WHAT IT IS NOT: a defence against the runner. The runner is the person's
 // own machine for the length of one job, and it is the thing the token is FOR.
+//
+// THE SAME CONSTRUCTION CARRIES A CLAUDE LOGIN, in both directions. A person
+// deposits their `claude setup-token` sealed to the minter's long-lived
+// deposit key, so the coordinator relaying it cannot read it; the minter keeps
+// it sealed to that same key, under their GitHub account id; and hands it to
+// their runner sealed to the runner's one-request key, bound to the job token
+// exactly as a repository token is. src/fleet/minter/claude.js is that path.
 
 import { toB64Url, fromB64Url } from './crypto.js';
 
@@ -69,6 +76,107 @@ export async function newSealKey() {
 export async function bindingFor({ repo, key }) {
   const digest = await crypto.subtle.digest('SHA-256', enc.encode(`${INFO}\n${String(repo).toLowerCase()}\n${key}`));
   return BINDING_PREFIX + toB64Url(new Uint8Array(digest));
+}
+
+/** What a job token asking for its owner's Claude login carries as its audience. */
+export const CLAUDE_BINDING_PREFIX = 'fleetwright-claude:';
+
+/**
+ * The audience for a runner's ask for its owner's Claude login: the same
+ * trick as `bindingFor`, with no repository, because a Claude login is not
+ * for one. A distinct prefix and a distinct line in the hash, so a job token
+ * minted for a repository token can never be presented for a Claude login, or
+ * the other way round.
+ *
+ * @param {string} key
+ * @returns {Promise<string>}
+ */
+export async function claudeBindingFor(key) {
+  const digest = await crypto.subtle.digest('SHA-256', enc.encode(`${INFO}\nclaude-login\n${key}`));
+  return CLAUDE_BINDING_PREFIX + toB64Url(new Uint8Array(digest));
+}
+
+/** A device's GitHub sign-in or renewal, sealed on its way to the minter. */
+export const GITHUB_REQUEST_AAD = 'fleetwright-github-request/v1';
+
+/** The GitHub token the minter got for a device, sealed on its way back. */
+export const GITHUB_REPLY_AAD = 'fleetwright-github-reply/v1';
+
+/** The additional data a Claude login is sealed under on its way INTO the minter. */
+export const DEPOSIT_AAD = 'fleetwright-claude-deposit/v1';
+
+/**
+ * The additional data a Claude login is kept under AT REST in the minter: the
+ * GitHub account it belongs to. A stored row moved under another account does
+ * not open, so storage that could be rearranged still could not hand one
+ * person's login to another person's runner.
+ *
+ * @param {string} userId  GitHub's numeric user id, as a string
+ */
+export function atRestAad(userId) {
+  return `fleetwright-claude-login/v1\n${userId}`;
+}
+
+/** A person's request to their vault, sealed on its way to the minter (src/fleet/minter/vault.js). */
+export const VAULT_REQUEST_AAD = 'fleetwright-vault-request/v1';
+
+/** The vault's answer to that person, sealed to the key their device made for it. */
+export const VAULT_REPLY_AAD = 'fleetwright-vault-reply/v1';
+
+/** What a box was approved to hold, sealed to the key the box made for that one request. */
+export const VAULT_BOX_AAD = 'fleetwright-vault-box/v1';
+
+/**
+ * The additional data a vault item is kept under AT REST: whose it is and
+ * which it is, so a row moved under another account, or one item copied over
+ * another, does not open.
+ *
+ * @param {string} userId  GitHub's numeric user id @param {string} name  the item
+ */
+export function vaultAtRestAad(userId, name) {
+  return `fleetwright-vault/v1\n${userId}\n${name}`;
+}
+
+/**
+ * A long-lived key pair for the minter to be deposited to: the private half as
+ * a JWK, which is what goes into the Worker secret, and the public half in the
+ * same 87-character form every seal key here takes, which is what a depositor
+ * pins. Extractable on purpose, and ONLY here: this is the one key that has to
+ * be written down, once, by the operator making it.
+ *
+ * @returns {Promise<{ secret: string, publicKey: string }>}
+ */
+export async function newDepositKey() {
+  const pair = /** @type {{ privateKey: CryptoKey, publicKey: CryptoKey }} */ (await crypto.subtle.generateKey(ECDH, true, ['deriveBits']));
+  const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+  return { secret: JSON.stringify({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, d: jwk.d }), publicKey: toB64Url(raw) };
+}
+
+/**
+ * The minter's deposit key, from the JWK `newDepositKey` wrote. Its public
+ * half is derived from the private half rather than configured beside it, so
+ * the key a depositor is told to pin cannot drift from the key that opens what
+ * they send.
+ *
+ * @param {string} secret
+ * @returns {Promise<{ privateKey: CryptoKey, publicKey: string }>}
+ */
+export async function importDepositKey(secret) {
+  /** @type {any} */
+  let jwk;
+  try {
+    jwk = JSON.parse(String(secret || ''));
+  } catch {
+    throw new Error('the deposit key is not JSON; it is the JWK scripts/minter-deposit-key.mjs printed');
+  }
+  if (jwk?.kty !== 'EC' || jwk?.crv !== 'P-256' || typeof jwk?.d !== 'string') {
+    throw new Error('the deposit key is not a P-256 private key');
+  }
+  const privateKey = await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y, d: jwk.d }, ECDH, false, ['deriveBits']);
+  const pub = await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, ECDH, true, []);
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pub));
+  return { privateKey, publicKey: toB64Url(raw) };
 }
 
 /**

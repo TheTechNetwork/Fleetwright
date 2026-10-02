@@ -17,8 +17,9 @@ import { adoptBoxAccount, Accounts } from './core/accounts.js';
 import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
 import { readConfirmation, noteHealth } from './core/update-confirm.js';
 import { reclaimStale } from './core/reclaim.js';
-import { Connections } from './core/connectors.js';
-import { rowForActor } from './core/accounts.js';
+import { Connections, PROVIDERS } from './core/connectors.js';
+import { rowForActor, emailFromActor } from './core/accounts.js';
+import { vaultEnvFor, vaultExpiryFor, vaultSecret } from './core/vault-store.js';
 import { loadEnvFile } from './core/env-file.js';
 import { answerSecretRequest, readNamedSecret } from './core/secret-store.js';
 import { HttpAdapter } from './adapters/http.js';
@@ -112,11 +113,15 @@ export async function main() {
           // pickSecretsFile turns that into a row — including refusing when it
           // cannot tell, which is the case that used to resolve to the box's
           // shared row.
+          //
+          // THE VAULT UNDERNEATH (vault-store.js): what the person's vault gave
+          // this box first, then what they linked on this box, which wins.
           secretsFor: (name) => {
-            const file = pickSecretsFile(cfg, registry.get(name)?.createdBy ?? null);
+            const who = registry.get(name)?.createdBy ?? null;
+            const file = pickSecretsFile(cfg, who);
             if (!file) return null;
             /** @type {Record<string, string>} */
-            const env = {};
+            const env = vaultEnvFor(cfg, emailFromActor(who));
             loadEnvFile(file, env);
             return env;
           },
@@ -130,7 +135,16 @@ export async function main() {
             // rowForActor, the same mapping the secrets lookup uses — an actor
             // with no fleet identity gets the host row, which is what
             // pickSecretsFile does one line above.
-            return new Connections(cfg.stateDir).renewalDueAt(rowForActor(who), provider);
+            const local = new Connections(cfg.stateDir).renewalDueAt(rowForActor(who), provider);
+            if (local !== null) return local;
+            // A token from the vault says when it runs out, unless one linked
+            // on this box is the one being served, which says nothing here.
+            const file = pickSecretsFile(cfg, who);
+            /** @type {Record<string, string>} */
+            const linked = {};
+            if (file) loadEnvFile(file, linked);
+            const keys = Object.hasOwn(PROVIDERS, provider) ? PROVIDERS[/** @type {keyof typeof PROVIDERS} */ (provider)].env : [];
+            return keys.some((k) => linked[k]) ? null : vaultExpiryFor(cfg, emailFromActor(who), provider);
           },
           // The named-secret resolver. The GRANT is on the record — the name
           // `start --secret` put there — and the VALUE is read from the store
@@ -141,7 +155,9 @@ export async function main() {
             answerSecretRequest({
               requested,
               granted: registry.get(name)?.secret ?? null,
-              read: (n) => readNamedSecret(cfg.secretsDir, n),
+              // The box's own secret of that name first, then the session
+              // owner's from their vault.
+              read: (n) => readNamedSecret(cfg.secretsDir, n) ?? vaultSecret(cfg, emailFromActor(registry.get(name)?.createdBy ?? null), n),
             }),
           logger: log,
         })

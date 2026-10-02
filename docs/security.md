@@ -173,14 +173,110 @@ runner has no profiles. This is the one place something verifies an identity
 the coordinator relayed rather than trusting it, which is why it holds here when
 nothing else in this section does.
 
+**A person's Claude login on their runner, and what it adds.** Not a verb: a
+`claude-login` frame a runner sends, and `PUT /api/claude-login`, which a
+person's own computer calls to deposit their `claude setup-token` with the
+minting Worker (`runner-central.md`, "Your Claude login on a runner"). Both
+carry a credential through the coordinator, so both are accounted for here.
+
+- **The deposit** is sealed on the person's computer to the minter's deposit
+  key, and the tool refuses to seal unless that key is the **pin** the person
+  was given by their operator, by a route that is not the fleet. A coordinator
+  offering its own key is caught there, before anything is sent. Inside the
+  seal is a GitHub token of theirs: the minter asks GitHub whose it is and keeps
+  the login for that account id, so the coordinator's word about the person is
+  never read, and the GitHub token is not kept. Each deposit carries its time;
+  one older than ten minutes, or not newer than the one held, is refused, so a
+  captured envelope cannot be replayed to put back a login its owner forgot.
+- **The hand-out** is `mint`'s construction without the repository: sealed to a
+  one-request key, bound into the audience of the runner's job token, verified
+  against GitHub's keys, a runner workflow started by a dispatch — and the
+  login goes to the account that **started the job**, and only from a job in
+  that account's own repository or one on `FLEETWRIGHT_GITHUB_MINT_OWNERS`.
+- **What it can still do** is deny: drop a deposit or a hand-out, and the
+  runner uses its repository's API key. It names the runner's owner in the
+  reply, and the runner runs that person's sessions on the login — a lie there
+  changes whose sessions on *that one runner* use it, which is no more than
+  forging the `actor` on a `start` already gives it. It can start sessions on
+  the runner, which then run on the person's subscription; a runner has no
+  profiles and no verb carries free text, so such a session sits at an empty
+  prompt. The login never leaves the runner through the fleet: the file verbs
+  reach podman volumes only, and a runner has none.
+- **What it cannot narrow** is the credential itself: a setup-token is the
+  person's whole subscription for a year. At rest in the minter it is sealed
+  to the deposit key under the account id; on the runner it is a 0600 file for
+  the length of the job, and the session running there can read it. That is
+  the reach a session on their permanent box already has with their login.
+
+**A device's own GitHub sign-in, and the dispatch it makes.** Starting a
+runner no longer needs a permanent box (`runner-central.md`, "Without a
+permanent box"), so two more routes carry something through the coordinator.
+
+- **`POST /api/runners/dispatch`** gives the signed-in person what `provision`
+  would have sent a box: the repository, the workflow and a ticket. Nothing
+  new is minted; the ticket is the same single-use one. A compromised
+  coordinator can name a different repository or workflow, and the device then
+  dispatches there with the person's own token, which is a dispatch the person
+  could have made themselves and one the device's own screen names. It cannot
+  make the device send it the token: the dispatch goes to `api.github.com`.
+- **`/api/github/device`** relays a phone's GitHub sign-in to the minting
+  Worker. The code GitHub sends back passes through the coordinator's callback,
+  and is useless without the PKCE verifier, which is only on the phone and in
+  the sealed request. The request is sealed to the minter key the person
+  pinned, and the answer to a key the phone made for that request; the minter
+  makes the exchange with the client secret, which is now in the minter as
+  well as the coordinator. What the coordinator can do is deny (drop either
+  message) or, holding the secret already, run a sign-in of its own through a
+  page it serves, which is no more than it could do before this route existed.
+  It cannot read a token a phone was given.
+- **On the phone** the token is in the Keychain or under the Keystore key that
+  already guards the fleet credential, and starts that person's runners from
+  their repository. It is the person's own user token, so it reaches what they
+  can reach on github.com through the App's permissions, for eight hours, and
+  is renewed with a refresh token kept the same way.
+
+**Each person's vault, and what it adds.** `POST /api/vault` and the `vault`
+frame carry every person's GitHub, Cloudflare and Claude credentials and named
+secrets through the coordinator, so they are accounted for here
+([vault.md](./vault.md)).
+
+- **A person's request** is sealed on their phone to the pinned minter key,
+  with their GitHub token inside, and the minter decides whose vault it is
+  from GitHub. The coordinator adds which signed-in account sent it, and the
+  minter refuses unless that matches the account named inside the seal, so an
+  honest coordinator stops one member filing credentials under another's name.
+  A dishonest one can at most file a person's *own* credentials under the
+  wrong fleet account, which is no more than forging an intent's actor.
+- **A box is approved by its key**, which the phone takes from the
+  coordinator's list and fingerprints itself, for the person to compare with
+  `fleetwright-sidecar identity` on the box. **This is the one place a
+  compromised coordinator can gain credentials:** by listing a key of its own
+  under a real box's name, to a person who approves without comparing. The
+  phone puts the comparison beside the button, and nothing else in this design
+  rests on the coordinator's word for a key.
+- **A box's request** is signed by that key and answered sealed to a key the
+  box made for it. The coordinator checks the key is the one the box enrolled
+  with, and the minter checks the signature and the approval; a replay gets an
+  answer only the box can open. What the coordinator can do is deny: drop the
+  request, and the box keeps what it holds until it runs out.
+- **What a box holds** is access tokens, a Claude setup-token and named
+  secrets, never a refresh token, in 0600 files the box's own sessions are
+  given through the broker. That is less than a box holding a linked
+  connection, which keeps the refresh token.
+
 **The minting Worker's own bound, which is a different compromise.** Whoever
 can deploy to the Cloudflare account can replace the minter's code and capture
 every token it signs from then on — for every repository of every account on
 `FLEETWRIGHT_GITHUB_MINT_OWNERS` the App is installed on, and, by editing that
-list or ignoring it, every installation. Secrets cannot be read back out of
-Cloudflare; code can be swapped. So the account and the API token that deploys
-to it are the boundary for the key, not the coordinator. Rotating the key on
-github.com ends it.
+list or ignoring it, every installation — and open every Claude login the
+minter keeps, since new code runs with the deposit key, and every phone
+sign-in it finishes from then on, and every vault, refresh tokens included. Secrets cannot be read
+back out of Cloudflare; code can be swapped. So the account and the API token
+that deploys to it are the boundary for both keys, not the coordinator.
+Rotating the App key on github.com ends the first. For the second, a new
+deposit key makes every kept login unreadable, but a token already captured
+lasts its year: Anthropic's documentation does not say where a person revokes
+a setup-token, and this page will not guess.
 
 **Duration:** until redeploy / secret rotation. There is no per-intent signature
 to expire.

@@ -56,7 +56,8 @@ import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
-import { newSealKey, bindingFor, seal, open } from '../seal.js';
+import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } from '../seal.js';
+import { signingInput } from '../crypto.js';
 import { runnerJobProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
@@ -184,6 +185,8 @@ export class Sidecar {
    *   minter?: import('./minter-config.js').Minter|null,
    *   jobToken?: ((audience: string) => Promise<string>)|null,
    *   mintTimeoutMs?: number,
+   *   vaultKey?: { publicJwk: { x: string, y: string }, sign: (message: string) => Promise<string> }|null,
+   *   vaultIntervalMs?: number,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
@@ -206,6 +209,12 @@ export class Sidecar {
     // id-token permission, and then there is nothing to ask for a mint with.
     jobToken = null,
     mintTimeoutMs = 30_000,
+    // THIS BOX'S OWN KEY, as a public half and a way to sign with the private
+    // one, for asking the fleet's vault for what this box's people approved it
+    // to hold (src/fleet/minter/vault.js). The private half stays in the
+    // process that loaded it (bin/fleetwright-sidecar). Null: no vault here.
+    vaultKey = null,
+    vaultIntervalMs = 10 * 60_000,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -333,6 +342,17 @@ export class Sidecar {
     this.repoAsks = new Map();
     /** Waiters for the coordinator's `minted` answer, by frame id. @type {Map<string, { resolve: (m: any) => void, timer: any }>} */
     this.mintWaiters = new Map();
+    /**
+     * On a runner, the ask for its owner's Claude login, made once when it
+     * joins. A session start waits for it (#run), so the first session is not
+     * placed on the API key a moment before the login arrives. Never rejects.
+     * @type {Promise<void>|null}
+     */
+    this.claudeLoginReady = null;
+    this.vaultKey = vaultKey;
+    this.vaultIntervalMs = vaultIntervalMs;
+    /** @type {any} */
+    this.vaultTimer = null;
   }
 
   get name() {
@@ -348,6 +368,11 @@ export class Sidecar {
     }
     this.transport.onMessage((msg) => this.#onMessage(msg));
     await this.transport.start();
+    // BEFORE THE FIRST HEALTH FRAME, because that frame is what tells the
+    // coordinator to start a session it was holding for this runner.
+    if (this.jobToken) this.claudeLoginReady = this.#takeClaudeLogin();
+    // THE VAULT, a few seconds in so the socket is up, then on its own clock.
+    if (this.vaultKey && this.vaultIntervalMs > 0) this.#scheduleVault(5_000);
 
     // Health is PUSHED rather than waited for. A coordinator that has to ask
     // needs a timer per host, and in a Worker that means a Durable Object alarm
@@ -380,6 +405,8 @@ export class Sidecar {
     this.healthTimer = null;
     if (this.renewTimer) clearInterval(this.renewTimer);
     this.renewTimer = null;
+    if (this.vaultTimer) clearTimeout(this.vaultTimer);
+    this.vaultTimer = null;
     this.watcher?.stop();
     await this.transport.stop();
   }
@@ -573,6 +600,10 @@ export class Sidecar {
       // A MINT NEVER BECOMES A COMMAND LINE EITHER, for the same reason: the
       // key it signs with is in this process and nowhere else on the box.
       if (intent.verb === 'mint') return reply(await this.#mint(intent));
+
+      // A session on a runner waits for the answer about its owner's Claude
+      // login, which is bounded by the mint timeout and never throws.
+      if ((intent.verb === 'start' || intent.verb === 'resume') && this.claudeLoginReady) await this.claudeLoginReady;
 
       // Everything else goes through the same command registry Telegram, the
       // web UI and the CLI use, so a fleet command cannot behave differently
@@ -941,6 +972,169 @@ export class Sidecar {
     this.repoTokens.set(repo.toLowerCase(), { token, expiresAt, repo: got });
     this.log.info(`sidecar: holding a token for ${got} until ${new Date(expiresAt).toISOString()}`);
     return /** @type {const} */ ({ ok: true, provider: 'github', env: { GH_TOKEN: token }, expiresAt, repo: got });
+  }
+
+  /**
+   * On a runner: ask for the owner's Claude login and tell the hub the
+   * answer, which is either the login or "none, use the API key".
+   *
+   * The ask is #askForRepoToken's without a repository: a one-request key, a
+   * job token whose audience binds it (seal.js, claudeBindingFor), and a
+   * `claude-login` frame. The minting Worker decides from GitHub's job token
+   * whose login this runner gets, and it can only ever be the account that
+   * started it (src/fleet/minter/claude.js). What comes back is sealed to the
+   * key, which dies with this call.
+   */
+  async #takeClaudeLogin() {
+    const said = await this.#askForClaudeLogin();
+    const given = said.ok
+      ? { email: said.owner, login: said.login, token: said.token }
+      : { email: said.owner ?? null, login: null, token: null };
+    try {
+      const r = await this.hub.runnerLogin(given);
+      if (!r.ok) this.log.warn(`sidecar: the hub did not take this runner's Claude login: ${r.text}`);
+    } catch (e) {
+      this.log.warn(`sidecar: could not tell the hub about this runner's Claude login: ${/** @type {Error} */ (e).message}`);
+    }
+    // SAID EITHER WAY, in the runner's log, because the person paying is
+    // decided here and "why did this bill to the API key" deserves an answer.
+    if (said.ok) this.log.info(`sidecar: sessions ${said.owner} starts here run on ${said.login}'s Claude login`);
+    else this.log.info(`sidecar: no Claude login for this runner's owner, so sessions use ANTHROPIC_API_KEY: ${said.text}`);
+  }
+
+  /** @param {number} ms */
+  #scheduleVault(ms) {
+    if (this.vaultTimer) clearTimeout(this.vaultTimer);
+    this.vaultTimer = setTimeout(() => {
+      void this.syncVault().then((next) => this.#scheduleVault(next));
+    }, ms);
+    this.vaultTimer.unref?.();
+  }
+
+  /**
+   * Ask the fleet's vault for what this box's people approved it to hold, and
+   * hand the answer to fleetwright, which keeps it where the broker and a
+   * session's Claude login already look (src/core/vault-store.js).
+   *
+   * EVERY TEN MINUTES, and sooner when a token it holds is about to run out:
+   * the vault renews tokens, this only asks for the current one, so a box
+   * never holds a refresh token and never renews one. An answer that is an
+   * answer (nobody approved this box, or this is not the key it enrolled
+   * with) clears what was held, which is how removing a box from a phone
+   * reaches it. Silence keeps what was held until it runs out.
+   *
+   * @returns {Promise<number>} how long until the next ask
+   */
+  async syncVault() {
+    const said = await this.#askVault();
+    if (said.ok) {
+      const r = await this.hub.vault({ accounts: said.accounts }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
+      if (r.ok) this.log.info(`sidecar: vault: ${r.text}`);
+      else this.log.warn(`sidecar: fleetwright did not take the vault's answer: ${r.text}`);
+      for (const a of said.accounts) for (const p of a.problems || []) this.log.warn(`sidecar: vault, ${a.email}: ${p}`);
+      // SOONER WHEN SOMETHING RUNS OUT: ten minutes before the first token
+      // held expires, so a session never asks the broker for a dead one.
+      const soonest = Math.min(...said.accounts.flatMap((a) => (a.items || []).map((i) => (i.expiresAt === null ? Infinity : Number(i.expiresAt)))));
+      const due = Number.isFinite(soonest) ? soonest - Date.now() - 10 * 60_000 : Infinity;
+      return Math.max(60_000, Math.min(this.vaultIntervalMs, due));
+    }
+    if (said.forget) await this.hub.vault({ accounts: [] }).catch(() => {});
+    this.log.info(`sidecar: vault: ${said.text}`);
+    return this.vaultIntervalMs;
+  }
+
+  /**
+   * @returns {Promise<{ ok: true, accounts: Array<{ email: string, items: Array<{ name: string, expiresAt: number|null }>, problems?: string[] }> } | { ok: false, forget: boolean, text: string }>}
+   */
+  async #askVault() {
+    const key = /** @type {NonNullable<typeof this.vaultKey>} */ (this.vaultKey);
+    const { privateKey, publicKey } = await newSealKey();
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey };
+    let signature;
+    try {
+      signature = await key.sign(signingInput('vault-box', request));
+    } catch (e) {
+      return { ok: false, forget: false, text: `this box could not sign its request: ${/** @type {Error} */ (e).message}` };
+    }
+    const id = `vault-${crypto.randomUUID()}`;
+    /** @type {any} */
+    const answer = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.mintWaiters.delete(id);
+        resolve(null);
+      }, this.mintTimeoutMs);
+      timer.unref?.();
+      this.mintWaiters.set(id, { resolve, timer });
+      let sent;
+      try {
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'vault', id, hostId: this.hostId, request, signature });
+      } catch {
+        sent = false;
+      }
+      if (sent === false) {
+        this.mintWaiters.delete(id);
+        clearTimeout(timer);
+        resolve({ ok: false, error: { code: 'not_connected' }, text: 'this box was not connected to the fleet when it asked' });
+      }
+    });
+    if (!answer) return { ok: false, forget: false, text: 'the fleet did not answer; a coordinator from before the vault drops the question' };
+    if (answer.ok !== true) {
+      // DEFINITE ANSWERS forget what was held; anything that could be a blip keeps it.
+      const forget = ['not_this_box', 'bad_signature', 'no_deposit_key', 'no_minter'].includes(String(answer.error?.code || ''));
+      return { ok: false, forget, text: String(answer.text || 'the fleet refused') };
+    }
+    try {
+      const inside = /** @type {any} */ (await open({ privateKey, publicKey, aad: VAULT_BOX_AAD, sealed: answer.sealed }));
+      return { ok: true, accounts: Array.isArray(inside?.accounts) ? inside.accounts : [] };
+    } catch {
+      return { ok: false, forget: false, text: 'the answer did not open with this request’s key, so it was not used' };
+    }
+  }
+
+  /**
+   * @returns {Promise<{ ok: true, token: string, login: string, owner: string } | { ok: false, owner?: string|null, text: string }>}
+   */
+  async #askForClaudeLogin() {
+    const { privateKey, publicKey } = await newSealKey();
+    const audience = await claudeBindingFor(publicKey);
+    let job;
+    try {
+      job = await /** @type {(a: string) => Promise<string>} */ (this.jobToken)(audience);
+    } catch (e) {
+      return { ok: false, text: `GitHub would not give this job a token to ask with: ${/** @type {Error} */ (e).message}` };
+    }
+    const id = `claude-${crypto.randomUUID()}`;
+    /** @type {any} */
+    const answer = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.mintWaiters.delete(id);
+        resolve(null);
+      }, this.mintTimeoutMs);
+      timer.unref?.();
+      this.mintWaiters.set(id, { resolve, timer });
+      let sent;
+      try {
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'claude-login', id, hostId: this.hostId, job, key: publicKey });
+      } catch {
+        sent = false;
+      }
+      if (sent === false) {
+        this.mintWaiters.delete(id);
+        clearTimeout(timer);
+        resolve({ ok: false, text: 'this runner was not connected to the fleet when it asked' });
+      }
+    });
+    if (!answer) return { ok: false, text: 'the fleet did not answer in time; a coordinator from before Claude logins drops the question' };
+    const owner = typeof answer.owner === 'string' ? answer.owner : null;
+    if (answer.ok !== true) return { ok: false, owner, text: String(answer.text || 'the fleet refused') };
+    try {
+      const inside = await open({ privateKey, publicKey, aad: audience, sealed: answer.sealed });
+      const token = typeof inside?.token === 'string' ? inside.token : '';
+      if (!token || !owner) return { ok: false, owner, text: 'the answer carried no login, so none was used' };
+      return { ok: true, token, login: String(inside.login || answer.login || ''), owner };
+    } catch {
+      return { ok: false, owner, text: 'the answer did not open with this request’s key, so it was not used' };
+    }
   }
 
   /**

@@ -77,7 +77,10 @@ box that happens to expire.
 So an ephemeral host authenticates with `ANTHROPIC_API_KEY`, from a repository
 secret. That is the credential designed for this shape: no browser, revocable on
 its own, billed separately, and scoped to one thing rather than being an account
-login.
+login. (Or, for a person who chose it, with a `claude setup-token` they
+deposited for their own runners — made for exactly this, no browser either,
+and handed only to runners they started: `runner-central.md`, "Your Claude
+login on a runner".)
 
 **It does not break the no-shared-credentials rule**, and the distinction is
 worth being precise about rather than waving at. That rule is about somebody's

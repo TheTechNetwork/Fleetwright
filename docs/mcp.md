@@ -85,6 +85,14 @@ belongs to whoever asked, and it ends itself — so what an agent can do unasked
 is bounded by a clock rather than by a policy. The tool's own description says
 what it spends. See [runner-central.md](./runner-central.md).
 
+**On your own computer it needs no permanent box.** `fleetwright-mcp` started
+with `GH_TOKEN` or `GITHUB_TOKEN` set, or with `gh` signed in, asks the fleet for
+a ticket (`/api/runners/dispatch`) and makes the dispatch itself, as you; the
+token is used for that and never sent to the fleet. Without one, or against a
+coordinator that predates the route, a box with your GitHub connection
+dispatches, as before. The hosted server has no token of yours and always asks
+a box.
+
 (`update` and `forget` were deliberately taken **off** this list: `update`
 because `KillMode=process` means it ends nobody's work, and `forget` because
 the seven-day bin made it the recoverable one — `DEFAULT_DENY` in

@@ -222,12 +222,17 @@ test('a private key is refused rather than stored', async () => {
   assert.match(/** @type {any} */ (r).error, /private key/);
 });
 
-test('what is listed carries no key material', async () => {
+test('what is listed carries the public key and nothing private', async () => {
+  // The public key is listed now, because a phone approving a box for its
+  // person's vault works out the fingerprint from the key itself rather than
+  // taking the coordinator's word for it (docs/vault.md). A private scalar
+  // never is.
   const hosts = new HostIdentities();
   const { host } = await enrolled(hosts);
-  const listed = JSON.stringify(hosts.list());
-  assert.equal(listed.includes('"x"'), false, 'the public key is not interesting to a person');
-  assert.ok(listed.includes(host.fingerprint), 'the fingerprint is, because it identifies the machine');
+  const [listed] = hosts.list();
+  assert.deepEqual(Object.keys(listed.publicJwk ?? {}).sort(), ['crv', 'kty', 'x', 'y']);
+  assert.ok(JSON.stringify(listed).includes(host.fingerprint), 'the fingerprint, because it identifies the machine');
+  assert.ok(!JSON.stringify(listed).includes('"d"'), 'never a private half');
 });
 
 test('a fingerprint is stable across exports of the same key', async () => {

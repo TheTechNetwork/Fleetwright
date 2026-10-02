@@ -101,7 +101,7 @@ jobs:
           node --version
           npm ci --omit=dev --no-audit --no-fund
           # renovate: datasource=npm depName=@anthropic-ai/claude-code
-          npm install -g @anthropic-ai/claude-code@2.1.283
+          npm install -g @anthropic-ai/claude-code@2.1.284
       - name: Be a host until the clock runs out
         working-directory: fleet
         env:

@@ -508,6 +508,17 @@ struct Fleet {
     /// box that dispatches the run never sees it.
     func provision(platform: String, minutes: Int? = nil, host: String? = nil,
                    start: [String: String]? = nil) async throws -> Reply {
+        // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
+        // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
+        // Otherwise a box with your GitHub connection does, as it always did.
+        let phone = PhoneGitHub(settings: settings)
+        if phone.signedIn {
+            do {
+                return try await phone.startRunner(self, platform: platform, minutes: minutes, start: start)
+            } catch {
+                return Reply(ok: false, text: error.localizedDescription, sessions: nil)
+            }
+        }
         var params: [String: String] = ["platform": platform]
         if let minutes { params["minutes"] = String(minutes) }
         return try await intent("provision", params: params, host: host, numeric: ["minutes"],
@@ -549,8 +560,9 @@ struct Fleet {
         try JSONDecoder().decode(RunnerRepoSetting.self, from: try await get("/api/runner-repo"))
     }
 
-    /// Saved only if a permanent box's check with YOUR GitHub connection
-    /// passes. The check comes back either way, so a refusal can say which
+    /// Saved only if the check passes: the minting Worker's, as the GitHub
+    /// App, or a permanent box's with YOUR GitHub connection where there is no
+    /// minter. The check comes back either way, so a refusal can say which
     /// answer stopped it.
     func setRunnerRepo(_ repo: String) async throws -> RunnerRepoSetting {
         let data = try await send("PUT", "/api/runner-repo", body: ["repo": repo])
@@ -559,6 +571,75 @@ struct Fleet {
 
     func clearRunnerRepo() async throws -> RunnerRepoSetting {
         try JSONDecoder().decode(RunnerRepoSetting.self, from: try await send("DELETE", "/api/runner-repo", body: nil))
+    }
+
+    /// Where to start a runner from this phone, and the ticket to start it with.
+    func prepareRunnerDispatch(platform: String, minutes: Int?, start: [String: String]?) async throws -> [String: Any] {
+        var body: [String: Any] = ["platform": platform]
+        if let minutes { body["minutes"] = minutes }
+        if let start { body["start"] = start }
+        return try Self.object(try await post("/api/runners/dispatch", body: body))
+    }
+
+    /// What this phone needs to open GitHub's sign-in page itself: the client id and the callback.
+    struct GitHubDeviceStart: Codable {
+        let ok: Bool?
+        let clientId: String?
+        let redirectUri: String?
+        let statePrefix: String?
+        let text: String?
+    }
+
+    func githubDeviceStart() async throws -> GitHubDeviceStart {
+        try JSONDecoder().decode(GitHubDeviceStart.self, from: try await get("/api/github/device"))
+    }
+
+    /// A sign-in or renewal sealed to the minter, relayed; the answer comes back sealed to this phone.
+    func githubDeviceToken(sealed: [String: String]) async throws -> [String: Any] {
+        try Self.object(try await post("/api/github/device", body: ["sealed": sealed]))
+    }
+
+    /// What this phone needs to open Cloudflare's sign-in page itself, for the person's vault.
+    struct CloudflareDeviceStart: Codable {
+        let ok: Bool?
+        let clientId: String?
+        let redirectUri: String?
+        let authorizeUrl: String?
+        let scopes: String?
+        let statePrefix: String?
+        let text: String?
+    }
+
+    func cloudflareDeviceStart() async throws -> CloudflareDeviceStart {
+        try JSONDecoder().decode(CloudflareDeviceStart.self, from: try await get("/api/cloudflare/device"))
+    }
+
+    /// A request to the person's vault, sealed to the minter; the answer comes back sealed to this phone.
+    func vault(sealed: [String: String]) async throws -> [String: Any] {
+        try Self.object(try await post("/api/vault", body: ["sealed": sealed]))
+    }
+
+    /// The key the fleet says its minter has, to compare with the pin.
+    struct MinterKey: Codable {
+        let ok: Bool?
+        let key: String?
+        let text: String?
+    }
+
+    func claudeLoginKey() async throws -> MinterKey {
+        try JSONDecoder().decode(MinterKey.self, from: try await get("/api/claude-login"))
+    }
+
+    /// A Claude login sealed to the minter, for your own runners.
+    func depositClaudeLogin(sealed: [String: String]) async throws -> Reply {
+        try JSONDecoder().decode(Reply.self, from: try await send("PUT", "/api/claude-login", body: ["sealed": sealed]))
+    }
+
+    private static func object(_ data: Data) throws -> [String: Any] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw FleetError.message("The coordinator answered with something that is not JSON.")
+        }
+        return object
     }
 
     /// What every host in the fleet can start a session on.
@@ -1441,6 +1522,17 @@ struct Fleet {
         let enrolledAt: Double?
         let lastSeenAt: Double?
         let revokedAt: Double?
+        /// The box's own public key, which a phone approves for its person's
+        /// vault by (PhoneVault). Nil from a coordinator too old to list it.
+        var publicJwk: PublicKey?
+        var ephemeral: Bool?
+
+        struct PublicKey: Codable, Hashable {
+            let kty: String
+            let crv: String
+            let x: String
+            let y: String
+        }
 
         var id: String { hostId }
         var isRevoked: Bool { (revokedAt ?? 0) > 0 }
@@ -1690,6 +1782,19 @@ final class Settings {
         didSet { UserDefaults.standard.set(customPhrase, forKey: "customPhrase") }
     }
 
+    /// This phone's own GitHub sign-in (PhoneGitHub.swift), as JSON, in the
+    /// keychain beside the fleet credential: it is a token that starts your
+    /// runners, so it gets the same care.
+    var githubSignIn: String {
+        didSet { Keychain.set(githubSignIn, for: "githubSignIn") }
+    }
+
+    /// The minting Worker's public key, as whoever runs the fleet gave it to
+    /// you. Not a secret: it is what this phone checks before sealing anything.
+    var minterPin: String {
+        didSet { UserDefaults.standard.set(minterPin, forKey: "minterPin") }
+    }
+
     private static let credentialKey = "credential"
 
     init() {
@@ -1702,6 +1807,8 @@ final class Settings {
         credential = Keychain.get(Self.credentialKey) ?? ""
         signedInAs = UserDefaults.standard.string(forKey: "signedInAs") ?? ""
         customPhrase = UserDefaults.standard.string(forKey: "customPhrase") ?? ""
+        githubSignIn = Keychain.get("githubSignIn") ?? ""
+        minterPin = UserDefaults.standard.string(forKey: "minterPin") ?? ""
 
         // Nothing is carried over from the build that asked for an admin token.
         // That token is the fleet's break-glass credential and every phone had

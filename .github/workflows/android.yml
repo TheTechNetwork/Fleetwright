@@ -84,7 +84,7 @@ jobs:
           # missing platform fails here with an obvious message instead of
           # halfway through a Gradle task.
           packages: 'platform-tools platforms;android-37.1 build-tools;37.0.0'
-      - uses: gradle/actions/setup-gradle@v6.3.0
+      - uses: gradle/actions/setup-gradle@v6.4.0
 
       # THE UNIT TESTS, BEFORE THE BUILD, because a compile failure in a test
       # is cheaper to read on its own than buried after an APK.
@@ -167,7 +167,7 @@ jobs:
           # missing platform fails here with an obvious message instead of
           # halfway through a Gradle task.
           packages: 'platform-tools platforms;android-37.1 build-tools;37.0.0'
-      - uses: gradle/actions/setup-gradle@v6.3.0
+      - uses: gradle/actions/setup-gradle@v6.4.0
 
       - name: Check there is a keystore to sign with
         id: keystore

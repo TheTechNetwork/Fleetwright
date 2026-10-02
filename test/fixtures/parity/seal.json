@@ -1,0 +1,28 @@
+{
+  "why": "One message sealed the way src/fleet/seal.js seals, with every random value written down, so the two phones can show they produce the same bytes and open what the minter seals. test/seal-parity.test.js opens it with seal.js itself.",
+  "recipient": {
+    "d": "7ELn93W8muM_Jgxc_a3s0xwF8BPlCKvEI5XIEzVai2w",
+    "x": "PWh3x9DBz_lOvY5V0vVWJxbbUrsia9J4HiYSZLf16KQ",
+    "y": "RA6L9xhYmUwbbhs5snq4f6U29rB7MFak42t9rhmrqdM",
+    "publicKey": "BD1od8fQwc_5Tr2OVdL1VicW21K7ImvSeB4mEmS39eikRA6L9xhYmUwbbhs5snq4f6U29rB7MFak42t9rhmrqdM"
+  },
+  "ephemeral": {
+    "d": "J6HC3vplcQ-8e5OjRNbDpbXOtMICbivEBvGhrC2opPY",
+    "x": "rm5viQBfAa1D-WOyJ8mDBXetkpsvtPQco81yBiLH45k",
+    "y": "xarBGgBXGZBcHf7YIT9VmvihfbvS8lO__bwg-xtd_JM"
+  },
+  "aad": "fleetwright-claude-deposit/v1",
+  "plaintext": "{\"v\":1,\"github\":\"ghu_example\",\"claude\":\"sk-ant-oat01-example\",\"at\":1790000000000}",
+  "sealed": {
+    "epk": "BK5ub4kAXwGtQ_ljsifJgwV3rZKbL7T0HKPNcgYix-OZxarBGgBXGZBcHf7YIT9VmvihfbvS8lO__bwg-xtd_JM",
+    "iv": "mib-_ch30w_o7EGb",
+    "ct": "gSsrlcDMGRDenXM6lyq6wlaRybYm-9wxFerWtHda_DSnH1pyDAiBgbM2pFaSknc1QS0VHvFgvNDPZ73IIfjHCTxvhd4Uqk_kX1xSJshHbDIta-UktELwpS2OuRmcI-CTTw"
+  },
+  "boxKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "PWh3x9DBz_lOvY5V0vVWJxbbUrsia9J4HiYSZLf16KQ",
+    "y": "RA6L9xhYmUwbbhs5snq4f6U29rB7MFak42t9rhmrqdM"
+  },
+  "fingerprint": "1d4a05afaca0d6e2"
+}

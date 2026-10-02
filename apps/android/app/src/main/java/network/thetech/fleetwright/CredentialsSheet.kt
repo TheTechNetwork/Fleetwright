@@ -92,6 +92,9 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
     // The row underneath is the host's answer and is the one that is right.
     LaunchedEffect(Unit) {
         WebAuth.returned.collect {
+            // A box's connect flow only: `github` is this phone's own sign-in,
+            // which the runners screen is waiting for, not this one.
+            if (it.host != "connected") return@collect
             // CAPTURED BEFORE IT IS CLEARED, because it is the only record of
             // which provider this callback belongs to — the flow is global and
             // the query is not trusted.

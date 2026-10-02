@@ -355,6 +355,32 @@ permanent box that holds the key, or reach public code only. See
 `docs/runner-central.md`, and `test/app-key-custody.test.js` for what keeps it
 this way.
 
+**`FLEETWRIGHT_MINTER_DEPOSIT_KEY` travels with it**, on the same terms and
+for the same reason: it is the key people seal their Claude logins to, so it
+opens every one the minter keeps. Another environment secret of
+`github-app-key`, synced by the same run of `minter-key`, which puts whichever
+of the two is present and leaves the Worker's copy of the other alone.
+`node scripts/minter-deposit-key.mjs` makes one, and prints the pin people
+check it against. Optional; without it the minter keeps no Claude logins and
+runners use their repository's API key. See `docs/runner-central.md`, "Your
+Claude login on a runner".
+
+**`FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` travels the same way**, so each
+person's vault can keep and renew their Cloudflare sign-in
+([vault.md](./vault.md)); the client id is read from the coordinator's config at
+deploy. Optional; without it vaults keep no Cloudflare sign-in.
+
+**`FLEETWRIGHT_GITHUB_CLIENT_SECRET` is synced to the minter by the same run**,
+from whatever that job can see: a repository secret, or a secret of
+`github-app-key`. A copy kept only as a secret of `production` is invisible to
+it, so put one in `github-app-key` if that is where yours is. The minter uses it to finish a
+phone's GitHub sign-in, so the token comes back sealed to the phone and the
+coordinator relays ciphertext. Optional; without it phones start machines
+through a permanent box. **One manual step for an existing fleet:** run the
+workflow by hand on `main` with **sync_app_key** ticked once after this ships,
+or the minter has no copy. See `docs/runner-central.md`, "Without a permanent
+box".
+
 And four repository **variables**:
 
 | variable | |

@@ -230,7 +230,8 @@ export async function verifyActionsToken(token, { audiences, repositories, workf
  *
  * @param {string} token
  * @param {{ audience: string }} opts
- * @returns {Promise<{ repository: string, workflowRef: string, actor: string, actorId: string,
+ * @returns {Promise<{ repository: string, repositoryOwner: string, repositoryOwnerId: string,
+ *   workflowRef: string, actor: string, actorId: string,
  *   runId: string, runAttempt: string, eventName: string }>}
  */
 export async function verifyRunnerJob(token, { audience }) {
@@ -250,6 +251,8 @@ export async function verifyRunnerJob(token, { audience }) {
   }
   return {
     repository: String(payload.repository || ''),
+    repositoryOwner: String(payload.repository_owner || ''),
+    repositoryOwnerId: String(payload.repository_owner_id ?? ''),
     workflowRef: String(payload.job_workflow_ref || ''),
     actor: String(payload.actor || ''),
     actorId: String(payload.actor_id ?? ''),

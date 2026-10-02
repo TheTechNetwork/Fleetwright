@@ -9,13 +9,13 @@
     "test": "node --test test/"
   },
   "devDependencies": {
-    "wrangler": "4.142.0"
+    "wrangler": "4.143.0"
   },
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
-    "@sentry/cloudflare": "11.0.0"
+    "@sentry/cloudflare": "11.1.0"
   },
   "overrides": {
     "sharp": "0.35.5"

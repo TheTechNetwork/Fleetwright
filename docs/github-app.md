@@ -104,8 +104,12 @@ This is the part to get right, and it follows directly from
   in the coordinator (which is treated as compromised). **It waits for the
   broker.**
 - **The client secret** is not a credential to anything on its own — it is
-  useless without a refresh token. It may live where hosts already keep
-  configuration.
+  useless without a refresh token, or a fresh code with its PKCE verifier. It
+  may live where hosts already keep configuration. The minting Worker holds a
+  copy too, so a phone can finish its own GitHub sign-in without the
+  coordinator able to read the token (`runner-central.md`, "Without a
+  permanent box"). It never goes to a phone: a secret in an app is a secret
+  everybody who downloads the app has.
 - **The per-person refresh token** lives in `${stateDir}/connections/<row>.renewal.json`,
   0600, one file per person, **mounted into no session** — beside the `.env`
   a session does get and the `.connections.json` a phone may read. Same blast

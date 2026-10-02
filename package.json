@@ -9,6 +9,7 @@
     "fleetwright": "./bin/fleetwright",
     "fleetwright-sidecar": "./bin/fleetwright-sidecar",
     "fleetwright-mcp": "./bin/fleetwright-mcp",
+    "fleetwright-claude-login": "./bin/fleetwright-claude-login",
     "fw": "./bin/fleetwright"
   },
   "engines": {

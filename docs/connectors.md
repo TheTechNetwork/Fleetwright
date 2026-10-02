@@ -222,7 +222,10 @@ not a permission check.
 
 ## Where a secret lives
 
-Exactly one file, `${stateDir}/accounts/<email>.env`, mode 0600.
+Exactly one file, `${stateDir}/accounts/<email>.env`, mode 0600, for what was
+linked on this box. What a person keeps in their vault instead, once for every
+box they approve, is a second source underneath it, in `${stateDir}/vault/`,
+and a link here wins ([vault.md](./vault.md)).
 
 What a phone asks for — *is GitHub connected, as whom* — is read from a
 **separate** metadata file that has no token in it. Two files is not tidiness.

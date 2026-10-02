@@ -17,6 +17,12 @@
 //                                 Stated to the agent rather than enforced: the
 //                                 lifecycle is its to manage, and a number it
 //                                 can act on beats a timer it cannot see.
+//   GH_TOKEN / GITHUB_TOKEN       optional — your own GitHub token. With one,
+//                                 or with `gh` signed in on this computer,
+//                                 fleet_provision starts the machine from here
+//                                 as you, with no permanent box. The token is
+//                                 used for that dispatch and never sent to the
+//                                 fleet. Without one, a box dispatches as before.
 //
 // In Claude Desktop or Claude Code:
 //
@@ -38,6 +44,7 @@
 
 import { createInterface } from 'node:readline';
 import { McpServer } from '../src/mcp/server.js';
+import { localGithubToken } from '../src/mcp/local-github.js';
 
 const coordinator = process.env.FLEETWRIGHT_COORDINATOR_URL;
 const credential = process.env.FLEETWRIGHT_CREDENTIAL;
@@ -65,6 +72,9 @@ const server = new McpServer({
     .map((s) => s.trim())
     .filter(Boolean),
   log: (m) => process.stderr.write(`${m}\n`),
+  // Starting a machine from here, as you, with no permanent box. See
+  // src/mcp/local-github.js.
+  githubToken: () => localGithubToken(),
 });
 
 const lines = createInterface({ input: process.stdin });

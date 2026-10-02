@@ -784,6 +784,27 @@ this is the gap it does not close: a host that joins after a credential was
 linked still has no copy. Re-linking is one tap, and it is one tap per new
 machine rather than one per machine per credential.
 
+### What was built, later, and why it does not undo the three costs
+
+The vault exists now ([vault.md](./vault.md)), and it answers each of the three
+rather than accepting them:
+
+1. **It is not the coordinator.** It is the minting Worker, which has no public
+   route and is reached only by the coordinator's service binding. The
+   coordinator relays sealed requests both ways and reads none of them.
+2. **It is asked on demand, not pulled at startup.** A box asks every ten
+   minutes for what it may hold now, and a session reads it through the broker
+   at the moment it needs it, as before. A box that cannot reach the vault
+   keeps what it last held until it runs out, so a session still starts with
+   no coordinator.
+3. **The credential to fetch credentials is the box's own key**, the one it
+   already proves itself with, approved by the person from their phone by a
+   fingerprint they compare with the box. Not a shared secret, and not the
+   coordinator's word.
+
+And the narrower gap above closes with it: a box enrolled tomorrow is one
+approval from holding everything its person kept, with no re-linking.
+
 ## Minting instead of storing, and OAuth instead of a PAT
 
 The follow-up question, and the better one: rather than a vault holding a

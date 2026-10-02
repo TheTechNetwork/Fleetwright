@@ -38,6 +38,8 @@ import { readVariant, sessionImage, pinnedByEnv as sandboxPinnedByEnv } from '..
 import { readHouseRules } from '../core/rules.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
+import { saveRunnerLogin } from '../core/runner-login.js';
+import { applyVault } from '../core/vault-store.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
 
@@ -334,6 +336,30 @@ export class HttpAdapter {
         // and a 500 with a reason is what it can log.
         return json(res, 500, { ok: false, text: /** @type {Error} */ (e).message });
       }
+    }
+
+    // A RUNNER'S CLAUDE LOGIN, from the sidecar that fetched it (src/core/
+    // runner-login.js). Sent here rather than written by the sidecar for the
+    // reason /api/renew-providers is: this process owns its state directory.
+    // The body is the owner, the GitHub account the login was deposited
+    // under, and the token or null — null meaning "a runner, and its owner has
+    // none here", which is what lets its sessions use the API key.
+    if (p === '/api/runner-login' && method === 'POST') {
+      const body = await readJson(req);
+      const r = saveRunnerLogin(this.cfg, { email: body.email, login: body.login, token: body.token });
+      if (r.ok) log.info(`http: runner login: ${r.text}`);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    // WHAT THIS BOX'S PEOPLE KEPT IN THEIR VAULTS, as the sidecar was just
+    // given it: written whole, so a person who removed this box from their
+    // phone is forgotten here on the same pass (vault-store.js). From the
+    // sidecar because it is the process holding the box's key and the socket;
+    // written here because these files are this process's to read.
+    if (p === '/api/vault' && method === 'POST') {
+      const r = applyVault(this.cfg, await readJson(req));
+      if (r.ok) log.info(`http: vault: ${r.text}`);
+      return json(res, r.ok ? 200 : 400, r);
     }
 
     // One command endpoint rather than a REST verb per action: the web UI and

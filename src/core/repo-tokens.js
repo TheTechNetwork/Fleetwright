@@ -45,7 +45,7 @@
 
 import { SignJWT } from 'jose';
 import { REPO_RE } from '../fleet/protocol/intents.js';
-import { RUNNER_WORKFLOWS } from './runners.js';
+import { RUNNER_WORKFLOWS, checkRunnerRepoAsApp } from './runners.js';
 
 /** Same bound and reasoning as runners.js: two API calls on a bad day. */
 const GITHUB_TIMEOUT_MS = 15_000;
@@ -137,6 +137,30 @@ export async function checkRepoAccess({ repo, token, fetchImpl = fetch }) {
     };
   } catch (e) {
     return { ok: false, message: `Could not reach GitHub: ${/** @type {Error} */ (e).message}` };
+  }
+}
+
+/**
+ * Whose GitHub token this is: the numeric account id and the login, or why
+ * GitHub would not say. For the minting Worker, which is handed a person's
+ * token inside a sealed Claude-login deposit and uses it for this one call,
+ * to learn which runners the login may go to without asking the coordinator.
+ *
+ * @param {{ token: string, fetchImpl?: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: true, userId: string, login: string } | { ok: false, message: string }>}
+ */
+export async function githubUser({ token, fetchImpl = fetch }) {
+  try {
+    const res = await fetchImpl('https://api.github.com/user', {
+      headers: headers(token),
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
+    if (res.status === 401) return { ok: false, message: 'GitHub rejected that token (401)' };
+    const body = res.ok ? /** @type {any} */ (await res.json()) : null;
+    if (!res.ok || body?.id === undefined) return { ok: false, message: `GitHub would not say whose token that is (${res.status})` };
+    return { ok: true, userId: String(body.id), login: String(body.login || '') };
+  } catch (e) {
+    return { ok: false, message: `could not reach GitHub: ${/** @type {Error} */ (e).message}` };
   }
 }
 
@@ -241,7 +265,7 @@ export async function appJwt({ clientId, key, now = () => Date.now() }) {
  * Which installation of the App reaches a repository.
  *
  * @param {{ repo: string, jwt: string, fetchImpl?: typeof globalThis.fetch }} args
- * @returns {Promise<{ ok: true, id: number } | { ok: false, message: string }>}
+ * @returns {Promise<{ ok: true, id: number, permissions: Record<string, string> } | { ok: false, message: string, notInstalled?: true }>}
  */
 export async function installationFor({ repo, jwt, fetchImpl = fetch }) {
   const inst = await fetchImpl(`https://api.github.com/repos/${repo}/installation`, {
@@ -249,15 +273,16 @@ export async function installationFor({ repo, jwt, fetchImpl = fetch }) {
     signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
   });
   if (inst.status === 404) {
-    return { ok: false, message: `The Fleetwright GitHub App is not installed on ${repo}, so there is nothing to mint from. Add it to the installation.` };
+    return { ok: false, notInstalled: true, message: `The Fleetwright GitHub App is not installed on ${repo}, so there is nothing to mint from. Add it to the installation.` };
   }
   if (inst.status === 401) {
     return { ok: false, message: 'GitHub rejected the App key (401). The key or the client id configured beside it is wrong, or the key was revoked.' };
   }
   if (!inst.ok) return { ok: false, message: `GitHub would not say which installation reaches ${repo} (${inst.status}).` };
-  const id = Number((/** @type {any} */ (await inst.json()))?.id);
+  const body = /** @type {any} */ (await inst.json());
+  const id = Number(body?.id);
   if (!Number.isSafeInteger(id)) return { ok: false, message: 'GitHub answered without an installation id.' };
-  return { ok: true, id };
+  return { ok: true, id, permissions: body?.permissions && typeof body.permissions === 'object' ? body.permissions : {} };
 }
 
 /**
@@ -368,3 +393,49 @@ export async function mintForActor({ repo, actor, actorId, clientId, key, fetchI
     return { ok: false, code: 'mint_failed', message: `Could not reach GitHub: ${/** @type {Error} */ (e).message}` };
   }
 }
+
+/**
+ * Is this a repository a runner can be started from, asked by the GitHub App
+ * itself — so that setting one needs no permanent box (checkRunnerRepoAsApp in
+ * ./runners.js has the questions and why each is asked).
+ *
+ * The token it mints reads one repository's metadata and contents, lives for
+ * the length of the check, and never leaves the process that minted it. That
+ * is why this is not held to FLEETWRIGHT_GITHUB_MINT_OWNERS the way a minted
+ * token is: the list decides whose repositories the App's key may hand anyone
+ * access to, and this hands nobody anything — it reads a public repository's
+ * workflow list and says what it found.
+ *
+ * @param {{ repo: string, clientId: string, key: AppKey, fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
+ * @returns {Promise<import('./runners.js').RunnerRepoCheck>}
+ */
+export async function checkRunnerRepoForApp({ repo, clientId, key, fetchImpl = fetch, now = () => Date.now() }) {
+  const name = String(repo || '');
+  /** @param {string} message @param {Partial<import('./runners.js').RunnerRepoCheck>} [extra] */
+  const no = (message, extra = {}) => ({
+    repo: name, public: null, installed: null, actionsWrite: null,
+    platforms: [], missing: Object.keys(RUNNER_WORKFLOWS), ok: false, message, ...extra,
+  });
+  if (!REPO_RE.test(name)) return no('That is not a repository name. Write it as owner/repo.');
+  try {
+    const jwt = await appJwt({ clientId, key, now });
+    const inst = await installationFor({ repo: name, jwt, fetchImpl });
+    if (!inst.ok) {
+      return inst.notInstalled
+        ? no(`The Fleetwright GitHub App is not installed on ${name}. Install it there and pick ${name}, then check again.`, { installed: false })
+        : no(inst.message);
+    }
+    const read = await mintInstallationToken({
+      installationId: inst.id,
+      repo: name,
+      permissions: { metadata: 'read', contents: 'read' },
+      jwt,
+      fetchImpl,
+    });
+    if (!read.ok) return no(read.message, { installed: true });
+    return await checkRunnerRepoAsApp({ repo: name, installation: inst, token: read.token, fetchImpl });
+  } catch (e) {
+    return no(`Could not reach GitHub: ${/** @type {Error} */ (e).message}`);
+  }
+}
+

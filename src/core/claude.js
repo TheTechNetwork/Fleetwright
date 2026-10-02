@@ -11,6 +11,8 @@ import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs, hookSocketMount } from './sandbox-userns.js';
 import { egressArgs } from './egress.js';
 
+/** @typedef {import('./runner-login.js').RunnerAuth} RunnerAuth */
+
 /** @param {number} ms */
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -42,10 +44,21 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * running to race with. The content comes from a file on this host — see
  * src/core/profiles.js for why it can never come from the wire.
  *
+ * runnerAuth is how a direct session on a RUNNER authenticates when nobody
+ * linked an account (./runner-login.js). A deposited Claude login is read
+ * from its file at exec time, so the token is in the CLI's environment and
+ * never in this string, tmux's arguments or `ps`; and ANTHROPIC_API_KEY is
+ * unset for that session, because the CLI ranks an API key above
+ * CLAUDE_CODE_OAUTH_TOKEN and would otherwise bill the repository anyway.
+ * The same unset, and nothing else, for a person who LINKED an account on a
+ * runner (`linked`): their login is the staged credential file, which the key
+ * would outrank in the same way. An API key needs nothing here: the session
+ * inherits it.
+ *
  * @param {import('../config.js').Config} cfg
- * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null }} opts
+ * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null, runnerAuth?: RunnerAuth|null }} opts
  */
-export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null }) {
+export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null, runnerAuth = null }) {
   const rc = remoteControl === null ? cfg.remoteControl : remoteControl;
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
 
@@ -71,7 +84,14 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
   const dir = !cfg.sandbox && typeof configDir === 'string' && configDir
     ? `CLAUDE_CONFIG_DIR='${configDir.replace(/'/g, `'\\''`)}' `
     : '';
-  return `${dir}IS_SANDBOX=1 exec ${quoted}`;
+  const login = cfg.sandbox || !runnerAuth
+    ? ''
+    : runnerAuth.kind === 'token'
+      ? `unset ANTHROPIC_API_KEY; CLAUDE_CODE_OAUTH_TOKEN="$(cat '${runnerAuth.file.replace(/'/g, `'\\''`)}')" `
+      : runnerAuth.kind === 'linked'
+        ? 'unset ANTHROPIC_API_KEY; '
+        : '';
+  return `${login}${dir}IS_SANDBOX=1 exec ${quoted}`;
 }
 
 /**
