@@ -1465,6 +1465,23 @@ const OPENAPI = JSON.stringify({
         }
       }
     },
+    "/api/me": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Who this credential belongs to, and whether they are an admin",
+        "description": "So an app draws admin-only controls for admins and nothing for members, instead of drawing them for everyone and refusing after the tap. The answer is the same check the destructive routes make; it grants nothing.",
+        "responses": {
+          "200": {
+            "description": "email and admin"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      }
+    },
     "/api/clients": {
       "get": {
         "tags": [

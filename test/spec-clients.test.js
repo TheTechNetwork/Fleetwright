@@ -84,6 +84,10 @@ const NOT_A_CLIENT_ROUTE = {
   '/healthz': 'infrastructure liveness. Read by a load balancer, not by a person.',
   '/oauth/github/callback': "a browser redirect target — GitHub sends somebody's browser here.",
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
+  // The coordinator layer of a stacked round (CONTRIBUTING.md): both phones
+  // call it in the layers above, and the Android layer deletes this line, at
+  // which point the parity check below covers it like any other route.
+  '/api/me': 'served ahead of the app layers that read it, so admin-only rows can be left out for members.',
   '/api/enroll/actions':
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
 };

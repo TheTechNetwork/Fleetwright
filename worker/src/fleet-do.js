@@ -958,6 +958,15 @@ export class Fleet {
 
     // Which devices can reach this fleet, and dropping one.
 
+    // WHO THIS CREDENTIAL IS, so an app can leave out what it cannot do. The
+    // apps drew People and every Revoke for every member, and the member found
+    // out after the confirmation dialog. This is the same flag the guard above
+    // reads, so the answer and the refusal cannot disagree; it grants nothing.
+    // No client means the shared token, which the guard lets through.
+    if (url.pathname === '/api/me' && request.method === 'GET') {
+      return json({ ok: true, email: client?.email ?? null, admin: client ? Boolean(client.admin) : true });
+    }
+
     if (url.pathname === '/api/clients' && request.method === 'GET') {
       return json({ ok: true, clients: this.core.clients.list() });
     }
