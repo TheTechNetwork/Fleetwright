@@ -1053,6 +1053,11 @@ export class Coordinator {
     }
 
 
+    // Same as the Worker: the flag the destructive-route guard reads.
+    if (p === '/api/me' && req.method === 'GET') {
+      return json(res, 200, { ok: true, email: client?.email ?? null, admin: client ? Boolean(client.admin) : true });
+    }
+
     if (p === '/api/clients' && req.method === 'GET') {
       return json(res, 200, { ok: true, clients: this.core.clients.list() });
     }

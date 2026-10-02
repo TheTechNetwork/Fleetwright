@@ -932,6 +932,29 @@ test('the first person into a fresh fleet is its admin, and later ones are not',
   assert.ok(c.core.clients.hasAdmin());
 });
 
+test('an app can ask whether its person is an admin, and the answer agrees with the refusal', async (t) => {
+  // The apps drew People and every Revoke for every member, and the member
+  // learned after the confirmation dialog. /api/me lets them leave those out;
+  // it is worth something only if it says what the guard will do.
+  const { provider: p, coordinator: c, origin } = await signInFleet(t);
+  const owner = await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }) });
+  const them = await session(origin, { idToken: await p.token({ email: 'colleague@thetech.network' }) });
+  const me = async (/** @type {string} */ token) =>
+    /** @type {any} */ (await (await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${token}` } })).json());
+
+  assert.deepEqual(await me(owner.body.token), { ok: true, email: 'eli@thetech.network', admin: true });
+  assert.deepEqual(await me(them.body.token), { ok: true, email: 'colleague@thetech.network', admin: false });
+
+  const key = await loadOrCreateKey(scratch());
+  const { code } = c.core.enrollment.mint({ purpose: 'host' });
+  await enrol({ origin, code, hostId: 'a-box', publicJwk: key.publicJwk });
+  const refused = await fetch(`${origin}/api/hosts/a-box`, { method: 'DELETE', headers: { authorization: `Bearer ${them.body.token}` } });
+  assert.equal(refused.status, 403, 'the member the answer called a member is the one refused');
+
+  const anonymous = await fetch(`${origin}/api/me`);
+  assert.equal(anonymous.status, 401, 'it says nothing to no credential');
+});
+
 /** @param {any} v */
 function undefined_or_false(v) {
   return v === true ? true : v;
