@@ -207,6 +207,20 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+NODE_VERSION=(?<currentValue>\\S+)"
       ]
+    },
+    {
+      "description": [
+        "The Renovate the config check runs, in .github/workflows/renovate-config.yml.",
+        "Pinned there because @latest stopped installing at 44.131.1; this keeps the",
+        "pin moving, one pull request at a time, each checked by the version it proposes."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/renovate-config\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+RENOVATE_VERSION: '(?<currentValue>[^']+)'"
+      ]
     }
   ]
 }
