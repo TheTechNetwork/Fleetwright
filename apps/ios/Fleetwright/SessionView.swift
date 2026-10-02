@@ -54,6 +54,9 @@ struct SessionView: View {
     @State private var busy = false
     @State private var result = ""
     @State private var confirmingForget = false
+    /// Counted so the same feedback twice is felt twice. See FleetView.
+    @State private var accepted = 0
+    @State private var refused = 0
 
     /// The schedule, in one place. Ten looks three seconds apart, then nine
     /// ten seconds apart: two minutes of watching, and then a button.
@@ -253,6 +256,9 @@ struct SessionView: View {
         .scrollContentBackground(.hidden)
         .background(Design.Palette.bg)
         .navigationTitle(session.label)
+        .sensoryFeedback(.success, trigger: accepted)
+        .sensoryFeedback(.error, trigger: refused)
+        .animation(Design.Motion.change, value: session.status)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await reload() }
         .task(id: watchGeneration) { await watch() }
@@ -309,8 +315,10 @@ struct SessionView: View {
                 let reply = try await work()
                 let said = (reply.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 result = said.isEmpty ? (nothingSaid ?? "") : said
+                if reply.ok == false { refused += 1 } else { accepted += 1 }
             } catch {
                 result = error.localizedDescription
+                refused += 1
             }
             await reload()
             await onChange()

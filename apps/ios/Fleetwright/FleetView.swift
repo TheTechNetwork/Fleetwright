@@ -137,6 +137,11 @@ struct FleetView: View {
     @State private var status = ""
     @State private var busy = false
     @State private var showingStart = false
+    /// Counted rather than flagged, so the same feedback twice in a row is
+    /// still felt twice: `.sensoryFeedback` fires when its trigger changes.
+    @State private var accepted = 0
+    @State private var refused = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack {
@@ -287,6 +292,12 @@ struct FleetView: View {
             .scrollContentBackground(.hidden)
             .background(Design.Palette.bg)
             .refreshable { await refresh() }
+            // FELT, NOT ONLY SEEN. Stop, Resume and an answer each say whether
+            // the fleet took them, in the hand, because this is read on a phone
+            // held at arm's length at night and a quoted reply at the top of a
+            // list is easy to miss. A refusal feels different from a yes.
+            .sensoryFeedback(.success, trigger: accepted)
+            .sensoryFeedback(.error, trigger: refused)
             // The product is called Fleetwright; this said "agent-fleet",
             // which is the repository. A person who installed one app and is
             // looking at another name has to work out whether they are the
@@ -500,7 +511,11 @@ struct FleetView: View {
         async let reporting = fleet.fleetHosts()
         do {
             let reply = try await fleet.list()
-            sessions = reply.sessions ?? []
+            // A CARD MOVES TO WHERE IT NOW BELONGS. A session that started
+            // asking goes to the top, a new one arrives, a forgotten one
+            // leaves; with nothing animating, each of those was a list that
+            // silently became a different list. Nil under Reduce Motion.
+            withAnimation(Design.Motion.settle(reduceMotion)) { sessions = reply.sessions ?? [] }
             // The fleet just answered, so anything held can go now — and if
             // any of it landed, the list we just fetched is already out of
             // date. One extra list, not a second refresh: refresh calls this.
@@ -508,7 +523,9 @@ struct FleetView: View {
                 // `as? [Fleet.Session]` did nothing — the value is already
                 // that type, optional — and the compiler said so. Binding it
                 // says the same thing and says it once.
-                if let fresh = try? await fleet.list().sessions { sessions = fresh }
+                if let fresh = try? await fleet.list().sessions {
+                    withAnimation(Design.Motion.settle(reduceMotion)) { sessions = fresh }
+                }
             }
             // A failure is shown, never swallowed: "nothing here" and "I could
             // not reach the coordinator" look identical otherwise, and they are
@@ -561,10 +578,13 @@ struct FleetView: View {
             // TRIMMED, not merely tested. A host that still pads its reply
             // would otherwise draw its card with a screenful of empty rows
             // above and below the one line worth reading.
-            let said = (try await work().text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let reply = try await work()
+            let said = (reply.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             status = said.isEmpty ? (nothingSaid ?? "") : said
+            if reply.ok == false { refused += 1 } else { accepted += 1 }
         } catch {
             status = error.localizedDescription
+            refused += 1
         }
         busy = false
         await refresh(keepStatus: true)
@@ -584,6 +604,14 @@ private struct SessionRow: View {
     /// Called when the session's own page changed something the list should
     /// know about — a stop, an answer — so the row moves with it.
     let changed: () async -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The question unfolds from under the title it belongs to; under Reduce
+    /// Motion it fades in where it will sit.
+    private var questionArrives: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top))
+    }
 
     /// A session that is asking something wears the attention ring, and it is
     /// the only card on the screen that ever wears anything but the hairline.
@@ -710,6 +738,7 @@ private struct SessionRow: View {
                     }
                 }
                 .padding(.top, Design.Space.insideTight)
+                .transition(questionArrives)
             } else if session.prompt != nil {
                 // A permission dialog names a command, so without the fleet
                 // switch its labels do not leave the box. Saying so beats
@@ -740,6 +769,9 @@ private struct SessionRow: View {
             .frame(minHeight: 44)
         }
         .fleetCard(radius: Design.Radius.cardSmall, ring: ring)
+        // THE RING TAKES ON THE TONE as the question arrives, rather than
+        // being swapped for it: the one card asking something comes forward.
+        .animation(Design.Motion.change, value: session.prompt != nil)
     }
 }
 
@@ -790,11 +822,16 @@ private struct StatusBadge: View {
             // Decorative: the word beside it is the label, and VoiceOver
             // announcing "play circle fill, running" is worse than "running".
             Image(systemName: symbol)
+                // The symbol becomes the next one rather than being swapped
+                // for it: a play mark turning into a hand is the news.
+                .contentTransition(.symbolEffect(.replace))
                 .accessibilityHidden(true)
             Text(status)
+                .contentTransition(.opacity)
         }
         .fleetType(.label)
         .foregroundStyle(tint)
+        .animation(Design.Motion.change, value: status)
         .padding(.horizontal, Design.Space.insideTight)
         .padding(.vertical, Design.Space.hair)
         .background(

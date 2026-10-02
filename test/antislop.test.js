@@ -69,8 +69,11 @@ test('the exception says what would delete it', () => {
 });
 
 test('the dials are set, because antislop requires them before any UI work', () => {
+  // SET, not set to 1. Each dial runs 1 to 3, and MOTION went to 2 when both
+  // apps turned out to move not at all; this asserts a value is chosen and
+  // written down, which is what antislop needs, not what the value is.
   for (const dial of ['ENERGY', 'RHYTHM', 'MOTION']) {
-    assert.match(MD, new RegExp(`\\*\\*${dial}\\*\\*\\s*\\|\\s*1`), `${dial} is not set to a value`);
+    assert.match(MD, new RegExp(`\\*\\*${dial}\\*\\*\\s*\\|\\s*[1-3]\\b`), `${dial} is not set to a value`);
   }
   // And the design system is named as the DESIGN.md antislop expects, rather
   // than the rules floating free of any direction.
