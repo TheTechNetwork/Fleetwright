@@ -224,7 +224,7 @@ test('a runner is told to use its API key whenever the login is not its owner’
   // arrived does not open, so the coordinator's record says it was given one.
   /** @type {Array<[string, Parameters<typeof fleet>[0], Record<string, unknown>, RegExp|null]>} */
   const cases = [
-    ['a runner somebody else started', {}, { ...FLEET_REPO, actor: 'mallory', actor_id: 7 }, /mallory has not deposited/],
+    ['a runner somebody else started', {}, { ...FLEET_REPO, actor: 'mallory', actor_id: 7 }, /mallory has not kept a Claude login/],
     ['a runner in somebody else’s repository', {}, { repository: 'stranger/runners', repository_owner: 'stranger', repository_owner_id: 99,
       job_workflow_ref: 'stranger/runners/.github/workflows/runner-linux.yml@refs/heads/main' }, /neither eli.s own nor one this fleet mints for/],
     ['a workflow that is not a runner', {}, { job_workflow_ref: 'eli/runners/.github/workflows/ci.yml@refs/heads/main' }, /not one of the runner workflows/],

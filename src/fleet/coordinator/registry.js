@@ -41,6 +41,9 @@ import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
  *   display — it is what `claude auth status` says on that machine — and no
  *   longer used to judge health: a box has no Claude account of its own.
  * @property {number|null} [claudeAccounts]  how many people have linked one
+ * @property {'owner'|'key'|'none'|null} [runnerAuth]  on a runner, what a session
+ *   with no linked account runs on: the owner's kept Claude login, the runner
+ *   repository's API key, or nothing. Null off a runner and from older hosts.
  *   here. Zero is the fault; null is an older host and is not.
  * @property {{reachable: boolean, reason?: string}} [hub]
  * @property {Array<{name: string, title?: string|null, createdBy?: string|null, deletedAt?: number|null, expiresAt?: number|null}>} [bin]
@@ -235,7 +238,7 @@ export class HostRegistry {
     } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
       host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;
-    } else if (health.claudeAccounts === 0) {
+    } else if (health.claudeAccounts === 0 && health.runnerAuth !== 'owner' && health.runnerAuth !== 'key') {
       // NOBODY CAN START A SESSION HERE, which is a different question from the
       // one this used to ask. It read `loggedIn === false` — the box's own
       // Claude login — and that rule outlived its model: since
@@ -255,8 +258,18 @@ export class HostRegistry {
       //
       // A refusal that names a reason is this protocol's central promise; a
       // reason without a remedy is half of it.
-      host.reason =
-        'nobody has linked a Claude account on this host, so no session started here can do anything. ' +
+      //
+      // A RUNNER IS ASKED A DIFFERENT QUESTION. Nobody links an account on a
+      // GitHub job that lives for an hour: a session there runs on its owner's
+      // kept Claude login or on the runner repository's API key, and the hub
+      // says which (runnerAuth). Counting only linked accounts marked every
+      // runner degraded, refused the session it was started for, and told the
+      // person to log in on a box they cannot reach.
+      host.reason = health.runnerAuth === 'none'
+        ? 'this runner has no Claude login for whoever started it and its repository has no ANTHROPIC_API_KEY, ' +
+          'so no session started here can do anything. Keep your Claude login for your runners under You › ' +
+          'Credentials in the app, or add ANTHROPIC_API_KEY to the runner repository’s Actions secrets'
+        : 'nobody has linked a Claude account on this host, so no session started here can do anything. ' +
         // TELEGRAM WAS ARCHIVED AND THIS SENTENCE DID NOT NOTICE. It is the
         // message a beta tester's first run ended at — the one the comment
         // above calls "a reason without a remedy is half of it" — and half of

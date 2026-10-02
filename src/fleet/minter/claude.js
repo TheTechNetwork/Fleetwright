@@ -204,7 +204,13 @@ export async function answerLogin(ask, config) {
 
   const held = await /** @type {LoginStore} */ (config.logins).get(claims.actorId);
   if (!held || held.forgotten || !held.sealed) {
-    return refuse('no_claude_login', `${claims.actor} has not deposited a Claude login, so this runner uses its repository’s API key.`);
+    // NOT "so this runner uses its repository's API key": this Worker cannot
+    // see whether that repository has one, and when it did not, the event
+    // log said the runner was running on a key that did not exist.
+    return refuse(
+      'no_claude_login',
+      `${claims.actor} has not kept a Claude login for their runners, so this runner falls back to its repository’s ANTHROPIC_API_KEY if it has one. Keep one under You › Credentials in the app.`,
+    );
   }
   let token;
   try {
