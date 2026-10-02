@@ -2,6 +2,7 @@ package network.thetech.fleetwright
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -71,6 +72,7 @@ fun MachinesScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val reduced = Design.Motion.reduced()
     var fleetHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
     var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
     // HAS THE FIRST ANSWER ARRIVED? "No machines yet" before the fleet has
@@ -150,14 +152,20 @@ fun MachinesScreen(
                     }
                 }
             }
+            // A machine that stops reporting moves to the silent cards below,
+            // and one that joins arrives, rather than the list becoming another.
             items(fleetHosts, key = { it.hostId }) { host ->
-                MachineCard(host = host, onClick = { showing = host.hostId })
+                Box(Modifier.animateItem(fadeInSpec = Design.Motion.change(), placementSpec = Design.Motion.settle(reduced), fadeOutSpec = Design.Motion.change())) {
+                    MachineCard(host = host, onClick = { showing = host.hostId })
+                }
             }
             // THE MACHINES THAT ARE NOT SAYING ANYTHING, in the same list. A box
             // that has gone quiet is still enrolled and still holds a key, which
             // is what a reinstalled box is refused for — so it needs its page.
             items(silent, key = { "silent/" + it.hostId }) { host ->
-                SilentCard(host = host, onClick = { showing = host.hostId })
+                Box(Modifier.animateItem(fadeInSpec = Design.Motion.change(), placementSpec = Design.Motion.settle(reduced), fadeOutSpec = Design.Motion.change())) {
+                    SilentCard(host = host, onClick = { showing = host.hostId })
+                }
             }
             if (settings.configured) {
                 // ONE ROW, AFTER THE LIST. Adding a machine is something done
