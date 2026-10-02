@@ -28,6 +28,10 @@ enum Seal {
     static let githubRequestAAD = "fleetwright-github-request/v1"
     /// The GitHub token the minter got for this phone, on its way back.
     static let githubReplyAAD = "fleetwright-github-reply/v1"
+    /// A request to the person's vault (PhoneVault), on its way to the minter.
+    static let vaultRequestAAD = "fleetwright-vault-request/v1"
+    /// The vault's answer, on its way back to the key this phone made for it.
+    static let vaultReplyAAD = "fleetwright-vault-reply/v1"
 
     enum Failure: LocalizedError {
         case notAKey, notSealed

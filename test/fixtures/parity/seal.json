@@ -17,5 +17,12 @@
     "epk": "BK5ub4kAXwGtQ_ljsifJgwV3rZKbL7T0HKPNcgYix-OZxarBGgBXGZBcHf7YIT9VmvihfbvS8lO__bwg-xtd_JM",
     "iv": "mib-_ch30w_o7EGb",
     "ct": "gSsrlcDMGRDenXM6lyq6wlaRybYm-9wxFerWtHda_DSnH1pyDAiBgbM2pFaSknc1QS0VHvFgvNDPZ73IIfjHCTxvhd4Uqk_kX1xSJshHbDIta-UktELwpS2OuRmcI-CTTw"
-  }
+  },
+  "boxKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "PWh3x9DBz_lOvY5V0vVWJxbbUrsia9J4HiYSZLf16KQ",
+    "y": "RA6L9xhYmUwbbhs5snq4f6U29rB7MFak42t9rhmrqdM"
+  },
+  "fingerprint": "1d4a05afaca0d6e2"
 }

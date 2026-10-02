@@ -60,6 +60,12 @@ const MAX_CLAUDE_PER_WINDOW = 5;
 
 /** GitHub sign-ins and renewals one person's devices may finish in MINT_WINDOW_MS. */
 const MAX_GITHUB_PER_WINDOW = 20;
+// A person's vault changes: a phone listing, keeping and approving, a few at
+// a time. Thirty in ten minutes is a busy afternoon and not a script.
+const MAX_VAULT_PER_WINDOW = 30;
+// A box asks for its vault every ten minutes and when a token is about to run
+// out; twelve in ten minutes is that with room for reconnects.
+const MAX_BOX_VAULT_PER_WINDOW = 12;
 /** A frame id worth correlating on — the same shape a reply id is held to. */
 const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
@@ -122,7 +128,8 @@ export class CoordinatorCore {
    *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any>,
    *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any>,
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
-   *     github?: (ask: { sealed: unknown }) => Promise<any> }|null,
+   *     github?: (ask: { sealed: unknown }) => Promise<any>,
+   *     vault?: (route: 'device'|'box', ask: Record<string, unknown>) => Promise<any> }|null,
    * }} [opts]
    */
   constructor({
@@ -403,6 +410,8 @@ export class CoordinatorCore {
     if (msg.kind === 'mint') return this.#onRunnerMint(hostId, msg);
     // AND FOR ITS OWNER'S CLAUDE LOGIN, answered the same way.
     if (msg.kind === 'claude-login') return this.#onRunnerClaude(hostId, msg);
+    // ANY BOX ASKING FOR WHAT ITS PEOPLE APPROVED IT TO HOLD, the same way.
+    if (msg.kind === 'vault') return this.#onHostVault(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -1617,6 +1626,71 @@ export class CoordinatorCore {
   }
 
   /**
+   * What a device needs to sign in to Cloudflare for its person's vault: the
+   * client id, the scopes this fleet asks for and the page to open. Not the
+   * client secret, which the minting Worker holds for the exchange.
+   *
+   * @param {string} origin
+   */
+  cloudflareDeviceStart(origin) {
+    const c = this.cloudflareOauth;
+    if (!c?.clientId || !c?.scopes) {
+      return { ok: false, error: { code: 'not_configured' }, text: 'This fleet has no Cloudflare sign-in configured.' };
+    }
+    return {
+      ok: true,
+      clientId: c.clientId,
+      redirectUri: `${origin}/oauth/cloudflare/callback`,
+      authorizeUrl: 'https://dash.cloudflare.com/oauth2/auth',
+      scopes: c.scopes,
+      statePrefix: 'd.',
+    };
+  }
+
+  /**
+   * A person reads or changes their vault: lists it, keeps or forgets an item,
+   * finishes a sign-in for it, approves a box or removes one.
+   *
+   * All of it is sealed on their device to the minting Worker's key, and this
+   * relays it unread with one thing beside it: which fleet account sent it.
+   * The minter checks that against the account named inside the seal before
+   * a box approval can name anybody (src/fleet/minter/vault.js), so this
+   * coordinator's word is needed for that and is not enough on its own. The
+   * answer comes back sealed to a key the device made for it.
+   *
+   * @param {{ email?: string|null }|null} requester @param {any} body
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async vaultDevice(requester, body) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first: a vault belongs to a person.' };
+    const sealed = body?.sealed;
+    if (!sealed || typeof sealed !== 'object' || JSON.stringify(sealed).length > 16_384) {
+      return { ok: false, error: { code: 'bad_params' }, text: 'That is not a sealed vault request.' };
+    }
+    if (!this.minter?.vault) {
+      return { ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a vault. See docs/vault.md.' };
+    }
+    const now = this.now();
+    const key = `vault:${email}`;
+    const recent = (this.claudeAsks.get(key) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_VAULT_PER_WINDOW) {
+      return { ok: false, error: { code: 'too_many' }, text: 'Too many vault changes in ten minutes. Wait a little and try again.' };
+    }
+    recent.push(now);
+    this.claudeAsks.set(key, recent);
+    const r = await this.minter.vault('device', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email }).then(
+      (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+    // WHAT CHANGED, in the minter's own words, which never carry a value.
+    this.record({ event: r.ok ? 'vault.changed' : 'vault.refused', actor: email, text: `${email}: ${String(r.text || '').slice(0, 200)}` });
+    return r.ok
+      ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
+  }
+
+  /**
    * Finish an authorization GitHub has redirected back to us.
    *
    * Everything here is refusable and says why in a sentence a person reading a
@@ -1706,6 +1780,15 @@ export class CoordinatorCore {
     const clientSecret = this.cloudflareOauth?.clientSecret;
     if (!clientId || !clientSecret) {
       return { ok: false, text: 'This fleet has no Cloudflare OAuth client configured.' };
+    }
+    // A DEVICE'S SIGN-IN, for its person's vault: the code goes back to the
+    // phone, which holds the verifier, and the minting Worker makes the
+    // exchange. The same branch GitHub's callback has.
+    if (DEVICE_STATE_RE.test(String(state ?? ''))) {
+      const back = deviceReturnUrl({ code, state, provider: 'cloudflare' });
+      return back
+        ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to Cloudflare.' }
+        : { ok: false, text: 'Cloudflare did not send back a code to finish signing in with. Try again from the app.' };
     }
     const flow = this.pendingCloudflare.redeem(state);
     if (!flow) {
@@ -2430,6 +2513,65 @@ export class CoordinatorCore {
         ? { ok: true, sealed: reply.sealed, login: reply.login, owner: host.owner, text: reply.text }
         : { ok: false, owner: host.owner, error: reply.error || { code: 'refused' }, text: reply.text || 'No Claude login for this runner.' },
     );
+  }
+
+  /**
+   * A box asks for what its people approved it to hold.
+   *
+   * The request is signed by the box's own key, and the minting Worker decides
+   * everything from that signature and the approvals people made from their
+   * phones (src/fleet/minter/vault.js). What this adds is one check of its
+   * own, that the key is the one this box enrolled with: an honest coordinator
+   * refuses a box that presents somebody else's key, and a dishonest one gains
+   * nothing by skipping the check, because the answer is sealed to the box.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  async #onHostVault(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for its vault without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the box asks again on its next pass */ }
+    };
+    const request = msg.request;
+    const signature = String(msg.signature || '');
+    const enrolled = this.hostIds?.get(hostId);
+    const k = request?.hostKey;
+    if (!request || typeof request !== 'object' || JSON.stringify(request).length > 2048 || signature.length > 200) {
+      answer({ ok: false, error: { code: 'bad_params' }, text: 'That vault request is not in the shape one takes.' });
+      return;
+    }
+    if (!enrolled?.publicJwk || enrolled.revokedAt || k?.x !== enrolled.publicJwk.x || k?.y !== enrolled.publicJwk.y) {
+      answer({ ok: false, error: { code: 'not_this_box' }, text: `That is not the key ${hostId} enrolled with.` });
+      return;
+    }
+    if (!this.minter?.vault) {
+      answer({ ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a vault.' });
+      return;
+    }
+    const now = this.now();
+    const key = `box-vault:${hostId}`;
+    const recent = (this.claudeAsks.get(key) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_BOX_VAULT_PER_WINDOW) {
+      answer({ ok: false, error: { code: 'too_many' }, text: `${hostId} has asked for its vault ${recent.length} times in ten minutes.` });
+      return;
+    }
+    recent.push(now);
+    this.claudeAsks.set(key, recent);
+    const r = await this.minter.vault('box', { request, signature }).then(
+      (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+    answer(r.ok
+      ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });
   }
 
   /**

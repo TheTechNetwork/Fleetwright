@@ -599,6 +599,26 @@ struct Fleet {
         try Self.object(try await post("/api/github/device", body: ["sealed": sealed]))
     }
 
+    /// What this phone needs to open Cloudflare's sign-in page itself, for the person's vault.
+    struct CloudflareDeviceStart: Codable {
+        let ok: Bool?
+        let clientId: String?
+        let redirectUri: String?
+        let authorizeUrl: String?
+        let scopes: String?
+        let statePrefix: String?
+        let text: String?
+    }
+
+    func cloudflareDeviceStart() async throws -> CloudflareDeviceStart {
+        try JSONDecoder().decode(CloudflareDeviceStart.self, from: try await get("/api/cloudflare/device"))
+    }
+
+    /// A request to the person's vault, sealed to the minter; the answer comes back sealed to this phone.
+    func vault(sealed: [String: String]) async throws -> [String: Any] {
+        try Self.object(try await post("/api/vault", body: ["sealed": sealed]))
+    }
+
     /// The key the fleet says its minter has, to compare with the pin.
     struct MinterKey: Codable {
         let ok: Bool?
@@ -1502,6 +1522,17 @@ struct Fleet {
         let enrolledAt: Double?
         let lastSeenAt: Double?
         let revokedAt: Double?
+        /// The box's own public key, which a phone approves for its person's
+        /// vault by (PhoneVault). Nil from a coordinator too old to list it.
+        var publicJwk: PublicKey?
+        var ephemeral: Bool?
+
+        struct PublicKey: Codable, Hashable {
+            let kty: String
+            let crv: String
+            let x: String
+            let y: String
+        }
 
         var id: String { hostId }
         var isRevoked: Bool { (revokedAt ?? 0) > 0 }

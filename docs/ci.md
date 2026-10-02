@@ -365,6 +365,11 @@ check it against. Optional; without it the minter keeps no Claude logins and
 runners use their repository's API key. See `docs/runner-central.md`, "Your
 Claude login on a runner".
 
+**`FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` travels the same way**, so each
+person's vault can keep and renew their Cloudflare sign-in
+([vault.md](./vault.md)); the client id is read from the coordinator's config at
+deploy. Optional; without it vaults keep no Cloudflare sign-in.
+
 **`FLEETWRIGHT_GITHUB_CLIENT_SECRET` is synced to the minter by the same run**,
 from whatever that job can see: a repository secret, or a secret of
 `github-app-key`. A copy kept only as a secret of `production` is invisible to

@@ -862,6 +862,13 @@ class Fleet(
     suspend fun githubDeviceToken(sealed: JSONObject): JSONObject =
         withContext(Dispatchers.IO) { post("/api/github/device", JSONObject().put("sealed", sealed)) }
 
+    /** What this phone needs to open Cloudflare's sign-in page itself, for the person's vault. */
+    suspend fun cloudflareDeviceStart(): JSONObject = withContext(Dispatchers.IO) { get("/api/cloudflare/device") }
+
+    /** A request to the person's vault, sealed to the minter; the answer comes back sealed to this phone. */
+    suspend fun vault(sealed: JSONObject): JSONObject =
+        withContext(Dispatchers.IO) { post("/api/vault", JSONObject().put("sealed", sealed)) }
+
     /** The key the fleet says its minter has, to compare with the pin. */
     suspend fun claudeLoginKey(): JSONObject = withContext(Dispatchers.IO) { get("/api/claude-login") }
 
@@ -1233,6 +1240,8 @@ class Fleet(
                     fingerprint = o.optString("fingerprint"),
                     revoked = o.optLong("revokedAt", 0L) > 0L,
                     lastSeenAt = o.optLong("lastSeenAt", 0L).takeIf { it > 0L },
+                    publicJwk = o.optJSONObject("publicJwk"),
+                    ephemeral = o.optBoolean("ephemeral", false),
                 )
             }
         }.getOrDefault(emptyList())
@@ -1298,7 +1307,18 @@ class Fleet(
      * since the epoch, or null for a box that enrolled and never connected —
      * which is a different fact from one that went away, and is shown as one.
      */
-    data class Host(val hostId: String, val fingerprint: String, val revoked: Boolean, val lastSeenAt: Long? = null)
+    /**
+     * `publicJwk` is the box's own public key, which a phone approves for its
+     * person's vault by (PhoneVault): null from a coordinator too old to list it.
+     */
+    data class Host(
+        val hostId: String,
+        val fingerprint: String,
+        val revoked: Boolean,
+        val lastSeenAt: Long? = null,
+        val publicJwk: JSONObject? = null,
+        val ephemeral: Boolean = false,
+    )
 
     /**
      * A device that holds a credential for this fleet. No secret in it — the

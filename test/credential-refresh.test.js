@@ -26,6 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { ensureSandboxVolumes, refreshSeededCredentials, credentialSourceForAccount } from '../src/core/podman.js';
+import { applyVault } from '../src/core/vault-store.js';
 
 const HOUR = 3_600_000;
 
@@ -259,4 +260,28 @@ test('an account resolves to its own file, or to nothing at all', async (t) => {
   // different situation from never having had one, and the caller has to be
   // able to tell them apart to say something true about it.
   assert.equal(credentialSourceForAccount(s.cfg(), 'nobody@example.com'), null);
+});
+
+test('a person with nothing linked here is seeded the Claude login from their vault, at start and on resume', async (t) => {
+  const s = stubPodman(t);
+  // What the sidecar wrote when the vault answered (vault-store.js).
+  applyVault(/** @type {any} */ ({ stateDir: s.state }), {
+    accounts: [{ email: 'vera@example.com', login: 'vera', items: [{ name: 'claude', value: `sk-ant-oat01-${'v'.repeat(40)}`, expiresAt: null }] }],
+  });
+  const started = await ensureSandboxVolumes(s.cfg(), 'veras', 'fleet:vera@example.com');
+  assert.equal(started.ok, true, started.message);
+  assert.equal(started.account, 'vera@example.com');
+  // Seeded as `.claude-token` for the entrypoint, over stdin, never as a credential file.
+  assert.match(s.seeded(), /sk-ant-oat01-v{40}/);
+  assert.ok(s.seeds().every((c) => !c.includes('sk-ant-oat01')), 'never on the command line');
+
+  // A resume of that session takes today's token from the vault the same way.
+  const again = refreshSeededCredentials(s.cfg(), 'veras', { account: 'vera@example.com' });
+  assert.equal(again.refreshed, true);
+  assert.equal(credentialSourceForAccount(s.cfg(), 'vera@example.com')?.tokenFile?.endsWith('vera@example.com.claude'), true);
+
+  // And a vault that no longer gives this box anything leaves a person with nothing, which is the refusal.
+  applyVault(/** @type {any} */ ({ stateDir: s.state }), { accounts: [] });
+  const refused = await ensureSandboxVolumes(s.cfg(), 'later', 'fleet:vera@example.com');
+  assert.equal(refused.ok, false);
 });

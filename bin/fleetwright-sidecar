@@ -29,6 +29,7 @@ import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
 import { loadMinter } from '../src/fleet/host/minter-config.js';
+import { sign } from '../src/fleet/crypto.js';
 import { actionsJobToken, serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
@@ -184,6 +185,11 @@ const sidecar = new Sidecar({
     // Present only inside a GitHub Actions job with id-token permission, which
     // is to say only on a runner.
     jobToken: actionsJobToken(process.env),
+    // THIS BOX'S KEY, for asking its people's vault. The private half is
+    // captured in the closure and goes nowhere else (docs/vault.md).
+    vaultKey: key
+      ? { publicJwk: key.publicJwk, sign: (/** @type {string} */ message) => sign(key.privateJwk, message) }
+      : null,
     // WHAT THE OPERATOR SAID. Labels are how work is aimed — `tag: macos` on a
     // start, filtered before ranking — and "gpu", "prod", "noisy-neighbour"
     // are decisions no amount of introspection produces, so they come from

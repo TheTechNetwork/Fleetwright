@@ -1,6 +1,4 @@
-import CryptoKit
 import Foundation
-import Security
 
 /// This phone's own GitHub sign-in, and the two things it is for: starting a
 /// runner with no permanent box in the fleet, and keeping your Claude login for
@@ -14,7 +12,7 @@ import Security
 ///
 /// HOW, WITHOUT ANYTHING IN THE MIDDLE SEEING THE TOKEN:
 ///  1. The phone makes a PKCE verifier and a state, and opens GitHub's own page
-///     in `WebAuth` with the App's public client id.
+///     in `WebAuth` with the App's public client id (DeviceSignIn).
 ///  2. GitHub sends the browser to the coordinator's callback, which hands the
 ///     code back to this app. The code is no use without the verifier.
 ///  3. The phone seals the code and the verifier to the minting Worker's key
@@ -74,26 +72,15 @@ struct PhoneGitHub {
         guard start.ok == true, let clientId = start.clientId, let redirectUri = start.redirectUri else {
             throw FleetError.message(start.text ?? "The fleet cannot start a GitHub sign-in.")
         }
-        let verifier = Self.randomToken(32)
-        let state = (start.statePrefix ?? "d.") + Self.randomToken(24)
-        let challenge = Seal.b64(Data(SHA256.hash(data: Data(verifier.utf8))))
-        var url = URLComponents(string: "https://github.com/login/oauth/authorize")!
-        url.queryItems = [
-            URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "redirect_uri", value: redirectUri),
-            URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "code_challenge", value: challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-        ]
-        let back = try await WebAuth.authorize(url.url!.absoluteString)
-        let items = URLComponents(url: back, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        func item(_ name: String) -> String? { items.first { $0.name == name }?.value }
-        // A custom scheme is unverified, so the state is what says this is the
-        // answer to THIS sign-in rather than something another app sent.
-        guard back.host == "github", item("state") == state else {
-            throw FleetError.message("GitHub came back with an answer to a different sign-in, so it was not used.")
-        }
-        guard let code = item("code"), !code.isEmpty else { throw FleetError.message("GitHub came back without a code.") }
+        let back = try await DeviceSignIn.run(
+            authorize: "https://github.com/login/oauth/authorize",
+            clientId: clientId,
+            redirectUri: redirectUri,
+            statePrefix: start.statePrefix ?? "d.",
+            host: "github"
+        )
+        let code = back.code
+        let verifier = back.verifier
         return try await finish(fleet, pin: pin, request: [
             "grant": "code", "code": code, "verifier": verifier, "redirectUri": redirectUri,
         ])
@@ -219,11 +206,5 @@ struct PhoneGitHub {
         case 404: return "GitHub cannot see \(what) from your account (404)."
         default: return "GitHub refused \(what) (\(status))."
         }
-    }
-
-    private static func randomToken(_ bytes: Int) -> String {
-        var raw = [UInt8](repeating: 0, count: bytes)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes, &raw)
-        return Seal.b64(Data(raw))
     }
 }

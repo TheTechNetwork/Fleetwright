@@ -101,6 +101,10 @@ struct RunnersFromPhone: View {
                 act { try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: nil) }
             }
             .disabled(busy)
+
+            // YOUR VAULT, below what it builds on: the key it seals to and the
+            // sign-in that says whose it is.
+            YourVault(settings: settings)
         }
 
         if !result.isBlank {
@@ -127,6 +131,175 @@ struct RunnersFromPhone: View {
                 failed = true
                 result = error.localizedDescription
             }
+        }
+    }
+}
+
+/// Your vault: each credential kept once, and the boxes that may hold it.
+/// See PhoneVault for how, and docs/vault.md for why.
+///
+/// Drawn inside RunnersFromPhone once the minter key is saved and this phone is
+/// signed in to GitHub, because every request here is sealed to that key and
+/// proves whose vault it is with that sign-in. The Claude login kept above is
+/// the same vault's, and shows in the list.
+///
+/// A box is offered for approval with the fingerprint this phone worked out
+/// from its key, beside the sentence that says to compare it, because the
+/// comparison is the whole of why approving is safe. The same sentences as
+/// Android (YourVault.kt), which test/runners-from-phone-in-apps.test.js holds
+/// them to.
+struct YourVault: View {
+    let settings: Settings
+    @State private var contents: PhoneVault.Contents?
+    @State private var boxes: [Fleet.Host] = []
+    @State private var secretName = ""
+    @State private var secretValue = ""
+    @State private var busy = false
+    @State private var result = ""
+    @State private var failed = false
+
+    private var vault: PhoneVault { PhoneVault(settings: settings) }
+
+    /// A box the fleet lists, with the fingerprint worked out here from its
+    /// key, never the one the fleet says beside it.
+    private struct Listed: Identifiable {
+        let host: Fleet.Host
+        let fingerprint: String?
+        var id: String { host.hostId }
+    }
+
+    private var listed: [Listed] {
+        boxes.map { Listed(host: $0, fingerprint: $0.publicJwk.map(PhoneVault.fingerprint)) }
+    }
+
+    /// Approved, and not in this fleet any more: still removable, because an
+    /// approval outlives the box being taken out of the fleet.
+    private var strays: [PhoneVault.Grant] {
+        let shown = Set(listed.compactMap { $0.fingerprint })
+        return (contents?.grants ?? []).filter { !shown.contains($0.fingerprint) }
+    }
+
+    var body: some View {
+        Text("Your vault")
+            .fleetType(.bodyStrong)
+            .task { await reload() }
+        Text("Keep each credential here once. A box you approve gets them when a session needs them, "
+             + "and loses them when you remove it.")
+            .fleetType(.label)
+            .foregroundStyle(Design.Palette.inkDim)
+
+        if let kept = contents {
+            Text(kept.items.isEmpty ? "Nothing kept yet." : "Kept: " + kept.items.map { PhoneVault.label($0.name) }.joined(separator: ", ") + ".")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.ink)
+            ForEach(kept.items, id: \.name) { item in
+                Button("Forget \(PhoneVault.label(item.name))", role: .destructive) {
+                    act { try await vault.forget(Fleet(settings: settings), name: item.name) }
+                }
+                .disabled(busy)
+            }
+        } else {
+            Text("Loading your vault…")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+        }
+
+        Button("Keep GitHub for my boxes") {
+            act { try await vault.connect(Fleet(settings: settings), provider: "github") }
+        }
+        .disabled(busy)
+        Button("Keep Cloudflare for my boxes") {
+            act { try await vault.connect(Fleet(settings: settings), provider: "cloudflare") }
+        }
+        .disabled(busy)
+
+        TextField("Secret name", text: $secretName)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        SecureField("Secret value", text: $secretValue)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        Button("Keep secret") {
+            act {
+                let text = try await vault.keepSecret(Fleet(settings: settings), name: secretName, value: secretValue)
+                secretName = ""
+                secretValue = ""
+                return text
+            }
+        }
+        .disabled(busy || secretName.isBlank || secretValue.isEmpty)
+
+        Text("Boxes")
+            .fleetType(.bodyStrong)
+        Text("Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.")
+            .fleetType(.label)
+            .foregroundStyle(Design.Palette.inkDim)
+        ForEach(listed) { box in
+            Text("\(box.host.hostId) · \(box.fingerprint ?? "no key listed")")
+                .fleetType(.labelMono)
+                .foregroundStyle(Design.Palette.ink)
+            if let grant = contents?.grants.first(where: { $0.fingerprint == box.fingerprint }) {
+                Text("Approved")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ok)
+                Button("Remove", role: .destructive) {
+                    act { try await vault.remove(Fleet(settings: settings), grant: grant) }
+                }
+                .disabled(busy)
+            } else if box.fingerprint != nil {
+                Button("Approve") {
+                    act { try await vault.approve(Fleet(settings: settings), host: box.host) }
+                }
+                .disabled(busy || contents == nil)
+            }
+        }
+        ForEach(strays, id: \.key) { grant in
+            Text("\(grant.label.isEmpty ? "A box" : grant.label) · \(grant.fingerprint)")
+                .fleetType(.labelMono)
+                .foregroundStyle(Design.Palette.inkDim)
+            Button("Remove", role: .destructive) {
+                act { try await vault.remove(Fleet(settings: settings), grant: grant) }
+            }
+            .disabled(busy)
+        }
+
+        if !result.isBlank {
+            Text(result)
+                .fleetType(.label)
+                .foregroundStyle(failed ? Design.Palette.bad : Design.Palette.ink)
+                .textSelection(.enabled)
+        }
+    }
+
+    @MainActor
+    private func reload() async {
+        let fleet = Fleet(settings: settings)
+        do {
+            contents = try await vault.list(fleet)
+        } catch {
+            failed = true
+            result = error.localizedDescription
+        }
+        boxes = ((try? await fleet.enrolledHosts()) ?? []).filter { !$0.isRevoked && $0.ephemeral != true }
+    }
+
+    /// Run one change, say what it did, then show the vault as it is now. A
+    /// cancelled sign-in says nothing: the person meant it.
+    private func act(_ block: @escaping @MainActor () async throws -> String) {
+        Task { @MainActor in
+            busy = true
+            result = ""
+            defer { busy = false }
+            do {
+                result = try await block()
+                failed = false
+            } catch WebAuth.Failure.cancelled {
+                failed = false
+            } catch {
+                failed = true
+                result = error.localizedDescription
+            }
+            await reload()
         }
     }
 }

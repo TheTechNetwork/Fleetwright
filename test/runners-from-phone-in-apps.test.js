@@ -12,20 +12,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { DEPOSIT_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD } from '../src/fleet/seal.js';
+import { DEPOSIT_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, VAULT_REQUEST_AAD, VAULT_REPLY_AAD } from '../src/fleet/seal.js';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
-const IOS = ['Fleet.swift', 'PhoneGitHub.swift', 'RunnersFromPhone.swift', 'Seal.swift']
+const IOS = ['Fleet.swift', 'PhoneGitHub.swift', 'RunnersFromPhone.swift', 'Seal.swift', 'DeviceSignIn.swift', 'PhoneVault.swift']
   .map((f) => read(`apps/ios/Fleetwright/${f}`))
   .join('\n');
-const ANDROID = ['Fleet.kt', 'PhoneGitHub.kt', 'RunnersFromPhone.kt', 'Seal.kt']
+const ANDROID = ['Fleet.kt', 'PhoneGitHub.kt', 'RunnersFromPhone.kt', 'Seal.kt', 'DeviceSignIn.kt', 'PhoneVault.kt', 'YourVault.kt']
   .map((f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`))
   .join('\n');
 
 test('both phones seal under the purposes the minter opens with', () => {
   // A phone sealing under a stale string gets "that did not open" from the
   // minter and nothing else, so the strings are checked against seal.js itself.
-  for (const aad of [DEPOSIT_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD]) {
+  for (const aad of [DEPOSIT_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, VAULT_REQUEST_AAD, VAULT_REPLY_AAD]) {
     assert.ok(IOS.includes(`"${aad}"`), `iOS does not seal under ${aad}`);
     assert.ok(ANDROID.includes(`"${aad}"`), `Android does not seal under ${aad}`);
   }
@@ -75,5 +75,46 @@ test('the GitHub sign-in is PKCE with a state the phone checks, and the code goe
     // The client secret is the minter's and nowhere else. A phone that holds
     // one has given it to everybody who can unzip the app.
     assert.doesNotMatch(src, /client_secret|clientSecret/, `${name} holds a client secret`);
+  }
+});
+
+test('the words about a vault are the same on both phones', () => {
+  for (const words of [
+    'Your vault',
+    'Keep each credential here once. A box you approve gets them when a session needs them, ',
+    'and loses them when you remove it.',
+    'Nothing kept yet.',
+    'Kept: ',
+    'Loading your vault…',
+    'Keep GitHub for my boxes',
+    'Keep Cloudflare for my boxes',
+    'Secret name',
+    'Secret value',
+    'Keep secret',
+    'Boxes',
+    'Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.',
+    'Approved',
+    'Approve',
+    'Remove',
+    'no key listed',
+    'This phone does not know which fleet account it is signed in as. Sign in to the fleet again.',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+});
+
+test('both phones reach the vault through the fleet, and approve a box by a fingerprint they work out themselves', () => {
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    assert.ok(src.includes('/api/vault'), `${name} never reaches the vault`);
+    assert.ok(src.includes('/api/cloudflare/device'), `${name} cannot sign in to Cloudflare for the vault`);
+    for (const op of ['"list"', '"put"', '"forget"', '"connect"', '"grant"', '"revoke"']) {
+      assert.ok(src.includes(op), `${name} never asks the vault to ${op}`);
+    }
+    // THE FINGERPRINT IS COMPUTED, over the canonical key, never read off the
+    // fleet's listing: the fleet listing a fingerprint beside a key of its own
+    // choosing is exactly the attack the comparison exists to catch.
+    assert.match(src, /SHA-256|SHA256/, `${name} does not hash the key itself`);
+    assert.match(src, /\{\\"crv\\":/, `${name} does not build the canonical key`);
   }
 });

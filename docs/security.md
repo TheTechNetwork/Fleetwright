@@ -235,13 +235,42 @@ permanent box"), so two more routes carry something through the coordinator.
   can reach on github.com through the App's permissions, for eight hours, and
   is renewed with a refresh token kept the same way.
 
+**Each person's vault, and what it adds.** `POST /api/vault` and the `vault`
+frame carry every person's GitHub, Cloudflare and Claude credentials and named
+secrets through the coordinator, so they are accounted for here
+([vault.md](./vault.md)).
+
+- **A person's request** is sealed on their phone to the pinned minter key,
+  with their GitHub token inside, and the minter decides whose vault it is
+  from GitHub. The coordinator adds which signed-in account sent it, and the
+  minter refuses unless that matches the account named inside the seal, so an
+  honest coordinator stops one member filing credentials under another's name.
+  A dishonest one can at most file a person's *own* credentials under the
+  wrong fleet account, which is no more than forging an intent's actor.
+- **A box is approved by its key**, which the phone takes from the
+  coordinator's list and fingerprints itself, for the person to compare with
+  `fleetwright-sidecar identity` on the box. **This is the one place a
+  compromised coordinator can gain credentials:** by listing a key of its own
+  under a real box's name, to a person who approves without comparing. The
+  phone puts the comparison beside the button, and nothing else in this design
+  rests on the coordinator's word for a key.
+- **A box's request** is signed by that key and answered sealed to a key the
+  box made for it. The coordinator checks the key is the one the box enrolled
+  with, and the minter checks the signature and the approval; a replay gets an
+  answer only the box can open. What the coordinator can do is deny: drop the
+  request, and the box keeps what it holds until it runs out.
+- **What a box holds** is access tokens, a Claude setup-token and named
+  secrets, never a refresh token, in 0600 files the box's own sessions are
+  given through the broker. That is less than a box holding a linked
+  connection, which keeps the refresh token.
+
 **The minting Worker's own bound, which is a different compromise.** Whoever
 can deploy to the Cloudflare account can replace the minter's code and capture
 every token it signs from then on — for every repository of every account on
 `FLEETWRIGHT_GITHUB_MINT_OWNERS` the App is installed on, and, by editing that
 list or ignoring it, every installation — and open every Claude login the
 minter keeps, since new code runs with the deposit key, and every phone
-sign-in it finishes from then on. Secrets cannot be read
+sign-in it finishes from then on, and every vault, refresh tokens included. Secrets cannot be read
 back out of Cloudflare; code can be swapped. So the account and the API token
 that deploys to it are the boundary for both keys, not the coordinator.
 Rotating the App key on github.com ends the first. For the second, a new

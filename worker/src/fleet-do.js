@@ -128,6 +128,9 @@ export class Fleet {
             runnerRepo: async (ask) => minterCall(env.MINTER, '/runner-repo', ask),
             // A device's GitHub sign-in, finished where the client secret is.
             github: async (ask) => minterCall(env.MINTER, '/github/token', ask),
+            // Each person's vault, and a box asking for what it was approved
+            // to hold: relayed sealed both ways (src/fleet/minter/vault.js).
+            vault: async (route, ask) => minterCall(env.MINTER, `/vault/${route}`, ask),
           }
         : null,
     });
@@ -816,6 +819,28 @@ export class Fleet {
         const r = await this.core.githubDeviceToken(requesterFor(client), await readJson(request));
         return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
       }
+    }
+
+    // A DEVICE SIGNING IN TO CLOUDFLARE for its person's vault: what it needs
+    // to open Cloudflare's page itself. The exchange is the minting Worker's,
+    // through POST /api/vault. See CoordinatorCore.cloudflareDeviceStart.
+    if (url.pathname === '/api/cloudflare/device' && request.method === 'GET') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first \u2014 a Cloudflare sign-in belongs to a person.' }, 403);
+      }
+      const r = this.core.cloudflareDeviceStart(url.origin);
+      return json(r, r.ok ? 200 : 503);
+    }
+
+    // A PERSON'S VAULT: list it, keep or forget an item, finish a sign-in for
+    // it, approve a box or remove one. Sealed to the minting Worker both ways;
+    // relayed with who sent it. See CoordinatorCore.vaultDevice and docs/vault.md.
+    if (url.pathname === '/api/vault' && request.method === 'POST') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first \u2014 a vault belongs to a person.' }, 403);
+      }
+      const r = await this.core.vaultDevice(requesterFor(client), await readJson(request));
+      return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
     }
 
     // START A RUNNER FROM YOUR OWN DEVICE, with no permanent box: the ticket

@@ -21,6 +21,8 @@ final class SealTests: XCTestCase {
         let aad: String
         let plaintext: String
         let sealed: [String: String]
+        let boxKey: Fleet.Host.PublicKey
+        let fingerprint: String
     }
 
     private func fixture() throws -> Fixture {
@@ -59,6 +61,13 @@ final class SealTests: XCTestCase {
         XCTAssertEqual(opened as NSDictionary, expected)
         // Bound to its purpose: the same bytes under another additional data do not open.
         XCTAssertThrowsError(try Seal.open(key, aad: "something else", sealed: f.sealed))
+    }
+
+    /// The fingerprint a person compares with `fleetwright-sidecar identity`
+    /// before approving a box for their vault, worked out by this phone.
+    func testWorksOutTheFingerprintABoxPrints() throws {
+        let f = try fixture()
+        XCTAssertEqual(PhoneVault.fingerprint(f.boxKey), f.fingerprint)
     }
 
     func testAKeyItMakesOpensWhatIsSealedToIt() throws {

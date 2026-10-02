@@ -55,6 +55,12 @@ internal object Seal {
     /** The GitHub token the minter got for this phone, on its way back. */
     const val GITHUB_REPLY_AAD = "fleetwright-github-reply/v1"
 
+    /** A request to the person's vault (PhoneVault), on its way to the minter. */
+    const val VAULT_REQUEST_AAD = "fleetwright-vault-request/v1"
+
+    /** The vault's answer, on its way back to the key this phone made for it. */
+    const val VAULT_REPLY_AAD = "fleetwright-vault-reply/v1"
+
     /** An uncompressed P-256 public key, base64url without padding: 87 characters. */
     val KEY_RE = Regex("^[A-Za-z0-9_-]{87}$")
 

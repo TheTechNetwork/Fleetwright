@@ -390,9 +390,20 @@ export class HostIdentities {
   }
 
   list() {
+    // THE PUBLIC KEY, reduced to the four fields that make it, and nothing
+    // that could be private. A phone needs it to approve a box for its
+    // person's vault: it works out the fingerprint from this key itself, for
+    // the person to compare with what the box prints, so a list that showed
+    // only a fingerprint would be asking the phone to trust this coordinator's
+    // word for which key that is (docs/vault.md).
     return [...this.hosts.values()]
       .filter((h) => !h.revokedAt)
-      .map(({ publicJwk, ...rest }) => rest)
+      .map(({ publicJwk, ...rest }) => ({
+        ...rest,
+        publicJwk: publicJwk?.kty === 'EC' && publicJwk.x && publicJwk.y
+          ? { kty: 'EC', crv: String(publicJwk.crv), x: String(publicJwk.x), y: String(publicJwk.y) }
+          : null,
+      }))
       .sort((a, b) => b.enrolledAt - a.enrolledAt);
   }
 

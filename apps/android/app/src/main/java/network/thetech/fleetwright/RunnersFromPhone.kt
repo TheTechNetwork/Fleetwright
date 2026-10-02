@@ -157,6 +157,10 @@ internal fun RunnersFromPhone(settings: Settings) {
                     onClick = { act { phone.depositClaudeLogin(Fleet(settings), null) } },
                 ) { Text("Forget my Claude login") }
             }
+
+            // YOUR VAULT, below what it builds on: the key it seals to and
+            // the sign-in that says whose it is.
+            YourVault(settings)
         }
 
         if (result.isNotBlank()) {

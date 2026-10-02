@@ -50,6 +50,11 @@ class SealTest {
     }
 
     @Test
+    fun worksOutTheFingerprintABoxPrints() {
+        assertEquals(fixture.getString("fingerprint"), PhoneVault.fingerprint(fixture.getJSONObject("boxKey")))
+    }
+
+    @Test
     fun aKeyItMakesOpensWhatIsSealedToIt() {
         val key = Seal.newKey()
         val sealed = Seal.seal(key.publicKey, Seal.GITHUB_REPLY_AAD, JSONObject().put("accessToken", "ghu_x"))

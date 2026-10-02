@@ -29,6 +29,7 @@ import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
 import { sessionImage, variantOf, pinnedByEnv } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
+import { vaultClaudeFile } from './vault-store.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -692,13 +693,19 @@ export function refreshSeededCredentials(cfg, name, { account = null, actor = nu
     return { refreshed: false, account: null, why: 'unknown account' };
   }
   const picked = credentialSourceForAccount(cfg, owner);
+  if (!picked?.source && picked?.tokenFile) {
+    // A VAULT TOKEN has no state to read and nothing to renew here: today's
+    // copy is whatever the vault gave this box on its last pass.
+    const seeded = seedCredentials(cfg, claude, picked, actor);
+    return seeded.ok ? { refreshed: true, account: picked.account } : { refreshed: false, account: owner, why: seeded.message };
+  }
   if (!picked?.source) {
     // The account was unlinked since this session started. Saying so beats
     // seeding somebody else's credential, and beats silence.
     log.warn(`sandbox: ${owner} has no credential on this box any more; ${claude} keeps the one it has`);
     return { refreshed: false, account: owner, why: 'no credential for that account' };
   }
-  const state = readCredentialState(picked.source);
+  const state = readCredentialState(/** @type {string} */ (picked.source));
   if (state.state === 'expired') {
     log.warn(`sandbox: ${owner}'s credential on this box is itself expired; ${claude} would gain nothing`);
     return { refreshed: false, account: owner, why: 'the host credential is expired too' };
@@ -724,7 +731,7 @@ export function refreshSeededCredentials(cfg, name, { account = null, actor = nu
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} account  an email, or "shared"
- * @returns {{ source: string|null, accountMeta: string|null, account: string }|null}
+ * @returns {{ source: string|null, tokenFile?: string, accountMeta: string|null, account: string }|null}
  */
 export function credentialSourceForAccount(cfg, account) {
   // `shared` is what volumes created before docs/one-account-per-person.md
@@ -736,7 +743,12 @@ export function credentialSourceForAccount(cfg, account) {
   if (!email) return null;
   const store = new Accounts(cfg.stateDir);
   const linked = store.credentialPathFor(email);
-  if (!linked) return null;
+  if (!linked) {
+    // The same vault fallback a start has, so a resume comes back on the
+    // token it started with rather than signed out.
+    const fromVault = vaultClaudeFile(cfg, email);
+    return fromVault ? { source: null, tokenFile: fromVault, accountMeta: null, account: email } : null;
+  }
   return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
 }
 
@@ -875,13 +887,14 @@ export function noAccountRefusal(cfg, picked) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} volume
- * @param {{ source: string|null, accountMeta?: string|null, account: string, why?: string }} picked
+ * @param {{ source: string|null, tokenFile?: string, accountMeta?: string|null, account: string, why?: string }} picked
  * @param {string|null} [actor]  for the provider tokens, which key on the
  *   person rather than on the Claude account — see pickSecretsFile.
  * @returns {{ ok: boolean, message?: string, account?: string }}
  */
 function seedCredentials(cfg, volume, picked, actor = null) {
   const source = picked.source;
+  if (!source && picked.tokenFile) return seedVaultToken(cfg, volume, picked);
   if (!source) return { ok: false, message: noAccountRefusal(cfg, picked) };
   // The identity rides with the credential when there is one. The entrypoint
   // merges .oauth-account.json into the container's /root/.claude.json on
@@ -924,6 +937,33 @@ function seedCredentials(cfg, volume, picked, actor = null) {
     };
   }
   log.info(`sandbox: seeded ${picked.account} credentials into ${volume}`);
+  return { ok: true, account: picked.account };
+}
+
+/**
+ * A Claude token from the person's vault, written into the volume as
+ * `.claude-token` for the entrypoint to export as CLAUDE_CODE_OAUTH_TOKEN when
+ * there is no `.credentials.json` beside it. Over stdin like every other
+ * seeded file, so it never reaches a command line.
+ *
+ * @param {import('../config.js').Config} cfg @param {string} volume
+ * @param {{ tokenFile?: string|null, account: string }} picked
+ */
+function seedVaultToken(cfg, volume, picked) {
+  /** @type {Buffer} */
+  let data;
+  try {
+    data = readFileSync(/** @type {string} */ (picked.tokenFile));
+  } catch (e) {
+    return { ok: false, message: `could not read the vault's Claude login to seed into ${volume}: ${/** @type {Error} */ (e).message}` };
+  }
+  const r = podman(
+    cfg,
+    ['run', '--rm', '-i', ...usernsArgs(cfg), '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg), 'sh'],
+    { input: seedScript([{ name: '.claude-token', data }]) },
+  );
+  if (r.status !== 0) return { ok: false, message: `could not seed the vault's Claude login into ${volume}: ${r.stderr.trim().slice(0, 200)}` };
+  log.info(`sandbox: seeded ${picked.account}'s Claude login from their vault into ${volume}`);
   return { ok: true, account: picked.account };
 }
 
@@ -1008,7 +1048,9 @@ export function adoptVolumeOwnership(cfg, volume) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {string|null} actor
- * @returns {{ source: string|null, accountMeta?: string|null, account: string, why?: string }}
+ * @returns {{ source: string|null, tokenFile?: string, accountMeta?: string|null, account: string, why?: string }}
+ *   `tokenFile` is set instead of `source` when the person's vault gave this
+ *   box a Claude token and nothing is linked here (vault-store.js)
  *   `why` is present only when `source` is null, and is written to be shown to
  *   a person: it is the difference between "this session cannot start" and
  *   "this session cannot start because you have not linked an account".
@@ -1019,6 +1061,12 @@ export function pickCredentialSource(cfg, actor) {
   if (email) {
     const linked = store.credentialPathFor(email);
     if (linked) return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
+    // THEIR VAULT'S CLAUDE LOGIN, when they linked none here: the token they
+    // kept once, given to this box because they approved it (vault-store.js).
+    // A link on this box is the more specific decision, which is why it is
+    // asked first.
+    const fromVault = vaultClaudeFile(cfg, email);
+    if (fromVault) return { source: null, tokenFile: fromVault, accountMeta: null, account: email };
     // NO FALLBACK TO THE BOX ANY MORE. This used to return the machine's own
     // account here, on the grounds that a shared org plan is a licence somebody
     // chose to share. True of an org and false of a guest — and the standing

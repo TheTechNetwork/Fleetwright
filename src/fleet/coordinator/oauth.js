@@ -395,8 +395,8 @@ export function appReturnUrl({ ok, provider = 'github' }) {
  */
 export const DEVICE_STATE_RE = /^d\.[A-Za-z0-9_-]{22,128}$/;
 
-/** What a GitHub authorization code looks like, as far as this will pass one on. */
-const CODE_RE = /^[A-Za-z0-9_-]{8,128}$/;
+/** What an authorization code looks like, as far as this will pass one on. Cloudflare's carry dots. */
+const CODE_RE = /^[A-Za-z0-9._-]{8,256}$/;
 
 /**
  * Where a device's sign-in goes back to: the app, with the code and its own
@@ -404,14 +404,17 @@ const CODE_RE = /^[A-Za-z0-9_-]{8,128}$/;
  * against its shape and percent-encoded. The scheme and path are fixed here,
  * so this cannot be steered anywhere else.
  *
- * @param {{ code: unknown, state: unknown }} q
+ * @param {{ code: unknown, state: unknown, provider?: 'github'|'cloudflare' }} q
  * @returns {string|null}  null when either does not look like one
  */
-export function deviceReturnUrl({ code, state }) {
+export function deviceReturnUrl({ code, state, provider = 'github' }) {
   const c = String(code ?? '');
   const st = String(state ?? '');
   if (!CODE_RE.test(c) || !DEVICE_STATE_RE.test(st)) return null;
-  return `fleetwright://github?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
+  // The host part says which provider came back, from a fixed pair, so a
+  // phone waiting for one sign-in cannot be handed the other's code.
+  const host = provider === 'cloudflare' ? 'cloudflare' : 'github';
+  return `fleetwright://${host}?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
 }
 
 /**

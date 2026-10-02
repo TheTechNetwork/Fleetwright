@@ -222,6 +222,19 @@ export class HubClient {
     return { ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
   }
 
+  /**
+   * Hand fleetwright what this box's people approved it to hold, as the vault
+   * just answered. See src/core/vault-store.js.
+   *
+   * @param {{ accounts: unknown[] }} bundle
+   * @returns {Promise<{ ok: boolean, text: string }>}
+   */
+  async vault(bundle) {
+    const r = await this.#json('POST', '/api/vault', bundle, this.commandTimeoutMs, { allowStatus: [400, 404] });
+    if (r.__status === 404) return { ok: false, text: 'fleetwright here is older than the vault; update it' };
+    return { ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
+  }
+
   /** Liveness only. @returns {Promise<boolean>} */
   async alive() {
     try {

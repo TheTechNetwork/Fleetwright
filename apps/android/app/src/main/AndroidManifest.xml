@@ -164,6 +164,13 @@
         <category android:name="android.intent.category.BROWSABLE" />
         <data android:scheme="fleetwright" android:host="github" />
       </intent-filter>
+      <!-- And a Cloudflare sign-in for the person's vault (PhoneVault.kt), on the same terms. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="fleetwright" android:host="cloudflare" />
+      </intent-filter>
     </activity>
 
     <!--

@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { importDepositKey, open } from '../src/fleet/seal.js';
+import { fingerprint } from '../src/fleet/crypto.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/parity/seal.json', import.meta.url), 'utf8'));
 
@@ -23,4 +24,12 @@ test('the phones’ sealed message opens with seal.js, to the plaintext they wer
   assert.deepEqual(opened, JSON.parse(fixture.plaintext));
   // And it is bound to its additional data, as every seal here is.
   await assert.rejects(open({ privateKey: recipient.privateKey, publicKey: recipient.publicKey, aad: 'something else', sealed: fixture.sealed }));
+});
+
+test('the box fingerprint the phones work out is the one a box prints', async () => {
+  // fleetwright-sidecar identity prints crypto.js's fingerprint; both phones
+  // compute it themselves from the key the fleet lists, to approve a box for a
+  // vault (PhoneVault.kt, PhoneVault.swift), and are tested against this.
+  assert.equal(await fingerprint(fixture.boxKey), fixture.fingerprint);
+  assert.match(fixture.fingerprint, /^[0-9a-f]{16}$/);
 });

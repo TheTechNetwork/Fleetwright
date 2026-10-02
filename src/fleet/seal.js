@@ -117,6 +117,26 @@ export function atRestAad(userId) {
   return `fleetwright-claude-login/v1\n${userId}`;
 }
 
+/** A person's request to their vault, sealed on its way to the minter (src/fleet/minter/vault.js). */
+export const VAULT_REQUEST_AAD = 'fleetwright-vault-request/v1';
+
+/** The vault's answer to that person, sealed to the key their device made for it. */
+export const VAULT_REPLY_AAD = 'fleetwright-vault-reply/v1';
+
+/** What a box was approved to hold, sealed to the key the box made for that one request. */
+export const VAULT_BOX_AAD = 'fleetwright-vault-box/v1';
+
+/**
+ * The additional data a vault item is kept under AT REST: whose it is and
+ * which it is, so a row moved under another account, or one item copied over
+ * another, does not open.
+ *
+ * @param {string} userId  GitHub's numeric user id @param {string} name  the item
+ */
+export function vaultAtRestAad(userId, name) {
+  return `fleetwright-vault/v1\n${userId}\n${name}`;
+}
+
 /**
  * A long-lived key pair for the minter to be deposited to: the private half as
  * a JWK, which is what goes into the Worker secret, and the public half in the

@@ -399,6 +399,13 @@ function verifyClaude(ctx) {
   }
   const picked = pickCredentialSource(ctx.cfg, ctx.actor);
   const mine = picked.account !== 'shared';
+  if (!picked.source && picked.tokenFile) {
+    // NOTHING LINKED HERE, AND THE VAULT HAS IT: said as what will happen,
+    // because "not linked" would send somebody to link what they already kept.
+    lines.push('');
+    lines.push(`A session you start on ${ctx.cfg.hostname} runs on the Claude login from your vault, since none is linked here.`);
+    return lines.join('\n');
+  }
   if (!picked.source) {
     // WHOSE ACCOUNT IS MISSING, in their own words. The box has no Claude
     // account of its own any more (docs/one-account-per-person.md), so this is

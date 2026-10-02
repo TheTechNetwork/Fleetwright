@@ -1,21 +1,11 @@
 package network.thetech.fleetwright
 
 import android.content.Context
-import android.net.Uri
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.Base64
 
 /**
  * This phone's own GitHub sign-in, and the two things it is for: starting a
@@ -30,7 +20,7 @@ import java.util.Base64
  *
  * HOW, WITHOUT ANYTHING IN THE MIDDLE SEEING THE TOKEN:
  *  1. The phone makes a PKCE verifier and a state, and opens GitHub's own page
- *     in a Custom Tab with the App's public client id.
+ *     in a Custom Tab with the App's public client id (DeviceSignIn).
  *  2. GitHub sends the browser to the coordinator's callback, which hands the
  *     code back to this app. The code is no use without the verifier.
  *  3. The phone seals the code and the verifier to the minting Worker's key
@@ -96,26 +86,17 @@ internal class PhoneGitHub(private val settings: Settings) {
         val pin = settings.minterPin.ifBlank { error("Save your minter key first. Whoever runs your fleet has it.") }
         val start = fleet.githubDeviceStart()
         if (start.optBoolean("ok") != true) error(start.optString("text").ifBlank { "The fleet cannot start a GitHub sign-in." })
-        val clientId = start.getString("clientId")
-        val redirectUri = start.getString("redirectUri")
-        val verifier = randomToken(32)
-        val state = start.optString("statePrefix", "d.") + randomToken(24)
-        val challenge = b64(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
-        val url = "https://github.com/login/oauth/authorize" +
-            "?client_id=${enc(clientId)}&redirect_uri=${enc(redirectUri)}&state=${enc(state)}" +
-            "&code_challenge=${enc(challenge)}&code_challenge_method=S256"
-        // Listening before the page opens: a callback that arrived before the
-        // collector would be lost, and the flow does not replay.
-        val back: Uri = coroutineScope {
-            val waiting = async(start = CoroutineStart.UNDISPATCHED) {
-                withTimeoutOrNull(10 * 60_000L) {
-                    WebAuth.returned.first { it.host == "github" && it.getQueryParameter("state") == state }
-                }
-            }
-            withContext(Dispatchers.Main) { WebAuth.open(context, url) }
-            waiting.await()
-        } ?: error("GitHub did not come back within ten minutes. Try again.")
-        val code = back.getQueryParameter("code").orEmpty().ifBlank { error("GitHub came back without a code.") }
+        val back = DeviceSignIn.run(
+            context,
+            authorize = "https://github.com/login/oauth/authorize",
+            clientId = start.getString("clientId"),
+            redirectUri = start.getString("redirectUri"),
+            statePrefix = start.optString("statePrefix", "d."),
+            host = "github",
+        )
+        val code = back.code
+        val verifier = back.verifier
+        val redirectUri = back.redirectUri
         finish(fleet, pin, JSONObject().put("grant", "code").put("code", code).put("verifier", verifier).put("redirectUri", redirectUri))
     }
 
@@ -227,10 +208,4 @@ internal class PhoneGitHub(private val settings: Settings) {
         404 -> "GitHub cannot see $what from your account (404)."
         else -> "GitHub refused $what ($status)."
     }
-
-    private fun randomToken(bytes: Int): String = b64(ByteArray(bytes).also { SecureRandom().nextBytes(it) })
-
-    private fun b64(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-
-    private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
 }
