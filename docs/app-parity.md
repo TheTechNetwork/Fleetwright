@@ -413,18 +413,37 @@ and restored when it was proven, rather than argued about. The evidence is
 somebody with the devices saying it worked, which is the only evidence this
 row could ever have had — no test in this repository can produce it.
 
-### The host page, and the gap that is open on purpose
+### Three places, the same on both phones
 
-iOS gives a machine a page of its own (`HostView.swift`); Android still puts
-most of a machine's controls in its fleet card. The two settings added with the
-sandbox and label verbs went into `HostSheet.kt` on Android rather than into
-that card, because both are a choice plus a list that grows and the card is
-already the wall iOS took apart.
+The gap this section used to record (a machine's page on iOS, its controls split
+across a card, a dialog and a second list on Android) is closed, and so is the
+larger one under it: one settings form doing three jobs. Both phones now have
+the same three places, in the same order, with the same things in them.
 
-So the two features are on both phones and the STRUCTURE is not the same yet.
-Written down rather than left to be discovered, because a gap one commit wide is
-invisible in a summary — which is the argument for this document over the
-intention.
+| Place | Its one job | What is in it |
+|---|---|---|
+| **Sessions** | what is running, and answering what is asking | the reassurance line (it opens the machine it names), the session cards (answer, stop, resume, open), New, Bin, Recent activity. A session's page holds Files, Output and Forget. |
+| **Machines** | is each machine well, and doing something about one | one list, facts only, reporting and silent machines alike; each card opens the machine's page: what is wrong, software, logs, identity (Claude sign-in, Key, Approve for your credentials), releases, image, labels, house rules, reboot, revoke, replace key. Add a machine is one row after the list. |
+| **You** | who you are here, what your sessions may use, and setup | first run (fleet address, sign-in, demo) in that order; account and devices; GitHub on this phone; Credentials (the vault first, links made on a box as facts); Temporary machines; notifications; Siri; This fleet. |
+
+**Admin-only rows are drawn for admins.** People, revoking a machine and
+revoking a device come from `GET /api/me`, which answers with the flag the
+coordinator's own guard reads. A member sees none of them rather than a control
+that refuses after the tap; not knowing (an older coordinator) draws nothing.
+
+**An admin can view the fleet as a member** (You, This fleet, View as a member).
+Every request then carries `x-fleetwright-view: member` and the coordinator
+answers it as a member's, so the lists are the member's lists and the refusals
+are real ones, not this view with rows hidden. The session list says so, with
+Switch back beside it; signing out leaves it.
+
+**One way to get a temporary machine.** New session, Where, a new machine. The
+standalone request that started an empty machine is gone from both phones.
+
+The words are held equal by the tests that were already doing it
+(`runners-from-phone-in-apps`, `runner-repo-in-apps`, `grants-in-apps`,
+`house-rules-shown`, `session-screen`); the structure has no test of its own,
+which is why this table exists.
 
 **And the row is narrower than "push works", which is worth saying while the
 correction is fresh.** Delivery is confirmed. A cold-start wake, a locked

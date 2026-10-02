@@ -200,16 +200,21 @@ the record here.
 Every screen in both apps is now on the palette, the scale and the spacing
 steps. What differs is how far the *layout* was taken:
 
-**Rebuilt around the system** — the session list on both phones. Borderless
-cards on the design's own ground, the 26pt/sp assurance card above them, a
-22pt/sp question on the card that is asking one, hand-drawn status chips, and
-48dp/44pt option rows.
+**Rebuilt around the system** — the session list and the machine list on both
+phones. Borderless cards on the design's own ground, the 26pt/sp assurance card
+above them, a 22pt/sp question on the card that is asking one (and on the
+session's page, which used to set it smaller), hand-drawn status chips, 48dp/44pt
+option rows, and 44pt/48dp for the one primary action a card carries. A machine
+card is a button that opens its page; every card on that list is the same shape,
+and the attention ring is what says one is different.
 
-**Restyled in place** — settings, the fleet screen, credentials, the start
-sheet, files, the recycle bin, session kinds. These are `Form`/`List` screens
+**Restyled in place** — You, credentials, the machine page, the start sheet,
+files, the recycle bin, session kinds. These are `Form`/`List` screens
 on iOS and Material lists on Android, and they stay that way: the ground, the
 row colour, the section headings and every size and tint are the design's, but
-the row structure is still the platform's. That is a deliberate stopping point
+the row structure is still the platform's. On Android these are full-screen
+pages now rather than AlertDialogs, which gave them room for the keyboard. That
+is a deliberate stopping point
 rather than an unfinished one — a settings screen is a list of controls, the
 platform's list is a good list of controls, and rebuilding it as cards would
 cost the affordances (swipe, edit mode, keyboard handling) to gain a look.
