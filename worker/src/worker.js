@@ -1470,11 +1470,11 @@ const OPENAPI = JSON.stringify({
         "tags": [
           "identity"
         ],
-        "summary": "Who this credential belongs to, and whether they are an admin",
-        "description": "So an app draws admin-only controls for admins and nothing for members, instead of drawing them for everyone and refusing after the tap. The answer is the same check the destructive routes make; it grants nothing.",
+        "summary": "Who this credential belongs to, whether they are an admin, and which view this request is answered in",
+        "description": "So an app draws admin-only controls for admins and nothing for members, instead of drawing them for everyone and refusing after the tap. `admin` is the same check the destructive routes make, and it grants nothing. Any request carrying `x-fleetwright-view: member` from an admin is answered as a member's would be (filtered lists, admin routes refused), so an admin can see what the people they invite see; `viewing` says which view this reply is in, and `admin` keeps the real role so the app can offer the way back. The header can only take privilege away.",
         "responses": {
           "200": {
-            "description": "email and admin"
+            "description": "email, admin, viewing"
           },
           "401": {
             "description": "no credential"

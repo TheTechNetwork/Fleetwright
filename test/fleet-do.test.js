@@ -226,6 +226,25 @@ test('a colleague cannot revoke machines on the Worker either', async () => {
   assert.equal(allowed.status, 200);
 });
 
+test('an admin viewing as a member is refused like one on the Worker too, and only for that request', async () => {
+  // The same rule as the Node coordinator (identity.test.js), on the
+  // coordinator that is actually deployed.
+  const { fleet: f } = fleet();
+  const admin = await f.core.clients.issue('first phone (eli@thetech.network)', { admin: true });
+  const { code } = f.core.enrollment.mint({ purpose: 'host' });
+  await call(f, '/api/enroll/host', 'POST', { code, hostId: 'build-server', publicJwk: (await generateKeyPair()).publicJwk });
+  const asMember = { authorization: `Bearer ${admin.token}`, 'x-fleetwright-view': 'member' };
+
+  const me = /** @type {any} */ (await (await call(f, '/api/me', 'GET', null, asMember)).json());
+  assert.equal(me.admin, true, 'the real role, so the app can offer the way back');
+  assert.equal(me.viewing, 'member');
+  assert.equal((await call(f, '/api/hosts/build-server', 'DELETE', null, asMember)).status, 403);
+  assert.equal(f.core.hostIds.list().find((h) => h.hostId === 'build-server')?.revokedAt, null, 'still enrolled');
+
+  const allowed = await call(f, '/api/hosts/build-server', 'DELETE', null, { authorization: `Bearer ${admin.token}` });
+  assert.equal(allowed.status, 200, 'the next request without it is an admin\u2019s again');
+});
+
 test('the Worker refuses to unregister somebody else’s phone, in the same words as the Node coordinator', async () => {
   const { fleet: f } = fleet({ FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' });
   const alice = await f.core.clients.issue('alice phone');

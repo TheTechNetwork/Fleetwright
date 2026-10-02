@@ -942,8 +942,8 @@ test('an app can ask whether its person is an admin, and the answer agrees with 
   const me = async (/** @type {string} */ token) =>
     /** @type {any} */ (await (await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${token}` } })).json());
 
-  assert.deepEqual(await me(owner.body.token), { ok: true, email: 'eli@thetech.network', admin: true });
-  assert.deepEqual(await me(them.body.token), { ok: true, email: 'colleague@thetech.network', admin: false });
+  assert.deepEqual(await me(owner.body.token), { ok: true, email: 'eli@thetech.network', admin: true, viewing: 'admin' });
+  assert.deepEqual(await me(them.body.token), { ok: true, email: 'colleague@thetech.network', admin: false, viewing: 'member' });
 
   const key = await loadOrCreateKey(scratch());
   const { code } = c.core.enrollment.mint({ purpose: 'host' });
@@ -953,6 +953,38 @@ test('an app can ask whether its person is an admin, and the answer agrees with 
 
   const anonymous = await fetch(`${origin}/api/me`);
   assert.equal(anonymous.status, 401, 'it says nothing to no credential');
+});
+
+test('an admin can see the fleet as a member does, and it only ever takes privilege away', async (t) => {
+  // "Show the admin what a user would see." Hiding the admin rows in the app
+  // would show the admin's own data with less chrome; the member's view is
+  // also fewer sessions, fewer machines' details, and refusals. So the
+  // coordinator answers the request as it would a member's.
+  const { provider: p, coordinator: c, origin } = await signInFleet(t);
+  const owner = await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }) });
+  const them = await session(origin, { idToken: await p.token({ email: 'colleague@thetech.network' }) });
+  const ask = async (/** @type {string} */ path, /** @type {string} */ token, /** @type {Record<string, string>} */ extra = {}, method = 'GET') =>
+    fetch(`${origin}${path}`, { method, headers: { authorization: `Bearer ${token}`, ...extra } });
+  const asMember = { 'x-fleetwright-view': 'member' };
+
+  // /api/me keeps the real role, so the app knows to offer the way back.
+  assert.deepEqual(await (await ask('/api/me', owner.body.token, asMember)).json(),
+    { ok: true, email: 'eli@thetech.network', admin: true, viewing: 'member' });
+  assert.equal((await (await ask('/api/me', owner.body.token)).json()).viewing, 'admin');
+
+  // And every admin route is refused, exactly as for a member.
+  const key = await loadOrCreateKey(scratch());
+  const { code } = c.core.enrollment.mint({ purpose: 'host' });
+  await enrol({ origin, code, hostId: 'a-box', publicJwk: key.publicJwk });
+  assert.equal((await ask('/api/hosts/a-box', owner.body.token, asMember, 'DELETE')).status, 403);
+  assert.equal((await ask('/api/invites', owner.body.token, asMember)).status, 403);
+  assert.notEqual((await ask('/api/invites', owner.body.token)).status, 403, 'without it the admin is an admin');
+
+  // It cannot raise anybody: a member asking for the member view is a member.
+  assert.deepEqual(await (await ask('/api/me', them.body.token, { 'x-fleetwright-view': 'admin' })).json(),
+    { ok: true, email: 'colleague@thetech.network', admin: false, viewing: 'member' });
+  // And the stored row is untouched, so the next request is an admin's again.
+  assert.equal(c.core.clients.list().find((x) => x.id === owner.body.client.id)?.admin, true);
 });
 
 /** @param {any} v */

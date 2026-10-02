@@ -22,7 +22,7 @@ import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coord
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
-import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
+import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -417,6 +417,15 @@ export class Fleet {
         return json({ ok: false, error: { code: 'unauthorised' }, text: 'That device credential is not valid.' }, 401);
       }
     }
+    // VIEWING AS A MEMBER. An admin's app can ask for every reply as a member
+    // would get it, so the admin sees what the people they invite see: their
+    // own sessions, machines and activity, no People, every admin route
+    // refused. It can only take privilege away, so honouring it from any
+    // caller is safe. A copy, never the stored row, so nothing saved later
+    // forgets the role. `isAdmin` keeps the real one for /api/me, which is how
+    // the app knows to offer the switch back.
+    const isAdmin = client ? Boolean(client.admin) : true;
+    if (client?.admin && viewsAsMember(request.headers.get('x-fleetwright-view'))) client = { ...client, admin: false };
 
     if (url.pathname === '/host/connect') return this.#acceptHost(request, url);
 
@@ -964,7 +973,7 @@ export class Fleet {
     // reads, so the answer and the refusal cannot disagree; it grants nothing.
     // No client means the shared token, which the guard lets through.
     if (url.pathname === '/api/me' && request.method === 'GET') {
-      return json({ ok: true, email: client?.email ?? null, admin: client ? Boolean(client.admin) : true });
+      return json({ ok: true, email: client?.email ?? null, admin: isAdmin, viewing: client && !client.admin ? 'member' : 'admin' });
     }
 
     if (url.pathname === '/api/clients' && request.method === 'GET') {

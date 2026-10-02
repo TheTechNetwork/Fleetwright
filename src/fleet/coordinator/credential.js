@@ -37,3 +37,13 @@ export function credentialFrom(authorization, url = null) {
 export function isClientCredential(presented) {
   return /^fwk_/.test(String(presented || ''));
 }
+
+/**
+ * Whether a request asked to be answered as a member would be. Only the one
+ * word, so a typo is the admin's own view rather than a guess.
+ *
+ * @param {string|null|undefined} header
+ */
+export function viewsAsMember(header) {
+  return String(header ?? '').trim().toLowerCase() === 'member';
+}
