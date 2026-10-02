@@ -180,7 +180,9 @@ class Fleet(
                 idleFor?.let { return "Quiet for $it" }
                 return "Working"
             }
-            if (status == "ended") return "Finished"
+            // "Ended", not "Finished": a crash and a success share this
+            // status, and the screen cannot tell them apart (C-5).
+            if (status == "ended") return "Ended"
             if (status == "stopped") return if (resumable) "Stopped · can be resumed" else "Stopped"
             return status
         }

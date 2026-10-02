@@ -898,6 +898,7 @@ private fun statusColour(status: String): Color = when (status) {
     // status is not an action. A badge that borrows it teaches it two meanings.
     "running" -> Design.Palette.active.now
     "awaiting-input" -> Design.Palette.attention.now
-    "ended" -> Design.Palette.ok.now
+    // NOT `ok`: an ended session may have crashed, and green would say it
+    // did its job.
     else -> Design.Palette.idle.now
 }

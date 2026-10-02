@@ -47,8 +47,8 @@ DEVICES=(
 # because readdir's order is the filesystem's.
 SHOTS=(
   "01-sessions:sessions"
-  "02-fleet:fleet"
-  "03-settings:settings"
+  "02-machines:machines"
+  "03-you:you"
 )
 
 command -v xcrun >/dev/null || { echo "this needs Xcode's command line tools"; exit 1; }

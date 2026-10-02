@@ -10,9 +10,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { iosSources } from './helpers/ios-sources.js';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
-const IOS = ['Fleet.swift', 'FleetView.swift', 'StartSheet.swift'].map((f) => read(`apps/ios/Fleetwright/${f}`)).join('\n');
+// The whole iOS app: the runner repository is a screen of its own now.
+const IOS = iosSources();
 const ANDROID = ['Fleet.kt', 'SettingsPanel.kt', 'StartSheet.kt', 'MainActivity.kt']
   .map((f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`))
   .join('\n');

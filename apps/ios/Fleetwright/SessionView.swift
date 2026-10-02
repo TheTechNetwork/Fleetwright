@@ -96,8 +96,11 @@ struct SessionView: View {
             if let prompt = session.prompt, let options = prompt.options, !options.isEmpty {
                 Section {
                     if let question = prompt.question, !question.isEmpty {
+                        // AS LOUD AS ON THE CARD. This is where somebody came
+                        // to think about it, and it was set smaller here than
+                        // on the list that sent them.
                         Text(question)
-                            .fleetType(.bodyStrong)
+                            .fleetType(.title)
                             .foregroundStyle(Design.Palette.ink)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -223,11 +226,15 @@ struct SessionView: View {
             }
             .listRowBackground(Design.Palette.card)
             .confirmationDialog("Forget \(session.label)?", isPresented: $confirmingForget, titleVisibility: .visible) {
-                Button("Forget — delete its conversation and workspace", role: .destructive) {
+                Button("Forget — move it to the bin", role: .destructive) {
                     act { try await fleet.forget(session.name) }
                 }
             } message: {
-                Text("This cannot be undone. Stop keeps everything and can be resumed; forget keeps nothing.")
+                // IT CAN BE UNDONE, for seven days, and this said it could not.
+                // The bin keeps a forgotten session and says so; a dialog
+                // claiming the opposite is the screen reporting a state it
+                // does not have.
+                Text("It stays in the bin for seven days, where Restore brings it back. After that its conversation and workspace are deleted.")
             }
 
             if !result.isBlank {

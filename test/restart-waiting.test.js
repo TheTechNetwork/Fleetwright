@@ -25,7 +25,7 @@ test('iOS reads what the disk holds beside what runs, and derives the gap once',
 
 test('the row says restart waiting before it says anything about downloads', () => {
   const swift = iosSources();
-  const row = swift.indexOf('private func describeRunning(');
+  const row = swift.indexOf('func describeRunning(');
   assert.ok(row > 0);
   const body = swift.slice(row, swift.indexOf('private func describeAccounts('));
   const restart = body.indexOf('restartWaitingFor');

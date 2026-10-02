@@ -262,8 +262,9 @@ struct StartSheet: View {
                             if now.hasPrefix(newMachineTag) { profile = ""; secret = "" }
                         }
                         if chosenPlatform != nil {
-                            // Five-minute steps between the protocol's bounds,
-                            // the same control as the one in settings.
+                            // Five-minute steps between the protocol's bounds.
+                            // The one minutes control in the app, now that the
+                            // standalone request under settings is gone.
                             Stepper("For \(machineMinutes) minutes", value: $machineMinutes, in: 5...350, step: 5)
                         }
                     } header: {
@@ -275,6 +276,14 @@ struct StartSheet: View {
                                  + "gone when the time runs out.")
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
+                            // SAID OUT LOUD, as docs/runner-central.md says it:
+                            // the Windows runner is written and not yet proven,
+                            // and offering it without that is a claim.
+                            if chosenPlatform == "windows" {
+                                Text("Windows runners are written and not yet proven.")
+                                    .fleetType(.label)
+                                    .foregroundStyle(Design.Palette.attention)
+                            }
                         }
                     }
                 }

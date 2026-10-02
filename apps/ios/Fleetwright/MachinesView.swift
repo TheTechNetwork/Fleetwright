@@ -1,0 +1,264 @@
+import SwiftUI
+
+/// The Machines tab: every machine in the fleet, one card each, and a way to
+/// add one.
+///
+/// WHAT THIS SCREEN IS FOR. Somebody opens it because a machine might be
+/// unwell, often at night, often from a notification. It used to open on the
+/// coordinator URL and a section called "Add a machine" holding the pin, the
+/// runner repository, this phone's GitHub sign-in, the vault and runner
+/// tokens, all permanently drawn, all above the list it was opened to read.
+/// Setup lives under You now; this screen carries the list and one row.
+///
+/// The cards are facts only and every one is the same shape (RHYTHM 1). A
+/// card that wears the attention ring is a machine that wants something. Tap
+/// one for its page, where everything you can do about it lives.
+struct MachinesView: View {
+    let settings: Settings
+    /// A machine somebody asked to see from elsewhere: a notification about
+    /// it, or the reassurance line naming it. Pushed once the list has it.
+    @Binding var opening: String?
+
+    @State private var fleetHosts: [Fleet.FleetHost] = []
+    @State private var hosts: [Fleet.Host] = []
+    /// HAS THE FIRST ANSWER ARRIVED? Every list starts empty, and "No machines
+    /// yet" before the fleet has replied is a confident statement about a
+    /// question nobody has asked.
+    @State private var loaded = false
+    /// The machine whose page is showing.
+    @State private var showing: String?
+
+    /// Enrolled, and not saying anything: membership with no report.
+    private var silent: [Fleet.Host] {
+        hosts.filter { h in !fleetHosts.contains { $0.hostId == h.hostId } }
+    }
+
+    var body: some View {
+        List {
+            if !settings.configured {
+                ContentUnavailableView {
+                    Label("Not signed in", systemImage: "server.rack")
+                } description: {
+                    Text("Sign in to a fleet under You, and its machines are listed here.")
+                }
+                .fleetRow()
+            } else if !loaded {
+                Text("Asking the fleet…")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .fleetRow()
+            } else if fleetHosts.isEmpty && hosts.isEmpty {
+                ContentUnavailableView {
+                    Label("No machines yet", systemImage: "server.rack")
+                } description: {
+                    Text("A machine joins with a pin from Add a machine and one line typed on it.")
+                }
+                .fleetRow()
+            }
+
+            ForEach(fleetHosts) { host in
+                Button { showing = host.hostId } label: { reportingCard(host) }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens its page")
+                    .fleetRow()
+            }
+
+            // THE MACHINES THAT ARE NOT SAYING ANYTHING. A box that has gone
+            // quiet is still enrolled, the coordinator still holds its key, and
+            // that key is exactly what a reinstalled box is refused for — so it
+            // needs a page, to be re-keyed or removed. A card of the same shape,
+            // on purpose: the ring and the words "not reporting" already say it
+            // is different.
+            ForEach(silent) { host in
+                Button { showing = host.hostId } label: { silentCard(host) }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens its page")
+                    .fleetRow()
+            }
+
+            if settings.configured {
+                // ONE ROW, AFTER THE LIST. Adding a machine is something done
+                // once per machine; the list is read every time.
+                NavigationLink {
+                    AddMachineView(settings: settings)
+                } label: {
+                    Label("Add a machine", systemImage: "plus")
+                        .fleetType(.body)
+                        .frame(minHeight: 44)
+                }
+                .fleetCard(radius: Design.Radius.cardSmall)
+                .fleetRow()
+            }
+        }
+        .listStyle(.plain)
+        .listRowSpacing(Design.Space.groupTight)
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .navigationTitle("Machines")
+        .refreshable { await loadHosts() }
+        .task(id: "\(settings.credential)|\(settings.viewAsMember)") { await loadHosts() }
+        .onChange(of: opening) { _, _ in openAsked() }
+        .navigationDestination(item: $showing) { id in hostPage(id) }
+    }
+
+    /// Push the page somebody asked for from elsewhere, once this list knows
+    /// the machine. A name it does not know is simply not opened: the list is
+    /// there, and the notification may be about a box that has since gone.
+    private func openAsked() {
+        guard let wanted = opening else { return }
+        if fleetHosts.contains(where: { $0.hostId == wanted }) || hosts.contains(where: { $0.hostId == wanted }) {
+            showing = wanted
+            opening = nil
+        } else if loaded {
+            opening = nil
+        }
+    }
+
+    @ViewBuilder private func hostPage(_ id: String) -> some View {
+        let reporting = fleetHosts.first { $0.hostId == id }
+        let member = hosts.first { $0.hostId == id }
+        // Nil health for a silent machine, not a guess: the page shows what a
+        // box reports, and this one reports nothing. Its membership record is
+        // what there is, and it is what Replace key and Revoke act on.
+        HostView(
+            settings: settings,
+            hostId: id,
+            initialHealth: reporting?.health,
+            initialState: reporting?.state ?? (member?.isRevoked == true ? "revoked" : "not reporting"),
+            initialReason: reporting?.reason ?? (member?.isRevoked == true
+                ? "Its key was revoked. Readmit mints the pin that brings it back."
+                : "Not connected to the fleet. Reinstalled? Replace key mints the pin its new key needs."),
+            enrolled: member,
+            onChange: { await loadHosts() },
+        )
+    }
+
+    private func reportingCard(_ host: Fleet.FleetHost) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                // A hostname is compared character by character against a
+                // terminal, at the weight a headline gets.
+                Text(host.hostId)
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+                Image(systemName: "chevron.right")
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+                // Colour reinforces the word; it never carries the meaning alone.
+                Text(host.state ?? "unknown")
+                    .fleetType(.label)
+                    .foregroundStyle(host.state == "healthy" ? Design.Palette.ok : Design.Palette.attention)
+            }
+            // ONLY WHEN IT IS NEWS. "reporting normally" under "healthy" is the
+            // same fact twice.
+            if let reason = host.reason, !reason.isEmpty, (host.state ?? "") != "healthy" {
+                Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+            }
+            healthLines(for: host)
+        }
+        .contentShape(Rectangle())
+        .fleetCard(radius: Design.Radius.cardSmall, ring: hostRing(host))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func silentCard(_ host: Fleet.Host) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                Text(host.hostId)
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+                Image(systemName: "chevron.right")
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+                Text(host.isRevoked ? "revoked" : "not reporting")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            }
+            Text(absence(host))
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+        }
+        .contentShape(Rectangle())
+        .fleetCard(radius: Design.Radius.cardSmall, ring: Design.Palette.attention.opacity(0.55))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// What this box says about itself, as lines. A method rather than more of
+    /// the card's body: the Swift type checker gives up on a body this size,
+    /// and only on CI.
+    @ViewBuilder
+    private func healthLines(for host: Fleet.FleetHost) -> some View {
+        // WHO CAN START A SESSION HERE, and as whom. Zero is the real fault and
+        // the only thing worth colouring; nil is an older host and says nothing.
+        if let accounts = host.health?.claudeAccounts {
+            Text(describeWhoCanStart(accounts, account: host.health?.account))
+                .fleetType(.micro)
+                .foregroundStyle(accounts == 0 ? Design.Palette.attention : Design.Palette.inkDim)
+        }
+        // THE SECOND WAY TO BE SIGNED OUT: the credential file a session is
+        // actually handed. Shown only when it is DEAD; an expired token that
+        // can renew itself is the ordinary state of a box nobody has touched.
+        if let credential = host.health?.credential, credential.isDead {
+            Text(credential.summary ?? "Sessions started here will come up signed out.")
+                .fleetType(.micro).foregroundStyle(Design.Palette.bad)
+        }
+        // Version, what it is behind, and which releases it takes: one line,
+        // in the order somebody asks.
+        Text(describeRunning(host))
+            .fleetType(.micro)
+            .foregroundStyle(host.updatePending ? Design.Palette.attention : Design.Palette.inkDim)
+        if let system = host.health?.updates?.system, !system.isEmpty {
+            Text("OS: \(system)").fleetType(.micro).foregroundStyle(Design.Palette.attention)
+        }
+        if host.health?.updates?.rebootRequired == true {
+            Text("reboot required").fleetType(.micro).foregroundStyle(Design.Palette.attention)
+        }
+    }
+
+    /// A machine that wants something wears the attention ring: not healthy,
+    /// an update waiting, or nobody able to start a session on it. Calm
+    /// recedes, trouble comes forward.
+    private func hostRing(_ host: Fleet.FleetHost) -> Color {
+        let unwell = (host.state ?? "unknown") != "healthy"
+        let waiting = host.updatePending
+        let unusable = (host.health?.claudeAccounts ?? 1) == 0
+        return unwell || waiting || unusable ? Design.Palette.attention.opacity(0.55) : Design.Palette.ring
+    }
+
+    /// "never connected" is a different fact from "last seen a while ago": one
+    /// is a box that enrolled and never came up, the other one that went away.
+    private func absence(_ host: Fleet.Host) -> String {
+        if let seen = host.lastSeenAt, seen > 0 { return "last seen \(relativeTime(seen))" }
+        return "never connected"
+    }
+
+    @MainActor
+    private func loadHosts() async {
+        guard settings.configured else { return }
+        // TWO ANSWERS, ONE WAIT: the cost is the slower of them, not the sum.
+        // Enrolled is the membership (keys, revocation); reporting is what
+        // each machine is saying now. Different questions.
+        let fleet = Fleet(settings: settings)
+        async let reporting = fleet.fleetHosts()
+        async let enrolled = fleet.enrolledHosts()
+        // A FAILED REQUEST IS NOT AN EMPTY FLEET. A list that was right ten
+        // seconds ago is a better answer than nothing, and the next refresh
+        // corrects it.
+        if let got = try? await reporting { fleetHosts = got }
+        if let got = try? await enrolled { hosts = got }
+        loaded = true
+        openAsked()
+    }
+}
+
+/// Milliseconds since the epoch, as words: "2 hours ago".
+func relativeTime(_ at: Double) -> String {
+    let date = Date(timeIntervalSince1970: at / 1000)
+    let f = RelativeDateTimeFormatter()
+    f.unitsStyle = .full
+    return f.localizedString(for: date, relativeTo: Date())
+}

@@ -1,33 +1,28 @@
 import SwiftUI
 
-/// Runners from this phone: the minter key, this phone's GitHub sign-in, and
-/// your Claude login for your runners. See PhoneGitHub for how each works and
-/// why nothing between here and the minter can read what this sends.
+/// This phone's own GitHub sign-in, and the minter key it seals to. See
+/// PhoneGitHub for how each works and why nothing between here and the minter
+/// can read what this sends.
 ///
-/// In the order a person needs them. The minter's key comes first because the
-/// other two seal to it, and the phone finds it itself at the fleet's address
+/// ONE PLACE, UNDER YOU › ACCOUNT. It was drawn inside "Add a machine" as
+/// "Runners from this phone", which hid an account this phone holds behind a
+/// heading about machines, and the vault (which knows a person by this same
+/// sign-in) one level further down. Two features use it, runners and the
+/// vault, and each says so where it is used.
+///
+/// In the order a person needs them: the minter's key first, because the
+/// sign-in seals to it, and the phone finds it itself at the fleet's address
 /// (PhoneGitHub.minterKey); the field to paste one is drawn only when nothing
-/// answers there. The GitHub sign-in second because it is what starts a machine and
-/// what proves whose Claude login this is; the Claude login last, because it is
-/// optional and the runner repository's API key covers anybody who skips it.
+/// answers there. Every control does something or is not drawn.
 ///
-/// Every control does something or is not drawn: the sign-in button appears
-/// only once there is a key to seal to, the Claude login only once GitHub is
-/// signed in.
 /// The same sentences as Android (RunnersFromPhone.kt), which
 /// test/runners-from-phone-in-apps.test.js holds them to.
-///
-/// Its own view rather than more of SettingsView, which is already at the size
-/// where the type checker gives up, and none of this state is shared with it.
-struct RunnersFromPhone: View {
+struct PhoneGitHubSignIn: View {
     let settings: Settings
     @State private var pinDraft = ""
     /// Did the minter answer for its own key? Nil while asking: CANNOT TELL
     /// yet, which draws neither the sign-in nor the field to paste a key.
     @State private var minterFound: Bool?
-    @State private var signedInAs: String?
-    @State private var signedIn = false
-    @State private var claudeDraft = ""
     @State private var busy = false
     @State private var result = ""
     @State private var failed = false
@@ -37,94 +32,55 @@ struct RunnersFromPhone: View {
     private var haveKey: Bool { !settings.minterPin.isEmpty || minterFound == true }
 
     private var signedInLine: String {
-        guard let login = signedInAs, !login.isEmpty else { return "Signed in to GitHub." }
+        guard let login = phone.signIn?.login, !login.isEmpty else { return "Signed in to GitHub." }
         return "Signed in to GitHub as \(login)."
     }
 
     var body: some View {
-        Text("Runners from this phone")
-            .fleetType(.bodyStrong)
-        Text("Sign in to GitHub here and this phone starts your machines itself, with no permanent box. "
-             + "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.")
-            .fleetType(.label)
-            .foregroundStyle(Design.Palette.inkDim)
-            .onAppear {
-                pinDraft = settings.minterPin
-                signedIn = phone.signedIn
-                signedInAs = phone.signIn?.login
-            }
-            .task { minterFound = await Fleet(settings: settings).minterOwnKey() != nil }
-
-        if minterFound == nil && settings.minterPin.isEmpty {
-            Text("Looking for your fleet's minter…")
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
-        }
-
-        if minterFound == false {
-            Text("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
-            TextField("Minter key from whoever runs your fleet", text: $pinDraft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .fleetType(.labelMono)
-            Button(busy ? "Checking…" : "Check and save key") {
-                act { try await phone.checkPin(Fleet(settings: settings), pin: pinDraft) }
-            }
-            .disabled(busy || pinDraft.isBlank || pinDraft == settings.minterPin)
-        }
-
-        if haveKey {
-            if signedIn {
-                Text(signedInLine)
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.ink)
-                Button("Sign out of GitHub", role: .destructive) {
-                    phone.signOut()
-                    signedIn = false
-                    signedInAs = nil
-                    result = "Signed out of GitHub on this phone. Machines you start now go through a permanent box."
-                    failed = false
-                }
-                .disabled(busy)
-            } else {
-                Button("Sign in to GitHub") {
-                    act {
-                        let text = try await phone.signInWith(Fleet(settings: settings))
-                        signedIn = phone.signedIn
-                        signedInAs = phone.signIn?.login
-                        return text
-                    }
-                }
-                .disabled(busy)
-            }
-        }
-
-        if signedIn {
-            Text("Runners you start can use your Claude subscription instead of the runner repository's API key. "
-                 + "Make the token on a computer with claude setup-token, and paste it here.")
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
-            SecureField("Token from claude setup-token", text: $claudeDraft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            Button("Keep for my runners") {
-                act {
-                    let text = try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: claudeDraft)
-                    claudeDraft = ""
-                    return text
-                }
-            }
-            .disabled(busy || claudeDraft.isBlank)
-            Button("Forget my Claude login", role: .destructive) {
-                act { try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: nil) }
+        if phone.signedIn {
+            Text(signedInLine)
+                .fleetType(.body)
+                .foregroundStyle(Design.Palette.ink)
+            Button("Sign out of GitHub", role: .destructive) {
+                phone.signOut()
+                result = "Signed out of GitHub on this phone. Machines you start now go through a permanent box."
+                failed = false
             }
             .disabled(busy)
+        } else {
+            Text("Sign in to GitHub here and this phone starts your machines itself, with no permanent box. "
+                 + "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+                .onAppear { pinDraft = settings.minterPin }
+                .task { minterFound = await Fleet(settings: settings).minterOwnKey() != nil }
 
-            // YOUR VAULT, below what it builds on: the key it seals to and the
-            // sign-in that says whose it is.
-            YourVault(settings: settings)
+            if minterFound == nil && settings.minterPin.isEmpty {
+                Text("Looking for your fleet's minter…")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+
+            if minterFound == false {
+                Text("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                TextField("Minter key from whoever runs your fleet", text: $pinDraft)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .fleetType(.labelMono)
+                Button(busy ? "Checking…" : "Check and save key") {
+                    act { try await phone.checkPin(Fleet(settings: settings), pin: pinDraft) }
+                }
+                .disabled(busy || pinDraft.isBlank || pinDraft == settings.minterPin)
+            }
+
+            if haveKey {
+                Button("Sign in to GitHub") {
+                    act { try await phone.signInWith(Fleet(settings: settings)) }
+                }
+                .disabled(busy)
+            }
         }
 
         if !result.isBlank {
@@ -158,20 +114,25 @@ struct RunnersFromPhone: View {
 /// Your vault: each credential kept once, and the boxes that may hold it.
 /// See PhoneVault for how, and docs/vault.md for why.
 ///
-/// Drawn inside RunnersFromPhone once the minter key is saved and this phone is
-/// signed in to GitHub, because every request here is sealed to that key and
-/// proves whose vault it is with that sign-in. The Claude login kept above is
-/// the same vault's, and shows in the list.
+/// THE CREDENTIALS SCREEN LEADS WITH THIS. A credential linked on one box is
+/// the older way and shows below as a fact; this is the way a person keeps
+/// Claude, GitHub, Cloudflare and named secrets once for every machine they
+/// approve. Every request is sealed to the minter's key and proves whose vault
+/// it is with this phone's GitHub sign-in, so it is drawn once that exists.
 ///
-/// A box is offered for approval with the fingerprint this phone worked out
-/// from its key, beside the sentence that says to compare it, because the
-/// comparison is the whole of why approving is safe. The same sentences as
-/// Android (YourVault.kt), which test/runners-from-phone-in-apps.test.js holds
-/// them to.
+/// APPROVING A BOX IS ON THAT BOX'S PAGE, beside its own Key, because the
+/// comparison of the two fingerprints is the whole of why approving is safe,
+/// and here they were shown apart. This lists which boxes hold your
+/// credentials, and removes an approval for a box that has left the fleet,
+/// which has no page to do it from.
+///
+/// The same sentences as Android (YourVault.kt), which
+/// test/runners-from-phone-in-apps.test.js holds them to.
 struct YourVault: View {
     let settings: Settings
     @State private var contents: PhoneVault.Contents?
     @State private var boxes: [Fleet.Host] = []
+    @State private var claudeDraft = ""
     @State private var secretName = ""
     @State private var secretValue = ""
     @State private var busy = false
@@ -179,34 +140,40 @@ struct YourVault: View {
     @State private var failed = false
 
     private var vault: PhoneVault { PhoneVault(settings: settings) }
+    private var phone: PhoneGitHub { PhoneGitHub(settings: settings) }
 
-    /// A box the fleet lists, with the fingerprint worked out here from its
-    /// key, never the one the fleet says beside it.
-    private struct Listed: Identifiable {
-        let host: Fleet.Host
-        let fingerprint: String?
-        var id: String { host.hostId }
+    /// The fingerprints of boxes still in this fleet, worked out here from
+    /// their keys, never the ones the fleet lists beside them.
+    private var inFleet: [String: String] {
+        var out: [String: String] = [:]
+        for host in boxes {
+            if let key = host.publicJwk { out[PhoneVault.fingerprint(key)] = host.hostId }
+        }
+        return out
     }
 
-    private var listed: [Listed] {
-        boxes.map { Listed(host: $0, fingerprint: $0.publicJwk.map(PhoneVault.fingerprint)) }
+    /// Approved boxes that are in this fleet, by name.
+    private var holders: [String] {
+        (contents?.grants ?? []).compactMap { inFleet[$0.fingerprint] }.sorted()
+    }
+
+    private var heldBy: String {
+        if holders.isEmpty { return "No box holds your credentials yet. Approve one from its page under Machines." }
+        return "Held by \(holders.joined(separator: ", ")). Approve or remove a box from its page under Machines."
     }
 
     /// Approved, and not in this fleet any more: still removable, because an
     /// approval outlives the box being taken out of the fleet.
     private var strays: [PhoneVault.Grant] {
-        let shown = Set(listed.compactMap { $0.fingerprint })
-        return (contents?.grants ?? []).filter { !shown.contains($0.fingerprint) }
+        (contents?.grants ?? []).filter { inFleet[$0.fingerprint] == nil }
     }
 
     var body: some View {
-        Text("Your vault")
-            .fleetType(.bodyStrong)
-            .task { await reload() }
         Text("Keep each credential here once. A box you approve gets them when a session needs them, "
              + "and loses them when you remove it.")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.inkDim)
+            .task { await reload() }
 
         if let kept = contents {
             Text(kept.items.isEmpty ? "Nothing kept yet." : "Kept: " + kept.items.map { PhoneVault.label($0.name) }.joined(separator: ", ") + ".")
@@ -222,6 +189,30 @@ struct YourVault: View {
             Text("Loading your vault…")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
+        }
+
+        // CLAUDE, kept the same way: this is the vault's Claude row, which
+        // runners and approved boxes both use.
+        Text("Runners you start can use your Claude subscription instead of the runner repository's API key. "
+             + "Make the token on a computer with claude setup-token, and paste it here.")
+            .fleetType(.label)
+            .foregroundStyle(Design.Palette.inkDim)
+        SecureField("Token from claude setup-token", text: $claudeDraft)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        Button("Keep for my runners") {
+            act {
+                let text = try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: claudeDraft)
+                claudeDraft = ""
+                return text
+            }
+        }
+        .disabled(busy || claudeDraft.isBlank)
+        if contents?.items.contains(where: { $0.name == "claude" }) == true {
+            Button("Forget my Claude login", role: .destructive) {
+                act { try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: nil) }
+            }
+            .disabled(busy)
         }
 
         Button("Keep GitHub for my boxes") {
@@ -249,38 +240,21 @@ struct YourVault: View {
         }
         .disabled(busy || secretName.isBlank || secretValue.isEmpty)
 
-        Text("Boxes")
-            .fleetType(.bodyStrong)
-        Text("Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.")
-            .fleetType(.label)
-            .foregroundStyle(Design.Palette.inkDim)
-        ForEach(listed) { box in
-            Text("\(box.host.hostId) · \(box.fingerprint ?? "no key listed")")
-                .fleetType(.labelMono)
-                .foregroundStyle(Design.Palette.ink)
-            if let grant = contents?.grants.first(where: { $0.fingerprint == box.fingerprint }) {
-                Text("Approved")
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.ok)
+        if contents != nil {
+            Text("Boxes")
+                .fleetType(.bodyStrong)
+            Text(heldBy)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            ForEach(strays, id: \.key) { grant in
+                Text("\(grant.label.isEmpty ? "A box" : grant.label) · \(grant.fingerprint) · not in this fleet")
+                    .fleetType(.labelMono)
+                    .foregroundStyle(Design.Palette.inkDim)
                 Button("Remove", role: .destructive) {
                     act { try await vault.remove(Fleet(settings: settings), grant: grant) }
                 }
                 .disabled(busy)
-            } else if box.fingerprint != nil {
-                Button("Approve") {
-                    act { try await vault.approve(Fleet(settings: settings), host: box.host) }
-                }
-                .disabled(busy || contents == nil)
             }
-        }
-        ForEach(strays, id: \.key) { grant in
-            Text("\(grant.label.isEmpty ? "A box" : grant.label) · \(grant.fingerprint)")
-                .fleetType(.labelMono)
-                .foregroundStyle(Design.Palette.inkDim)
-            Button("Remove", role: .destructive) {
-                act { try await vault.remove(Fleet(settings: settings), grant: grant) }
-            }
-            .disabled(busy)
         }
 
         if !result.isBlank {
@@ -300,11 +274,110 @@ struct YourVault: View {
             failed = true
             result = error.localizedDescription
         }
-        boxes = ((try? await fleet.enrolledHosts()) ?? []).filter { !$0.isRevoked && $0.ephemeral != true }
+        if let got = try? await fleet.enrolledHosts() {
+            boxes = got.filter { !$0.isRevoked && $0.ephemeral != true }
+        }
     }
 
     /// Run one change, say what it did, then show the vault as it is now. A
     /// cancelled sign-in says nothing: the person meant it.
+    private func act(_ block: @escaping @MainActor () async throws -> String) {
+        Task { @MainActor in
+            busy = true
+            result = ""
+            defer { busy = false }
+            do {
+                result = try await block()
+                failed = false
+            } catch WebAuth.Failure.cancelled {
+                failed = false
+            } catch {
+                failed = true
+                result = error.localizedDescription
+            }
+            await reload()
+        }
+    }
+}
+
+/// Whether ONE box may hold your vault's credentials, on that box's page.
+///
+/// Beside its Key on purpose: approving is safe because the fingerprint this
+/// phone works out from the box's key matches what `fleetwright-sidecar
+/// identity` prints on the box, and the page is where both are in view. The
+/// fingerprint here is computed, never read off the fleet's listing.
+///
+/// Drawn only for a permanent box the fleet has a key for, and only once this
+/// phone is signed in to GitHub, which is how the vault knows whose it is.
+struct VaultApproval: View {
+    let settings: Settings
+    let host: Fleet.Host
+    @State private var grant: PhoneVault.Grant?
+    @State private var loaded = false
+    @State private var busy = false
+    @State private var result = ""
+    @State private var failed = false
+
+    private var vault: PhoneVault { PhoneVault(settings: settings) }
+    private var fingerprint: String? { host.publicJwk.map(PhoneVault.fingerprint) }
+
+    var body: some View {
+        if PhoneGitHub(settings: settings).signedIn {
+            Group {
+                if let fingerprint {
+                    if !loaded {
+                        Text("Loading your vault…")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                    } else if let grant {
+                        LabeledContent("Your credentials") {
+                            Text("Approved").fleetType(.label).foregroundStyle(Design.Palette.ok)
+                        }
+                        Button("Remove", role: .destructive) {
+                            act { try await vault.remove(Fleet(settings: settings), grant: grant) }
+                        }
+                        .disabled(busy)
+                    } else {
+                        Text("Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                        Text(fingerprint)
+                            .fleetType(.labelMono)
+                            .foregroundStyle(Design.Palette.ink)
+                            .textSelection(.enabled)
+                        Button("Approve") {
+                            act { try await vault.approve(Fleet(settings: settings), host: host) }
+                        }
+                        .disabled(busy)
+                    }
+                } else {
+                    Text("\(host.hostId) · no key listed")
+                        .fleetType(.labelMono)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                if !result.isBlank {
+                    Text(result)
+                        .fleetType(.label)
+                        .foregroundStyle(failed ? Design.Palette.bad : Design.Palette.ink)
+                        .textSelection(.enabled)
+                }
+            }
+            .task { await reload() }
+        }
+    }
+
+    @MainActor
+    private func reload() async {
+        do {
+            let contents = try await vault.list(Fleet(settings: settings))
+            grant = contents.grants.first { $0.fingerprint == fingerprint }
+        } catch {
+            failed = true
+            result = error.localizedDescription
+        }
+        loaded = true
+    }
+
     private func act(_ block: @escaping @MainActor () async throws -> String) {
         Task { @MainActor in
             busy = true

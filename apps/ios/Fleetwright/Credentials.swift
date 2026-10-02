@@ -36,6 +36,48 @@ struct CredentialsView: View {
     /// The per-machine half. A host row shows Claude and nothing else; the
     /// fleet-wide screen shows everything else.
     var onlyClaude: Bool = false
+    /// THE OLDER WAY, AS FACTS. Vault first: a credential is kept once in the
+    /// vault (under Credentials) and a link made on a box is shown here as
+    /// what it is, with Test and Forget, and no second Connect beside the
+    /// vault's. A link on a box wins there, which is why forgetting one is
+    /// still offered.
+    var linkedOnly: Bool = false
+
+    private var headerText: String {
+        if onlyClaude { return host.map { "Claude on \($0)" } ?? "Claude" }
+        return linkedOnly ? "Linked on machines" : "Your credentials"
+    }
+
+    /// What this screen says under its list. A function, not a chain of
+    /// ternaries over `+`: that shape is what makes the Swift type checker
+    /// give up, and only on CI.
+    private var footerText: String {
+        if linkedOnly {
+            return "Linked on a box rather than kept in your vault. A link on a box wins there; forget one and "
+                + "that box uses what your vault keeps."
+        }
+        if onlyClaude && host == nil {
+            return "Sessions run on the account of whoever started them, so signing in links YOURS, on the "
+                + "machine you pick."
+        }
+        if onlyClaude {
+            return "This machine has no Claude account of its own. Sessions run on the account of whoever "
+                + "started them, so connecting here links YOURS — and somebody who has not connected "
+                + "one cannot start a session on this box."
+        }
+        return "Each one is created on the provider's own page, on your account, and can be "
+            + "revoked there at any time. A token goes to every machine in the fleet, because "
+            + "it is yours rather than any one box's — sessions you start get it, and nobody "
+            + "else's do. Claude is per person too: a session runs on the account of whoever "
+            + "started it."
+    }
+
+    /// The rows this screen draws.
+    private var shown: [Fleet.Connections.Available] {
+        if onlyClaude { return connections.catalogue.filter(\.isSignIn) }
+        if linkedOnly { return connections.catalogue.filter { connections.linked($0.provider) != nil } }
+        return connections.catalogue
+    }
 
     @State private var connections = Fleet.Connections()
     @State private var pending: Fleet.Connections.Available?
@@ -79,26 +121,23 @@ struct CredentialsView: View {
                 // machines are missing it. That is better information than the
                 // fleet-wide providers get, not worse — so Claude is shown,
                 // and the action names the machine it is about to act on.
-                ForEach(onlyClaude ? connections.catalogue.filter(\.isSignIn) : connections.catalogue) { provider in
+                if linkedOnly && !connections.catalogue.isEmpty && shown.isEmpty {
+                    Text("Nothing is linked on a machine.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                ForEach(shown) { provider in
                     row(provider)
                 }
             } header: {
-                Text(onlyClaude ? "Claude on \(host ?? "this machine")" : "Your credentials")
+                Text(headerText)
             } footer: {
                 // "Signing in to Claude is per machine: that one is a login the
                 // box performs" was true and is not any more. A machine has no
                 // Claude account — see docs/one-account-per-person.md — and a
                 // sentence describing one is how somebody spends an evening
                 // looking for a button that should not exist.
-                Text(onlyClaude
-                     ? "This machine has no Claude account of its own. Sessions run on the account of whoever "
-                       + "started them, so connecting here links YOURS — and somebody who has not connected "
-                       + "one cannot start a session on this box."
-                     : "Each one is created on the provider's own page, on your account, and can be "
-                       + "revoked there at any time. A token goes to every machine in the fleet, because "
-                       + "it is yours rather than any one box's — sessions you start get it, and nobody "
-                       + "else's do. Claude is per person too: a session runs on the account of whoever "
-                       + "started it.")
+                Text(footerText)
             }
 
             if let pending {
@@ -209,7 +248,7 @@ struct CredentialsView: View {
         .scrollContentBackground(.hidden)
         .background(Design.Palette.bg)
         .listRowBackground(Design.Palette.card)
-        .navigationTitle("Credentials")
+        .navigationTitle(linkedOnly ? "Linked on machines" : onlyClaude ? "Claude" : "Credentials")
         // A dialog rather than a picker in the row: this is a one-off choice
         // that starts something, not a setting to leave sitting there.
         .confirmationDialog(
@@ -296,15 +335,17 @@ struct CredentialsView: View {
                 Text("not connected").fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
             }
             HStack(spacing: 12) {
-                Button(actionLabel(provider, connections.linked(provider.provider), on: targetHost(provider))) {
-                    // ASK WHEN THERE IS SOMETHING TO ASK. A sign-in on a fleet
-                    // with two machines and no host chosen used to be sent
-                    // anyway, and the coordinator refused it by name — correct,
-                    // and unactionable on a screen with no picker.
-                    if provider.isSignIn, host == nil, hostsToOffer(provider).count > 1 {
-                        choosingHost = provider
-                    } else {
-                        Task { await begin(provider, on: targetHost(provider)) }
+                if !linkedOnly {
+                    Button(actionLabel(provider, connections.linked(provider.provider), on: targetHost(provider))) {
+                        // ASK WHEN THERE IS SOMETHING TO ASK. A sign-in on a fleet
+                        // with two machines and no host chosen used to be sent
+                        // anyway, and the coordinator refused it by name — correct,
+                        // and unactionable on a screen with no picker.
+                        if provider.isSignIn, host == nil, hostsToOffer(provider).count > 1 {
+                            choosingHost = provider
+                        } else {
+                            Task { await begin(provider, on: targetHost(provider)) }
+                        }
                     }
                 }
                 if connections.linked(provider.provider) != nil {

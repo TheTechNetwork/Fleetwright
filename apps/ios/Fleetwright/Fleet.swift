@@ -163,7 +163,11 @@ struct Fleet {
                 if let idle = idleFor { return "Quiet for \(idle)" }
                 return "Working"
             }
-            if status == "ended" { return "Finished" }
+            // "ENDED", NOT "FINISHED". A session that crashed ends with the
+            // same status as one that did its job, and "Finished" picked the
+            // kinder reading of a fact this app cannot tell apart (C-5).
+            // Output says which it was.
+            if status == "ended" { return "Ended" }
             if status == "stopped" { return isResumable ? "Stopped · can be resumed" : "Stopped" }
             return status
         }
@@ -1086,6 +1090,21 @@ struct Fleet {
         return try JSONDecoder().decode(Reply.self, from: data).clients ?? []
     }
 
+    /// Who this credential is, and whether the fleet treats them as an admin.
+    ///
+    /// The same flag the coordinator's destructive-route guard reads, so a row
+    /// drawn from it cannot disagree with the refusal. Throws on an older
+    /// coordinator that does not serve it, which leaves the answer unknown.
+    func me() async throws -> (email: String?, admin: Bool) {
+        let data = try await get("/api/me")
+        struct Reply: Codable { let email: String?; let admin: Bool? }
+        let reply = try JSONDecoder().decode(Reply.self, from: data)
+        // A reply without the field is an older coordinator's "no such route",
+        // which is not an answer about this person.
+        guard let admin = reply.admin else { throw FleetError.message("This fleet does not say who is an admin.") }
+        return (reply.email, admin)
+    }
+
     /// Whether this fleet can start a temporary machine, and where from.
     ///
     /// The `runners` field of /api/hosts: the repository holding the runner
@@ -1686,6 +1705,10 @@ struct Fleet {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         if authenticated, !settings.credential.isEmpty {
             request.setValue("Bearer \(settings.credential)", forHTTPHeaderField: "authorization")
+            // AN ADMIN SEEING THE FLEET AS A MEMBER: the coordinator answers
+            // this as a member's request, so every list and refusal is the one
+            // a member gets, not an imitation of it drawn here.
+            if settings.viewAsMember { request.setValue("member", forHTTPHeaderField: "x-fleetwright-view") }
         }
         // Long, because a `start` waits out the Remote Control check on the
         // host. A short timeout reports a working fleet as unreachable.
@@ -1808,6 +1831,25 @@ final class Settings {
         didSet { UserDefaults.standard.set(minterPin, forKey: "minterPin") }
     }
 
+    /// Whether the person signed in is this fleet's admin. NIL IS CANNOT TELL:
+    /// not asked yet, or a coordinator too old to say. Admin-only rows are
+    /// drawn only for `true`, so not knowing draws nothing rather than a
+    /// control that answers "needs an admin credential". Not stored: it is
+    /// the coordinator's to say, and it is asked again on every launch.
+    var admin: Bool? = nil
+
+    /// An admin looking at the fleet as a member would. Sent with every
+    /// request (see `send`), so the coordinator answers as it would a member:
+    /// fewer sessions, other people's machines without their accounts, and the
+    /// refusals. Kept across launches, and said on the session list, so an
+    /// admin cannot forget they are in it.
+    var viewAsMember: Bool {
+        didSet { UserDefaults.standard.set(viewAsMember, forKey: "viewAsMember") }
+    }
+
+    /// Whether admin-only rows are drawn: an admin, not viewing as a member.
+    var showsAdmin: Bool { admin == true && !viewAsMember }
+
     private static let credentialKey = "credential"
 
     init() {
@@ -1822,6 +1864,7 @@ final class Settings {
         customPhrase = UserDefaults.standard.string(forKey: "customPhrase") ?? ""
         githubSignIn = Keychain.get("githubSignIn") ?? ""
         minterPin = UserDefaults.standard.string(forKey: "minterPin") ?? ""
+        viewAsMember = UserDefaults.standard.bool(forKey: "viewAsMember")
 
         // Nothing is carried over from the build that asked for an admin token.
         // That token is the fleet's break-glass credential and every phone had
@@ -1836,6 +1879,20 @@ final class Settings {
     func signOut() {
         credential = ""
         signedInAs = ""
+        admin = nil
+        viewAsMember = false
+    }
+
+    /// Ask the fleet whether this person is an admin. A failure keeps what
+    /// was known, the way every list here does, rather than forgetting it
+    /// because the network blinked.
+    @MainActor
+    func refreshAdmin() async {
+        guard configured else {
+            admin = nil
+            return
+        }
+        if let me = try? await Fleet(settings: self).me() { admin = me.admin }
     }
 
     /// Reachable AND allowed in. Both matter: a URL with no credential gets a

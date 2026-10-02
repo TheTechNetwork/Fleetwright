@@ -41,7 +41,7 @@ test('the screenshot tab and the unconfigured-app rule cannot both fire', () => 
   // Two things can choose a tab, and their order has to be visible: a
   // screenshot run has already been pointed at the demo, so it is configured,
   // and `else if` is what says that rather than leaving it to be worked out.
-  assert.match(VIEW, /if let t = screenshotTab \{ tab = t \}\s*\n\s*else if !settings\.configured \{ tab = \.settings \}/);
+  assert.match(VIEW, /if let t = screenshotTab \{ tab = t \}\s*\n\s*else if !settings\.configured \{ tab = \.you \}/);
 });
 
 test('the directories are named for Apple display types, which the uploader reads', () => {

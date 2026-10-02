@@ -260,11 +260,8 @@ test('a fleet card says each fact once, and shows controls only when asked', () 
   //
   // Six lines of fact, two of them the same fact, one of them the badge again,
   // and four controls under every machine whether or not anything was wanted.
-  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
-  const card = view.slice(
-    view.indexOf('A CARD, LIKE A SESSION IS'),
-    view.indexOf('} header: {', view.indexOf('A CARD, LIKE A SESSION IS')),
-  );
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/MachinesView.swift', import.meta.url), 'utf8');
+  const card = view.slice(view.indexOf('private func reportingCard'), view.indexOf('private func silentCard'));
 
   // THE ACCOUNT WAS PRINTED TWICE. describeWhoCanStart already carries the
   // address, the plan and the org — it was changed to carry them when those
@@ -288,9 +285,14 @@ test('a fleet card says each fact once, and shows controls only when asked', () 
   }
   assert.ok(!card.includes('expandedHost'), 'the row expands in place again');
 
-  // A LINK, NOT A TAP GESTURE. The push transition, the back button and the
-  // accessibility affordance all come with it; a gesture on a card gets none of
-  // those and has to invent each one badly.
-  assert.match(card, /NavigationLink\(""\) \{[\s\S]{0,200}?HostView\(/);
-  assert.ok(!card.includes('.onTapGesture'), 'a raw gesture is standing in for a link again');
+  // A BUTTON THAT PUSHES, NOT A TAP GESTURE. The push transition, the back
+  // button and the accessibility affordance all come with it; a gesture on a
+  // card gets none of those and has to invent each one badly. It was a hidden
+  // NavigationLink("") at zero opacity behind the card, which VoiceOver met as
+  // an unlabelled link beside a card that read as static text.
+  assert.match(view, /Button \{ showing = host\.hostId \} label: \{ reportingCard\(host\) \}/);
+  assert.match(view, /\.navigationDestination\(item: \$showing\)[\s\S]{0,120}?hostPage\(id\)/);
+  assert.match(view, /HostView\(/);
+  assert.ok(!view.includes('NavigationLink("")'), 'an unlabelled hidden link is standing in for the card again');
+  assert.ok(!view.includes('.onTapGesture'), 'a raw gesture is standing in for a link again');
 });
