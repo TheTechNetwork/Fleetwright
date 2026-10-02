@@ -2189,6 +2189,129 @@ const OPENAPI = JSON.stringify({
         }
       }
     },
+    "/api/runners/dispatch": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Start a runner from your own device",
+        "description": "Mints the dispatch ticket `provision` would, and holds the session to start when the runner joins, but hands the dispatch to the caller instead of to a permanent box: `repo`, `workflow` and `inputs` are what to send GitHub's `POST /repos/{repo}/actions/workflows/{workflow}/dispatches` with the caller's own GitHub sign-in, on the repository's default branch. No permanent box is involved. See docs/runner-central.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "macos",
+                      "windows",
+                      "linux",
+                      "android"
+                    ]
+                  },
+                  "minutes": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 350
+                  },
+                  "start": {
+                    "type": "object",
+                    "description": "a session to start when it joins: `title`, `brief`, `mode`, as `start` takes them"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`repo`, `workflow`, `inputs` (`minutes`, `ticket`, `coordinator`) and `text`"
+          },
+          "400": {
+            "description": "not a platform, or minutes out of range"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "422": {
+            "description": "nowhere to start one: no runner repository is set for you or for the fleet"
+          }
+        }
+      }
+    },
+    "/api/github/device": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Start signing in to GitHub on this device",
+        "description": "The App's client id and the callback GitHub sends the browser back through, for a device that runs GitHub's sign-in page itself with its own PKCE verifier and a state beginning `d.`. Not the client secret: that stays in the minting Worker, which finishes the exchange (POST). The callback hands the code back to the app at `fleetwright://github` and exchanges nothing.",
+        "responses": {
+          "200": {
+            "description": "`clientId`, `redirectUri`, `statePrefix`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "503": {
+            "description": "this fleet has no GitHub App configured"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Finish or renew this device's GitHub sign-in",
+        "description": "`sealed` is `{ v: 1, grant: 'code'|'refresh', code, verifier, redirectUri, refreshToken, reply, at }` sealed on the device to the minting Worker's deposit key. The coordinator relays it unread; the minter makes the exchange with the client secret only it holds, and returns the token sealed to `reply`, a key only the device has. See docs/runner-central.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sealed"
+                ],
+                "properties": {
+                  "sealed": {
+                    "type": "object",
+                    "description": "`{ epk, iv, ct }` from src/fleet/seal.js"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`sealed`, the token for the device, and `text`"
+          },
+          "400": {
+            "description": "not a sealed sign-in"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "422": {
+            "description": "refused: `error.code` and `text` say why (stale, sealed to another key, GitHub refused the code, no minter)"
+          }
+        }
+      }
+    },
     "/api/claude-login": {
       "get": {
         "tags": [
@@ -2294,6 +2417,73 @@ const OPENAPI = JSON.stringify({
           },
           "503": {
             "description": "FLEETWRIGHT_ACTIONS_REPOS is unset \u2014 this coordinator admits no runners"
+          }
+        }
+      }
+    },
+    "/api/vault": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Read or change your vault",
+        "description": "`sealed` is `{ v: 1, github, email, op, at, reply, ... }` sealed on the device to the minting Worker's deposit key, where `op` is `list`, `put` or `forget` (a named secret `secret:NAME`, or `claude`), `connect` (a GitHub or Cloudflare sign-in: `provider`, `code`, `verifier`, `redirectUri`), `grant` (`hostKey`, the box's public key, and `label`) or `revoke` (`key`). The coordinator relays it unread beside the signed-in account, which the minter checks against `email` inside the seal. The answer is sealed to `reply`. See docs/vault.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sealed"
+                ],
+                "properties": {
+                  "sealed": {
+                    "type": "object",
+                    "description": "`{ epk, iv, ct }` from src/fleet/seal.js"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`sealed`, the answer for the device, and `text`"
+          },
+          "400": {
+            "description": "not a sealed vault request"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "422": {
+            "description": "the minting Worker refused it, with a code and a sentence"
+          }
+        }
+      }
+    },
+    "/api/cloudflare/device": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Start signing in to Cloudflare for your vault",
+        "description": "The Cloudflare client id, the scopes this fleet asks for, the authorize page and the callback, for a device that runs Cloudflare's sign-in itself with its own PKCE verifier and a state beginning `d.`. The callback hands the code back to the app at `fleetwright://cloudflare`; the minting Worker makes the exchange through POST /api/vault. Not the client secret.",
+        "responses": {
+          "200": {
+            "description": "`clientId`, `redirectUri`, `authorizeUrl`, `scopes`, `statePrefix`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "503": {
+            "description": "this fleet has no Cloudflare sign-in configured"
           }
         }
       }

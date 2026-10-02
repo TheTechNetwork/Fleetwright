@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,6 +27,7 @@ import { depositClaudeLogin } from '../src/fleet/claude-deposit.js';
 import { saveRunnerLogin, runnerTokenFile } from '../src/core/runner-login.js';
 import { ensureDirectConfig } from '../src/core/direct-config.js';
 import { buildCommand } from '../src/core/claude.js';
+import { Accounts } from '../src/core/accounts.js';
 import minterWorker, { ClaudeLogins } from '../worker/src/minter.js';
 import { actionsIssuer } from './helpers/actions-issuer.js';
 
@@ -221,7 +222,10 @@ test('a runner is told to use its API key whenever the login is not its owner’
       job_workflow_ref: 'stranger/runners/.github/workflows/runner-linux.yml@refs/heads/main' }, /neither eli.s own nor one this fleet mints for/],
     ['a workflow that is not a runner', {}, { job_workflow_ref: 'eli/runners/.github/workflows/ci.yml@refs/heads/main' }, /not one of the runner workflows/],
     ['a coordinator that asks with its own key', { tamper: { up: (fr) => (fr.kind === 'claude-login' ? { ...fr, key: theirKey } : fr) } }, {}, /did not verify/],
-    ['a coordinator that changes the answer', { tamper: { down: (fr) => (fr.sealed ? { ...fr, sealed: { ...fr.sealed, ct: `A${fr.sealed.ct.slice(1)}` } } : fr) } }, {}, null],
+    // ALWAYS A DIFFERENT FIRST CHARACTER. This wrote `A` over it, which is no
+    // change at all for the one ciphertext in 64 that already starts with
+    // one, so the login opened and the case failed about that often.
+    ['a coordinator that changes the answer', { tamper: { down: (fr) => (fr.sealed ? { ...fr, sealed: { ...fr.sealed, ct: `${fr.sealed.ct[0] === 'A' ? 'B' : 'A'}${fr.sealed.ct.slice(1)}` } } : fr) } }, {}, null],
   ];
   for (const [name, opts, job, expected] of cases) {
     const f = await fleet(opts);
@@ -315,10 +319,32 @@ test('on a runner the owner’s sessions run on their login and everybody else�
   // config, which is the one it reads, by the key's last twenty characters.
   const state = JSON.parse(readFileSync(join(String(other.dir), '.claude.json'), 'utf8'));
   assert.deepEqual(state.customApiKeyResponses?.approved, [KEY.slice(-20)]);
+  // …and the "running in Bypass Permissions mode" warning, which a real CLI
+  // draws with "No, exit" focused before anything else. A permanent box gets
+  // this from install.sh's settings; a runner never runs install.sh.
+  for (const staged of [owner, other]) {
+    const settings = JSON.parse(readFileSync(join(String(staged.dir), 'settings.json'), 'utf8'));
+    assert.equal(settings.skipDangerousModePermissionPrompt, true);
+  }
 
   // A RUNNER WHOSE OWNER HAS NONE: the key, for them too.
   saveRunnerLogin(cfg, { email: OWNER, login: null, token: null });
   assert.equal(run(`fleet:${OWNER}`).said, `key=${KEY} token=none`);
+
+  // SOMEBODY WHO LINKED AN ACCOUNT, on a runner: their staged login is the
+  // credential, and the repository's key is unset so the CLI cannot rank it
+  // above that login and bill the repository instead.
+  new Accounts(cfg.stateDir).save('carol@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'sk-ant-oat01-carol' } }));
+  const carol = run('fleet:carol@example.com');
+  assert.equal(carol.said, 'key=none token=none');
+  assert.ok(existsSync(join(String(carol.dir), '.credentials.json')), 'her login is the staged file');
+  // …and on a permanent box the same linked account is left alone: an
+  // operator who set ANTHROPIC_API_KEY there meant it.
+  rmSync(join(cfg.stateDir, 'runner-login.json'));
+  const boxCfg = { ...cfg };
+  const staged = ensureDirectConfig(boxCfg, 'carolbox', 'fleet:carol@example.com', { cwd: join(dir, 'work') });
+  assert.equal(staged.ok, true);
+  assert.equal(/** @type {any} */ (staged).auth, undefined);
 });
 
 test('the coordinator answers every ask it will not relay, and never with silence', async () => {

@@ -828,13 +828,53 @@ class Fleet(
         minutes: Int? = null,
         host: String? = null,
         start: Map<String, String>? = null,
-    ): Reply = intent(
-        "provision",
-        mapOf("platform" to platform),
-        host,
-        numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
-        extra = if (start == null) emptyMap() else mapOf("start" to JSONObject(start.toMap())),
-    )
+    ): Reply {
+        // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
+        // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
+        // Otherwise a box with your GitHub connection does, as it always did.
+        val phone = PhoneGitHub(settings)
+        if (phone.signedIn) {
+            return runCatching { phone.startRunner(this, platform, minutes, start) }
+                .getOrElse { Reply(false, it.message ?: "that did not work", emptyList()) }
+        }
+        return intent(
+            "provision",
+            mapOf("platform" to platform),
+            host,
+            numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
+            extra = if (start == null) emptyMap() else mapOf("start" to JSONObject(start.toMap())),
+        )
+    }
+
+    /** Where to start a runner from this phone, and the ticket to start it with. */
+    suspend fun prepareRunnerDispatch(platform: String, minutes: Int?, start: Map<String, String>?): JSONObject =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject().put("platform", platform)
+            if (minutes != null) body.put("minutes", minutes)
+            if (start != null) body.put("start", JSONObject(start.toMap()))
+            post("/api/runners/dispatch", body)
+        }
+
+    /** What this phone needs to open GitHub's sign-in page itself: the client id and the callback. */
+    suspend fun githubDeviceStart(): JSONObject = withContext(Dispatchers.IO) { get("/api/github/device") }
+
+    /** A sign-in or renewal sealed to the minter, relayed; the answer comes back sealed to this phone. */
+    suspend fun githubDeviceToken(sealed: JSONObject): JSONObject =
+        withContext(Dispatchers.IO) { post("/api/github/device", JSONObject().put("sealed", sealed)) }
+
+    /** What this phone needs to open Cloudflare's sign-in page itself, for the person's vault. */
+    suspend fun cloudflareDeviceStart(): JSONObject = withContext(Dispatchers.IO) { get("/api/cloudflare/device") }
+
+    /** A request to the person's vault, sealed to the minter; the answer comes back sealed to this phone. */
+    suspend fun vault(sealed: JSONObject): JSONObject =
+        withContext(Dispatchers.IO) { post("/api/vault", JSONObject().put("sealed", sealed)) }
+
+    /** The key the fleet says its minter has, to compare with the pin. */
+    suspend fun claudeLoginKey(): JSONObject = withContext(Dispatchers.IO) { get("/api/claude-login") }
+
+    /** A Claude login sealed to the minter, for your own runners. */
+    suspend fun depositClaudeLogin(sealed: JSONObject): JSONObject =
+        withContext(Dispatchers.IO) { send("PUT", "/api/claude-login", JSONObject().put("sealed", sealed)) }
 
     /**
      * What a runner repository check found, as data — so a screen shows each
@@ -1200,6 +1240,8 @@ class Fleet(
                     fingerprint = o.optString("fingerprint"),
                     revoked = o.optLong("revokedAt", 0L) > 0L,
                     lastSeenAt = o.optLong("lastSeenAt", 0L).takeIf { it > 0L },
+                    publicJwk = o.optJSONObject("publicJwk"),
+                    ephemeral = o.optBoolean("ephemeral", false),
                 )
             }
         }.getOrDefault(emptyList())
@@ -1265,7 +1307,18 @@ class Fleet(
      * since the epoch, or null for a box that enrolled and never connected —
      * which is a different fact from one that went away, and is shown as one.
      */
-    data class Host(val hostId: String, val fingerprint: String, val revoked: Boolean, val lastSeenAt: Long? = null)
+    /**
+     * `publicJwk` is the box's own public key, which a phone approves for its
+     * person's vault by (PhoneVault): null from a coordinator too old to list it.
+     */
+    data class Host(
+        val hostId: String,
+        val fingerprint: String,
+        val revoked: Boolean,
+        val lastSeenAt: Long? = null,
+        val publicJwk: JSONObject? = null,
+        val ephemeral: Boolean = false,
+    )
 
     /**
      * A device that holds a credential for this fleet. No secret in it — the
@@ -2042,6 +2095,26 @@ class Settings(context: Context) {
                 remove("apiToken.enc")
             }.apply()
         }
+
+    /**
+     * This phone's own GitHub sign-in (PhoneGitHub), encrypted under the same
+     * Keystore key as the fleet credential: a token that starts your runners.
+     */
+    var githubSignIn: String
+        get() = prefs.getString("githubSignIn.enc", null)?.let { decrypt(it) } ?: ""
+        set(value) {
+            prefs.edit().apply {
+                if (value.isBlank()) remove("githubSignIn.enc") else putString("githubSignIn.enc", encrypt(value))
+            }.apply()
+        }
+
+    /**
+     * The minting Worker's public key, as whoever runs the fleet gave it to
+     * you. Not a secret: it is what this phone checks before sealing anything.
+     */
+    var minterPin: String
+        get() = prefs.getString("minterPin", "") ?: ""
+        set(value) = prefs.edit().putString("minterPin", value.trim()).apply()
 
     /** Who this device is signed in as. Not a secret — it is displayed. */
     var signedInAs: String

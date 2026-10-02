@@ -43,7 +43,14 @@ test('revoking twice is agreement, not a new event', () => {
   assert.equal(hosts.revoke('gone-box'), false);
 });
 
-test('the list never carries key material, revoked or not', () => {
-  const hosts = withHost('box');
-  for (const h of hosts.list()) assert.equal(h.publicJwk, undefined);
+test('the list carries a box\'s public key and never anything private', () => {
+  // The public key is there so a phone can approve the box for its person's
+  // vault by the key itself (docs/vault.md). What may never be there is a
+  // private scalar, whatever was stored.
+  const hosts = new HostIdentities({ now: () => 1000 });
+  hosts.restore([{ hostId: 'box', publicJwk: { kty: 'EC', crv: 'P-256', x: 'x'.repeat(43), y: 'y'.repeat(43), d: 'secret' }, fingerprint: 'f'.repeat(16), enrolledAt: 1, revokedAt: null }]);
+  for (const h of hosts.list()) {
+    assert.deepEqual(h.publicJwk, { kty: 'EC', crv: 'P-256', x: 'x'.repeat(43), y: 'y'.repeat(43) });
+    assert.ok(!JSON.stringify(h).includes('secret'));
+  }
 });

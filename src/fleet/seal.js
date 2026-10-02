@@ -96,6 +96,12 @@ export async function claudeBindingFor(key) {
   return CLAUDE_BINDING_PREFIX + toB64Url(new Uint8Array(digest));
 }
 
+/** A device's GitHub sign-in or renewal, sealed on its way to the minter. */
+export const GITHUB_REQUEST_AAD = 'fleetwright-github-request/v1';
+
+/** The GitHub token the minter got for a device, sealed on its way back. */
+export const GITHUB_REPLY_AAD = 'fleetwright-github-reply/v1';
+
 /** The additional data a Claude login is sealed under on its way INTO the minter. */
 export const DEPOSIT_AAD = 'fleetwright-claude-deposit/v1';
 
@@ -109,6 +115,26 @@ export const DEPOSIT_AAD = 'fleetwright-claude-deposit/v1';
  */
 export function atRestAad(userId) {
   return `fleetwright-claude-login/v1\n${userId}`;
+}
+
+/** A person's request to their vault, sealed on its way to the minter (src/fleet/minter/vault.js). */
+export const VAULT_REQUEST_AAD = 'fleetwright-vault-request/v1';
+
+/** The vault's answer to that person, sealed to the key their device made for it. */
+export const VAULT_REPLY_AAD = 'fleetwright-vault-reply/v1';
+
+/** What a box was approved to hold, sealed to the key the box made for that one request. */
+export const VAULT_BOX_AAD = 'fleetwright-vault-box/v1';
+
+/**
+ * The additional data a vault item is kept under AT REST: whose it is and
+ * which it is, so a row moved under another account, or one item copied over
+ * another, does not open.
+ *
+ * @param {string} userId  GitHub's numeric user id @param {string} name  the item
+ */
+export function vaultAtRestAad(userId, name) {
+  return `fleetwright-vault/v1\n${userId}\n${name}`;
 }
 
 /**

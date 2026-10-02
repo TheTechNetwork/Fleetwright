@@ -67,11 +67,11 @@ because a narrow credential is narrow until somebody widens it.
 `FLEETWRIGHT_RUNNER_TOKEN` exists is that nothing knew who a runner belonged to
 until the job said so. When the fleet dispatches, it knew before the job existed.
 
-What it costs, stated plainly: **you need one permanent host with GitHub
-connected before you can have a temporary one.** A fleet of nothing but runners
-cannot start a runner. That is the correct shape rather than a limitation to fix
-— the permanent box is where the credentials, the conversations and the internal
-access live, and runners are the thing you reach for *from* it.
+What it used to cost: **one permanent host with GitHub connected before you
+could have a temporary one.** That is no longer true. The token that dispatches
+can be on the device the person is holding, and [the next
+section](#without-a-permanent-box) says how. A box with your GitHub connection
+still works, and is what a phone that has not signed in falls back to.
 
 ### Why the coordinator does not do this itself
 
@@ -84,6 +84,65 @@ the table above.
 So the coordinator does the two things only it can: it knows **who is asking**
 (it verified them) and it mints the **ticket**. The host does the one thing only
 it can: it holds the token.
+
+## Without a permanent box
+
+The same split, with the token somewhere else. The coordinator still knows who
+is asking and mints the ticket; what holds the person's GitHub token and makes
+the dispatch is now **the device they are using**, when it can:
+
+| who dispatches | with what token | how it got it |
+|---|---|---|
+| **a phone** signed in under *Runners from this phone* | its own GitHub App user token, in the Keychain or the Keystore | the sign-in below |
+| **`fleetwright-mcp`** on the person's computer | `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token` | they are already signed in to `gh` |
+| a permanent box, as before | the person's connection on that box | `connect github` |
+
+**The dispatch.** `POST /api/runners/dispatch` takes what `provision` takes
+(platform, minutes, and the session to start) and answers with the repository,
+the workflow and the three inputs, ticket included. The device then asks GitHub
+for the repository's default branch and dispatches the workflow, which is what
+a box's `dispatchRunner` does, with the same inputs. The token never goes to
+the fleet. The ticket is the same single-use, forty-five-minute ticket, so what
+admits the job and whose machine it is are unchanged. An unused one expires.
+
+**Signing a phone in to GitHub, without the coordinator seeing the token.** A
+GitHub App's code exchange needs its client secret, and a secret shipped in an
+app is a secret everyone who downloads the app has. So the phone runs the
+browser half and the **minting Worker** runs the exchange:
+
+1. The phone asks `GET /api/github/device` for the App's public client id and
+   the callback URL, makes a PKCE verifier and a state starting `d.`, and opens
+   GitHub's own page.
+2. GitHub sends the browser to `/oauth/github/callback`. A `d.` state is a
+   device's, so the coordinator exchanges nothing and hands the code to the app
+   at `fleetwright://github`. The app checks the state is the one it made. The
+   code is no use without the verifier, which never left the phone.
+3. The phone seals `{ code, verifier, redirectUri, reply }` to the minter's key
+   (the pin under [Depositing one](#depositing-one), checked against
+   `GET /api/claude-login` before anything is sealed) and posts it to
+   `POST /api/github/device`. `reply` is a P-256 key the phone made for this one
+   request.
+4. The minter opens it, refuses it if it is more than ten minutes old, makes
+   the exchange with `FLEETWRIGHT_GITHUB_CLIENT_SECRET`, asks GitHub whose token
+   it is, and seals the answer to `reply`. The coordinator relays two
+   ciphertexts and can read neither.
+
+Renewal, before the eight-hour token runs out, is the same request with
+`grant: refresh` and the refresh token. Sealing is `src/fleet/seal.js`, and
+each phone carries a port of it (`Seal.swift`, `Seal.kt`) held to the same bytes
+by `test/fixtures/parity/seal.json`: each phone seals the fixture's plaintext
+with its recorded random values and must produce the recorded ciphertext.
+
+**What that adds to the minter.** It now holds the App's client secret beside
+its private key. The secret can only exchange a code somebody's browser was
+given, and only with that code's verifier, so it is a smaller thing than the
+key that is already there. A fleet with no secret in the minter answers
+`not_configured`, and phones keep starting machines through a box.
+
+**The phone also deposits your Claude login** (the same sealed deposit
+`fleetwright-claude-login` makes), with its own GitHub token inside, so a
+phone and a `claude setup-token` are all a person needs. See
+[below](#your-claude-login-on-a-runner).
 
 ## The ticket
 
@@ -168,9 +227,14 @@ only there) with the **Fleetwright GitHub App installed** and the runner
 workflows from [`install/runner-central/`](../install/runner-central/) in it.
 The fleet's repository stays the default for anybody who has not set one.
 
-**It is checked before it is saved.** `PUT /api/runner-repo` asks a permanent
-box to run `runnerrepo` with the person's own GitHub connection, and saves the
-name only if every answer is one a dispatch can use:
+**It is checked before it is saved.** `PUT /api/runner-repo` asks the
+**minting Worker** first, which checks as the GitHub App itself: it finds the
+App's installation on the repository, mints a read-only token for it (metadata
+and contents, nothing else, kept inside the minter), and answers the same four
+questions with no box involved. Where there is no minter, or it holds no App
+key, it asks a permanent box to run `runnerrepo` with the person's own GitHub
+connection. Either way the name is saved only if every answer is one a dispatch
+can use:
 
 | asked | how | why it matters |
 |---|---|---|
@@ -409,6 +473,12 @@ fleetwright-claude-login            # paste it when asked
 fleetwright-claude-login forget     # take it back
 ```
 
+**Or from a phone.** Under *Runners from this phone*, once the minter key is
+saved and the phone is signed in to GitHub, paste the token from `claude
+setup-token` and choose *Keep for my runners*. The phone seals the same deposit
+with its own GitHub token inside, so it needs nothing from a computer but the
+token itself. *Forget my Claude login* takes it back.
+
 `fleetwright-claude-login` takes the same `FLEETWRIGHT_COORDINATOR_URL` and
 `FLEETWRIGHT_CREDENTIAL` as `fleetwright-mcp`, and one more:
 **`FLEETWRIGHT_MINTER_KEY`, the pin** — the minting Worker's public key, which
@@ -456,6 +526,7 @@ machine is not placed on the API key a moment before the login arrives.
 |---|---|
 | the runner's owner, with a login deposited | their login, as `CLAUDE_CODE_OAUTH_TOKEN`, with `ANTHROPIC_API_KEY` **unset** for that session — the CLI ranks an API key above the token and would bill the repository anyway |
 | the owner, with none | the repository's `ANTHROPIC_API_KEY` |
+| somebody who **linked** a Claude account to the fleet | that account, with `ANTHROPIC_API_KEY` **unset** for the same reason. Before, the key outranked it and the session billed the repository while looking signed in |
 | anybody else the fleet places there | the repository's `ANTHROPIC_API_KEY` |
 
 The token is a 0600 file in the job's private state directory, read when the
@@ -472,6 +543,14 @@ permanent box never says so, and still refuses a guest who has linked nothing,
 whatever is in its environment. And the CLI's "use this API key?" question is
 now answered in the session's own config directory, which is the one it reads;
 it was being answered in the box's, one directory over.
+
+**And the Bypass Permissions warning.** A runner session starts with
+`--dangerously-skip-permissions`, and the CLI answers that with a warning whose
+focused choice is "No, exit". A permanent box pre-accepts it in the settings
+`install.sh` writes; a runner never runs `install.sh`, so its sessions sat at
+the warning with nobody to press anything. Each runner session's own
+`settings.json` now carries `skipDangerousModePermissionPrompt`, the same
+acceptance a permanent box has, and nothing wider.
 
 ### What it cannot narrow
 
@@ -504,9 +583,18 @@ prints a private key and its pin. The private key is
 `FLEETWRIGHT_MINTER_DEPOSIT_KEY`, an **environment** secret of `github-app-key`
 beside the App key, synced to the minting Worker by the same manual run of the
 Worker workflow with **sync_app_key** ticked ([ci.md](./ci.md)). The pin goes
-to each person who will deposit, by message or in person. Without the key the
+to each person who will deposit, by message or in person, and it is the same
+pin a phone asks for under *Runners from this phone*. Without the key the
 minter keeps no logins and every runner uses its repository's key, as before.
 A new key makes every kept login unreadable; people deposit again.
+
+**For phones to sign in to GitHub,** the minter also needs the App's client
+secret, `FLEETWRIGHT_GITHUB_CLIENT_SECRET`, in the same `github-app-key`
+environment, synced by the same run. It is the secret the coordinator already
+has for connecting GitHub on a box; the minter's copy is what lets a phone
+finish a sign-in without the coordinator in a position to read the token.
+Without it, phones answer *the fleet cannot start a GitHub sign-in* and keep
+starting machines through a box.
 
 The logins live in a Durable Object of the minting Worker's own
 ([`wrangler.minter.toml`](../worker/wrangler.minter.toml)), which no other

@@ -39,6 +39,7 @@ import { readHouseRules } from '../core/rules.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
 import { saveRunnerLogin } from '../core/runner-login.js';
+import { applyVault } from '../core/vault-store.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
 
@@ -347,6 +348,17 @@ export class HttpAdapter {
       const body = await readJson(req);
       const r = saveRunnerLogin(this.cfg, { email: body.email, login: body.login, token: body.token });
       if (r.ok) log.info(`http: runner login: ${r.text}`);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    // WHAT THIS BOX'S PEOPLE KEPT IN THEIR VAULTS, as the sidecar was just
+    // given it: written whole, so a person who removed this box from their
+    // phone is forgotten here on the same pass (vault-store.js). From the
+    // sidecar because it is the process holding the box's key and the socket;
+    // written here because these files are this process's to read.
+    if (p === '/api/vault' && method === 'POST') {
+      const r = applyVault(this.cfg, await readJson(req));
+      if (r.ok) log.info(`http: vault: ${r.text}`);
       return json(res, r.ok ? 200 : 400, r);
     }
 

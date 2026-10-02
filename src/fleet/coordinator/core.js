@@ -20,14 +20,14 @@ import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE } from '../seal.js';
-import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText } from './oauth.js';
+import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
 import { RunnerTickets } from './runner-tickets.js';
 import { RunnerRepos } from './runner-repos.js';
-import { RUNNER_WORKFLOWS } from '../../core/runners.js';
+import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -57,6 +57,15 @@ const MINT_WINDOW_MS = 10 * 60_000;
  * two. Past that it is asking for something other than a login.
  */
 const MAX_CLAUDE_PER_WINDOW = 5;
+
+/** GitHub sign-ins and renewals one person's devices may finish in MINT_WINDOW_MS. */
+const MAX_GITHUB_PER_WINDOW = 20;
+// A person's vault changes: a phone listing, keeping and approving, a few at
+// a time. Thirty in ten minutes is a busy afternoon and not a script.
+const MAX_VAULT_PER_WINDOW = 30;
+// A box asks for its vault every ten minutes and when a token is about to run
+// out; twelve in ten minutes is that with room for reconnects.
+const MAX_BOX_VAULT_PER_WINDOW = 12;
 /** A frame id worth correlating on — the same shape a reply id is held to. */
 const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
@@ -117,7 +126,10 @@ export class CoordinatorCore {
    *   cloudflareOauth?: { clientId?: string, clientSecret?: string, scopes?: string }|null,
    *   runnerRepo?: string|null,
    *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any>,
-   *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any> }|null,
+   *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any>,
+   *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
+   *     github?: (ask: { sealed: unknown }) => Promise<any>,
+   *     vault?: (route: 'device'|'box', ask: Record<string, unknown>) => Promise<any> }|null,
    * }} [opts]
    */
   constructor({
@@ -398,6 +410,8 @@ export class CoordinatorCore {
     if (msg.kind === 'mint') return this.#onRunnerMint(hostId, msg);
     // AND FOR ITS OWNER'S CLAUDE LOGIN, answered the same way.
     if (msg.kind === 'claude-login') return this.#onRunnerClaude(hostId, msg);
+    // ANY BOX ASKING FOR WHAT ITS PEOPLE APPROVED IT TO HOLD, the same way.
+    if (msg.kind === 'vault') return this.#onHostVault(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -1228,74 +1242,13 @@ export class CoordinatorCore {
     // it is by presenting a single-use value it could not have invented. See
     // src/fleet/coordinator/runner-tickets.js.
     if (spec.verb === 'provision') {
-      const owner = String(spec.requester?.email || '').toLowerCase();
-      if (!owner) {
-        return {
-          ok: false,
-          error: { code: 'not_signed_in' },
-          text:
-            'A runner belongs to the person who asked for it, so this needs a signed-in identity. ' +
-            'Sign in on a device and use its credential rather than the fleet-wide admin token.',
-        };
-      }
-      // WHOSE REPOSITORY: the person's own when they set one, the fleet's
-      // otherwise. Decided here and never taken from the caller — whatever
-      // arrived in `repo` is replaced or removed below.
-      const own = this.runnerRepos.get(owner);
-      const repository = own || this.runnerRepo;
-      if (!repository) {
-        return {
-          ok: false,
-          error: { code: 'not_configured' },
-          text:
-            'There is nowhere to start a machine from yet. Set your own runner repository in the app — a ' +
-            'public repository with the Fleetwright GitHub App installed and the runner workflows in it — or ' +
-            'an operator sets FLEETWRIGHT_RUNNER_REPO for the whole fleet. See docs/runner-central.md.',
-        };
-      }
-      // A SESSION TO START WHEN IT JOINS, if the caller asked for one. Beside
-      // the params like `host`, never inside them — the host dispatching the
-      // run has nothing to do with it — and checked against `start`'s own rules
-      // so a runner is never handed a session request the protocol would
-      // refuse. Title, brief and mode only: a runner is minutes old and holds
-      // no task profiles or secrets to name.
-      /** @type {{ title?: string, brief?: string, mode?: string }|null} */
-      let start = null;
-      if (spec.startAfter && typeof spec.startAfter === 'object') {
-        /** @type {Record<string, any>} */
-        const wanted = {};
-        for (const k of ['title', 'brief', 'mode']) {
-          if (spec.startAfter[k] !== undefined && spec.startAfter[k] !== null) wanted[k] = spec.startAfter[k];
-        }
-        const checked = checkParams('start', wanted);
-        if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
-        start = /** @type {any} */ (checked.params);
-      }
-      const ticket = await this.runnerTickets.mint({
-        owner,
-        platform: String(shaped.params.platform || ''),
-        repository,
-        start,
-      });
+      const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null);
+      if (minted.ok === false) return minted;
       /** @type {Record<string, any>} */
-      const params = { ...shaped.params, ticket: ticket.token };
-      if (own) params.repo = own;
+      const params = { ...shaped.params, ticket: minted.ticket };
+      if (minted.own) params.repo = minted.own;
       else delete params.repo;
       spec = { ...spec, params };
-      // Persisted before the dispatch leaves, not after it succeeds: a ticket
-      // that is spent by a job but was never written down is an unattributed
-      // host, and the window between minting and enrolment is minutes long —
-      // long enough to contain a restart, which is precisely the case this
-      // exists for.
-      this.onStateChanged?.();
-      this.record({
-        event: 'runner.requested',
-        actor: spec.actor ?? null,
-        // Never the ticket. It is single-use and short-lived and it is still a
-        // value that attributes a machine to a person, and the event ring is
-        // read by every device this fleet has issued a credential to.
-        text: `${owner} asked for a ${shaped.params.platform} runner from ${repository}`,
-      });
     }
 
     const placement = place(this.registry, spec, {
@@ -1607,6 +1560,137 @@ export class CoordinatorCore {
   }
 
   /**
+   * What a device needs to START signing in to GitHub by itself: the App's
+   * client id, which is public and in every authorize URL anyway, and the
+   * callback GitHub sends it back through. Not the client secret: that stays
+   * in the minting Worker, which finishes the exchange (githubDeviceToken).
+   *
+   * @param {string} origin
+   */
+  githubDeviceStart(origin) {
+    const clientId = this.githubApp?.clientId;
+    if (!clientId) {
+      return { ok: false, error: { code: 'not_configured' }, text: 'This fleet has no GitHub App configured, so there is nothing to sign in to GitHub with.' };
+    }
+    return { ok: true, clientId, redirectUri: `${origin}/oauth/github/callback`, statePrefix: 'd.' };
+  }
+
+  /**
+   * A device finishing, or renewing, its own GitHub sign-in, through the
+   * minting Worker.
+   *
+   * WHY THE MINTER AND NOT HERE. The exchange needs the App's client secret
+   * and this process holds it, so it could make the exchange itself; but then
+   * the person's GitHub token would come back through the part of the fleet
+   * this project treats as compromised, and a phone's token is what starts
+   * their runners and proves who they are to the minter. So the device seals
+   * the code and its PKCE verifier (or its refresh token) to the minter's key,
+   * this relays the ciphertext, the minter, which holds its own copy of the
+   * secret, asks GitHub, and seals the answer to a key only the device has.
+   * The code alone is no use to this process: GitHub refuses it without the
+   * verifier that never left the phone.
+   *
+   * @param {{ email?: string|null }|null} requester @param {any} body
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async githubDeviceToken(requester, body) {
+    const email = String(requester?.email || '').toLowerCase();
+    const sealed = body?.sealed;
+    if (!sealed || typeof sealed !== 'object' || JSON.stringify(sealed).length > 8192) {
+      return { ok: false, error: { code: 'bad_params' }, text: 'That is not a sealed GitHub sign-in.' };
+    }
+    if (!this.minter?.github) {
+      return {
+        ok: false,
+        error: { code: 'no_minter' },
+        text: 'This fleet has no minting Worker to finish a GitHub sign-in on a device. See docs/runner-central.md.',
+      };
+    }
+    // A FEW A MINUTE PER PERSON is a sign-in and a renewal with room to retry;
+    // more is something else.
+    const now = this.now();
+    const key = `github:${email}`;
+    const recent = (this.claudeAsks.get(key) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_GITHUB_PER_WINDOW) {
+      return { ok: false, error: { code: 'too_many' }, text: 'Too many GitHub sign-ins in ten minutes. Wait a little and try again.' };
+    }
+    recent.push(now);
+    this.claudeAsks.set(key, recent);
+    const r = await this.minter.github({ sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct } }).then(
+      (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+    return r.ok
+      ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
+  }
+
+  /**
+   * What a device needs to sign in to Cloudflare for its person's vault: the
+   * client id, the scopes this fleet asks for and the page to open. Not the
+   * client secret, which the minting Worker holds for the exchange.
+   *
+   * @param {string} origin
+   */
+  cloudflareDeviceStart(origin) {
+    const c = this.cloudflareOauth;
+    if (!c?.clientId || !c?.scopes) {
+      return { ok: false, error: { code: 'not_configured' }, text: 'This fleet has no Cloudflare sign-in configured.' };
+    }
+    return {
+      ok: true,
+      clientId: c.clientId,
+      redirectUri: `${origin}/oauth/cloudflare/callback`,
+      authorizeUrl: 'https://dash.cloudflare.com/oauth2/auth',
+      scopes: c.scopes,
+      statePrefix: 'd.',
+    };
+  }
+
+  /**
+   * A person reads or changes their vault: lists it, keeps or forgets an item,
+   * finishes a sign-in for it, approves a box or removes one.
+   *
+   * All of it is sealed on their device to the minting Worker's key, and this
+   * relays it unread with one thing beside it: which fleet account sent it.
+   * The minter checks that against the account named inside the seal before
+   * a box approval can name anybody (src/fleet/minter/vault.js), so this
+   * coordinator's word is needed for that and is not enough on its own. The
+   * answer comes back sealed to a key the device made for it.
+   *
+   * @param {{ email?: string|null }|null} requester @param {any} body
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async vaultDevice(requester, body) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first: a vault belongs to a person.' };
+    const sealed = body?.sealed;
+    if (!sealed || typeof sealed !== 'object' || JSON.stringify(sealed).length > 16_384) {
+      return { ok: false, error: { code: 'bad_params' }, text: 'That is not a sealed vault request.' };
+    }
+    if (!this.minter?.vault) {
+      return { ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a vault. See docs/vault.md.' };
+    }
+    const now = this.now();
+    const key = `vault:${email}`;
+    const recent = (this.claudeAsks.get(key) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_VAULT_PER_WINDOW) {
+      return { ok: false, error: { code: 'too_many' }, text: 'Too many vault changes in ten minutes. Wait a little and try again.' };
+    }
+    recent.push(now);
+    this.claudeAsks.set(key, recent);
+    const r = await this.minter.vault('device', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email }).then(
+      (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+    // WHAT CHANGED, in the minter's own words, which never carry a value.
+    this.record({ event: r.ok ? 'vault.changed' : 'vault.refused', actor: email, text: `${email}: ${String(r.text || '').slice(0, 200)}` });
+    return r.ok
+      ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
+  }
+
+  /**
    * Finish an authorization GitHub has redirected back to us.
    *
    * Everything here is refusable and says why in a sentence a person reading a
@@ -1622,6 +1706,17 @@ export class CoordinatorCore {
     const clientSecret = this.githubApp?.clientSecret;
     if (!clientId || !clientSecret) {
       return { ok: false, text: 'This fleet has no GitHub App configured.' };
+    }
+    // A SIGN-IN A DEVICE STARTED, for the device's own use (starting a
+    // runner, depositing a Claude login) with no box anywhere. The phone made
+    // this state and holds the PKCE verifier; the code goes back to it, and it
+    // finishes the exchange through the minting Worker, so the token never
+    // comes near this process. See githubDeviceToken.
+    if (DEVICE_STATE_RE.test(String(state ?? ''))) {
+      const back = deviceReturnUrl({ code, state });
+      return back
+        ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to GitHub.' }
+        : { ok: false, text: 'GitHub did not send back a code to finish signing in with. Try again from the app.' };
     }
     const flow = this.pendingGithub.redeem(state);
     if (!flow) {
@@ -1685,6 +1780,15 @@ export class CoordinatorCore {
     const clientSecret = this.cloudflareOauth?.clientSecret;
     if (!clientId || !clientSecret) {
       return { ok: false, text: 'This fleet has no Cloudflare OAuth client configured.' };
+    }
+    // A DEVICE'S SIGN-IN, for its person's vault: the code goes back to the
+    // phone, which holds the verifier, and the minting Worker makes the
+    // exchange. The same branch GitHub's callback has.
+    if (DEVICE_STATE_RE.test(String(state ?? ''))) {
+      const back = deviceReturnUrl({ code, state, provider: 'cloudflare' });
+      return back
+        ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to Cloudflare.' }
+        : { ok: false, text: 'Cloudflare did not send back a code to finish signing in with. Try again from the app.' };
     }
     const flow = this.pendingCloudflare.redeem(state);
     if (!flow) {
@@ -1871,7 +1975,19 @@ export class CoordinatorCore {
         text: 'A runner repository belongs to a person, so this needs a signed-in identity.',
       };
     }
-    const reply = await this.dispatch({ verb: 'runnerrepo', params: { repo: String(repo ?? '') }, actor: email, requester });
+    // THE MINTING WORKER FIRST, as the App, so no permanent box is needed; a
+    // box with the person's GitHub connection only when the Worker holds no
+    // key or cannot be reached — the same order a mint takes.
+    /** @type {any} */
+    let reply = null;
+    if (this.minter?.runnerRepo) {
+      reply = await this.minter.runnerRepo({ repo: String(repo ?? '') }).then(
+        (r) => (r && typeof r === 'object' ? r : null),
+        () => null,
+      );
+      if (reply?.needsMinter) reply = null;
+    }
+    reply ??= await this.dispatch({ verb: 'runnerrepo', params: { repo: String(repo ?? '') }, actor: email, requester });
     const check = reply?.runnerRepo;
     if (reply?.ok === false || !check?.ok) {
       return {
@@ -2105,6 +2221,134 @@ export class CoordinatorCore {
     };
   }
 
+
+  /**
+   * A dispatch ticket for a runner this person asked for, and the repository
+   * it will run in — the part of `provision` that does not need a box.
+   *
+   * Shared by the two ways a runner is started: a permanent box dispatching
+   * the workflow with the person's GitHub connection (`provision`), and the
+   * person's own device dispatching it with its own (`prepareRunnerDispatch`).
+   * Either way the coordinator decides the repository and mints the ticket;
+   * what differs is only whose hands carry it to GitHub.
+   *
+   * @param {{ email?: string|null }|null|undefined} requester
+   * @param {string} platform
+   * @param {any} startAfter  a session to start when it joins, `start`'s rules
+   * @param {string|null} actor
+   * @returns {Promise<{ ok: true, ticket: string, repository: string, own: string|null }
+   *   | { ok: false, error: { code: string }, text: string }>}
+   */
+  async #mintRunnerTicket(requester, platform, startAfter, actor) {
+    const owner = String(requester?.email || '').toLowerCase();
+    if (!owner) {
+      return {
+        ok: false,
+        error: { code: 'not_signed_in' },
+        text:
+          'A runner belongs to the person who asked for it, so this needs a signed-in identity. ' +
+          'Sign in on a device and use its credential rather than the fleet-wide admin token.',
+      };
+    }
+    // WHOSE REPOSITORY: the person's own when they set one, the fleet's
+    // otherwise. Decided here and never taken from the caller — whatever
+    // arrived in `repo` is replaced or removed below.
+    const own = this.runnerRepos.get(owner);
+    const repository = own || this.runnerRepo;
+    if (!repository) {
+      return {
+        ok: false,
+        error: { code: 'not_configured' },
+        text:
+          'There is nowhere to start a machine from yet. Set your own runner repository in the app — a ' +
+          'public repository with the Fleetwright GitHub App installed and the runner workflows in it — or ' +
+          'an operator sets FLEETWRIGHT_RUNNER_REPO for the whole fleet. See docs/runner-central.md.',
+      };
+    }
+    // A SESSION TO START WHEN IT JOINS, if the caller asked for one. Beside
+    // the params like `host`, never inside them — the host dispatching the
+    // run has nothing to do with it — and checked against `start`'s own rules
+    // so a runner is never handed a session request the protocol would
+    // refuse. Title, brief and mode only: a runner is minutes old and holds
+    // no task profiles or secrets to name.
+    /** @type {{ title?: string, brief?: string, mode?: string }|null} */
+    let start = null;
+    if (startAfter && typeof startAfter === 'object') {
+      /** @type {Record<string, any>} */
+      const wanted = {};
+      for (const k of ['title', 'brief', 'mode']) {
+        if (startAfter[k] !== undefined && startAfter[k] !== null) wanted[k] = startAfter[k];
+      }
+      const checked = checkParams('start', wanted);
+      if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      start = /** @type {any} */ (checked.params);
+    }
+    const ticket = await this.runnerTickets.mint({
+      owner,
+      platform,
+      repository,
+      start,
+    });
+    // Persisted before the dispatch leaves, not after it succeeds: a ticket
+    // that is spent by a job but was never written down is an unattributed
+    // host, and the window between minting and enrolment is minutes long —
+    // long enough to contain a restart, which is precisely the case this
+    // exists for.
+    this.onStateChanged?.();
+    this.record({
+      event: 'runner.requested',
+      actor,
+      // Never the ticket. It is single-use and short-lived and it is still a
+      // value that attributes a machine to a person, and the event ring is
+      // read by every device this fleet has issued a credential to.
+      text: `${owner} asked for a ${platform} runner from ${repository}`,
+    });
+    return { ok: true, ticket: ticket.token, repository, own: own || null };
+  }
+
+  /**
+   * Everything a person's own device needs to start a runner itself.
+   *
+   * THE WAY TO START A RUNNER WITH NO PERMANENT BOX. `provision` hands the
+   * dispatch to a box because a box held the person's GitHub connection; a
+   * phone that has signed in to GitHub, or a computer with `gh`, holds one of
+   * its own. So this mints the same ticket and remembers the same held
+   * session, and instead of sending them to a box it gives the caller what to
+   * send to GitHub: the repository, the workflow file, and the inputs. The run
+   * is then started by the person themselves, which is what makes everything
+   * after it work — GitHub's job token names them, and the minter gives their
+   * runner their repository tokens and their Claude login.
+   *
+   * What this hands out is what the box was handed: a single-use ticket for a
+   * dispatch only this person can make, into a repository the coordinator
+   * chose. Nothing here is a GitHub credential.
+   *
+   * @param {{ email?: string|null }|null} requester
+   * @param {{ platform?: unknown, minutes?: unknown, start?: unknown }|null} body
+   * @param {string} origin  this coordinator's own, which the runner enrols with
+   * @returns {Promise<Record<string, any>>}
+   */
+  async prepareRunnerDispatch(requester, body, origin) {
+    /** @type {Record<string, unknown>} */
+    const wanted = { platform: body?.platform };
+    if (body?.minutes !== undefined && body?.minutes !== null) wanted.minutes = body.minutes;
+    const shaped = checkParams('provision', wanted);
+    if (shaped.ok === false) return { ok: false, error: { code: 'bad_params' }, text: shaped.error };
+    const platform = /** @type {keyof typeof RUNNER_WORKFLOWS} */ (String(shaped.params.platform));
+    const minted = await this.#mintRunnerTicket(requester, platform, body?.start, requester?.email ? `app:${requester.email}` : null);
+    if (minted.ok === false) return minted;
+    const minutes = String(shaped.params.minutes ?? DEFAULT_RUNNER_MINUTES);
+    return {
+      ok: true,
+      repo: minted.repository,
+      workflow: RUNNER_WORKFLOWS[platform],
+      inputs: { minutes, ticket: minted.ticket, coordinator: origin },
+      text:
+        `Start it by dispatching ${RUNNER_WORKFLOWS[platform]} in ${minted.repository} with your own GitHub sign-in. ` +
+        'The ticket is good once, for forty-five minutes.',
+    };
+  }
+
   /**
    * A runner wants git credentials for one repository.
    *
@@ -2269,6 +2513,65 @@ export class CoordinatorCore {
         ? { ok: true, sealed: reply.sealed, login: reply.login, owner: host.owner, text: reply.text }
         : { ok: false, owner: host.owner, error: reply.error || { code: 'refused' }, text: reply.text || 'No Claude login for this runner.' },
     );
+  }
+
+  /**
+   * A box asks for what its people approved it to hold.
+   *
+   * The request is signed by the box's own key, and the minting Worker decides
+   * everything from that signature and the approvals people made from their
+   * phones (src/fleet/minter/vault.js). What this adds is one check of its
+   * own, that the key is the one this box enrolled with: an honest coordinator
+   * refuses a box that presents somebody else's key, and a dishonest one gains
+   * nothing by skipping the check, because the answer is sealed to the box.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  async #onHostVault(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for its vault without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the box asks again on its next pass */ }
+    };
+    const request = msg.request;
+    const signature = String(msg.signature || '');
+    const enrolled = this.hostIds?.get(hostId);
+    const k = request?.hostKey;
+    if (!request || typeof request !== 'object' || JSON.stringify(request).length > 2048 || signature.length > 200) {
+      answer({ ok: false, error: { code: 'bad_params' }, text: 'That vault request is not in the shape one takes.' });
+      return;
+    }
+    if (!enrolled?.publicJwk || enrolled.revokedAt || k?.x !== enrolled.publicJwk.x || k?.y !== enrolled.publicJwk.y) {
+      answer({ ok: false, error: { code: 'not_this_box' }, text: `That is not the key ${hostId} enrolled with.` });
+      return;
+    }
+    if (!this.minter?.vault) {
+      answer({ ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a vault.' });
+      return;
+    }
+    const now = this.now();
+    const key = `box-vault:${hostId}`;
+    const recent = (this.claudeAsks.get(key) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_BOX_VAULT_PER_WINDOW) {
+      answer({ ok: false, error: { code: 'too_many' }, text: `${hostId} has asked for its vault ${recent.length} times in ten minutes.` });
+      return;
+    }
+    recent.push(now);
+    this.claudeAsks.set(key, recent);
+    const r = await this.minter.vault('box', { request, signature }).then(
+      (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+    answer(r.ok
+      ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });
   }
 
   /**

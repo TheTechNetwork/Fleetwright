@@ -33,6 +33,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { normaliseEmail } from './accounts.js';
+import { vaultClaudeFile } from './vault-store.js';
 
 /** @param {{ stateDir: string }} cfg */
 const recordFile = (cfg) => path.join(cfg.stateDir, 'runner-login.json');
@@ -68,13 +69,32 @@ export function saveRunnerLogin(cfg, { email, login, token }) {
 }
 
 /**
- * @typedef {{ kind: 'token', file: string, login: string|null } | { kind: 'key', key: string }} RunnerAuth
+ * @typedef {{ kind: 'token', file: string, login: string|null } | { kind: 'key', key: string } | { kind: 'linked' }} RunnerAuth
+ *   `linked` is a session whose person linked an account, on a runner: its
+ *   credential is the staged file, and the only thing to do is make sure the
+ *   repository's API key in the environment does not outrank it.
  */
 
 /**
- * How a session started for `email` authenticates on this runner, when it has
- * no linked account — or null when it has no answer here, which is the refusal
- * it always was.
+ * Is this host a runner, by the record its sidecar wrote at join? A runner
+ * starts with the runner repository's ANTHROPIC_API_KEY in its environment
+ * whether or not anybody wants it used, which is what the answer is for.
+ *
+ * @param {{ stateDir: string }} cfg
+ */
+export function onRunner(cfg) {
+  try {
+    return JSON.parse(readFileSync(recordFile(cfg), 'utf8'))?.runner === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How a session started for `email` authenticates when it has no linked
+ * account: on a runner, or on any box the person's vault gave a Claude token
+ * to — or null when there is no answer here, which is the refusal it always
+ * was.
  *
  * @param {{ stateDir: string }} cfg
  * @param {string|null} email  the person starting (or whose session is resuming)
@@ -83,17 +103,22 @@ export function saveRunnerLogin(cfg, { email, login, token }) {
  */
 export function runnerAuthFor(cfg, email, env = process.env) {
   /** @type {any} */
-  let record;
+  let record = null;
   try {
     record = JSON.parse(readFileSync(recordFile(cfg), 'utf8'));
-  } catch {
-    return null;
-  }
-  if (record?.runner !== true) return null;
+  } catch { /* not a runner, or one that has not been told yet */ }
+  // THE PERSON'S VAULT, on any box they approved (vault-store.js): a token
+  // they kept once, used when nothing is linked here. After a runner owner's
+  // own deposit, which is the same token by another road, and before the
+  // runner repository's API key, which bills somebody else.
+  const vault = vaultClaudeFile(cfg, email);
+  const fromVault = vault ? /** @type {RunnerAuth} */ ({ kind: 'token', file: vault, login: null }) : null;
+  if (record?.runner !== true) return fromVault;
   const owner = typeof record.email === 'string' ? record.email : null;
   if (record.token && owner && email && owner === normaliseEmail(email) && existsSync(runnerTokenFile(cfg))) {
     return { kind: 'token', file: runnerTokenFile(cfg), login: record.login ?? null };
   }
+  if (fromVault) return fromVault;
   const key = env.ANTHROPIC_API_KEY;
   return key ? { kind: 'key', key } : null;
 }

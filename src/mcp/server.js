@@ -20,6 +20,7 @@
 // Framing is newline-delimited JSON, which is what the stdio transport uses.
 
 import { toolsFor, DEFAULT_DENY } from './tools.js';
+import { dispatchRunner } from '../core/runners.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -59,6 +60,10 @@ const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
  *   uncapped one is a dropped connection, which a client cannot tell from a
  *   broken server.
  * @property {(fn: () => void, ms: number) => any} [setTimer]
+ * @property {(() => string|null|Promise<string|null>)|null} [githubToken]  the person's own GitHub
+ *   token on THIS computer, for starting a runner with no permanent box. Only
+ *   the stdio server has one: it runs as the person, where `gh` is signed in.
+ *   The hosted server leaves it out and provisions through a box as before.
  */
 
 /**
@@ -282,7 +287,9 @@ export class McpServer {
     started = null,
     maxWaitMs = 0,
     setTimer = (/** @type {() => void} */ fn, /** @type {number} */ ms) => setTimeout(fn, ms).unref?.(),
+    githubToken = null,
   }) {
+    this.githubToken = githubToken;
     this.coordinator = String(coordinator || '').replace(/\/+$/, '');
     this.credential = credential;
     this.budgetMinutes = budgetMinutes;
@@ -793,6 +800,14 @@ export class McpServer {
       );
     }
 
+    // A MACHINE FROM THIS COMPUTER, with no permanent box, when the person's
+    // own GitHub sign-in is here to make the dispatch with. See
+    // #provisionHere; anything it cannot do falls through to the box path.
+    if (tool.verb === 'provision' && this.githubToken && !host && !tag) {
+      const here = await this.#provisionHere(params);
+      if (here) return here;
+    }
+
     /** @type {any} */
     let reply;
     try {
@@ -897,6 +912,63 @@ export class McpServer {
     }
     const body = reply?.text ?? JSON.stringify(reply, null, 1);
     return this.#text(String(body), failed);
+  }
+
+  /**
+   * Start a runner from this computer, as the person, with no permanent box.
+   *
+   * The coordinator mints the ticket and says which repository and workflow
+   * (`/api/runners/dispatch`); the dispatch is made here with the person's own
+   * GitHub token, which never leaves this computer. That is the same split the
+   * phones make (PhoneGitHub), and the same function a box uses to dispatch
+   * (dispatchRunner), so all three ask GitHub the same question.
+   *
+   * Null when it cannot even begin: no token here, or a coordinator too old to
+   * serve the route. The caller then asks a box, which is what it did before
+   * this existed, so an older fleet loses nothing.
+   *
+   * @param {Record<string, any>} params
+   */
+  async #provisionHere(params) {
+    let token = null;
+    try {
+      token = await /** @type {() => any} */ (this.githubToken)();
+    } catch {
+      token = null;
+    }
+    if (!token) return null;
+    /** @type {any} */
+    let plan;
+    try {
+      const res = await this.fetch(`${this.coordinator}/api/runners/dispatch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.credential}` },
+        body: JSON.stringify({ platform: params.platform, ...(params.minutes !== undefined ? { minutes: params.minutes } : {}) }),
+      });
+      if (res.status === 404) return null;
+      if (res.status === 401 || res.status === 403) {
+        return this.#text('this credential was refused — it may have been revoked from the app', true);
+      }
+      plan = await res.json();
+    } catch (e) {
+      return this.#text(describeFailure(e), true);
+    }
+    if (plan?.ok !== true) return this.#text(String(plan?.text || 'The fleet would not start a machine.'), true);
+    const sent = await dispatchRunner({
+      repo: plan.repo,
+      platform: String(params.platform),
+      minutes: Number(plan.inputs?.minutes),
+      ticket: plan.inputs?.ticket,
+      coordinator: plan.inputs?.coordinator,
+      token: String(token),
+      fetchImpl: (url, init) => this.fetch(url, init),
+    });
+    if (!sent.ok) return this.#text(String(sent.message), true);
+    return this.#text(
+      `Asked GitHub for a ${params.platform} machine from ${plan.repo}, as you, from this computer. ` +
+        'It takes a few minutes to boot and then appears in the fleet as a host of yours; fleet_list shows it ' +
+        'when it has joined.',
+    );
   }
 
   /**

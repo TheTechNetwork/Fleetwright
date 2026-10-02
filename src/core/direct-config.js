@@ -32,7 +32,7 @@ import path from 'node:path';
 import { log } from '../log.js';
 import { pickCredentialSource, credentialSourceForAccount, noAccountRefusal } from './podman.js';
 import { emailFromActor } from './accounts.js';
-import { runnerAuthFor } from './runner-login.js';
+import { onRunner, runnerAuthFor } from './runner-login.js';
 
 /**
  * Where a direct session's Claude config lives.
@@ -122,6 +122,11 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
   trust(dir, cwd, meta);
   stageSettings(cfg, dir);
   log.info(`direct: ${fresh ? 'staged' : 'refreshed'} ${picked.account}'s credential for ${name}`);
+  // A LINKED ACCOUNT ON A RUNNER. The runner repository's ANTHROPIC_API_KEY is
+  // in this host's environment, and the CLI ranks an API key above the login
+  // just staged, so without this the session would bill the repository while
+  // looking signed in as the person. See buildCommand.
+  if (onRunner(cfg)) return { ok: true, dir, account: picked.account, fresh, auth: { kind: 'linked' } };
   return { ok: true, dir, account: picked.account, fresh };
 }
 
@@ -138,8 +143,36 @@ function stageForRunner(cfg, dir, cwd, account, auth, fresh) {
   writeFileSync(path.join(dir, RUNNER_MARK), `${account ?? ''}\n`, { mode: 0o600 });
   trust(dir, cwd, null, auth.kind === 'key' ? auth.key : null);
   stageSettings(cfg, dir);
+  acceptDangerousMode(dir);
   log.info(`direct: ${path.basename(dir)} runs on ${auth.kind === 'token' ? `${auth.login ?? account}'s deposited Claude login` : 'the runner repository\'s API key'}`);
   return { ok: true, dir, account, fresh, auth };
+}
+
+/**
+ * The CLI's "running in Bypass Permissions mode" warning, answered for a
+ * runner session.
+ *
+ * FOUND BY RUNNING ONE: a session started with --dangerously-skip-permissions
+ * first draws that warning with "No, exit" focused, and waits. A permanent box
+ * never shows it, because install.sh puts `skipDangerousModePermissionPrompt`
+ * in the settings.json stageSettings copies in. A runner never runs
+ * install.sh, so every runner session sat at the warning, whatever credential
+ * it had. A runner is the case the setting is for: a machine destroyed when
+ * its job ends, given to the one person who asked for it. Merged into the
+ * session's own settings, so anything else there stays.
+ *
+ * @param {string} dir
+ */
+function acceptDangerousMode(dir) {
+  const file = path.join(dir, 'settings.json');
+  /** @type {any} */
+  let settings = {};
+  try {
+    settings = JSON.parse(readFileSync(file, 'utf8'));
+  } catch { /* none yet: a runner has no template to copy */ }
+  if (settings.skipDangerousModePermissionPrompt === true) return;
+  settings.skipDangerousModePermissionPrompt = true;
+  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
 }
 
 /** Beside a runner session's config, in place of `.credentials.json`: whose it is. */

@@ -38,6 +38,17 @@ try {
 MERGE
 fi
 
+# A CLAUDE LOGIN FROM THE PERSON'S VAULT, when nothing was linked on the box:
+# a `claude setup-token` they kept once, seeded here as a file rather than put
+# on the podman command line (see seedVaultToken in src/core/podman.js). Only
+# when there is no .credentials.json, which is a link on the box and wins. The
+# CLI ranks an API key above this token, so none is left to outrank it.
+if [ ! -f /root/.claude/.credentials.json ] && [ -f /root/.claude/.claude-token ]; then
+  CLAUDE_CODE_OAUTH_TOKEN="$(cat /root/.claude/.claude-token)"
+  export CLAUDE_CODE_OAUTH_TOKEN
+  unset ANTHROPIC_API_KEY
+fi
+
 # The other credentials — GitHub, Cloudflare, whatever else was connected.
 #
 # THEY ARE NO LONGER HERE. This used to seed /root/.claude/.secrets.env into the

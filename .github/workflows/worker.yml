@@ -323,6 +323,11 @@ jobs:
             minter_vars=()
             [ -n "${MINT_CLIENT_ID:-}" ] && minter_vars+=(--var "FLEETWRIGHT_GITHUB_CLIENT_ID:$MINT_CLIENT_ID")
             [ -n "${MINT_OWNERS:-}" ] && minter_vars+=(--var "FLEETWRIGHT_GITHUB_MINT_OWNERS:$MINT_OWNERS")
+            # The Cloudflare client id the coordinator signs people in with,
+            # read from the coordinator's own config so the vault's Cloudflare
+            # sign-ins are renewed by the same client. Public, like the App's.
+            cf_client_id=$(sed -n 's/^FLEETWRIGHT_CLOUDFLARE_CLIENT_ID *= *"\(.*\)"/\1/p' "$config" | head -1)
+            [ -n "$cf_client_id" ] && minter_vars+=(--var "FLEETWRIGHT_CLOUDFLARE_CLIENT_ID:$cf_client_id")
             npx wrangler deploy --config wrangler.minter.toml ${minter_vars[@]+"${minter_vars[@]}"}
             if [ -z "${MINT_OWNERS:-}" ]; then
               echo "::notice::The minting Worker is deployed with no FLEETWRIGHT_GITHUB_MINT_OWNERS variable, so it mints for nobody."
@@ -488,6 +493,14 @@ jobs:
           # every login the minter keeps. Optional — a fleet that keeps no
           # Claude logins sets none, and its runners use the API key.
           FLEETWRIGHT_MINTER_DEPOSIT_KEY: ${{ secrets.FLEETWRIGHT_MINTER_DEPOSIT_KEY }}
+          # THE APP'S CLIENT SECRET, a second copy for the minter: it finishes
+          # a phone's own GitHub sign-in, so the person's token never comes
+          # back through the coordinator. Optional, like the deposit key.
+          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
+          # AND CLOUDFLARE'S, for the same reason: the vault keeps a person's
+          # Cloudflare sign-in and renews it in the minter, so it needs the
+          # client the coordinator signs them in with. Optional.
+          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET }}
         run: |
           set -u
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
@@ -506,7 +519,7 @@ jobs:
           # wrangler only: `secret put` uploads a value and bundles nothing,
           # so the repository root's dependencies are not needed here.
           npm install --no-audit --no-fund
-          for name in FLEETWRIGHT_GITHUB_APP_KEY FLEETWRIGHT_MINTER_DEPOSIT_KEY; do
+          for name in FLEETWRIGHT_GITHUB_APP_KEY FLEETWRIGHT_MINTER_DEPOSIT_KEY FLEETWRIGHT_GITHUB_CLIENT_SECRET FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET; do
             if [ -z "${!name:-}" ]; then
               echo "::notice::No $name on the github-app-key environment; the minting Worker keeps the one it has, if any."
               continue

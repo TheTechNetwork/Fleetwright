@@ -42,12 +42,31 @@ preview_urls = false
 #                                     which runner repositories besides a
 #                                     person's own may be given their Claude
 #                                     login
+#   FLEETWRIGHT_GITHUB_CLIENT_SECRET  SECRET. The App's client secret, for
+#                                     finishing a phone's own GitHub sign-in
+#                                     (src/fleet/minter/github.js), so it is
+#                                     never shipped in an app and the token
+#                                     never comes back through the coordinator.
+#                                     Synced by the same manual job. Unset →
+#                                     phones cannot sign in to GitHub
+#                                     themselves, and start runners through a
+#                                     permanent box as before
+#   FLEETWRIGHT_CLOUDFLARE_CLIENT_ID  the Cloudflare OAuth client the coordinator
+#                                     signs people in with. Public; the deploy
+#                                     reads it from the coordinator's config and
+#                                     passes it with --var
+#   FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET  SECRET. That client's secret, so the
+#                                     vault (src/fleet/minter/vault.js) can finish
+#                                     and renew a person's Cloudflare sign-in.
+#                                     Synced by the same manual job. Unset →
+#                                     vaults keep no Cloudflare sign-in
 #   FLEETWRIGHT_MINTER_DEPOSIT_KEY    SECRET. The P-256 key people seal their
 #                                     Claude logins to, as the JWK
 #                                     `node scripts/minter-deposit-key.mjs`
 #                                     prints. Unset → it keeps no Claude
-#                                     logins, and every runner uses its
-#                                     repository's API key, as before
+#                                     logins and no vaults (docs/vault.md),
+#                                     and every runner uses its repository's
+#                                     API key, as before
 
 [observability]
 enabled = true
