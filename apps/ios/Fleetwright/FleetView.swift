@@ -776,7 +776,12 @@ private struct StatusBadge: View {
         case "awaiting-input": return Design.Palette.attention
         // NOT `ok`. A crash and a success both end as "ended", and green
         // would claim the one this badge cannot know (C-5).
-        default: return Design.Palette.idle
+        //
+        // AND NOT `idle`, which is a tone for a mark rather than for words:
+        // as 13pt text on the inner surface it is 3.6:1 in dark and 2.3:1 in
+        // light, under the 4.5:1 a word this size needs. `inkDim` is the
+        // palette's own colour for "stopped" and clears it in both themes.
+        default: return Design.Palette.inkDim
         }
     }
 
