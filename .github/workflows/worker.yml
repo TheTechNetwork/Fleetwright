@@ -499,8 +499,11 @@ jobs:
           FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
           # AND CLOUDFLARE'S, for the same reason: the vault keeps a person's
           # Cloudflare sign-in and renews it in the minter, so it needs the
-          # client the coordinator signs them in with. Optional.
-          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET }}
+          # client the coordinator signs them in with. Optional. Read under
+          # both names, as the coordinator's sync reads it: a repository that
+          # still keeps it as AGENT_FLEET_* gave the coordinator its copy and
+          # the minter nothing.
+          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET || secrets.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET }}
         run: |
           set -u
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
