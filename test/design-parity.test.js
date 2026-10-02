@@ -173,6 +173,47 @@ test('every colour is the same colour on all three surfaces, in both themes', ()
   }
 });
 
+test('a change of state takes the same time on all three surfaces', () => {
+  // THE SAME DRIFT AS A SIZE, IN TIME. A badge that crossfades in 250ms on one
+  // phone and 400ms on the other is the two-products problem this table is for,
+  // and nobody notices it by looking at either alone.
+  const spec = TABLE.motion;
+  const swift = block(SWIFT_BARE, 'enum Motion {');
+  const kotlin = block(KOTLIN_BARE, 'object Motion {');
+
+  for (const [token, expected] of Object.entries(spec.tokens)) {
+    const css = BASE[cssName(spec.cssPrefix, token)];
+    assert.equal(css, `${expected}ms`, `console.css disagrees about motion.${token}`);
+    const inSwift = swift.match(new RegExp(`static let ${token}: Double = ([\\d.]+)`));
+    assert.equal(Number(inSwift?.[1]), expected, `Design.swift disagrees about motion.${token}`);
+    const inKotlin = kotlin.match(new RegExp(`const val ${token} = ([\\d.]+)\\b`));
+    assert.equal(Number(inKotlin?.[1]), expected, `Design.kt disagrees about motion.${token}`);
+  }
+
+  // The bounce is the apps' alone: the console has no spring to give it to.
+  assert.equal(Number(swift.match(/static let bounce: Double = ([\d.]+)/)?.[1]), spec.bounce);
+  assert.equal(Number(kotlin.match(/const val bounce = ([\d.]+)f/)?.[1]), spec.bounce);
+
+  // And nothing is declared in one place only, which is how a fourth duration
+  // turns up on one phone and the table never hears of it.
+  const named = Object.keys(spec.tokens).concat('bounce').sort();
+  assert.deepEqual([...swift.matchAll(/static let (\w+): Double/g)].map((m) => m[1]).sort(), named);
+  assert.deepEqual([...kotlin.matchAll(/const val (\w+) =/g)].map((m) => m[1]).sort(), named);
+  assert.deepEqual(
+    Object.keys(BASE).filter((n) => n.startsWith(spec.cssPrefix)).sort(),
+    Object.keys(spec.tokens).map((t) => cssName(spec.cssPrefix, t)).sort(),
+  );
+});
+
+test('nothing moves for someone who asked for less motion', () => {
+  // A setting a person chose, on all three: the console turns transitions off,
+  // and each app's spring is nil when the system says to reduce motion. What
+  // keeps moving there is a crossfade, which has no travel.
+  assert.match(CSS_BARE, /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,120}transition-duration: 0s/);
+  assert.match(SWIFT_BARE, /static func settle\(_ reduced: Bool\) -> Animation\? \{\s*reduced \? nil/);
+  assert.match(KOTLIN_BARE, /fun <T> settle\(reduced: Boolean\): FiniteAnimationSpec<T>\? =\s*if \(reduced\) null/);
+});
+
 test('the accent is one value, and it is never a state', () => {
   // Two claims the design makes that a token comparison would otherwise let
   // through. `#3866D6` is the brand, unchanged by theme — dark lifts only the

@@ -120,21 +120,28 @@ struct Reassurance {
 /// that takes as long to read as the list it summarises has failed.
 struct ReassuranceBanner: View {
     let summary: Reassurance
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.inside) {
             HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
                 Image(systemName: summary.symbol)
                     .foregroundStyle(summary.tint)
+                    .contentTransition(.symbolEffect(.replace))
                     .accessibilityHidden(true)
                 Text(summary.headline)
                     .fleetType(.greeting)
                     .foregroundStyle(Design.Palette.ink)
+                    .contentTransition(.opacity)
                 Spacer(minLength: 0)
             }
             Text(summary.basis)
                 .fleetType(.bodySmall)
                 .foregroundStyle(Design.Palette.inkDim)
+                // The counts roll to their new value, so "2 sessions running"
+                // becoming 3 reads as one more rather than a new sentence.
+                // Reduce Motion asks for no travel, and a roll is travel.
+                .contentTransition(reduceMotion ? ContentTransition.opacity : .numericText())
         }
         // THE CARD IS THE POINT, and it is the reason this is no longer a row
         // in a grouped list. This line is the first thing read and the last
@@ -146,6 +153,10 @@ struct ReassuranceBanner: View {
         // that the glyph and the headline are already carrying. Calm recedes,
         // trouble comes forward, and neither depends on the colour being seen.
         .fleetCard(ring: summary.settled ? Design.Palette.ring : summary.tint.opacity(0.55))
+        // THE LINE THAT SAYS WHETHER ANYTHING NEEDS YOU says it changed: it is
+        // the first thing on the screen and the one most worth noticing.
+        .animation(Design.Motion.change, value: summary.headline)
+        .animation(Design.Motion.change, value: summary.basis)
         // NO GLASS, still, and for the reason the material exists: it means
         // "this is above the content". This card is the content.
         //

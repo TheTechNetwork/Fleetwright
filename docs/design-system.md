@@ -148,6 +148,49 @@ Nothing draws one yet. It is defined here rather than invented later by whoever
 builds the first chart, because a second set of blues is how two surfaces stop
 matching.
 
+### Motion — a change of state, and nothing else
+
+| Token | Value | What moves |
+|---|---|---|
+| `quick` | 150 ms | A press or a toggle answering a finger |
+| `standard` | 250 ms | A word, a symbol or a ring changing to say something new about the same thing |
+| `arrive` | 350 ms | A card coming into a list, leaving it, or moving to where it now belongs |
+| `bounce` | 0.15 | How far that card overshoots as it settles. The apps only: the console has no spring |
+
+Both apps had none of this until the dial in `CLAUDE.md` went from 1 to 2. A
+session going from working to waiting swapped one card for another, and the
+question it was asking arrived the same way, with nothing to say that anything
+had happened. The rule is now the one the dial always stated: **a change of
+state moves, and nothing else does.**
+
+- **What moves.** A status word and its symbol when the state changes. The
+  assurance line when it starts saying something else. A card arriving in the
+  list, leaving it, or moving to the top because it is now asking. A ring
+  taking on the tone of a card that has started asking.
+- **What does not.** Nothing animates on arrival for its own sake, nothing
+  loops, and nothing pulses to say "live": a working session says so in words.
+- **Felt, not just seen.** Stop, Resume and an answer sent each give a haptic,
+  and a refusal gives a different one. A phone in a pocket-reaching hand at
+  night is where this app gets used.
+- **Reduce Motion is honoured.** Under it, nothing travels. A change that
+  would have moved is a crossfade, and a card that would have moved is simply
+  in its new place. The console turns transitions off entirely.
+
+The spring is the same spring on both phones: SwiftUI's
+`.spring(duration:bounce:)` is Compose's `spring(dampingRatio = 1 − bounce,
+stiffness = (2π / duration)²)`, and `Design.kt` derives it that way rather than
+holding a second set of numbers.
+
+**What Android does not take from Material 3 Expressive, and why.** Its
+theme and its motion scheme are internal in the stable Material 3 the app
+builds against (1.4.0), so Material's own components (sheets, switches, the
+pull to refresh) keep their standard motion; everything the app draws itself
+moves on the tokens above. Its wallpaper colour and shape morphing are not
+wanted in any release, for the reason this document exists: the palette and
+the radii are the same on all three surfaces. What it does take is the short
+navigation bar, with the same list, rack and person marks iOS shows in the
+same three places.
+
 ### Cards have no borders
 
 Zero visible edges anywhere. Separation is an inset highlight, a soft drop

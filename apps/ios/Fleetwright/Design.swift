@@ -84,6 +84,36 @@ enum Design {
         static let chip: CGFloat = 8
     }
 
+    /// How long a change of state takes to move, in milliseconds.
+    ///
+    /// A CHANGE OF STATE MOVES; NOTHING ELSE DOES. A session going from working
+    /// to waiting is news and should read as a change rather than a swap; a
+    /// screen that animates for pleasure is noise on an app opened at night
+    /// because something is wrong. Nothing here loops.
+    ///
+    /// Milliseconds, not seconds, so the numbers are the console's and
+    /// Android's and test/design-parity.test.js can hold all three equal.
+    enum Motion {
+        /// A press or a toggle answering a finger.
+        static let quick: Double = 150
+        /// A word, a symbol or a ring changing to say something new.
+        static let standard: Double = 250
+        /// A card coming into a list, leaving it, or moving to its new place.
+        static let arrive: Double = 350
+        /// How far a card overshoots as it settles. 0 stops dead.
+        static let bounce: Double = 0.15
+
+        /// The same thing, saying something new: a crossfade with no travel,
+        /// so it is the one animation Reduce Motion keeps.
+        static let change = Animation.easeOut(duration: standard / 1000)
+
+        /// Something moving to where it belongs. Nil under Reduce Motion: the
+        /// thing simply is where it belongs, which is what that setting asks.
+        static func settle(_ reduced: Bool) -> Animation? {
+            reduced ? nil : .spring(duration: arrive / 1000, bounce: bounce)
+        }
+    }
+
     /// Every colour, dark first.
     ///
     /// Written in code rather than an asset catalog on purpose: an asset
