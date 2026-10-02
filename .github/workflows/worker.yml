@@ -337,14 +337,45 @@ jobs:
             # a fork on workers.dev) gets no route, and its people paste the
             # pin as before. A token that cannot write routes costs the route,
             # not the deploy.
+            #
+            # THE ROUTE NAMES ITS ZONE. An account with SSL for SaaS refuses a
+            # route without one ("you must specify the zone per route", 10082),
+            # and `wrangler deploy --route` has no way to give it, so the route
+            # goes into a copy of the minter's config beside the original. The
+            # zone is asked of Cloudflare, longest suffix of the hostname first,
+            # so a name under a two-part suffix finds its own zone rather than a
+            # guess.
             minter_host=$(grep -v '^[[:space:]]*#' "$config" | sed -n 's/.*pattern *= *"\([^"/*]*\)", *custom_domain *= *true.*/\1/p' | head -1)
             minter_route=${minter_host:+$minter_host/.well-known/fleetwright-minter}
-            if [ -n "$minter_route" ] && npx wrangler deploy --config wrangler.minter.toml --route "$minter_route" ${minter_vars[@]+"${minter_vars[@]}"}; then
+            minter_zone=""
+            candidate=$minter_host
+            while [ -n "$candidate" ] && [ "${candidate#*.}" != "$candidate" ]; do
+              if curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                  "https://api.cloudflare.com/client/v4/zones?name=$candidate&account.id=$CLOUDFLARE_ACCOUNT_ID" \
+                | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>process.exit(JSON.parse(s).result?.length?0:1))'; then
+                minter_zone=$candidate
+                break
+              fi
+              candidate=${candidate#*.}
+            done
+            # A token that cannot list zones still gets a route: the last two
+            # labels are the zone for every name this project deploys under.
+            if [ -n "$minter_host" ] && [ -z "$minter_zone" ]; then
+              minter_zone=$(printf '%s' "$minter_host" | awk -F. 'NF>=2 {print $(NF-1)"."$NF}')
+            fi
+            routed=""
+            if [ -n "$minter_route" ] && [ -n "$minter_zone" ]; then
+              routed=.wrangler.minter.routed.toml
+              sed "/^preview_urls = false\$/a routes = [ { pattern = \"$minter_route\", zone_name = \"$minter_zone\" } ]" wrangler.minter.toml > "$routed"
+              grep -q "^routes = " "$routed" || routed=""
+            fi
+            if [ -n "$routed" ] && npx wrangler deploy --config "$routed" ${minter_vars[@]+"${minter_vars[@]}"}; then
               echo "The minting Worker answers https://$minter_route"
             else
-              [ -n "$minter_route" ] && echo "::warning::The minting Worker could not be given $minter_route, so phones on this fleet need the pin pasted. Check that CLOUDFLARE_API_TOKEN can edit Workers Routes on that zone."
+              [ -n "$minter_route" ] && echo "::warning::The minting Worker could not be given $minter_route${minter_zone:+ in zone $minter_zone}, so phones on this fleet need the pin pasted. Check that CLOUDFLARE_API_TOKEN can read that zone and edit its Workers Routes."
               npx wrangler deploy --config wrangler.minter.toml ${minter_vars[@]+"${minter_vars[@]}"}
             fi
+            rm -f .wrangler.minter.routed.toml
             if [ -z "${MINT_OWNERS:-}" ]; then
               echo "::notice::The minting Worker is deployed with no FLEETWRIGHT_GITHUB_MINT_OWNERS variable, so it mints for nobody."
             fi
