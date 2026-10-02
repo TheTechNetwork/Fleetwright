@@ -176,14 +176,13 @@
         "",
         "The three host installs were worse: unpinned, so every runner build took",
         "whatever was latest that morning and the fleet ran a different version",
-        "from the image it is supposed to mirror."
+        "from the image it is supposed to mirror. Two of them now live in",
+        "TheTechNetwork/Fleetwright-Runners-Template, whose renovate.json pins them."
       ],
       "customType": "regex",
       "managerFilePatterns": [
         "/^sandbox/Containerfile$/",
-        "/^\\.github/workflows/ephemeral-mac\\.yml$/",
-        "/^install/runner-central/\\.github/workflows/runner-windows\\.yml$/",
-        "/^install/runner-central/\\.github/actions/fleet-host/action\\.yml$/"
+        "/^\\.github/workflows/ephemeral-mac\\.yml$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG CLAUDE_VERSION=(?<currentValue>\\S+)",

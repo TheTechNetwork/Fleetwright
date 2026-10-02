@@ -2212,7 +2212,7 @@ fun String.said(nothing: String = ""): String = trim().ifEmpty { nothing }
 fun describeRunnerRepoSetting(saved: String?, fleet: String?): String = when {
     saved != null -> "Your machines come from $saved."
     fleet != null -> "Your machines come from the fleet's repository, $fleet. Set your own to use your free Actions minutes."
-    else -> "Set a public repository with the Fleetwright GitHub App installed and the runner workflows in it, and your machines come from there."
+    else -> "Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template, install the Fleetwright GitHub App on it, and your machines come from there."
 }
 
 /** What a runner repository check found, one answer per fact. "can't tell"

@@ -166,7 +166,7 @@ struct PhoneGitHub {
             return Fleet.Reply(
                 ok: false,
                 text: "GitHub refused the dispatch (422). \(repo) has \(workflow), but it does not take the inputs this fleet "
-                    + "sends. Update it from install/runner-central/ in the Fleetwright repository.",
+                    + "sends. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
                 sessions: nil
             )
         default:

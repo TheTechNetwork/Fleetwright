@@ -25,7 +25,7 @@ test('the words about a runner repository are the same on both phones', () => {
     'Remove your runner repository',
     'Your machines come from the fleet\'s repository, ',
     'Set your own to use your free Actions minutes.',
-    'Set a public repository with the Fleetwright GitHub App installed and the runner workflows in it, and your machines come from there.',
+    'Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template, install the Fleetwright GitHub App on it, and your machines come from there.',
     'Public: ',
     ' · GitHub app: ',
     'Actions write: ',

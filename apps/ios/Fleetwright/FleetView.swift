@@ -932,7 +932,7 @@ private struct SettingsView: View {
     /// Split out of the section above because that body is already at the
     /// size where the Swift type checker gives up on a line nobody edited.
     /// WHERE YOUR MACHINES COME FROM. A public repository of your own, with
-    /// the Fleetwright GitHub App installed and the runner workflows in it,
+    /// the Fleetwright GitHub App installed, made from the runner template,
     /// is what makes Actions minutes free for you. Saved only after it has
     /// been checked: by the fleet's minting Worker as the GitHub App, or by a
     /// permanent box with your GitHub connection where there is no minter.
@@ -2216,7 +2216,7 @@ func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) ->
 func describeRunnerRepoSetting(saved: String?, fleet: String?) -> String {
     if let saved { return "Your machines come from \(saved)." }
     if let fleet { return "Your machines come from the fleet's repository, \(fleet). Set your own to use your free Actions minutes." }
-    return "Set a public repository with the Fleetwright GitHub App installed and the runner workflows in it, and your machines come from there."
+    return "Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template, install the Fleetwright GitHub App on it, and your machines come from there."
 }
 
 /// What a runner repository check found, one answer per fact. "can't tell"

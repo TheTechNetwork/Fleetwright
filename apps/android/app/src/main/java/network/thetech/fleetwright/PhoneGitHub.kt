@@ -166,7 +166,7 @@ internal class PhoneGitHub(private val settings: Settings) {
                 422 -> Fleet.Reply(
                     false,
                     "GitHub refused the dispatch (422). $repo has $workflow, but it does not take the inputs this fleet " +
-                        "sends. Update it from install/runner-central/ in the Fleetwright repository.",
+                        "sends. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
                     emptyList(),
                 )
                 else -> Fleet.Reply(false, refusal(sent.first, "$workflow in $repo"), emptyList())

@@ -50,7 +50,7 @@ test('the words about runners from a phone are the same on both', () => {
     'Forget my Claude login',
     'The fleet\'s minter has a different key from the one you were given, so nothing was saved. Ask whoever runs your fleet.',
     'It takes a few minutes to boot and then ',
-    'Update it from install/runner-central/ in the Fleetwright repository.',
+    'Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.',
   ]) {
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
     assert.ok(ANDROID.includes(words), `Android lost: ${words}`);

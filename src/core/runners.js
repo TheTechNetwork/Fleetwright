@@ -196,7 +196,7 @@ export async function dispatchRunner({
         message:
           `GitHub refused the dispatch (422). ${repo} has ${workflow}, but it does not accept the inputs this ` +
           'fleet sends — it needs `minutes`, `ticket` and `coordinator`, and a `workflow_dispatch` trigger. ' +
-          'Update it from install/runner-central/ in the Fleetwright repository.',
+          'Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.',
       };
     }
     return { ok: false, message: refusal(res, `${workflow} in ${repo}`) };
@@ -444,8 +444,8 @@ async function listRunnerWorkflows(full, get, out) {
     return {
       ...out,
       message:
-        `${full} has none of the runner workflows. Copy install/runner-central/ from the Fleetwright ` +
-        'repository into it, then check again.',
+        `${full} has none of the runner workflows. Make it from github.com/TheTechNetwork/Fleetwright-Runners-Template, or copy that ` +
+        "repository's .github directory into it, then check again.",
     };
   }
   return null;

@@ -39,8 +39,8 @@ session ──MCP──▶ fleet_provision {platform: "macos", minutes: 60}
 
 Two repositories, deliberately. This one holds the fleet. The **runner
 repository** holds four workflow files and nothing else —
-[`install/runner-central/`](../install/runner-central/) is its contents, and its
-README is the setup.
+[`Fleetwright-Runners-Template`](https://github.com/TheTechNetwork/Fleetwright-Runners-Template) is its template: make one with **Use this template**, and its README is
+the setup.
 
 ## The credential question, which is the whole design
 
@@ -224,7 +224,7 @@ something an operator arranged before anybody could have one, and everybody's
 Actions minutes came out of one account. Each person can now name their own:
 a **public** repository (Actions minutes on GitHub's standard runners are free
 only there) with the **Fleetwright GitHub App installed** and the runner
-workflows from [`install/runner-central/`](../install/runner-central/) in it.
+workflows from [`Fleetwright-Runners-Template`](https://github.com/TheTechNetwork/Fleetwright-Runners-Template) in it, which is what making it from that template gives.
 The fleet's repository stays the default for anybody who has not set one.
 
 **It is checked before it is saved.** `PUT /api/runner-repo` asks the
