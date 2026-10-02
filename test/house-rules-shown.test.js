@@ -56,6 +56,6 @@ test('both phones say the same thing about house rules, in the same two states',
     assert.ok(swift.includes(sentence), `iOS lost: ${sentence}`);
     assert.ok(kotlin.includes(sentence), `Android lost: ${sentence}`);
   }
-  assert.match(kotlin, /host\.houseRules\?\.let/, 'null draws nothing on Android too');
+  assert.match(kotlin, /h\.houseRules\?\.let/, "null draws nothing on Android too");
   assert.match(kotlin, /houseRules == 0/, 'zero is its own state on Android too');
 });

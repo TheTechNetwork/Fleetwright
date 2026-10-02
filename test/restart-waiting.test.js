@@ -51,7 +51,7 @@ test('Android reads what the disk holds and derives the gap once, on the model',
 
 test('both phones put restart waiting first, in the same words', () => {
   const kotlin = androidSources();
-  const row = kotlin.indexOf('private fun describeRunning(');
+  const row = kotlin.indexOf('fun describeRunning(');
   assert.ok(row > 0);
   const body = kotlin.slice(row, kotlin.indexOf('return if (parts.isEmpty())', row));
   const restart = body.indexOf('restartWaitingFor');

@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -55,8 +57,16 @@ import java.util.Date
  * A sheet left open must not poll a production host forever; dismissing it
  * cancels the effect, which is the whole of the mechanism.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, onChanged: () -> Unit) {
+fun SessionSheet(
+    fleet: Fleet,
+    initial: Fleet.Session,
+    onDismiss: () -> Unit,
+    onChanged: () -> Unit,
+    /** Its workspace. Here and not on the card, where it sat beside the same row of actions twice. */
+    onFiles: () -> Unit = {},
+) {
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
     // Seeded from what the list already has: a sheet that opened blank to
@@ -120,9 +130,11 @@ fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, on
         AlertDialog(
             onDismissRequest = { confirmingForget = false },
             title = { Text("Forget ${session.label}?") },
-            text = { Text("This deletes its conversation and workspace. It cannot be undone.") },
+            // IT CAN BE UNDONE, for seven days, and this said it could not. The
+            // bin keeps a forgotten session and says so.
+            text = { Text("It stays in the bin for seven days, where Restore brings it back. After that its conversation and workspace are deleted.") },
             confirmButton = {
-                TextButton(onClick = { confirmingForget = false; act { it.forget(session.name) } }) { Text("Forget") }
+                TextButton(onClick = { confirmingForget = false; act { it.forget(session.name) } }) { Text("Forget — move it to the bin") }
             },
             dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text("Cancel") } },
         )
@@ -165,7 +177,8 @@ fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, on
                 val rcUrl = session.rcUrl?.takeIf { it.isNotBlank() }
                 if (prompt != null && prompt.options.isNotEmpty()) {
                     Text("It is asking", style = Design.Style.section, color = Design.Palette.ink.now)
-                    prompt.question?.let { Text(it, style = Design.Style.bodyStrong, color = Design.Palette.ink.now) }
+                    // AS LOUD AS ON THE CARD: this is where somebody came to think.
+                    prompt.question?.let { Text(it, style = Design.Style.title, color = Design.Palette.ink.now) }
                     prompt.options.forEach { option ->
                         OutlinedButton(
                             onClick = { act { it.answer(session.name, option.index, prompt.id) } },
@@ -242,12 +255,17 @@ fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, on
                 }
 
                 Text("Actions", style = Design.Style.section, color = Design.Palette.ink.now)
-                Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                // WRAPS rather than clips: four actions do not fit one line of
+                // a dialog at 390dp with the type turned up.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     if (session.isRunning) {
                         TextButton(onClick = { act { it.stop(session.name) } }, enabled = !busy) { Text("Stop") }
                     } else if (session.resumable) {
                         TextButton(onClick = { act { it.resume(session.name, "summary") } }, enabled = !busy) { Text("Resume") }
                     }
+                    // THE WORKSPACE, on running and stopped sessions alike:
+                    // "collect what it produced" is a thing to do after.
+                    TextButton(onClick = onFiles, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Files") }
                     // What it SAID, as against what it looks like: the
                     // container's output outlives the pane.
                     TextButton(

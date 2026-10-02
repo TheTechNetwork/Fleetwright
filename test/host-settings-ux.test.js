@@ -79,7 +79,7 @@ test('Remove is offered on exactly the labels it works for', () => {
   const kt = code(kotlin());
   assert.match(
     kt,
-    /if \(label in setLabels\) \{[\s\S]{0,400}?trailingIcon = \{ Text\("✕"\) \}/,
+    /if \(label in setLabels\) \{[\s\S]{0,400}?trailingIcon = \{ Text\("✕", Modifier\.semantics \{ contentDescription = "Remove \$label" \}\) \}/,
     'Android does not gate the remove chip on removability',
   );
   // AND IT SAYS WHY, on both. Without a reason, the only difference between the
@@ -104,7 +104,7 @@ test('the field is cleared when the label leaves, on both', () => {
   // A field still holding a name that was refused looks like it can be pressed
   // again. Same rule the credential paste already follows.
   assert.match(code(iosSources()), /newLabel = ""[\s\S]{0,200}?fleet\.labels\(host: hostId, add: wanted\)/);
-  assert.match(code(kotlin()), /newLabel = ""[\s\S]{0,200}?labels\(host\.hostId, add = wanted\)/);
+  assert.match(code(kotlin()), /newLabel = ""[\s\S]{0,200}?labels\(hostId, add = wanted\)/);
 });
 
 test('both believe the reply rather than waiting for the next frame', () => {

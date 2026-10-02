@@ -49,8 +49,24 @@ import kotlinx.coroutines.launch
  * Matches the iOS screen field for field. A credential flow that works on one
  * phone and not the other is the state docs/app-parity.md was written about.
  */
+/**
+ * @param host the box to ask, or null for the whole fleet. Null only with
+ *   [linkedOnly]: a sign-in happens in a pane on ONE box, so the flows below
+ *   always have one.
+ * @param onlyClaude a machine's page: Claude on this box, and nothing else.
+ * @param linkedOnly THE OLDER WAY, AS FACTS. Vault first: a credential is kept
+ *   once in the vault, and a link made on a box is shown here as what it is,
+ *   with Test and Forget and no second Connect beside the vault's. A link on a
+ *   box wins there, which is why forgetting one is still offered.
+ */
 @Composable
-fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
+fun CredentialsSheet(
+    settings: Settings,
+    host: String?,
+    onDismiss: () -> Unit,
+    onlyClaude: Boolean = false,
+    linkedOnly: Boolean = false,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var connections by remember { mutableStateOf(Fleet.Connections()) }
@@ -123,29 +139,47 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
         }
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Your credentials") },
-        text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+    val title = when {
+        onlyClaude -> "Claude on ${host ?: "this machine"}"
+        linkedOnly -> "Linked on machines"
+        else -> "Your credentials"
+    }
+    val shown = when {
+        onlyClaude -> connections.catalogue.filter { it.isSignIn }
+        linkedOnly -> connections.catalogue.filter { connections.linked(it.provider) != null }
+        else -> connections.catalogue
+    }
+    FullScreen(title = title, onDismiss = onDismiss) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 // "Signing in to Claude is per machine: that one is a login the
                 // box performs" was true and is not any more. A machine has no
                 // Claude account — see docs/one-account-per-person.md — and a
                 // sentence describing one is how somebody spends an evening
                 // looking for a button that should not exist.
                 Text(
-                    "Each one is created on the provider's own page, on your account, and can be revoked "
-                        + "there at any time. A token goes to every machine in the fleet, because it is yours "
-                        + "rather than any one box's — sessions you start get it, and nobody else's do. Claude "
-                        + "is per person too: a session runs on the account of whoever started it, and this "
-                        + "machine has none of its own.",
-                    style = MaterialTheme.typography.bodySmall,
+                    when {
+                        linkedOnly ->
+                            "Linked on a box rather than kept in your vault. A link on a box wins there; forget one " +
+                                "and that box uses what your vault keeps."
+                        onlyClaude ->
+                            "This machine has no Claude account of its own. Sessions run on the account of whoever " +
+                                "started them, so connecting here links YOURS — and somebody who has not connected " +
+                                "one cannot start a session on this box."
+                        else ->
+                            "Each one is created on the provider's own page, on your account, and can be revoked " +
+                                "there at any time. A token goes to every machine in the fleet, because it is yours " +
+                                "rather than any one box's — sessions you start get it, and nobody else's do. Claude " +
+                                "is per person too: a session runs on the account of whoever started it, and this " +
+                                "machine has none of its own."
+                    },
+                    style = Design.Style.bodySmall,
+                    color = Design.Palette.inkDim.now,
                 )
+                if (linkedOnly && connections.catalogue.isNotEmpty() && shown.isEmpty()) {
+                    Hint("Nothing is linked on a machine.")
+                }
 
-                connections.catalogue.forEach { provider ->
+                shown.forEach { provider ->
                     val linked = connections.linked(provider.provider)
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair / 2)) {
                         Text(provider.label, style = MaterialTheme.typography.titleSmall)
@@ -193,7 +227,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             )
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-                            TextButton(
+                            if (!linkedOnly && host != null) TextButton(
                                 enabled = !busy,
                                 onClick = {
                                     secret = ""
@@ -222,7 +256,11 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                 },
                             ) { Text(actionLabel(provider, linked)) }
 
-                            if (linked != null) {
+                            // ON A MACHINE'S PAGE, Claude is that machine's;
+                            // fleet-wide, a Claude sign-in has no one box to
+                            // forget it from, so it is shown as a fact and
+                            // forgotten from the machine it is on.
+                            if (linked != null && (host != null || !provider.isSignIn)) {
                                 // TEST, because "connected" is a fact about
                                 // storage and not about the token — it can be
                                 // revoked, expire, or have its permissions
@@ -246,7 +284,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                     onClick = {
                                         scope.launch {
                                             busy = true
-                                            val reply = if (provider.isSignIn) Fleet(settings).unlink(host, provider.provider)
+                                            val reply = if (provider.isSignIn && host != null) Fleet(settings).unlink(host, provider.provider)
                                                 else Fleet(settings).unlinkEverywhere(provider.provider)
                                             result = reply.text
                                             reply.connections?.let { connections = it }
@@ -400,7 +438,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                         )
                         Text(
                             if (p.isSignIn)
-                                "This page was generated by $host for this attempt, and the code goes back to the same box."
+                                "This page was generated by ${host ?: "that machine"} for this attempt, and the code goes back to the same box."
                             else
                                 "It is checked with ${p.label} before it is stored, so a typo fails here and not four "
                                     + "hours into a session. It goes to every machine in the fleet.",
@@ -422,7 +460,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                         // A token goes fleet-wide; a Claude
                                         // code goes to the box whose pane is
                                         // waiting for it.
-                                        val reply = if (p.isSignIn) Fleet(settings).link(host, p.provider, sending)
+                                        val reply = if (p.isSignIn && host != null) Fleet(settings).link(host, p.provider, sending)
                                             else Fleet(settings).linkEverywhere(p.provider, sending)
                                         result = reply.text
                                         reply.connections?.let { connections = it }
@@ -441,9 +479,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
 
                 if (result.isNotBlank()) Text(result, style = MaterialTheme.typography.bodySmall)
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-    )
+    }
 }
 
 /**

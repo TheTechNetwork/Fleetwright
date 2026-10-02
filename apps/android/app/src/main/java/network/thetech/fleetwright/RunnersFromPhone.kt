@@ -2,9 +2,7 @@ package network.thetech.fleetwright
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -17,32 +15,34 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlinx.coroutines.launch
 
 /**
- * Runners from this phone: the minter key, this phone's GitHub sign-in, and
- * your Claude login for your runners. See PhoneGitHub for how each works and
- * why nothing between here and the minter can read what this sends.
+ * This phone's own GitHub sign-in, and the minter key it seals to. See
+ * PhoneGitHub for how each works and why nothing between here and the minter
+ * can read what this sends.
  *
- * In the order a person needs them. The minter's key comes first because the
- * other two seal to it, and the phone finds it itself at the fleet's address
+ * ONE PLACE, UNDER YOU › ACCOUNT. It was drawn inside the Hosts section as
+ * "Runners from this phone", which hid an account this phone holds behind a
+ * heading about machines, and the vault (which knows a person by this same
+ * sign-in) one level further down. Two features use it, runners and the vault,
+ * and each says so where it is used.
+ *
+ * In the order a person needs them: the minter's key first, because the
+ * sign-in seals to it, and the phone finds it itself at the fleet's address
  * ([PhoneGitHub.minterKey]); the field to paste one is drawn only when nothing
- * answers there. The GitHub sign-in second because it is what starts a machine and
- * what proves whose Claude login this is; the Claude login last, because it is
- * optional and the runner repository's API key covers anybody who skips it.
+ * answers there. Every control does something or is not drawn.
  *
- * Every control does something or is not drawn: the sign-in button appears
- * only once there is a key to seal to, the Claude login only once GitHub is
- * signed in.
  * The same sentences as iOS (RunnersFromPhone.swift), which
  * test/runners-from-phone-in-apps.test.js holds them to.
+ *
+ * @param onChanged told when the sign-in starts or ends, so a screen whose
+ *   contents depend on it (Credentials) can redraw.
  */
 @Composable
-internal fun RunnersFromPhone(settings: Settings) {
+internal fun PhoneGitHubSignIn(settings: Settings, onChanged: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val phone = remember { PhoneGitHub(settings) }
@@ -55,7 +55,6 @@ internal fun RunnersFromPhone(settings: Settings) {
     val haveKey = pin.isNotBlank() || minterFound == true
     var signedInAs by remember { mutableStateOf(phone.signIn?.login) }
     var signedIn by remember { mutableStateOf(phone.signedIn) }
-    var claudeDraft by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
@@ -73,67 +72,57 @@ internal fun RunnersFromPhone(settings: Settings) {
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-        Text("Runners from this phone", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "Sign in to GitHub here and this phone starts your machines itself, with no permanent box. " +
-                "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Design.Palette.inkDim.now,
-        )
-
-        if (minterFound == null && pin.isBlank()) {
+        if (signedIn) {
             Text(
-                "Looking for your fleet's minter…",
-                style = MaterialTheme.typography.bodySmall,
-                color = Design.Palette.inkDim.now,
+                signedInAs?.takeIf { it.isNotBlank() }?.let { "Signed in to GitHub as $it." } ?: "Signed in to GitHub.",
+                style = Design.Style.body,
+                color = Design.Palette.ink.now,
             )
-        }
-
-        if (minterFound == false) {
-            Text(
-                "This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.",
-                style = MaterialTheme.typography.bodySmall,
-                color = Design.Palette.inkDim.now,
-            )
-            OutlinedTextField(
-                value = pinDraft,
-                onValueChange = { pinDraft = it.trim() },
-                label = { Text("Minter key from whoever runs your fleet") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                    keyboardType = KeyboardType.Ascii,
-                ),
-            )
-            OutlinedButton(
-                enabled = !busy && pinDraft.isNotBlank() && pinDraft != pin,
+            TextButton(
+                enabled = !busy,
                 onClick = {
-                    act {
-                        phone.checkPin(Fleet(settings), pinDraft).onSuccess { pin = settings.minterPin }
-                    }
+                    phone.signOut()
+                    signedIn = false
+                    signedInAs = null
+                    result = "Signed out of GitHub on this phone. Machines you start now go through a permanent box."
+                    failed = false
+                    onChanged()
                 },
-            ) { Text(if (busy) "Checking…" else "Check and save key") }
-        }
+            ) { Text("Sign out of GitHub") }
+        } else {
+            Hint(
+                "Sign in to GitHub here and this phone starts your machines itself, with no permanent box. " +
+                    "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.",
+            )
 
-        if (haveKey) {
-            if (signedIn) {
-                Text(
-                    signedInAs?.takeIf { it.isNotBlank() }?.let { "Signed in to GitHub as $it." } ?: "Signed in to GitHub.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Design.Palette.ink.now,
+            if (minterFound == null && pin.isBlank()) {
+                Hint("Looking for your fleet's minter…")
+            }
+
+            if (minterFound == false) {
+                Hint("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+                OutlinedTextField(
+                    value = pinDraft,
+                    onValueChange = { pinDraft = it.trim() },
+                    label = { Text("Minter key from whoever runs your fleet") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Ascii,
+                    ),
                 )
-                TextButton(
-                    enabled = !busy,
+                OutlinedButton(
+                    enabled = !busy && pinDraft.isNotBlank() && pinDraft != pin,
                     onClick = {
-                        phone.signOut()
-                        signedIn = false
-                        signedInAs = null
-                        result = "Signed out of GitHub on this phone. Machines you start now go through a permanent box."
-                        failed = false
+                        act {
+                            phone.checkPin(Fleet(settings), pinDraft).onSuccess { pin = settings.minterPin }
+                        }
                     },
-                ) { Text("Sign out of GitHub") }
-            } else {
+                ) { Text(if (busy) "Checking…" else "Check and save key") }
+            }
+
+            if (haveKey) {
                 OutlinedButton(
                     enabled = !busy,
                     onClick = {
@@ -141,6 +130,7 @@ internal fun RunnersFromPhone(settings: Settings) {
                             phone.signInWith(context, Fleet(settings)).onSuccess {
                                 signedIn = phone.signedIn
                                 signedInAs = phone.signIn?.login
+                                onChanged()
                             }
                         }
                     },
@@ -148,52 +138,8 @@ internal fun RunnersFromPhone(settings: Settings) {
             }
         }
 
-        if (signedIn) {
-            Text(
-                "Runners you start can use your Claude subscription instead of the runner repository's API key. " +
-                    "Make the token on a computer with claude setup-token, and paste it here.",
-                style = MaterialTheme.typography.bodySmall,
-                color = Design.Palette.inkDim.now,
-            )
-            OutlinedTextField(
-                value = claudeDraft,
-                onValueChange = { claudeDraft = it.trim() },
-                label = { Text("Token from claude setup-token") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                    keyboardType = KeyboardType.Password,
-                ),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-                OutlinedButton(
-                    enabled = !busy && claudeDraft.isNotBlank(),
-                    onClick = {
-                        act {
-                            phone.depositClaudeLogin(Fleet(settings), claudeDraft).onSuccess { claudeDraft = "" }
-                        }
-                    },
-                ) { Text("Keep for my runners") }
-                TextButton(
-                    enabled = !busy,
-                    onClick = { act { phone.depositClaudeLogin(Fleet(settings), null) } },
-                ) { Text("Forget my Claude login") }
-            }
-
-            // YOUR VAULT, below what it builds on: the key it seals to and
-            // the sign-in that says whose it is.
-            YourVault(settings)
-        }
-
         if (result.isNotBlank()) {
-            Text(
-                result,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Default,
-                color = if (failed) Design.Palette.bad.now else Design.Palette.ink.now,
-            )
+            Hint(result, color = if (failed) Design.Palette.bad.now else Design.Palette.ink.now)
         }
     }
 }

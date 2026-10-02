@@ -54,9 +54,10 @@ test('independent requests are asked for at the same time', () => {
   const refresh = VIEW.slice(VIEW.indexOf('private func refresh(keepStatus'), VIEW.indexOf('private func act('));
   assert.match(refresh, /async let reporting = fleet\.fleetHosts\(\)/);
 
-  const android = MAIN.slice(MAIN.indexOf('LaunchedEffect(signedIn)'), MAIN.indexOf('Text("Devices"'));
-  assert.match(android, /val devices = async \{/);
-  assert.match(android, /val happened = async \{/);
+  // Android's machine list asks for its two answers together too.
+  const android = MAIN.slice(MAIN.indexOf('suspend fun loadHosts()'), MAIN.indexOf('loaded = true', MAIN.indexOf('suspend fun loadHosts()')));
+  assert.match(android, /val reporting = async \{/);
+  assert.match(android, /val members = async \{/);
 });
 
 test('a request that failed does not empty the screen', () => {

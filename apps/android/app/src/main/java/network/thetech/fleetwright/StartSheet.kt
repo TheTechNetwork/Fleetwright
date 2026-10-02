@@ -344,6 +344,15 @@ fun StartSheet(
                                     "gone when the time runs out.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                            // SAID OUT LOUD, as docs/runner-central.md says it:
+                            // the Windows runner is written and not yet proven.
+                            if (platform == "windows") {
+                                Text(
+                                    "Windows runners are written and not yet proven.",
+                                    style = Design.Style.bodySmall,
+                                    color = Design.Palette.attention.now,
+                                )
+                            }
                         }
                     }
                 }
