@@ -108,5 +108,30 @@
     "chart3": { "dark": "#2f56a3", "light": "#7b9de2" },
     "chart4": { "dark": "#3866d6", "light": "#3866d6" },
     "chart5": { "dark": "#7aa7f7", "light": "#1e3f8f" }
+  },
+  "motion": {
+    "$comment": [
+      "How long a change of state takes to move, in milliseconds, and how much a card",
+      "overshoots when it settles. Three durations and a bounce, read by the same test.",
+      "",
+      "quick is a press or a hover answering a finger. standard is a word, a symbol or a",
+      "ring changing to say something new about the same thing. arrive is a card coming",
+      "into a list, leaving it or moving to where it now belongs.",
+      "",
+      "The bounce is the apps' alone. The console has no spring to give it to, and a",
+      "number one surface declares for show is the agreeing-while-not-agreeing this table",
+      "exists to prevent. It is a fraction: 0 is critically damped and stops dead, and",
+      "0.15 lets a card settle rather than land."
+    ],
+    "unit": "milliseconds; bounce is a fraction",
+    "cssPrefix": "--m-",
+    "swift": "Design.Motion",
+    "kotlin": "Design.Motion",
+    "tokens": {
+      "quick": 150,
+      "standard": 250,
+      "arrive": 350
+    },
+    "bounce": 0.15
   }
 }
