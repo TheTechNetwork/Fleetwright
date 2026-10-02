@@ -27,6 +27,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -324,6 +334,9 @@ fun FleetScreen(
      *   succeeds. Set after an action, whose reply text is the only
      *   confirmation the coordinator ever gives.
      */
+    val haptic = LocalHapticFeedback.current
+    val reduced = Design.Motion.reduced()
+
     suspend fun reload(keepStatus: Boolean = false) {
         if (!settings.configured) return
         busy = true
@@ -348,11 +361,19 @@ fun FleetScreen(
         scope.launch { reload(keepStatus) }
     }
 
-    /** Run one verb and quote what came back, then re-list. */
+    /**
+     * Run one verb and quote what came back, then re-list.
+     *
+     * FELT, NOT ONLY SEEN. Stop, Resume and an answer each say in the hand
+     * whether the fleet took them, and a refusal feels different from a yes:
+     * the quoted reply is at the top of a list read at arm's length at night.
+     */
     fun act(work: suspend () -> Fleet.Reply) {
         scope.launch {
             busy = true
-            status = work().text.said()
+            val reply = work()
+            status = reply.text.said()
+            haptic.performHapticFeedback(if (reply.ok) HapticFeedbackType.Confirm else HapticFeedbackType.Reject)
             busy = false
             reload(keepStatus = true)
         }
@@ -531,12 +552,20 @@ fun FleetScreen(
             )
         },
         bottomBar = {
-            NavigationBar {
-                listOf("sessions" to "Sessions", "machines" to "Machines", "you" to "You").forEach { (key, label) ->
-                    NavigationBarItem(
+            // THE SHORT BAR, Material 3's current one: shorter than the old
+            // NavigationBar, with the mark above its word. The marks were empty
+            // slots, so the three tabs read as three words; they are now the
+            // same list, rack and person iOS shows in the same places.
+            ShortNavigationBar {
+                listOf(
+                    Triple("sessions", "Sessions", NavIcons.sessions),
+                    Triple("machines", "Machines", NavIcons.machines),
+                    Triple("you", "You", NavIcons.you),
+                ).forEach { (key, label, mark) ->
+                    ShortNavigationBarItem(
                         selected = tab == key,
                         onClick = { tab = key },
-                        icon = {},
+                        icon = { Icon(mark, contentDescription = null) },
                         label = { Text(label) },
                     )
                 }
@@ -689,7 +718,16 @@ fun FleetScreen(
                         // and only there. The card carried the same row of
                         // actions as the sheet it opens, plus Peek, which the
                         // sheet already does by watching the screen.
+                        //
+                        // A CARD MOVES TO WHERE IT NOW BELONGS: one that started
+                        // asking goes to the top, a new one arrives, a forgotten
+                        // one leaves. No travel when animations are off.
                         SessionCard(
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = Design.Motion.change(),
+                                placementSpec = Design.Motion.settle(reduced),
+                                fadeOutSpec = Design.Motion.change(),
+                            ),
                             session = session,
                             busy = busy,
                             onStop = { act { fleet.stop(session.name) } },
@@ -746,6 +784,7 @@ private fun EmptySessions(
 
 @Composable
 private fun SessionCard(
+    modifier: Modifier = Modifier,
     session: Fleet.Session,
     busy: Boolean,
     onStop: () -> Unit,
@@ -757,9 +796,17 @@ private fun SessionCard(
 ) {
     // NO BORDER, AND A RING THAT MEANS SOMETHING. The one card that wears a
     // tone is the one asking a question.
-    val ring = if (session.prompt != null) Design.Palette.attention.now else Design.Palette.ring.now
+    //
+    // AND IT TAKES THE TONE ON as the question arrives, rather than being
+    // swapped for it.
+    val ring by animateColorAsState(
+        if (session.prompt != null) Design.Palette.attention.now else Design.Palette.ring.now,
+        Design.Motion.change(),
+        label = "ring",
+    )
+    val reduced = Design.Motion.reduced()
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .fleetCard(radius = Design.Radius.cardSmall, ring = ring)
             .padding(Design.Space.groupTight),
@@ -784,15 +831,18 @@ private fun SessionCard(
                 )
                 Text(" ›", style = Design.Style.bodyStrong, color = Design.Palette.inkDim.now)
             }
-            // Colour AND the word, never colour alone.
-            Text(
-                session.status,
-                Modifier
+            // Colour AND the word, never colour alone. The word crossfades
+            // into the next one: a session changing state is the news.
+            AnimatedContent(
+                targetState = session.status,
+                modifier = Modifier
                     .background(Design.Palette.inner.now, RoundedCornerShape(Design.Radius.chip))
                     .padding(horizontal = Design.Space.insideTight, vertical = Design.Space.hair),
-                style = Design.Style.label,
-                color = statusColour(session.status),
-            )
+                transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+                label = "status",
+            ) { status ->
+                Text(status, style = Design.Style.label, color = statusColour(status))
+            }
         }
         if (session.label != session.name) {
             Text(session.name, style = Design.Style.micro, fontFamily = FontFamily.Monospace, color = Design.Palette.inkDim.now)
@@ -812,6 +862,14 @@ private fun SessionCard(
         session.quietFor?.let { Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now) }
         // WHAT IT IS ASKING, and the answer as rows. The options are the ones
         // the HOST published; an ordinal is sent, never text.
+        // THE QUESTION UNFOLDS from under the title it belongs to; with
+        // animations off it fades in where it will sit.
+        AnimatedVisibility(
+            visible = session.prompt != null,
+            enter = if (reduced) fadeIn(Design.Motion.change())
+            else fadeIn(Design.Motion.change()) + expandVertically(Design.Motion.settle(false)!!),
+            exit = fadeOut(Design.Motion.change()) + shrinkVertically(Design.Motion.change()),
+        ) {
         session.prompt?.let { prompt ->
             if (prompt.options.isNotEmpty()) {
                 Column(
@@ -855,6 +913,7 @@ private fun SessionCard(
                     color = Design.Palette.inkDim.now,
                 )
             }
+        }
         }
 
         // ONE PRIMARY ACTION, at 48dp.

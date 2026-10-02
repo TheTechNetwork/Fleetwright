@@ -14,9 +14,11 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -143,6 +145,24 @@ object Design {
         fun <T> settle(reduced: Boolean): FiniteAnimationSpec<T>? =
             if (reduced) null
             else spring(dampingRatio = 1f - bounce, stiffness = (2 * PI / (arrive / 1000.0)).pow(2).toFloat())
+
+        /**
+         * Has this person turned animations off? Android's "Remove animations"
+         * sets the animator duration scale to zero; read once per screen, as
+         * the setting does not change under a running app often enough to
+         * watch.
+         */
+        @Composable
+        fun reduced(): Boolean {
+            val resolver = LocalContext.current.contentResolver
+            return remember(resolver) {
+                android.provider.Settings.Global.getFloat(
+                    resolver,
+                    android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                    1f,
+                ) == 0f
+            }
+        }
     }
 
     /**

@@ -181,6 +181,16 @@ The spring is the same spring on both phones: SwiftUI's
 stiffness = (2π / duration)²)`, and `Design.kt` derives it that way rather than
 holding a second set of numbers.
 
+**What Android does not take from Material 3 Expressive, and why.** Its
+theme and its motion scheme are internal in the stable Material 3 the app
+builds against (1.4.0), so Material's own components (sheets, switches, the
+pull to refresh) keep their standard motion; everything the app draws itself
+moves on the tokens above. Its wallpaper colour and shape morphing are not
+wanted in any release, for the reason this document exists: the palette and
+the radii are the same on all three surfaces. What it does take is the short
+navigation bar, with the same list, rack and person marks iOS shows in the
+same three places.
+
 ### Cards have no borders
 
 Zero visible edges anywhere. Separation is an inset highlight, a soft drop
