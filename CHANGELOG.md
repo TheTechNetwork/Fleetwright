@@ -11,11 +11,27 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
-## 0.4.4 — 2026-09-30
+## 0.4.4 — 2026-10-02
 
-**Temporary machines come from your own GitHub repository, and a session can
-start on one from New session. The apps show how full a session's context is
-and what each Claude account has left.**
+**Temporary machines come from your own GitHub repository, and your phone can
+start one with no permanent box. Your GitHub, Cloudflare and Claude sign-ins
+and your secrets are kept once, in a vault, for every box you approve.**
+
+- **Start machines from your phone.** Under Settings, Runners from this phone,
+  save the minter key whoever runs your fleet gave you and sign in to GitHub.
+  The phone then asks GitHub for machines itself, so no permanent box has to
+  be online. `fleetwright-mcp` on a computer does the same when it can find a
+  GitHub token.
+- **Your vault.** In the same place, keep GitHub and Cloudflare by signing in,
+  add named secrets, and approve your boxes. Approve a box only when the
+  fingerprint the phone shows matches what `fleetwright-sidecar identity`
+  prints on it. An approved box gets what is kept within ten minutes, and
+  loses it within ten minutes of being removed. Anything linked on a box
+  itself still wins.
+- **Runners on your Claude subscription.** Paste a token from
+  `claude setup-token` on the phone, or deposit one with
+  `fleetwright-claude-login`, and the runners you start use your subscription
+  instead of the runner repository's API key.
 
 - **Your own runner repository.** Under Add a machine, enter a public
   repository with the runner workflows in it and press **Check and save**. The
@@ -39,11 +55,18 @@ and what each Claude account has left.**
   running the old code until someone restarts it. `/identity` and `/enroll` say
   which account to run them as rather than suggesting a reinstall. A runner
   started with an API key no longer stops at the CLI's question about using
-  it. The macOS installer no longer fails to reload a daemon it has just
-  stopped. The macOS host is now installed for real on a GitHub runner in CI.
+  it, nor at the Bypass Permissions warning. A Claude account linked to a
+  runner is used instead of the repository's API key. The macOS installer no
+  longer fails to reload a daemon it has just stopped. The macOS host is now
+  installed for real on a GitHub runner in CI.
 
 Hosts speak protocol 6. An older box keeps working, but cannot check a runner
-repository or dispatch to one, and says so rather than failing.
+repository or dispatch to one, and says so rather than failing. It gets
+nothing from the vault until it is upgraded.
+
+For whoever runs the fleet: phone sign-in, the vault and Claude logins on
+runners need the minting Worker's secrets. Run the Worker workflow by hand on
+`main` with **sync_app_key** ticked (`docs/vault.md`).
 
 ## 0.4.3 — 2026-09-29
 
