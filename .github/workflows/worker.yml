@@ -321,7 +321,14 @@ jobs:
           config="${WRANGLER_CONFIG:-wrangler.toml}"
           if grep -q '^service = "fleetwright-minter"' "$config"; then
             minter_vars=()
-            [ -n "${MINT_CLIENT_ID:-}" ] && minter_vars+=(--var "FLEETWRIGHT_GITHUB_CLIENT_ID:$MINT_CLIENT_ID")
+            # THE APP'S CLIENT ID: the repository variable when one is set,
+            # otherwise the one the coordinator's own config already carries.
+            # Without it the minter can sign no App JWT and finish no phone
+            # sign-in ("needs its deposit key and the GitHub App client id and
+            # secret"), and a fleet that never set the variable had exactly
+            # that while the coordinator beside it knew the id. Public.
+            mint_client_id=${MINT_CLIENT_ID:-$(sed -n 's/^FLEETWRIGHT_GITHUB_CLIENT_ID *= *"\(.*\)"/\1/p' "$config" | head -1)}
+            [ -n "$mint_client_id" ] && minter_vars+=(--var "FLEETWRIGHT_GITHUB_CLIENT_ID:$mint_client_id")
             [ -n "${MINT_OWNERS:-}" ] && minter_vars+=(--var "FLEETWRIGHT_GITHUB_MINT_OWNERS:$MINT_OWNERS")
             # The Cloudflare client id the coordinator signs people in with,
             # read from the coordinator's own config so the vault's Cloudflare
