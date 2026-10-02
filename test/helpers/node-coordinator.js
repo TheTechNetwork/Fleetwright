@@ -45,7 +45,7 @@ import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
-import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
+import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { resource } from '../../src/core/resources.js';
@@ -930,6 +930,9 @@ export class Coordinator {
       // through, or a fleet that forgot to set a token looks authenticated.
       return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'this coordinator has no admin token set' });
     }
+    // Viewing as a member: the same rule as the Worker, from the same helper.
+    const isAdmin = client ? Boolean(client.admin) : true;
+    if (client?.admin && viewsAsMember(String(req.headers['x-fleetwright-view'] ?? ''))) client = { ...client, admin: false };
 
     // The destructive routes, checked BEFORE any of them run. The first version
     // of this sat further down the file, after the /api/hosts/ DELETE handler
@@ -1055,7 +1058,7 @@ export class Coordinator {
 
     // Same as the Worker: the flag the destructive-route guard reads.
     if (p === '/api/me' && req.method === 'GET') {
-      return json(res, 200, { ok: true, email: client?.email ?? null, admin: client ? Boolean(client.admin) : true });
+      return json(res, 200, { ok: true, email: client?.email ?? null, admin: isAdmin, viewing: client && !client.admin ? 'member' : 'admin' });
     }
 
     if (p === '/api/clients' && req.method === 'GET') {
