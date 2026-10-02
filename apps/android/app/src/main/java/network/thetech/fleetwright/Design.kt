@@ -1,5 +1,9 @@
 package network.thetech.fleetwright
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -18,6 +22,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.PI
+import kotlin.math.pow
 
 /**
  * The design system, as Compose can use it.
@@ -98,6 +104,45 @@ object Design {
         val cardSmall = 18.dp
         val row = 14.dp
         val chip = 8.dp
+    }
+
+    /**
+     * How long a change of state takes to move, in milliseconds.
+     *
+     * A CHANGE OF STATE MOVES; NOTHING ELSE DOES. A session going from working
+     * to waiting is news and should read as a change rather than a swap; a
+     * screen that animates for pleasure is noise on an app opened at night
+     * because something is wrong. Nothing here loops.
+     *
+     * The same numbers as iOS and the console, held equal by
+     * test/design-parity.test.js.
+     */
+    object Motion {
+        /** A press or a toggle answering a finger. */
+        const val quick = 150
+        /** A word, a symbol or a ring changing to say something new. */
+        const val standard = 250
+        /** A card coming into a list, leaving it, or moving to its new place. */
+        const val arrive = 350
+        /** How far a card overshoots as it settles. 0 stops dead. */
+        const val bounce = 0.15f
+
+        /**
+         * The same thing, saying something new: a crossfade with no travel, so
+         * it is the one animation "Remove animations" keeps.
+         */
+        fun <T> change(): FiniteAnimationSpec<T> = tween(standard, easing = FastOutSlowInEasing)
+
+        /**
+         * Something moving to where it belongs, as iOS's spring with the same
+         * duration and bounce: SwiftUI's bounce is one minus the damping ratio,
+         * and its duration is the period of the undamped spring, so the
+         * stiffness is (2π / duration)². Null when animations are off, where the
+         * thing simply is where it belongs.
+         */
+        fun <T> settle(reduced: Boolean): FiniteAnimationSpec<T>? =
+            if (reduced) null
+            else spring(dampingRatio = 1f - bounce, stiffness = (2 * PI / (arrive / 1000.0)).pow(2).toFloat())
     }
 
     /**

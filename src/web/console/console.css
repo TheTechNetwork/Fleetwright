@@ -87,6 +87,16 @@
   --r-chip: 8px;
   --r-round: 50%;
 
+  /* --- motion -------------------------------------------------------------
+   *
+   * How long a change of state takes, and nothing else: this page animates a
+   * hover and a state, never an arrival for its own sake. The same three
+   * numbers as both apps, held there by test/design-parity.test.js. The apps'
+   * spring has no counterpart here, which is why it is not declared. */
+  --m-quick: 150ms;
+  --m-standard: 250ms;
+  --m-arrive: 350ms;
+
   /* --- colour: dark, which is the default and the one tuned for a dark room
    *
    * The ground is not #000 so a lit card does not punch a hole in the retina,
@@ -356,6 +366,7 @@ body {
   font-size: var(--t-body-small);
   cursor: pointer;
 }
+.option { transition: box-shadow var(--m-quick) ease-out; }
 .option:hover { box-shadow: 0 0 0 1px var(--accent); }
 .option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ordinal {
@@ -409,6 +420,11 @@ body {
  * Forced-colours mode drops every box-shadow, and a borderless card is then a
  * card with nothing around it at all — three panes of text run together. The
  * separation comes back as a border the mode will actually paint. */
+/* A person who asked for less motion gets none, rather than a shorter one. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; }
+}
+
 @media (forced-colors: active) {
   .confidence, .host, .ask, .srow, .option { border: 1px solid; }
 }
