@@ -30,8 +30,9 @@ None of it is the coordinator's word. The coordinator relays ciphertext both
 ways and adds one fact the minter checks against something else.
 
 **A person**, from their phone, under *Runners from this phone*, *Your vault*.
-Every request is sealed on the phone to the minter key the person pinned (the
-same pin a Claude deposit uses), with the phone's own GitHub token inside. The
+Every request is sealed on the phone to the minter's key, which the phone asks
+the minter for itself (see [The minter's key](#the-minters-key) below), with
+the phone's own GitHub token inside. The
 minter asks GitHub whose that token is, and that GitHub account is whose vault
 it is. The request also names the fleet account it is for, and the coordinator
 says which signed-in account sent it; the minter refuses unless the two agree.
@@ -55,7 +56,7 @@ sealed to a one-request key the box made. Replaying a box's request gets an
 answer sealed to the box's own key.
 
 ```
-phone ── sealed to the pinned minter key: { github, email, op, at, reply } ──┐
+phone ── sealed to the minter's own key: { github, email, op, at, reply } ──┐
                                                          POST /api/vault     │
 box ──── signed by the box key: { hostKey, at, reply } ──┐                   │
                                          `vault` frame   │                   │
@@ -115,20 +116,47 @@ it: new code there runs with the deposit key and the client secrets, and can
 read every vault. That is the bound the App key and the Claude logins already
 had ([security.md §4.1](./security.md)).
 
+## The minter's key
+
+Everything a phone or `fleetwright-claude-login` sends the minter is sealed to
+the minter's deposit key, so the one thing that must not come from the
+coordinator is which key that is. Nobody hunts for it:
+
+- **The minter makes it.** The first time anything asks, the minter's Durable
+  Object makes a P-256 key and keeps it beside the vaults it protects. Two
+  first asks at once share one key (`test/vault.test.js`). A key the operator
+  made by hand, as `FLEETWRIGHT_MINTER_DEPOSIT_KEY`, is used instead when set.
+- **The minter answers for it** at `https://<the fleet>/.well-known/fleetwright-minter`.
+  The deploy gives the minting Worker a route for that one path on the
+  coordinator's own hostname, and a route runs before the coordinator's Custom
+  Domain, so the coordinator never sees the request. The answer is the public
+  half and nothing else.
+- **The phone asks there**, from the fleet address it already has. A key saved
+  by hand still wins. Only when nothing answers there, which is a fleet whose
+  deploy gave the minter no route, does the phone show a field to paste the key
+  whoever runs the fleet gave you, and that key is checked against what the
+  coordinator says before it is saved.
+
+What this trusts is the Cloudflare account that serves both Workers, which is
+already the minter's bound (below): code deployed there could read every vault
+whatever key a phone held.
+
 ## For whoever runs the fleet
 
-The vault needs what the minter already has for Claude logins, the deposit key,
-plus the OAuth clients it renews with:
+The deposit key needs nothing from you. The vault needs the OAuth clients it
+signs people in and renews with:
 
 | secret | where | without it |
 |---|---|---|
-| `FLEETWRIGHT_MINTER_DEPOSIT_KEY` | `github-app-key` environment | no vaults at all |
 | `FLEETWRIGHT_GITHUB_CLIENT_SECRET` | repository secret or `github-app-key` | no GitHub in vaults, and no phone sign-in |
-| `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | repository secret or `github-app-key` | no Cloudflare in vaults |
+| `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | repository secret or `github-app-key` (the old `AGENT_FLEET_` name is read too) | no Cloudflare in vaults |
 
-All three are synced by running the Worker workflow by hand on `main` with
+Both are synced by running the Worker workflow by hand on `main` with
 **sync_app_key** ticked ([ci.md](./ci.md)). The Cloudflare client id is read
-from the coordinator's own config at deploy.
+from the coordinator's own config at deploy, and so is the hostname the
+minter's key path is routed on. If the deploy's Cloudflare token cannot edit
+Workers Routes on that zone, the deploy says so in a warning and carries on,
+and phones on that fleet ask for the key to be pasted.
 
 ## Adding a provider
 

@@ -10,8 +10,11 @@
 # what it checks, against GitHub, before it signs anything.
 #
 # Read this file as the security boundary: no routes, no workers.dev address,
-# no preview URLs — nothing on the internet can call it — and one binding, to a
-# Durable Object of its own. It cannot reach the fleet, a session or a host; it
+# no preview URLs, and one binding, to a Durable Object of its own. The one
+# thing on the internet is a public key: the deploy adds a single route,
+# <the fleet's hostname>/.well-known/fleetwright-minter, with --route, because
+# the hostname is the coordinator config's and not this file's. Every other
+# path answers only the coordinator's service binding. It cannot reach the fleet, a session or a host; it
 # can sign a JWT with the App's key, open what people seal to its deposit key,
 # keep that in its own storage, and talk to api.github.com.
 name = "fleetwright-minter"
@@ -60,13 +63,14 @@ preview_urls = false
 #                                     and renew a person's Cloudflare sign-in.
 #                                     Synced by the same manual job. Unset →
 #                                     vaults keep no Cloudflare sign-in
-#   FLEETWRIGHT_MINTER_DEPOSIT_KEY    SECRET. The P-256 key people seal their
-#                                     Claude logins to, as the JWK
-#                                     `node scripts/minter-deposit-key.mjs`
-#                                     prints. Unset → it keeps no Claude
-#                                     logins and no vaults (docs/vault.md),
-#                                     and every runner uses its repository's
-#                                     API key, as before
+#   FLEETWRIGHT_MINTER_DEPOSIT_KEY    SECRET, OPTIONAL. The P-256 key people
+#                                     seal their logins and vaults to, as the
+#                                     JWK `node scripts/minter-deposit-key.mjs`
+#                                     prints. Unset → the LOGINS object makes
+#                                     one the first time it is asked and keeps
+#                                     it beside what it protects, which is
+#                                     what a fleet should do. Set it only to
+#                                     keep a key made by hand before that
 
 [observability]
 enabled = true

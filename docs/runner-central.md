@@ -118,8 +118,8 @@ browser half and the **minting Worker** runs the exchange:
    at `fleetwright://github`. The app checks the state is the one it made. The
    code is no use without the verifier, which never left the phone.
 3. The phone seals `{ code, verifier, redirectUri, reply }` to the minter's key
-   (the pin under [Depositing one](#depositing-one), checked against
-   `GET /api/claude-login` before anything is sealed) and posts it to
+   (which it asks the minter for at the fleet's address, see
+   [vault.md, "The minter's key"](./vault.md#the-minters-key)) and posts it to
    `POST /api/github/device`. `reply` is a P-256 key the phone made for this one
    request.
 4. The minter opens it, refuses it if it is more than ten minutes old, makes
@@ -473,20 +473,22 @@ fleetwright-claude-login            # paste it when asked
 fleetwright-claude-login forget     # take it back
 ```
 
-**Or from a phone.** Under *Runners from this phone*, once the minter key is
-saved and the phone is signed in to GitHub, paste the token from `claude
+**Or from a phone.** Under *Runners from this phone*, once the phone is signed
+in to GitHub, paste the token from `claude
 setup-token` and choose *Keep for my runners*. The phone seals the same deposit
 with its own GitHub token inside, so it needs nothing from a computer but the
 token itself. *Forget my Claude login* takes it back.
 
 `fleetwright-claude-login` takes the same `FLEETWRIGHT_COORDINATOR_URL` and
-`FLEETWRIGHT_CREDENTIAL` as `fleetwright-mcp`, and one more:
-**`FLEETWRIGHT_MINTER_KEY`, the pin** — the minting Worker's public key, which
-whoever runs your fleet gives you by a route that is not the fleet. Run it once
-without the pin and it prints the key the fleet claims, sends nothing, and
-asks you to check that key with them. With the pin set, it refuses any other
-key, because a coordinator offering its own is exactly how somebody would read
-your login on its way through.
+`FLEETWRIGHT_CREDENTIAL` as `fleetwright-mcp`. It asks the minting Worker for
+its key at the fleet's address, on a path the deploy routes past the
+coordinator ([vault.md, "The minter's key"](./vault.md#the-minters-key)), and
+refuses to send anything if the coordinator names a different key, because a
+coordinator offering its own is exactly how somebody would read your login on
+its way through. **`FLEETWRIGHT_MINTER_KEY`**, the pin, is for a fleet whose
+minter has no such route: run without it there and it prints the key the fleet
+claims, sends nothing, and asks you to check that key with whoever runs your
+fleet. When set, it wins over the lookup.
 
 It also needs a GitHub token of yours — `GH_TOKEN`, or whatever `gh auth
 token` prints. That is how the minter learns whose login this is without
@@ -496,7 +498,7 @@ asking the coordinator: it asks GitHub, once, and does not keep the token.
 it prints lasts a year.
 
 ```
-your computer ── seals { Claude token, GitHub token, now } to the PINNED key
+your computer ── seals { Claude token, GitHub token, now } to the MINTER'S key
    │  PUT /api/claude-login
    ▼
 coordinator ─── relays it unread
@@ -575,18 +577,17 @@ leaks, assume it lasts its year.
 
 ### For whoever runs the fleet
 
-```sh
-node scripts/minter-deposit-key.mjs
-```
+The deposit key is the minter's own: it makes one the first time it is asked
+and keeps it in its Durable Object, and the deploy routes
+`<the fleet>/.well-known/fleetwright-minter` to it so people's tools can find
+it ([vault.md](./vault.md#the-minters-key)). There is nothing to hand anyone.
 
-prints a private key and its pin. The private key is
-`FLEETWRIGHT_MINTER_DEPOSIT_KEY`, an **environment** secret of `github-app-key`
-beside the App key, synced to the minting Worker by the same manual run of the
-Worker workflow with **sync_app_key** ticked ([ci.md](./ci.md)). The pin goes
-to each person who will deposit, by message or in person, and it is the same
-pin a phone asks for under *Runners from this phone*. Without the key the
-minter keeps no logins and every runner uses its repository's key, as before.
-A new key makes every kept login unreadable; people deposit again.
+`node scripts/minter-deposit-key.mjs` still prints a key and its pin, for a
+fleet that wants to choose its own: set the private half as
+`FLEETWRIGHT_MINTER_DEPOSIT_KEY`, an **environment** secret of `github-app-key`,
+synced by the manual run of the Worker workflow with **sync_app_key** ticked
+([ci.md](./ci.md)), and it is used instead of the one the minter made. A new
+key, either way, makes every kept login unreadable; people deposit again.
 
 **For phones to sign in to GitHub,** the minter also needs the App's client
 secret, `FLEETWRIGHT_GITHUB_CLIENT_SECRET`, in the same `github-app-key`

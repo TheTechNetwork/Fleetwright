@@ -355,15 +355,16 @@ permanent box that holds the key, or reach public code only. See
 `docs/runner-central.md`, and `test/app-key-custody.test.js` for what keeps it
 this way.
 
-**`FLEETWRIGHT_MINTER_DEPOSIT_KEY` travels with it**, on the same terms and
-for the same reason: it is the key people seal their Claude logins to, so it
-opens every one the minter keeps. Another environment secret of
-`github-app-key`, synced by the same run of `minter-key`, which puts whichever
-of the two is present and leaves the Worker's copy of the other alone.
-`node scripts/minter-deposit-key.mjs` makes one, and prints the pin people
-check it against. Optional; without it the minter keeps no Claude logins and
-runners use their repository's API key. See `docs/runner-central.md`, "Your
-Claude login on a runner".
+**`FLEETWRIGHT_MINTER_DEPOSIT_KEY` can travel with it**, and normally does not.
+The minter makes its own deposit key the first time it is asked and keeps it
+in its Durable Object, and the deploy routes
+`<the coordinator's hostname>/.well-known/fleetwright-minter` to it so phones
+find the key without a pin (`docs/vault.md`, "The minter's key"). Set this
+environment secret of `github-app-key` only to choose the key yourself:
+`node scripts/minter-deposit-key.mjs` makes one, and the same run of
+`minter-key` syncs it. The route needs the deploy's `CLOUDFLARE_API_TOKEN` to
+edit Workers Routes on the zone; without that the deploy warns and carries on,
+and phones on the fleet ask for the pin.
 
 **`FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` travels the same way**, so each
 person's vault can keep and renew their Cloudflare sign-in

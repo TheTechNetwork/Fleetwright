@@ -9,7 +9,7 @@ import java.security.MessageDigest
  * Worker once, and which of their boxes may hold it. See docs/vault.md, and
  * src/fleet/minter/vault.js for the other end.
  *
- * EVERY REQUEST IS SEALED to the minter key the person pinned, with this
+ * EVERY REQUEST IS SEALED to the minter's key (PhoneGitHub.minterKey), with this
  * phone's GitHub token inside so the minter can ask GitHub whose vault it is,
  * and the fleet account it is for. The answer comes back sealed to a key this
  * phone made for that one request. The coordinator relays both and reads
@@ -30,7 +30,7 @@ internal class PhoneVault(private val settings: Settings) {
 
     /** Seal one request, relay it, open the answer. */
     private suspend fun ask(fleet: Fleet, op: String, extra: JSONObject = JSONObject()): Pair<String, JSONObject> {
-        val pin = settings.minterPin.ifBlank { error("Save your minter key first. Whoever runs your fleet has it.") }
+        val pin = PhoneGitHub(settings).minterKey(fleet)
         val email = settings.signedInAs.trim().ifBlank { error("This phone does not know which fleet account it is signed in as. Sign in to the fleet again.") }
         val github = PhoneGitHub(settings).accessToken(fleet)
         val reply = Seal.newKey()

@@ -6,7 +6,7 @@ import Foundation
 /// thing on Android. See docs/vault.md, and src/fleet/minter/vault.js for the
 /// other end.
 ///
-/// EVERY REQUEST IS SEALED to the minter key the person pinned, with this
+/// EVERY REQUEST IS SEALED to the minter's key (PhoneGitHub.minterKey), with this
 /// phone's GitHub token inside so the minter can ask GitHub whose vault it is,
 /// and the fleet account it is for. The answer comes back sealed to a key this
 /// phone made for that one request. The coordinator relays both and reads
@@ -38,8 +38,7 @@ struct PhoneVault {
 
     /// Seal one request, relay it, open the answer.
     private func ask(_ fleet: Fleet, op: String, extra: [String: Any] = [:]) async throws -> (text: String, answer: [String: Any]) {
-        let pin = settings.minterPin
-        guard !pin.isEmpty else { throw FleetError.message("Save your minter key first. Whoever runs your fleet has it.") }
+        let pin = try await PhoneGitHub(settings: settings).minterKey(fleet)
         let email = settings.signedInAs.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else {
             throw FleetError.message("This phone does not know which fleet account it is signed in as. Sign in to the fleet again.")

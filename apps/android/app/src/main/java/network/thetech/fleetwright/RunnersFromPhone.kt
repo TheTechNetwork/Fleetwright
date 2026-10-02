@@ -10,6 +10,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,13 +28,16 @@ import kotlinx.coroutines.launch
  * your Claude login for your runners. See PhoneGitHub for how each works and
  * why nothing between here and the minter can read what this sends.
  *
- * In the order a person needs them. The key comes first because the other two
- * seal to it; the GitHub sign-in second because it is what starts a machine and
+ * In the order a person needs them. The minter's key comes first because the
+ * other two seal to it, and the phone finds it itself at the fleet's address
+ * ([PhoneGitHub.minterKey]); the field to paste one is drawn only when nothing
+ * answers there. The GitHub sign-in second because it is what starts a machine and
  * what proves whose Claude login this is; the Claude login last, because it is
  * optional and the runner repository's API key covers anybody who skips it.
  *
  * Every control does something or is not drawn: the sign-in button appears
- * only once a key is saved, the Claude login only once GitHub is signed in.
+ * only once there is a key to seal to, the Claude login only once GitHub is
+ * signed in.
  * The same sentences as iOS (RunnersFromPhone.swift), which
  * test/runners-from-phone-in-apps.test.js holds them to.
  */
@@ -44,6 +48,11 @@ internal fun RunnersFromPhone(settings: Settings) {
     val phone = remember { PhoneGitHub(settings) }
     var pin by remember { mutableStateOf(settings.minterPin) }
     var pinDraft by remember { mutableStateOf(settings.minterPin) }
+    // Did the minter answer for its own key? Null while asking: CANNOT TELL
+    // yet, which draws neither the sign-in nor the field to paste a key.
+    var minterFound by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(settings.coordinatorUrl) { minterFound = Fleet(settings).minterOwnKey() != null }
+    val haveKey = pin.isNotBlank() || minterFound == true
     var signedInAs by remember { mutableStateOf(phone.signIn?.login) }
     var signedIn by remember { mutableStateOf(phone.signedIn) }
     var claudeDraft by remember { mutableStateOf("") }
@@ -67,32 +76,47 @@ internal fun RunnersFromPhone(settings: Settings) {
         Text("Runners from this phone", style = MaterialTheme.typography.titleSmall)
         Text(
             "Sign in to GitHub here and this phone starts your machines itself, with no permanent box. " +
-                "The minter key makes sure what this phone sends can be read by your fleet's minter and nothing in between.",
+                "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.",
             style = MaterialTheme.typography.bodySmall,
             color = Design.Palette.inkDim.now,
         )
 
-        OutlinedTextField(
-            value = pinDraft,
-            onValueChange = { pinDraft = it.trim() },
-            label = { Text("Minter key from whoever runs your fleet") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Ascii,
-            ),
-        )
-        OutlinedButton(
-            enabled = !busy && pinDraft.isNotBlank() && pinDraft != pin,
-            onClick = {
-                act {
-                    phone.checkPin(Fleet(settings), pinDraft).onSuccess { pin = settings.minterPin }
-                }
-            },
-        ) { Text(if (busy) "Checking…" else "Check and save key") }
+        if (minterFound == null && pin.isBlank()) {
+            Text(
+                "Looking for your fleet's minter…",
+                style = MaterialTheme.typography.bodySmall,
+                color = Design.Palette.inkDim.now,
+            )
+        }
 
-        if (pin.isNotBlank()) {
+        if (minterFound == false) {
+            Text(
+                "This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Design.Palette.inkDim.now,
+            )
+            OutlinedTextField(
+                value = pinDraft,
+                onValueChange = { pinDraft = it.trim() },
+                label = { Text("Minter key from whoever runs your fleet") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Ascii,
+                ),
+            )
+            OutlinedButton(
+                enabled = !busy && pinDraft.isNotBlank() && pinDraft != pin,
+                onClick = {
+                    act {
+                        phone.checkPin(Fleet(settings), pinDraft).onSuccess { pin = settings.minterPin }
+                    }
+                },
+            ) { Text(if (busy) "Checking…" else "Check and save key") }
+        }
+
+        if (haveKey) {
             if (signedIn) {
                 Text(
                     signedInAs?.takeIf { it.isNotBlank() }?.let { "Signed in to GitHub as $it." } ?: "Signed in to GitHub.",

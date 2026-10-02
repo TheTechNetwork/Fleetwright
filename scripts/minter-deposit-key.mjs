@@ -1,8 +1,12 @@
-// Make the minting Worker's deposit key: the key people seal their Claude
-// logins to on the way in (docs/runner-central.md, "Your Claude login on a
-// runner").
+// Make the minting Worker's deposit key by hand: the key people seal their
+// Claude logins and vaults to on the way in.
 //
 //   node scripts/minter-deposit-key.mjs
+//
+// NOT NEEDED TO RUN A FLEET. The minter makes its own the first time it is
+// asked and answers for it at the fleet's address (docs/vault.md, "The
+// minter's key"). This is for a fleet that wants to choose its key, or one
+// whose deploy cannot give the minter that route and so hands out the pin.
 //
 // Prints two things, once, and writes neither anywhere:
 //

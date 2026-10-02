@@ -27,22 +27,42 @@
 //   POST /vault/box       a box asks for what its people approved it to hold,
 //                         signed with the box's own key
 //
+// ONE THING ON THE INTERNET, and it is a public key:
+//
+//   GET /.well-known/fleetwright-minter   the deposit key's public half
+//
+// The deploy routes that one path of the fleet's own hostname here
+// (.github/workflows/worker.yml), and a route runs before the coordinator's
+// Custom Domain on the same hostname, so the coordinator never sees the
+// request and cannot answer it with a key of its own. That is what lets a
+// phone or `fleetwright-claude-login` find the key to seal to from the fleet's
+// address alone, with nobody pasting a pin. Every other path is still only
+// what the coordinator's service binding sends, and still POST.
+//
 // The logins are kept in a Durable Object of this Worker's own, `LOGINS`,
-// which no other script is bound to — and kept sealed, so even the storage
-// holds nothing this Worker's secret does not have to open.
+// which no other script is bound to, and kept sealed to the deposit key, which
+// the same object makes the first time it is asked and keeps beside them
+// (`depositSecret` below). FLEETWRIGHT_MINTER_DEPOSIT_KEY, when set, is used
+// instead: a fleet that made one by hand keeps it.
 
 import { answerMintRequest } from '../../src/fleet/minter/answer.js';
 import { answerDeposit, answerLogin, depositKeyAnswer } from '../../src/fleet/minter/claude.js';
 import { answerGithubToken } from '../../src/fleet/minter/github.js';
 import { answerVaultDevice, answerVaultBox } from '../../src/fleet/minter/vault.js';
 import { importAppKey, checkRunnerRepoForApp } from '../../src/core/repo-tokens.js';
-import { importDepositKey } from '../../src/fleet/seal.js';
+import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
 
 /** A request is a repository or a login, a job token and a public key. Anything bigger is not one. */
 const MAX_BODY = 16 * 1024;
 
 /** Everything this Worker answers. */
 const ROUTES = ['/mint', '/runner-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login', '/vault/device', '/vault/box'];
+
+/** The one public path: the deposit key's public half, and nothing else. */
+export const KEY_PATH = '/.well-known/fleetwright-minter';
+
+/** Where the object keeps the key it made. */
+const DEPOSIT_ROW = 'deposit:key';
 
 /**
  * The imported key, per isolate. Importing is cheap and done once; the PEM it
@@ -79,6 +99,27 @@ function depositKeyFor(secret) {
     });
   }
   return depositImported.key;
+}
+
+/**
+ * The deposit key, from the secret when one is set and from the object's own
+ * storage otherwise, or null when this Worker has neither.
+ *
+ * @param {Record<string, any>} env
+ * @returns {(() => Promise<{ privateKey: CryptoKey, publicKey: string }>)|null}
+ */
+function depositKeyFrom(env) {
+  const secret = String(env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '');
+  if (secret) return () => depositKeyFor(secret);
+  if (!env.LOGINS) return null;
+  return async () => {
+    const stub = env.LOGINS.get(env.LOGINS.idFromName('logins'));
+    const res = await stub.fetch('https://logins.internal/deposit-key', { method: 'POST', body: '{}' });
+    /** @type {any} */
+    const r = await res.json().catch(() => null);
+    if (!r?.ok || typeof r.secret !== 'string') throw new Error('the login store did not give its key');
+    return depositKeyFor(r.secret);
+  };
 }
 
 /**
@@ -119,6 +160,34 @@ export class ClaudeLogins {
   constructor(state, env = {}) {
     this.storage = state.storage;
     this.env = env;
+    /** @type {Promise<string>|null} */
+    this.made = null;
+  }
+
+  /**
+   * The key this object made, made the first time it is asked.
+   *
+   * ONCE, even when two requests ask before the first has finished: they share
+   * one promise, because this is the only instance and the only isolate it
+   * runs in. Two keys would mean a phone sealing to the first while the vault
+   * opens with the second. A failure is forgotten so the next ask tries again.
+   *
+   * @returns {Promise<string>}
+   */
+  depositSecret() {
+    if (!this.made) {
+      this.made = (async () => {
+        const kept = await this.storage.get(DEPOSIT_ROW);
+        if (typeof kept === 'string' && kept) return kept;
+        const { secret } = await newDepositKey();
+        await this.storage.put(DEPOSIT_ROW, secret);
+        return secret;
+      })();
+      this.made.catch(() => {
+        this.made = null;
+      });
+    }
+    return this.made;
   }
 
   /** @param {Request} request */
@@ -130,8 +199,11 @@ export class ClaudeLogins {
     // of it: renewing an OAuth token rotates its refresh token, and only one
     // writer can make sure two boxes asking at once rotate it once. See the
     // lock in src/fleet/minter/vault.js.
+    // ITS OWN KEY, to the Worker in front of it and to nothing else: no other
+    // script is bound to this object. Not asked for when the secret is set.
+    if (op === 'deposit-key') return json(200, { ok: true, secret: await this.depositSecret() });
     if (op === 'vault/device' || op === 'vault/box') {
-      const config = vaultConfig(this.env, this.storage);
+      const config = vaultConfig(this.env, this.storage, () => this.depositSecret());
       return json(200, op === 'vault/device' ? await answerVaultDevice(body, config) : await answerVaultBox(body, config));
     }
     const id = String(body?.id || '');
@@ -150,12 +222,13 @@ export class ClaudeLogins {
  *
  * @param {Record<string, any>} env
  * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} storage
+ * @param {() => Promise<string>} own  the key the object made, when no secret is set
  * @returns {import('../../src/fleet/minter/vault.js').VaultConfig}
  */
-function vaultConfig(env, storage) {
+function vaultConfig(env, storage, own) {
   const secret = String(env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '');
   return {
-    depositKey: secret ? () => depositKeyFor(secret) : null,
+    depositKey: secret ? () => depositKeyFor(secret) : async () => depositKeyFor(await own()),
     store: storage,
     clients: {
       github: { clientId: String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || ''), secret: String(env.FLEETWRIGHT_GITHUB_CLIENT_SECRET || '') },
@@ -169,6 +242,28 @@ function json(status, body) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
+/**
+ * The deposit key's public half, for anyone who asks: a phone, the deposit
+ * tool, a person with curl. Nothing about who keeps what, and nothing private.
+ *
+ * NOT CACHED, so a key made for the first time, or a new secret, is what the
+ * next ask sees. It is one small read of one row.
+ *
+ * @param {Record<string, any>} env
+ */
+async function publicKey(env) {
+  const key = depositKeyFrom(env);
+  const headers = { 'content-type': 'application/json', 'cache-control': 'no-store', 'access-control-allow-origin': '*' };
+  if (!key) {
+    return new Response(JSON.stringify({ ok: false, error: { code: 'no_deposit_key' }, text: 'This minting Worker has no storage bound, so it keeps no key.' }), { status: 503, headers });
+  }
+  try {
+    return new Response(JSON.stringify({ ok: true, v: 1, key: (await key()).publicKey }), { status: 200, headers });
+  } catch (e) {
+    return new Response(JSON.stringify({ ok: false, error: { code: 'bad_deposit_key' }, text: `The deposit key does not load: ${/** @type {Error} */ (e).message}.` }), { status: 503, headers });
+  }
+}
+
 export default {
   /**
    * @param {Request} request
@@ -176,6 +271,9 @@ export default {
    */
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === KEY_PATH && (request.method === 'GET' || request.method === 'HEAD')) {
+      return publicKey(env);
+    }
     if (request.method !== 'POST' || !ROUTES.includes(url.pathname)) {
       return json(404, { ok: false, error: { code: 'not_found' }, text: 'This Worker mints repository tokens and keeps each person’s vault for the coordinator, and does nothing else.' });
     }
@@ -220,9 +318,8 @@ export default {
       const res = await stub.fetch(`https://logins.internal${url.pathname}`, { method: 'POST', body: JSON.stringify(ask) });
       return json(200, await res.json());
     }
-    const secret = String(env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '');
     /** @type {import('../../src/fleet/minter/claude.js').ClaudeConfig} */
-    const claude = { depositKey: secret ? () => depositKeyFor(secret) : null, logins: loginsFrom(env.LOGINS), owners };
+    const claude = { depositKey: depositKeyFrom(env), logins: loginsFrom(env.LOGINS), owners };
     if (url.pathname === '/github/token') {
       return json(200, await answerGithubToken(ask, {
         depositKey: claude.depositKey,

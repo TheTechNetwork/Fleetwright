@@ -872,6 +872,20 @@ class Fleet(
     /** The key the fleet says its minter has, to compare with the pin. */
     suspend fun claudeLoginKey(): JSONObject = withContext(Dispatchers.IO) { get("/api/claude-login") }
 
+    /**
+     * The minter's key from the minter itself, at the fleet's address. The
+     * deploy routes this one path past the coordinator (worker/src/minter.js,
+     * KEY_PATH), so it is a key to seal to that the coordinator did not
+     * choose, and nobody has to paste a pin. Null when nothing there answers
+     * with one: a fleet whose minter was given no route.
+     */
+    suspend fun minterOwnKey(): String? = withContext(Dispatchers.IO) {
+        runCatching { send("GET", "/.well-known/fleetwright-minter", null, authenticated = false) }.getOrNull()
+            ?.takeIf { it.optBoolean("ok") }
+            ?.optString("key")
+            ?.takeIf { Seal.KEY_RE.matches(it) }
+    }
+
     /** A Claude login sealed to the minter, for your own runners. */
     suspend fun depositClaudeLogin(sealed: JSONObject): JSONObject =
         withContext(Dispatchers.IO) { send("PUT", "/api/claude-login", JSONObject().put("sealed", sealed)) }
