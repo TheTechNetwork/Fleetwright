@@ -84,7 +84,7 @@ jobs:
   # is never built from a partial view. A PR gate cannot leave a gap: the merge
   # commit re-analyses in full.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       swift: ${{ steps.filter.outputs.swift }}
       java: ${{ steps.filter.outputs.java }}
@@ -161,7 +161,7 @@ jobs:
     needs: changes
     # Any non-prose change. This is the part of the repo that faces the network.
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       security-events: write
       actions: read
@@ -186,7 +186,7 @@ jobs:
     needs: changes
     # A workflow changed — which is exactly the change that broke this file.
     if: needs.changes.outputs.wf == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       security-events: write
       actions: read
@@ -209,7 +209,7 @@ jobs:
     name: analyze (java-kotlin)
     needs: changes
     if: needs.changes.outputs.java == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       security-events: write
       actions: read

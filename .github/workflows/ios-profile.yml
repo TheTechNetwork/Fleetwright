@@ -42,7 +42,7 @@ permissions:
 jobs:
   recreate:
     if: inputs.confirm == 'recreate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1

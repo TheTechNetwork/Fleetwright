@@ -113,7 +113,7 @@ jobs:
   # gets true, because those are the events where a partial view is the thing
   # that ships.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       bundle: ${{ steps.filter.outputs.bundle }}
     steps:
@@ -157,7 +157,7 @@ jobs:
   check:
     needs: changes
     if: needs.changes.outputs.bundle == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
@@ -250,7 +250,7 @@ jobs:
     name: the coordinator container runs
     needs: changes
     if: needs.changes.outputs.bundle == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
@@ -272,7 +272,7 @@ jobs:
     # nothing. Said here because "it happens to be excluded" is how a queue run
     # eventually ships something nobody merged.
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1
@@ -491,7 +491,7 @@ jobs:
   minter-key:
     needs: deploy
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.sync_app_key
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: github-app-key
     steps:
       - uses: actions/checkout@v7.0.1
@@ -558,7 +558,7 @@ jobs:
     name: Worker passed
     needs: [changes, check, container]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Every job above either passed or was skipped
         env:

@@ -10,9 +10,9 @@ This file is the setup, in order.
 
 ```
 .github/workflows/runner-macos.yml      macos-26
-.github/workflows/runner-linux.yml      ubuntu-latest
+.github/workflows/runner-linux.yml      ubuntu-26.04
 .github/workflows/runner-windows.yml    windows-2025 — NOT PROVEN, see below
-.github/workflows/runner-android.yml    ubuntu-latest + SDK + KVM
+.github/workflows/runner-android.yml    ubuntu-26.04 + SDK + KVM
 .github/actions/fleet-host/action.yml   everything the first, second and fourth share
 ```
 

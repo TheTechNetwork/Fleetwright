@@ -64,7 +64,7 @@ concurrency:
 
 jobs:
   host:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # GitHub's own ceiling, as a BACKSTOP only. The `minutes` input is what
     # actually ends the job, so this is the value that applies when something
     # has hung rather than the one that governs a normal run.

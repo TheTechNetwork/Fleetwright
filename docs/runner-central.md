@@ -299,9 +299,9 @@ all. Adding `provision` itself cost nothing: an old host answers
 
 | platform | runner | for |
 |---|---|---|
-| `linux` | `ubuntu-latest` | the default. Cheapest, fastest to boot, and most work does not care |
+| `linux` | `ubuntu-26.04` | the default. Cheapest, fastest to boot, and most work does not care |
 | `macos` | `macos-26` | the one nobody has hardware for — an iOS or macOS build, Xcode |
-| `android` | `ubuntu-latest` + SDK + KVM | *looking at* an app rather than only building it |
+| `android` | `ubuntu-26.04` + SDK + KVM | *looking at* an app rather than only building it |
 | `windows` | `windows-2025` | **not proven** — see below |
 
 The Android runner installs a system image and makes `/dev/kvm` writable, and
