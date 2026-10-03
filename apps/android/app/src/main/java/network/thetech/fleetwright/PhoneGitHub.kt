@@ -2,6 +2,9 @@ package network.thetech.fleetwright
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -27,7 +30,8 @@ import java.net.URL
  *     (the PIN you saved), and a key of its own for the answer. The minter,
  *     which holds the App's client secret, makes the exchange with GitHub and
  *     seals the token back. The coordinator relays two ciphertexts.
- * Renewal, every eight hours, is the same with the refresh token.
+ * Renewal, every eight hours, is the same with the refresh token, one at a
+ * time ([accessToken]).
  *
  * The token lives in [Settings.githubSignIn], encrypted under the same
  * Keystore key as this device's fleet credential.
@@ -116,15 +120,44 @@ internal class PhoneGitHub(private val settings: Settings) {
         finish(fleet, pin, JSONObject().put("grant", "code").put("code", code).put("verifier", verifier).put("redirectUri", redirectUri))
     }
 
-    /** A token that is good now, renewed through the minter when it is close to expiring. */
+    /**
+     * A token that is good now, renewed through the minter when it is close to expiring.
+     *
+     * ONE RENEWAL AT A TIME, FOR THE WHOLE APP. GitHub's refresh tokens work
+     * once: each renewal hands back the next. Sessions, New session and the
+     * vault each ask for a token as they appear, so two renewals used to go
+     * out with the same refresh token, one won, and the other came back as
+     * "The refresh token passed is incorrect or expired". Every caller now
+     * waits on [renewal] and then uses what the renewal ahead of it kept.
+     *
+     * NOT CANCELLED WITH THE SCREEN. By the time the minter answers, GitHub
+     * has already spent the old refresh token; a renewal cancelled with a
+     * LaunchedEffect would drop the only copy of the new one, and this phone
+     * could never renew again.
+     */
     suspend fun accessToken(fleet: Fleet): String {
         val held = signIn ?: error("Sign in to GitHub on this phone first.")
-        val expires = held.expiresAt ?: return held.accessToken
-        if (expires - System.currentTimeMillis() > 5 * 60_000L) return held.accessToken
-        val refresh = held.refreshToken ?: error("Your GitHub sign-in has expired. Sign in again.")
-        val pin = minterKey(fleet)
-        finish(fleet, pin, JSONObject().put("grant", "refresh").put("refreshToken", refresh))
-        return signIn?.accessToken ?: error("Your GitHub sign-in could not be renewed. Sign in again.")
+        if (fresh(held)) return held.accessToken
+        renewal.withLock { withContext(NonCancellable) { renew(fleet) } }
+        return signIn?.accessToken ?: error("Sign in to GitHub on this phone first.")
+    }
+
+    /** Good for five more minutes, or never expires. */
+    private fun fresh(held: SignIn): Boolean {
+        val expires = held.expiresAt ?: return true
+        return expires - System.currentTimeMillis() > 5 * 60_000L
+    }
+
+    private suspend fun renew(fleet: Fleet) {
+        // Asked again inside: the renewal this caller waited behind may
+        // already have done it.
+        val held = signIn ?: error("Sign in to GitHub on this phone first.")
+        if (fresh(held)) return
+        val refresh = held.refreshToken ?: run {
+            signOut()
+            error("This phone's GitHub sign-in has run out. Sign in to GitHub again.")
+        }
+        finish(fleet, minterKey(fleet), JSONObject().put("grant", "refresh").put("refreshToken", refresh))
     }
 
     /** Seal a request to the minter, relay it, open the answer, keep it. */
@@ -133,7 +166,13 @@ internal class PhoneGitHub(private val settings: Settings) {
         request.put("v", 1).put("reply", reply.publicKey).put("at", System.currentTimeMillis())
         val sealed = Seal.seal(pin, Seal.GITHUB_REQUEST_AAD, request)
         val r = fleet.githubDeviceToken(sealed)
-        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "The fleet refused the GitHub sign-in." })
+        if (r.optBoolean("ok") != true) {
+            // A SPENT REFRESH TOKEN IS NOT A SIGN-IN. Kept, it would fail the
+            // same way on every screen that needs a token; dropped, those
+            // screens offer "Sign in to GitHub" instead.
+            if (r.optJSONObject("error")?.optString("code") == "sign_in_again") signOut()
+            error(r.optString("text").ifBlank { "The fleet refused the GitHub sign-in." })
+        }
         val token = Seal.open(reply, Seal.GITHUB_REPLY_AAD, r.getJSONObject("sealed"))
         settings.githubSignIn = JSONObject()
             .put("accessToken", token.getString("accessToken"))
@@ -221,5 +260,10 @@ internal class PhoneGitHub(private val settings: Settings) {
         403 -> "GitHub refused $what (403). Your account needs write access there."
         404 -> "GitHub cannot see $what from your account (404)."
         else -> "GitHub refused $what ($status)."
+    }
+
+    private companion object {
+        /** Shared by every PhoneGitHub, since a screen builds its own. */
+        val renewal = Mutex()
     }
 }

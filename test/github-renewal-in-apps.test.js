@@ -18,8 +18,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const IOS = iosSources();
+const ANDROID = androidSources();
 
 test('iOS: every caller waits on the one renewal in flight, and it outlives the screen that started it', () => {
   assert.match(IOS, /try await Renewal\.shared\.run \{ try await renew\(fleet\) \}/);
@@ -41,4 +43,22 @@ test('iOS: a renewal reads the sign-in another Settings may have renewed', () =>
 
 test('iOS: a spent refresh token signs this phone out of GitHub rather than failing every screen', () => {
   assert.match(IOS, /\["code"\] as\? String == "sign_in_again" \{ signOut\(\) \}/);
+});
+
+test('Android: every caller waits on the one renewal in flight, and it outlives the screen that started it', () => {
+  // One lock for every PhoneGitHub, since each screen builds its own; and
+  // NonCancellable inside it, so a LaunchedEffect leaving does not drop the
+  // new refresh token.
+  assert.match(ANDROID, /renewal\.withLock \{ withContext\(NonCancellable\) \{ renew\(fleet\) \} \}/);
+  assert.match(ANDROID, /private companion object \{[\s\S]{0,120}?val renewal = Mutex\(\)/);
+  assert.match(ANDROID, /private suspend fun renew\(fleet: Fleet\) \{[\s\S]{0,400}?if \(fresh\(held\)\) return/);
+});
+
+test('Android: a spent refresh token signs this phone out of GitHub rather than failing every screen', () => {
+  assert.match(ANDROID, /optJSONObject\("error"\)\?\.optString\("code"\) == "sign_in_again"\) signOut\(\)/);
+});
+
+test('both phones say the same thing when a sign-in has run out', () => {
+  const words = "This phone's GitHub sign-in has run out. Sign in to GitHub again.";
+  assert.ok(IOS.includes(words) && ANDROID.includes(words));
 });
