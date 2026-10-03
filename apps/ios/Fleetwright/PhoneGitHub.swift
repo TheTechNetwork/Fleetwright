@@ -19,7 +19,8 @@ import Foundation
 ///     (`minterKey`), and a key of its own for the answer. The minter,
 ///     which holds the App's client secret, makes the exchange with GitHub and
 ///     seals the token back. The coordinator relays two ciphertexts.
-/// Renewal, every eight hours, is the same with the refresh token.
+/// Renewal, every eight hours, is the same with the refresh token, one at a
+/// time (`accessToken`).
 ///
 /// The token lives in `Settings.githubSignIn`, in the keychain beside this
 /// device's fleet credential.
@@ -101,15 +102,60 @@ struct PhoneGitHub {
     }
 
     /// A token that is good now, renewed through the minter when it is close to expiring.
+    ///
+    /// ONE RENEWAL AT A TIME, FOR THE WHOLE APP. GitHub's refresh tokens work
+    /// once: each renewal hands back the next. Sessions, New session and the
+    /// vault each ask for a token as they appear, so two renewals used to go
+    /// out with the same refresh token, one won, and the other came back as
+    /// "The refresh token passed is incorrect or expired". Every caller now
+    /// waits on the one renewal in flight (`Renewal`) and then uses what it
+    /// kept.
     func accessToken(_ fleet: Fleet) async throws -> String {
+        settings.reloadGithubSignIn()
         guard let held = signIn else { throw FleetError.message("Sign in to GitHub on this phone first.") }
-        guard let expires = held.expiresAt else { return held.accessToken }
-        if expires - Date().timeIntervalSince1970 * 1000 > 5 * 60_000 { return held.accessToken }
-        guard let refresh = held.refreshToken else { throw FleetError.message("Your GitHub sign-in has expired. Sign in again.") }
+        if Self.fresh(held) { return held.accessToken }
+        try await Renewal.shared.run { try await renew(fleet) }
+        guard let renewed = signIn?.accessToken else { throw FleetError.message("Sign in to GitHub on this phone first.") }
+        return renewed
+    }
+
+    /// Good for five more minutes, or never expires.
+    private static func fresh(_ held: SignIn) -> Bool {
+        guard let expires = held.expiresAt else { return true }
+        return expires - Date().timeIntervalSince1970 * 1000 > 5 * 60_000
+    }
+
+    private func renew(_ fleet: Fleet) async throws {
+        // Asked again inside: the renewal this caller waited behind may
+        // already have done it.
+        settings.reloadGithubSignIn()
+        guard let held = signIn else { throw FleetError.message("Sign in to GitHub on this phone first.") }
+        if Self.fresh(held) { return }
+        guard let refresh = held.refreshToken else {
+            signOut()
+            throw FleetError.message("This phone's GitHub sign-in has run out. Sign in to GitHub again.")
+        }
         let pin = try await minterKey(fleet)
         _ = try await finish(fleet, pin: pin, request: ["grant": "refresh", "refreshToken": refresh])
-        guard let renewed = signIn?.accessToken else { throw FleetError.message("Your GitHub sign-in could not be renewed. Sign in again.") }
-        return renewed
+    }
+
+    /// The renewal in flight, shared by everybody who asks while it runs.
+    ///
+    /// UNSTRUCTURED, so leaving a screen does not cancel it. By the time the
+    /// minter answers, GitHub has already spent the old refresh token; a
+    /// renewal cancelled with the screen's `.task` would drop the only copy
+    /// of the new one, and this phone could never renew again.
+    private actor Renewal {
+        static let shared = Renewal()
+        private var running: Task<Void, Error>?
+
+        func run(_ work: @escaping () async throws -> Void) async throws {
+            if let running { return try await running.value }
+            let task = Task { try await work() }
+            running = task
+            defer { running = nil }
+            try await task.value
+        }
     }
 
     /// Seal a request to the minter, relay it, open the answer, keep it.
@@ -122,6 +168,10 @@ struct PhoneGitHub {
         let sealed = try Seal.seal(to: pin, aad: Seal.githubRequestAAD, payload: body)
         let answer = try await fleet.githubDeviceToken(sealed: sealed)
         guard answer["ok"] as? Bool == true, let box = answer["sealed"] as? [String: Any] else {
+            // A SPENT REFRESH TOKEN IS NOT A SIGN-IN. Kept, it would fail the
+            // same way on every screen that needs a token; dropped, those
+            // screens offer "Sign in to GitHub" instead.
+            if (answer["error"] as? [String: Any])?["code"] as? String == "sign_in_again" { signOut() }
             throw FleetError.message(answer["text"] as? String ?? "The fleet refused the GitHub sign-in.")
         }
         let token = try Seal.open(reply, aad: Seal.githubReplyAAD, sealed: box)

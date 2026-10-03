@@ -1825,6 +1825,17 @@ final class Settings {
         didSet { Keychain.set(githubSignIn, for: "githubSignIn") }
     }
 
+    /// Take up what the keychain holds now, if another `Settings` changed it.
+    ///
+    /// A Shortcut and a notification action each build their own `Settings`,
+    /// and a renewal made through one of them spends the refresh token this
+    /// one still holds: GitHub's work once. Read before renewing, so this one
+    /// renews with the token that is actually current.
+    func reloadGithubSignIn() {
+        let stored = Keychain.get("githubSignIn") ?? ""
+        if stored != githubSignIn { githubSignIn = stored }
+    }
+
     /// The minting Worker's public key, as whoever runs the fleet gave it to
     /// you. Not a secret: it is what this phone checks before sealing anything.
     var minterPin: String {
