@@ -30,6 +30,11 @@ import { RunnerRepos } from './runner-repos.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
 
+/**
+ * How long a start waits for a host that has connected and not yet reported
+ * (see #firstHealth). A little over the sidecar's 15-second health interval.
+ */
+const FIRST_HEALTH_WAIT_MS = 20_000;
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
 /** How long a runner has, after enrolling, to report health and be given the
@@ -119,6 +124,7 @@ export class CoordinatorCore {
    *   setTimer?: (fn: () => void, ms: number) => any,
    *   clearTimer?: (handle: any) => void,
    *   intentTimeoutMs?: number,
+   *   firstHealthWaitMs?: number,
    *   logger?: { info: Function, warn: Function, error: Function, debug: Function },
    *   push?: import('../push.js').Pusher|null,
  *   mailer?: { send: ((m: { to: string, subject: string, text: string }) => Promise<void>)|null, from: string|null }|null,
@@ -138,6 +144,7 @@ export class CoordinatorCore {
     setTimer = (fn, ms) => setTimeout(fn, ms),
     clearTimer = (h) => clearTimeout(h),
     intentTimeoutMs = DEFAULT_INTENT_TIMEOUT_MS,
+    firstHealthWaitMs = FIRST_HEALTH_WAIT_MS,
     logger,
     push = null,
     // Sending an invitation email, when a deployment has set it up. Optional
@@ -173,6 +180,7 @@ export class CoordinatorCore {
     this.newId = newId;
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
+    this.firstHealthWaitMs = firstHealthWaitMs;
     this.intentTimeoutMs = intentTimeoutMs;
     this.log = logger || { info() {}, warn() {}, error() {}, debug() {} };
     this.push = push;
@@ -1251,7 +1259,7 @@ export class CoordinatorCore {
       spec = { ...spec, params };
     }
 
-    const placement = place(this.registry, spec, {
+    const placeIt = () => place(this.registry, spec, {
       // The caller's chosen host, when they chose one. Beside the spec rather
       // than in params, so it can never leak into the intent a host validates.
       preferHost: typeof spec.preferHost === 'string' ? spec.preferHost : '',
@@ -1265,6 +1273,19 @@ export class CoordinatorCore {
       // control never becomes an existence oracle.
       requester: spec.requester ?? null,
     });
+    let placement = placeIt();
+    // A MACHINE THAT HAS NOT SPOKEN YET IS NOT A MACHINE THAT CANNOT WORK. A
+    // coordinator deploy restarts this object and forgets every host's last
+    // report, so for the first seconds afterwards each box is connected and
+    // "unknown". A start in that window was refused with "unknown (connected,
+    // no health report yet)" for every machine, and the phone called the
+    // refusal "Session ready". A box reports within one health interval of
+    // connecting, so wait that long for one, once, and only when the waiting
+    // is all that stands between this request and a host.
+    if (placement.kind === 'refused' && placement.code === 'no_hosts' && this.#awaitingFirstHealth()) {
+      await this.#firstHealth();
+      placement = placeIt();
+    }
     if (placement.kind === 'refused') {
       // SEVERAL BOXES COULD ASK GITHUB, AND ONLY SOME HOLD YOUR CONNECTION.
       // The scheduler refuses to guess, which is right for it — it cannot see
@@ -2347,6 +2368,31 @@ export class CoordinatorCore {
         `Start it by dispatching ${RUNNER_WORKFLOWS[platform]} in ${minted.repository} with your own GitHub sign-in. ` +
         'The ticket is good once, for forty-five minutes.',
     };
+  }
+
+  /**
+   * Is a host connected that has not reported yet, recently enough that its
+   * first report is on its way? Older than the wait, it is a host that is not
+   * going to report, and the registry already says so in its own words.
+   */
+  #awaitingFirstHealth() {
+    const now = this.now();
+    return this.registry.list().some(
+      (h) => h.connected && h.state === 'unknown' && now - h.connectedAt < this.firstHealthWaitMs,
+    );
+  }
+
+  /**
+   * Until some host has reported or the wait runs out, whichever is first. A
+   * poll rather than a hook into recordHealth: it runs only in the seconds after
+   * a restart, and a quarter of a second is shorter than anyone notices.
+   */
+  async #firstHealth() {
+    const deadline = this.now() + this.firstHealthWaitMs;
+    while (this.#awaitingFirstHealth() && this.now() < deadline) {
+      await new Promise((resolve) => this.setTimer(() => resolve(undefined), 250));
+      if (this.registry.list().some((h) => h.connected && h.state === 'healthy')) return;
+    }
   }
 
   /**

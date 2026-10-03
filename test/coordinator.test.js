@@ -951,3 +951,43 @@ test('a coordinator restart does not re-announce a fault it already announced', 
 
   assert.equal(sent.length, 1, 'the deploy re-announced a fault the fleet had already been told about');
 });
+
+test('a start just after the coordinator restarts waits for the machines to report, rather than refusing', async () => {
+  // THE NOTIFICATION THIS IS FOR said "vnic-runner-oci: unknown (connected, no
+  // health report yet); rpi-7550: unknown (connected, no health report yet)".
+  // A deploy restarts the coordinator and forgets every host's last report, so
+  // for the first seconds every box is connected and unknown, and a start in
+  // that window was refused for both. A box reports within one health interval.
+  const core = new CoordinatorCore({ firstHealthWaitMs: 2_000, intentTimeoutMs: 2_000 });
+  /** @type {any[]} */
+  const sent = [];
+  core.hostConnected('box', (msg) => { sent.push(msg); });
+
+  const started = core.dispatch({ verb: 'start', params: { name: 'job' } });
+  // Not refused on the spot: still waiting, nothing sent to anybody yet.
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(sent.filter((m) => m.kind === 'intent').length, 0);
+
+  await core.onHostMessage('box', { v: PROTOCOL_VERSION, kind: 'health', hostId: 'box', health: health({ hostId: 'box', claudeAccounts: 1 }) });
+  // The report arrived, so the start goes to the box that just reported.
+  const deadline = Date.now() + 1_500;
+  while (!sent.some((m) => m.kind === 'intent') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+  const intent = sent.find((m) => m.kind === 'intent');
+  assert.ok(intent, 'the start was sent once the box reported');
+  assert.equal(intent.verb, 'start');
+  // Answer it, so the dispatch settles and the test leaves nothing running.
+  await core.onHostMessage('box', { v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: true, text: 'started' });
+  const r = await started;
+  assert.equal(r.ok, true, String(r.text));
+});
+
+test('a machine that never reports is still refused, after the wait and not forever', async () => {
+  const core = new CoordinatorCore({ firstHealthWaitMs: 300 });
+  core.hostConnected('box', () => {});
+  const at = Date.now();
+  const r = await core.dispatch({ verb: 'start', params: { name: 'job' } });
+  assert.equal(r.ok, false);
+  assert.match(String(r.text), /no health report yet/);
+  assert.ok(Date.now() - at >= 250, 'it waited for a report first');
+  assert.ok(Date.now() - at < 2_000, 'and not much longer than the wait');
+});
