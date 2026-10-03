@@ -150,13 +150,17 @@ test('a phone signs in to GitHub itself, and neither the coordinator nor the pag
   };
   /** @type {any[]} */
   const exchanges = [];
+  let spentRefresh = false;
   const gh = githubIs((u, init) => {
     if (u.hostname === 'github.com' && u.pathname === '/login/oauth/access_token') {
       const form = Object.fromEntries(new URLSearchParams(String(init.body)));
       exchanges.push(form);
       if (form.client_secret !== 'the-client-secret') return json(200, { error: 'incorrect_client_credentials' });
       if (form.grant_type === 'refresh_token') {
-        return form.refresh_token === FIRST_REFRESH
+        // Once, as GitHub's are: a renewal spends the token it was given.
+        const fresh = form.refresh_token === FIRST_REFRESH && !spentRefresh;
+        spentRefresh ||= fresh;
+        return fresh
           ? json(200, { access_token: 'ghu_second', expires_in: 28800, refresh_token: SECOND_REFRESH, refresh_token_expires_in: 15897600 })
           : json(200, { error: 'bad_refresh_token' });
       }
@@ -213,6 +217,10 @@ test('a phone signs in to GitHub itself, and neither the coordinator nor the pag
   assert.equal(renewed.ok, true, String(renewed.text));
   const second = await open({ privateKey: phone.privateKey, publicKey: phone.publicKey, aad: GITHUB_REPLY_AAD, sealed: /** @type {any} */ (renewed.sealed) });
   assert.equal(second.accessToken, 'ghu_second');
+  // The refresh token that renewal spent is refused as spent, which a phone
+  // answers by asking for a new sign-in rather than by showing GitHub's words.
+  const spent = await ask({ grant: 'refresh', refreshToken: FIRST_REFRESH });
+  assert.equal(spent.error?.code, 'sign_in_again', String(spent.text));
 
   // 5. AND WHAT IS REFUSED: a code without its verifier, an old request, a
   // request sealed to another key, and a fleet with no secret in the minter.

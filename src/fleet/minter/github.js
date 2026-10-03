@@ -119,6 +119,15 @@ export async function answerGithubToken(ask, config) {
   // GitHub answers 200 with an `error` for a bad code, an expired one, or a
   // verifier that does not match: said as GitHub said it.
   if (typeof body?.access_token !== 'string' || !body.access_token) {
+    // A SPENT RENEWAL IS ITS OWN CODE. GitHub's refresh tokens work once: each
+    // renewal hands back the next one, and a phone that renewed twice at once,
+    // or lost the answer on the way, holds one GitHub will never take again.
+    // Nothing retries its way out of that, so the device is told to drop the
+    // sign-in and ask for a new one, rather than shown GitHub's sentence on
+    // every screen that needs a token.
+    if (inside.grant === 'refresh' && body?.error === 'bad_refresh_token') {
+      return refuse('sign_in_again', 'This phone’s GitHub sign-in has run out. Sign in to GitHub again.');
+    }
     const why = typeof body?.error_description === 'string' ? body.error_description : String(body?.error || 'no token in the answer');
     return refuse('github_refused', `GitHub did not sign you in: ${why}.`);
   }
