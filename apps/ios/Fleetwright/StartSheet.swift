@@ -89,6 +89,10 @@ struct StartSheet: View {
     /// snapshot. The new-machine choices are drawn from this and only this, so
     /// a fleet with no runner repository offers none (C-2).
     @State private var canStartMachine = false
+    /// Whether this person has a Claude login kept for runners. A new machine
+    /// started without one, and with no API key in the runner repository,
+    /// refuses the session it was started for, so New session says so here.
+    @State private var claude: ClaudeKept?
     @State private var machineMinutes = 60
 
     /// The operating system when a new machine is chosen, else nil.
@@ -288,6 +292,22 @@ struct StartSheet: View {
                     }
                 }
 
+                // ASKED WHERE IT MATTERS. A runner fetches its owner's Claude
+                // login when it joins; with none kept it falls back to the
+                // runner repository's API key, and with neither it refuses the
+                // session. Nothing said so until after the machine had booted.
+                if chosenPlatform != nil, claude == .missing || claude == .needsGitHub {
+                    Section {
+                        Text("No Claude login is kept for your runners, so this one runs on the runner repository's "
+                             + "API key if it has one, and cannot start the session if it does not.")
+                            .fleetType(.bodySmall)
+                            .foregroundStyle(Design.Palette.attention)
+                        ClaudeSetup(settings: settings) { claude = .kept }
+                    } header: {
+                        Text("Claude").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                    }
+                }
+
                 if !error.isEmpty {
                     Section {
                         Text(error).foregroundStyle(Design.Palette.bad).fleetType(.bodySmall)
@@ -324,6 +344,7 @@ struct StartSheet: View {
                 // runner repository for this person. A failure offers none,
                 // which is the safe way round for a control that spends money.
                 canStartMachine = (try? await fleet.runners()) != nil
+                if canStartMachine { claude = await claudeKept(settings) }
             }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
