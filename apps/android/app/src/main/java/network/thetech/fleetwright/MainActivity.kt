@@ -322,6 +322,10 @@ fun FleetScreen(
     // The session whose sheet is open: the state sentence, the pane watched,
     // Files, Output and Forget.
     var inspecting by remember { mutableStateOf<Fleet.Session?>(null) }
+    // Whether this person's Claude login is kept for their runners (ClaudeSetup.kt).
+    var claude by remember { mutableStateOf<ClaudeKept?>(null) }
+    var claudePutOff by remember { mutableStateOf(settings.claudeSetupPutOff) }
+    var settingUpClaude by remember { mutableStateOf(false) }
     // A Claude sign-in asked for from the empty list, on the machine picked.
     var connectingOn by remember { mutableStateOf<String?>(null) }
     // Whether THIS PERSON has Claude anywhere. Null until asked, and asked only
@@ -421,7 +425,11 @@ fun FleetScreen(
                     profile = request.profile,
                     secret = request.secret,
                 )
-                LocalNotice.post(context, "Session ready", reply.text.ifBlank { "Started." })
+                // BY WHAT THE FLEET SAID, not by whether it answered: a refusal
+                // is an answer, and "Session ready" over "unknown (connected, no
+                // health report yet)" sent somebody looking for a session that
+                // did not exist.
+                LocalNotice.post(context, if (reply.ok) "Session ready" else "Could not start a session", reply.text.ifBlank { "Started." })
                 reply.text.ifBlank { "Started." }
             } catch (e: Exception) {
                 // A TIMEOUT IS NOT A FAILURE: `start` carries an idempotency
@@ -480,6 +488,7 @@ fun FleetScreen(
     // fleet answers. Not on a timer: a timer retries into an outage.
     LaunchedEffect(signedIn, viewAsMember) {
         admin = if (signedIn) fleet.me().getOrNull() else null
+        claude = if (signedIn) claudeKept(settings) else null
         if (!signedIn) {
             sessions = emptyList()
             binHosts = emptyList()
@@ -516,6 +525,12 @@ fun FleetScreen(
             host = session.hostId,
             onDismiss = { browsing = null },
         )
+    }
+    if (settingUpClaude) {
+        ClaudeSetupScreen(settings, onDismiss = {
+            settingUpClaude = false
+            scope.launch { claude = claudeKept(settings) }
+        })
     }
     inspecting?.let { session ->
         SessionSheet(
@@ -670,6 +685,19 @@ fun FleetScreen(
                                         tab = "machines"
                                     },
                                 ) { ReassuranceBanner(summary) }
+                            }
+                            // THE ONBOARDING ASK, under the line that says
+                            // whether anything needs you. A session runs on its
+                            // starter's own Claude account, and a runner started
+                            // with none kept refused the session it was started
+                            // for, with nothing on the way there having asked.
+                            if (!claudePutOff && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub) &&
+                                settings.configured && !Demo.isActive(settings.coordinatorUrl)
+                            ) {
+                                ClaudeSetupCard(
+                                    onSetUp = { settingUpClaude = true },
+                                    onPutOff = { settings.claudeSetupPutOff = true; claudePutOff = true },
+                                )
                             }
                             if (status.isNotBlank()) {
                                 // Evidence quoted from somewhere else, on an
