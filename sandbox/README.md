@@ -88,7 +88,7 @@ have to be copied in at start rather than baked. The entrypoint does that, then
 
 ## The hook
 
-`hook.mjs` posts the conversation uuid to `/run/hub.sock` — a unix socket
+`hook.mjs` posts the conversation uuid to `/run/hub/hub.sock` — a unix socket
 bind-mounted from the host, belonging to exactly one session. It sends **no
 session name**: the socket already determines which session this is, so a
 container cannot report against a neighbour's. See `docs/hook-socket.md`.

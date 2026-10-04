@@ -72,7 +72,8 @@ IS_SANDBOX=1 exec podman run --rm -it \
   --name agent-<name> \
   -v claude-<name>:/root/.claude \
   -v work-<name>:/work -w /work \
-  -v /run/fleetwright/<name>.sock:/run/hub.sock \
+  -v /var/lib/fleetwright/hook-sockets/<name>:/run/hub \
+  -e AGENT_SESSION_HOOK_SOCKET=/run/hub/hub.sock \
   --memory=8g --cpus=2 --pids-limit=512 \
   fleetwright-session:latest \
   claude --remote-control <name> --dangerously-skip-permissions --resume <uuid>
