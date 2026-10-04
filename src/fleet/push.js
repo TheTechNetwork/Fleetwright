@@ -23,6 +23,10 @@
  * @property {Record<string, string>} [data]
  * @property {string} [category]  this notification can be answered, and this
  *   names which two answers. See the category comment in the APNs payload.
+ * @property {boolean} [drawnByApp]  the app draws this itself — hypervisor
+ *   setup progress, which Android keeps as one ongoing notification with a
+ *   progress bar. FCM then sends it data-only, as it does an answerable one,
+ *   so the tray never draws a notification per step over the app's own.
  */
 
 import { sealTo } from './push-crypto.js';
@@ -203,7 +207,8 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
           // sealing them. The category is in the clear either way, because iOS
           // reads it before anything could be decrypted — said at length in
           // promptForPush().
-          const forTheApp = message.category && !wire.encrypted
+          const appDraws = Boolean(message.category || message.drawnByApp);
+          const forTheApp = appDraws && !wire.encrypted
             ? { title: message.title, body: message.body }
             : {};
           // DATA-ONLY WHEN ENCRYPTED, and this is not a detail. A `notification`
@@ -233,7 +238,7 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
               // to a force-stopped app, and delayable by Doze. HIGH priority is
               // what buys the wake and is set either way. Everything with
               // nothing to answer keeps the tray's own delivery.
-              ...(wire.encrypted || message.category ? {} : { notification: { title: wire.title, body: wire.body } }),
+              ...(wire.encrypted || appDraws ? {} : { notification: { title: wire.title, body: wire.body } }),
               // Data rides alongside so the app can deep-link to the session
               // rather than just opening. When encrypted it carries the whole
               // notification instead, and when it is answerable it carries the

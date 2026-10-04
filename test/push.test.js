@@ -971,3 +971,29 @@ test('back at its prompt reads as a sentence', () => {
   assert.equal(describeEvent({ event: 'session.ready' }), 'is back at its prompt');
   assert.equal(describeEvent({ event: 'session.ready', text: 'is back at its prompt. This is a temporary machine' }), 'is back at its prompt. This is a temporary machine');
 });
+
+test('setup progress reaches an Android app data-only, so the tray never draws a step over its progress bar', async () => {
+  // Reported by the Android layer of the hypervisor round: the app keeps one
+  // ongoing notification with a progress bar, but an unencrypted push with a
+  // `notification` block is drawn by the tray while the app is in the
+  // background and never reaches it, which is the whole time progress matters.
+  /** @type {any[]} */
+  const bodies = [];
+  const pusher = fcmPusher(await realServiceAccount(), {
+    logger: { info() {}, warn() {} },
+    fetchImpl: async (/** @type {any} */ url, /** @type {any} */ init) => {
+      if (String(url).includes('oauth2')) return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), { status: 200 });
+      bodies.push(JSON.parse(init.body));
+      return new Response('{}', { status: 200 });
+    },
+  });
+  const device = [{ token: 'android-1', platform: 'android' }];
+  await pusher.send(device, { title: 'Adding a hypervisor', body: 'Step 2 of 8', drawnByApp: true, data: { kind: 'xosetup', step: '1' } });
+  await pusher.send(device, { title: 'Session waiting', body: 'is waiting for you' });
+
+  const [progress, ordinary] = bodies.map((b) => b.message);
+  assert.equal('notification' in progress, false, 'the app draws it');
+  assert.equal(progress.data.title, 'Adding a hypervisor', 'and so the words travel in data');
+  assert.equal(progress.data.kind, 'xosetup');
+  assert.ok(ordinary.notification, 'everything else keeps the tray’s own delivery');
+});

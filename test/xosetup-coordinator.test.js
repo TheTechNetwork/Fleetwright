@@ -161,6 +161,7 @@ test('progress becomes a Live Activity update with numbers only, and an Android 
   assert.deepEqual(sent[0].devices.map((/** @type {any} */ d) => d.platform), ['android']);
   assert.equal(sent[0].message.data.kind, 'xosetup');
   assert.equal(sent[0].message.data.name, `xosetup-${JOB}`, 'each step replaces the last');
+  assert.equal(sent[0].message.drawnByApp, true, 'Android draws it as one ongoing notification, so FCM must not');
 
   // The end goes to both, and ends the activity.
   await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: 8, of: 8, phase: 'done', state: 'done', text: 'xo.lan is in the fleet.' });
