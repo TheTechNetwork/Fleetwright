@@ -16,8 +16,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const IOS = iosSources();
+const ANDROID = androidSources();
 
 const SAID = [
   'Sessions run on the Claude login its owner keeps for runners',
@@ -40,4 +42,17 @@ test('iOS: the attention colour and ring are for a machine nothing can start on'
   assert.match(IOS, /case "owner", "key": return false\s*case "none": return true\s*default: return !runner/);
   assert.match(IOS, /let unusable = whoCanStartIsFault\(/);
   assert.doesNotMatch(IOS, /\.foregroundStyle\(accounts == 0 \? Design\.Palette\.attention/);
+});
+
+test('Android: a runner row says what its sessions run on, in the same words', () => {
+  for (const words of SAID) assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
+  assert.match(ANDROID, /runnerAuth = health\?\.optString\("runnerAuth"\)\?\.takeIf \{ it == "owner" \|\| it == "key" \|\| it == "none" \}/);
+  assert.match(ANDROID, /ephemeral = o\.optBoolean\("ephemeral", false\)/);
+});
+
+test('Android: the attention colour and ring are for a machine nothing can start on', () => {
+  assert.match(ANDROID, /fun whoCanStartIsFault\(accounts: Int\?, host: Fleet\.FleetHost\): Boolean \{\s*if \(accounts != 0\) return false/);
+  assert.match(ANDROID, /"owner", "key" -> false\s*"none" -> true\s*else -> !host\.ephemeral/);
+  assert.match(ANDROID, /val wants = [^\n]*whoCanStartIsFault\(host\.claudeAccounts, host\)/);
+  assert.doesNotMatch(ANDROID, /color = if \(accounts == 0\) Design\.Palette\.attention/);
 });

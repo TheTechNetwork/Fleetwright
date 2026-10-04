@@ -260,6 +260,14 @@ class Fleet(
          * is an older host and is not one.
          */
         val claudeAccounts: Int? = null,
+        /**
+         * On a runner, what a session there signs in with when nobody has
+         * linked an account: "owner", "key" or "none". Null on a permanent box,
+         * and on a runner that has not heard back yet.
+         */
+        val runnerAuth: String? = null,
+        /** A runner: a machine somebody started for an hour, expected to vanish. */
+        val ephemeral: Boolean = false,
         val accountEmail: String?,
         val accountPlan: String?,
         val accountOrg: String?,
@@ -1766,6 +1774,8 @@ class Fleet(
                     claudeAccounts = if (health?.has("claudeAccounts") == true && !health.isNull("claudeAccounts")) {
                         health.optInt("claudeAccounts")
                     } else null,
+                    runnerAuth = health?.optString("runnerAuth")?.takeIf { it == "owner" || it == "key" || it == "none" },
+                    ephemeral = o.optBoolean("ephemeral", false),
                     accountEmail = account?.optString("email")?.takeIf { it.isNotBlank() && it != "null" },
                     accountPlan = account?.optString("plan")?.takeIf { it.isNotBlank() && it != "null" },
                     accountOrg = account?.optString("org")?.takeIf { it.isNotBlank() && it != "null" },

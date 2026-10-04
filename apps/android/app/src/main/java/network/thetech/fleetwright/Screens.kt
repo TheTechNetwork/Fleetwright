@@ -122,7 +122,35 @@ fun Quoted(text: String) {
  * both name a personal organisation that way, so on a single-person account it
  * is guaranteed noise.
  */
+/**
+ * Whether that line is a fault: nobody can start a session here. A runner with
+ * its owner's login or its repository's key can, and one that has not heard
+ * back yet cannot be judged.
+ */
+fun whoCanStartIsFault(accounts: Int?, host: Fleet.FleetHost): Boolean {
+    if (accounts != 0) return false
+    return when (host.runnerAuth) {
+        "owner", "key" -> false
+        "none" -> true
+        else -> !host.ephemeral
+    }
+}
+
 fun describeWhoCanStart(accounts: Int, host: Fleet.FleetHost): String {
+    // A RUNNER IS ASKED A DIFFERENT QUESTION. Nobody links an account on a
+    // GitHub job; its sessions run on the login its owner keeps for runners or
+    // on the runner repository's key, and the host says which. This line said
+    // "sessions will not start" on a runner whose sessions would, beside the
+    // word "healthy". The same words as iOS (FleetView.swift).
+    if (accounts == 0) {
+        when (host.runnerAuth) {
+            "owner" -> return "Sessions run on the Claude login its owner keeps for runners"
+            "key" -> return "Sessions run on the runner repository's API key"
+            "none" -> return "No Claude login is kept for this runner's owner and its repository has no API key — sessions will not start"
+            // Cannot tell yet, which is not a fault (C-5).
+            else -> if (host.ephemeral) return "Fetching the Claude login its sessions will run on"
+        }
+    }
     // THE ZERO CASE KEEPS ITS WORDS. It is the only real fault here, and
     // naming the Claude account is what makes it actionable.
     if (accounts == 0) return "Nobody has connected a Claude account here — sessions will not start"

@@ -189,7 +189,7 @@ fun MachinesScreen(
 private fun MachineCard(host: Fleet.FleetHost, onClick: () -> Unit) {
     // A machine that wants something wears the attention ring: not healthy, an
     // update waiting, or nobody able to start a session on it.
-    val wants = host.state != "healthy" || host.appPending || host.claudeAccounts == 0
+    val wants = host.state != "healthy" || host.appPending || whoCanStartIsFault(host.claudeAccounts, host)
     Column(
         Modifier
             .fillMaxWidth()
@@ -256,7 +256,7 @@ private fun HealthLines(host: Fleet.FleetHost) {
         Text(
             describeWhoCanStart(accounts, host),
             style = Design.Style.micro,
-            color = if (accounts == 0) Design.Palette.attention.now else Design.Palette.inkDim.now,
+            color = if (whoCanStartIsFault(accounts, host)) Design.Palette.attention.now else Design.Palette.inkDim.now,
         )
     }
     // THE SECOND WAY TO BE SIGNED OUT: the credential file a session is
