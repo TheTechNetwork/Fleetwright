@@ -198,6 +198,53 @@ ENV IS_SANDBOX=1
 # in a diff.
 ENV DISABLE_AUTOUPDATER=1
 
+# TOOLS A SESSION INSTALLS SURVIVE A RESTART. Everything outside /work and
+# /root/.claude is gone on every stop, which is the point of the container, and
+# it meant a session that installed a CLI with npm -g or dropped a binary in
+# /usr/local/bin had to install it again on every resume. Reported from a
+# session: "restart resets /usr/local/bin — putting the tooling on the
+# persistent volume this time." So the package managers' install prefixes point
+# at /work/.tools, which lives and dies with the session's workspace, and its
+# bin is on PATH. PIP_BREAK_SYSTEM_PACKAGES because Debian refuses `pip install
+# --user` otherwise (PEP 668); the install lands in /work/.tools, not in the
+# system Python it is protecting, and the system is thrown away on stop anyway.
+#
+# AFTER the image's own npm install above, or the CLI itself would be installed
+# under /work/.tools and hidden by the volume mount. And AFTER /usr/local/bin on
+# PATH, so a tool a session installs never shadows the credential shims there
+# (fleet-cred, gh, the git helper): a session's newer copy of something wins
+# over the OS's, not over the fleet's.
+ENV FLEETWRIGHT_TOOLS=/work/.tools \
+    NPM_CONFIG_PREFIX=/work/.tools \
+    PYTHONUSERBASE=/work/.tools \
+    PIPX_HOME=/work/.tools/pipx \
+    PIPX_BIN_DIR=/work/.tools/bin \
+    GOBIN=/work/.tools/bin \
+    CARGO_INSTALL_ROOT=/work/.tools \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PATH=/usr/local/sbin:/usr/local/bin:/work/.tools/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# DOWNLOADS ARE CACHED IN ONE PLACE, /root/.cache, which the host mounts from a
+# volume of the person's own (FLEETWRIGHT_SANDBOX_CACHE, cacheVolumeFor in
+# src/core/claude.js), so their next session installs the same packages without
+# fetching them again. pip, uv, yarn and go's build cache use it by default;
+# these move the rest there.
+ENV NPM_CONFIG_CACHE=/root/.cache/npm \
+    npm_config_store_dir=/root/.cache/pnpm \
+    GOMODCACHE=/root/.cache/go/mod \
+    CARGO_HOME=/root/.cache/cargo
+
+# Told to the session, so it installs where things last instead of finding out
+# on the next resume. Claude Code reads this file on Linux as instructions for
+# every session on the machine, and no volume shadows /etc.
+RUN mkdir -p /etc/claude-code && printf '%s\n' \
+    '# This machine' \
+    '' \
+    'Only /work and ~/.claude survive a restart of this session. Everything else, including /usr/local/bin and anything installed with apt, is gone when it restarts.' \
+    '' \
+    'Install tools you want to keep with npm -g, pip install --user, pipx, go install or cargo install: they go to /work/.tools/bin, which is on PATH. A binary you download yourself belongs in /work/.tools/bin too. Package downloads are cached in ~/.cache, which your other sessions on this machine share.' \
+    > /etc/claude-code/CLAUDE.md
+
 WORKDIR /work
 
 # tini as PID 1: a session that spawns background processes (a dev server, a

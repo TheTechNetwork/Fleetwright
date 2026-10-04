@@ -48,6 +48,19 @@ it can install whatever it needs — and all of that is discarded when the
 container stops, which is the entire point. Baking tools in trades that away for
 a faster start.
 
+**What a session installs for itself can last, though, if it asks to.** The
+package managers' install prefixes point at `/work/.tools`, on the session's
+own workspace volume, and its `bin` is on `PATH` after `/usr/local/bin`: so
+`npm -g`, `pip install --user`, `pipx`, `go install` and `cargo install` survive
+a restart, and so does a binary put in `/work/.tools/bin`. `/usr/local/bin` and
+apt still do not. `/etc/claude-code/CLAUDE.md` tells the session so.
+
+**And downloads are cached per person.** npm, pnpm, pip, uv, go and cargo keep
+what they fetch under `/root/.cache`, which the host mounts from a volume named
+`cache-<hash of the person's email>`, shared by that person's sessions on the
+box and by nobody else's. It is not deleted with a session; `podman volume rm`
+reclaims it, and `FLEETWRIGHT_SANDBOX_CACHE=0` turns it off.
+
 ## The three things that would otherwise hang a session
 
 All observed on hardware, all confirmed fixed by pre-seeding (design.md §10):

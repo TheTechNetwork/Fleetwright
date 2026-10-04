@@ -511,6 +511,8 @@ export class SessionManager {
         prompt,
         configDir,
         runnerAuth,
+        // Whose download cache this session shares (claude.js cacheVolumeFor).
+        owner: this.registry.get(name)?.createdBy ?? actor,
       });
       // A new life of the container: whatever the CLI last said belongs to the
       // old one, and the pane is the only witness until it speaks again.
@@ -1154,6 +1156,7 @@ export class SessionManager {
           name: rec.name,
           resumeUuid: rec.uuid,
           skipPermissions: rec.skipPermissions ?? null,
+          owner: rec.createdBy ?? null,
         });
         this.activity.delete(rec.name);
         const spawned = newSession({ name: rec.name, cwd: rec.cwd || this.cfg.workdir, command });

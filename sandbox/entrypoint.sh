@@ -7,6 +7,8 @@
 set -e
 
 mkdir -p /root/.claude
+# Where a session's own tools go, on its workspace volume (see the Containerfile).
+mkdir -p /work/.tools/bin
 
 # settings.json: only if the session has not got its own. An operator who edits
 # it inside a session keeps their edit across every later resume, because the

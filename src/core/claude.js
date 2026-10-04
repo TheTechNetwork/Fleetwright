@@ -10,6 +10,8 @@ import { log } from '../log.js';
 import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs, hookSocketMount } from './sandbox-userns.js';
 import { egressArgs } from './egress.js';
+import { createHash } from 'node:crypto';
+import { emailFromActor, normaliseEmail } from './accounts.js';
 
 /** @typedef {import('./runner-login.js').RunnerAuth} RunnerAuth */
 
@@ -56,13 +58,14 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * inherits it.
  *
  * @param {import('../config.js').Config} cfg
- * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null, runnerAuth?: RunnerAuth|null }} opts
+ * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null, runnerAuth?: RunnerAuth|null, owner?: string|null }} opts
+ *   `owner` is whose session this is (an actor or an email), for the download cache it shares
  */
-export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null, runnerAuth = null }) {
+export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null, runnerAuth = null, owner = null }) {
   const rc = remoteControl === null ? cfg.remoteControl : remoteControl;
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
 
-  const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket) : [cfg.claudeBin];
+  const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket, owner) : [cfg.claudeBin];
   if (cfg.sandbox) argv.push('claude');
   if (rc) argv.push('--remote-control', name);
   if (skip) argv.push('--dangerously-skip-permissions');
@@ -119,8 +122,9 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
  * @param {import('../config.js').Config} cfg
  * @param {string} name
  * @param {boolean} hookSocket
+ * @param {string|null} [owner]  whose session this is, for the download cache
  */
-function sandboxArgv(cfg, name, hookSocket) {
+function sandboxArgv(cfg, name, hookSocket, owner = null) {
   const argv = [
     cfg.podmanBin, 'run', '--rm', '-it',
     '--name', `agent-${name}`,
@@ -138,6 +142,19 @@ function sandboxArgv(cfg, name, hookSocket) {
     '-v', `work-${name}:/work`,
     '-w', '/work',
   ];
+
+  // A DOWNLOAD CACHE PER PERSON, shared by their sessions on this box. Asked
+  // for from a session that kept reinstalling the same tooling: everything
+  // outside the two volumes is gone on every stop, so each resume and each new
+  // session downloaded every package again. The image points npm, pip, uv, go
+  // and pnpm at /root/.cache (sandbox/Containerfile), and this keeps it.
+  //
+  // ONE PERSON'S, NEVER SHARED BETWEEN PEOPLE. A cache is something a session
+  // can write and the next one trusts, so a shared one would let any member
+  // plant a package in everybody's next install. Within one person's sessions
+  // that is no more than their own /work already allows.
+  const cache = cfg.sandboxCache === true ? cacheVolumeFor(owner) : null;
+  if (cache) argv.push('-v', `${cache}:/root/.cache`);
 
   // The per-session hook socket, bind-mounted into this container and no other,
   // so the session can report its conversation uuid without being able to name
@@ -160,6 +177,22 @@ function sandboxArgv(cfg, name, hookSocket) {
 
   argv.push(sessionImage(cfg));
   return argv;
+}
+
+/**
+ * The podman volume holding one person's download cache: `cache-` and the
+ * first sixteen hex digits of a hash of their email, because an address is not
+ * a volume name and the volume list need not spell out who uses the box.
+ * Sessions with no person behind them (the box's own surfaces) share
+ * `cache-box`, which is the operator's.
+ *
+ * @param {string|null} owner  an actor (`fleet:<email>`) or an email
+ * @returns {string}
+ */
+export function cacheVolumeFor(owner) {
+  const email = emailFromActor(owner) ?? normaliseEmail(String(owner ?? ''));
+  if (!email) return 'cache-box';
+  return `cache-${createHash('sha256').update(email).digest('hex').slice(0, 16)}`;
 }
 
 // --- 1. Remote Control can silently fail to attach --------------------------
