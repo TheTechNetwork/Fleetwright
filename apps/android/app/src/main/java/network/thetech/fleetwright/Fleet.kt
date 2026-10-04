@@ -618,6 +618,57 @@ class Fleet(
          * Apply button, because the button reads the row.
          */
         val waiting: Waiting? = null,
+        /**
+         * Which machine answered, when the coordinator says. `xosetup` names
+         * it on every phase, so the screen can say where the setup is running
+         * even after the app was closed and reopened on the job alone.
+         */
+        val hostId: String? = null,
+        /**
+         * What every permanent machine found at a Xen Orchestra address, one
+         * entry each. NULL IS NOT EMPTY: null is a reply that was not about
+         * probing (or a coordinator too old for the verb), empty is a fleet
+         * with no permanent machine to ask.
+         */
+        val probes: List<Probe>? = null,
+        /** Where a hypervisor setup has got to, when the reply is about one. */
+        val xosetup: Setup? = null,
+    )
+
+    /**
+     * One machine's answer to `xoprobe`. `xo` is three-valued on purpose:
+     * null is "answered, and it could not tell what by", which is not "not
+     * Xen Orchestra". `cert` is the SHA-256 of the certificate that answered,
+     * lowercase hex, and null when nothing did or nothing was TLS.
+     */
+    data class Probe(
+        val hostId: String,
+        val reachable: Boolean,
+        val xo: Boolean?,
+        val tls: Boolean,
+        val cert: String?,
+        val version: String?,
+    )
+
+    /**
+     * An `xosetup` answer. After `begin`: the job, the key the machine made
+     * for it, the machine's signature over that key and the enrolment key
+     * that made the signature (XoSetup.verifyKeySig). After anything else:
+     * the step the machine is on, out of how many, by its key, and the
+     * sentence the machine wrote about it.
+     */
+    data class Setup(
+        val job: String,
+        /** waiting, running, done, failed or cancelled. */
+        val state: String,
+        val step: Int?,
+        val of: Int?,
+        val phase: String?,
+        val text: String?,
+        val key: String?,
+        val keySig: String?,
+        val hostKey: JSONObject?,
+        val fingerprint: String?,
     )
 
     /**
@@ -1232,6 +1283,54 @@ class Fleet(
             idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),
         )
 
+    /**
+     * Ask every permanent machine whether it can reach a Xen Orchestra
+     * address, and which certificate answered. The reply's [Reply.probes]
+     * names each machine, so the setup can be offered only on one that can.
+     * Admin only; the coordinator says so if not.
+     *
+     * Never held: a probe held overnight and replayed is a port scan nobody
+     * asked for, and by then the person has put the phone down.
+     */
+    suspend fun xoprobe(address: String): Reply =
+        intent("xoprobe", mapOf("address" to address), idempotencyKey = "app-" + java.util.UUID.randomUUID().toString())
+
+    /**
+     * One phase of onboarding a hypervisor. docs/hypervisors.md, and the verb
+     * in src/fleet/protocol/intents.js.
+     *
+     * `begin` goes to the machine chosen ([host]) with the address and the
+     * certificate fingerprint the person accepted. Every later phase names the
+     * job alone: the coordinator routes it to the machine that answered
+     * `begin`, whatever host this phone might name, because the key is in
+     * that machine's memory and nowhere else.
+     *
+     * NEVER HELD, for the same reason as [setupToken] and more so: `run`
+     * carries the admin sign-in, sealed, and a sealed sign-in on a phone's
+     * disk waiting to be replayed is a credential kept. Passing an id is what
+     * keeps a send that could not reach the fleet out of the outbox.
+     */
+    suspend fun xosetup(
+        phase: String,
+        job: String? = null,
+        address: String? = null,
+        pin: String? = null,
+        sealed: String? = null,
+        host: String? = null,
+    ): Reply =
+        intent(
+            "xosetup",
+            buildMap {
+                put("phase", phase)
+                if (job != null) put("job", job)
+                if (address != null) put("address", address)
+                if (pin != null) put("pin", pin)
+                if (sealed != null) put("sealed", sealed)
+            },
+            host = host,
+            idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),
+        )
+
     /** Forget a stored credential. Does NOT revoke it at the provider. */
     suspend fun unlink(host: String, provider: String, scope: String? = null): Reply =
         intent("unlink", buildMap { put("provider", provider); if (scope != null) put("scope", scope) }, host = host)
@@ -1732,6 +1831,42 @@ class Fleet(
                     },
                     url = json.optString("url").takeIf { it.isNotBlank() && it != "null" },
                     sealed = json.optJSONObject("sealed"),
+                    hostId = json.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
+                    probes = json.optJSONArray("probes")?.let { a ->
+                        (0 until a.length()).mapNotNull { i ->
+                            a.optJSONObject(i)?.let { p ->
+                                val id = p.optString("hostId")
+                                if (id.isBlank()) null
+                                else Probe(
+                                    hostId = id,
+                                    reachable = p.optBoolean("reachable", false),
+                                    // `has` and `isNull` first: optBoolean would
+                                    // turn "could not tell" into "not Xen
+                                    // Orchestra", which is a different answer.
+                                    xo = p.takeIf { it.has("xo") && !it.isNull("xo") }?.optBoolean("xo"),
+                                    tls = p.optBoolean("tls", false),
+                                    cert = p.optString("cert").takeIf { XoSetup.PIN_RE.matches(it) },
+                                    version = p.optString("version").takeIf { it.isNotBlank() && it != "null" },
+                                )
+                            }
+                        }
+                    },
+                    xosetup = json.optJSONObject("xosetup")?.let { s ->
+                        val job = s.optString("job")
+                        if (!XoSetup.JOB_RE.matches(job)) null
+                        else Setup(
+                            job = job,
+                            state = s.optString("state").takeIf { it.isNotBlank() && it != "null" } ?: "waiting",
+                            step = s.optInt("step", -1).takeIf { it >= 0 },
+                            of = s.optInt("of", -1).takeIf { it >= 1 },
+                            phase = s.optString("phase").takeIf { it.isNotBlank() && it != "null" },
+                            text = s.optString("text").takeIf { it.isNotBlank() && it != "null" },
+                            key = s.optString("key").takeIf { it.isNotBlank() && it != "null" },
+                            keySig = s.optString("keySig").takeIf { it.isNotBlank() && it != "null" },
+                            hostKey = s.optJSONObject("hostKey"),
+                            fingerprint = s.optString("fingerprint").takeIf { it.isNotBlank() && it != "null" },
+                        )
+                    },
                 )
             } catch (e: Exception) {
                 // HELD, NOT LOST — but only when the fleet could not be
