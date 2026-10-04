@@ -41,6 +41,16 @@ struct ClaudeSetup: View {
     @State private var busy = false
     @State private var result = ""
     @State private var failed = false
+    /// Machines that could run `claude setup-token` for this person, by name.
+    /// Empty until asked and on a fleet with none connected, which leaves only
+    /// the paste field: nothing is offered that could not happen.
+    @State private var machines: [String] = []
+    @State private var machine = ""
+    /// The sign-in page the chosen machine started, once it has.
+    @State private var page: URL?
+    @State private var pageHost = ""
+    @State private var code = ""
+    @Environment(\.openURL) private var openURL
 
     private var phone: PhoneGitHub { PhoneGitHub(settings: settings) }
 
@@ -51,34 +61,125 @@ struct ClaudeSetup: View {
                 .foregroundStyle(Design.Palette.inkDim)
             PhoneGitHubSignIn(settings: settings)
         } else {
-            Text("Sessions run on your own Claude subscription. On a computer, run claude setup-token, sign in, "
-                 + "and paste the line it prints here. Every runner you start, and every box you approve, uses it.")
+            Text("Sessions run on your own Claude subscription. Keep your login once, and every runner you start, "
+                 + "and every box you approve, uses it.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
-            SecureField("Token from claude setup-token", text: $draft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            Button(busy ? "Keeping…" : "Keep my Claude login") {
-                Task {
-                    busy = true
-                    defer { busy = false }
-                    do {
-                        result = try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: draft)
-                        failed = false
-                        draft = ""
-                        onKept()
-                    } catch {
-                        result = error.localizedDescription
-                        failed = true
+                .task { await loadMachines() }
+            if let page {
+                // A MACHINE IS MAKING IT. The page opened by itself; the link
+                // is for coming back to it. Numbered, because the person
+                // leaves the app in the middle and has to know what they are
+                // coming back to do.
+                Link("1. Open the sign-in page", destination: page)
+                Text("2. Sign in to Claude, copy the code the page shows, and paste it here.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                SecureField("Code from the sign-in page", text: $code)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button(busy ? "Keeping…" : "3. Keep my Claude login") { Task { await keepFromMachine() } }
+                    .disabled(busy || code.isBlank)
+                Button("Cancel", role: .cancel) {
+                    self.page = nil
+                    code = ""
+                }
+            } else {
+                // WRITTEN BECAUSE IT WAS ASKED FOR: "If a host is available why
+                // not offer to run it, return the link, open the page, capture
+                // the token?" The field below wanted the output of a command run
+                // on a computer, from somebody holding a phone.
+                if !machines.isEmpty {
+                    if machines.count > 1 {
+                        Picker("Machine", selection: $machine) {
+                            ForEach(machines, id: \.self) { Text($0).tag($0) }
+                        }
+                    }
+                    Button(busy ? "Starting…" : "Make it on \(machine)") { Task { await startOnMachine() } }
+                        .disabled(busy || machine.isEmpty)
+                    Text("\(machine) runs claude setup-token for you. The token comes back sealed to this phone, "
+                         + "and the machine keeps no copy.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                Text(machines.isEmpty
+                     ? "On a computer, run claude setup-token, sign in, and paste the line it prints here."
+                     : "Or, on a computer, run claude setup-token, sign in, and paste the line it prints here.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                SecureField("Token from claude setup-token", text: $draft)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button(busy ? "Keeping…" : "Keep my Claude login") {
+                    Task {
+                        busy = true
+                        defer { busy = false }
+                        do {
+                            result = try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: draft)
+                            failed = false
+                            draft = ""
+                            onKept()
+                        } catch {
+                            result = error.localizedDescription
+                            failed = true
+                        }
                     }
                 }
+                .disabled(busy || draft.isBlank)
             }
-            .disabled(busy || draft.isBlank)
         }
         if !result.isBlank {
             Text(result)
                 .fleetType(.label)
                 .foregroundStyle(failed ? Design.Palette.bad : Design.Palette.ink)
+        }
+    }
+
+    /// The machines that could make it: every connected one. Nil from the
+    /// fleet leaves the list empty, which offers nothing rather than guessing.
+    @MainActor
+    private func loadMachines() async {
+        guard machines.isEmpty, let hosts = try? await Fleet(settings: settings).fleetHosts() else { return }
+        machines = hosts.filter { ($0.state ?? "") != "offline" }.map(\.hostId).sorted()
+        if machine.isEmpty { machine = machines.first ?? "" }
+    }
+
+    @MainActor
+    private func startOnMachine() async {
+        busy = true
+        defer { busy = false }
+        result = ""
+        do {
+            let reply = try await Fleet(settings: settings).setupToken(host: machine)
+            guard reply.ok != false, let raw = reply.url, let url = URL(string: raw) else {
+                result = reply.text ?? "\(machine) did not start a sign-in."
+                failed = true
+                return
+            }
+            page = url
+            pageHost = machine
+            code = ""
+            openURL(url)
+        } catch {
+            result = error.localizedDescription
+            failed = true
+        }
+    }
+
+    @MainActor
+    private func keepFromMachine() async {
+        busy = true
+        defer { busy = false }
+        let sending = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        code = ""
+        do {
+            result = try await phone.keepTokenFromMachine(Fleet(settings: settings), host: pageHost, code: sending)
+            failed = false
+            page = nil
+            onKept()
+        } catch {
+            result = error.localizedDescription
+            failed = true
         }
     }
 }
