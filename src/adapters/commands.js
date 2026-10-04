@@ -106,6 +106,8 @@ import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
+import { runnerAuthKind } from '../core/runner-login.js';
+import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageLists, runUpgrade, runPackageUpgrade } from '../core/upgrades.js';
 import { fetchNotes, describeNotes, changelogRepo } from '../core/changelog.js';
 import { grantsOf } from '../core/grants.js';
@@ -573,6 +575,12 @@ function describeAccounts(ctx) {
   if (linked.length) {
     return `${linked.length} account${linked.length === 1 ? '' : 's'} linked — a session runs as whoever starts it`;
   }
+  // A RUNNER HAS AN ANSWER WITH NOBODY LINKED (core/runner-auth-words.js): its
+  // owner's kept login or its repository's key. The sentence below told the
+  // owner of a runner whose session was already running that it could not do
+  // anything.
+  const runner = describeRunnerAuth(runnerAuthKind(ctx.cfg));
+  if (runner) return runner;
   const auth = ctx.login.status();
   if (auth.loggedIn) {
     return `the box itself is signed in as ${auth.email || 'an account it cannot name'}, but nobody has linked a personal account`;

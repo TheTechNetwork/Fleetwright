@@ -444,6 +444,37 @@ test('a host nobody has linked an account on says so, and says how to fix it', a
   assert.match(text, /login for/);
 });
 
+test('a runner with nobody linked says what its sessions run on, not that they cannot run', async () => {
+  // Nobody links an account on a GitHub job, so every runner reported "NOBODY
+  // HAS LINKED AN ACCOUNT — a session started here cannot do anything" beside
+  // a session that was running on the repository's API key.
+  const { McpServer } = await import('../src/mcp/server.js');
+  /** @param {string} runnerAuth */
+  const healthOf = async (runnerAuth) => {
+    const server = new McpServer({
+      coordinator: 'https://fleet.example',
+      credential: 'fwk_a_b',
+      write: () => {},
+      watchMs: 0,
+      fetch: async () => ({
+        status: 200,
+        json: async () => ({ ok: true, text: 'ok', health: { running: 1, maxSessions: 5, free: 4, claudeAccounts: 0, runnerAuth } }),
+      }),
+    });
+    const reply = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fleet_health', arguments: {} } });
+    return String(reply.result.content[0].text);
+  };
+  for (const [kind, said] of /** @type {const} */ ([
+    ['owner', /Claude login its owner keeps for runners/],
+    ['key', /sessions run on the runner repository’s API key/],
+    ['none', /no ANTHROPIC_API_KEY, so sessions will not start/],
+  ])) {
+    const text = await healthOf(kind);
+    assert.match(text, said, `${kind}: ${text}`);
+    assert.doesNotMatch(text, /NOBODY HAS LINKED/, `${kind}: a runner was reported as unable to run anything`);
+  }
+});
+
 test('an older host that cannot answer is not reported as broken', async () => {
   // claudeAccounts absent means CANNOT TELL. A fleet that flags every older
   // host as broken teaches people to ignore the flag.

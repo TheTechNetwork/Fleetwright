@@ -23,6 +23,7 @@ import { titleFromCwd, cleanTitle } from './titles.js';
 import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { resolveWorkdir } from './trust.js';
 import { ensureDirectConfig, removeDirectConfig } from './direct-config.js';
+import { noRemoteControl } from './runner-auth-words.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
 import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
@@ -86,6 +87,13 @@ export class SessionManager {
     // running — `tmux attach` finishes it by hand.
     /** @type {Map<string, { dialog: import('./claude.js').ResumeDialog, verb: string, at: number }>} */
     this.awaitingChoice = new Map();
+    // Sessions whose credential cannot open Remote Control, and why
+    // (runner-auth-words.js noRemoteControl): an API key or a setup-token. Set
+    // at each launch from the credential that launch chose, so the
+    // resume-after-a-choice path, which no longer has it, does not wait for a
+    // link that cannot come.
+    /** @type {Map<string, string>} */
+    this.noRemoteControl = new Map();
   }
 
   // --- reconciliation -----------------------------------------------------
@@ -498,6 +506,9 @@ export class SessionManager {
       configDir = staged.dir;
       runnerAuth = staged.auth ?? null;
     }
+    const noLink = noRemoteControl(runnerAuth?.kind);
+    if (noLink) this.noRemoteControl.set(name, noLink);
+    else this.noRemoteControl.delete(name);
     this.inFlight.add(name);
     try {
       const command = buildCommand(this.cfg, {
@@ -598,6 +609,16 @@ export class SessionManager {
       }
       if (rc.killed) {
         return { ok: false, message: `Started "${name}" but ${rc.detail}. Killed it — try again.` };
+      }
+      // NOT A FAILURE TO DIAGNOSE. The session is working; it just cannot
+      // have a link, and the reason is the whole answer — no output to quote
+      // and no pane to look at. With no profile either, nothing can ever give
+      // it work: no verb sends text to a session, so that is said too.
+      if (rc.noLink) {
+        const idle = !resumeUuid && !(typeof prompt === 'string' && prompt.trim())
+          ? ' Nothing was asked of it either, and nothing else can hand it work, so it will sit at its prompt: start it with a task profile instead.'
+          : '';
+        return { ok: true, message: `${cap(verb)} "${name}" in ${cwd}. ${rc.detail}${idle}`, session: this.registry.get(name) ?? rec };
       }
       // WHAT IT PRINTED, not where to go and read it.
       //
@@ -707,12 +728,19 @@ export class SessionManager {
    *
    * @param {string} name
    * @param {string} verb
-   * @returns {Promise<{ online: boolean, url: string|null, detail: string, killed?: boolean }>}
+   * @returns {Promise<{ online: boolean, url: string|null, detail: string, killed?: boolean, noLink?: boolean }>}
    */
   async #settleRemoteControl(name, verb) {
     if (!this.cfg.remoteControl) return { online: false, url: null, detail: 'remote control disabled' };
 
-    const rc = await verifyRemoteControl(this.cfg, name);
+    // Answered without waiting: twice the timeout spent on a link the
+    // credential cannot open, then "did not come online after retry", was what
+    // a runner said about every session.
+    const why = this.noRemoteControl.get(name);
+    /** @type {{ online: boolean, url: string|null, detail: string, noLink?: boolean }} */
+    const rc = why
+      ? { online: false, url: null, detail: why, noLink: true }
+      : await verifyRemoteControl(this.cfg, name);
     if (rc.online) {
       this.registry.upsert(name, { rcUrl: rc.url, detail: `${verb} · ${rc.detail}` });
       log.info(`${verb} ${name}: ${rc.detail}${rc.url ? ' ' + rc.url : ''}`);
@@ -728,6 +756,11 @@ export class SessionManager {
       this.registry.upsert(name, { status: 'error', resumeOnBoot: false, detail: rc.detail, stoppedAt: Date.now() });
       log.warn(`${name}: ${rc.detail}; killed (FLEETWRIGHT_RC_REQUIRED=1)`);
       return { ...rc, killed: true };
+    }
+    if (rc.noLink) {
+      this.registry.upsert(name, { detail: `${verb} · no Remote Control on this credential` });
+      log.info(`${verb} ${name}: no Remote Control on this credential`);
+      return rc;
     }
     this.registry.upsert(name, { detail: `${verb} · ${rc.detail}` });
     log.warn(`${name}: ${rc.detail} (session kept — reach it with \`tmux attach -t ${name}\`)`);
