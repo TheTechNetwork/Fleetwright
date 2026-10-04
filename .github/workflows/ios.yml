@@ -105,6 +105,10 @@ jobs:
         # gitignored, because a hand-written pbxproj opens on exactly one machine.
         run: xcodegen generate
 
+      # The scheme builds the Live Activity extension too (the app depends on
+      # it in project.yml), so every line of the Lock Screen view is
+      # type-checked here as well, and CODE_SIGNING_ALLOWED=NO covers both
+      # bundles: an unsigned simulator build needs no profile for either.
       - name: Build
         working-directory: apps/ios
         run: |
@@ -388,6 +392,77 @@ jobs:
           rm -f "$RUNNER_TEMP/dist.p12"
           echo "imported $(security find-identity -v -p codesigning "$KEYCHAIN" | grep -c 'Apple Distribution' || true) distribution identity"
 
+      # THE EXTENSION'S PROFILE, FETCHED RATHER THAN PASTED.
+      #
+      # The Live Activity extension is a second bundle (network.thetech.
+      # fleetwright.Activity) and Apple signs every bundle with a profile for
+      # its own bundle id, so the one in APPLE_PROVISIONING_PROFILE does not
+      # cover it. The choice was a second secret, made in the portal by hand
+      # and re-pasted every year, or asking App Store Connect for it — and the
+      # API key below already talks to App Store Connect to upload.
+      #
+      # So tools/ensure-ios-extension-profile.mjs registers the bundle id if
+      # the team has never seen it, reuses an ACTIVE App Store profile for it
+      # that names the certificate imported above, or creates one bound to
+      # every valid distribution certificate, and writes the bytes here. It
+      # NEVER mints a certificate: that is the cap this workflow once filled,
+      # and the comment on the archive step is the long version. The
+      # certificate is found by its serial, read out of the keychain the .p12
+      # went into, so the profile is checked against the identity that will
+      # actually sign and not against whichever the team happens to hold.
+      #
+      # WHAT THE KEY NEEDS: a role allowed to manage Certificates, Identifiers
+      # & Profiles (Admin, or App Manager with that access). A Developer-role
+      # key may upload but gets 403 FORBIDDEN here, and that is the sentence to
+      # read if this step fails on a fresh team — Users and Access →
+      # Integrations → App Store Connect API.
+      #
+      # Installed under its UUID like the app's profile, and its NAME is what
+      # the archive passes to the extension target, read out of the profile
+      # for the reason the app's is.
+      - uses: actions/setup-node@v7.0.0
+        if: steps.creds.outputs.have == 'true'
+        with:
+          node-version: '24.21.0'
+
+      - name: Ensure the Live Activity extension has a profile
+        if: steps.creds.outputs.have == 'true'
+        id: activity_profile
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          # RAW PEM, not base64, as everywhere else this key is read.
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: network.thetech.fleetwright.Activity
+          BUNDLE_NAME: Fleetwright Activity
+          PROFILE_NAME: Fleetwright Activity Profile
+          OUT: ${{ runner.temp }}/activity.mobileprovision
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          # The serial of the identity imported above. `-p` prints the first
+          # matching certificate as PEM; openssl reads the serial out of it.
+          # Empty when nothing matches, and the tool then accepts any valid
+          # distribution certificate rather than refusing to run.
+          CERT_SERIAL=$(security find-certificate -c "Apple Distribution" -p "$KEYCHAIN" 2>/dev/null \
+            | openssl x509 -noout -serial 2>/dev/null | sed 's/^serial=//' || true)
+          export CERT_SERIAL
+          echo "signing certificate serial: ${CERT_SERIAL:-unknown}"
+          node tools/ensure-ios-extension-profile.mjs
+
+          security cms -D -i "$OUT" > "$RUNNER_TEMP/activity.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/activity.plist")
+          NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/activity.plist")
+          APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/activity.plist")
+          EXPIRES=$(/usr/libexec/PlistBuddy -c 'Print :ExpirationDate' "$RUNNER_TEMP/activity.plist")
+          echo "extension profile: $NAME ($UUID)"
+          echo "app id:            $APPID"
+          echo "expires:           $EXPIRES"
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$OUT" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          rm -f "$RUNNER_TEMP/activity.plist"
+
       - name: Archive
         if: steps.creds.outputs.have == 'true'
         working-directory: apps/ios
@@ -401,6 +476,7 @@ jobs:
           # increases.
           BUILD_NUMBER: ${{ github.run_number }}
           PROFILE_NAME: ${{ steps.profile.outputs.name }}
+          ACTIVITY_PROFILE_NAME: ${{ steps.activity_profile.outputs.name }}
         # If this fails with "provisioning profile does not include the
         # com.apple.developer.applesignin entitlement", it is not a certificate
         # problem however much it reads like one. The app entitles Sign in with
@@ -434,6 +510,15 @@ jobs:
           # to mint anything at all — so the worst case is now a build that
           # fails, rather than a build that fails AND leaves the account one
           # certificate closer to unusable.
+          #
+          # TWO PROFILES, ONE PER TARGET, through two variables rather than
+          # PROVISIONING_PROFILE_SPECIFIER itself. A setting on this command
+          # line applies to every target in the build, and the Live Activity
+          # extension is a second target with a second bundle id that the
+          # app's profile does not cover. project.yml gives each target
+          # `PROVISIONING_PROFILE_SPECIFIER: $(FLEETWRIGHT_…_PROFILE)`, so
+          # naming the two variables here names a profile per bundle while
+          # the identity and the team stay shared.
           xcodebuild archive \
             -project Fleetwright.xcodeproj \
             -scheme Fleetwright \
@@ -442,7 +527,8 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            FLEETWRIGHT_APP_PROFILE="$PROFILE_NAME" \
+            FLEETWRIGHT_ACTIVITY_PROFILE="$ACTIVITY_PROFILE_NAME" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       - name: Upload to TestFlight
@@ -453,11 +539,18 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           BUNDLE_ID: network.thetech.fleetwright
+          ACTIVITY_BUNDLE_ID: network.thetech.fleetwright.Activity
           PROFILE_NAME: ${{ steps.profile.outputs.name }}
+          ACTIVITY_PROFILE_NAME: ${{ steps.activity_profile.outputs.name }}
         run: |
           # signingStyle manual, and the profile named per bundle id. Without
           # these two keys the export re-decides the signing it was just given,
           # and re-deciding is what asked Apple for certificates.
+          #
+          # BOTH BUNDLE IDS. The extension inside the app is re-signed on
+          # export like the app is, and a bundle id missing from this list is
+          # a bundle the export decides the signing for — which is the thing
+          # the list exists to stop.
           #
           # The API key stays: it authenticates the UPLOAD, which is a
           # different thing from minting signing assets and the only reason it
@@ -476,6 +569,7 @@ jobs:
             <key>provisioningProfiles</key>
             <dict>
               <key>${BUNDLE_ID}</key><string>${PROFILE_NAME}</string>
+              <key>${ACTIVITY_BUNDLE_ID}</key><string>${ACTIVITY_PROFILE_NAME}</string>
             </dict>
           </dict>
           </plist>
