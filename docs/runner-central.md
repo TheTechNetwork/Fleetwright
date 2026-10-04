@@ -479,6 +479,16 @@ setup-token` and choose *Keep for my runners*. The phone seals the same deposit
 with its own GitHub token inside, so it needs nothing from a computer but the
 token itself. *Forget my Claude login* takes it back.
 
+**Or made by one of your machines.** With a machine connected, Claude setup
+on either phone offers *Make it on <machine>*. That machine runs `claude
+setup-token` in a pane, in a config directory of its own so its Claude setup is
+untouched, and the sign-in page opens on the phone. Sign in, paste the code the
+page shows, and the phone sends it with a key made for that one answer. The
+machine types the code, reads the token off the pane, seals it to that key and
+tears the pane and the directory down; the phone opens it and deposits it as
+above. The coordinator relays the page's address and a ciphertext, never the
+token. The verb is `setuptoken` ([intents.md](./intents.md)).
+
 `fleetwright-claude-login` takes the same `FLEETWRIGHT_COORDINATOR_URL` and
 `FLEETWRIGHT_CREDENTIAL` as `fleetwright-mcp`. It asks the minting Worker for
 its key at the fleet's address, on a path the deploy routes past the

@@ -202,6 +202,16 @@ carry a credential through the coordinator, so both are accounted for here.
   profiles and no verb carries free text, so such a session sits at an empty
   prompt. The login never leaves the runner through the fleet: the file verbs
   reach podman volumes only, and a runner has none.
+- **A token made on a machine** (`setuptoken`) is in the clear on that
+  machine for the seconds between the CLI printing it and the seal: on its
+  pane, and in the hub's memory. The machine is one of the person's own, which
+  already holds their linked login if they have one, and it keeps nothing: the
+  pane and its config directory are removed before the reply, the code is
+  masked in the journal, and the token is in no reply text. The coordinator
+  relays the sign-in page and a ciphertext sealed to the phone's one-answer
+  key. What it can do is the usual: refuse, or send the phone's request to a
+  different machine of the fleet, which then makes the token instead. It still
+  cannot read it, and only whoever started a flow can finish it.
 - **What it cannot narrow** is the credential itself: a setup-token is the
   person's whole subscription for a year. At rest in the minter it is sealed
   to the deposit key under the account id; on the runner it is a 0600 file for
