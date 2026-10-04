@@ -6,13 +6,13 @@
 // the mapping does not run in CI. What is pinned here is that the flag is
 // `nomap` and not `auto` (podman chowns a volume only on first use, so `auto`'s
 // per-container ranges would orphan a resumed workspace), that the socket
-// mount carries `:U` only when the flag does, and that the two boxes where
-// nomap cannot work fall back loudly rather than fail quietly.
+// mount chowns nothing under either flag, and that the two boxes where nomap
+// cannot work fall back loudly rather than fail quietly.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { usernsArgs, hookSocketMount, USERNS_MODES } from '../src/core/sandbox-userns.js';
+import { usernsArgs, USERNS_MODES } from '../src/core/sandbox-userns.js';
 import { resolveUserns } from '../src/config.js';
 import { buildCommand } from '../src/core/claude.js';
 
@@ -41,22 +41,21 @@ test('the two modes are nomap and host, and nomap is the one that separates', ()
   assert.deepEqual(usernsArgs({}), [], 'an unset mode is the old line, not a guess');
 });
 
-test('a session runs in its own namespace, and its socket is chowned to it', () => {
+test('a session runs in its own namespace, and its socket directory is not chowned to it', () => {
+  // `:U` used to chown the socket to the session, and the hub, no longer its
+  // owner, could not make it again after a restart. The session now connects
+  // through permission bits — see HookSocketServer.open.
   const line = buildCommand(cfg(), { name: 'api' });
   assert.match(line, /'--userns=nomap'/);
-  assert.match(line, /'\/run\/fleetwright-sidecar\/api\.sock:\/run\/hub\.sock:U'/, 'one inode, chowned to the session');
+  assert.match(line, /'\/run\/fleetwright-sidecar\/api:\/run\/hub'/);
+  assert.ok(!line.includes(':U'));
 });
 
-test('the host namespace is exactly the line every session ran before', () => {
+test('the host namespace mounts the same directory', () => {
   const line = buildCommand(cfg({ sandboxUserns: 'host' }), { name: 'api' });
   assert.ok(!line.includes('--userns'));
-  assert.match(line, /'\/run\/fleetwright-sidecar\/api\.sock:\/run\/hub\.sock'/);
-  assert.ok(!line.includes(':U'), 'no chown when the hub already owns what the session connects to');
-});
-
-test('hookSocketMount adds :U only under nomap', () => {
-  assert.equal(hookSocketMount({ sandboxUserns: 'nomap' }, '/a/x.sock', '/run/hub.sock'), '/a/x.sock:/run/hub.sock:U');
-  assert.equal(hookSocketMount({ sandboxUserns: 'host' }, '/a/x.sock', '/run/hub.sock'), '/a/x.sock:/run/hub.sock');
+  assert.match(line, /'\/run\/fleetwright-sidecar\/api:\/run\/hub'/);
+  assert.ok(!line.includes(':U'));
 });
 
 test('the operator refusal of --userns=host still stands beside the default', () => {

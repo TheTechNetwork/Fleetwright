@@ -8,7 +8,8 @@ import { capturePane, hasSession, sendKeys } from './tmux.js';
 import { dewrapPane, RC_URL_RE } from './pane.js';
 import { log } from '../log.js';
 import { sessionImage } from './sandbox-variant.js';
-import { usernsArgs, hookSocketMount } from './sandbox-userns.js';
+import { usernsArgs } from './sandbox-userns.js';
+import { CONTAINER_SOCKET_DIR, CONTAINER_SOCKET_PATH, LEGACY_CONTAINER_SOCKET_PATH, SOCKET_FILE } from './hook-socket.js';
 import { egressArgs } from './egress.js';
 import { createHash } from 'node:crypto';
 import { emailFromActor, normaliseEmail } from './accounts.js';
@@ -159,8 +160,20 @@ function sandboxArgv(cfg, name, hookSocket, owner = null) {
   // The per-session hook socket, bind-mounted into this container and no other,
   // so the session can report its conversation uuid without being able to name
   // any session but its own. See src/core/hook-socket.js.
+  //
+  // ITS DIRECTORY, so a hub that restarts can listen in it again and the
+  // running session reaches the new socket. The environment says where the
+  // socket is, and every client in the image reads that first. The socket file
+  // is mounted at its old path as well, for one reader only: an image from
+  // before the directory, whose entrypoint registers the hooks if it finds a
+  // socket there when it starts.
   if (hookSocket) {
-    argv.push('-v', hookSocketMount(cfg, `${cfg.sandboxHookSocketDir}/${name}.sock`, '/run/hub.sock'));
+    const own = `${cfg.sandboxHookSocketDir}/${name}`;
+    argv.push(
+      '-v', `${own}:${CONTAINER_SOCKET_DIR}`,
+      '-v', `${own}/${SOCKET_FILE}:${LEGACY_CONTAINER_SOCKET_PATH}`,
+      '-e', `AGENT_SESSION_HOOK_SOCKET=${CONTAINER_SOCKET_PATH}`,
+    );
   }
 
   // Where it may reach: nothing, when the box is on an allowlist, except the

@@ -98,7 +98,13 @@ rm -f /root/.claude/.secrets.env
 # them back out of a payload whose field names belong to the CLI's release
 # cycle. A five-second timeout on each, so a socket that has gone away can
 # never hold a turn open.
-if [ -S /run/hub.sock ]; then
+#
+# WHERE THE SOCKET IS: the launcher says, in AGENT_SESSION_HOOK_SOCKET. A hub
+# from before the per-session directory says nothing and mounts the socket
+# itself at /run/hub.sock, and that is where to look then.
+HUB_SOCK="${AGENT_SESSION_HOOK_SOCKET:-/run/hub/hub.sock}"
+[ -S "$HUB_SOCK" ] || HUB_SOCK=/run/hub.sock
+if [ -S "$HUB_SOCK" ]; then
   node <<'NODE'
 const fs = require('fs');
 const file = '/root/.claude/settings.json';

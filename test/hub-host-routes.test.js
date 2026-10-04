@@ -25,7 +25,7 @@ import { writeChannel } from '../src/core/channel.js';
 import { writeVariant } from '../src/core/sandbox-variant.js';
 import { armConfirmation, evidencePath } from '../src/core/update-confirm.js';
 import { requestRestart } from '../src/core/restart-watch.js';
-import { DEFAULT_SOCKET_DIR } from '../src/core/hook-socket.js';
+import { defaultSocketDir } from '../src/core/hook-socket.js';
 
 /** @param {import('node:test').TestContext} t @param {Record<string, unknown>} [over] */
 async function hub(t, over = {}) {
@@ -228,12 +228,11 @@ test('both writes sit behind the token like every other operator route', async (
 
 // --- where the sockets live -----------------------------------------------------
 
-test("the hook sockets default to fleetwright's own runtime directory", () => {
-  // The unit says `RuntimeDirectory=fleetwright`; the code must name the same
-  // place, or systemd creates one directory and the service writes into another
-  // — the sidecar's, which under #270 it cannot enter.
-  assert.equal(DEFAULT_SOCKET_DIR, '/run/fleetwright');
-  assert.doesNotMatch(DEFAULT_SOCKET_DIR, /sidecar|agent-fleet/);
+test('the hook sockets default to the state directory, which a restart leaves alone', () => {
+  // Not the unit's RuntimeDirectory: systemd deletes that whenever the service
+  // stops, restart included, and a running session's mount of it went with it.
+  assert.equal(defaultSocketDir('/var/lib/fleetwright'), '/var/lib/fleetwright/hook-sockets');
+  assert.doesNotMatch(defaultSocketDir('/var/lib/fleetwright'), /^\/run\/|sidecar|agent-fleet/);
 });
 
 // --- what each account has left, and where a transcript is ------------------

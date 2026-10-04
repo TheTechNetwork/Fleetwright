@@ -99,6 +99,9 @@ export async function main() {
     cfg.sandbox && cfg.sandboxHookSocket
       ? new HookSocketServer({
           dir: cfg.sandboxHookSocketDir,
+          // Under nomap the session connects as a uid that owns nothing here,
+          // so its directory and socket carry the bits everybody gets.
+          userns: cfg.sandboxUserns,
           onSessionStart: (r) => sessions.recordUuid(r),
           // The lifecycle hooks — Stop, PermissionRequest and the rest —
           // saying what the session is doing, so the watcher can stop
@@ -215,6 +218,10 @@ export async function main() {
   // Adopt whatever is already on the box before deciding what to restore, so a
   // session that survived a hub restart is never launched a second time.
   sessions.reconcile();
+  // And answer the ones that did on their sockets again. Until this, a session
+  // that outlived a restart had no credential broker: git and gh lost GitHub
+  // until somebody restarted it.
+  await sessions.reopenHookSockets();
 
   /** @type {Array<{ stop: () => Promise<unknown> }>} */
   const adapters = [];

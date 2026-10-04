@@ -5,7 +5,7 @@
 //   fleet-cred <provider>        prints KEY=value lines for `eval`
 //   git-credential-fleet get     speaks git's credential helper protocol
 //
-// It sends NO identity. The socket bind-mounted at /run/hub.sock belongs to
+// It sends NO identity. The socket bind-mounted at /run/hub/hub.sock belongs to
 // exactly one session on the host, and that is what says which session this is
 // — the same property the SessionStart hook relies on. A name in the body would
 // only ever be a claim somebody has to decide whether to believe.
@@ -15,11 +15,17 @@
 // time is what makes a rotation land in a running session.
 
 import { request } from 'node:http';
+import { existsSync } from 'node:fs';
 
 // ON A RUNNER there is no container and no bind-mounted socket: the sidecar
 // serves one broker for the whole machine (src/fleet/host/runner-broker.js),
 // and the runner workflow points this at it. Same route, same answers.
-const SOCKET = process.env.FLEETWRIGHT_RUNNER_BROKER || process.env.AGENT_SESSION_HOOK_SOCKET || '/run/hub.sock';
+// In a session, where the launcher said, then the per-session directory, then
+// where a hub from before the directory mounted the socket itself.
+const SOCKET =
+  process.env.FLEETWRIGHT_RUNNER_BROKER ||
+  process.env.AGENT_SESSION_HOOK_SOCKET ||
+  (existsSync('/run/hub/hub.sock') ? '/run/hub/hub.sock' : '/run/hub.sock');
 const PATHNAME = '/internal/credential';
 
 /**

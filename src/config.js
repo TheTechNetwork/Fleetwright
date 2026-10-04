@@ -14,7 +14,7 @@ import { unsafeSandboxArgs, unsafeSandboxMessage, splitArgs } from './core/sandb
 import { INSTALL_ROOT } from './core/resources.js';
 import { adoptLegacyEnv } from './fleet/legacy-names.js';
 import { preferExisting } from './fleet/legacy-paths.js';
-import { DEFAULT_SOCKET_DIR } from './core/hook-socket.js';
+import { defaultSocketDir } from './core/hook-socket.js';
 
 // The checkout this process is running from — two levels up from src/config.js.
 // Derived rather than configured, so it is right by construction even when the
@@ -319,9 +319,9 @@ export function loadConfig(env = process.env) {
     // mounted at /root/.cache: npm, pip, uv, go and pnpm keep what they fetched,
     // so the next session does not fetch it again. See cacheVolumeFor.
     sandboxCache: bool('FLEETWRIGHT_SANDBOX_CACHE', true),
-    // Default: this service's own runtime directory — see DEFAULT_SOCKET_DIR
-    // in core/hook-socket.js for why it stopped being the sidecar's.
-    sandboxHookSocketDir: str('FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR', DEFAULT_SOCKET_DIR),
+    // Default: under the state directory, because a session's socket has to
+    // outlive a hub restart — see defaultSocketDir in core/hook-socket.js.
+    sandboxHookSocketDir: str('FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR', defaultSocketDir(stateDir)),
     // Copied into each session's fresh conversation volume, or the session
     // comes up unauthenticated and hangs at a login prompt nobody can answer.
     // Set empty to disable and manage credentials yourself.
