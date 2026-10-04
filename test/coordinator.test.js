@@ -137,6 +137,27 @@ test('a runner with nothing to run on is degraded, and told the remedy a runner 
   assert.doesNotMatch(reason, /fleetwright login/);
 });
 
+test('a runner that has not been told about its owner\'s login yet is not degraded', () => {
+  // REPORTED FROM A PHONE: a runner started from New session notified "cannot
+  // start sessions: nobody has linked a Claude account on this host ... Link
+  // one from the app, or on the box with fleetwright login", and showed
+  // healthy seconds later. For its first seconds a runner has not heard from
+  // the minter and reports runnerAuth null, which is cannot tell.
+  const reg = new HostRegistry();
+  reg.connect('gha-runner', () => {}, { ephemeral: true });
+  reg.recordHealth('gha-runner', health({ claudeAccounts: 0, runnerAuth: null }));
+  assert.equal(reg.get('gha-runner')?.state, 'unknown');
+  assert.doesNotMatch(reg.get('gha-runner')?.reason || '', /fleetwright login|nobody has linked/);
+  // And the answer, when it comes, moves it on.
+  reg.recordHealth('gha-runner', health({ claudeAccounts: 0, runnerAuth: 'owner' }));
+  assert.equal(reg.get('gha-runner')?.state, 'healthy');
+
+  // A permanent box that reports null is still judged by its linked accounts.
+  reg.connect('box', () => {});
+  reg.recordHealth('box', health({ claudeAccounts: 0, runnerAuth: null }));
+  assert.equal(reg.get('box')?.state, 'degraded');
+});
+
 test('an older host that does not report accounts is not faulted for it', () => {
   // Absent is cannot-tell, never a fault — the same rule the credential field
   // follows, and the one this codebase keeps having to restate.

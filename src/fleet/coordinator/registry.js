@@ -238,6 +238,19 @@ export class HostRegistry {
     } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
       host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;
+    } else if (host.ephemeral && health.claudeAccounts === 0 && health.runnerAuth == null) {
+      // A RUNNER THAT HAS NOT BEEN TOLD YET IS NOT ONE WITH NOTHING TO RUN ON.
+      // For its first seconds it has not heard back from the minter about its
+      // owner's Claude login, so it reports `runnerAuth: null`: cannot tell.
+      // This fell through to the rule below, marked the runner degraded with
+      // the permanent box's sentence ("link one from the app, or on the box
+      // with fleetwright login"), notified the person who had just started it,
+      // and then went healthy seconds later when the answer arrived. Unknown
+      // says nothing and notifies nobody (core.js #onHostState), and a
+      // runner the minter has no login for still reports `none` and is
+      // degraded with the runner's own remedy.
+      host.state = 'unknown';
+      host.reason = 'a new runner, still fetching the Claude login its sessions will run on';
     } else if (health.claudeAccounts === 0 && health.runnerAuth !== 'owner' && health.runnerAuth !== 'key') {
       // NOBODY CAN START A SESSION HERE, which is a different question from the
       // one this used to ask. It read `loggedIn === false` — the box's own
