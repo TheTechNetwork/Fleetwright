@@ -242,6 +242,37 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // `runnerrepo` is the same question asked before the dispatch rather than
   // during it — is this a repository my GitHub can start machines from — so it
   // goes where `provision` goes, for every reason above.
+  // A CLAUDE TOKEN IS MADE ON THE MACHINE YOU PICKED, and both halves go there.
+  //
+  // `setuptoken` starts `claude setup-token` in a pane and then types the code
+  // into THAT pane, so the second half landing on another box would type a
+  // code into a machine that never asked for one: pinned, like a Claude
+  // `connect`. Not new work either, so a full box can still make one; the
+  // capacity filter below is for sessions. Any connected machine will do,
+  // a runner included, because the token goes back sealed to the phone.
+  if (verb === 'setuptoken') {
+    const hosts = registry.reachable();
+    if (!hosts.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    if (preferHost) {
+      const chosen = hosts.find((h) => h.hostId === preferHost);
+      return chosen
+        ? { kind: 'host', host: chosen }
+        : {
+            kind: 'refused',
+            code: 'host_unavailable',
+            reason: `${preferHost} is not connected. These are: ${hosts.map((h) => h.hostId).join(', ')}.`,
+          };
+    }
+    if (hosts.length === 1) return { kind: 'host', host: hosts[0] };
+    return {
+      kind: 'refused',
+      code: 'ambiguous_host',
+      reason:
+        `Which machine should make it? ${hosts.map((h) => h.hostId).join(', ')}. ` +
+        'The sign-in page comes from one machine and the code goes back to that same one.',
+    };
+  }
+
   if (verb === 'provision' || verb === 'runnerrepo') {
     const durable = registry.reachable().filter((h) => !h.ephemeral);
     if (!durable.length) {

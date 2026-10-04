@@ -115,3 +115,30 @@ test('what an account has left is one fact, and the box that asked last has it',
   assert.equal(claude.usage.windows.fiveHour.used, 42);
   assert.deepEqual(claude.hosts, ['a', 'b', 'c']);
 });
+
+test('a Claude token is made on the machine somebody picked, busy or not', async () => {
+  // `setuptoken` types a code into the pane its first half started, so both
+  // halves must reach the same box, and a box with no room for a session can
+  // still make one.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  for (const id of ['rpi-7550', 'deb13']) {
+    core.registry.hosts.set(id, { hostId: id, state: 'healthy', connected: true, healthAt: Date.now(), health: { capacity: { running: 4, max: 4 } } });
+  }
+  /** @type {string[]} */
+  const asked = [];
+  core.send = async (host) => {
+    asked.push(host.hostId);
+    return { ok: true, hostId: host.hostId, text: 'started', url: 'https://claude.ai/oauth/authorize?x=1' };
+  };
+
+  const started = await core.dispatch({ verb: 'setuptoken', params: {}, preferHost: 'deb13' });
+  assert.equal(started.ok, true, String(started.text));
+  assert.deepEqual(asked, ['deb13']);
+  assert.match(String(started.url), /^https:\/\/claude\.ai\//, 'the sign-in page reaches the phone');
+
+  // Two machines and none named is a question, not a guess.
+  const unnamed = await core.dispatch({ verb: 'setuptoken', params: {} });
+  assert.equal(unnamed.error?.code, 'ambiguous_host');
+  assert.match(String(unnamed.text), /rpi-7550/);
+});

@@ -100,6 +100,9 @@ test('the verb set is exactly what is documented', () => {
     // only use by guessing is one nobody uses, and a new verb costs an old host
     // nothing but an `unknown_verb`. Names only; the value never crosses.
     'secrets',
+    // A Claude token for runners, made on a machine with the Claude command on
+    // it. A new verb, so an older host answers `unknown_verb`.
+    'setuptoken',
     'start',
     'status',
     'stop',
@@ -247,7 +250,7 @@ test('only state-changing verbs are marked mutating', () => {
     // one — the reply comes back long before the runner does, so a caller that
     // retries on a slow answer is exactly the case.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

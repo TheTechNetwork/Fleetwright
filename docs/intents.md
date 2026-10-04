@@ -136,6 +136,7 @@ and "dead host" is the one it retries.
 | `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — exchanged with the host's PKCE verifier, then `/link` and `/renew` |
 | `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket`, `repo?` (v6) | ✅ | `/provision <platform> [minutes]` |
 | `runnerrepo` | `repo` (`owner/repo`, v6) | | `/runnerrepo <owner/repo>` |
+| `setuptoken` | `code?` (secret), `reply?` (a P-256 public key) | ✅ | `/setuptoken` starts `claude setup-token` in a pane and returns the sign-in page; `/setuptoken <code> <reply>` finishes it and returns the token sealed to `reply` |
 | `mint` | `repo` (`owner/repo`), `job` (a GitHub Actions job token), `key` (a P-256 public key) | | sidecar-local — `/githubaccess <owner/repo>` asks the hub what the person can do there; the token is minted and sealed in the sidecar |
 
 `provision` is the other odd one, and in the opposite direction: every verb

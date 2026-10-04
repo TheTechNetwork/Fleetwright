@@ -1082,6 +1082,7 @@
                       "runnerrepo",
                       "sandbox",
                       "secrets",
+                      "setuptoken",
                       "start",
                       "status",
                       "stop",
