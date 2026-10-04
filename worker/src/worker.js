@@ -1722,7 +1722,9 @@ const OPENAPI = JSON.stringify({
                       "updates",
                       "upgrade",
                       "verify",
-                      "writefile"
+                      "writefile",
+                      "xoprobe",
+                      "xosetup"
                     ]
                   },
                   "params": {
@@ -2506,6 +2508,75 @@ const OPENAPI = JSON.stringify({
           },
           "503": {
             "description": "this fleet has no Cloudflare sign-in configured"
+          }
+        }
+      }
+    },
+    "/api/xosetup/activity": {
+      "post": {
+        "summary": "Register a Live Activity for a hypervisor setup",
+        "description": "The phone that began an `xosetup` job posts the push token of the Live Activity it started, so progress reaches the Lock Screen and the Dynamic Island while the app is closed. Only the job's owner. Answers with where the job has got to.",
+        "operationId": "registerSetupActivity",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "job",
+                  "token"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{12}$"
+                  },
+                  "token": {
+                    "type": "string",
+                    "description": "The ActivityKit push token, hex."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "job": {
+                      "type": "string"
+                    },
+                    "hostId": {
+                      "type": "string"
+                    },
+                    "progress": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a job id and a token."
+          },
+          "403": {
+            "description": "Not signed in."
+          },
+          "422": {
+            "description": "No such job for this person."
           }
         }
       }

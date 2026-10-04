@@ -84,6 +84,8 @@ const NOT_A_CLIENT_ROUTE = {
   '/healthz': 'infrastructure liveness. Read by a load balancer, not by a person.',
   '/oauth/github/callback': "a browser redirect target — GitHub sends somebody's browser here.",
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
+  '/api/xosetup/activity':
+    'the iOS layer of the hypervisor round calls it, stacked on this one: a Live Activity exists only on iOS. Remove this line in that layer.',
   '/api/enroll/actions':
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
 };
