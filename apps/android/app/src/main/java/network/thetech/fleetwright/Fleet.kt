@@ -546,6 +546,10 @@ class Fleet(
         val connections: Connections? = null,
         /** What a stored token can do, when it was just asked. Never the token. */
         val check: Check? = null,
+        /** The sign-in page a machine started `claude setup-token` on. */
+        val url: String? = null,
+        /** The token that machine made, sealed to a key only this phone holds. Ciphertext the coordinator cannot read. */
+        val sealed: JSONObject? = null,
         /**
          * A directory listing, as DATA. The rendered text is for a person;
          * parsing it back out of the prose is how an app breaks the first time
@@ -1197,6 +1201,24 @@ class Fleet(
     suspend fun verify(host: String? = null, provider: String): Reply =
         intent("verify", mapOf("provider" to provider), host = host)
 
+    /**
+     * Make a Claude token for your runners on one machine, which runs `claude
+     * setup-token` in a pane there. With no code the reply carries the sign-in
+     * page in `url`; with the code that page showed and [reply], it carries the
+     * token sealed to [reply] in `sealed`.
+     *
+     * NEVER HELD. The outbox keeps what it holds on disk and replays it, and a
+     * code is a live credential for the minutes it lasts. Passing an id is what
+     * keeps a send that could not reach the fleet out of the outbox.
+     */
+    suspend fun setupToken(host: String, code: String? = null, reply: String? = null): Reply =
+        intent(
+            "setuptoken",
+            buildMap { if (code != null) put("code", code); if (reply != null) put("reply", reply) },
+            host = host,
+            idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),
+        )
+
     /** Forget a stored credential. Does NOT revoke it at the provider. */
     suspend fun unlink(host: String, provider: String, scope: String? = null): Reply =
         intent("unlink", buildMap { put("provider", provider); if (scope != null) put("scope", scope) }, host = host)
@@ -1695,6 +1717,8 @@ class Fleet(
                             hostId = c.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
                         )
                     },
+                    url = json.optString("url").takeIf { it.isNotBlank() && it != "null" },
+                    sealed = json.optJSONObject("sealed"),
                 )
             } catch (e: Exception) {
                 // HELD, NOT LOST — but only when the fleet could not be

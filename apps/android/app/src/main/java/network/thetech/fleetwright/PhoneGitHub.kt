@@ -236,6 +236,22 @@ internal class PhoneGitHub(private val settings: Settings) {
         r.optString("text")
     }
 
+    /**
+     * Finish a token one of your machines is making, and keep it: send the code
+     * with a key made for this one answer, open what comes back, and deposit it
+     * exactly as a pasted token is deposited. The token exists in the clear only
+     * in this function's memory, between the two seals.
+     */
+    suspend fun keepTokenFromMachine(fleet: Fleet, host: String, code: String): Result<String> = runCatching {
+        val key = Seal.newKey()
+        val reply = fleet.setupToken(host, code = code, reply = key.publicKey)
+        val sealed = reply.sealed
+        if (!reply.ok || sealed == null) error(reply.text.ifBlank { "$host did not make a token." })
+        val token = Seal.open(key, Seal.SETUP_TOKEN_AAD, sealed).optString("token")
+        if (token.isBlank()) error("The answer did not open with this phone's key, so it was not used.")
+        depositClaudeLogin(fleet, token).getOrThrow()
+    }
+
     private fun github(method: String, url: String, token: String, body: JSONObject?): Pair<Int, String> {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
