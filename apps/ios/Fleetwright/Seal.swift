@@ -35,6 +35,11 @@ enum Seal {
     /// A Claude token one of your machines made with `claude setup-token`, on
     /// its way back to the key this phone made for it.
     static let setupTokenAAD = "fleetwright-setup-token/v1"
+    /// A Xen Orchestra admin sign-in on its way to the machine running setup
+    /// for it (docs/hypervisors.md). Bound to the job and the address, so a
+    /// sealed sign-in cannot be replayed into another job or at another pool:
+    /// the machine opens it under the same two values it was given at `begin`.
+    static func xosetupAAD(job: String, address: String) -> String { "fleetwright-xosetup/v1:\(job):\(address)" }
 
     enum Failure: LocalizedError {
         case notAKey, notSealed

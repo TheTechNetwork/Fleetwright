@@ -70,6 +70,9 @@ fun MachinesScreen(
     opening: String?,
     onOpened: () -> Unit,
     modifier: Modifier = Modifier,
+    /** A hypervisor setup a notification was tapped for: its progress, by job. */
+    resumingSetup: String? = null,
+    onResumed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val reduced = Design.Motion.reduced()
@@ -81,6 +84,16 @@ fun MachinesScreen(
     var refreshing by remember { mutableStateOf(false) }
     var showing by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
+    var addingHypervisor by remember { mutableStateOf(false) }
+    var hypervisorJob by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(resumingSetup) {
+        if (resumingSetup != null) {
+            hypervisorJob = resumingSetup
+            addingHypervisor = true
+            onResumed()
+        }
+    }
 
     suspend fun loadHosts() {
         if (!settings.configured) return
@@ -120,6 +133,9 @@ fun MachinesScreen(
         )
     }
     if (adding) AddMachineSheet(settings, onDismiss = { adding = false })
+    if (addingHypervisor) {
+        HypervisorSheet(settings, resumeJob = hypervisorJob, onDismiss = { addingHypervisor = false; hypervisorJob = null })
+    }
 
     // Enrolled, and not saying anything: membership with no report.
     val silent = hosts.filter { h -> fleetHosts.none { it.hostId == h.hostId } }
@@ -173,6 +189,15 @@ fun MachinesScreen(
                 item {
                     Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
                         OpenRow("Add a machine") { adding = true }
+                        // ADMINS ONLY, drawn only for true: the verbs behind it
+                        // refuse a member, and a member should not meet a row
+                        // that only answers "needs an admin".
+                        if (admin == true) {
+                            OpenRow("Add a hypervisor") {
+                                hypervisorJob = null
+                                addingHypervisor = true
+                            }
+                        }
                     }
                 }
             }

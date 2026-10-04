@@ -90,6 +90,25 @@ struct MachinesView: View {
                 .fleetCard(radius: Design.Radius.cardSmall)
                 .fleetRow()
             }
+
+            // A POOL OF VIRTUAL MACHINES, for the one person who can add one:
+            // onboarding makes a user and a token on the hypervisor, which is
+            // the fleet's business and not a member's. Drawn only for a known
+            // admin (nil is cannot tell and draws nothing), and the row is the
+            // same shape as the one above it, because it is the same kind of
+            // thing: a way in, read once. The stacked squares are the mark
+            // the Dynamic Island uses for the same job, so the two agree.
+            if settings.configured && settings.showsAdmin {
+                NavigationLink {
+                    AddHypervisorView(settings: settings)
+                } label: {
+                    Label("Add a hypervisor", systemImage: "square.stack.3d.up")
+                        .fleetType(.body)
+                        .frame(minHeight: 44)
+                }
+                .fleetCard(radius: Design.Radius.cardSmall)
+                .fleetRow()
+            }
         }
         .listStyle(.plain)
         .listRowSpacing(Design.Space.groupTight)

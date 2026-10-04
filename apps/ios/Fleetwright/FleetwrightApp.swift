@@ -320,8 +320,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             // scroll from the page that could do something about it.
             let event = info["event"] as? String ?? ""
             let host = info["hostId"] as? String ?? ""
+            // A HYPERVISOR SETUP ENDING is news about the machine that ran
+            // it, and lands on that machine's page for the same reason.
+            let kind = info["kind"] as? String ?? ""
             await MainActor.run {
-                if event.hasPrefix("host."), !host.isEmpty { open(host: host) } else { open(name) }
+                if event.hasPrefix("host.") || kind == "xosetup", !host.isEmpty { open(host: host) } else { open(name) }
             }
         }
     }
