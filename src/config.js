@@ -315,6 +315,10 @@ export function loadConfig(env = process.env) {
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('FLEETWRIGHT_SANDBOX_HOOK_SOCKET', true),
+    // A download cache per person, shared by their sessions on this box and
+    // mounted at /root/.cache: npm, pip, uv, go and pnpm keep what they fetched,
+    // so the next session does not fetch it again. See cacheVolumeFor.
+    sandboxCache: bool('FLEETWRIGHT_SANDBOX_CACHE', true),
     // Default: this service's own runtime directory — see DEFAULT_SOCKET_DIR
     // in core/hook-socket.js for why it stopped being the sidecar's.
     sandboxHookSocketDir: str('FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR', DEFAULT_SOCKET_DIR),

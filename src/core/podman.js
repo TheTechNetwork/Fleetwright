@@ -6,6 +6,10 @@
 //
 //   conversation (~/.claude)   named volume   survives stop, deleted on /forget
 //   workspace (/work)          named volume   survives stop, deleted on /forget
+//     its tools (/work/.tools) the same       what npm -g, pip --user, go and
+//                                             cargo install, on PATH
+//   downloads (~/.cache)       named volume   one per PERSON, shared by their
+//                                             sessions, kept after /forget
 //   system (packages, /etc)    container fs   gone on every stop
 //
 // tmux does not move. The pane's process becomes `podman run -it`, so
