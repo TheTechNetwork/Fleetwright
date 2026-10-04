@@ -19,14 +19,22 @@
 // read it.
 //
 // Instead the isolation supplies the authentication. Each session gets its own
-// socket on the host:
+// directory on the host, holding its own socket:
 //
-//     /run/fleetwright/<name>.sock
+//     /var/lib/fleetwright/hook-sockets/<name>/hub.sock
 //
-// and podman mounts exactly that one into exactly that one container, always at
-// the same path inside:
+// and podman mounts exactly that directory into exactly that one container,
+// always at the same path inside:
 //
-//     -v /run/fleetwright/<name>.sock:/run/hub.sock
+//     -v /var/lib/fleetwright/hook-sockets/<name>:/run/hub
+//
+// WHY A DIRECTORY AND NOT THE SOCKET. It used to be the socket file itself,
+// mounted at /run/hub.sock, and every hub restart cut every running session off
+// from the credential broker: git and gh lost GitHub until the session was
+// restarted. A file bind mount holds the INODE, not the name, so the socket the
+// hub listened on after a restart was a new file the container could never
+// see. A directory mount holds the directory, and a socket made again inside it
+// is the one the container connects to. See reopenHookSockets in sessions.js.
 //
 // So the session name is a property of WHICH SOCKET the request arrived on, not
 // of anything in the request. The container cannot name another session because
@@ -72,27 +80,45 @@ export const SESSION_EVENT_PATH = '/internal/session-event';
  * src/core/secret-store.js and docs/trust.md. */
 export const SECRET_PATH = '/internal/secret';
 
-/** Where the socket appears INSIDE the container. Fixed, because the session
- * does not know (and must not need to know) its own name on the host. */
-export const CONTAINER_SOCKET_PATH = '/run/hub.sock';
+/** Where the session's directory appears INSIDE the container, and the socket
+ * in it. Fixed, because the session does not know (and must not need to know)
+ * its own name on the host. The launcher also says it in the environment, as
+ * AGENT_SESSION_HOOK_SOCKET, which is what the image's clients read first. */
+export const CONTAINER_SOCKET_DIR = '/run/hub';
+export const SOCKET_FILE = 'hub.sock';
+export const CONTAINER_SOCKET_PATH = `${CONTAINER_SOCKET_DIR}/${SOCKET_FILE}`;
+
+/** Where the socket file itself was mounted before the directory, and still
+ * is, beside it: an image from before the change decides whether to register
+ * its hooks by looking here when it starts. Nothing should connect to it,
+ * because after a hub restart it is the dead inode described above. */
+export const LEGACY_CONTAINER_SOCKET_PATH = '/run/hub.sock';
 
 /**
- * Default host-side directory holding one socket per live session.
+ * Default host-side directory holding one directory per session.
  *
- * FLEETWRIGHT'S OWN RUNTIME DIRECTORY, which its unit creates (`RuntimeDirectory=
- * fleetwright`, 0700, owned by the service user). It used to be the SIDECAR's
- * — `/run/fleetwright-sidecar`, and the legacy name before that — from the
- * time the sidecar was going to serve these sockets. It never did: the process
- * that opens a socket before `podman run` and mounts it is this one
- * (src/core/sessions.js), and writing into another service's runtime directory
- * only worked because the two ran as one user. Under #270 they do not, and the
- * sidecar's directory becomes one this process cannot enter.
+ * UNDER THE STATE DIRECTORY, BECAUSE IT HAS TO SURVIVE A RESTART. It was
+ * `/run/fleetwright`, the unit's `RuntimeDirectory=`, and systemd deletes a
+ * runtime directory every time the service stops, restart included. A session
+ * running across a hub update kept a mount of a directory that no longer
+ * existed, so even a socket made again under the same name could not reach it.
+ * The state directory is the service user's too (`StateDirectory=`, 0700), and
+ * nothing removes it.
  *
- * Not `preferExisting` over the old paths: both exist on every box under
- * systemd, so preferring whichever is there would pick the wrong one forever.
- * A box that needs the old path can still name it — FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR.
+ * Changing the unit instead (`RuntimeDirectoryPreserve=yes`) would only reach a
+ * box when its installer runs again: an update applied from the app swaps a
+ * symlink and leaves the unit alone. A box that names a directory of its own
+ * keeps it — FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR.
+ *
+ * @param {string} stateDir
  */
-export const DEFAULT_SOCKET_DIR = '/run/fleetwright';
+export function defaultSocketDir(stateDir) {
+  return path.join(stateDir, 'hook-sockets');
+}
+
+// The longest path a unix socket can be bound to on Linux: sun_path is 108
+// bytes, and one of them is the terminating NUL.
+const MAX_SOCKET_PATH_BYTES = 107;
 
 /** A conversation uuid, in the shape fleetwright already validates. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f-]{27}$/;
@@ -121,7 +147,10 @@ export function isValidSessionName(name) {
 
 /**
  * @typedef {object} HookSocketOptions
- * @property {string} [dir]                  host directory for the sockets
+ * @property {string} dir                    host directory for the sessions' directories
+ * @property {string} [userns]  the session namespace, `nomap` or `host` — see sandbox-userns.js.
+ *   Under `nomap` the session connects as a uid that owns nothing here, so it
+ *   reaches its socket through the permission bits everybody gets.
  * @property {(r: HookReport) => { ok: boolean, message?: string } | Promise<{ ok: boolean, message?: string }>} onSessionStart
  * @property {((name: string) => Record<string, string>|null)} [secretsFor]
  *   The credential broker's reader: the connected tokens belonging to whoever
@@ -146,8 +175,9 @@ export function isValidSessionName(name) {
 
 export class HookSocketServer {
   /** @param {HookSocketOptions} opts */
-  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, expiryFor, namedSecretFor, onSessionEvent, logger }) {
+  constructor({ dir, userns = 'host', onSessionStart, secretsFor, expiryFor, namedSecretFor, onSessionEvent, logger }) {
     this.dir = dir;
+    this.unmapped = userns === 'nomap';
     this.onSessionStart = onSessionStart;
     this.secretsFor = secretsFor || null;
     this.expiryFor = expiryFor || null;
@@ -158,23 +188,39 @@ export class HookSocketServer {
     this.servers = new Map();
   }
 
+  /** The session's own directory: what is bind-mounted into its container.
+   * @param {string} name */
+  sessionDir(name) {
+    return path.join(this.dir, name);
+  }
+
   /** @param {string} name */
   socketPath(name) {
-    return path.join(this.dir, `${name}.sock`);
+    return path.join(this.dir, name, SOCKET_FILE);
   }
 
   /**
-   * Start listening for one session. Returns the host path to bind-mount.
+   * Start listening for one session. Returns the host socket path.
+   *
+   * Called at launch, and again by a hub that has just started for every
+   * session still running, whose container is holding the directory and
+   * waiting for something to answer in it.
    *
    * Two layers of access control, because each covers the other's gap:
    *
-   *  - The DIRECTORY is 0700. Node creates a unix socket with a mode derived
-   *    from the process umask, and there is an unavoidable window between
-   *    listen() and chmod() where the socket may be world-writable. A private
-   *    directory makes that window unreachable rather than merely short.
-   *  - The SOCKET is 0600. Rootless podman maps container-root to the host user
-   *    running the hub, so the container reaches it as the owner; nothing else
-   *    on the box does.
+   *  - The SOCKETS DIRECTORY is 0700, and is made so here even when something
+   *    else created it. Node creates a unix socket with a mode derived from the
+   *    process umask, and there is an unavoidable window between listen() and
+   *    chmod() where the socket may be world-writable. A private directory makes
+   *    that window unreachable rather than merely short.
+   *  - The SESSION'S DIRECTORY and SOCKET are 0700 and 0600 where container
+   *    root is the hub's own user (`host`), so it reaches them as the owner.
+   *    Under `nomap` they are 0711 and 0666: container root is a uid this box
+   *    never maps, and it connects with the bits everybody gets. That used to
+   *    be done by chowning the socket to the session (`:U` on the mount), which
+   *    left the hub unable to make it again after a restart. Nobody else gets
+   *    those bits, because nobody else can pass the 0700 directory above, and
+   *    a container sees only its own directory.
    *
    * @param {string} name
    * @returns {Promise<string>} the host socket path
@@ -185,8 +231,18 @@ export class HookSocketServer {
     }
     if (this.servers.has(name)) return this.socketPath(name);
 
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     const sock = this.socketPath(name);
+    if (Buffer.byteLength(sock) > MAX_SOCKET_PATH_BYTES) {
+      throw new Error(
+        `${sock} is too long for a unix socket (${MAX_SOCKET_PATH_BYTES} bytes at most) — ` +
+          'set FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR to a shorter directory',
+      );
+    }
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    chmodSync(this.dir, 0o700);
+    const own = this.sessionDir(name);
+    mkdirSync(own, { recursive: true, mode: 0o700 });
+    chmodSync(own, this.unmapped ? 0o711 : 0o700);
     await clearStaleSocket(sock);
 
     const server = createHttpServer((req, res) => {
@@ -203,7 +259,7 @@ export class HookSocketServer {
       server.on('error', reject);
       server.listen(sock, () => resolve(null));
     });
-    chmodSync(sock, 0o600);
+    chmodSync(sock, this.unmapped ? 0o666 : 0o600);
 
     this.servers.set(name, server);
     this.log.info(`hook-socket: listening for ${name} at ${sock}`);
@@ -211,11 +267,11 @@ export class HookSocketServer {
   }
 
   /**
-   * Stop listening for one session and remove its socket.
+   * Stop listening for one session and remove its directory.
    *
-   * Called when the container exits. Leaving the file behind would be harmless
-   * on its own — nothing is listening — but it would accumulate, and the next
-   * session of the same name would have to clear it.
+   * Called when a session is deleted for good. Leaving it behind would be
+   * harmless on its own — nothing is listening — but it would accumulate, and
+   * the state directory is not cleared by a reboot the way /run was.
    * @param {string} name
    */
   async close(name) {
@@ -224,12 +280,25 @@ export class HookSocketServer {
       this.servers.delete(name);
       await new Promise((resolve) => server.close(() => resolve(null)));
     }
-    rmSync(this.socketPath(name), { force: true });
+    if (isValidSessionName(name)) rmSync(this.sessionDir(name), { recursive: true, force: true });
   }
 
-  /** Shut every socket down. */
+  /** Whether this process is answering on a session's socket right now.
+   * @param {string} name */
+  listening(name) {
+    return this.servers.has(name);
+  }
+
+  /**
+   * Stop listening on every socket, and LEAVE THE DIRECTORIES. A running
+   * container is holding its own, and the next hub to start listens in it
+   * again; removing it here would make the one it finds a different directory,
+   * which is the restart bug over again.
+   */
   async closeAll() {
-    await Promise.all([...this.servers.keys()].map((n) => this.close(n)));
+    const servers = [...this.servers.values()];
+    this.servers.clear();
+    await Promise.all(servers.map((server) => new Promise((resolve) => server.close(() => resolve(null)))));
   }
 
   /** Session names currently listening. */
@@ -494,7 +563,9 @@ async function clearStaleSocket(sock) {
     probe.on('error', (e) => done(!probeSaysStale(e)));
   });
   if (live) throw new Error(`${sock} is already in use by a live listener`);
-  rmSync(sock, { force: true });
+  // Recursive for one leftover: a launch that mounted a socket nothing had
+  // made, which podman fills in with an empty directory of that name.
+  rmSync(sock, { force: true, recursive: true });
 }
 
 /**
@@ -502,8 +573,10 @@ async function clearStaleSocket(sock) {
  *
  * This used to be `on('error', () => stale)`, and it was right for exactly as
  * long as the hub could always open its own sockets. Under `--userns=nomap`
- * the socket is bind-mounted with `:U`, which chowns it to the session's
- * uid — and the hub, which no longer owns the file, gets EACCES on connect.
+ * the socket was bind-mounted with `:U`, which chowned it to the session's
+ * uid — and the hub, which no longer owned the file, got EACCES on connect.
+ * The mount no longer chowns anything, but a socket the hub cannot probe is
+ * still not one it may assume is dead.
  * Reading that as "the listener is gone" would unlink a socket a running
  * container is talking to: the exact hijack clearStaleSocket's comment exists
  * to prevent, performed by the hub on itself.

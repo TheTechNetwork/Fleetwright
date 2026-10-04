@@ -29,6 +29,7 @@ import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
 import { readSessionLogs } from './logs.js';
 import { phaseFor } from './activity.js';
+import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -696,6 +697,41 @@ export class SessionManager {
   }
 
   /**
+   * Listen again for every session still running, when the hub starts.
+   *
+   * A hub restart (an update, a crash, systemd) leaves every session running:
+   * that is what KillMode=process is for. It did not leave them reachable. The
+   * process that answered on their sockets was gone, nothing opened them again
+   * until the session itself was restarted, and in the meantime git and gh
+   * inside it lost GitHub, because the credential broker is on that socket.
+   * Seen on vnic-runner-oci after the update at 14:11, and fixed by hand with a
+   * resume each time.
+   *
+   * Only a session whose directory is there: that is one launched with the
+   * directory mount. A container from before it holds a socket file that no
+   * longer exists, and nothing made here can reach it; a restart of that
+   * session is what brings it back, once.
+   *
+   * @returns {Promise<string[]>} the sessions listened for again
+   */
+  async reopenHookSockets() {
+    if (!this.hooks || !this.cfg.sandbox || !this.cfg.sandboxHookSocket) return [];
+    /** @type {string[]} */
+    const reopened = [];
+    for (const rec of this.running()) {
+      if (!existsSync(this.hooks.sessionDir(rec.name))) continue;
+      try {
+        await this.hooks.open(rec.name);
+        reopened.push(rec.name);
+      } catch (e) {
+        log.warn(`${rec.name}: could not listen on its hook socket again: ${/** @type {Error} */ (e).message}`);
+      }
+    }
+    if (reopened.length) log.info(`hook-socket: listening again for ${reopened.length} running session(s): ${reopened.join(', ')}`);
+    return reopened;
+  }
+
+  /**
    * Make sure this session has a hook socket to report through, opening one if
    * there is not already.
    *
@@ -714,9 +750,13 @@ export class SessionManager {
    */
   async #ensureHookSocket(name) {
     if (!this.cfg.sandbox || !this.cfg.sandboxHookSocket) return false;
-    const socket = path.join(this.cfg.sandboxHookSocketDir, `${name}.sock`);
-    if (existsSync(socket)) return true;
+    // A socket file being there is not the question; something answering on it
+    // is. The directory outlives a hub restart now, and so does the dead
+    // socket in it, which this used to take for a live one and mount.
+    // open() is a no-op for a socket this process is already serving.
+    const socket = path.join(this.cfg.sandboxHookSocketDir, name, SOCKET_FILE);
     if (!this.hooks) {
+      if (existsSync(socket)) return true;
       log.warn(
         `${name}: no hook socket at ${socket} and nothing here serves them — starting without it. ` +
           'The session will not record a conversation uuid, so it will not be resumable.',
@@ -1200,6 +1240,10 @@ export class SessionManager {
           name: rec.name,
           resumeUuid: rec.uuid,
           skipPermissions: rec.skipPermissions ?? null,
+          // Opened, like a launch. Left to its default this mounted a socket
+          // nothing had made, which podman turns into an empty directory: a
+          // session brought back after a reboot with no hook and no broker.
+          hookSocket: await this.#ensureHookSocket(rec.name),
           owner: rec.createdBy ?? null,
         });
         this.activity.delete(rec.name);

@@ -67,7 +67,8 @@ test('the hook socket is mounted per session, at a fixed path inside', () => {
   const line = buildCommand(cfg({ sandbox: true }), { name: 'bigjob' });
   // Per-session outside, always the same inside — which is what lets the
   // container report without knowing its own name.
-  assert.match(line, /'-v' '\/run\/fleetwright-sidecar\/bigjob\.sock:\/run\/hub\.sock'/);
+  assert.match(line, /'-v' '\/run\/fleetwright-sidecar\/bigjob:\/run\/hub'/);
+  assert.match(line, /'-e' 'AGENT_SESSION_HOOK_SOCKET=\/run\/hub\/hub\.sock'/);
 });
 
 test('the hook socket mount can be turned off', () => {

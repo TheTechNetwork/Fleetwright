@@ -45,22 +45,7 @@ export function usernsArgs(cfg) {
   return cfg.sandboxUserns === 'nomap' ? ['--userns=nomap'] : [];
 }
 
-/**
- * The bind-mount spec for the per-session hook socket.
- *
- * Under `nomap` the socket, created 0600 by the service user, is owned by a uid
- * the container does not map, and container root cannot connect to it. The `U`
- * volume option "tells Podman to use the correct host UID and GID based on the
- * UID and GID within the container, to change recursively the owner and group
- * of the source volume" — one inode here, so it is instant. The hub keeps the
- * listening descriptor it already holds; only who may CONNECT changes. See
- * hook-socket.js `clearStaleSocket` for the probe this obliges to tell EACCES
- * from a dead listener.
- *
- * @param {{ sandboxUserns?: string }} cfg
- * @param {string} hostPath
- * @param {string} containerPath
- */
-export function hookSocketMount(cfg, hostPath, containerPath) {
-  return `${hostPath}:${containerPath}${cfg.sandboxUserns === 'nomap' ? ':U' : ''}`;
-}
+// The hook socket used to have a helper here, adding `:U` to its mount under
+// `nomap` so container root could connect. It chowned the socket away from the
+// hub, which then could not make it again after a restart; the session now
+// connects through permission bits instead. See HookSocketServer.open.

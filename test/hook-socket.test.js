@@ -10,7 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync, readdirSync, chmodSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -172,7 +172,34 @@ test('the socket directory is private and the socket is owner-only', async (t) =
   const sock = await server.open('bigjob');
 
   assert.equal(statSync(dir).mode & 0o777, 0o700, 'socket directory must not be traversable by others');
+  assert.equal(statSync(server.sessionDir('bigjob')).mode & 0o777, 0o700);
   assert.equal(statSync(sock).mode & 0o777, 0o600, 'socket must not be reachable by other users on the box');
+});
+
+test('under nomap the session reaches its socket through the bits everybody gets, behind a private directory', async (t) => {
+  // Container root is a uid this box never maps, so owner bits are not its.
+  // It used to be handed ownership with `:U`, which left the hub unable to
+  // make the socket again after a restart. What keeps everybody else out is
+  // the 0700 directory above, which is made so even when it already existed.
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hook-sock-'));
+  chmodSync(dir, 0o755);
+  const server = new HookSocketServer({ dir, userns: 'nomap', onSessionStart: () => ({ ok: true }) });
+  t.after(async () => {
+    await server.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const sock = await server.open('bigjob');
+
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  assert.equal(statSync(server.sessionDir('bigjob')).mode & 0o777, 0o711);
+  assert.equal(statSync(sock).mode & 0o777, 0o666);
+});
+
+test('a socket path too long to bind is refused with the setting that fixes it', async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hook-sock-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const server = new HookSocketServer({ dir: path.join(dir, 'x'.repeat(80)), onSessionStart: () => ({ ok: true }) });
+  await assert.rejects(() => server.open('a'.repeat(40)), /FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR/);
 });
 
 test('a session name that would escape the socket directory is refused', async (t) => {
@@ -315,7 +342,7 @@ test('the secret route is 404 when the host wires no resolver, and 405 for GET',
 
 // --- lifecycle --------------------------------------------------------------
 
-test('closing a session removes its socket from the filesystem', async (t) => {
+test('closing a session removes its directory from the filesystem', async (t) => {
   const { dir, server } = harness(t);
   const sock = await server.open('bigjob');
   assert.ok(statSync(sock));
@@ -326,12 +353,34 @@ test('closing a session removes its socket from the filesystem', async (t) => {
   assert.deepEqual(server.names(), []);
 });
 
+test('shutting every socket down leaves the directories a running container is holding', async (t) => {
+  const { dir, server } = harness(t);
+  await server.open('bigjob');
+
+  await server.closeAll();
+
+  assert.deepEqual(readdirSync(dir), ['bigjob'], 'removing it would make the next hub listen in a different directory');
+  assert.equal(server.listening('bigjob'), false);
+});
+
 test('a socket left behind by a crashed run is reclaimed', async (t) => {
   // `--rm` plus a container that died hard leaves the file with nothing behind
   // it. The next start of that session must not fail with EADDRINUSE.
   const { dir, server, reports } = harness(t);
-  const stale = path.join(dir, 'bigjob.sock');
-  writeFileSync(stale, '');
+  mkdirSync(path.join(dir, 'bigjob'));
+  writeFileSync(path.join(dir, 'bigjob', 'hub.sock'), '');
+
+  const sock = await server.open('bigjob');
+  await postSessionStart({ socketPath: sock, uuid: UUID });
+
+  assert.equal(reports[0].name, 'bigjob');
+});
+
+test('an empty directory podman made where the socket should be is reclaimed', async (t) => {
+  // Mounting a socket nothing had made gets you a directory of that name: a
+  // session restored after a reboot used to be launched exactly so.
+  const { dir, server, reports } = harness(t);
+  mkdirSync(path.join(dir, 'bigjob', 'hub.sock'), { recursive: true });
 
   const sock = await server.open('bigjob');
   await postSessionStart({ socketPath: sock, uuid: UUID });
@@ -485,13 +534,13 @@ test('an unreachable socket returns a failure instead of throwing', async (t) =>
 test('every session sees the same in-container path, whatever it is called', async (t) => {
   // This is what lets a session report without knowing its own name: the host
   // paths differ per session, the container path never does. Changing
-  // CONTAINER_SOCKET_PATH means changing the podman `-v` line in lockstep, so
-  // pin it.
+  // CONTAINER_SOCKET_PATH means changing the podman `-v` line and the image's
+  // clients in lockstep, so pin it.
   const { server } = harness(t);
   const hostPaths = [await server.open('alpha'), await server.open('beta')];
 
   assert.equal(new Set(hostPaths).size, 2, 'host sockets are per-session');
-  assert.equal(CONTAINER_SOCKET_PATH, '/run/hub.sock');
+  assert.equal(CONTAINER_SOCKET_PATH, '/run/hub/hub.sock');
   for (const p of hostPaths) {
     assert.notEqual(p, CONTAINER_SOCKET_PATH);
   }
