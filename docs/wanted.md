@@ -248,7 +248,10 @@ verbs, and is precisely the thing design.md §5 exists to forbid. It is the
 it is arbitrary text reaching a model that can act.
 
 So the rule that has to hold: **the coordinator may NAME a profile; it may never
-CARRY one.** The content lives on the host, or in the repository being worked
+CARRY one.** *(Held from v3 to v6. Protocol 7 dropped it for a session's first
+message on 4 Oct 2026, at the owner's decision: `start.task` carries the words,
+because a runner has no profiles and every session started on one came up idle.
+See [`task-at-start.md`](./task-at-start.md) and `security.md` §4.1.)* The content lives on the host, or in the repository being worked
 on, and `start { profile: 'reviewer' }` selects among things the host already
 has — exactly the shape `docs/trust.md` argues for with secrets, for exactly the
 same reason. `start` already takes a bounded `enum` for `mode`, so the protocol

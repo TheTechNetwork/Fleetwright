@@ -135,6 +135,17 @@ gained in v2. Concretely it can:
   attribution is worthless under this compromise;
 - `start` a dangerous session as any member and `peek` its pane, reading the
   member's seeded Claude/provider credentials out of it;
+- **write that session's instructions** (`start.task`, protocol 7), on any host,
+  permanent boxes included. Until v7 it could only name a profile a person
+  with a shell had put on the box, so what an unattended session was told to
+  do was bounded by files the box's owner had written. The owner decided on
+  4 Oct 2026 to let a start carry its task everywhere, because a runner has no
+  profiles and every session started on one came up idle. What a session so
+  instructed can reach is whatever that member's session can reach: their
+  linked Claude account or a runner's kept login, their seeded provider
+  tokens, the per-repository GitHub tokens the App mints for a runner, for
+  the job's life. Text into a session that is already running still has no
+  route;
 - `unlink` any member (denial), `stop`/`forget`/`purge` sessions, `reboot` hosts.
 
 **What it still cannot do:** read a refresh token or App private key (it never

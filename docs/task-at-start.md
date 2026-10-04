@@ -4,6 +4,35 @@ The highest-ranked thing in either beta report. **Decided and shipped in v3** �
 the reasoning is kept in full below, because the decision was a judgement about
 when to spend a coordinated release and that is worth being able to re-read.
 
+## v7: the words travel too (4 Oct 2026)
+
+v3 answered the tester with profiles, and kept the rule that the coordinator
+may name one and never carry one. That held for permanent boxes, where somebody
+with a shell can write a profile. It did not hold for the case the tester
+quoted — "hand a job to a Mac that did not exist five minutes ago" — because a
+runner is minutes old and has no profiles. Every session started on one came
+up idle, nothing in the fleet could give it work, and the phone could only
+offer a Remote Control link a runner's credential cannot open.
+
+The owner's call, given three options (task text on runners only, profiles
+read from the runner repository, or task text everywhere): **task text
+everywhere.**
+
+- `start { task }`: the session's first message, raw so its lines survive, up
+  to 8000 bytes, either a task or a profile. Protocol 7.
+- A host older than 7 is refused rather than handed a start without its task.
+  Dropping it would start the idle session this exists to end, with a reply
+  saying it started.
+- A start held for a new runner carries its task to the runner's first health
+  frame, so New session on a phone and `fleet_provision` then `fleet_start`
+  from an agent both hand a fresh machine its job.
+- The record keeps `tasked: true` and none of the words, so the phone hears
+  when a job handed over comes back, the way it does for a profile.
+- **What it widens** is in `security.md` §4.1: a compromised coordinator can
+  now write an unattended session's instructions, on any host.
+- **What it still does not open:** text into a session that is already
+  running. `answer` still takes an ordinal, for the staleness reason below.
+
 ## What was wrong
 
 `fleet_start` took a `brief`. It was stored and never delivered — the session
@@ -97,7 +126,9 @@ loudly broken rather than subtly wrong.
 
 The last of those did not wait on the decision and shipped a commit earlier.
 
-## What this deliberately did not open
+## What this deliberately did not open (until v7)
+
+*Superseded at start by v7, above. Still true of a running session.*
 
 There is still **no way to send text into a session** — at start or later. The
 set of things a session can be started with is exactly the set of files on that
@@ -108,5 +139,5 @@ same one `docs/wanted.md` set before any of this was built:
 
 ## Status
 
-**Done.** [#325](https://github.com/TheTechNetwork/Fleetwright/issues/325).
+**Done.** [#325](https://github.com/TheTechNetwork/Fleetwright/issues/325) for profiles; `start.task` in protocol 7.
 

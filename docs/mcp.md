@@ -335,9 +335,13 @@ thing: a session coming BACK TO ITS PROMPT after working. fleet_await returns
 on it. That means it stopped working, not that it did what you asked — deciding
 it is over is still your job, and the log is the evidence.
 
-GIVE A SESSION A PROFILE OR IT COMES UP IDLE. …
+GIVE A SESSION A TASK OR IT COMES UP IDLE. …
 
-  1. fleet_start with a `profile`, naming a host or a tag …
+A MACHINE FOR A JOB. fleet_provision brings up a macOS, Windows, Linux or
+Android runner; once it shows on fleet_status, fleet_start on it by name with
+the task. …
+
+  1. fleet_start with a `task` (or a `profile`), naming a host or a tag …
   2. fleet_await — returns when the session comes back to its prompt after
      working, needs a person, ends or errors, or the wait runs out. Do not poll.
   3. fleet_read_log to collect what it produced — BEFORE stopping it …
@@ -345,10 +349,10 @@ GIVE A SESSION A PROFILE OR IT COMES UP IDLE. …
 ```
 
 (Quoted from `McpServer#instructions()` in `src/mcp/server.js`, abridged — that
-function is the source; a profile is a file on the host, listed by
-`fleet_profiles`, whose content becomes the session's first message. Starting
-without one produces an idle REPL and an empty log, which is the silent failure
-v3 was spent removing.)
+function is the source. A task is the words of the session's first message
+(protocol 7); a profile is a file on the host, listed by `fleet_profiles`,
+whose content does the same. Starting with neither produces an idle REPL and an
+empty log, which is the silent failure v3 and v7 were spent removing.)
 
 `FLEETWRIGHT_MCP_BUDGET_MINUTES` sets the number, and it is **stated rather than
 enforced**. A timer the agent cannot see produces a session that dies mid-answer

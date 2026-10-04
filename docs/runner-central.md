@@ -212,8 +212,11 @@ session with the dispatch ticket. When the runner enrols on that ticket and
 sends its first health frame, the coordinator starts the session there, as the
 person who asked, once. The session announces itself the way every session
 does, and a start that fails is recorded rather than silent. It carries no
-Remote Control link: neither credential a runner is given can open one ([below](#what-it-cannot-narrow)). Task profiles and secrets are not offered for a new machine: it
-is minutes old and holds neither.
+Remote Control link: neither credential a runner is given can open one ([below](#what-it-cannot-narrow)). So it is given its job in words: New session's
+"What should it do?" field, or `fleet_start { task }` from an agent once the
+runner shows on `fleet_status`, is the session's first message (protocol 7), and
+the phone hears when it is back at its prompt. Task profiles and secrets are not
+offered for a new machine: it is minutes old and holds neither.
 
 ## Your own runner repository
 
