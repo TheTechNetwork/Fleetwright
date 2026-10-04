@@ -50,3 +50,5 @@ export function cleanText(value, { max = 200, label = 'value' } = {}) {
 /** The limits, named once so the protocol and the HTTP API cannot drift apart. */
 export const TITLE_MAX = 60;
 export const BRIEF_MAX = 500;
+/** A task is typed into a session as its first message, so it is bounded like a profile file (profiles.js). */
+export const TASK_MAX = 8000;

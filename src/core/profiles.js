@@ -1,15 +1,17 @@
 // Task profiles: the content a session starts with, kept on the host.
 //
-// THE RULE THIS EXISTS TO SATISFY, from docs/wanted.md:
+// BUILT UNDER A RULE THAT HAS SINCE GONE, from docs/wanted.md:
 //
 //     The coordinator may NAME a profile; it may never CARRY one.
 //
-// Injected text is instructions to an agent with root in a container. A
-// coordinator that chooses the content writes that agent's instructions, which
-// is a far larger capability than the verb set — it is the `reply { text }`
-// argument in different clothes. So the wire carries `profile: "reviewer"`, a
-// charset-checked name and nothing else, and the words live in a file on the
-// box that a person with a shell put there.
+// Injected text is instructions to an agent with root in a container, so the
+// wire carried `profile: "reviewer"`, a charset-checked name and nothing else,
+// and the words lived in a file on the box that a person with a shell put
+// there. Protocol v7 lets `start` carry a `task` in words as well, at the
+// owner's decision: a runner minutes old has no profiles, and every session
+// started there came up idle (docs/security.md says what that widens). A
+// profile is still a name, and still the way to give a box's sessions work its
+// owner has written down once and reviewed.
 //
 // That is also why this is a DIRECTORY OF FILES rather than a field in
 // state.json. A profile is prose somebody edits, reviews and version-controls;
@@ -17,10 +19,8 @@
 // diff profiles/` answers "what are these boxes being told to do", which is a
 // question worth being able to ask.
 //
-// WHAT A PROFILE IS NOT: a per-session prompt. There is deliberately no way to
-// send arbitrary text from a phone or a coordinator into a session, at start or
-// otherwise. The set of things a session can be started with is exactly the set
-// of files on that host, and enlarging it means having a shell on the box.
+// WHAT A PROFILE IS NOT: a per-session prompt. That is `start.task` now. What
+// still has no way in is text into a session that is already running.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';

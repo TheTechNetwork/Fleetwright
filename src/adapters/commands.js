@@ -23,6 +23,8 @@
  * @property {string} [content]    a file's body, carried as a FIELD for a
  *   stronger version of the same reason: it has newlines and leading whitespace
  *   that matter, and it may be a shell script
+ * @property {string} [task]       a new session's first message in words (protocol v7),
+ *   carried as a FIELD for the reason `content` is: it is lines of prose
  * @property {string} [profile]    which task profile a new session starts on.
  *   A NAME, never the words: the content is a file on this box, and a caller
  *   that could supply it would be writing the instructions of an agent with
@@ -630,8 +632,9 @@ export const COMMANDS = {
     short: 'Start a new Claude session',
     help:
       'Start a new session. --safe keeps permission prompts on for this one session. ' +
-      '--profile=<name> gives it something to do — /profiles lists what this box has. ' +
-      'Without one the session comes up idle, waiting for a person. ' +
+      '--profile=<name> gives it something to do — /profiles lists what this box has — and the app ' +
+      'and the fleet can hand it a task in words instead. ' +
+      'Without either the session comes up idle, waiting for a person. ' +
       '--secret=<name> lets it fetch that named secret at runtime (fleet-secret <name>); ' +
       'the value stays on this box.',
     run: async (ctx, args, flags, values) => {
@@ -649,10 +652,11 @@ export const COMMANDS = {
         title: ctx.title ?? null,
         brief: ctx.brief ?? null,
         // Typed as `--profile=x`, or supplied as a field by the fleet. The
-        // NAME only: sessions.start reads the content off this box, because a
-        // caller that could supply the words would be writing the instructions
-        // of an agent with root in a container.
+        // NAME: sessions.start reads the content off this box.
         profile: values?.get('profile') ?? ctx.profile ?? null,
+        // THE WORDS, v7: a field beside the command, never parsed out of it —
+        // a task is lines of prose and the command line is split on spaces.
+        task: typeof ctx.task === 'string' && ctx.task.trim() ? ctx.task : null,
         // Typed as `--secret=x`, or supplied as a field by the fleet. The NAME
         // only, and grants this session permission to fetch that secret's value
         // at runtime — the value lives in the store on this box and is read
@@ -670,10 +674,13 @@ export const COMMANDS = {
       // read as "working" is how somebody comes back in an hour to an empty log.
       if (r.ok) {
         const profile = values?.get('profile') ?? ctx.profile ?? null;
-        text += profile
-          ? `\nStarted on the "${profile}" profile — it has its first message already.`
-          : '\nIT STARTED IDLE. Nothing has been asked of it yet: open Remote Control, or start it with ' +
-            '--profile=<name> (see /profiles).';
+        const task = typeof ctx.task === 'string' && ctx.task.trim();
+        text += task
+          ? '\nStarted on the task it was given — it has its first message already.'
+          : profile
+            ? `\nStarted on the "${profile}" profile — it has its first message already.`
+            : '\nIT STARTED IDLE. Nothing has been asked of it yet: open Remote Control, or start it with ' +
+              'a task, or --profile=<name> (see /profiles).';
       }
       return { ok: r.ok, text, sessions: r.session ? [r.session] : undefined };
     },

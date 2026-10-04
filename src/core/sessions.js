@@ -218,7 +218,8 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null }} opts
+   *   `task` is the session's first message in words (protocol v7); either it or `profile`
    *   skipPermissions overrides FLEETWRIGHT_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
    *   title is prose a PERSON wrote; supplying it pins the title so nothing
@@ -232,7 +233,7 @@ export class SessionManager {
    *   value never does. See src/core/secret-store.js.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null } = {}) {
     this.reconcile();
 
     if (name && !isValidName(name)) return { ok: false, message: nameError(name) };
@@ -278,8 +279,14 @@ export class SessionManager {
     //
     // The refusal LISTS WHAT THIS HOST HAS, the way the tag refusal does. A
     // caller that guessed wrong cannot fix a guess it is not shown.
+    // TWO FIRST MESSAGES IS ONE TOO MANY. A task in words (v7) and a profile
+    // both become the session's first message, and quietly preferring either
+    // would run something the caller did not mean.
+    if (profile && typeof task === 'string' && task.trim()) {
+      return { ok: false, message: 'Give a session a task or a profile, not both — each one is its first message.' };
+    }
     /** @type {string|null} */
-    let prompt = null;
+    let prompt = typeof task === 'string' && task.trim() ? task : null;
     if (profile) {
       prompt = this.profiles.get(profile);
       if (prompt === null) {
@@ -289,8 +296,8 @@ export class SessionManager {
           message: have.length
             ? `This host has no profile called "${profile}". It has: ${have.join(', ')}.`
             : `This host has no task profiles at all, so "${profile}" cannot be started. ` +
-              `Profiles are ${this.cfg.profileDir}/<name>.md on this box, and putting one there needs a shell here — ` +
-              'that is deliberate: it is what stops a coordinator from writing a session\'s instructions.',
+              `Profiles are ${this.cfg.profileDir}/<name>.md on this box. To give this session work without one, ` +
+              'send it a task in words.',
         };
       }
     }
@@ -340,9 +347,11 @@ export class SessionManager {
       // handed a job is the one whose "back at its prompt" is news — the
       // person who handed it over is waiting for exactly that — and the
       // watcher can only say so if the record says which sessions those are.
-      // A name is what the coordinator may see (docs/wanted.md: it may NAME
-      // a profile, never CARRY one); the content stays on the box.
+      // The content stays on the box.
       profile,
+      // And whether it was handed its job in words, for the same watcher. A
+      // flag, never the words: the record is what `list` and `status` serve.
+      tasked: prompt !== null && !profile,
       // The secret this session was GRANTED, by name. It rides on the record so
       // the credential broker can scope a `fleet-secret <name>` request to it:
       // the grant decides, not the ask. A name only, like `profile` — the value
@@ -428,10 +437,10 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean }} opts
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false }) {
     // Whose Claude account got seeded, when THIS start created the volumes.
     // Stays null on resume and on non-sandboxed sessions: null on the record
     // means "whatever was already there".
@@ -544,6 +553,7 @@ export class SessionManager {
         ...(title ? { title, titlePinned: true } : existing?.title ? {} : { title: titleFromCwd(cwd) }),
         ...(brief ? { brief } : {}),
         ...(profile ? { profile } : {}),
+        ...(tasked ? { tasked: true } : {}),
         // The granted secret name, kept so the broker can scope a runtime
         // `fleet-secret` request to what `start --secret` allowed. A name, never
         // a value — the value stays in the store on this box.

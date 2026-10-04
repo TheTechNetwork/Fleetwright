@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 
-import { cleanText, TITLE_MAX, BRIEF_MAX } from '../core/text.js';
+import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../core/text.js';
 import { MAX_WRITE_BYTES } from '../core/files.js';
 import { dispatch, parse, canonicalCommand } from './commands.js';
 import { sidecarMayRun } from '../core/sidecar-scope.js';
@@ -402,16 +402,26 @@ export class HttpAdapter {
         meta[field] = r.value;
       }
 
+      // THE TASK, v7: a session's first message, from whoever starts it. Not
+      // through cleanText, for the reason `content` is not — a task is often
+      // several lines, and joining them changes what was asked. Bounded like
+      // a profile file and refused with a NUL, which would make what was
+      // checked and what is typed into the session two different strings.
+      if (body.task !== undefined && body.task !== null) {
+        if (typeof body.task !== 'string') return json(res, 400, { ok: false, text: 'task must be text' });
+        if (Buffer.byteLength(body.task) > TASK_MAX) return json(res, 400, { ok: false, text: `task is longer than ${TASK_MAX} bytes` });
+        if (body.task.includes('\0')) return json(res, 400, { ok: false, text: 'task contains a null byte' });
+        if (body.task.trim()) meta.task = body.task;
+      }
+
       // WHICH TASK PROFILE, which is a NAME rather than prose and so does not
       // go through cleanText — that collapses whitespace and strips control
       // characters, which would silently turn a wrong name into a different
       // wrong name. A name is exactly right or it is refused.
       //
       // It is accepted as a field as well as on the command line so that the
-      // web UI and the fleet do not have to spell it differently. The content
-      // is never accepted here in any form: it is a file on this box, because a
-      // caller that could supply the words would be writing the instructions of
-      // an agent with root in a container.
+      // web UI and the fleet do not have to spell it differently. Its content
+      // is a file on this box; words of the caller's own come as `task`, above.
       if (body.profile !== undefined && body.profile !== null) {
         if (typeof body.profile !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(body.profile)) {
           return json(res, 400, { ok: false, text: 'profile must be a plain name — letters, digits, dash, underscore' });

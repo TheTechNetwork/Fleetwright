@@ -29,6 +29,7 @@ import { log } from '../log.js';
  * @property {boolean} [titlePinned]      set by hand, so nothing derived overwrites it
  * @property {string|null} [brief]         a sentence of context, written by a person at start
  * @property {string|null} [profile]       the NAME of the profile it was started with, never its content — the watcher reads it to say whose "back at its prompt" is news
+ * @property {boolean} [tasked]          whether it was started on a task in words (protocol v7) — a flag for the same watcher, never the words
  * @property {string|null} [secret]        the NAME of the secret it was granted at start, never its value — the credential broker reads it to scope a runtime fetch to what was granted
  * @property {string|null} [account]       whose Claude account was seeded: an email, or "shared"
  * @property {string|null} detail         last human-readable outcome
@@ -152,6 +153,7 @@ export class Registry {
           title: patch.title ?? null,
           brief: patch.brief ?? null,
           profile: patch.profile ?? null,
+          tasked: patch.tasked ?? false,
           secret: patch.secret ?? null,
           account: patch.account ?? null,
           detail: patch.detail ?? null,
