@@ -35,7 +35,7 @@
     "js-yaml": "5.4.2",
     "playwright": "1.63.0",
     "preact": "11.0.0",
-    "preact-render-to-string": "6.7.0",
+    "preact-render-to-string": "6.8.0",
     "typescript": "7.0.2"
   },
   "dependencies": {
