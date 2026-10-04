@@ -142,8 +142,13 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
   }
 
+  // `verify` WITH THEM, for the same reason: the token is the person's, and
+  // a Test sent to one arbitrary box answered "No GitHub token is stored
+  // here" from the one machine the token never reached, under a row that
+  // said "connected". Asked of every box, the answer comes from one that
+  // holds it, and the rest say where it is absent.
   if (
-    (verb === 'link' || verb === 'unlink') &&
+    (verb === 'link' || verb === 'unlink' || verb === 'verify') &&
     intent.params?.provider &&
     intent.params.provider !== 'claude' &&
     // An explicitly named host still wins. Fanning out is the DEFAULT, not a

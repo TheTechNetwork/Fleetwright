@@ -115,3 +115,57 @@ test('what an account has left is one fact, and the box that asked last has it',
   assert.equal(claude.usage.windows.fiveHour.used, 42);
   assert.deepEqual(claude.hosts, ['a', 'b', 'c']);
 });
+
+test('a box that could not read the account never replaces one that could, however recently it asked', async () => {
+  // REPORTED FROM A PHONE: the Claude row said "the credential has expired and
+  // has not renewed yet" while a Test said two hours left. One box held an
+  // expired copy and asked last; its report has no figures, and it replaced
+  // the reading from the box where the account works.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  for (const id of ['works', 'expired']) {
+    core.registry.hosts.set(id, { hostId: id, state: 'healthy', connected: true, healthAt: Date.now(), health: {} });
+  }
+  const usageOn = /** @type {Record<string, any>} */ ({
+    works: { checkedAt: 1_700_000_000_000, windows: { fiveHour: { used: 40, resetsAt: 1_700_000_900_000 }, sevenDay: null, sevenDayOpus: null, sevenDaySonnet: null }, why: null },
+    expired: { checkedAt: 1_700_000_600_000, windows: null, why: 'the credential has expired and has not renewed yet' },
+  });
+  core.send = async (host) => ({
+    ok: true,
+    hostId: host.hostId,
+    connections: {
+      catalogue: [{ provider: 'claude', label: 'Claude' }],
+      connected: [{ provider: 'claude', label: 'Claude', account: 'a@example.com', updatedAt: 0, usage: usageOn[host.hostId] }],
+    },
+  });
+
+  const reply = await core.dispatch({ verb: 'connect', params: {} });
+  const claude = reply.connections.connected.find((c) => c.provider === 'claude');
+  assert.equal(claude.usage.windows.fiveHour.used, 40);
+  assert.equal(claude.usage.why, null);
+});
+
+test('Test on a token asks every box, and answers from one that holds it', async () => {
+  // REPORTED FROM A PHONE: GitHub's row said "connected" and "not on
+  // rpi-7550", and Test answered "No GitHub token is stored here." The Test
+  // had been sent to one box, and it was rpi-7550.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  for (const id of ['rpi-7550', 'deb13']) {
+    core.registry.hosts.set(id, { hostId: id, state: 'healthy', connected: true, healthAt: Date.now(), health: {} });
+  }
+  /** @type {string[]} */
+  const asked = [];
+  core.send = async (host) => {
+    asked.push(host.hostId);
+    return host.hostId === 'deb13'
+      ? { ok: true, hostId: host.hostId, text: 'GitHub token works.', check: { ok: true, account: 'eli', granted: ['repo'], missing: [] } }
+      : { ok: false, hostId: host.hostId, text: 'No GitHub token is stored here.' };
+  };
+
+  const reply = await core.dispatch({ verb: 'verify', params: { provider: 'github' } });
+  assert.deepEqual(asked.sort(), ['deb13', 'rpi-7550']);
+  assert.equal(reply.check.ok, true);
+  assert.equal(reply.check.hostId, 'deb13', 'said by the box that holds it');
+  assert.match(reply.hosts.find((/** @type {any} */ h) => h.hostId === 'rpi-7550').text, /No GitHub token/);
+});
