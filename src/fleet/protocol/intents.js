@@ -52,7 +52,7 @@
 //
 // See docs/intents.md for the wire format and the reasoning in full.
 
-import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
+import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../../core/text.js';
 import { SEAL_KEY_RE } from '../seal.js';
 
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
@@ -382,7 +382,7 @@ export const VERBS = Object.freeze({
       task: {
         type: 'raw',
         required: false,
-        max: 8000,
+        max: TASK_MAX,
         since: 7,
         describe:
           'What the session should do, as its first message — "build the macOS app in ./app, run its tests, and ' +

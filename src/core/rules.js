@@ -17,11 +17,10 @@
 // line of them. There was no way to fix that short of baking a file into the
 // image, which is a rebuild per edit.
 //
-// THE RULE THIS OBEYS is the one docs/wanted.md set for profiles:
-//
-//     The coordinator may NAME a profile; it may never CARRY one.
-//
-// This needs even less than that. Nothing about house rules crosses the wire —
+// THE RULE THIS WAS BUILT UNDER is the one docs/wanted.md set for profiles —
+// the coordinator may NAME a profile and never CARRY one — which protocol v7
+// dropped for a session's first message (`start.task`). House rules were never
+// part of that and are not now: nothing about them crosses the wire —
 // no verb sets them, no field carries them, and not even a name is sent. The
 // content lives in a file on the box that a person with a shell put there, and
 // the whole of the fleet's involvement is reporting that it is there.

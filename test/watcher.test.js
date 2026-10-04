@@ -572,6 +572,21 @@ test('every return to the prompt is one event, and a session without a profile c
   const ready = events.filter((e) => e.event === 'session.ready');
   assert.equal(ready.length, 2, 'two returns, two events');
   assert.equal(ready[0].profile, undefined, 'no profile, no field');
+  assert.equal(ready[0].tasked, undefined, 'no task, no field');
+});
+
+test('a session handed its task in words says it had one when it comes back, and nothing of what it said', async (t) => {
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('build', { status: 'running', tasked: true })],
+    panes: { build: WORKING },
+  });
+  await watcher.tick({ quiet: true });
+  stub.panes.build = AT_PROMPT;
+  await watcher.tick();
+
+  const ready = events.filter((e) => e.event === 'session.ready');
+  assert.equal(ready.length, 1);
+  assert.equal(ready[0].tasked, true);
 });
 
 test('a question is not a return to the prompt', async (t) => {

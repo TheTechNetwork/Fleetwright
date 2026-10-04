@@ -601,19 +601,6 @@ export class Sidecar {
       // key it signs with is in this process and nowhere else on the box.
       if (intent.verb === 'mint') return reply(await this.#mint(intent));
 
-      // v7'S `task`, REFUSED UNTIL THIS BOX CAN DELIVER IT. The protocol table
-      // is shared, so a box on this commit reports 7 and validates a task, but
-      // nothing here types it into the session yet — that is the host layer of
-      // the same round. Taken without that, it would start the idle session
-      // `task` exists to end and say it started.
-      if (intent.verb === 'start' && typeof intent.params?.task === 'string' && intent.params.task) {
-        return reply({
-          ok: false,
-          error: { code: 'host_outdated' },
-          text: 'This box cannot be handed a task yet. Update it and ask again, or start the session with a profile.',
-        });
-      }
-
       // A session on a runner waits for the answer about its owner's Claude
       // login, which is bounded by the mint timeout and never throws.
       if ((intent.verb === 'start' || intent.verb === 'resume') && this.claudeLoginReady) await this.claudeLoginReady;
@@ -1759,16 +1746,16 @@ export function toCommandLine({ verb, params, actor }) {
       return p.name ? `/status ${p.name}` : '/status';
     case 'start':
       // `mode` becomes a flag rather than passing through as text; the only two
-      // values it can hold are the two literals below. `title` and `brief` are
-      // deliberately NOT here — they are prose, they travel as fields on the
-      // request, and commandMeta() below is what picks them up.
+      // values it can hold are the two literals below. `title`, `brief` and
+      // `task` are deliberately NOT here — they are prose, they travel as
+      // fields on the request, and commandMeta() below is what picks them up.
       //
       // `profile` IS here, and the difference is the whole design. It is a
       // NAME — charset-checked by validateIntent, no whitespace, no quote, no
       // leading dash — so it is a single token that cannot become a second
       // flag. The words it selects never travel: fleetwright reads them off a
-      // file on this box. A coordinator that could send the content would be
-      // writing the instructions of an agent with root in a container.
+      // file on this box. (Since v7 a `task` can carry words of its own, beside
+      // the line rather than in it.)
       //
       // `secret` is here for the same reason and with the same guarantee: a
       // charset-checked NAME, a single token, and what it names — the value —
@@ -1998,6 +1985,11 @@ export function commandMeta(verb, params = {}, actor = '') {
     ...(typeof actor === 'string' && actor ? { actor } : {}),
     ...(verb === 'start' && typeof params?.title === 'string' ? { title: params.title } : {}),
     ...(verb === 'start' && typeof params?.brief === 'string' ? { brief: params.brief } : {}),
+    // THE TASK, v7: the session's first message. Beside the line like the
+    // brief and for the same reason, only more so: it is several lines of
+    // prose, and anything in the line is split on whitespace and could read
+    // as a flag.
+    ...(verb === 'start' && typeof params?.task === 'string' && params.task ? { task: params.task } : {}),
     // File content, for the same reason and by the same route: prose and
     // payloads travel beside a command rather than inside it.
     ...(verb === 'writefile' && typeof params?.content === 'string' ? { content: params.content } : {}),

@@ -341,7 +341,8 @@ export class SessionWatcher {
         // not announced as having finished nothing, and only once per
         // return: the flag below is cleared the moment it fires.
         //
-        // `profile` rides along by name, never by content, so the
+        // `profile` rides along by name, never by content, and `tasked` as
+        // a flag for a session handed its job in words, so the
         // coordinator can decide whose "done" is worth a phone buzzing —
         // a job somebody handed over is; a turn in a conversation they are
         // driving by hand is not.
@@ -351,6 +352,7 @@ export class SessionWatcher {
             name,
             text: 'is back at its prompt',
             ...(session.profile ? { profile: String(session.profile) } : {}),
+            ...(session.tasked === true ? { tasked: true } : {}),
           });
           readyAt = Date.now();
         }
