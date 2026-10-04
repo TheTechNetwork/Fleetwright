@@ -475,6 +475,9 @@ export class CoordinatorCore {
       // and the one fact that says whether "back at its prompt" is a job
       // handed over coming back finished, or a turn in a conversation.
       ...(msg.profile ? { profile: String(msg.profile).slice(0, 80) } : {}),
+      // The same fact for a session handed its words directly (v7 `task`):
+      // whether it had a job, never what the job said.
+      ...(msg.tasked === true ? { tasked: true } : {}),
       at: this.now(),
     };
     // A TEMPORARY MACHINE THAT HAS FINISHED IS COSTING MONEY, and that is the
@@ -510,13 +513,13 @@ export class CoordinatorCore {
 
     this.log.info(`coordinator: ${hostId} ${event.event}${event.name ? ` ${event.name}` : ''}`);
     // BACK AT ITS PROMPT IS NEWS TWICE AND NOISE OTHERWISE. A session that was
-    // handed a job (a profile) coming back is the "done" both beta testers
+    // handed a job (a task or a profile) coming back is the "done" both beta testers
     // asked for; a session on a temporary machine coming back is a bill
     // still running. A turn in a conversation somebody is driving by hand is
     // neither — they are looking at it — and a buzz per turn is how the one
     // notification that matters gets switched off with the rest. The ring
     // keeps all of them; only the phone is selective.
-    const worth = event.event !== 'session.ready' || Boolean(event.profile) || ephemeral;
+    const worth = event.event !== 'session.ready' || Boolean(event.profile) || event.tasked === true || ephemeral;
     if (this.push && worth && NOTIFIABLE.has(event.event)) await this.#notify(event, prompt);
   }
 
