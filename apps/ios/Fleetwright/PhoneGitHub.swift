@@ -244,6 +244,21 @@ struct PhoneGitHub {
         return answer.text ?? ""
     }
 
+    /// Finish a token one of your machines is making, and keep it: send the
+    /// code with a key made for this one answer, open what comes back, and
+    /// deposit it exactly as a pasted token is deposited. The token exists in
+    /// the clear only in this function's memory, between the two seals.
+    func keepTokenFromMachine(_ fleet: Fleet, host: String, code: String) async throws -> String {
+        let key = Seal.newKey()
+        let reply = try await fleet.setupToken(host: host, code: code, reply: key.publicKey)
+        guard reply.ok != false, let sealed = reply.sealed else {
+            throw FleetError.message(reply.text ?? "\(host) did not make a token.")
+        }
+        let inside = try Seal.open(key, aad: Seal.setupTokenAAD, sealed: sealed)
+        guard let token = inside["token"] as? String, !token.isEmpty else { throw Seal.Failure.notSealed }
+        return try await depositClaudeLogin(fleet, claudeToken: token)
+    }
+
     private func github(_ method: String, _ url: String, token: String, body: [String: Any]?) async throws -> (status: Int, data: Data) {
         var request = URLRequest(url: URL(string: url)!)
         request.httpMethod = method

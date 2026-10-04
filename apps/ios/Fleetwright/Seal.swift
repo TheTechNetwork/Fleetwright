@@ -32,6 +32,9 @@ enum Seal {
     static let vaultRequestAAD = "fleetwright-vault-request/v1"
     /// The vault's answer, on its way back to the key this phone made for it.
     static let vaultReplyAAD = "fleetwright-vault-reply/v1"
+    /// A Claude token one of your machines made with `claude setup-token`, on
+    /// its way back to the key this phone made for it.
+    static let setupTokenAAD = "fleetwright-setup-token/v1"
 
     enum Failure: LocalizedError {
         case notAKey, notSealed

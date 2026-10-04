@@ -259,6 +259,11 @@ struct Fleet {
         /// is worth: a fingerprint when nothing is running, the box's pin when
         /// something is.
         var reboot: RebootCost?
+        /// The sign-in page a machine started `claude setup-token` on.
+        var url: String?
+        /// The token that machine made, sealed to a key only this phone holds.
+        /// Ciphertext: the coordinator relays it and cannot read it.
+        var sealed: [String: String]?
 
         struct RebootCost: Codable, Hashable {
             let sessions: Int
@@ -846,6 +851,21 @@ struct Fleet {
     /// until a session failed.
     func verify(host: String? = nil, provider: String) async throws -> Reply {
         try await intent("verify", params: ["provider": provider], host: host)
+    }
+
+    /// Make a Claude token for your runners on one machine, which runs
+    /// `claude setup-token` in a pane there. With no code the reply carries
+    /// the sign-in page in `url`; with the code that page showed and `reply`,
+    /// it carries the token sealed to `reply` in `sealed`.
+    ///
+    /// NEVER HELD. The outbox keeps what it holds on disk and replays it, and a
+    /// code is a live credential for the minutes it lasts. Passing an id is
+    /// what keeps a send that could not reach the fleet out of the outbox.
+    func setupToken(host: String, code: String? = nil, reply: String? = nil) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let code { params["code"] = code }
+        if let reply { params["reply"] = reply }
+        return try await intent("setuptoken", params: params, host: host, idempotencyKey: "app-\(UUID().uuidString)")
     }
 
     /// Forget a stored credential. Does NOT revoke it at the provider.
