@@ -14,6 +14,10 @@ import { Sidecar, toCommandLine, REPLAY_TTL_MS } from '../src/fleet/host/sidecar
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
+import { generateKeyPair, sign, verify, signingInput } from '../src/fleet/crypto.js';
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const RC_URL = 'https://claude.ai/code/session_016zfBs7LYmQwg7WqfD6dY3M';
 const RC_PANE = `/remote-control is active · Continue here, on your phone, or at\n${RC_URL}`;
@@ -886,4 +890,41 @@ test('checking a repository is one command naming it, and nothing else', async (
   const { sidecar, stub } = await setup(t);
   await sidecar.handle(intent({ verb: 'runnerrepo', params: { repo: 'eli/runners' }, id: 'idem-rr-0003' }));
   assert.equal(stub.commands.at(-1), '/runnerrepo eli/runners');
+});
+
+// --- adding a hypervisor --------------------------------------------------------
+
+test('adding a hypervisor is answered here and never reaches the hub', async (t) => {
+  // The setup key is signed with this process's key and the sealed sign-in is
+  // opened with a key in this process's memory, so neither may ever become a
+  // command line. See src/fleet/host/xo-setup.js and docs/hypervisors.md.
+  const keys = await generateKeyPair();
+  const { sidecar, stub } = await setup(t, {}, {
+    vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ m) => sign(keys.privateJwk, m) },
+    xoStateDir: mkdtempSync(path.join(os.tmpdir(), 'sidecar-xo-')),
+  });
+  const pin = 'a'.repeat(64);
+
+  const probed = await sidecar.handle(intent({ verb: 'xoprobe', params: { address: '127.0.0.1:1' }, actor: 'eli@example.com' }));
+  assert.equal(probed.ok, true);
+  assert.equal(probed.xoprobe.reachable, false);
+  assert.equal('text' in probed.xoprobe, false, 'the sentence is the reply’s, not the probe’s');
+
+  const begun = await sidecar.handle(intent({ id: 'idem-0000002', verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', pin }, actor: 'eli@example.com' }));
+  assert.equal(begun.ok, true, begun.text);
+  const { job, key, keySig, hostKey } = begun.xosetup;
+  assert.equal(await verify(hostKey, keySig, signingInput('xosetup-key', { address: 'xo.lan', job, key, pin })), true);
+
+  // Somebody else asking after the job is told the same as for no job at all.
+  const theirs = await sidecar.handle(intent({ id: 'idem-0000003', verb: 'xosetup', params: { phase: 'status', job }, actor: 'sam@example.com' }));
+  assert.equal(theirs.ok, false);
+
+  assert.deepEqual(stub.commands, [], 'nothing reached fleetwright');
+});
+
+test('a machine with nowhere to keep a hypervisor token refuses to begin', async (t) => {
+  const { sidecar } = await setup(t);
+  const r = await sidecar.handle(intent({ verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', pin: 'a'.repeat(64) }, actor: 'eli@example.com' }));
+  assert.equal(r.ok, false);
+  assert.match(r.text, /nowhere set aside/);
 });
