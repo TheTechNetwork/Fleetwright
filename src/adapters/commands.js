@@ -386,7 +386,10 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
  */
 function verifyClaude(ctx) {
   const auth = ctx.login.status();
-  const lines = [describe(auth)];
+  // WHICH MACHINE, FIRST. Claude is per machine and this reply is read on a
+  // phone, under a fleet-wide row, after a Test that went to one box. Every
+  // "this box" below meant a machine the screen never named.
+  const lines = ctx.cfg.hostname ? [`On ${ctx.cfg.hostname}:`, describe(auth)] : [describe(auth)];
   // A LOGIN IN FLIGHT IS NOT A LOGGED-OUT BOX, and for a while this surface
   // could not tell you which you were looking at. `status()` used to answer
   // about whichever link flow was in progress, so a member linking their own
@@ -426,10 +429,12 @@ function verifyClaude(ctx) {
   // round it goes says which of the two to go and look at.
   if (auth.loggedIn === false && state.state === 'fresh') {
     lines.push('');
+    // Said calmly. This reaches a phone, and a shouted sentence about a
+    // fault that does not stop anything reads as an alarm.
     lines.push(
-      'THESE TWO DISAGREE. `claude auth status` reports signed out while the credential file on this box is '
-      + 'valid and unexpired. That is a fault in the reporting rather than in the credential — sessions here '
-      + 'will work. Restarting fleetwright clears it.',
+      'The Claude command on this box reports signed out, but the credential file sessions use is valid and '
+      + 'unexpired. That is a fault in the report, not the credential: sessions here will work, and restarting '
+      + 'fleetwright clears it.',
     );
   }
   lines.push('');

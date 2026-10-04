@@ -201,6 +201,9 @@ struct Fleet {
         /// Asked for and not granted. Nil means "cannot tell".
         let missing: [String]?
         let message: String?
+        /// The machine that checked, when the coordinator asked every box
+        /// and answered from one that holds the token.
+        let hostId: String?
     }
 
     struct Reply: Codable {
