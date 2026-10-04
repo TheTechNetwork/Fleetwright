@@ -158,24 +158,42 @@ it dies with the lab.
 
 ### The uplink
 
-`fleetwright-uplink` is a network the operator makes once, and **it must not
-be the management network**, the one Xen Orchestra, the pool masters or
-anything else you care about sit on. A VLAN with a route to the internet and
-nothing else. Everything a lab does leaves through it, so it is the boundary;
-the router inside the lab is the instrument, not the wall.
+**`fleetwright-uplink` must not be the management network**, the one Xen
+Orchestra, the pool masters and everything else on your LAN sit on. Everything
+a lab does leaves through it, so it is the boundary; the router inside the lab
+is the instrument, not the wall.
 
-## Templates, built once
+**Onboarding makes it, so nobody configures a switch.** It is a private
+network inside the pool, and its only way out is a permanent **edge** router:
+one more OPNsense VM, `fleetwright-edge`, with its WAN on the management
+network and its LAN on `fleetwright-uplink`. Its rules are fixed at
+onboarding and never touched by a session: out to the internet, and nothing
+to any private, link-local or multicast range, so a lab can reach the world
+and cannot reach your LAN, the pool's API or another lab. A pool that already
+has a suitable VLAN can be pointed at it instead; nothing requires it.
 
-Neither exists yet, so building them is part of the work:
+## Templates, built by onboarding
 
-- **Linux.** Start from a cloud-init-ready Debian or Ubuntu image (Xen
-  Orchestra's Hub has them), install the Xen guest tools and the fleetwright
-  package without enrolling, give the service user sudo, convert to a
-  template. A script in `install/` makes this repeatable, so a template is
-  rebuilt rather than patched.
-- **OPNsense.** Installed once from its image with the Xen guest tools plugin,
-  WAN on DHCP, LAN static, the API enabled with the bootstrap key, converted
-  to a template.
+Neither exists yet, and nobody builds them by hand:
+
+- **Linux.** Debian's official cloud image (the `genericcloud` build, which
+  already runs cloud-init) is downloaded, checked against Debian's published
+  checksum, converted and imported. A builder VM boots it once with cloud-init
+  that installs the Xen guest tools and the fleetwright package without
+  enrolling and gives the service user sudo, then powers off and is converted
+  to `fleetwright-debian-13`.
+- **OPNsense.** Its prebuilt disk image is downloaded and checked the same
+  way, and booted beside a small second disk holding a generated
+  `config.xml`: interfaces assigned, LAN addressed, the Xen guest tools
+  plugin, the API enabled with a bootstrap key only the hypervisor host knows.
+  OPNsense's importer reads a configuration from attached media at first
+  boot, which is what makes this unattended. **This is the step to prove
+  first on real hardware**, because it is the one that rests on an OPNsense
+  behaviour rather than on an API.
+
+Rebuilding is the same script with the newest image, so a template is
+replaced rather than patched, and the old one is deleted once nothing was
+cloned from it.
 
 ## The interface, so Proxmox is a second driver and not a second design
 
@@ -197,23 +215,84 @@ Following `CONTRIBUTING.md`, coordinator first:
 
 1. **Coordinator, protocol 8:** `template` and `lab` on `provision`, the
    `templates` verb, placement onto a host that publishes the template, the
-   ticket.
-2. **Host:** the Xen Orchestra driver, template and lab files, the expiry
-   reaper. Tested against a stand-in JSON-RPC server, because the real one is
-   on hardware this repository cannot reach.
-3. **Phones:** templates and labs in the new-machine picker.
+   ticket, and the onboarding verb that carries a sealed admin credential to
+   one chosen host.
+2. **Host:** the onboarding script, the Xen Orchestra driver, template and
+   lab files, the expiry reaper. Tested against a stand-in JSON-RPC server,
+   because the real one is on hardware this repository cannot reach.
+3. **Phones:** Add a hypervisor, its progress, and templates and labs in
+   the new-machine picker.
 4. **Docs.**
 
 Labs (step 2 again, with the router bootstrap) come after a single VM works
 on the real pool.
 
-## What the operator does once, by hand
+## Onboarding: nothing made by hand
 
-- Make the hypervisor host VM and enrol it as a permanent host.
-- Make the `fleetwright` Xen Orchestra user, its resource set, and a token
-  for it; give the token to the hypervisor host only.
-- Make the uplink network, off the management network.
-- Build the two templates.
+**What a person supplies is an address and a credential, once.** Everything
+in the sections above is created by a script from those, and the credential
+is used for that run and thrown away.
+
+### From the app
+
+Machines → Add a hypervisor: the pool's address, and one of
+
+- a **Xen Orchestra admin** sign-in, when the pool has Xen Orchestra;
+- the pool master's **root password**, when it does not. The script then
+  deploys Xen Orchestra too, in a VM of its own: built from source, so it
+  needs no account anywhere.
+
+The credential is **sealed on the phone to the host that will run the
+script**, the same way a GitHub code is sealed to the box that exchanges it,
+so the coordinator relays ciphertext it cannot read. The host that runs it is
+one already in the fleet that can reach the pool's address; the app offers
+the ones whose health says they can, and refuses with what to do if none can.
+
+### Without any host yet
+
+One line on the pool master's console, which shows a pin minted in the app
+for it:
+
+```sh
+curl -fsSL https://<coordinator>/xcp-ng | bash -s -- <pin>
+```
+
+It runs there with `xe`, which needs no credential at all. It is the path for
+a fleet whose first machine is the pool.
+
+### What the script does, in order
+
+Each step finds its object by the `fleetwright` tag before making one, so the
+script can be run again after a failure, or to repair, and does only what is
+missing:
+
+1. **Xen Orchestra**, if there is none: deploy it.
+2. **The `fleetwright` user**, a password nobody sees, its **resource set**
+   (the templates, networks and storage it may use, and quotas sized from
+   what the pool has free), its ACL, and a token for it.
+3. **`fleetwright-uplink`**, and the **edge router** in front of it.
+4. **The templates**, as above.
+5. **The hypervisor host VM**, cloned from the Debian template with
+   cloud-init carrying a single-use enrolment pin for a **permanent** host.
+   It joins the fleet by itself.
+6. **The token goes to that host only**, as a vault item granted to it, so
+   it is never on a disk outside that VM and never in cloud-init.
+7. **The admin credential is dropped.** From here the fleet holds only the
+   limited user's token, on one VM.
+
+Xen Orchestra itself, when the script deployed it, is a separate VM from the
+hypervisor host on purpose: its admin account must not sit beside the token
+whose whole point is being less than admin.
+
+The app shows each step as it runs and what failed if one did, with "Try
+again" re-running the script from where it stopped.
+
+### Removing it
+
+Machines → the pool → Remove: every VM, network and template tagged
+`fleetwright`, the user, its resource set and its token, the hypervisor host
+retired. It needs the admin credential again, for the same reason onboarding
+did, and keeps nothing it did not make.
 
 ## What this does not do
 
