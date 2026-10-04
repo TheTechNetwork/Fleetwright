@@ -101,7 +101,7 @@ jobs:
           brew untap aws/tap >/dev/null 2>&1 || true
           brew install tmux
           # renovate: datasource=npm depName=@anthropic-ai/claude-code
-          npm install -g @anthropic-ai/claude-code@2.1.286
+          npm install -g @anthropic-ai/claude-code@2.1.287
           tmux -V && claude --version
 
       - name: Run as a host until the clock runs out
