@@ -41,12 +41,13 @@ test('iOS: the entry is on Machines, for a known admin only', () => {
 
 test('iOS: the screen asks every machine first, then runs one job on one machine through its four phases', () => {
   assert.match(IOS, /intent\("xoprobe", params: \["address": address\]/);
-  for (const phase of ['begin', 'run', 'status', 'cancel']) {
+  for (const phase of ['run', 'status', 'cancel']) {
     assert.match(IOS, new RegExp(`intent\\("xosetup", params: \\["phase": "${phase}"`), `no ${phase} phase`);
   }
   // `begin` names the machine the person chose; the coordinator routes every
-  // later phase back to it from the job, so none of them names one.
-  assert.match(IOS, /\["phase": "begin", "address": address, "pin": pin\], host: host/);
+  // later phase back to it from the job, so none of them names one. Its
+  // params are built first, because `trust` goes only when a person gave it.
+  assert.match(IOS, /var params = \["phase": "begin", "address": address, "pin": pin\]\s*if let trust \{ params\["trust"\] = trust \}\s*return try await intent\("xosetup", params: params, host: host/);
   // NEVER HELD: each carries an idempotency key, which keeps a send that could
   // not reach the fleet out of the outbox and off the disk.
   const sends = IOS.match(/intent\("(?:xoprobe|xosetup)"[^\n]*\n?[^\n]*idempotencyKey: "app-\\\(UUID\(\)\.uuidString\)"/g) ?? [];
@@ -62,7 +63,7 @@ test('iOS: only a machine that reached the address over HTTPS is offered, and th
   // The certificate the machine saw is shown for acceptance, grouped so it can
   // be compared against a terminal, and `begin` pins exactly that one.
   assert.match(SCREEN, /Text\(XOSetupKey\.grouped\(cert\)\)/);
-  assert.match(SCREEN, /guard let pin = probe\.cert else \{ return \}[\s\S]{0,600}?beginSetup\(address: target, pin: pin, host: probe\.hostId\)/);
+  assert.match(SCREEN, /guard let pin = probe\.cert else \{ return \}[\s\S]{0,1500}?beginSetup\(address: target, pin: pin, host: probe\.hostId, trust: trust\)/);
   // Cannot tell is said as cannot tell.
   assert.ok(SCREEN.includes('cannot tell whether it is Xen Orchestra'));
 });
@@ -127,7 +128,10 @@ test('iOS: the sign-in is sealed under the documented AAD, as the documented pay
 test('iOS: progress is polled only while the screen is open, with Cancel while it runs', () => {
   assert.match(SCREEN, /\.task\(id: job\) \{ await follow\(\) \}/);
   assert.match(SCREEN, /while !Task\.isCancelled, running \{\s*guard \(try\? await Task\.sleep\(for: \.seconds\(3\)\)\) != nil else \{ return \}/);
-  assert.match(SCREEN, /if running \{\s*Button\("Cancel", role: \.destructive\) \{ Task \{ await cancel\(job\) \} \}/);
+  // Offered once: after the machine says it will stop, its sentence stands
+  // in for the button (C-2).
+  assert.match(SCREEN, /if running, !cancelRequested \{\s*Button\("Cancel", role: \.destructive\) \{ Task \{ await cancel\(job\) \} \}/);
+  assert.match(SCREEN, /refuse\(reply\.text \?\? "It could not be stopped\."\)\s*\} else \{\s*cancelRequested = true/);
   // Done has a way out; a stopped job has a way back in.
   assert.match(SCREEN, /else if progress\?\.state == "done" \{\s*Button\("Done"\) \{ dismiss\(\) \}/);
   assert.match(SCREEN, /Button\("Try again"\) \{ reset\(\) \}/);
@@ -162,17 +166,20 @@ test('iOS: the Live Activity decodes exactly what the coordinator pushes, and te
   assert.ok(pushed, 'the coordinator no longer pushes {step, of, phase, state}');
   assert.match(
     IOS,
-    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*\}/,
+    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*\}/,
   );
+  // `since` is the phone's own, never pushed: optional, so a pushed state
+  // without it still decodes.
+  assert.match(read('src/fleet/coordinator/core.js'), /state: \{ step: progress\.step, of: progress\.of, phase: progress\.phase, state: progress\.state \}/, 'the coordinator pushes no `since`');
   // The static half is local only: it is in the attributes, not the state.
   assert.match(IOS, /struct XOSetupAttributes: ActivityAttributes \{[\s\S]*?let job: String\s*(?:\/\/\/[^\n]*\n\s*)*let hostId: String\s*(?:\/\/\/[^\n]*\n\s*)*let address: String/);
 
   // Started with a push token, the token posted hex to the coordinator's
   // route, and the answer's progress applied so a late activity starts right.
-  assert.match(IOS, /Activity<XOSetupAttributes>\.request\(\s*attributes: attributes,\s*content: ActivityContent\(state: first, staleDate: nil\),\s*pushType: \.token\s*\)/);
-  assert.match(IOS, /for await token in activity\.pushTokenUpdates \{\s*let hex = token\.map \{ String\(format: "%02x", \$0\) \}\.joined\(\)/);
+  assert.match(IOS, /Activity<XOSetupAttributes>\.request\(\s*attributes: attributes,\s*content: content\(first\),\s*pushType: \.token\s*\)/);
+  assert.match(IOS, /for await token in activity\.pushTokenUpdates \{\s*await register\(token, for: job, on: activity, fleet: fleet\)[\s\S]*?let hex = token\.map \{ String\(format: "%02x", \$0\) \}\.joined\(\)/);
   assert.match(IOS, /post\("\/api\/xosetup\/activity", body: \["job": job, "token": token\]\)/);
-  assert.match(IOS, /let state = contentState\(latest\.progress\)\s*else \{ continue \}\s*await activity\.update\(ActivityContent\(state: state, staleDate: nil\)\)/);
+  assert.match(IOS, /let state = contentState\(latest\.progress\)\s*else \{ return \}\s*await show\(state, on: activity\)/);
   // Ended on this side the moment the screen sees the job is over.
   assert.match(IOS, /if XOSetupWords\.isLive\(state\.state\) \{\s*await activity\.update\(content\)\s*\} else \{\s*await activity\.end\(content, dismissalPolicy: \.after\(/);
   assert.match(IOS, /static func isLive\(_ state: String\) -> Bool \{ state == "running" \|\| state == "waiting" \}/);
@@ -225,3 +232,40 @@ test('iOS: the project declares the extension, the activity, and a profile per t
 // refuses to judge a run with a skipped test in it, and a todo counts as one —
 // so a placeholder test here would switch the coverage ratchet off for the
 // whole repository until the Android layer landed.
+
+test('iOS: a certificate that does not check out is shown in full and accepted by the person before begin', () => {
+  // The same words as Android (XoSetup.kt problemLines), one per problem.
+  for (const words of [
+    'Self-signed: nothing but the server itself vouches for it.',
+    'Signed by an authority this machine does not trust.',
+    'Issued for a different name than',
+    'This machine could not read the certificate’s details.',
+    'Not trusted by that machine, which did not say why.',
+    'Its certificate checks out',
+  ]) {
+    assert.ok(SCREEN.includes(words), words);
+  }
+  assert.match(SCREEN, /case "expired": return "Expired on /);
+  assert.match(SCREEN, /case "not-yet-valid": return "Not valid until /);
+  // Every field the coordinator narrows is decoded and shown.
+  assert.match(IOS, /struct Certificate: Codable, Hashable \{[\s\S]*?let trusted: Bool\?[\s\S]*?let problems: \[String\]\?[\s\S]*?let subject: String\?[\s\S]*?let issuer: String\?[\s\S]*?let notBefore: String\?[\s\S]*?let notAfter: String\?[\s\S]*?let names: \[String\]\?/);
+  for (const label of ['"Issued to"', '"Issued by"', '"Valid"', '"Names"']) assert.ok(SCREEN.includes(label), label);
+  // The question, and Begin waits for its answer.
+  assert.match(SCREEN, /Toggle\(isOn: \$acknowledged\)/);
+  assert.match(SCREEN, /\.disabled\(busy \|\| email\.isBlank \|\| password\.isEmpty \|\| \(!chosen\.certificateTrusted && !acknowledged\)\)/);
+  // `trust` goes only with the person's word, and never for a trusted one.
+  assert.match(SCREEN, /if probe\.certificateTrusted \{\s*trust = nil\s*\} else if acknowledged \{\s*trust = "accepted"\s*\} else \{\s*return\s*\}/);
+  // What was found for one address is not left standing for another.
+  assert.match(SCREEN, /\.onChange\(of: address\)[\s\S]{0,400}?probes = nil[\s\S]{0,80}?chosen = nil[\s\S]{0,80}?acknowledged = false/);
+});
+
+test('iOS: a Live Activity that has heard nothing says so, and one the app gave up on ends', () => {
+  const ACT = read('apps/ios/Fleetwright/XOSetupActivities.swift');
+  assert.match(ACT, /staleDate: XOSetupWords\.isLive\(state\.state\) \? Date\(timeIntervalSinceNow: staleAfter\) : nil/);
+  assert.match(WIDGET, /stale: context\.isStale/);
+  assert.match(WIDGET, /if stale, XOSetupWords\.isLive\(state\.state\) \{\s*Text\(XOSetupWords\.silence\(state\)\)/);
+  // A state with no step still ends a dead job's activity.
+  assert.match(ACT, /var state = fresh \?\? activity\.content\.state\s*state\.state = newState/);
+  // Tokens are relayed again after a relaunch.
+  assert.match(read('apps/ios/Fleetwright/FleetwrightApp.swift'), /XOSetupActivities\.resume\(fleet: Fleet\(settings: settings\)\)/);
+});
