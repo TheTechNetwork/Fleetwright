@@ -61,6 +61,9 @@ internal object Seal {
     /** The vault's answer, on its way back to the key this phone made for it. */
     const val VAULT_REPLY_AAD = "fleetwright-vault-reply/v1"
 
+    /** A Claude token one of your machines made with `claude setup-token`, on its way back to this phone's key. */
+    const val SETUP_TOKEN_AAD = "fleetwright-setup-token/v1"
+
     /** An uncompressed P-256 public key, base64url without padding: 87 characters. */
     val KEY_RE = Regex("^[A-Za-z0-9_-]{87}$")
 
