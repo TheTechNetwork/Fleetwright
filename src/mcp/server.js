@@ -21,6 +21,7 @@
 
 import { toolsFor, DEFAULT_DENY } from './tools.js';
 import { dispatchRunner } from '../core/runners.js';
+import { describeRunnerAuth } from '../core/runner-auth-words.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -202,7 +203,13 @@ function describeHealth(h) {
   //
   // claudeAccounts is the real signal, and null is CANNOT TELL — an older host
   // that does not send it must not be reported as broken.
-  if (typeof h.claudeAccounts === 'number') {
+  // A runner with nobody linked is the ordinary case and has an answer of its
+  // own: what its sessions run on (core/runner-auth-words.js). Reported as "cannot
+  // do anything" beside a session that was running on the repository's key.
+  const runner = h.claudeAccounts === 0 ? describeRunnerAuth(h.runnerAuth) : null;
+  if (runner) {
+    lines.push(`claude: ${runner}`);
+  } else if (typeof h.claudeAccounts === 'number') {
     lines.push(
       h.claudeAccounts > 0
         ? `claude: ${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'} linked — sessions run as whoever starts them`

@@ -331,6 +331,30 @@ test('status counts the accounts that are actually linked', async () => {
   }
 });
 
+test('status on a runner with nobody linked says what its sessions run on', async () => {
+  // The host's own `status` printed "NOBODY HAS LINKED AN ACCOUNT — sessions
+  // started here cannot do anything" on a runner whose session was running on
+  // the repository's API key.
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const { saveRunnerLogin } = await import('../src/core/runner-login.js');
+  const dir = mkdtempSync(path.join(tmpdir(), 'status-runner-'));
+  const saved = process.env.ANTHROPIC_API_KEY;
+  try {
+    assert.equal(saveRunnerLogin({ stateDir: dir }, { email: 'owner@example.com', login: 'owner', token: null }).ok, true);
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-runner-repository-key-000000000000';
+    const reply = await dispatch(/** @type {any} */ ({
+      cfg: { stateDir: dir, installDir: dir, hostname: 'gha-1', releaseManifest: '' },
+      login: { status: () => ({ loggedIn: false }) },
+      sessions: { list: () => [] },
+    }), '/status');
+    assert.match(reply.text, /sessions run on the runner repository’s API key/, reply.text.slice(0, 400));
+    assert.doesNotMatch(reply.text, /NOBODY HAS LINKED/);
+  } finally {
+    if (saved === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a credential file whose mode was widened is tightened before it is read, out loud', () => {
   // connectors.js grew this guard for GitHub and Cloudflare tokens and this
   // store did not have it — on the one file that is an account rather than a
