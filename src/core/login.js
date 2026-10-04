@@ -21,6 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { Accounts, extractOauthAccount } from './accounts.js';
@@ -51,6 +52,25 @@ import { log } from '../log.js';
 // runs normally, no URL is ever found, and the login just times out.
 const AUTH_URL_RE =
   /https:\/\/(?:claude\.com|claude\.ai|platform\.claude\.com|console\.anthropic\.com)\/[^\s"'<>]*/g;
+// What `claude setup-token` prints as the token, once the pane is de-wrapped:
+// `sk-ant-oat01-` and the rest. Matched on the `sk-ant-` family rather than the
+// exact kind, so a new kind number does not silently stop the capture.
+const SETUP_TOKEN_RE = /\bsk-ant-[a-z]+\d*-[A-Za-z0-9_-]{20,}/;
+
+/**
+ * The token a `claude setup-token` pane printed, or null.
+ *
+ * De-wrapped first: the token is longer than a terminal line, and reading it
+ * off the raw pane would take the first line of it and lose the rest.
+ *
+ * @param {string} pane
+ * @returns {string|null}
+ */
+export function setupTokenFrom(pane) {
+  const m = dewrapPane(String(pane || '')).match(SETUP_TOKEN_RE);
+  return m ? m[0] : null;
+}
+
 const SUCCESS_RE = /Login successful|Logged in as|Successfully (?:logged|signed) in|authentication successful/i;
 const FAILURE_RE = /Login failed|Invalid code|authentication failed|Error: /i;
 
@@ -203,10 +223,17 @@ function tryRead(file) {
   }
 }
 
+/** What a flow does to its pane. One object, so a test can stand in for tmux and the CLI. */
+const PANE_IO = { hasSession, newSession, killSession, capturePane, sendKeys, sleep };
+
 export class LoginFlow {
-  /** @param {import('../config.js').Config} cfg */
-  constructor(cfg) {
+  /**
+   * @param {import('../config.js').Config} cfg
+   * @param {typeof PANE_IO} [io]  the pane, replaceable so a test can play the CLI's part
+   */
+  constructor(cfg, io = PANE_IO) {
     this.cfg = cfg;
+    this.io = io;
     /** @type {{ startedAt: number, startedBy: string|null, url: string|null, mode: string, linkFor?: string|null, linkDir?: string|null }|null} */
     this.pending = null;
   }
@@ -277,7 +304,7 @@ export class LoginFlow {
   /** Is a login waiting for a code right now? */
   isPending() {
     if (!this.pending) return false;
-    if (!hasSession(this.cfg.loginSessionName)) {
+    if (!this.io.hasSession(this.cfg.loginSessionName)) {
       this.pending = null;
       return false;
     }
@@ -319,7 +346,7 @@ export class LoginFlow {
     }
 
     const name = this.cfg.loginSessionName;
-    if (hasSession(name)) killSession(name); // stale pane from a crashed attempt
+    if (this.io.hasSession(name)) this.io.killSession(name); // stale pane from a crashed attempt
 
     const args = ['auth', 'login'];
     // Always pass the account type explicitly. Without it the flow opens with
@@ -348,7 +375,7 @@ export class LoginFlow {
       .map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`)
       .join(' ');
     const envPrefix = linkDir ? `env CLAUDE_CONFIG_DIR='${linkDir.replace(/'/g, `'\\''`)}' ` : '';
-    const spawned = newSession({ name, cwd: this.cfg.workdir, command: `exec ${envPrefix}${quoted}` });
+    const spawned = this.io.newSession({ name, cwd: this.cfg.workdir, command: `exec ${envPrefix}${quoted}` });
     if (spawned.status !== 0) {
       return { ok: false, message: `Could not start the login: ${(spawned.stderr || 'tmux failed').trim().slice(0, 200)}` };
     }
@@ -357,7 +384,7 @@ export class LoginFlow {
 
     const url = await this.#waitForUrl();
     if (!url) {
-      const pane = capturePane(name, 60).trim().split('\n').slice(-6).join('\n');
+      const pane = this.io.capturePane(name, 60).trim().split('\n').slice(-6).join('\n');
       this.cancel();
       return {
         ok: false,
@@ -380,9 +407,9 @@ export class LoginFlow {
   async #waitForUrl() {
     const name = this.cfg.loginSessionName;
     for (let waited = 0; waited < 45_000; waited += 1000) {
-      await sleep(1000);
-      if (!hasSession(name)) return null; // exited — already logged in, or failed
-      const text = capturePane(name, 200);
+      await this.io.sleep(1000);
+      if (!this.io.hasSession(name)) return null; // exited — already logged in, or failed
+      const text = this.io.capturePane(name, 200);
       const matches = dewrapPane(text).match(AUTH_URL_RE);
       if (!matches) continue;
       // Prefer a genuine authorize endpoint over any other first-party link
@@ -426,6 +453,10 @@ export class LoginFlow {
     // unknown_session refusal.
     const nothingWaiting = { ok: false, message: 'No login is waiting for a code. Start one with /login.' };
     if (!this.isPending()) return nothingWaiting;
+    // A TOKEN BEING MADE IS NOT A LOGIN. Typing this code into that pane and
+    // then waiting for `auth status` to say signed in would wait for something
+    // `setup-token` never does; it belongs to finishSetupToken.
+    if (this.pending?.mode === 'setup-token') return nothingWaiting;
     if (!sameActor(actor, this.pending?.startedBy)) {
       log.warn('login: a code arrived from somebody who did not start this login — refused');
       return nothingWaiting;
@@ -439,8 +470,8 @@ export class LoginFlow {
     }
 
     const name = this.cfg.loginSessionName;
-    sendKeys(name, ['-l', trimmed]); // -l = literal, so nothing is read as a key name
-    sendKeys(name, ['Enter']);
+    this.io.sendKeys(name, ['-l', trimmed]); // -l = literal, so nothing is read as a key name
+    this.io.sendKeys(name, ['Enter']);
 
     // CAPTURED ONCE, BEFORE THE LOOP. Read per-iteration off `this.pending`,
     // this was hostage to anything that cleared it — and something did: a
@@ -454,9 +485,9 @@ export class LoginFlow {
     // Watch the pane for an outcome, but treat `claude auth status` as the
     // authority — the banner wording is cosmetic and changes between releases.
     for (let waited = 0; waited < 60_000; waited += 2000) {
-      await sleep(2000);
-      const alive = hasSession(name);
-      const text = alive ? capturePane(name, 80) : '';
+      await this.io.sleep(2000);
+      const alive = this.io.hasSession(name);
+      const text = alive ? this.io.capturePane(name, 80) : '';
       const st = this.status({ configDir: link?.dir ?? null });
       if (st.loggedIn) {
         this.finish();
@@ -533,11 +564,118 @@ export class LoginFlow {
     };
   }
 
+  /**
+   * Begin making a long-lived Claude token with `claude setup-token`, and
+   * return the sign-in page to hand to the person.
+   *
+   * WHY ON THIS BOX. The token is what a runner signs in with, and making one
+   * needs a computer with the Claude command on it. Somebody on a phone has no
+   * such thing; this machine does. The flow is `start()`'s: a pane, a URL
+   * scraped out of it, a code typed back in.
+   *
+   * ITS OWN CONFIG DIRECTORY, removed when the flow ends, so making a token
+   * never touches this box's Claude setup or anybody's linked account.
+   *
+   * THE PANE OUTLIVES THE COMMAND by two minutes. `setup-token` prints the
+   * token and exits, and a tmux session ends with its command, taking the
+   * only copy of the token with it before anything could read it. The flow
+   * kills the pane the moment it has the token, whichever way it ends.
+   *
+   * @param {{ actor?: string|null }} [opts]
+   * @returns {Promise<{ ok: boolean, message: string, url?: string }>}
+   */
+  async startSetupToken({ actor = null } = {}) {
+    if (!this.cfg.loginEnabled) {
+      return { ok: false, message: 'Signing in from fleetwright is disabled on this box (FLEETWRIGHT_LOGIN=0).' };
+    }
+    if (this.isPending()) {
+      return {
+        ok: false,
+        message: 'A sign-in is already in progress on this box. Wait a few minutes for it to finish, or pick another machine.',
+      };
+    }
+    const name = this.cfg.loginSessionName;
+    if (this.io.hasSession(name)) this.io.killSession(name);
+
+    const tokenDir = path.join(this.cfg.stateDir, 'accounts', `pending-setup-${randomUUID()}`);
+    mkdirSync(tokenDir, { recursive: true, mode: 0o700 });
+    const q = (/** @type {string} */ a) => `'${String(a).replace(/'/g, `'\\''`)}'`;
+    const command = `env CLAUDE_CONFIG_DIR=${q(tokenDir)} ${q(this.cfg.claudeBin)} setup-token; sleep 120`;
+    const spawned = this.io.newSession({ name, cwd: this.cfg.workdir, command });
+    if (spawned.status !== 0) {
+      rmSync(tokenDir, { recursive: true, force: true });
+      return { ok: false, message: `Could not start claude setup-token: ${(spawned.stderr || 'tmux failed').trim().slice(0, 200)}` };
+    }
+
+    // `linkDir` so cancel() removes the directory, whichever way this ends.
+    this.pending = { startedAt: Date.now(), startedBy: actor, url: null, mode: 'setup-token', linkFor: null, linkDir: tokenDir };
+
+    const url = await this.#waitForUrl();
+    if (!url) {
+      const pane = this.io.capturePane(name, 60).trim().split('\n').slice(-6).join('\n');
+      this.cancel();
+      return { ok: false, message: `claude setup-token did not show a sign-in page.\nLast output:\n${pane || '(nothing)'}` };
+    }
+    this.pending.url = url;
+    log.info(`login: setup-token page issued${actor ? ` to ${actor}` : ''}`);
+    return {
+      ok: true,
+      url,
+      message: `Open the sign-in page, sign in to Claude, and send back the code it shows. It expires in ${Math.round(this.cfg.loginTimeoutMs / 60000)} minutes.`,
+    };
+  }
+
+  /**
+   * Type the code into the waiting `setup-token` pane and return the token it
+   * prints. The caller seals it; nothing here logs it or writes it down, and
+   * the pane and its directory are gone before this returns.
+   *
+   * Only whoever started the flow may finish it, with the same byte-identical
+   * refusal as submitCode, for the same reason.
+   *
+   * @param {string} code
+   * @param {string|null} [actor]
+   * @returns {Promise<{ ok: boolean, message: string, token?: string }>}
+   */
+  async finishSetupToken(code, actor = null) {
+    const nothingWaiting = { ok: false, message: 'No token is being made on this box. Start again from the app.' };
+    if (!this.isPending() || this.pending?.mode !== 'setup-token') return nothingWaiting;
+    if (!sameActor(actor, this.pending?.startedBy)) {
+      log.warn('login: a setup-token code arrived from somebody who did not start it — refused');
+      return nothingWaiting;
+    }
+    const trimmed = String(code || '').trim();
+    if (!trimmed || /\s/.test(trimmed) || trimmed.length > 512) {
+      return { ok: false, message: 'That does not look like the code from the sign-in page. Paste just the code itself.' };
+    }
+    const name = this.cfg.loginSessionName;
+    this.io.sendKeys(name, ['-l', trimmed]);
+    this.io.sendKeys(name, ['Enter']);
+
+    for (let waited = 0; waited < 60_000; waited += 2000) {
+      await this.io.sleep(2000);
+      const text = this.io.capturePane(name, 200);
+      const token = setupTokenFrom(text);
+      if (token) {
+        this.cancel();
+        log.info('login: setup-token made a token');
+        return { ok: true, token, message: 'Made a Claude token.' };
+      }
+      if (FAILURE_RE.test(text)) {
+        this.cancel();
+        const why = failureLine(text);
+        return { ok: false, message: `Claude refused the sign-in.${why ? `\n\n${why}` : ''}` };
+      }
+    }
+    this.cancel();
+    return { ok: false, message: 'Sent the code, but no token appeared within a minute. Start again from the app.' };
+  }
+
   /** Tear the pane down without touching credentials. */
   cancel() {
     const name = this.cfg.loginSessionName;
-    const had = hasSession(name);
-    if (had) killSession(name);
+    const had = this.io.hasSession(name);
+    if (had) this.io.killSession(name);
     if (this.pending?.linkDir) rmSync(this.pending.linkDir, { recursive: true, force: true });
     this.pending = null;
     return { ok: true, message: had ? 'Login cancelled.' : 'No login was in progress.' };
@@ -545,7 +683,7 @@ export class LoginFlow {
 
   /** Successful end of a flow — same teardown, different wording. */
   finish() {
-    if (hasSession(this.cfg.loginSessionName)) killSession(this.cfg.loginSessionName);
+    if (this.io.hasSession(this.cfg.loginSessionName)) this.io.killSession(this.cfg.loginSessionName);
     this.pending = null;
   }
 

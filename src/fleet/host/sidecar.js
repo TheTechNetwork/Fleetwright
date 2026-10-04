@@ -713,6 +713,11 @@ export class Sidecar {
         // What a stored token can actually do, when it was just asked. Scope
         // names, an account, and what is absent — never the token.
         ...(r.check ? { check: r.check } : {}),
+        // `setuptoken`'s two halves: the sign-in page to open, and the token
+        // it made, sealed to the asking phone's key. Ciphertext, so the
+        // coordinator relays it without being able to read it.
+        ...(typeof r.url === 'string' && r.url ? { url: r.url } : {}),
+        ...(r.sealed && typeof r.sealed === 'object' ? { sealed: r.sealed } : {}),
         // WHAT IS WAITING, AS DATA, and it was computed and then thrown away
         // here. `/updates` returns `{ app, system }` — kind, pending, version —
         // precisely so a row can render a state instead of parsing a sentence,
@@ -1891,6 +1896,14 @@ export function toCommandLine({ verb, params, actor }) {
       return `/link ${p.provider} ${p.secret}${p.scope === 'host' ? ' --host' : ''}`;
     case 'verify':
       return `/verify ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
+    case 'setuptoken':
+      // The code is a protocol `secret`, so one token with no leading dash. The
+      // key is held to SEAL_KEY_RE, and an uncompressed P-256 point always
+      // starts with byte 0x04, so its base64url always starts with `B`: never a
+      // flag either. A finish without a key is refused here, not sent.
+      if (!p.code) return '/setuptoken';
+      if (!p.reply) throw new Error('setuptoken with a code needs `reply`, the key to seal the token to');
+      return `/setuptoken ${p.code} ${p.reply}`;
     case 'unlink':
       if (p.provider === 'claude') {
         // Same as `connect` above: there is no machine account to log out of.

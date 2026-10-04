@@ -88,6 +88,7 @@
  */
 
 import { describe } from '../core/login.js';
+import { seal, SEAL_KEY_RE, SETUP_TOKEN_AAD } from '../fleet/seal.js';
 import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../core/connectors.js';
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
 import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
@@ -1664,6 +1665,36 @@ export const COMMANDS = {
       // afterwards runs on an account they control.
       const r = await ctx.login.submitCode(args.join(''), ctx.actor);
       return { ok: r.ok, text: r.message, connections: connectionsPayload(ctx) };
+    },
+  },
+
+  setuptoken: {
+    usage: '/setuptoken [<code> <reply-key>]',
+    short: 'Make a long-lived Claude token for your runners on this box',
+    help:
+      'Runs `claude setup-token` here for somebody without a computer to run it on. With no arguments it starts '
+      + 'and answers with the sign-in page. With the code that page shows and a P-256 public key, it answers with '
+      + 'the token sealed to that key, so only whoever holds the private half can read it. Nothing is kept here.',
+    run: async (ctx, args) => {
+      if (!args.length) {
+        const r = await ctx.login.startSetupToken({ actor: ctx.actor });
+        return { ok: r.ok, text: r.message, ...(r.url ? { url: r.url } : {}) };
+      }
+      const [code, reply] = args;
+      // A KEY TO SEAL TO, OR NOTHING IS TYPED. The token is a person's whole
+      // subscription for a year; a finish with no key would have to answer it
+      // in the clear, through every relay between here and the phone.
+      if (!code || !SEAL_KEY_RE.test(String(reply || ''))) {
+        return { ok: false, text: 'Usage: /setuptoken <code> <reply-key>' };
+      }
+      const r = await ctx.login.finishSetupToken(code, ctx.actor);
+      if (!r.ok || !r.token) return { ok: false, text: r.message };
+      const sealed = await seal({ to: reply, aad: SETUP_TOKEN_AAD, payload: { v: 1, token: r.token } });
+      return {
+        ok: true,
+        text: `Made a Claude token on ${ctx.cfg.hostname || 'this box'}. It went back sealed to whoever asked, and this box kept no copy.`,
+        sealed,
+      };
     },
   },
 
