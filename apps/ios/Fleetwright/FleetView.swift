@@ -997,7 +997,24 @@ private func describeBinned(_ item: Fleet.Binned) -> String {
 /// is guaranteed noise.
 // NOT file-private: HostView renders the same sentence, and a second copy of
 // it is how two screens start describing one fact differently.
-func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) -> String {
+func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?,
+                         runnerAuth: String? = nil, runner: Bool = false) -> String {
+    // A RUNNER IS ASKED A DIFFERENT QUESTION. Nobody links an account on a
+    // GitHub job; its sessions run on the login its owner keeps for runners or
+    // on the runner repository's key, and the host says which. This line said
+    // "Nobody has connected a Claude account here — sessions will not start"
+    // on a runner whose sessions would start, beside the word "healthy".
+    if accounts == 0 {
+        switch runnerAuth {
+        case "owner": return "Sessions run on the Claude login its owner keeps for runners"
+        case "key": return "Sessions run on the runner repository's API key"
+        case "none":
+            return "No Claude login is kept for this runner's owner and its repository has no API key — sessions will not start"
+        default:
+            // Cannot tell yet, which is not a fault (C-5).
+            if runner { return "Fetching the Claude login its sessions will run on" }
+        }
+    }
     // THE ZERO CASE KEEPS ITS WORDS. It is the only real fault here, and
     // "Nobody" alone says what is wrong without saying what to do about it —
     // naming the Claude account is what makes it actionable. The other cases
@@ -1115,6 +1132,18 @@ func describeRunning(_ host: Fleet.FleetHost) -> String {
         parts.append(host.health?.channelPinned == true ? "\(channel), set on the box" : channel)
     }
     return parts.isEmpty ? "version not reported" : parts.joined(separator: " · ")
+}
+
+/// Whether that line is a fault: nobody can start a session here. A runner
+/// with its owner's login or its repository's key can, and one that has not
+/// heard back yet cannot be judged.
+func whoCanStartIsFault(_ accounts: Int, runnerAuth: String?, runner: Bool) -> Bool {
+    guard accounts == 0 else { return false }
+    switch runnerAuth {
+    case "owner", "key": return false
+    case "none": return true
+    default: return !runner
+    }
 }
 
 /// "Nobody has connected a Claude account here", or how many people have.

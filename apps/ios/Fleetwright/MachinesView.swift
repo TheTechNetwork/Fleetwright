@@ -196,9 +196,12 @@ struct MachinesView: View {
         // WHO CAN START A SESSION HERE, and as whom. Zero is the real fault and
         // the only thing worth colouring; nil is an older host and says nothing.
         if let accounts = host.health?.claudeAccounts {
-            Text(describeWhoCanStart(accounts, account: host.health?.account))
+            let auth = host.health?.runnerAuth
+            let runner = host.ephemeral == true
+            Text(describeWhoCanStart(accounts, account: host.health?.account, runnerAuth: auth, runner: runner))
                 .fleetType(.micro)
-                .foregroundStyle(accounts == 0 ? Design.Palette.attention : Design.Palette.inkDim)
+                .foregroundStyle(whoCanStartIsFault(accounts, runnerAuth: auth, runner: runner)
+                                 ? Design.Palette.attention : Design.Palette.inkDim)
         }
         // THE SECOND WAY TO BE SIGNED OUT: the credential file a session is
         // actually handed. Shown only when it is DEAD; an expired token that
@@ -226,7 +229,8 @@ struct MachinesView: View {
     private func hostRing(_ host: Fleet.FleetHost) -> Color {
         let unwell = (host.state ?? "unknown") != "healthy"
         let waiting = host.updatePending
-        let unusable = (host.health?.claudeAccounts ?? 1) == 0
+        let unusable = whoCanStartIsFault(host.health?.claudeAccounts ?? 1, runnerAuth: host.health?.runnerAuth,
+                                          runner: host.ephemeral == true)
         return unwell || waiting || unusable ? Design.Palette.attention.opacity(0.55) : Design.Palette.ring
     }
 

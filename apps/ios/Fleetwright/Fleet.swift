@@ -1395,6 +1395,11 @@ struct Fleet {
         /// is the ordinary state of every box. Zero here is the real fault;
         /// nil is an older host and is not one.
         let claudeAccounts: Int?
+        /// On a runner, what a session there signs in with when nobody has
+        /// linked an account: "owner" (the login its owner keeps for runners),
+        /// "key" (the runner repository's API key) or "none". Nil on a
+        /// permanent box, and on a runner that has not heard back yet.
+        let runnerAuth: String?
         let running: Int?
         let maxSessions: Int?
         /// Forgotten, still recoverable. Absent on a host that has not been
@@ -1512,7 +1517,7 @@ struct Fleet {
             )
             return HostHealth(
                 account: account, credential: credential, version: version, updates: next,
-                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
@@ -1521,7 +1526,7 @@ struct Fleet {
         func withChannel(_ channel: String, pinned: Bool) -> HostHealth {
             HostHealth(
                 account: account, credential: credential, version: version, updates: updates,
-                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
@@ -1534,7 +1539,7 @@ struct Fleet {
         func withSandbox(_ sandbox: Sandbox) -> HostHealth {
             HostHealth(
                 account: account, credential: credential, version: version, updates: updates,
-                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
@@ -1549,7 +1554,7 @@ struct Fleet {
         func withLabels(all: [String], set: [String]) -> HostHealth {
             HostHealth(
                 account: account, credential: credential, version: version, updates: updates,
-                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
             )
@@ -1563,6 +1568,8 @@ struct Fleet {
         let state: String?
         let reason: String?
         let health: HostHealth?
+        /// A runner: a machine somebody started for an hour, expected to vanish.
+        var ephemeral: Bool?
         var id: String { hostId }
 
         /// Is there anything of ours to apply? Asked once, so the version line
