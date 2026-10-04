@@ -225,9 +225,11 @@ struct HostView: View {
                 Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
             }
             if let accounts = health?.claudeAccounts {
-                Text(describeWhoCanStart(accounts, account: health?.account))
+                let runner = enrolled?.ephemeral == true
+                Text(describeWhoCanStart(accounts, account: health?.account, runnerAuth: health?.runnerAuth, runner: runner))
                     .fleetType(.label)
-                    .foregroundStyle(accounts == 0 ? Design.Palette.attention : Design.Palette.inkDim)
+                    .foregroundStyle(whoCanStartIsFault(accounts, runnerAuth: health?.runnerAuth, runner: runner)
+                                     ? Design.Palette.attention : Design.Palette.inkDim)
             }
             if let version = health?.version?.head, !version.isEmpty {
                 Text(version).fleetType(.labelMono).foregroundStyle(Design.Palette.inkDim)
