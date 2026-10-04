@@ -100,10 +100,10 @@ function constantTimeEqual(a, b) {
  *   presenting it is refused, and a repository nobody put on the operator's
  *   allowlist can admit a machine ONLY with a ticket naming it. Absent on a
  *   ticket minted before this existed, which binds nothing, as before
- * @property {{ title?: string, brief?: string, mode?: string }|null} [start]
- *   a session to start on the runner once it joins, for the person who asked.
- *   Prose and a mode only: a runner has no task profiles and no secrets of its
- *   own, so a ticket cannot carry a reference to either
+ * @property {{ title?: string, brief?: string, mode?: string, task?: string }|null} [start]
+ *   a session to start on the runner once it joins, for the person who asked:
+ *   its task, prose and a mode. A runner has no task profiles and no secrets
+ *   of its own, so a ticket cannot carry a reference to either
  * @property {number} mintedAt
  * @property {number} expiresAt
  */

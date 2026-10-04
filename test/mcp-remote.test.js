@@ -677,7 +677,7 @@ test('start says whether the session has anything to do', async () => {
 
   const idle = await start({ brief: 'list the files' });
   assert.match(idle, /STARTED IDLE/);
-  assert.match(idle, /fleet_profiles/, 'names the dead end without naming the way out of it');
+  assert.match(idle, /start it again with a `task`/, 'names the dead end without naming the way out of it');
   // And where it landed, which was its own finding (#327).
   assert.match(idle, /On deb132/);
 
@@ -689,6 +689,10 @@ test('start says whether the session has anything to do', async () => {
   assert.match(working, /"reviewer" profile/);
   assert.match(working, /read_log BEFORE you stop it/i);
   assert.match(working, /On deb132/);
+
+  const tasked = await start({ task: 'Run the tests and say which failed.' });
+  assert.equal(/STARTED IDLE/.test(tasked), false);
+  assert.match(tasked, /working on the task you gave it/);
 });
 
 // --- the evidence a caller was told to gather by hand ------------------------

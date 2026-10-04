@@ -928,6 +928,20 @@ test('a session started from a profile coming back to its prompt is the "done" t
   assert.equal(c.events[0].profile, 'nightly');
 });
 
+test('a session handed its task in words coming back is the same "done", and only that it had one travels', async () => {
+  const push = fakePusher();
+  const c = core({ push });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40) });
+
+  await c.onHostMessage('deb132', { kind: 'event', event: 'session.ready', name: 'build-1', text: 'is back at its prompt', tasked: true });
+
+  assert.equal(push.sends.length, 1, 'a job handed over coming back is what the phone is for');
+  assert.equal(c.events[0].tasked, true);
+  // A flag, not the words: an event carrying `tasked: "rm -rf"` keeps nothing of it.
+  await c.onHostMessage('deb132', { kind: 'event', event: 'session.ready', name: 'build-2', text: 'is back at its prompt', tasked: 'rm -rf' });
+  assert.equal(c.events.at(-1)?.tasked, undefined);
+});
+
 test('a turn in a conversation somebody is driving by hand is recorded and not pushed', async () => {
   const push = fakePusher();
   const c = core({ push });

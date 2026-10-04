@@ -120,16 +120,24 @@ test('the prompt is the last argument, after every flag', () => {
   assert.equal(/''$/.test(buildCommand(cfg, { name: 'x', prompt: '   ' })), false);
 });
 
-test('the protocol carries the name and has nowhere to put the words', () => {
-  // docs/wanted.md: the coordinator may NAME a profile; it may never CARRY one.
-  // Asserted as an absence, because the way this property is lost is somebody
-  // adding a convenient `prompt` or `task` parameter that looks harmless.
+test('words reach a session only as its first message, and a profile is still a name', () => {
+  // docs/wanted.md's rule was that the coordinator may NAME a profile and never
+  // CARRY one. v7 dropped it at the owner's decision: `start.task` carries the
+  // first message, because a runner minutes old has no profile and every
+  // session started there came up idle. What still holds is that nothing sends
+  // text into a session that is already running — the property that made
+  // `answer` take an ordinal — so `start.task` is the one place words travel,
+  // asserted as an absence everywhere else.
   for (const [verb, spec] of Object.entries(VERBS)) {
     for (const key of Object.keys(spec.params)) {
+      if (verb === 'start' && key === 'task') continue;
       assert.equal(/^(prompt|task|instructions|message)$/i.test(key), false,
-        `${verb} accepts "${key}" — free text into a session is the one thing this protocol does not do`);
+        `${verb} accepts "${key}" — text into a running session is the one thing this protocol does not do`);
     }
   }
+  // Raw, so a task's newlines survive, and bounded like a profile file.
+  assert.equal(VERBS.start.params.task.type, 'raw');
+  assert.equal(VERBS.start.params.task.max, 8000);
   assert.equal(VERBS.start.params.profile.type, 'name');
 
   // A profile name is validated as a name, so it cannot become a second flag on

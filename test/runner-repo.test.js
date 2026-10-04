@@ -321,14 +321,16 @@ test('the session asked for with a machine starts on it once, as its owner', asy
   assert.equal(bad.ok, false);
   assert.equal(core.runnerTickets.serialise().length, 0);
 
-  await core.dispatch(provision(eli, { startAfter: { title: 'Build the Mac app', profile: 'deploy' } }));
+  const task = 'Build the macOS app in ./app.\nRun its tests and say which failed.';
+  await core.dispatch(provision(eli, { startAfter: { title: 'Build the Mac app', profile: 'deploy', task } }));
   const ticket = await core.runnerTickets.redeem(sent[0].spec.params.ticket);
-  // A runner has no profiles, so a profile is not carried.
-  assert.deepEqual(ticket?.start, { title: 'Build the Mac app' });
+  // A runner has no profiles, so a profile is not carried. Its task is: the
+  // words are how a machine minutes old is given its job, newlines and all.
+  assert.deepEqual(ticket?.start, { title: 'Build the Mac app', task });
 
   core.noteRunnerEnrolled('gha-eli-1', ticket);
   core.registry.connect('gha-eli-1', () => {}, { ephemeral: true, owner: eli.email });
-  const frame = { kind: 'health', health: { hub: { reachable: true }, protocol: 6, maxSessions: 1, running: 0, free: 1, labels: [] } };
+  const frame = { kind: 'health', health: { hub: { reachable: true }, protocol: 7, maxSessions: 1, running: 0, free: 1, labels: [] } };
   await core.onHostMessage('gha-eli-1', frame);
   await core.onHostMessage('gha-eli-1', frame);
   await new Promise((r) => setImmediate(r));
@@ -338,7 +340,30 @@ test('the session asked for with a machine starts on it once, as its owner', asy
   assert.equal(starts[0].hostId, 'gha-eli-1');
   assert.equal(starts[0].spec.actor, eli.email);
   assert.equal(starts[0].spec.params.title, 'Build the Mac app');
+  assert.equal(starts[0].spec.params.task, task);
   assert.ok(core.events.some((e) => e.event === 'runner.started'));
+});
+
+test('a task goes to a host that can take one, and a host that cannot says so rather than starting idle', async () => {
+  // Dropped the way an optional param too new for a host is, the task would
+  // leave the session idle — the thing it exists to end — with a reply saying
+  // it started.
+  const { core, sent } = fleet([['deb6', 6], ['deb7', 7]], () => ({ ok: true, text: 'Started.', sessions: [] }));
+  const start = (/** @type {string} */ host, /** @type {any} */ params) =>
+    core.dispatch({ verb: 'start', params, actor: eli.email, requester: eli, preferHost: host });
+
+  const old = await start('deb6', { task: 'Run the tests.' });
+  assert.equal(old.ok, false);
+  assert.equal(old.error?.code, 'host_outdated');
+  assert.match(String(old.text), /deb6 is too old to be handed a task .* needs 7/);
+  assert.deepEqual(sent, []);
+
+  // Without a task there is nothing to lose, and it goes.
+  assert.equal((await start('deb6', { title: 'Look around' })).ok, true);
+
+  assert.equal((await start('deb7', { task: 'Run the tests.' })).ok, true);
+  assert.equal(sent.at(-1)?.hostId, 'deb7');
+  assert.equal(sent.at(-1)?.spec.params.task, 'Run the tests.');
 });
 
 test('stored runner state that does not look right is dropped, not trusted', () => {

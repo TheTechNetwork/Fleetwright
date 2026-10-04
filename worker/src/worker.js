@@ -1742,7 +1742,7 @@ const OPENAPI = JSON.stringify({
                   },
                   "start": {
                     "type": "object",
-                    "description": "For `provision` only: a session to start on the runner once it joins the fleet, as `start` would take it \u2014 `title`, `brief` and `mode`. Held by the coordinator with the dispatch ticket and started on the runner\u2019s first health frame, as the person who asked. No profile or secret: a runner holds neither.",
+                    "description": "For `provision` only: a session to start on the runner once it joins the fleet, as `start` would take it \u2014 `task`, `title`, `brief` and `mode`. Held by the coordinator with the dispatch ticket and started on the runner\u2019s first health frame, as the person who asked. `task` is the words it starts working on; without one it comes up idle. No profile or secret: a runner holds neither.",
                     "properties": {
                       "title": {
                         "type": "string"
@@ -1752,6 +1752,10 @@ const OPENAPI = JSON.stringify({
                       },
                       "mode": {
                         "type": "string"
+                      },
+                      "task": {
+                        "type": "string",
+                        "maxLength": 8000
                       }
                     },
                     "additionalProperties": false
@@ -2239,7 +2243,7 @@ const OPENAPI = JSON.stringify({
                   },
                   "start": {
                     "type": "object",
-                    "description": "a session to start when it joins: `title`, `brief`, `mode`, as `start` takes them"
+                    "description": "a session to start when it joins: `task`, `title`, `brief`, `mode`, as `start` takes them"
                   }
                 }
               }

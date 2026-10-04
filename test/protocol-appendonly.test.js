@@ -30,7 +30,7 @@ const BASELINE = Object.freeze({
   status: { name: 1 },
   peek: { name: 1, lines: 1 },
   health: {},
-  start: { name: 1, mode: 1, title: 1, brief: 1, profile: 3, secret: 4 },
+  start: { name: 1, mode: 1, title: 1, brief: 1, profile: 3, secret: 4, task: 7 },
   channel: { to: 1 },
   sandbox: { to: 1 },
   labels: { add: 1, remove: 1 },

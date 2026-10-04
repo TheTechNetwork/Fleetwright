@@ -601,6 +601,19 @@ export class Sidecar {
       // key it signs with is in this process and nowhere else on the box.
       if (intent.verb === 'mint') return reply(await this.#mint(intent));
 
+      // v7'S `task`, REFUSED UNTIL THIS BOX CAN DELIVER IT. The protocol table
+      // is shared, so a box on this commit reports 7 and validates a task, but
+      // nothing here types it into the session yet — that is the host layer of
+      // the same round. Taken without that, it would start the idle session
+      // `task` exists to end and say it started.
+      if (intent.verb === 'start' && typeof intent.params?.task === 'string' && intent.params.task) {
+        return reply({
+          ok: false,
+          error: { code: 'host_outdated' },
+          text: 'This box cannot be handed a task yet. Update it and ask again, or start the session with a profile.',
+        });
+      }
+
       // A session on a runner waits for the answer about its owner's Claude
       // login, which is bounded by the mint timeout and never throws.
       if ((intent.verb === 'start' || intent.verb === 'resume') && this.claudeLoginReady) await this.claudeLoginReady;
