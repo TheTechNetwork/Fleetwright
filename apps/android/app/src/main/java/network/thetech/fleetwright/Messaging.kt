@@ -63,6 +63,13 @@ class Messaging : FirebaseMessagingService() {
      * nothing, and Doze may delay it.
      */
     override fun onMessageReceived(message: RemoteMessage) {
+        // A HYPERVISOR SETUP'S PROGRESS IS THE OTHER EXCEPTION: not a
+        // notification per step, but one that is updated in place, with a
+        // bar. XoSetupNotice draws it from the step numbers in `data`.
+        if (message.data[XoSetupNotice.EXTRA_KIND] == XoSetupNotice.KIND) {
+            XoSetupNotice.post(applicationContext, message.data)
+            return
+        }
         val words = NotificationAnswers.titlesFor(message.data["category"])
         if (words == null) {
             Log.i(TAG, "push while foregrounded: ${message.notification?.title ?: message.data}")
