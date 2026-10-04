@@ -61,6 +61,7 @@ const BASELINE = Object.freeze({
   provision: { platform: 1, minutes: 1, ticket: 1, repo: 6 },
   runnerrepo: { repo: 6 },
   mint: { repo: 1, job: 1, key: 1 },
+  setuptoken: { code: 1, reply: 1 },
 });
 
 /** @param {import('../src/fleet/protocol/intents.js').ParamSpec} ps */

@@ -1059,6 +1059,40 @@ export const VERBS = Object.freeze({
       'workflows (linux, macos, windows, android) it has. Changes nothing.',
   },
 
+  // A CLAUDE TOKEN FOR YOUR RUNNERS, MADE ON A MACHINE YOU PICK.
+  //
+  // `claude setup-token` is the one way to make the long-lived token a runner
+  // signs in with, and it needs a computer with the Claude command on it. A
+  // person on a phone has no such thing, and the fleet has several. So the
+  // machine runs it in a pane, as it already runs `claude auth login`, and
+  // this verb is its two halves:
+  //
+  //   no `code`        start it; the reply carries the sign-in page's address
+  //   `code` + `reply` finish it; the reply carries the token SEALED to
+  //                    `reply`, a key only the asking phone holds
+  //
+  // The phone opens the seal and keeps the token with the minter exactly as a
+  // pasted one is kept, so the coordinator relays an address and a ciphertext
+  // and never the token. A new verb rather than a parameter on `connect`: an
+  // older host answers `unknown_verb`, which strands nothing.
+  setuptoken: {
+    params: {
+      code: { type: 'secret', required: false, max: 512 },
+      reply: {
+        type: 'text',
+        required: false,
+        max: 87,
+        pattern: SEAL_KEY_RE,
+        shapeName: 'a P-256 public key',
+        describe: 'What the token is sealed to: a key only the asking phone holds.',
+      },
+    },
+    mutating: true,
+    summary:
+      'Make a long-lived Claude token for your runners on one machine: start it to get the sign-in page, then send ' +
+      'the code that page shows with a key of yours, and the token comes back sealed to that key.',
+  },
+
   // A REPOSITORY TOKEN FOR A RUNNER, minted by a permanent box that holds the
   // GitHub App key, for the runner's owner. See src/core/repo-tokens.js for
   // what bounds it and docs/runner-central.md for why it exists.

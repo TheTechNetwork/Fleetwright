@@ -1713,6 +1713,7 @@ const OPENAPI = JSON.stringify({
                       "runnerrepo",
                       "sandbox",
                       "secrets",
+                      "setuptoken",
                       "start",
                       "status",
                       "stop",

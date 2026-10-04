@@ -56,6 +56,10 @@ export const DEFAULT_DENY = ([
   // product does not provide. A dead end rather than a policy.
   'reboot', 'upgrade', 'restore',
   'connect', 'link', 'unlink', 'renew', 'answer',
+  // A token that is a person's whole Claude subscription for a year. Made for
+  // a phone to keep with the minter; an agent has no key to seal it to and no
+  // business asking.
+  'setuptoken',
   // NOT `forget`, ANY MORE. It was withheld as "destroys a conversation that
   // cannot be recovered", and that stopped being true when the seven-day
   // recycle bin shipped — `forget` is now the RECOVERABLE one and `purge` is
