@@ -11,6 +11,58 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.5 — 2026-10-04
+
+**The apps are now three places, Sessions, Machines and You. One of your
+machines can make the Claude token for your phone, and a runner says what its
+sessions will run on.**
+
+- **Sessions, Machines and You.** Sessions is your sessions and what they are
+  waiting on. Machines is the boxes and runners and how they are. You is your
+  account, your credentials and the one-time setup. People, Revoke host and
+  revoking someone's device are offered to admins only. An admin can switch to
+  the member view to see exactly what a member sees, then switch back.
+- **Finish setting up.** Once you are signed in and no Claude login is kept for
+  you, Sessions shows a card that takes you through signing in to GitHub on
+  the phone and keeping a Claude login, so a runner no longer joins and then
+  refuses the session it was started for.
+- **Make the Claude token on one of your machines.** Claude setup now offers
+  to run `claude setup-token` on a machine you pick. The phone opens the
+  sign-in page, you paste back the code it shows, and the token comes back
+  sealed to your phone. The fleet passes on only the page's address and the
+  sealed reply. A box still on 0.4.4 says it cannot, and pasting a token works
+  as before.
+- **No minter key to paste.** The phone and `fleetwright-claude-login` look the
+  key up from the fleet's address, and a key that changes reaches every phone
+  with nothing to paste again.
+- **Runner repositories come from a template.** Make one from
+  github.com/TheTechNetwork/Fleetwright-Runners-Template, install the GitHub
+  App on it, and press **Check and save**.
+- **A session keeps the tools it installs.** What a session installs with npm,
+  pip, pipx, go or cargo now goes under `/work/.tools` and is still there after
+  its box restarts. Downloads are cached for each person, so the next session
+  does not fetch the same packages again. This needs the new session image,
+  which the box offers under Apply update. `FLEETWRIGHT_SANDBOX_CACHE=0` turns
+  the cache off.
+- **Fixes.**
+  - The phone's GitHub sign-in could fail with "The refresh token passed is
+    incorrect or expired": two renewals at once spent the same single-use
+    token. It now renews once at a time, and a sign-in that has run out asks
+    you to sign in again.
+  - Linked on machines: a credential's row and its Test now agree when it is
+    linked on more than one machine. The Test answer shows under its own row
+    and names the machine it ran on, and a fault reads as a plain sentence.
+  - A runner no longer says nobody has connected a Claude account when its
+    sessions run on its owner's Claude login or the repository's API key. A
+    runner still fetching its login is shown as not known yet, and sends no
+    notification.
+  - A start made just after the fleet restarts waits up to 20 seconds for
+    machines that have only just reconnected, instead of refusing.
+  - A phone that once saved the minter key by hand seals to the current key.
+
+Hosts still speak protocol 6. A box on 0.4.4 keeps working and lacks only the
+token-making and the session tool changes above.
+
 ## 0.4.4 — 2026-10-02
 
 **Temporary machines come from your own GitHub repository, and your phone can
