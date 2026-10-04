@@ -398,6 +398,7 @@ fun FleetScreen(
                 request.title?.let { put("title", it) }
                 request.brief?.let { put("brief", it) }
                 request.mode?.let { put("mode", it) }
+                request.task?.let { put("task", it) }
             }
             scope.launch {
                 val reply = fleet.provision(platform, minutes = request.minutes, start = start)
@@ -410,7 +411,7 @@ fun FleetScreen(
         }
         // SAID DIFFERENTLY WHEN IT HAS NOTHING TO DO: a session with no profile
         // is waiting for a person.
-        status = if (request.profile == null) {
+        status = if (request.profile == null && request.task == null) {
             "Starting a session. It will come up idle, waiting for you."
         } else {
             "Starting a session. You will get a notification when it is ready."
@@ -424,6 +425,7 @@ fun FleetScreen(
                     host = request.host,
                     profile = request.profile,
                     secret = request.secret,
+                    task = request.task,
                 )
                 // BY WHAT THE FLEET SAID, not by whether it answered: a refusal
                 // is an answer, and "Session ready" over "unknown (connected, no

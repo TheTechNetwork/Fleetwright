@@ -40,16 +40,18 @@ test('both apps can ask what tasks the fleet has', () => {
   assert.match(DROID.fleet, /intent\("profiles"/);
 });
 
-test('both apps send the profile on start, and neither sends the words', () => {
+test('both apps send the profile on start, and the words only as its task', () => {
   for (const [name, src] of [['iOS', IOS.fleet], ['Android', DROID.fleet]]) {
     assert.match(src, /params\["profile"\] = profile|put\("profile", profile\)/,
       `${name} never puts profile on a start intent`);
-    // THE CONTENT MUST NOT HAVE A ROUTE. A phone that could supply the words
-    // would be writing the instructions of an agent running as root in a
-    // container — docs/task-at-start.md, and the rule wanted.md set before any
-    // of this was built.
-    assert.equal(/"(prompt|task|instructions)"\s*[:,]/.test(src), false,
-      `${name} has a field that could carry a task's text`);
+    // THE WORDS HAVE ONE ROUTE. wanted.md's rule was that a phone never sends
+    // them; protocol v7 dropped it for a session's first message, at the
+    // owner's decision, so `start.task` carries them — once, in Fleet.start,
+    // and through no other key. Nothing sends text to a running session.
+    const routes = src.match(/params\["task"\] = task|put\("task", task\)/g) ?? [];
+    assert.equal(routes.length, 1, `${name} should send a task from Fleet.start and nowhere else`);
+    assert.equal(/"(prompt|instructions|message)"\s*[:,\]]/.test(src), false,
+      `${name} has another field that could carry words into a session`);
   }
 });
 

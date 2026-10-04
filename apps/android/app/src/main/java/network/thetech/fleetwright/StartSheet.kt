@@ -42,6 +42,8 @@ data class StartRequest(
      * did before protocol v3, and what nothing said out loud.
      */
     val profile: String? = null,
+    /** OR WHAT IT WILL DO, in words (protocol v7): its first message. Either this or `profile`. */
+    val task: String? = null,
     /**
      * WHAT IT MAY REACH, by name. Null grants nothing. The value never travels
      * with this — the host resolves the name and the session fetches the value
@@ -52,7 +54,8 @@ data class StartRequest(
      * A NEW TEMPORARY MACHINE to start it on, by operating system, or null for
      * a machine the fleet already has. When set, `host`, `profile` and
      * `secret` are null: the machine does not exist yet, and a runner holds no
-     * task profiles or secrets of its own.
+     * task profiles or secrets of its own. `task` travels: it is how a machine
+     * minutes old is given its job.
      */
     val platform: String? = null,
     /** How long that machine stays, in minutes. Only with `platform`. */
@@ -98,6 +101,7 @@ fun StartSheet(
     val kinds = remember { SessionKinds.all(context) }
 
     var brief by remember { mutableStateOf("") }
+    var task by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("") }
     var lastSuggested by remember { mutableStateOf("") }
     var titleUntouched by remember { mutableStateOf(true) }
@@ -137,11 +141,14 @@ fun StartSheet(
     // to read it, lose the sentence, and costs them the thing it was meant to
     // save. Restarted by LaunchedEffect's key rather than by cancelling a job
     // by hand, which is the same debounce with less to get wrong.
-    LaunchedEffect(brief) {
-        if (!titleUntouched || brief.isBlank()) return@LaunchedEffect
+    // From the brief when there is one, else the task, which says what the
+    // session is about just as well.
+    val suggestionSource = brief.ifBlank { task }
+    LaunchedEffect(suggestionSource) {
+        if (!titleUntouched || suggestionSource.isBlank()) return@LaunchedEffect
         delay(700)
-        val suggested = Naming.suggest(brief)
-        // The brief may have moved on. Applying a title for text that is no
+        val suggested = Naming.suggest(suggestionSource)
+        // The text may have moved on. Applying a title for text that is no
         // longer there is worse than applying none.
         if (titleUntouched) {
             lastSuggested = suggested
@@ -198,20 +205,33 @@ fun StartSheet(
                 )
                 // WHAT IT WILL DO, and it is above Kind and Where because it
                 // is the question that decides whether starting is worth doing
-                // at all. A session with no task comes up idle: correct,
+                // at all. A session with nothing to do comes up idle: correct,
                 // sometimes wanted, and never what somebody expects from a
                 // button labelled Start.
+                //
+                // THE WORDS FIRST, always offered: since protocol v7 a session
+                // can be handed its job in words, and a new machine in no other
+                // way. A profile a host has written down is the alternative,
+                // offered once the fleet has answered that it has some. Writing
+                // a task clears a chosen profile: two first messages is one too
+                // many, and the host refuses the pair.
                 val offered = profiles.orEmpty()
-                if (offered.isNotEmpty() && platform.isEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
-                        Text("Task", style = MaterialTheme.typography.labelMedium)
+                Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                    OutlinedTextField(
+                        value = task,
+                        onValueChange = {
+                            task = it
+                            if (it.isNotBlank()) profile = ""
+                        },
+                        label = { Text("What should it do?") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (offered.isNotEmpty() && platform.isEmpty() && task.isBlank()) {
+                        Text("Or one written on a host", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
                             onClick = { profile = "" },
-                            label = {
-                                Text(
-                                    if (profile.isEmpty()) "I will drive it \u2713" else "I will drive it",
-                                )
-                            },
+                            label = { Text(if (profile.isEmpty()) "None \u2713" else "None") },
                         )
                         offered.forEach { p ->
                             AssistChip(
@@ -235,14 +255,16 @@ fun StartSheet(
                                 },
                             )
                         }
-                        Text(
-                            if (profile.isEmpty())
-                                "It will start idle, waiting for you."
-                            else
-                                "It starts with this as its first message. The task lives on the host — this app never sends the words.",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
                     }
+                    Text(
+                        when {
+                            task.isNotBlank() ->
+                                "It starts with these words and gets to work. Say what to do, where, and what to report back: nothing can be added once it is going."
+                            profile.isEmpty() -> "Leave it empty and it starts idle, waiting for you."
+                            else -> "It starts with this as its first message. The words are kept on the host."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 // WHAT IT MAY REACH, optional. Shown only when a box actually
                 // holds a secret — an empty picker offers a control for a
@@ -294,7 +316,7 @@ fun StartSheet(
                                         // Only if the fleet still has it — a
                                         // kind naming a deleted profile would
                                         // otherwise pre-fill a refused start.
-                                        if (offered.any { it.name == chosen.profile }) profile = chosen.profile
+                                        if (task.isBlank() && offered.any { it.name == chosen.profile }) profile = chosen.profile
                                     }
                                 },
                                 label = { Text(if (kind?.id == k.id) "${k.displayName} ✓" else k.displayName) },
@@ -345,10 +367,14 @@ fun StartSheet(
                                 Text("For $machineMinutes minutes", style = MaterialTheme.typography.bodyMedium)
                                 TextButton(enabled = machineMinutes < 350, onClick = { machineMinutes += 5 }) { Text("More") }
                             }
+                            // NO LINK PROMISED. A runner's credential cannot open
+                            // Remote Control, so the notification that matters
+                            // is the one when its task is done.
                             Text(
-                                "It takes a few minutes to boot. The session starts on it when it joins, and you get a " +
-                                    "notification with its link. It comes up idle, waiting for you. Everything on it is " +
-                                    "gone when the time runs out.",
+                                "It takes a few minutes to boot. The session starts on it when it joins" +
+                                    (if (task.isBlank()) ", idle, with nothing to do. Give it a task above to put it to work."
+                                    else " and works on your task. You get a notification when it is back at its prompt.") +
+                                    " Everything on it is gone when the time runs out.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             // SAID OUT LOUD, as docs/runner-central.md says it:
@@ -401,7 +427,8 @@ fun StartSheet(
                             brief = brief.trim().ifBlank { null },
                             mode = kind?.mode,
                             host = host.ifBlank { null }.takeIf { platform.isEmpty() },
-                            profile = profile.ifBlank { null }.takeIf { platform.isEmpty() },
+                            profile = profile.ifBlank { null }.takeIf { platform.isEmpty() && task.isBlank() },
+                            task = task.trim().ifBlank { null },
                             secret = secret.ifBlank { null }.takeIf { platform.isEmpty() },
                             platform = platform.ifBlank { null },
                             minutes = machineMinutes.takeIf { platform.isNotEmpty() },
