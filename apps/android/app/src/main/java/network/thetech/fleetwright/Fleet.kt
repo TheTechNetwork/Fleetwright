@@ -674,6 +674,8 @@ class Fleet(
         val granted: List<String>?,
         val missing: List<String>?,
         val message: String?,
+        /** The machine that checked, when the coordinator asked every box and answered from one that holds the token. */
+        val hostId: String? = null,
     )
 
     /**
@@ -1712,6 +1714,7 @@ class Fleet(
                             granted = list("granted"),
                             missing = list("missing"),
                             message = c.optString("message").takeIf { it.isNotBlank() && it != "null" },
+                            hostId = c.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
                         )
                     },
                     url = json.optString("url").takeIf { it.isNotBlank() && it != "null" },

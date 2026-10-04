@@ -1419,9 +1419,18 @@ export class CoordinatorCore {
         ? results.flatMap((r) => (r.secrets || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId })))
         : undefined;
 
+      // A TEST ASKED OF EVERY BOX answers with what a box that holds the
+      // token found, attributed to it. A box without one has nothing to
+      // check, and its "No GitHub token is stored here" stays in its own line
+      // of `hosts` rather than standing for the fleet.
+      const checked = results.filter((r) => r?.check && typeof r.check === 'object');
+      const answered = checked.find((r) => r.check.ok) ?? checked[0];
+      const check = answered ? { ...answered.check, hostId: answered.hostId } : undefined;
+
       return {
         ok: results.some((r) => r.ok),
         fanout: true,
+        ...(check ? { check } : {}),
         ...(connections ? { connections } : {}),
         ...(profiles ? { profiles } : {}),
         ...(secrets ? { secrets } : {}),
@@ -2865,8 +2874,16 @@ function mergeConnections(results) {
       if (c.account && found.account && c.account !== found.account) found.account = 'differs between machines';
       // WHAT THE ACCOUNT HAS LEFT is one fact about one plan, however many
       // boxes asked: the box that asked most recently has the answer, and a
-      // box that could not ask (null) never overwrites one that could.
-      if (c.usage && (!found.usage || (c.usage.checkedAt ?? 0) > (found.usage.checkedAt ?? 0))) {
+      // box that could not ask never overwrites one that could.
+      //
+      // "COULD NOT ASK" IS NOT ONLY NULL. A box whose copy of the login has
+      // expired answers with a report and no figures ("the credential has
+      // expired and has not renewed yet"), and because it asked last, that
+      // replaced a real reading from a box where the same account works. The
+      // row then said expired while a Test on the other box said two hours
+      // left. A reading beats a reason whenever it was taken; between two of
+      // the same kind, the newer one wins.
+      if (c.usage && (!found.usage || newerOrBetter(c.usage, found.usage))) {
         found.usage = c.usage;
       }
       byProvider.set(c.provider, found);
@@ -2886,6 +2903,18 @@ function mergeConnections(results) {
     })),
     hosts: everywhere,
   };
+}
+
+/**
+ * Whether usage report `a` should replace `b`: a report with figures beats one
+ * without, and otherwise the newer one wins.
+ *
+ * @param {any} a @param {any} b
+ */
+function newerOrBetter(a, b) {
+  const read = (/** @type {any} */ u) => Boolean(u?.windows);
+  if (read(a) !== read(b)) return read(a);
+  return (a.checkedAt ?? 0) > (b.checkedAt ?? 0);
 }
 
 /**

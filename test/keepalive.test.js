@@ -323,6 +323,31 @@ test('the app can say WHEN, not just what', async () => {
   assert.match(reply.text, /copy in its volume/);
 });
 
+test('the Claude test names its machine, and says a reporting fault calmly', async () => {
+  // REPORTED FROM A PHONE: the reply landed under a fleet-wide row and began
+  // "This box has no Claude account of its own", about a box it never named,
+  // then shouted "THESE TWO DISAGREE" with a CLI command in backticks.
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'named-'));
+  const file = path.join(dir, '.credentials.json');
+  writeFileSync(file, JSON.stringify({
+    claudeAiOauth: { accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() + 2 * HOUR },
+  }));
+  mkdirSync(path.join(dir, 'accounts'), { recursive: true });
+  writeFileSync(path.join(dir, 'accounts', 'box@example.com.json'), readFileSync(file, 'utf8'));
+  const ctx = {
+    cfg: { credentialKeepaliveMs: 3_600_000, sandbox: true, sandboxCredentialsFile: file, stateDir: dir, hostname: 'rpi-7550' },
+    actor: null,
+    login: { status: () => ({ loggedIn: false }), isPending: () => false },
+  };
+
+  const reply = await dispatch(/** @type {any} */ (ctx), '/verify claude');
+
+  assert.match(reply.text, /^On rpi-7550:\n/);
+  assert.match(reply.text, /fault in the report, not the credential/);
+  assert.doesNotMatch(reply.text, /THESE TWO|`claude auth status`/);
+});
+
 // --- whose login is being reported ------------------------------------------
 
 test('a link flow in progress does not make the whole box report signed out', async () => {
