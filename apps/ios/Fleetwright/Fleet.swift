@@ -264,6 +264,16 @@ struct Fleet {
         /// The token that machine made, sealed to a key only this phone holds.
         /// Ciphertext: the coordinator relays it and cannot read it.
         var sealed: [String: String]?
+        /// Which machine answered, when the coordinator placed the request on
+        /// one and the screen has to carry on with that same machine: every
+        /// phase of a hypervisor setup after `begin`.
+        var hostId: String?
+        /// What every permanent machine found at a Xen Orchestra address
+        /// (`xoprobe`), one entry per machine, so the screen offers only the
+        /// ones that reached it.
+        var probes: [Probe]?
+        /// Where a hypervisor setup has got to, or what `begin` handed back.
+        var xosetup: SetupState?
 
         struct RebootCost: Codable, Hashable {
             let sessions: Int
@@ -872,6 +882,109 @@ struct Fleet {
         if let code { params["code"] = code }
         if let reply { params["reply"] = reply }
         return try await intent("setuptoken", params: params, host: host, idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// One machine's answer to "can you reach this Xen Orchestra address".
+    /// `narrowProbe` in src/fleet/coordinator/core.js is the shape.
+    struct Probe: Codable, Hashable, Identifiable {
+        let hostId: String
+        /// Something answered at the address.
+        let reachable: Bool?
+        /// It looks like Xen Orchestra. NIL IS CANNOT TELL: a machine that
+        /// reached something it could not identify has not said no.
+        let xo: Bool?
+        /// It answered over HTTPS, which setup needs: a password is only ever
+        /// sent to a server whose certificate was pinned.
+        let tls: Bool?
+        /// SHA-256 of that certificate, lowercase hex, for the person to
+        /// accept and `begin` to pin.
+        let cert: String?
+        let version: String?
+        var id: String { hostId }
+
+        /// Setup can be run from this machine: it reached the address over
+        /// HTTPS and saw a certificate to pin.
+        var canRunSetup: Bool { reachable == true && tls == true && cert != nil }
+    }
+
+    /// Where a hypervisor setup is, in the shape every `xosetup` phase and
+    /// POST /api/xosetup/activity answer with. The key fields are present only
+    /// in `begin`'s answer; the step fields only once it is running.
+    struct SetupState: Codable, Hashable {
+        let job: String?
+        /// `waiting`, `running`, `done`, `failed` or `cancelled`.
+        let state: String?
+        var step: Int?
+        var of: Int?
+        var phase: String?
+        /// One sentence from the machine about the step, for the screen.
+        var text: String?
+        /// A P-256 key the machine made for this job alone, to seal the
+        /// sign-in to. Trusted only once `keySig` checks out (XOSetupKey).
+        var key: String?
+        /// The machine's signature over that key, with its enrolment key.
+        var keySig: String?
+        /// The machine's enrolment key, whose fingerprint the person can
+        /// compare with what the box prints.
+        var hostKey: Host.PublicKey?
+        var fingerprint: String?
+    }
+
+    /// Ask every permanent machine whether it can reach a Xen Orchestra
+    /// address, and with which certificate. Admin only; the coordinator says
+    /// so. Not held in the outbox: a probe replayed hours later answers a
+    /// question nobody is still asking.
+    func xoprobe(address: String) async throws -> Reply {
+        try await intent("xoprobe", params: ["address": address], idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// Begin onboarding a hypervisor on ONE chosen machine, pinning the
+    /// certificate `xoprobe` saw there. The reply carries the key to seal the
+    /// sign-in to, signed by the machine (SetupState).
+    func beginSetup(address: String, pin: String, host: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "begin", "address": address, "pin": pin], host: host,
+                         idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// The admin sign-in, sealed on this phone to the job's key as
+    /// `epk.iv.ct`. The coordinator routes it to the machine that answered
+    /// `begin`, whatever host is named here, so none is.
+    ///
+    /// NEVER HELD, for the reason `setupToken` gives: the outbox writes what it
+    /// holds to disk, and a sealed sign-in replayed into a job that has ended
+    /// is a credential on a disk for nothing.
+    func runSetup(job: String, sealed: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "run", "job": job, "sealed": sealed],
+                         idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// Where the job has got to, for a screen that is open.
+    func setupStatus(job: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "status", "job": job], idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// Stop between steps.
+    func cancelSetup(job: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "cancel", "job": job], idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// What the coordinator answers when a Live Activity's push token is
+    /// registered: where the job already is, so an activity that starts late
+    /// starts right.
+    struct SetupActivityRegistration: Codable {
+        let ok: Bool?
+        let text: String?
+        let hostId: String?
+        let progress: SetupState?
+    }
+
+    /// Tell the coordinator where this job's Live Activity updates go: the
+    /// activity's push token, hex. Only the job's owner may; an answer with
+    /// `ok: false` is a sentence for the screen, not a throw, because the
+    /// screen keeps working without the Lock Screen.
+    func registerSetupActivity(job: String, token: String) async throws -> SetupActivityRegistration {
+        let data = try await post("/api/xosetup/activity", body: ["job": job, "token": token])
+        return try JSONDecoder().decode(SetupActivityRegistration.self, from: data)
     }
 
     /// Forget a stored credential. Does NOT revoke it at the provider.

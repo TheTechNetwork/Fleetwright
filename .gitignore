@@ -35,6 +35,8 @@ apps/ios/build/
 # The source of truth for both is project.yml.
 apps/ios/Fleetwright/Info.plist
 apps/ios/Fleetwright/Fleetwright.entitlements
+# The Live Activity extension's plist, generated the same way.
+apps/ios/FleetwrightActivity/Info.plist
 
 # A signing key must never be committed — but the reason it is ignored rather
 # than merely not-added is /update: it refuses to pull into a dirty tree, and

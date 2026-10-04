@@ -84,10 +84,21 @@ const NOT_A_CLIENT_ROUTE = {
   '/healthz': 'infrastructure liveness. Read by a load balancer, not by a person.',
   '/oauth/github/callback': "a browser redirect target — GitHub sends somebody's browser here.",
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
-  '/api/xosetup/activity':
-    'the iOS layer of the hypervisor round calls it, stacked on this one: a Live Activity exists only on iOS. Remove this line in that layer.',
   '/api/enroll/actions':
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
+};
+
+/**
+ * Routes ONE phone calls and the other has no reason to, each with the
+ * reason. Unlike the list above these still have to be reached by somebody:
+ * only the parity test below lets them through, and only with the reason
+ * written down, because "the other platform does not need it" is the
+ * sentence that hides a feature shipped to one phone.
+ */
+const ONE_PHONE_ROUTE = {
+  '/api/xosetup/activity':
+    'a Live Activity exists only on iOS, and this registers its push token. Android shows the same progress as an ' +
+    'ongoing notification the coordinator already sends to every registered device, which needs no registration.',
 };
 
 test('every route in the spec is reachable by a primary client, or says why not', () => {
@@ -118,6 +129,10 @@ test('the two apps reach the same routes, or the gap is deliberate', () => {
   const gaps = [];
   for (const route of Object.keys(spec.paths)) {
     if (route in NOT_A_CLIENT_ROUTE) continue;
+    if (route in ONE_PHONE_ROUTE) {
+      assert.ok(ONE_PHONE_ROUTE[route].length > 20, `${route}: the gap needs a reason, not a label`);
+      continue;
+    }
     const stem = route.split('{')[0].replace(/\/$/, '');
     const i = calls(IOS, stem);
     const a = calls(ANDROID, stem);
