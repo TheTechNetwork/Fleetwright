@@ -57,7 +57,8 @@ import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } from '../seal.js';
-import { signingInput } from '../crypto.js';
+import { signingInput, fingerprint } from '../crypto.js';
+import { probe, XoSetups } from './xo-setup.js';
 import { runnerJobProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
@@ -187,6 +188,7 @@ export class Sidecar {
    *   mintTimeoutMs?: number,
    *   vaultKey?: { publicJwk: { x: string, y: string }, sign: (message: string) => Promise<string> }|null,
    *   vaultIntervalMs?: number,
+   *   xoStateDir?: string|null,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
@@ -215,6 +217,11 @@ export class Sidecar {
     // process that loaded it (bin/fleetwright-sidecar). Null: no vault here.
     vaultKey = null,
     vaultIntervalMs = 10 * 60_000,
+    // WHERE A HYPERVISOR'S LIMITED TOKEN IS KEPT once onboarding has made one
+    // (src/fleet/host/xo-setup.js): this process's own state directory, the
+    // one beside its key. Null refuses onboarding rather than writing it
+    // somewhere nobody chose.
+    xoStateDir = null,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -350,6 +357,9 @@ export class Sidecar {
      */
     this.claudeLoginReady = null;
     this.vaultKey = vaultKey;
+    this.xoStateDir = xoStateDir;
+    /** @type {XoSetups|null} made on first use */
+    this.xoSetups = null;
     this.vaultIntervalMs = vaultIntervalMs;
     /** @type {any} */
     this.vaultTimer = null;
@@ -469,6 +479,45 @@ export class Sidecar {
       this.transport.send({ v: PROTOCOL_VERSION, kind: 'event', hostId: this.hostId, ...event });
     } catch (e) {
       this.log.warn(`sidecar: could not send ${event.event}: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  /**
+   * One phase of hypervisor onboarding, for the person the coordinator says
+   * is asking. The coordinator checks they are an admin and that the job is
+   * theirs; this checks the job is theirs again, because it is the party that
+   * holds the key, and the coordinator is the one this project assumes may be
+   * lying.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   */
+  async #xosetup(intent) {
+    if (!this.xoStateDir) {
+      return { ok: false, text: 'This machine has nowhere set aside to keep a hypervisor’s token, so it cannot run the setup.' };
+    }
+    if (!this.xoSetups) {
+      this.xoSetups = new XoSetups({
+        signer: this.vaultKey,
+        emit: (event) => this.emitEvent(event),
+        stateDir: this.xoStateDir,
+        fingerprint,
+        log: this.log,
+      });
+    }
+    const actor = intent.actor ? String(intent.actor) : null;
+    const p = intent.params;
+    switch (p.phase) {
+      case 'begin':
+        if (!p.address) return { ok: false, text: 'Say where Xen Orchestra answers.' };
+        return this.xoSetups.begin({ address: String(p.address), pin: p.pin ? String(p.pin) : null, actor });
+      case 'run':
+        return this.xoSetups.run({ job: String(p.job || ''), sealed: String(p.sealed || ''), actor });
+      case 'status':
+        return this.xoSetups.status({ job: String(p.job || ''), actor });
+      case 'cancel':
+        return this.xoSetups.cancel({ job: String(p.job || ''), actor });
+      default:
+        return { ok: false, text: 'Unknown setup phase.' };
     }
   }
 
@@ -600,6 +649,17 @@ export class Sidecar {
       // A MINT NEVER BECOMES A COMMAND LINE EITHER, for the same reason: the
       // key it signs with is in this process and nowhere else on the box.
       if (intent.verb === 'mint') return reply(await this.#mint(intent));
+
+      // ADDING A HYPERVISOR IS THIS PROCESS'S TOO. The setup key is signed
+      // with the key this process holds, the sealed sign-in is opened with a
+      // key that lives only in its memory, and neither may become a command
+      // line on the way to the hub. docs/hypervisors.md.
+      if (intent.verb === 'xoprobe') {
+        const found = await probe(String(intent.params.address));
+        const { text, ...xoprobe } = found;
+        return reply({ ok: true, text, xoprobe });
+      }
+      if (intent.verb === 'xosetup') return reply(await this.#xosetup(intent));
 
       // A session on a runner waits for the answer about its owner's Claude
       // login, which is bounded by the mint timeout and never throws.

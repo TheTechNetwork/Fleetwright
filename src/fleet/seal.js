@@ -112,6 +112,19 @@ export const DEPOSIT_AAD = 'fleetwright-claude-deposit/v1';
 export const SETUP_TOKEN_AAD = 'fleetwright-setup-token/v1';
 
 /**
+ * What a hypervisor admin sign-in is sealed under: the job and the address, so
+ * a sealed sign-in for one setup cannot be replayed into another, or pointed
+ * at a different Xen Orchestra. The phone builds the same string.
+ * See src/fleet/host/xo-setup.js and docs/hypervisors.md.
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function xosetupAad(job, address) {
+  return `fleetwright-xosetup/v1:${job}:${address}`;
+}
+
+/**
  * The additional data a Claude login is kept under AT REST in the minter: the
  * GitHub account it belongs to. A stored row moved under another account does
  * not open, so storage that could be rearranged still could not hand one

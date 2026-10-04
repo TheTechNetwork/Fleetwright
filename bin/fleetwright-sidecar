@@ -21,6 +21,7 @@ import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint, r
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
 import { WebSocketTransport, MAX_BACKOFF_MS } from '../src/fleet/host/transports/websocket.js';
 import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import { existsSync } from 'node:fs';
 import * as readline from 'node:readline/promises';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
@@ -190,6 +191,9 @@ const sidecar = new Sidecar({
     vaultKey: key
       ? { publicJwk: key.publicJwk, sign: (/** @type {string} */ message) => sign(key.privateJwk, message) }
       : null,
+    // Where a hypervisor's limited token is kept after onboarding: this
+    // process's own state directory, beside its key (src/fleet/host/xo-setup.js).
+    xoStateDir: path.dirname(cfg.hostKeyFile),
     // WHAT THE OPERATOR SAID. Labels are how work is aimed — `tag: macos` on a
     // start, filtered before ranking — and "gpu", "prod", "noisy-neighbour"
     // are decisions no amount of introspection produces, so they come from
