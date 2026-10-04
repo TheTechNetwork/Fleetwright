@@ -229,6 +229,41 @@ carry a credential through the coordinator, so both are accounted for here.
   the length of the job, and the session running there can read it. That is
   the reach a session on their permanent box already has with their login.
 
+**A hypervisor's admin sign-in** (`xoprobe`, `xosetup`, `docs/hypervisors.md`).
+Onboarding a Xen Orchestra pool carries its admin sign-in from a phone to one
+machine of the fleet, through the coordinator.
+
+- **It relays ciphertext.** The phone seals the sign-in to a key the machine
+  made for that one job, under a binding of the job and the address, so a
+  sealed sign-in cannot be replayed into another job or pointed at another
+  Xen Orchestra. The machine opens it, uses it for the steps, wipes it on
+  every way out and writes it nowhere.
+- **It cannot substitute the key.** The machine signs the job's key with its
+  enrolment key, over the job, the address, the pin and the key together; the
+  phone checks that signature against the fingerprint it approved for the
+  vault, or has the person compare it with `fleetwright-sidecar identity` on
+  that machine. A coordinator that swaps the key cannot sign the swap.
+- **It cannot redirect the connection.** The machine connects only to a server
+  presenting the certificate the person accepted (its SHA-256, from the probe),
+  and sends nothing to any other. What a compromised coordinator can still do
+  is refuse, or send the request to a different machine of the fleet, which
+  then runs the setup; the phone's signature check names the machine it
+  verified.
+- **The probe is a port scan, one address at a time.** `xoprobe` asks every
+  permanent machine to reach an address on its network, and answers with
+  whether something did, whether it looks like Xen Orchestra and its
+  certificate. Admin only, checked here, which a compromised coordinator does
+  not respect; the reach is "does this address answer HTTPS from that box".
+- **Progress on a Lock Screen is not sealed.** A Live Activity's content goes
+  to the widget with no hook that could decrypt it first, so it carries step
+  numbers and a key from a fixed list, never an address or a name. The words
+  travel in the ordinary notification, which is sealed.
+- **What is kept** is the limited user's token, 0600 in the sidecar's state
+  directory of the machine that ran the setup. That machine can then do what
+  the token can, which Xen Orchestra bounds with the resource set. It is the
+  proxying machine for now; the dedicated machine on the pool is the next
+  round's.
+
 **A device's own GitHub sign-in, and the dispatch it makes.** Starting a
 runner no longer needs a permanent box (`runner-central.md`, "Without a
 permanent box"), so two more routes carry something through the coordinator.
