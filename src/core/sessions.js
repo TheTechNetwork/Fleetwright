@@ -622,11 +622,12 @@ export class SessionManager {
       }
       // NOT A FAILURE TO DIAGNOSE. The session is working; it just cannot
       // have a link, and the reason is the whole answer — no output to quote
-      // and no pane to look at. With no profile either, nothing can ever give
-      // it work: no verb sends text to a session, so that is said too.
+      // and no pane to look at. With no task or profile either, nothing can
+      // ever give it work: no verb sends text to a running session, so that is
+      // said too, with the way to start one that has a job.
       if (rc.noLink) {
         const idle = !resumeUuid && !(typeof prompt === 'string' && prompt.trim())
-          ? ' Nothing was asked of it either, and nothing else can hand it work, so it will sit at its prompt: start it with a task profile instead.'
+          ? ' Nothing was asked of it either, and nothing else can hand it work, so it will sit at its prompt: stop it and start it again with a task.'
           : '';
         return { ok: true, message: `${cap(verb)} "${name}" in ${cwd}. ${rc.detail}${idle}`, session: this.registry.get(name) ?? rec };
       }

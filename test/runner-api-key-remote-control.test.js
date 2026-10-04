@@ -68,8 +68,9 @@ test('a runner session says at once that it has no Remote Control, on the key or
 
   assert.equal(reply.ok, true, reply.message);
   assert.match(reply.message, /runner repository’s API key, and an API key cannot open Remote Control/, reply.message);
-  // Started with no profile: nothing can ever give it work, and it says so.
-  assert.match(reply.message, /start it with a task profile/);
+  // Started with neither a task nor a profile: nothing can ever give it work,
+  // and it says how to start one that has a job.
+  assert.match(reply.message, /start it again with a task/);
   assert.doesNotMatch(reply.message, /did not come online/);
   // Before: two full timeouts, 8 s here. A second is generous for a tmux spawn.
   assert.ok(took < RC_TIMEOUT, `waited ${took} ms for a link an API key cannot have`);
