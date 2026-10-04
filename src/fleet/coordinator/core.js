@@ -822,6 +822,10 @@ export class CoordinatorCore {
       await this.push.send(targets, {
         title,
         body,
+        // Android draws progress itself, as one ongoing notification; a tray
+        // notification per step would sit on top of it whenever the app is in
+        // the background, which is the whole time it matters.
+        drawnByApp: true,
         data: {
           kind: 'xosetup',
           // The collapse key both providers read: each step replaces the last.
