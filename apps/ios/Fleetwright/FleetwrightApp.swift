@@ -245,6 +245,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Asking before there is anything to notify about is how permission
         // gets denied. This runs once the app is on screen and configured.
         guard settings.configured else { return }
+        // A hypervisor setup's Live Activity outlives the process that
+        // started it; its push token is relayed again from here, or the
+        // Lock Screen stops moving after a relaunch (XOSetupActivities).
+        XOSetupActivities.resume(fleet: Fleet(settings: settings))
         let granted = (try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         guard granted else { return }

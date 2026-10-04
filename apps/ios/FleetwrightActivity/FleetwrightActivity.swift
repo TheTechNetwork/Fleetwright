@@ -36,7 +36,7 @@ struct XOSetupActivityWidget: Widget {
         ActivityConfiguration(for: XOSetupAttributes.self) { context in
             // The Lock Screen follows the phone's appearance, and so does the
             // tint under it, so both resolve in the same scheme.
-            XOSetupLockScreen(hostId: context.attributes.hostId, state: context.state)
+            XOSetupLockScreen(hostId: context.attributes.hostId, state: context.state, stale: context.isStale)
                 .padding(Design.Space.groupTight)
                 .activityBackgroundTint(Design.Palette.card)
                 .activitySystemActionForegroundColor(Design.Palette.ink)
@@ -62,7 +62,7 @@ struct XOSetupActivityWidget: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    XOSetupLines(hostId: context.attributes.hostId, state: context.state)
+                    XOSetupLines(hostId: context.attributes.hostId, state: context.state, stale: context.isStale)
                         .padding(.horizontal, Design.Space.insideTight)
                         .environment(\.colorScheme, .dark)
                 }
@@ -107,6 +107,9 @@ struct XOSetupMark: View {
 struct XOSetupLines: View {
     let hostId: String
     let state: XOSetupAttributes.ContentState
+    /// Past the content's stale date: nothing has been heard for long enough
+    /// that the step shown is no longer a claim about now.
+    var stale: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.insideTight) {
@@ -114,6 +117,11 @@ struct XOSetupLines: View {
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.ink)
                 .contentTransition(.opacity)
+            if stale, XOSetupWords.isLive(state.state) {
+                Text(XOSetupWords.silence(state))
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
             // Only once the machine has said how many steps there are. A bar
             // with no length is a claim; no bar is not.
             if XOSetupWords.isLive(state.state), state.of > 0 {
@@ -132,13 +140,14 @@ struct XOSetupLines: View {
 struct XOSetupLockScreen: View {
     let hostId: String
     let state: XOSetupAttributes.ContentState
+    var stale: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: Design.Space.inside) {
             XOSetupMark(state: state)
                 .fleetType(.title)
                 .padding(.top, Design.Space.hair)
-            XOSetupLines(hostId: hostId, state: state)
+            XOSetupLines(hostId: hostId, state: state, stale: stale)
             if let ordinal = XOSetupWords.ordinal(state) {
                 Text(ordinal)
                     .fleetType(.label)
