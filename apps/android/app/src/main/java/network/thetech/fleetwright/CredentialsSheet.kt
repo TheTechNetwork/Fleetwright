@@ -76,6 +76,10 @@ fun CredentialsSheet(
     // The last answer per provider, kept so the detail can be reopened without
     // asking the provider again.
     var checks by remember { mutableStateOf(mapOf<String, Fleet.Check>()) }
+    // A Test that came back as words rather than a check, kept under the row
+    // it answers. It used to land at the bottom of the sheet, below every row
+    // and naming none of them.
+    var tested by remember { mutableStateOf(mapOf<String, Pair<String, Boolean>>()) }
     var busy by remember { mutableStateOf(false) }
 
     // Reloaded on host AND on every resume, which is how coming back from the
@@ -273,8 +277,13 @@ fun CredentialsSheet(
                                         scope.launch {
                                             busy = true
                                             val reply = Fleet(settings).verify(host, provider.provider)
-                                            if (reply.check != null) checks = checks + (provider.provider to reply.check)
-                                            else result = reply.text
+                                            if (reply.check != null) {
+                                                checks = checks + (provider.provider to reply.check)
+                                                tested = tested - provider.provider
+                                            } else {
+                                                checks = checks - provider.provider
+                                                tested = tested + (provider.provider to (reply.text to reply.ok))
+                                            }
                                             busy = false
                                         }
                                     },
@@ -350,6 +359,13 @@ fun CredentialsSheet(
                                     color = MaterialTheme.colorScheme.error,
                                 )
                             }
+                        }
+                        tested[provider.provider]?.let { (text, ok) ->
+                            Text(
+                                text,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (ok) Design.Palette.inkDim.now else MaterialTheme.colorScheme.error,
+                            )
                         }
                     }
                 }
@@ -519,5 +535,7 @@ private fun describeCheck(check: Fleet.Check): String {
         check.account?.takeIf { it.isNotBlank() },
         check.granted?.let { "${it.size} scope${if (it.size == 1) "" else "s"}" },
         check.missing?.takeIf { it.isNotEmpty() }?.let { "${it.size} missing" },
+        // WHERE, when the fleet asked every machine and one answered for it.
+        check.hostId?.takeIf { it.isNotBlank() }?.let { "on $it" },
     ).joinToString(" · ")
 }
