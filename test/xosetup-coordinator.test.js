@@ -14,7 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CoordinatorCore, narrowProgress } from '../src/fleet/coordinator/core.js';
+import { CoordinatorCore, narrowProgress, narrowCertificate } from '../src/fleet/coordinator/core.js';
 import { XOSETUP_STEPS } from '../src/fleet/protocol/intents.js';
 
 const JOB = 'a1b2c3d4e5f6';
@@ -87,7 +87,15 @@ test('the probe asks every permanent machine and says which reached it, never a 
     text: hostId === 'deb14' ? 'Xen Orchestra answered.' : 'Nothing answered.',
     xoprobe:
       hostId === 'deb14'
-        ? { reachable: true, xo: true, tls: true, cert: 'b'.repeat(64), version: '5.170', extra: 'not forwarded' }
+        ? {
+            reachable: true,
+            xo: true,
+            tls: true,
+            cert: 'b'.repeat(64),
+            certificate: { trusted: false, problems: ['self-signed'], subject: 'CN=xo.lan', issuer: 'CN=xo.lan', notBefore: '2026-01-01T00:00:00Z', notAfter: '2036-01-01T00:00:00Z', names: ['xo.lan'], extra: 'no' },
+            version: '5.170',
+            extra: 'not forwarded',
+          }
         : { reachable: false, xo: null, tls: false, cert: null },
   }));
   core.registry.connect('gha-1', () => {}, { ephemeral: true });
@@ -96,7 +104,23 @@ test('the probe asks every permanent machine and says which reached it, never a 
   const r = await core.dispatch({ verb: 'xoprobe', params: { address: 'xo.lan' }, actor: `fleet:${admin.email}`, requester: admin });
   assert.deepEqual(asked.map((a) => a.hostId).sort(), ['deb14', 'rpi-7550']);
   const deb = r.probes.find((/** @type {any} */ p) => p.hostId === 'deb14');
-  assert.deepEqual(deb, { hostId: 'deb14', reachable: true, xo: true, tls: true, cert: 'b'.repeat(64), version: '5.170' });
+  assert.deepEqual(deb, {
+    hostId: 'deb14',
+    reachable: true,
+    xo: true,
+    tls: true,
+    cert: 'b'.repeat(64),
+    certificate: {
+      trusted: false,
+      problems: ['self-signed'],
+      subject: 'CN=xo.lan',
+      issuer: 'CN=xo.lan',
+      notBefore: '2026-01-01T00:00:00.000Z',
+      notAfter: '2036-01-01T00:00:00.000Z',
+      names: ['xo.lan'],
+    },
+    version: '5.170',
+  });
   assert.equal(r.probes.find((/** @type {any} */ p) => p.hostId === 'rpi-7550').reachable, false);
 });
 
@@ -198,4 +222,17 @@ test('the Live Activity route is the owner’s and takes a token, nothing else',
   assert.equal(core.registerSetupActivity(admin, { job: 'nope', token: 'c0ffee'.repeat(12) }).error.code, 'bad_params');
   assert.equal(core.registerSetupActivity(admin, { job: JOB, token: 'not hex' }).error.code, 'bad_params');
   assert.equal(core.registerSetupActivity(admin, { job: JOB, token: 'c0ffee'.repeat(12) }).error.code, 'unknown_job');
+});
+
+test('a certificate is called trusted only when the machine said so and named nothing wrong with it', () => {
+  // The doubtful case lands on the side that asks the person.
+  assert.equal(narrowCertificate({ trusted: true, problems: ['expired'] })?.trusted, false);
+  assert.equal(narrowCertificate({ trusted: 'yes', problems: [] })?.trusted, false);
+  assert.equal(narrowCertificate({ trusted: true, problems: [] })?.trusted, true);
+  // Only the problems there are words for, and nothing that is not a date.
+  const odd = narrowCertificate({ problems: ['self-signed', 'rm -rf'], notAfter: 'tomorrow', subject: 'CN=a\u0007b' });
+  assert.deepEqual(odd?.problems, ['self-signed']);
+  assert.equal(odd?.notAfter, null);
+  assert.equal(odd?.subject, 'CN=a b');
+  assert.equal(narrowCertificate(null), null);
 });

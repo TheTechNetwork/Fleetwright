@@ -3361,7 +3361,7 @@ export function narrowProgress(msg) {
  * @param {any} p
  */
 export function narrowProbe(p) {
-  if (!p || typeof p !== 'object') return { reachable: false, xo: null, tls: false, cert: null, version: null };
+  if (!p || typeof p !== 'object') return { reachable: false, xo: null, tls: false, cert: null, certificate: null, version: null };
   const cert = typeof p.cert === 'string' && CERT_PIN_RE.test(p.cert) ? p.cert : null;
   return {
     reachable: p.reachable === true,
@@ -3370,7 +3370,40 @@ export function narrowProbe(p) {
     xo: p.xo === true ? true : p.xo === false ? false : null,
     tls: p.tls === true,
     cert,
+    certificate: cert ? narrowCertificate(p.certificate) : null,
     version: typeof p.version === 'string' ? p.version.slice(0, 40) : null,
+  };
+}
+
+/** What can be wrong with a certificate, as a probe names it. */
+export const CERT_PROBLEMS = Object.freeze(['self-signed', 'untrusted-issuer', 'expired', 'not-yet-valid', 'name-mismatch']);
+
+/**
+ * What a certificate says about itself and whether it checks out, narrowed to
+ * what the phone shows before the person accepts it.
+ *
+ * `trusted` is true only when the host said so AND named no problem: a
+ * certificate the phone is told is fine is never asked about, so the doubtful
+ * case has to land on the side that asks. Absent or malformed is null, which
+ * the apps treat the same way.
+ *
+ * @param {any} c
+ */
+export function narrowCertificate(c) {
+  if (!c || typeof c !== 'object') return null;
+  /** @param {unknown} v @param {number} max */
+  const text = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, max) : null);
+  /** @param {unknown} v */
+  const when = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(Date.parse(v)).toISOString() : null);
+  const problems = Array.isArray(c.problems) ? CERT_PROBLEMS.filter((k) => c.problems.includes(k)) : [];
+  return {
+    trusted: c.trusted === true && problems.length === 0,
+    problems,
+    subject: text(c.subject, 200),
+    issuer: text(c.issuer, 200),
+    notBefore: when(c.notBefore),
+    notAfter: when(c.notAfter),
+    names: Array.isArray(c.names) ? c.names.filter((/** @type {unknown} */ n) => typeof n === 'string').slice(0, 20).map((/** @type {string} */ n) => n.slice(0, 255)) : [],
   };
 }
 
