@@ -27,9 +27,11 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,8 +86,10 @@ fun MachinesScreen(
     var refreshing by remember { mutableStateOf(false) }
     var showing by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
-    var addingHypervisor by remember { mutableStateOf(false) }
-    var hypervisorJob by remember { mutableStateOf<String?>(null) }
+    // SAVEABLE, because a setup takes minutes and a phone turns: a rotation
+    // that forgot these would close the progress on a job still running.
+    var addingHypervisor by rememberSaveable { mutableStateOf(false) }
+    var hypervisorJob by rememberSaveable { mutableStateOf<String?>(null) }
 
     LaunchedEffect(resumingSetup) {
         if (resumingSetup != null) {
@@ -134,7 +138,12 @@ fun MachinesScreen(
     }
     if (adding) AddMachineSheet(settings, onDismiss = { adding = false })
     if (addingHypervisor) {
-        HypervisorSheet(settings, resumeJob = hypervisorJob, onDismiss = { addingHypervisor = false; hypervisorJob = null })
+        // KEYED ON THE JOB: a second notification, tapped while the sheet is
+        // already open on another job, retargets it rather than leaving the
+        // first job's state in a sheet whose argument quietly changed.
+        key(hypervisorJob) {
+            HypervisorSheet(settings, resumeJob = hypervisorJob, onDismiss = { addingHypervisor = false; hypervisorJob = null })
+        }
     }
 
     // Enrolled, and not saying anything: membership with no report.

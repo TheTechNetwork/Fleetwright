@@ -10,7 +10,9 @@ import java.security.KeyPairGenerator
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
+import java.time.ZoneId
 import java.util.Base64
+import java.util.Locale
 
 /**
  * The check that decides whether a Xen Orchestra sign-in is sealed at all,
@@ -24,6 +26,12 @@ import java.util.Base64
  * accepts a mangled one. So: a key made here signs the documented input, the
  * DER is unpacked back to raw as a host would send it, and the phone must say
  * yes to that and no to every nearby wrong thing.
+ *
+ * The certificate is here for a smaller version of the same reason: whether a
+ * half-filled `certificate` lands on the side that asks, what a date says in
+ * a locale, and when `trust` is sent are run, not read, because the one way
+ * to lose them quietly is a parse that turns a JSON null into the word
+ * "null" or a missing `problems` into "trusted".
  */
 class XoSetupTest {
 
@@ -153,6 +161,84 @@ class XoSetupTest {
         // A key this app has never heard of: the number, one-based.
         assertEquals("Step 3 of 9", XoSetup.stepWords("new-step", 2, 9))
         assertEquals("Step 9 of 9", XoSetup.stepWords(null, 12, 9))
+    }
+
+    @Test
+    fun aCertificateIsReadTolerantly() {
+        assertEquals(null, XoSetup.certificate(null))
+        val full = XoSetup.certificate(
+            JSONObject(
+                """{"trusted":false,"problems":["self-signed","name-mismatch","made-up"],"subject":"CN=xo.lan","issuer":"CN=xo.lan",""" +
+                    """"notBefore":"2025-10-03T12:00:00.000Z","notAfter":"2026-10-03T12:00:00.000Z","names":["xo.lan","10.0.0.5"]}""",
+            ),
+        )!!
+        assertFalse(full.trusted)
+        // A problem this app has no words for is dropped; the order is the machine's.
+        assertEquals(listOf("self-signed", "name-mismatch"), full.problems)
+        assertEquals("CN=xo.lan", full.subject)
+        assertEquals("2026-10-03T12:00:00.000Z", full.notAfter)
+        assertEquals(listOf("xo.lan", "10.0.0.5"), full.names)
+        // Trusted only when said so AND nothing is named wrong: the doubtful
+        // case lands on the side that asks.
+        assertTrue(XoSetup.certificate(JSONObject("""{"trusted":true,"problems":[]}"""))!!.trusted)
+        assertFalse(XoSetup.certificate(JSONObject("""{"trusted":true,"problems":["expired"]}"""))!!.trusted)
+        assertFalse(XoSetup.certificate(JSONObject("""{"problems":[]}"""))!!.trusted)
+        // Missing, null and wrongly typed fields are absent, never the word "null".
+        val bare = XoSetup.certificate(JSONObject("""{"trusted":"yes","subject":null,"issuer":"","names":"xo.lan"}"""))!!
+        assertFalse(bare.trusted)
+        assertEquals(null, bare.subject)
+        assertEquals(null, bare.issuer)
+        assertEquals(null, bare.notBefore)
+        assertEquals(emptyList<String>(), bare.names)
+        assertEquals(emptyList<String>(), bare.problems)
+    }
+
+    @Test
+    fun whatIsWrongIsSaidInTheWordsBothPhonesUse() {
+        val zone = ZoneId.of("UTC")
+        val uk = Locale.UK
+        val c = Fleet.Certificate(
+            trusted = false,
+            problems = listOf("self-signed", "untrusted-issuer", "expired", "not-yet-valid", "name-mismatch"),
+            subject = "CN=xo",
+            issuer = "CN=Example CA",
+            notBefore = "2027-01-02T00:00:00.000Z",
+            notAfter = "2026-03-04T00:00:00.000Z",
+            names = emptyList(),
+        )
+        assertEquals(
+            listOf(
+                "Self-signed: nothing but the server itself vouches for it.",
+                "Signed by an authority this machine does not trust.",
+                "Expired on 4 Mar 2026.",
+                "Not valid until 2 Jan 2027.",
+                "Issued for a different name than xo.lan:443.",
+            ),
+            XoSetup.problemLines(c, address, zone, uk),
+        )
+        assertEquals(listOf("This machine could not read the certificate’s details."), XoSetup.problemLines(null, address, zone, uk))
+        // Distrusted with no reason named is said as that, never as fine.
+        assertEquals(listOf("Not trusted by that machine, which did not say why."), XoSetup.problemLines(c.copy(problems = emptyList()), address, zone, uk))
+        // A date the machine wrote that does not parse is shown as written.
+        assertEquals("Expired on sometime.", XoSetup.problemLines(c.copy(problems = listOf("expired"), notAfter = "sometime"), address, zone, uk).single())
+        // A trusted one has nothing to say here, and one calm line elsewhere.
+        val fine = c.copy(trusted = true, problems = emptyList())
+        assertEquals(emptyList<String>(), XoSetup.problemLines(fine, address, zone, uk))
+        assertEquals("Its certificate checks out: issued to CN=xo by CN=Example CA, valid until 4 Mar 2026.", XoSetup.trustedLine(fine, zone, uk))
+        assertEquals("Its certificate checks out.", XoSetup.trustedLine(fine.copy(subject = null, issuer = null, notAfter = null), zone, uk))
+    }
+
+    @Test
+    fun trustIsSentOnlyForAnAcknowledgedCertificateThatDidNotCheckOut() {
+        val fine = Fleet.Certificate(true, emptyList(), null, null, null, null, emptyList())
+        val bad = fine.copy(trusted = false, problems = listOf("self-signed"))
+        assertEquals(null, XoSetup.trustFor(fine, acknowledged = true))
+        assertEquals(null, XoSetup.trustFor(fine, acknowledged = false))
+        assertEquals("accepted", XoSetup.trustFor(bad, acknowledged = true))
+        assertEquals(null, XoSetup.trustFor(bad, acknowledged = false))
+        // A certificate the machine could not read is one nobody vouched for.
+        assertEquals("accepted", XoSetup.trustFor(null, acknowledged = true))
+        assertEquals(null, XoSetup.trustFor(null, acknowledged = false))
     }
 
     @Test

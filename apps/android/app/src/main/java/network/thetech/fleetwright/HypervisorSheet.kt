@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -28,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,12 +49,22 @@ import kotlinx.coroutines.launch
  * already in the fleet, from this phone. docs/hypervisors.md; the arithmetic
  * is in XoSetup.kt and the words here are iOS's too.
  *
- * FOUR THINGS, IN THE ORDER THEY CAN HAPPEN. An address, and which machines
- * can reach it (`xoprobe`); a machine and the admin sign-in; the machine's
- * key for this job, checked before anything is sealed to it; then the steps as
- * the machine runs them, polled only while this screen is open, because the
- * fleet also pushes them to a notification (XoSetupNotice) for the phone in a
- * pocket.
+ * FIVE THINGS, IN THE ORDER THEY CAN HAPPEN. An address, and which machines
+ * can reach it (`xoprobe`); the certificate that machine saw, which the
+ * person acknowledges when it does not check out; a machine and the admin
+ * sign-in; the machine's key for this job, checked before anything is sealed
+ * to it; then the steps as the machine runs them, polled only while this
+ * screen is open, because the fleet also pushes them to a notification
+ * (XoSetupNotice) for the phone in a pocket.
+ *
+ * THE CERTIFICATE IS THE ONE CARD HERE THAT ASKS A QUESTION. A certificate
+ * that checks out is one calm line. One that does not gets the attention
+ * ring the design spends on exactly this, what is wrong with it in words, its
+ * details, and a box the person ticks having read them; Set up stays off
+ * until they do, and `begin` then carries `trust = accepted`, which is what
+ * the host looks for before it will connect. The box unticks itself when the
+ * address, the machine or the probe changes, because it was about the
+ * certificate those three named.
  *
  * THE PASSWORD IS IN MEMORY FOR AS LONG AS IT TAKES TO SEAL IT, and no longer.
  * It is sealed to the job's key on this phone, so the coordinator relays
@@ -59,6 +72,14 @@ import kotlinx.coroutines.launch
  * again on every way out of the sign-in step. Nothing here writes it anywhere,
  * logs it, or hands it to the outbox: every send is given an id, which is what
  * keeps a send the fleet did not answer off this phone's disk (Fleet.xosetup).
+ * It is the one input NOT in rememberSaveable, for the same reason: saved
+ * state is written to a Bundle, and a Bundle is a place.
+ *
+ * WHAT SURVIVES A ROTATION. The job, the machine running it, the address,
+ * the machine chosen and the acknowledgement are saveable, so turning the
+ * phone mid-setup comes back to the same progress rather than an empty form.
+ * The probes are not: they are an answer from the fleet, and asking again is
+ * one tap.
  *
  * @param resumeJob a job a notification was tapped for: straight to its
  *   progress, from `status`, with nothing to type.
@@ -68,12 +89,16 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     val scope = rememberCoroutineScope()
     val fleet = remember { Fleet(settings) }
 
-    var address by remember { mutableStateOf("") }
+    var address by rememberSaveable { mutableStateOf("") }
     var probing by remember { mutableStateOf(false) }
     // NULL IS NOT ASKED. An empty list is a fleet with nothing permanent to ask.
     var probes by remember { mutableStateOf<List<Fleet.Probe>?>(null) }
     var probeText by remember { mutableStateOf("") }
-    var chosen by remember { mutableStateOf<String?>(null) }
+    var chosen by rememberSaveable { mutableStateOf<String?>(null) }
+    // The person has read what is wrong with the chosen machine's certificate
+    // and trusts it anyway. About one certificate: reset with the address,
+    // the machine, and every new probe.
+    var acknowledged by rememberSaveable { mutableStateOf(false) }
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -81,14 +106,23 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     var refusal by remember { mutableStateOf("") }
 
     // A `begin` answer this phone could not vouch for by itself, waiting on
-    // the person's comparison. Cleared either way.
-    var unvouched by remember { mutableStateOf<Fleet.Setup?>(null) }
-    var unvouchedHost by remember { mutableStateOf("") }
+    // the person's comparison, with the inputs as they were when `begin` was
+    // sent. Cleared either way.
+    var unvouched by remember { mutableStateOf<Pending?>(null) }
 
-    var job by remember { mutableStateOf(resumeJob) }
-    var runningOn by remember { mutableStateOf("") }
+    var job by rememberSaveable { mutableStateOf(resumeJob) }
+    var runningOn by rememberSaveable { mutableStateOf("") }
     var progress by remember { mutableStateOf<Fleet.Setup?>(null) }
     var cancelling by remember { mutableStateOf(false) }
+    // The fleet took a cancel: the button is not offered again, and what the
+    // host said about it is shown instead.
+    var cancelAccepted by rememberSaveable { mutableStateOf(false) }
+    var cancelText by rememberSaveable { mutableStateOf("") }
+    // The poll gave up: on the fleet's word that it has no such job (`gone`),
+    // or after five unanswered asks. `asks` restarts it from Ask again.
+    var pollStopped by remember { mutableStateOf(false) }
+    var pollGone by remember { mutableStateOf(false) }
+    var asks by rememberSaveable { mutableStateOf(0) }
 
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     val reachable = probes.orEmpty().filter { it.reachable && it.tls && it.cert != null }
@@ -100,6 +134,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
             probeText = ""
             probes = null
             chosen = null
+            acknowledged = false
             val r = fleet.xoprobe(address.trim())
             if (r.ok && r.probes != null) {
                 probes = r.probes
@@ -112,19 +147,24 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
         }
     }
 
-    /** `run`: seal the sign-in to the job's key, drop the password, send. */
-    suspend fun run(setup: Fleet.Setup, hostId: String) {
-        val key = setup.key ?: return
-        val sealed = XoSetup.sealSignIn(key, setup.job, address.trim(), email.trim(), password)
+    /**
+     * `run`: seal the sign-in to the job's key, drop the password, send. The
+     * address and the email are the ones `begin` was sent with, not whatever
+     * the fields hold now: the job's key was signed over that address, and a
+     * sign-in sealed under a different one would be refused as a replay.
+     */
+    suspend fun run(p: Pending) {
+        val key = p.setup.key ?: return
+        val sealed = XoSetup.sealSignIn(key, p.setup.job, p.where, p.email, password)
         password = ""
-        val r = fleet.xosetup("run", job = setup.job, sealed = sealed)
+        val r = fleet.xosetup("run", job = p.setup.job, sealed = sealed)
         if (!r.ok) {
-            refusal = r.text.ifBlank { "$hostId did not take the sign-in." }
+            refusal = r.text.ifBlank { "${p.hostId} did not take the sign-in." }
             return
         }
-        job = setup.job
-        runningOn = r.hostId ?: hostId
-        progress = r.xosetup ?: setup.copy(state = "running")
+        job = p.setup.job
+        runningOn = r.hostId ?: p.hostId
+        progress = r.xosetup ?: p.setup.copy(state = "running")
     }
 
     /**
@@ -136,11 +176,18 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     fun begin() {
         val p = pick ?: return
         val pin = p.cert ?: return
+        // "accepted" for a certificate that did not check out and was
+        // acknowledged; nothing for one that did. The button is off until the
+        // box is ticked, so a null here for an untrusted certificate is a
+        // path that should not exist; refusing it is cheaper than finding out.
+        val trust = XoSetup.trustFor(p.certificate, acknowledged)
+        if (p.certificate?.trusted != true && trust == null) return
         scope.launch {
             beginning = true
             refusal = ""
             val where = address.trim()
-            val r = fleet.xosetup("begin", address = where, pin = pin, host = p.hostId)
+            val who = email.trim()
+            val r = fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust)
             val setup = r.xosetup
             val hostId = r.hostId ?: p.hostId
             when {
@@ -160,16 +207,14 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         .firstOrNull { it.hostId == hostId }?.publicJwk?.let { PhoneVault.fingerprint(it) }
                     val approved = PhoneGitHub(settings).signedIn &&
                         runCatching { PhoneVault(settings).list(fleet) }.getOrNull()?.grants?.any { it.fingerprint == fingerprint } == true
+                    val pending = Pending(setup, hostId, where, who)
                     when {
                         listed != null && listed != fingerprint -> {
                             password = ""
                             refusal = "That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent."
                         }
-                        approved -> run(setup, hostId)
-                        else -> {
-                            unvouched = setup
-                            unvouchedHost = hostId
-                        }
+                        approved -> run(pending)
+                        else -> unvouched = pending
                     }
                 }
             }
@@ -177,26 +222,48 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
         }
     }
 
+    fun startAgain() {
+        job = null
+        progress = null
+        refusal = ""
+        password = ""
+        cancelAccepted = false
+        cancelText = ""
+        pollStopped = false
+        pollGone = false
+    }
+
     // THE POLL, ONLY WHILE THIS IS ON SCREEN. Leaving the screen cancels the
-    // effect; the notification carries on without it.
-    LaunchedEffect(job) {
+    // effect; the notification carries on without it. It ends when the setup
+    // does, when the fleet says it has no such job, or after five asks in a
+    // row went unanswered: a poll that runs for ever against a refusal is a
+    // phone warming a pocket. Ask again restarts it.
+    LaunchedEffect(job, asks) {
         val id = job ?: return@LaunchedEffect
+        pollStopped = false
+        pollGone = false
+        var unanswered = 0
         while (isActive) {
             val state = progress?.state
             if (state == "done" || state == "failed" || state == "cancelled") break
-            if (progress != null) delay(2_000)
+            if (progress != null || unanswered > 0) delay(2_000)
             val r = fleet.xosetup("status", job = id)
             if (r.ok && r.xosetup != null) {
                 progress = r.xosetup
                 refusal = ""
+                unanswered = 0
                 r.hostId?.let { runningOn = it }
-            } else if (progress == null) {
-                // Resumed on a job the fleet no longer knows: say so, once.
-                progress = Fleet.Setup(id, "failed", null, null, null, r.text.ifBlank { "The fleet does not know that setup any more." }, null, null, null, null)
-            } else if (!r.ok) {
-                // The bar stays where it was; the sentence says the fleet
-                // stopped answering, and the next answer clears it.
-                refusal = r.text.ifBlank { "The fleet did not answer about the setup." }
+                continue
+            }
+            // WHAT IS SHOWN IS THE REFUSAL, NOT A STATE. The bar stays where
+            // it was, or stays absent: "Stopped" is the machine's word for
+            // its own job, and a fleet that did not answer has not said it.
+            unanswered++
+            refusal = r.text.ifBlank { "The fleet did not answer about the setup." }
+            if (r.code == "unknown_job" || unanswered >= 5) {
+                pollGone = r.code == "unknown_job"
+                pollStopped = true
+                break
             }
         }
     }
@@ -209,49 +276,64 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                 SectionHead("Setting up")
                 if (runningOn.isNotBlank()) Hint("On $runningOn", color = Design.Palette.ink.now)
                 if (setup == null) {
-                    Hint("Asking where it has got to…")
+                    if (!pollStopped) Hint("Asking where it has got to…")
                 } else {
                     SetupProgress(setup)
-                    when (setup.state) {
-                        "running", "waiting" -> {
-                            TextButton(
-                                enabled = !cancelling,
-                                onClick = {
-                                    scope.launch {
-                                        cancelling = true
-                                        val r = fleet.xosetup("cancel", job = setup.job)
-                                        if (r.ok && r.xosetup != null) progress = r.xosetup
-                                        else if (!r.ok) refusal = r.text.ifBlank { "Could not cancel." }
-                                        cancelling = false
+                }
+                when {
+                    pollStopped -> {
+                        Hint(
+                            if (pollGone) "The fleet has no setup with this id for you, so there is nothing more to ask it."
+                            else "Asked five times with no answer, so this has stopped asking.",
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                            if (!pollGone) {
+                                OutlinedButton(onClick = { asks++ }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ask again") }
+                            }
+                            TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }
+                        }
+                    }
+                    setup != null && (setup.state == "running" || setup.state == "waiting") && !cancelAccepted -> {
+                        TextButton(
+                            enabled = !cancelling,
+                            onClick = {
+                                scope.launch {
+                                    cancelling = true
+                                    val r = fleet.xosetup("cancel", job = setup.job)
+                                    if (r.ok) {
+                                        // OFFERED ONCE. The fleet has the cancel;
+                                        // what the host said about it stands in
+                                        // for the button until the state changes.
+                                        cancelAccepted = true
+                                        cancelText = r.text
+                                        r.xosetup?.let { progress = it }
+                                    } else {
+                                        refusal = r.text.ifBlank { "Could not cancel." }
                                     }
-                                },
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) { Text(if (cancelling) "Cancelling…" else "Cancel") }
-                            Hint("It stops between steps. What was made so far is tagged fleetwright, and running the setup again picks up from what exists.")
-                        }
-                        else -> {
-                            TextButton(
-                                onClick = {
-                                    job = null
-                                    progress = null
-                                    refusal = ""
-                                    password = ""
-                                },
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) { Text("Start again") }
-                        }
+                                    cancelling = false
+                                }
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(if (cancelling) "Cancelling…" else "Cancel") }
+                        Hint("It stops between steps. What was made so far is tagged fleetwright, and running the setup again picks up from what exists.")
+                    }
+                    setup != null && (setup.state == "running" || setup.state == "waiting") -> {
+                        Hint(cancelText.ifBlank { "Cancelling after this step." }, color = Design.Palette.ink.now)
+                    }
+                    setup != null -> {
+                        TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }
                     }
                 }
             }
             waitingOn != null -> {
-                SectionHead("Is that $unvouchedHost's key?")
+                SectionHead("Is that ${waitingOn.hostId}'s key?")
                 Hint(
-                    "$unvouchedHost signed the key your sign-in will be sealed to, and this phone has not approved " +
-                        "that machine before. Compare this with what fleetwright-sidecar identity prints on $unvouchedHost.",
+                    "${waitingOn.hostId} signed the key your sign-in will be sealed to, and this phone has not approved " +
+                        "that machine before. Compare this with what fleetwright-sidecar identity prints on ${waitingOn.hostId}.",
                 )
                 SelectionContainer {
                     Text(
-                        PhoneVault.fingerprint(waitingOn.hostKey!!),
+                        PhoneVault.fingerprint(waitingOn.setup.hostKey!!),
                         style = Design.Style.title,
                         fontFamily = FontFamily.Monospace,
                         color = Design.Palette.ink.now,
@@ -260,10 +342,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                 Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     OutlinedButton(
                         onClick = {
-                            val s = waitingOn
-                            val h = unvouchedHost
                             unvouched = null
-                            scope.launch { run(s, h) }
+                            scope.launch { run(waitingOn) }
                         },
                         modifier = Modifier.heightIn(min = 48.dp),
                     ) { Text("They match") }
@@ -281,10 +361,22 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                 SectionHead("Where Xen Orchestra answers")
                 OutlinedTextField(
                     value = address,
-                    onValueChange = { address = it.trim() },
+                    onValueChange = { typed ->
+                        val next = typed.trim()
+                        if (next != address) {
+                            // A NEW ADDRESS IS A NEW QUESTION: the probes, the
+                            // machine and the certificate were about the old one.
+                            address = next
+                            probes = null
+                            probeText = ""
+                            chosen = null
+                            acknowledged = false
+                        }
+                    },
                     label = { Text("Address") },
                     supportingText = { Text("A host name or IP address, with a port if it is not 443. No https://.") },
                     singleLine = true,
+                    enabled = !beginning,
                     isError = address.isNotBlank() && !addressOk,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
@@ -294,7 +386,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedButton(
-                    enabled = !probing && addressOk,
+                    enabled = !probing && !beginning && addressOk,
                     onClick = { probe() },
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) { Text(if (probing) "Asking every machine…" else "Find a machine that can reach it") }
@@ -320,10 +412,23 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                                     Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 48.dp)
-                                        .selectable(selected = p.hostId == chosen, role = Role.RadioButton, onClick = { chosen = p.hostId }),
+                                        .selectable(
+                                            selected = p.hostId == chosen,
+                                            enabled = !beginning,
+                                            role = Role.RadioButton,
+                                            onClick = {
+                                                if (chosen != p.hostId) {
+                                                    chosen = p.hostId
+                                                    // Another machine saw its own
+                                                    // certificate; the tick was for
+                                                    // the last one's.
+                                                    acknowledged = false
+                                                }
+                                            },
+                                        ),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    RadioButton(selected = p.hostId == chosen, onClick = null)
+                                    RadioButton(selected = p.hostId == chosen, onClick = null, enabled = !beginning)
                                     Spacer(Modifier.width(Design.Space.insideTight))
                                     Column(Modifier.weight(1f)) {
                                         Text(p.hostId, style = Design.Style.body, color = Design.Palette.ink.now)
@@ -338,19 +443,17 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
 
                 val cert = pick?.cert
                 if (pick != null && cert != null) {
-                    // THE PIN. The machine sends the sign-in only to an address
-                    // that answers with this certificate, so this is the thing
-                    // to compare with the padlock in a browser before going on.
-                    Text("Certificate SHA-256", style = Design.Style.label, color = Design.Palette.inkDim.now)
-                    SelectionContainer {
-                        Text(
-                            XoSetup.groupedPin(cert),
-                            style = Design.Style.label,
-                            fontFamily = FontFamily.Monospace,
-                            color = Design.Palette.ink.now,
-                        )
+                    val certificate = pick.certificate
+                    val trusted = certificate?.trusted == true
+                    if (certificate != null && trusted) {
+                        // CALM. It checks out, so nothing is asked; the pin
+                        // still shows, because it is what the machine holds
+                        // the sign-in to.
+                        Hint(XoSetup.trustedLine(certificate), color = Design.Palette.ink.now)
+                        PinLines(cert, pick.hostId, address)
+                    } else {
+                        CertificateAsk(pick, address, acknowledged, enabled = !beginning, onAcknowledged = { acknowledged = it })
                     }
-                    Hint("The certificate ${pick.hostId} saw at $address. Compare it with the one your browser shows for Xen Orchestra; the machine refuses to send the sign-in to any other.")
 
                     SectionHead("Xen Orchestra admin sign-in")
                     OutlinedTextField(
@@ -358,6 +461,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         onValueChange = { email = it.trim() },
                         label = { Text("Admin email") },
                         singleLine = true,
+                        enabled = !beginning,
                         keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.None,
                             autoCorrectEnabled = false,
@@ -370,6 +474,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         onValueChange = { password = it },
                         label = { Text("Admin password") },
                         singleLine = true,
+                        enabled = !beginning,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.None,
@@ -382,8 +487,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
                             "It is sealed to that machine on this phone; the fleet relays it and cannot read it.",
                     )
+                    // OFF UNTIL THE CERTIFICATE IS EITHER FINE OR ACKNOWLEDGED:
+                    // the host would refuse `connect` anyway, and a button
+                    // that leads to a refusal is a button that lied.
                     OutlinedButton(
-                        enabled = !beginning && email.isNotBlank() && password.isNotEmpty(),
+                        enabled = !beginning && email.isNotBlank() && password.isNotEmpty() && (trusted || acknowledged),
                         onClick = { begin() },
                         modifier = Modifier.heightIn(min = 48.dp),
                     ) { Text(if (beginning) "Checking ${pick.hostId}'s key…" else "Set up on ${pick.hostId}") }
@@ -394,10 +502,90 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     }
 }
 
+/** A `begin` answer with the inputs it was sent for, which `run` seals under and not the fields' current text. */
+private class Pending(val setup: Fleet.Setup, val hostId: String, val where: String, val email: String)
+
 /** A machine that cannot run it, and why, in one dim line. */
 @Composable
 private fun ProbeLine(p: Fleet.Probe) {
     Text("${p.hostId} · ${XoSetup.describe(p)}", style = Design.Style.label, color = Design.Palette.inkDim.now)
+}
+
+/**
+ * THE PIN. The machine sends the sign-in only to an address that answers
+ * with this certificate, so this is the thing to compare with the padlock in
+ * a browser before going on.
+ */
+@Composable
+private fun PinLines(cert: String, hostId: String, address: String) {
+    Text("Certificate SHA-256", style = Design.Style.label, color = Design.Palette.inkDim.now)
+    SelectionContainer {
+        Text(
+            XoSetup.groupedPin(cert),
+            style = Design.Style.label,
+            fontFamily = FontFamily.Monospace,
+            color = Design.Palette.ink.now,
+        )
+    }
+    Hint("The certificate $hostId saw at $address. Compare it with the one your browser shows for Xen Orchestra; the machine refuses to send the sign-in to any other.")
+}
+
+/**
+ * The card that asks: a certificate that does not check out, or one the
+ * machine could not read. What is wrong, one line each in the words iOS
+ * uses; then what it says about itself, each line only when the machine
+ * said; then the pin; then the box. The attention ring is the one place
+ * this screen spends a tone, and the heading carries the same word, so the
+ * card reads the same with the colour gone.
+ */
+@Composable
+private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Boolean, enabled: Boolean, onAcknowledged: (Boolean) -> Unit) {
+    val c = probe.certificate
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .fleetCard(radius = Design.Radius.cardSmall, ring = Design.Palette.attention.now)
+            .padding(Design.Space.groupTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+    ) {
+        Text(
+            if (c == null) "This certificate could not be checked" else "This certificate does not check out",
+            style = Design.Style.bodyStrong,
+            color = Design.Palette.attention.now,
+        )
+        XoSetup.problemLines(c, address).forEach { line ->
+            Text(line, style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+        }
+        if (c != null) {
+            Detail("Issued to", c.subject)
+            Detail("Issued by", c.issuer)
+            Detail("Valid from", c.notBefore?.let { XoSetup.mediumDate(it) })
+            Detail("Valid until", c.notAfter?.let { XoSetup.mediumDate(it) })
+            Detail("Names", c.names.takeIf { it.isNotEmpty() }?.joinToString(", "))
+        }
+        probe.cert?.let { PinLines(it, probe.hostId, address) }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .toggleable(value = acknowledged, enabled = enabled, role = Role.Checkbox, onValueChange = onAcknowledged),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = acknowledged, onCheckedChange = null, enabled = enabled)
+            Spacer(Modifier.width(Design.Space.insideTight))
+            Text("I checked this certificate and trust it", style = Design.Style.body, color = Design.Palette.ink.now)
+        }
+    }
+}
+
+/** One thing a certificate says about itself. Absent is not drawn: a blank row would read as "none", and the machine said nothing. */
+@Composable
+private fun Detail(label: String, value: String?) {
+    if (value == null) return
+    Column {
+        Text(label, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        SelectionContainer { Text(value, style = Design.Style.bodySmall, color = Design.Palette.ink.now) }
+    }
 }
 
 /**
