@@ -606,14 +606,20 @@ It pulls, finds nothing, and comes back on the same version — the one case tha
 still needs somebody on the machine, and the drift message says so rather than
 promising the update will work.
 
-**The content never travels.** A profile is a file on the host —
-`/var/lib/fleetwright/profiles/<name>.md` — and the intent carries its name. That
-is [`wanted.md`](./wanted.md)'s rule kept rather than bent: *the coordinator may
-NAME a profile; it may never CARRY one.* Injected text is instructions to an
-agent with root in a container, so a coordinator that chose the words would be
-writing that agent's instructions — a much larger capability than the rest of
-this verb set combined, and the `reply { text }` argument in different clothes.
-There is still no way to send text into a session, at start or later.
+**A profile's content never travels.** A profile is a file on the host —
+`/var/lib/fleetwright/profiles/<name>.md` — and the intent carries its name.
+
+**A task's does, since v7.** `start { task }` is the session's first message in
+words: raw text, newlines kept, up to 8000 bytes, and either a task or a
+profile, never both. Until v7 the rule was [`wanted.md`](./wanted.md)'s — *the
+coordinator may NAME a profile; it may never CARRY one* — and a runner minutes
+old has no profiles, so every session started on one came up idle with nothing
+able to give it work. The owner dropped the rule on every host on 4 Oct 2026;
+[`security.md`](./security.md) §4.1 states what that adds to a compromised
+coordinator's reach. A host older than 7 is refused a task with
+`host_outdated` rather than handed a start without it, which would start the
+idle session `task` exists to end. There is still no way to send text into a
+session that is already running.
 
 The asymmetry is worth knowing by heart, because it decides how much a change
 costs:
