@@ -106,6 +106,12 @@ export const GITHUB_REPLY_AAD = 'fleetwright-github-reply/v1';
 export const DEPOSIT_AAD = 'fleetwright-claude-deposit/v1';
 
 /**
+ * A Claude token a machine made with `claude setup-token`, sealed on its way
+ * back to the phone that asked for it, which then deposits it like a pasted one.
+ */
+export const SETUP_TOKEN_AAD = 'fleetwright-setup-token/v1';
+
+/**
  * The additional data a Claude login is kept under AT REST in the minter: the
  * GitHub account it belongs to. A stored row moved under another account does
  * not open, so storage that could be rearranged still could not hand one

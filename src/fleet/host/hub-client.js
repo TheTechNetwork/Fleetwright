@@ -64,6 +64,8 @@ export class HubError extends Error {
  * @property {any[]} [buttons]
  * @property {{ catalogue: any[], connected: any[] }} [connections]
  * @property {{ ok: boolean, account?: string, granted?: string[]|null, wants?: string[]|null, missing?: string[]|null, message: string }} [check]
+ * @property {string} [url] the sign-in page `/setuptoken` started
+ * @property {{ epk: string, iv: string, ct: string }} [sealed] the token `/setuptoken` made, sealed to the asking phone's key
  * @property {Array<{ name: string, summary: string, chars: number }>} [profiles]
  *   the task profiles that host has, as data
  * @property {Array<{ name: string }>} [secrets]

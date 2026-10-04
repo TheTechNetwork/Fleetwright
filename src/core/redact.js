@@ -39,6 +39,9 @@ const SECRET_FROM = new Map([
   // than being right about which is which. The provider name is still worth
   // keeping for the same reason it is on `link`.
   ['renew', 1],
+  // /setuptoken <code> <reply-key>: the code is the sign-in page's, good for
+  // one exchange; the key is public, and hidden with it rather than counted.
+  ['setuptoken', 0],
 ]);
 
 /** What replaces it. Fixed length, so the log never leaks the secret's size. */
