@@ -14,8 +14,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const IOS = iosSources();
+const ANDROID = androidSources();
 
 test('iOS: New session asks what it should do, and sends the words', () => {
   assert.ok(IOS.includes('TextField("What should it do?", text: $task, axis: .vertical)'));
@@ -33,4 +35,24 @@ test('iOS: the sheet says what happens, and promises no link a runner cannot hav
   assert.doesNotMatch(IOS, /notification with its link/);
   // "Started" said as idle only when it has neither.
   assert.match(IOS, /status = request\.profile == nil && request\.task == nil\s*\? "Starting a session\. It will come up idle/);
+});
+
+test('Android: New session asks what it should do, and sends the words', () => {
+  assert.ok(ANDROID.includes('label = { Text("What should it do?") }'));
+  assert.match(ANDROID, /if \(!task\.isNullOrBlank\(\)\) put\("task", task\)/);
+  assert.match(ANDROID, /request\.task\?\.let \{ put\("task", it\) \}/);
+  assert.match(ANDROID, /profile = profile\.ifBlank \{ null \}\.takeIf \{ platform\.isEmpty\(\) && task\.isBlank\(\) \}/);
+});
+
+test('Android: the sheet says the same as iOS, and promises no link a runner cannot have', () => {
+  for (const words of [
+    'It starts with these words and gets to work.',
+    'Leave it empty and it starts idle, waiting for you.',
+    ' and works on your task. You get a notification when it is back at its prompt.',
+  ]) {
+    assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
+    assert.ok(IOS.includes(words), `iOS does not say: ${words}`);
+  }
+  assert.doesNotMatch(ANDROID, /notification with its link/);
+  assert.match(ANDROID, /status = if \(request\.profile == null && request\.task == null\) \{/);
 });

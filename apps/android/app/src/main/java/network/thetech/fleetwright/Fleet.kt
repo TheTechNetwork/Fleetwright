@@ -789,6 +789,7 @@ class Fleet(
         host: String? = null,
         profile: String? = null,
         secret: String? = null,
+        task: String? = null,
     ): Reply = intent(
         "start",
         buildMap {
@@ -804,6 +805,10 @@ class Fleet(
             // is refused by that host, listing what it does have, so a stale
             // picker fails with something a person can act on.
             if (!profile.isNullOrBlank()) put("profile", profile)
+            // OR THE WORDS THEMSELVES (protocol v7): what to do, as the
+            // session's first message, sent as typed. A host too old to take
+            // one is refused by the coordinator rather than started idle.
+            if (!task.isNullOrBlank()) put("task", task)
             // WHAT THE SESSION MAY REACH, by name. A NAME, never the value: the
             // host resolves it and the session fetches the value at runtime over
             // the broker, so nothing here carries a credential. An unknown name
