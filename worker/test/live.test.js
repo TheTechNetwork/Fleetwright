@@ -29,6 +29,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { enrol, proveIdentity } from '../../src/fleet/host/identity.js';
+import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 
 const requireWorker = createRequire(new URL('../package.json', import.meta.url));
 
@@ -100,6 +101,10 @@ async function connectHost(hostId) {
       hostId,
       labels: [],
       hub: { reachable: true, host: hostId },
+      // The protocol it speaks, as every real sidecar reports. Without it
+      // the coordinator cannot tell this host can take a v7 `task`, and
+      // refuses one rather than starting the session idle.
+      protocol: PROTOCOL_VERSION,
       maxSessions: 5,
       running: 0,
       free: 5,
@@ -183,7 +188,10 @@ test('an intent round-trips: phone in, host out, reply back', async () => {
       // The v2 fields, through the REAL coordinator. The protocol bump exists
       // for these; if the DO builds a v1 intent or drops the params, this is
       // where it shows.
-      params: { title: 'refactor auth', brief: 'split the token check out' },
+      // And v7's `task`, the protocol's first `raw` param a start carries: its
+      // byte bound was counted with Node's Buffer, which this Worker does not
+      // have, and every start with a task threw a 500 in production.
+      params: { title: 'refactor auth', brief: 'split the token check out', task: 'Split the token check out.\n  Then run the tests.' },
       // PINNED to this test's own host. Unpinned, the scheduler may place on
       // an earlier test's host whose socket closed a beat ago but whose
       // disconnect has not landed — nobody answers, and the test spends 60s
@@ -206,6 +214,7 @@ test('an intent round-trips: phone in, host out, reply back', async () => {
   assert.equal(intent.id, 'live-roundtrip-0001', 'the idempotency key must be the caller\'s, not a fresh one');
   assert.equal(intent.params.title, 'refactor auth');
   assert.equal(intent.params.brief, 'split the token check out');
+  assert.equal(intent.params.task, 'Split the token check out.\n  Then run the tests.', 'a task crosses the wire word for word');
   // The version the DO sends is the version this build speaks — a literal here
   // is the healthz bug on the write path.
   const { PROTOCOL_VERSION } = await import('../../src/fleet/protocol/intents.js');

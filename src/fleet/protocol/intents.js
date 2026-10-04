@@ -117,6 +117,9 @@ import { SEAL_KEY_RE } from '../seal.js';
 /** @type {number} */
 export const PROTOCOL_VERSION = 7;
 
+/** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
+const UTF8 = new TextEncoder();
+
 // THE FLOOR: the oldest protocol this host's code still reads correctly, and the
 // change that stops a routine feature bump stranding a host. See
 // docs/protocol-negotiation.md for the argument in full.
@@ -1383,7 +1386,12 @@ function checkParam(verb, key, ps, value) {
     // which truncates the value for anything written in C — what gets validated
     // and what gets stored would be different strings.
     if (typeof value !== 'string') return bad(`${verb}.${key} must be text`);
-    if (Buffer.byteLength(value) > (ps.max ?? 256 * 1024)) {
+    // COUNTED WITH TextEncoder, NOT Buffer. This table runs in the coordinator
+    // Worker too, and the Worker has no Node compatibility flag, so `Buffer`
+    // is not defined there: every start carrying v7's `task` threw a
+    // ReferenceError and came back as a 500 from the coordinator. TextEncoder
+    // is in workerd, Node and browsers alike, and counts the same UTF-8 bytes.
+    if (UTF8.encode(value).length > (ps.max ?? 256 * 1024)) {
       return bad(`${verb}.${key} is larger than ${Math.round((ps.max ?? 262144) / 1024)}KB`);
     }
     if (value.includes('\0')) return bad(`${verb}.${key} contains a null byte`);
