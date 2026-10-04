@@ -107,6 +107,10 @@ may be "nothing", and that is worth knowing before designing launchd units.
 
 ### Proxmox VM and container templates as session hosts
 
+> **Designed** in [`hypervisors.md`](./hypervisors.md), XCP-ng first and
+> Proxmox as a second driver behind the same interface. This section is the
+> argument it started from.
+
 A VM or LXC template on a Proxmox node, cloned when a session needs a machine,
 enrolled as a host, worked in, and destroyed after. The same shape as the
 GitHub Actions runner in `docs/runner-central.md`, on hardware you own: no
