@@ -29,6 +29,9 @@ struct StartRequest {
     /// empty prompt and somebody has to drive it — which is what every session
     /// did before protocol v3, and what nothing said out loud.
     let profile: String?
+    /// OR WHAT IT WILL DO, in words (protocol v7): its first message. Either
+    /// this or `profile`, never both.
+    var task: String? = nil
     /// WHAT IT MAY REACH, by name. nil grants nothing. The value never travels
     /// with this — the host resolves the name and the session fetches the value
     /// at runtime. See docs/trust.md.
@@ -36,7 +39,8 @@ struct StartRequest {
     /// A NEW TEMPORARY MACHINE to start it on, by operating system, or nil for
     /// a machine the fleet already has. When set, `host`, `profile` and
     /// `secret` are nil: the machine does not exist yet, and a runner holds no
-    /// task profiles or secrets of its own.
+    /// task profiles or secrets of its own. `task` travels: it is how a
+    /// machine minutes old is given its job.
     var platform: String? = nil
     /// How long that machine stays, in minutes. Only with `platform`.
     var minutes: Int? = nil
@@ -67,6 +71,7 @@ struct StartSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var brief = ""
+    @State private var task = ""
     @State private var title = ""
     @State private var kind: SessionKind?
     @State private var host = ""
@@ -101,6 +106,8 @@ struct StartSheet: View {
     }
 
     private var kinds: [SessionKind] { SessionKinds.all() }
+
+    private var taskIsEmpty: Bool { task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -139,7 +146,7 @@ struct StartSheet: View {
                     // model to do it. A button that explains why it is disabled
                     // is better than one that is simply absent, but a button
                     // that cannot work at all is worse than either.
-                    if Naming.canSuggest, !brief.isEmpty {
+                    if Naming.canSuggest, !suggestionSource.isEmpty {
                         // Explicitly asking overrides the "they edited it"
                         // guard: they know they edited it, they are asking anyway.
                         Button("Suggest again") { Task { titleIsUntouched = true; await suggest() } }
@@ -151,17 +158,29 @@ struct StartSheet: View {
 
                 // WHAT IT WILL DO, and it is above Kind and Where because it
                 // is the question that decides whether starting is worth doing
-                // at all. A session with no profile comes up idle: correct,
+                // at all. A session with nothing to do comes up idle: correct,
                 // sometimes wanted, and never what somebody expects from a
                 // button labelled Start.
                 //
-                // Only shown once the fleet has ANSWERED. Rendering an empty
-                // picker while the request is in flight offers "Nothing yet" as
-                // if it were the fleet's answer, and somebody taps Start.
-                if profilesAnswered, !profiles.isEmpty, chosenPlatform == nil {
-                    Section {
-                        Picker("Task", selection: $profile) {
-                            Text("Nothing — I will drive it").tag("")
+                // THE WORDS FIRST, always offered: since protocol v7 a session
+                // can be handed its job in words, and a new machine can be
+                // handed it in no other way. A profile a host has written
+                // down is the alternative, offered only once the fleet has
+                // ANSWERED that it has some — an empty picker while the
+                // request is in flight offers "Nothing yet" as the fleet's
+                // answer.
+                Section {
+                    TextField("What should it do?", text: $task, axis: .vertical)
+                        .lineLimit(3...8)
+                        // Two first messages is one too many, and the host
+                        // refuses the pair, so writing one clears the other.
+                        .onChange(of: task) { _, now in
+                            if !now.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { profile = "" }
+                            scheduleSuggestion()
+                        }
+                    if profilesAnswered, !profiles.isEmpty, chosenPlatform == nil, taskIsEmpty {
+                        Picker("Or one written on a host", selection: $profile) {
+                            Text("None").tag("")
                             ForEach(profiles) { p in
                                 // The summary, not the name, because the name is
                                 // a filename and the summary is the sentence
@@ -178,15 +197,17 @@ struct StartSheet: View {
                             let owners = Set(profiles.filter { $0.name == now }.compactMap(\.hostId))
                             if owners.count == 1, let only = owners.first { host = only }
                         }
-                    } header: {
-                        Text("Task").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
-                    } footer: {
-                        Text(profile.isEmpty
-                             ? "It will start idle, waiting for you. Nothing is asked of it until you open it."
-                             : "It starts with this as its first message. The task lives on the host — this app never sends the words.")
-                            .fleetType(.label)
-                            .foregroundStyle(Design.Palette.inkDim)
                     }
+                } header: {
+                    Text("Task").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                } footer: {
+                    Text(!taskIsEmpty
+                         ? "It starts with these words and gets to work. Say what to do, where, and what to report back: nothing can be added once it is going."
+                         : profile.isEmpty
+                            ? "Leave it empty and it starts idle, waiting for you."
+                            : "It starts with this as its first message. The words are kept on the host.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
                 }
 
                 // WHAT IT MAY REACH, and optional. Shown only once the fleet has
@@ -235,7 +256,7 @@ struct StartSheet: View {
                             // the same terms — but only if the fleet still has
                             // it. A kind naming a profile somebody deleted would
                             // otherwise pre-fill a start that is refused.
-                            if let kindProfile = now?.profile, profiles.contains(where: { $0.name == kindProfile }) {
+                            if taskIsEmpty, let kindProfile = now?.profile, profiles.contains(where: { $0.name == kindProfile }) {
                                 profile = kindProfile
                             }
                         }
@@ -275,9 +296,14 @@ struct StartSheet: View {
                         Text("Where").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
                         if chosenPlatform != nil {
-                            Text("It takes a few minutes to boot. The session starts on it when it joins, and you get a "
-                                 + "notification with its link. It comes up idle, waiting for you. Everything on it is "
-                                 + "gone when the time runs out.")
+                            // NO LINK PROMISED. A runner's credential cannot open
+                            // Remote Control, so the notification that matters is
+                            // the one when its task is done.
+                            Text("It takes a few minutes to boot. The session starts on it when it joins"
+                                 + (taskIsEmpty
+                                    ? ", idle, with nothing to do. Give it a task above to put it to work."
+                                    : " and works on your task. You get a notification when it is back at its prompt.")
+                                 + " Everything on it is gone when the time runs out.")
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                             // SAID OUT LOUD, as docs/runner-central.md says it:
@@ -393,15 +419,19 @@ struct StartSheet: View {
     @State private var titleIsUntouched = true
     @State private var lastSuggested = ""
 
+    /// What a title is suggested from: the brief when there is one, else the
+    /// task, which says what the session is about just as well.
+    private var suggestionSource: String { brief.trimmingCharacters(in: .whitespaces).isEmpty ? task : brief }
+
     private func suggest() async {
-        let source = brief
+        let source = suggestionSource
         guard !source.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         suggesting = true
         let suggested = await Naming.suggest(for: source)
         suggesting = false
-        // The brief may have moved on while the model was thinking. Applying a
+        // The text may have moved on while the model was thinking. Applying a
         // title for text that is no longer there is worse than applying none.
-        guard source == brief, titleIsUntouched else { return }
+        guard source == suggestionSource, titleIsUntouched else { return }
         lastSuggested = suggested
         title = suggested
     }
@@ -423,13 +453,15 @@ struct StartSheet: View {
             finalTitle = "\(prefix): \(finalTitle)"
         }
         let trimmedBrief = brief.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTask = task.trimmingCharacters(in: .whitespacesAndNewlines)
         let platform = chosenPlatform
         onStart(StartRequest(
             title: finalTitle.isEmpty ? nil : finalTitle,
             brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
             mode: kind?.mode,
             host: host.isEmpty || platform != nil ? nil : host,
-            profile: profile.isEmpty || platform != nil ? nil : profile,
+            profile: profile.isEmpty || platform != nil || !trimmedTask.isEmpty ? nil : profile,
+            task: trimmedTask.isEmpty ? nil : trimmedTask,
             secret: secret.isEmpty || platform != nil ? nil : secret,
             platform: platform,
             minutes: platform == nil ? nil : machineMinutes

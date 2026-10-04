@@ -470,7 +470,8 @@ struct Fleet {
         mode: String? = nil,
         host: String? = nil,
         profile: String? = nil,
-        secret: String? = nil
+        secret: String? = nil,
+        task: String? = nil
     ) async throws -> Reply {
         var params: [String: String] = [:]
         if let name { params["name"] = name }
@@ -486,6 +487,11 @@ struct Fleet {
         // fails with something a person can act on rather than starting a
         // session that sits there.
         if let profile, !profile.isEmpty { params["profile"] = profile }
+        // OR THE WORDS THEMSELVES (protocol v7): what to do, as the session's
+        // first message. Sent as typed, lines and all. A host too old to take
+        // one is refused by the coordinator with a sentence rather than
+        // started idle.
+        if let task, !task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { params["task"] = task }
         // WHAT THE SESSION MAY REACH, by name. A NAME, never the value: the host
         // resolves it and the session fetches the value at runtime over the
         // broker, so nothing here carries a credential. An unknown name is

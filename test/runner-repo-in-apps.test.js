@@ -49,7 +49,7 @@ test('the same four new machines, in the same order, on both phones', () => {
   // And the promise that comes with choosing one.
   for (const src of [IOS, ANDROID]) {
     assert.match(src, /The session starts on it when it joins/);
-    assert.match(src, /Everything on it is "\s*\+\s*"gone when the time runs out\./);
+    assert.match(src, /Everything on it is (?:"\s*\+\s*")?gone when the time runs out\./);
   }
 });
 

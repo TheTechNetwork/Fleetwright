@@ -465,6 +465,7 @@ struct FleetView: View {
             if let title = request.title { start["title"] = title }
             if let brief = request.brief { start["brief"] = brief }
             if let mode = request.mode { start["mode"] = mode }
+            if let task = request.task { start["task"] = task }
             Task {
                 do {
                     let reply = try await Fleet(settings: settings)
@@ -485,7 +486,7 @@ struct FleetView: View {
         // "working" and only one of these is. A session with no profile is
         // waiting for a person, and somebody who walks away expecting output
         // comes back to an empty prompt.
-        status = request.profile == nil
+        status = request.profile == nil && request.task == nil
             ? "Starting a session. It will come up idle, waiting for you."
             : "Starting a session. You will get a notification when it is ready."
         Task {
@@ -497,7 +498,8 @@ struct FleetView: View {
                     mode: request.mode,
                     host: request.host,
                     profile: request.profile,
-                    secret: request.secret
+                    secret: request.secret,
+                    task: request.task
                 )
                 let text = reply.text ?? "Started."
                 await MainActor.run { status = text }
