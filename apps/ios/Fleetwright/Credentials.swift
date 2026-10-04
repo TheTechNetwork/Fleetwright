@@ -101,6 +101,10 @@ struct CredentialsView: View {
     /// without asking the provider again.
     @State private var checks: [String: Fleet.Check] = [:]
     @State private var expanded: Set<String> = []
+    /// A Test that came back as words rather than a check, kept under the
+    /// row it answers. It used to land in a card at the bottom of the screen,
+    /// below every row and naming none of them.
+    @State private var tested: [String: (text: String, ok: Bool)] = [:]
 
     var body: some View {
         List {
@@ -395,6 +399,11 @@ struct CredentialsView: View {
                 }
                 .fleetType(.micro)
             }
+            if let said = tested[provider.provider] {
+                Text(said.text)
+                    .fleetType(.micro)
+                    .foregroundStyle(said.ok ? Design.Palette.inkDim : Design.Palette.bad)
+            }
         }
         .padding(.vertical, Design.Space.hair / 2)
     }
@@ -570,12 +579,14 @@ struct CredentialsView: View {
             let reply = try await Fleet(settings: settings).verify(host: host, provider: provider.provider)
             if let check = reply.check {
                 checks[provider.provider] = check
+                tested[provider.provider] = nil
                 expanded.insert(provider.provider)
             } else {
-                result = reply.text ?? ""
+                checks[provider.provider] = nil
+                tested[provider.provider] = (reply.text ?? "", reply.ok != false)
             }
         } catch {
-            result = error.localizedDescription
+            tested[provider.provider] = (error.localizedDescription, false)
         }
     }
 
@@ -623,6 +634,8 @@ private func describeCheck(_ check: Fleet.Check) -> String {
     if let account = check.account, !account.isEmpty { parts.append(account) }
     if let granted = check.granted { parts.append("\(granted.count) scope\(granted.count == 1 ? "" : "s")") }
     if let missing = check.missing, !missing.isEmpty { parts.append("\(missing.count) missing") }
+    // WHERE, when the fleet asked every machine and one answered for it.
+    if let host = check.hostId, !host.isEmpty { parts.append("on \(host)") }
     return parts.joined(separator: " · ")
 }
 
