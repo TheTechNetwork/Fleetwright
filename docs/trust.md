@@ -660,8 +660,9 @@ Two mechanisms, because `gh` and `git` want different things:
   process's environment for the life of one command, and never in a file, never
   in the session's shell, never in `~/.config/gh/hosts.yml`.
 
-The socket is the one that already exists: `/run/fleetwright/<name>.sock`,
-bind-mounted into that session's container and nowhere else. fleetwright knows
+The socket is the one that already exists, `hub.sock` in the session's own
+directory under `/var/lib/fleetwright/hook-sockets`, bind-mounted into that
+session's container and nowhere else. fleetwright knows
 which session is asking because of which socket it arrived on, so a session
 cannot ask for another session's scope. That is the same unforgeability the
 hook socket already relies on, used for a second purpose.

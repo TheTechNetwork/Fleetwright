@@ -90,7 +90,7 @@ writing that token into a world-readable hook script.
 The **per-session hook socket** ([`hook-socket.md`](./hook-socket.md)) is the
 sandboxed form of the same report, and fleetwright serves it itself: the socket
 says which session a report came from, so the container posts `{uuid, cwd}` to
-`/run/hub.sock` and can name nothing. The sidecar is not in that path.
+`/run/hub/hub.sock` and can name nothing. The sidecar is not in that path.
 
 ## What it fixes
 

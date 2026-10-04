@@ -8,14 +8,45 @@ same box as the rest of §10. Everything below is a passing test in
 
 ## What it is
 
-One unix socket per session on the host:
+One unix socket per session on the host, in a directory of its own:
 
-    /run/fleetwright/<name>.sock
+    /var/lib/fleetwright/hook-sockets/<name>/hub.sock
 
-bind-mounted into that session's container and nowhere else, always at the same
-path inside:
+with that directory bind-mounted into that session's container and nowhere
+else, always at the same path inside, and the path told to it:
 
-    -v /run/fleetwright/<name>.sock:/run/hub.sock
+    -v /var/lib/fleetwright/hook-sockets/<name>:/run/hub
+    -e AGENT_SESSION_HOOK_SOCKET=/run/hub/hub.sock
+
+### Why a directory, under the state directory
+
+It was the socket file itself, `/run/fleetwright/<name>.sock` mounted at
+`/run/hub.sock`, and every hub restart cut every running session off from the
+credential broker: git and gh inside it lost GitHub until somebody restarted
+the session. Two things did it, and either was enough.
+
+- **A file bind mount holds the inode.** The hub that came back made a new
+  socket under the same name, and the container still held the old one, which
+  nothing would ever answer on again. A directory mount holds the directory, so
+  a socket made again inside it is the one the container connects to.
+- **systemd deletes a `RuntimeDirectory` every time the service stops**,
+  restart included, so `/run/fleetwright` itself was a different directory
+  afterwards. The state directory is the service user's too and nothing removes
+  it. Setting `RuntimeDirectoryPreserve=` in the unit would only have reached a
+  box when its installer next ran: an update applied from the app swaps a
+  symlink and leaves the unit as it was.
+
+The hub that starts listens again for every session still running whose
+directory is there (`reopenHookSockets` in `src/core/sessions.js`), and reads
+tokens per request as it always did, so the answer is the token as it is now.
+`test/hook-socket-restart.test.js` holds the directory the way the mount does,
+restarts the hub under it and asks for GitHub through the same path.
+
+A session started before this holds the old socket file and stays cut off
+until it is restarted once. The socket file is still mounted at
+`/run/hub.sock` beside the directory, for one reader: the entrypoint of an image
+from before the change, which registers the hooks only if it finds a socket
+there. Everything else in the image reads `AGENT_SESSION_HOOK_SOCKET`.
 
 ## Why it is the fix rather than a complication
 
@@ -37,7 +68,7 @@ another session's socket. The trust relationship inverts: the body used to be
 the authority and was forgeable; the socket is the authority and is not.
 
 The container is not even told its own name — it posts `{uuid, cwd}` to
-`/run/hub.sock` and the host fills in the rest.
+`/run/hub/hub.sock` and the host fills in the rest.
 
 ## What was confirmed
 
@@ -83,13 +114,14 @@ session before `podman run` so the path exists to mount:
 
 ```js
 const hooks = new HookSocketServer({
-  dir: cfg.sandboxHookSocketDir,                       // /run/fleetwright by default
+  dir: cfg.sandboxHookSocketDir,                       // <state dir>/hook-sockets by default
+  userns: cfg.sandboxUserns,                           // nomap: 0711 directory, 0666 socket
   onSessionStart: (r) => sessions.recordUuid(r),
   onSessionEvent: (e) => sessions.recordEvent(e),
   secretsFor, expiryFor, namedSecretFor,               // the credential broker
 });
 await hooks.open(name);   // before podman run, to get the path to mount
-await hooks.close(name);  // when the container exits
+await hooks.close(name);  // when the session is deleted for good
 ```
 
 The server knows which session a report came from because it knows which socket
@@ -105,6 +137,8 @@ socket the answers it needed — whose session, whose tokens, read at the moment
 of the request — were all fleetwright's. The directory moved to fleetwright's own
 `RuntimeDirectory` when the two services stopped sharing a user (#270): a
 directory systemd creates 0700 for one service is not one the other can enter.
+It moved again, to the state directory, when the runtime directory turned out
+not to survive a restart (above).
 
 That is the whole trick: **the untokened endpoint stops being a weakness once
 the only thing that can reach it is a process that already knows who is
@@ -118,7 +152,7 @@ as `hook: demo → a1b2c3d4-…`, and a post naming a different session was refu
 
 The container-side half is `postSessionStart()`. In a sandbox, `fleetwright hook`
 runs it instead of its HTTP POST — detected by the socket existing at
-`/run/hub.sock`. The spool fallback is unchanged and still applies: a transport
+`/run/hub/hub.sock`. The spool fallback is unchanged and still applies: a transport
 failure returns `{ok: false, error}` rather than throwing, so the hook can spool
 and exit 0.
 

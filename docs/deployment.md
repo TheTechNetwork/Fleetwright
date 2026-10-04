@@ -513,21 +513,28 @@ owner, once.
 
 ### Hook socket directory
 
-fleetwright serves one unix socket per sandboxed session under
-`FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR` (default `/run/fleetwright`, which is the
-`RuntimeDirectory` its unit already creates `0700` for the service user). Each
-socket is `0600` — see [`hook-socket.md`](./hook-socket.md) for why both layers
-matter.
+fleetwright serves one unix socket per sandboxed session, each in a directory
+of its own, under `FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR` (default
+`hook-sockets` in the state directory, so `/var/lib/fleetwright/hook-sockets`).
+The directory is made `0700` for the service user; the socket is `0600`, or
+`0666` in a `0711` session directory under `--userns=nomap` — see
+[`hook-socket.md`](./hook-socket.md) for why both layers matter.
 
-`/run` is tmpfs, so the directory does not survive a reboot and does not need
-cleaning up. Outside systemd, a service running as **root** creates it itself;
-an unprivileged user cannot create a directory in `/run`, so pre-create it with
-the right owner or point the variable somewhere the service can write.
+It is under the state directory because it has to outlive a restart: a
+running session holds its own directory, and the hub that starts listens in it
+again. It used to be `/run/fleetwright`, the unit's `RuntimeDirectory`, which
+systemd deletes whenever the service stops, and every running session lost the
+credential broker with it. A session's directory is removed when the session
+is deleted for good. A unix socket path is limited to 107 bytes, so a state
+directory with a long path needs this pointed somewhere shorter; the hub says
+so rather than starting the session without one.
 
 The default used to be `/run/fleetwright-sidecar`, the sidecar's runtime
 directory, from a design in which the sidecar served these sockets. It never
 did, and once the sidecar runs as its own user that directory is one fleetwright
-cannot enter. A box that set the old path explicitly keeps it.
+cannot enter. A box that set the old path explicitly keeps it, and a box that
+set `/run/fleetwright` explicitly keeps the restart problem until it removes
+the line.
 
 `sessions.js` opens a socket per session as it starts one and closes it on
 stop, so this is live rather than idle: it is how a sandboxed session's

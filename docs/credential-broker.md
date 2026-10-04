@@ -6,10 +6,10 @@ A session **asks** for a token instead of being handed one.
 container                      host
 ─────────                      ────
 git push  ──▶ git-credential-fleet ─┐
-gh pr list ─▶ /usr/local/bin/gh ────┼─▶ /run/hub.sock ─▶ answerCredentialRequest
-anything  ──▶ fleet-cred github ────┘   (this session's         │
-                                         socket, and only it)   ▼
-                                                        <email>.env, read now
+gh pr list ─▶ /usr/local/bin/gh ────┼─▶ /run/hub/hub.sock ─▶ answerCredentialRequest
+anything  ──▶ fleet-cred github ────┘   (this session's             │
+                                         socket, and only it)       ▼
+                                                            <email>.env, read now
 ```
 
 ## What it replaces
@@ -83,10 +83,10 @@ under the same socket and the same authority.
 ```
 container                         host
 ─────────                         ────
-fleet-secret github-deploy ─▶ /run/hub.sock ─▶ /internal/secret
-                                  (this session's socket)     │
-                                                              ▼
-                                          FLEETWRIGHT_SECRETS_DIR/github-deploy
+fleet-secret github-deploy ─▶ /run/hub/hub.sock ─▶ /internal/secret
+                                  (this session's socket)         │
+                                                                  ▼
+                                              FLEETWRIGHT_SECRETS_DIR/github-deploy
                                                     read now, if GRANTED
 ```
 
