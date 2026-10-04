@@ -634,8 +634,8 @@ enum CertificateWords {
             switch key {
             case "self-signed": return "Self-signed: nothing but the server itself vouches for it."
             case "untrusted-issuer": return "Signed by an authority this machine does not trust."
-            case "expired": return "Expired on \(date(c.notAfter) ?? "a date it does not give")."
-            case "not-yet-valid": return "Not valid until \(date(c.notBefore) ?? "a date it does not give")."
+            case "expired": return "Expired on \(date(c.notAfter) ?? "a date this machine did not say")."
+            case "not-yet-valid": return "Not valid until \(date(c.notBefore) ?? "a date this machine did not say")."
             case "name-mismatch": return "Issued for a different name than \(address)."
             default: return nil
             }
