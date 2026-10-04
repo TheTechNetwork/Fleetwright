@@ -17,8 +17,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const IOS = iosSources();
+const ANDROID = androidSources();
 
 test('iOS: a Test that comes back as words is kept under its own row', () => {
   assert.match(IOS, /@State private var tested: \[String: \(text: String, ok: Bool\)\]/);
@@ -32,4 +34,16 @@ test('iOS: a Test that comes back as words is kept under its own row', () => {
 test('iOS: a check names the machine that made it', () => {
   assert.match(IOS, /let hostId: String\?\s*\}/);
   assert.match(IOS, /if let host = check\.hostId, !host\.isEmpty \{ parts\.append\("on \\\(host\)"\) \}/);
+});
+
+test('Android: a Test that comes back as words is kept under its own row', () => {
+  assert.match(ANDROID, /var tested by remember \{ mutableStateOf\(mapOf<String, Pair<String, Boolean>>\(\)\) \}/);
+  assert.match(ANDROID, /tested = tested \+ \(provider\.provider to \(reply\.text to reply\.ok\)\)/);
+  assert.match(ANDROID, /tested\[provider\.provider\]\?\.let \{ \(text, ok\) ->/);
+  assert.doesNotMatch(ANDROID, /verify\(host, provider\.provider\)[\s\S]{0,200}?else result = reply\.text/);
+});
+
+test('Android: a check names the machine that made it', () => {
+  assert.match(ANDROID, /hostId = c\.optString\("hostId"\)/);
+  assert.match(ANDROID, /check\.hostId\?\.takeIf \{ it\.isNotBlank\(\) \}\?\.let \{ "on \$it" \}/);
 });
