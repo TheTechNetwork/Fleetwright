@@ -147,6 +147,9 @@ export class Fleet {
         this.state.storage.put('runnerTickets', this.core.runnerTickets.serialise()),
         this.state.storage.put('runnerRepos', this.core.runnerRepos.serialise()),
         this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts()),
+        // Hypervisor setups: begun, then run a minute later, then reporting
+        // for several more — every gap one this object is evicted across.
+        this.state.storage.put('xosetups', this.core.serialiseSetups()),
       ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
@@ -212,6 +215,7 @@ export class Fleet {
       // Each person's own runner repository, and sessions waiting for a runner.
       this.core.runnerRepos.restore(await this.state.storage.get('runnerRepos'));
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
+      this.core.restoreSetups(await this.state.storage.get('xosetups'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
       // MCP clients that registered themselves. A Durable Object is evicted

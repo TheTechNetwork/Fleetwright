@@ -236,3 +236,40 @@ test('a certificate is called trusted only when the machine said so and named no
   assert.equal(odd?.subject, 'CN=a b');
   assert.equal(narrowCertificate(null), null);
 });
+
+test('a job outlives the coordinator being rebuilt from storage between phases', async () => {
+  // The Worker's Durable Object is evicted between messages as a matter of
+  // course: begun on one instance, run and reported on the next.
+  const first = fleet(['deb14'], machine);
+  let changed = 0;
+  first.core.onStateChanged = () => changed++;
+  await first.core.dispatch(begin(admin));
+  assert.ok(changed > 0, 'a begun job asks to be written down');
+  const stored = JSON.parse(JSON.stringify(first.core.serialiseSetups()));
+
+  const second = fleet(['deb14'], machine);
+  await second.core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
+  second.core.restoreSetups(stored);
+  const ran = await second.core.dispatch({ verb: 'xosetup', params: { phase: 'run', job: JOB, sealed: 'a.b.c' }, actor: `fleet:${admin.email}`, requester: admin });
+  assert.equal(ran.ok, true, ran.text);
+  assert.equal(second.asked.at(-1)?.hostId, 'deb14');
+  await second.core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: 1, of: 8, phase: 'sign-in', state: 'running' });
+  assert.equal(second.sent.length, 1, 'progress from the machine still running it is shown');
+  // Still nobody else's after the restore.
+  const theirs = await second.core.dispatch({ verb: 'xosetup', params: { phase: 'status', job: JOB }, actor: 'fleet:other@example.com', requester: { email: 'other@example.com', admin: true } });
+  assert.equal(theirs.error?.code, 'unknown_job');
+  // And a stored row that is not a job's shape is not half-believed.
+  const third = fleet(['deb14'], machine);
+  third.core.restoreSetups([['nope', {}], [JOB, { hostId: 5 }], 'junk']);
+  assert.equal(third.core.setups.size, 0);
+});
+
+test('a machine that did not answer the probe is not listed as finding nothing', async () => {
+  const { core } = fleet(['deb14', 'rpi-7550'], (hostId) =>
+    hostId === 'deb14'
+      ? { ok: true, text: 'Xen Orchestra answered.', xoprobe: { reachable: true, xo: true, tls: true, cert: 'b'.repeat(64) } }
+      : { ok: false, error: { code: 'unknown_verb' }, text: 'This machine does not know xoprobe.' });
+  const r = await core.dispatch({ verb: 'xoprobe', params: { address: 'xo.lan' }, actor: `fleet:${admin.email}`, requester: admin });
+  assert.deepEqual(r.probes.map((/** @type {any} */ p) => p.hostId), ['deb14']);
+  assert.match(r.hosts.find((/** @type {any} */ h) => h.hostId === 'rpi-7550').text, /does not know/);
+});

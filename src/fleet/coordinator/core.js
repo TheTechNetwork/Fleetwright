@@ -46,6 +46,14 @@ const RUNNER_START_TTL_MS = 30 * 60_000;
  * tickets it came from (runner-tickets.js). Oldest out: a runner that has not
  * reported health while two hundred newer ones did is not coming. */
 const MAX_RUNNER_STARTS = 200;
+/**
+ * Hypervisor setup jobs the coordinator remembers, and for how long. Twenty
+ * because each row carries up to four Live Activity tokens of up to 400 hex
+ * characters, and the whole store is one Durable Object value: twenty full
+ * rows are about 45 KiB of the 128 a value may hold (test/do-key-bounds).
+ */
+const MAX_SETUPS = 20;
+const SETUP_TTL_MS = 24 * 60 * 60_000;
 
 /**
  * How many repository tokens one runner may ask for in MINT_WINDOW_MS. A runner
@@ -198,9 +206,14 @@ export class CoordinatorCore {
     /**
      * Hypervisor onboarding jobs, by the id the host made: which machine runs
      * each, whose it is, where it has got to, and the Live Activity tokens its
-     * owner's phone registered for it. MEMORY ONLY, like the authorizations
-     * below: a job lasts minutes, the host holds the real state, and a phone
-     * that finds this forgotten after a restart asks the host with `status`.
+     * owner's phone registered for it.
+     *
+     * KEPT IN STORAGE on the Worker (serialiseSetups), not memory only, which
+     * it was until a review found what that cost: the Durable Object is
+     * evicted between messages as a matter of course, and a person reading a
+     * fingerprint and typing a password is a gap it is evicted across. Every
+     * later phase then answered `unknown_job`, and progress from a machine
+     * still mid-run was dropped as coming from a job nobody had begun.
      * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[] }>}
      */
     this.setups = new Map();
@@ -741,6 +754,7 @@ export class CoordinatorCore {
       if (answer?.ok !== false && typeof job === 'string' && XOSETUP_JOB_RE.test(job)) {
         this.#pruneSetups();
         this.setups.set(job, { hostId, owner, startedAt: this.now(), last: null, activities: [] });
+        this.onStateChanged?.();
       }
       return answer ? { ...answer, hostId } : answer;
     }
@@ -760,9 +774,38 @@ export class CoordinatorCore {
 
   /** Forget jobs a day old, and keep the map bounded whatever happens. */
   #pruneSetups() {
-    const cutoff = this.now() - 24 * 60 * 60_000;
+    const cutoff = this.now() - SETUP_TTL_MS;
     for (const [job, rec] of this.setups) if (rec.startedAt < cutoff) this.setups.delete(job);
-    while (this.setups.size >= 50) this.setups.delete(/** @type {string} */ (this.setups.keys().next().value));
+    while (this.setups.size >= MAX_SETUPS) this.setups.delete(/** @type {string} */ (this.setups.keys().next().value));
+  }
+
+  /** The setup jobs, for storage. @returns {Array<[string, any]>} */
+  serialiseSetups() {
+    const cutoff = this.now() - SETUP_TTL_MS;
+    return [...this.setups.entries()].filter(([, r]) => r.startedAt >= cutoff);
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it: a row that
+   * does not have the shape is dropped rather than half-believed.
+   *
+   * @param {unknown} entries
+   */
+  restoreSetups(entries) {
+    if (!Array.isArray(entries)) return;
+    const cutoff = this.now() - SETUP_TTL_MS;
+    for (const e of entries.slice(-MAX_SETUPS)) {
+      if (!Array.isArray(e) || !XOSETUP_JOB_RE.test(String(e[0])) || !e[1] || typeof e[1] !== 'object') continue;
+      const r = e[1];
+      if (typeof r.hostId !== 'string' || !(Number(r.startedAt) >= cutoff)) continue;
+      this.setups.set(e[0], {
+        hostId: r.hostId,
+        owner: typeof r.owner === 'string' ? r.owner : null,
+        startedAt: Number(r.startedAt),
+        last: r.last ? narrowProgress(r.last) : null,
+        activities: Array.isArray(r.activities) ? r.activities.filter((/** @type {unknown} */ t) => typeof t === 'string' && /^[0-9a-f]{64,400}$/.test(t)).slice(-4) : [],
+      });
+    }
   }
 
   /**
@@ -786,6 +829,7 @@ export class CoordinatorCore {
     const progress = narrowProgress(msg);
     if (!progress) return;
     rec.last = progress;
+    this.onStateChanged?.();
     if (!this.push) return;
 
     const ended = progress.state !== 'running';
@@ -868,6 +912,7 @@ export class CoordinatorCore {
       // A phone that reinstalls or restarts the activity gets a new token;
       // four is more than one person's phones and still bounded.
       if (rec.activities.length > 4) rec.activities.splice(0, rec.activities.length - 4);
+      this.onStateChanged?.();
     }
     return { ok: true, job, hostId: rec.hostId, progress: rec.last };
   }
@@ -1382,7 +1427,9 @@ export class CoordinatorCore {
     // Mutating only: a `list` every fifteen seconds from three phones would
     // push everything else out of a 200-entry ring inside an hour, and that
     // ring is the only memory this coordinator has.
-    if (isMutating(spec.verb) && spec.actor) {
+    // A setup phase routed on to its machine by #setup comes through here a
+    // second time; it was recorded the first.
+    if (isMutating(spec.verb) && spec.actor && spec.setupRouted !== true) {
       this.record({
         event: 'intent',
         verb: spec.verb,
@@ -1634,9 +1681,13 @@ export class CoordinatorCore {
       // WHICH MACHINES CAN REACH A HYPERVISOR, attributed, because the answer
       // is per machine and the app offers only the ones that could. Narrowed
       // to the fields a probe has, so nothing else a host put on it travels.
-      const probes = results.some((r) => r?.xoprobe && typeof r.xoprobe === 'object')
-        ? results.map((r) => ({ hostId: r.hostId, ...narrowProbe(r.xoprobe) }))
-        : undefined;
+      //
+      // ONLY MACHINES THAT ANSWERED. A machine that timed out, errored or is
+      // too old to know the verb did not find the address unreachable; it
+      // said nothing, and an entry reading `reachable: false` would be a claim
+      // nobody made. Its sentence is in `hosts`.
+      const probing = results.filter((r) => r?.xoprobe && typeof r.xoprobe === 'object');
+      const probes = probing.length ? probing.map((r) => ({ hostId: r.hostId, ...narrowProbe(r.xoprobe) })) : undefined;
 
       const checked = results.filter((r) => r?.check && typeof r.check === 'object');
       const answered = checked.find((r) => r.check.ok) ?? checked[0];
