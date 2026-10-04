@@ -103,8 +103,19 @@ import { SEAL_KEY_RE } from '../seal.js';
 // `since: 6`), and the coordinator refuses rather than let one dispatch into the
 // fleet's repository when the person named their own: dropping it silently would
 // start a machine somewhere they did not choose. See docs/runner-central.md.
+//
+// v7, 4 Oct 2026: `start` can CARRY its first message. `task` is the words a
+// session starts working on, sent by whoever starts it — an MCP caller asking
+// a macOS runner to build and test an app, a phone sending a machine off with
+// a job. Until now the coordinator could only NAME a profile, a file a person
+// with a shell had put on the box, and a runner is minutes old and has none,
+// so every session started there came up idle with nothing able to give it
+// work. The owner decided the rule goes, on every host: docs/security.md
+// states what that widens. An older host is refused rather than handed a
+// start without its task (`since: 7`), because dropping it would start the
+// idle session this exists to end and report that it worked.
 /** @type {number} */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 // THE FLOOR: the oldest protocol this host's code still reads correctly, and the
 // change that stops a routine feature bump stranding a host. See
@@ -359,33 +370,43 @@ export const VERBS = Object.freeze({
         max: BRIEF_MAX,
         describe:
           'A note for whoever opens this session later. NOT the task: it is stored, never typed into the ' +
-          'session and never given to the model. To give a session work, name a `profile`.',
+          'session and never given to the model. To give a session work, send a `task` or name a `profile`.',
       },
-      // THE TASK, AND IT IS A NAME RATHER THAN THE WORDS.
-      //
-      // docs/wanted.md settled the security half before this was built: the
-      // coordinator may NAME a profile; it may never CARRY one. Injected text
-      // is instructions to an agent with root in a container, so a coordinator
-      // that chose the content would be writing that agent's instructions —
-      // the `reply { text }` argument in different clothes, and a much larger
-      // capability than the rest of this verb set combined.
+      // THE WORDS THEMSELVES, which this protocol refused to carry from v3 to
+      // v6 (see PROTOCOL_VERSION). `raw` rather than `text`: a task is often
+      // several lines — steps, a path, a command to run — and cleanText would
+      // join them into one. Bounded like a profile file (profiles.js
+      // CONTENT_MAX), because it is typed into the session as its first
+      // message. Either this or a profile, never both: two first messages is
+      // one too many, and the host refuses the pair.
+      task: {
+        type: 'raw',
+        required: false,
+        max: 8000,
+        since: 7,
+        describe:
+          'What the session should do, as its first message — "build the macOS app in ./app, run its tests, and ' +
+          'say what failed". The session starts working on it instead of idle. Either this or a `profile`.',
+      },
+      // A TASK BY NAME: a file on that host whose content becomes the first
+      // message. From v3 to v6 this was the only way to give a session work,
+      // under docs/wanted.md's rule that the coordinator may NAME a profile and
+      // never CARRY one; v7's `task` above dropped that rule at the owner's
+      // decision, and a profile stays for the work a box's owner wants written
+      // down once and reviewed — `git diff profiles/` still answers "what are
+      // these boxes told to do" for that part.
       //
       // `name` and not `enum`, because the values are files on a host and this
       // table cannot know them. The HOST refuses an unknown one and lists what
       // it has, which is the same shape the tag refusal already uses well.
-      //
-      // What this does NOT open: there is still no way to send text into a
-      // session, at start or later. The set of things a session can be started
-      // with is exactly the set of files on that box, and adding to it needs a
-      // shell on it.
       profile: {
         type: 'name',
         required: false,
         since: 3, // added in the v3 bump — omitted when speaking v<3 to a host
         describe:
           'A task profile ON THAT HOST, by name — its content becomes the session\'s first message, so the ' +
-          'session comes up working instead of idle. Ask `profiles` for the list. Without one the session ' +
-          'starts idle and a person has to drive it.',
+          'session comes up working instead of idle. Ask `profiles` for the list. Without one or a `task` the ' +
+          'session starts idle and a person has to drive it.',
       },
       // A SECRET BY REFERENCE, WHICH IS THE WHOLE POINT: A NAME, NEVER A VALUE.
       //
@@ -418,10 +439,11 @@ export const VERBS = Object.freeze({
     // sees this sentence and nothing around it — and "see the note above" is a
     // reference to a comment in a file it will never open.
     summary:
-      'Start a new session. NAME A `profile` OR IT COMES UP IDLE: a profile is a file on that host whose ' +
-      'content becomes the session\'s first message, and `profiles` lists what the host has. Without one ' +
-      'the session sits at an empty prompt and a person has to drive it — nothing else here can hand it ' +
-      'work, because no verb sends text to a session (`answer` picks a numbered option and nothing else). ' +
+      'Start a new session. GIVE IT A `task` OR A `profile` OR IT COMES UP IDLE: a task is the words it ' +
+      'starts working on, and a profile is a file on that host whose content does the same (`profiles` ' +
+      'lists them). Without either the session sits at an empty prompt and a person has to drive it — ' +
+      'nothing can hand it work later, because no verb sends text to a running session (`answer` picks a ' +
+      'numbered option and nothing else). ' +
       'There is no path parameter: a session works in a fixed directory, so where it runs is a property of ' +
       'the host rather than something to ask for. Name a `secret` the host holds and the session can fetch ' +
       'its value at runtime; the value never crosses this protocol.',

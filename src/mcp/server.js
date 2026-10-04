@@ -554,23 +554,25 @@ export class McpServer {
       'stopped working, not that it did what you asked — deciding it is over is still your job, and the',
       'log is the evidence.',
       '',
-      'GIVE A SESSION A PROFILE OR IT COMES UP IDLE.',
-      'This is the first thing to know, because the failure is silent. `fleet_start` with no `profile`',
-      'opens an empty prompt: the session exists, nothing errored, and nothing was asked of it. Waiting',
-      'on one produces an empty log and no error anywhere. Two testers lost a session to that loop.',
+      'GIVE A SESSION A TASK OR IT COMES UP IDLE.',
+      'This is the first thing to know, because the failure is silent. `fleet_start` with no `task` and no',
+      '`profile` opens an empty prompt: the session exists, nothing errored, and nothing was asked of it.',
+      'Waiting on one produces an empty log and no error anywhere. Two testers lost a session to that loop.',
       '',
-      'A PROFILE IS A FILE ON THE HOST, chosen by name. Its content becomes the session\'s first',
-      'message. Call fleet_profiles to see what a host has; you cannot supply the words yourself, and',
-      'that is deliberate rather than missing — a session runs as root in a container, so what it is',
-      'told to do lives on the machine it runs on and gets there by somebody with a shell.',
+      'A TASK IS THE WORDS, and they are its first message: "build the macOS app in ./app, run its',
+      'tests, and report what failed". Say what to do, where, and what to hand back — the session cannot',
+      'ask you anything once it is going, and nothing can send it a second message. A host older than',
+      'protocol 7 refuses a task rather than starting idle, and says so.',
       '',
-      'IF NO PROFILE FITS, HAND IT OVER RATHER THAN GUESSING. Start it and give the Remote Control URL',
-      'from the reply to the person you are working with: they can drive it and you cannot. That is a',
-      'handoff, not a failure — the fleet gets them a machine, they bring the instructions. If nobody is',
-      'going to drive it and no profile fits, do not start it.',
+      'A PROFILE IS THE SAME THING WRITTEN DOWN ON THE HOST, chosen by name. Call fleet_profiles to see',
+      'what a host has; use one when the box\'s owner has written the job you want.',
+      '',
+      'A MACHINE FOR A JOB. fleet_provision brings up a macOS, Windows, Linux or Android runner; once it',
+      'shows on fleet_status, fleet_start on it by name with the task. It runs, comes back to its prompt,',
+      'and you collect the result. Nobody needs a Remote Control link for that, and a runner has none.',
       '',
       'Watching one that is actually working:',
-      '  1. fleet_start with a `profile`, naming a host or a tag for a particular kind of machine',
+      '  1. fleet_start with a `task` (or a `profile`), naming a host or a tag for a kind of machine',
       '  2. fleet_await — returns when the session comes back to its prompt after working, needs a',
       '     person, ends or errors, or the wait runs out. Do not poll. A session that never started',
       '     working never comes back, so a wait on an idle session runs out the clock and says so.',
@@ -870,8 +872,8 @@ export class McpServer {
       // anywhere. A beta tester followed it exactly and lost the session to it;
       // on a paid runner that loop burns money until the budget deadline.
       //
-      // v3 gave `start` a `profile`, so there is now a right answer to point
-      // at rather than only a dead end to name. Both branches are printed,
+      // v3 gave `start` a `profile` and v7 a `task`, so there is now a right
+      // answer to point at rather than only a dead end to name. Both branches are printed,
       // because "started" reads as "working" either way and only one of them
       // is: an agent told the session is idle stops waiting for output that is
       // never coming, and an agent told it is working stops hunting for a
@@ -879,16 +881,15 @@ export class McpServer {
       if (tool.verb === 'start') {
         reply = {
           ...reply,
-          text: params.profile
-            ? `${reply?.text ?? ''}\n\nIt is working on the "${params.profile}" profile — that is its first ` +
-              'message, already delivered. fleet_await, then fleet_read_log BEFORE you stop it.'
+          text: params.task || params.profile
+            ? `${reply?.text ?? ''}\n\nIt is working on ${params.task ? 'the task you gave it' : `the "${params.profile}" profile`} — ` +
+              'that is its first message, already delivered. fleet_await, then fleet_read_log BEFORE you stop it.'
             : `${reply?.text ?? ''}\n\nIT STARTED IDLE — nothing has been asked of it. Waiting on it will ` +
               'time out rather than finish.\n' +
-              'Either start it with a `profile` (fleet_profiles lists what this host has), or hand it to a ' +
-              'person: ' +
+              'Stop it and start it again with a `task`, or hand it to a person: ' +
               (reply?.rcUrl
                 ? reply.rcUrl
-                : 'its Remote Control link appears on fleet_status once the session has published one.'),
+                : 'its Remote Control link appears on fleet_status once the session has published one, and a runner never has one.'),
         };
       }
     }

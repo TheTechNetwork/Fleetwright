@@ -204,7 +204,7 @@ export class CoordinatorCore {
      * spent on that host's first health frame. Bounded by time rather than
      * count: a runner that enrolled and never reported health is a job that
      * died, and its session is not going to happen.
-     * @type {Map<string, { owner: string, start: { title?: string, brief?: string, mode?: string }, until: number }>}
+     * @type {Map<string, { owner: string, start: { title?: string, brief?: string, mode?: string, task?: string }, until: number }>}
      */
     this.runnerStarts = new Map();
     /**
@@ -2099,7 +2099,7 @@ export class CoordinatorCore {
    * the runner's first health frame, which is the moment it can start one.
    *
    * @param {string} hostId
-   * @param {{ owner: string, start?: { title?: string, brief?: string, mode?: string }|null }|null} ticket
+   * @param {{ owner: string, start?: { title?: string, brief?: string, mode?: string, task?: string }|null }|null} ticket
    */
   noteRunnerEnrolled(hostId, ticket) {
     if (!ticket?.start || !ticket.owner) return;
@@ -2179,6 +2179,20 @@ export class CoordinatorCore {
    * @returns {{ ok: false, error: { code: string }, text: string }|null}
    */
   #cannotCarry(host, spec) {
+    // A TASK, for the same reason: dropped, the session starts idle — the thing
+    // `task` exists to end — and the reply says it started.
+    if (spec.verb === 'start' && typeof spec.params?.task === 'string' && spec.params.task) {
+      const speaks = Number(host?.health?.protocol);
+      if (Number.isInteger(speaks) && speaks >= 7) return null;
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text:
+          `${host?.hostId} is too old to be handed a task — it speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs 7. Update it, or start the ` +
+          'session there with a profile.',
+      };
+    }
     if (spec.verb !== 'provision' || !spec.params?.repo) return null;
     const speaks = Number(host?.health?.protocol);
     if (Number.isInteger(speaks) && speaks >= 6) return null;
@@ -2299,14 +2313,15 @@ export class CoordinatorCore {
     // the params like `host`, never inside them — the host dispatching the
     // run has nothing to do with it — and checked against `start`'s own rules
     // so a runner is never handed a session request the protocol would
-    // refuse. Title, brief and mode only: a runner is minutes old and holds
-    // no task profiles or secrets to name.
-    /** @type {{ title?: string, brief?: string, mode?: string }|null} */
+    // refuse. A task, and title, brief and mode: a runner is minutes old and
+    // holds no task profiles or secrets to name, so the words are how it is
+    // given its job.
+    /** @type {{ title?: string, brief?: string, mode?: string, task?: string }|null} */
     let start = null;
     if (startAfter && typeof startAfter === 'object') {
       /** @type {Record<string, any>} */
       const wanted = {};
-      for (const k of ['title', 'brief', 'mode']) {
+      for (const k of ['title', 'brief', 'mode', 'task']) {
         if (startAfter[k] !== undefined && startAfter[k] !== null) wanted[k] = startAfter[k];
       }
       const checked = checkParams('start', wanted);

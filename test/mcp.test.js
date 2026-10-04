@@ -102,7 +102,7 @@ test('required stays required, and enums keep their values', () => {
   }
 });
 
-test('the instructions teach the profile, and the handoff when none fits', async () => {
+test('the instructions teach the task, and a machine brought up for a job', async () => {
   // The lifecycle they taught was start -> await -> read_log -> stop, which
   // implies a session produces something. Started with nothing to do it does
   // not: the loop ends at an idle REPL with an empty log and no error, and two
@@ -117,15 +117,15 @@ test('the instructions teach the profile, and the handoff when none fits', async
   const r = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
   const text = String(r.result.instructions);
 
-  assert.match(text, /GIVE A SESSION A PROFILE OR IT COMES UP IDLE/);
+  assert.match(text, /GIVE A SESSION A TASK OR IT COMES UP IDLE/);
+  // v7: the words travel, and the instructions say what a good task holds,
+  // because nothing can send the session a second message.
+  assert.match(text, /A TASK IS THE WORDS/);
+  assert.match(text, /nothing can send it a second message/);
   assert.match(text, /fleet_profiles/, 'a profile you can only name by guessing is not a feature');
-  // The words never travel, and the reason is worth carrying: a caller that
-  // could supply them would be writing the instructions of an agent with root.
-  assert.match(text, /cannot supply the words yourself/);
-  // The handoff survives, because no profile will fit every job. It is the
-  // fallback now rather than the only answer.
-  assert.match(text, /Remote Control URL/);
-  assert.match(text, /do not start it/);
+  // The job a runner exists for, end to end, with no Remote Control in it.
+  assert.match(text, /fleet_provision brings up a macOS, Windows, Linux or Android runner/);
+  assert.match(text, /Nobody needs a Remote Control link for that/);
   // And the two things a watcher gets wrong: await cannot see a prompt, and
   // stopping discards the output.
   assert.match(text, /BEFORE stopping it/);
