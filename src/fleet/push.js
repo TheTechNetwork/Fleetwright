@@ -30,6 +30,28 @@ import { sealTo } from './push-crypto.js';
 /**
  * @typedef {object} Pusher
  * @property {(devices: Array<{token: string, platform: string, pushKey?: string}>, message: PushMessage) => Promise<{sent: number, dead: string[]}>} send
+ * @property {(tokens: string[], update: ActivityUpdate) => Promise<{sent: number, dead: string[]}>} [activity]
+ *   A Live Activity update, iOS only. Optional: a sender without it simply has
+ *   no Live Activities, and the notification at the end still arrives.
+ */
+
+/**
+ * One Live Activity update.
+ *
+ * NOT ENCRYPTED, AND IT CANNOT BE. An ordinary notification is sealed to the
+ * phone and opened by its extension; a Live Activity's `content-state` is
+ * handed straight to the widget by the system, and ActivityKit has no hook
+ * that runs first. So what goes here is chosen to be worth nothing to anybody
+ * who reads it on the way: step numbers and a key out of a fixed list. Never
+ * an address, a machine's name or a person's — the app already knows which job
+ * the activity is about, because it started it.
+ *
+ * @typedef {object} ActivityUpdate
+ * @property {'update'|'end'} event
+ * @property {Record<string, string|number>} state  the `content-state`, exactly
+ *   as the widget's ContentState decodes it
+ * @property {number} [dismissAt]  ms epoch: when an ended activity leaves the
+ *   Lock Screen
  */
 
 /**
@@ -96,6 +118,10 @@ export function logPusher(logger) {
   return {
     async send(devices, message) {
       logger.info(`push (not configured, would send to ${devices.length}): ${message.title} — ${message.body}`);
+      return { sent: 0, dead: [] };
+    },
+    async activity(tokens, update) {
+      logger.info(`push (not configured, would update ${tokens.length} live activit${tokens.length === 1 ? 'y' : 'ies'}): ${update.event}`);
       return { sent: 0, dead: [] };
     },
   };
@@ -401,6 +427,54 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
       }
       return { sent, dead };
     },
+
+    // A LIVE ACTIVITY UPDATE, to the tokens the app registered for one job.
+    //
+    // A different push type and a different topic, both required: Apple
+    // rejects a `liveactivity` push sent to the bare bundle id, and silently
+    // never delivers an `alert` to an activity token. Priority 10 because each
+    // of these is a step finishing, which is the news; Apple budgets them, and
+    // onboarding sends fewer than a dozen.
+    async activity(tokens, update) {
+      if (!tokens.length) return { sent: 0, dead: [] };
+      const authorization = `bearer ${await bearer()}`;
+      const nowS = Math.floor(now() / 1000);
+      const payload = JSON.stringify({
+        aps: {
+          timestamp: nowS,
+          event: update.event,
+          'content-state': update.state,
+          ...(update.event === 'end' && update.dismissAt ? { 'dismissal-date': Math.floor(update.dismissAt / 1000) } : {}),
+        },
+      });
+      let sent = 0;
+      /** @type {string[]} */
+      const dead = [];
+      for (const token of tokens) {
+        try {
+          const res = await send(token, payload, {
+            authorization,
+            'apns-topic': `${config.bundleId}.push-type.liveactivity`,
+            'apns-push-type': 'liveactivity',
+            'apns-priority': '10',
+            'apns-expiration': String(nowS + PUSH_TTL_S),
+          });
+          if (res.status === 200) {
+            sent++;
+            continue;
+          }
+          // An ended or dismissed activity's token is gone for good.
+          if (res.status === 410 || /BadDeviceToken|Unregistered|ExpiredToken/i.test(res.body)) {
+            dead.push(token);
+          } else {
+            log.warn(`push: APNs live activity ${res.status} ${res.body.slice(0, 200)}`);
+          }
+        } catch (err) {
+          log.warn(`push: a live activity update was skipped — ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return { sent, dead };
+    },
   };
 }
 
@@ -473,6 +547,16 @@ export function routingPusher({ ios, other, logger }) {
         }
       }
       return { sent, dead };
+    },
+    // Live Activities exist only on iOS, so only the iOS sender is asked.
+    async activity(tokens, update) {
+      if (!ios?.activity) return { sent: 0, dead: [] };
+      try {
+        return await ios.activity(tokens, update);
+      } catch (err) {
+        log.warn(`push: the live activity sender failed — ${err instanceof Error ? err.message : String(err)}`);
+        return { sent: 0, dead: [] };
+      }
     },
   };
 }

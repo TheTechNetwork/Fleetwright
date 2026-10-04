@@ -116,6 +116,11 @@ test('the verb set is exactly what is documented', () => {
     'upgrade',
     'verify',
     'writefile',
+    // Adding a hypervisor: can a machine reach it, and onboarding run on the
+    // one that can. New verbs, so an older host answers `unknown_verb`.
+    // docs/hypervisors.md.
+    'xoprobe',
+    'xosetup',
   ]);
 });
 
@@ -250,7 +255,7 @@ test('only state-changing verbs are marked mutating', () => {
     // one — the reply comes back long before the runner does, so a caller that
     // retries on a slow answer is exactly the case.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile', 'xosetup'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

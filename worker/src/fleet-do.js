@@ -884,6 +884,18 @@ export class Fleet {
       }
     }
 
+    // A LIVE ACTIVITY FOR A HYPERVISOR SETUP. The phone that began the job
+    // posts the activity's push token, and progress reaches the Lock Screen
+    // and the Dynamic Island while the app is closed. Only the job's owner;
+    // see registerSetupActivity in core.js and docs/hypervisors.md.
+    if (url.pathname === '/api/xosetup/activity' && request.method === 'POST') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first.' }, 403);
+      }
+      const r = this.core.registerSetupActivity(requesterFor(client), await readJson(request));
+      return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
+    }
+
     if (url.pathname === '/api/runner-tokens' && request.method === 'POST') {
       if (!client?.email) {
         return json({ ok: false, text: 'Sign in first — a runner token belongs to a person.' }, 403);

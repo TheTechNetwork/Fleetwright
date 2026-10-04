@@ -1159,6 +1159,15 @@ export class Coordinator {
       }
     }
 
+    // A Live Activity for a hypervisor setup — see the Worker's copy.
+    if (p === '/api/xosetup/activity' && req.method === 'POST') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first.' });
+      }
+      const r = this.core.registerSetupActivity(requesterFor(client), await readJson(req));
+      return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+    }
+
     if (p === '/api/runner-tokens' && req.method === 'POST') {
       if (!client?.email) {
         return json(res, 403, { ok: false, text: 'Sign in first — a runner token belongs to a person.' });

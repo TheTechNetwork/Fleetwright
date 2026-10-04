@@ -278,6 +278,46 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     };
   }
 
+  // CAN YOU REACH IT is asked of every permanent machine, because the answer
+  // differs by machine and the point is to find the ones that can. A runner is
+  // left out: it is on somebody else's network for a few hours and can reach
+  // nothing on yours. docs/hypervisors.md.
+  if (verb === 'xoprobe') {
+    const durable = registry.reachable().filter((h) => !h.ephemeral);
+    return durable.length
+      ? { kind: 'fanout', hosts: durable }
+      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+  }
+
+  // ONBOARDING RUNS ON THE MACHINE THAT WAS CHOSEN, and every phase of one job
+  // goes back to it: the key `begin` made lives only in that machine's memory,
+  // so a `run` anywhere else would hand a sealed sign-in to a box that cannot
+  // open it. core.js fills the preference from the job for every phase after
+  // the first, so only `begin` ever needs a person to choose. Not new work, so
+  // a full machine can still do it.
+  if (verb === 'xosetup') {
+    const durable = registry.reachable().filter((h) => !h.ephemeral);
+    if (!durable.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    if (preferHost) {
+      const chosen = durable.find((h) => h.hostId === preferHost);
+      return chosen
+        ? { kind: 'host', host: chosen }
+        : {
+            kind: 'refused',
+            code: 'host_unavailable',
+            reason: `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+          };
+    }
+    if (durable.length === 1) return { kind: 'host', host: durable[0] };
+    return {
+      kind: 'refused',
+      code: 'ambiguous_host',
+      reason:
+        `Which machine should run the setup? ${durable.map((h) => h.hostId).join(', ')}. ` +
+        'Ask xoprobe first: it says which of them can reach the address.',
+    };
+  }
+
   if (verb === 'provision' || verb === 'runnerrepo') {
     const durable = registry.reachable().filter((h) => !h.ephemeral);
     if (!durable.length) {

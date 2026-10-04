@@ -55,6 +55,36 @@
 import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../../core/text.js';
 import { SEAL_KEY_RE } from '../seal.js';
 
+/** A Xen Orchestra address: a DNS name, an IPv4 address or a bracketed IPv6
+ * one, with an optional port. No scheme and no path, so it can only ever name
+ * a machine, and a host builds the URL itself. */
+export const XO_ADDRESS_RE =
+  /^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]{2,45}\])(?::[0-9]{1,5})?$/;
+
+/** A setup job id: twelve lowercase hex digits, made by the host. */
+export const XOSETUP_JOB_RE = /^[0-9a-f]{12}$/;
+
+/** A certificate fingerprint: SHA-256, lowercase hex. */
+export const CERT_PIN_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * What onboarding does, in order, by key. The host reports progress as an
+ * index into this list and each app words each key itself, so a progress
+ * update says nothing a lock screen should not show and every surface agrees
+ * on how many steps there are. Append only: an app that has never heard of a
+ * key shows the step number instead.
+ */
+export const XOSETUP_STEPS = Object.freeze([
+  'connect', // reach Xen Orchestra and check its certificate against the pin
+  'sign-in', // the admin sign-in, once
+  'inventory', // pools, storage, networks, and anything tagged fleetwright already
+  'user', // the limited `fleetwright` user
+  'resource-set', // what it may use, and how much
+  'token', // a token for that user, which is all the fleet keeps
+  'updates', // turn on the installer's own update plugin, when it is installed
+  'hand-off', // the token to the machine that will use it; the sign-in dropped
+]);
+
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
 //
 // A VERSION BUMP IS A FLAG DAY, and this is the second one. Adding a VERB is
@@ -1116,6 +1146,97 @@ export const VERBS = Object.freeze({
     summary:
       'Make a long-lived Claude token for your runners on one machine: start it to get the sign-in page, then send ' +
       'the code that page shows with a key of yours, and the token comes back sealed to that key.',
+  },
+
+  // CAN THIS MACHINE REACH A HYPERVISOR, asked of every permanent machine at
+  // once, so the app can offer only the ones that can run its onboarding.
+  // docs/hypervisors.md.
+  //
+  // WHAT A HOST DOES WITH IT is one TLS handshake and one GET of `/` at the
+  // address, and what comes back is reduced to whether anything answered,
+  // whether it looks like Xen Orchestra, and the certificate's fingerprint.
+  // That bounds what a compromised coordinator gains from asking: whether an
+  // address on a host's network answers HTTPS, which is a port scan one
+  // address at a time and nothing a page could carry. Admin only, checked in
+  // the coordinator; a new verb, so an older host answers `unknown_verb`.
+  xoprobe: {
+    params: {
+      address: {
+        type: 'text',
+        required: true,
+        max: 260,
+        pattern: XO_ADDRESS_RE,
+        shapeName: 'a host name or IP address, with an optional port',
+        describe: 'Where Xen Orchestra answers: a host name or address, optionally with a port. No scheme, no path.',
+      },
+    },
+    mutating: false,
+    summary:
+      'Ask every permanent machine whether it can reach a Xen Orchestra address, and which certificate answered, ' +
+      'so setup runs on one that can.',
+  },
+
+  // ONBOARDING A HYPERVISOR, run by one chosen machine. docs/hypervisors.md.
+  //
+  // FOUR PHASES, one verb, because they are one conversation with one machine
+  // and must never be split across two:
+  //
+  //   begin   the machine makes a key for this job alone and signs it with its
+  //           enrolment key, so the phone can tell the key is that machine's
+  //           and not one the coordinator put in its place;
+  //   run     the admin sign-in, sealed on the phone to that key, so the
+  //           coordinator relays ciphertext. The machine opens it, runs the
+  //           steps in XOSETUP_STEPS, and keeps nothing of it afterwards;
+  //   status  where it has got to, for an app that was closed;
+  //   cancel  stop between steps.
+  //
+  // PROGRESS ARRIVES AS AN EVENT, `xosetup.progress`, for the job's owner
+  // only, and becomes a Live Activity on iOS and an ongoing notification on
+  // Android. Its content is step numbers and a phase key, never an address or
+  // a name, because a Live Activity update cannot be encrypted.
+  //
+  // Admin only, checked in the coordinator. A new verb, so an older host
+  // answers `unknown_verb` and strands nothing.
+  xosetup: {
+    params: {
+      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel'] },
+      job: {
+        type: 'text',
+        required: false,
+        max: 16,
+        pattern: XOSETUP_JOB_RE,
+        shapeName: 'a setup job id',
+        describe: 'The job `begin` answered with. Required for every other phase.',
+      },
+      address: {
+        type: 'text',
+        required: false,
+        max: 260,
+        pattern: XO_ADDRESS_RE,
+        shapeName: 'a host name or IP address, with an optional port',
+        describe: 'Where Xen Orchestra answers, for `begin`.',
+      },
+      pin: {
+        type: 'text',
+        required: false,
+        max: 64,
+        pattern: CERT_PIN_RE,
+        shapeName: 'a SHA-256 fingerprint in hex',
+        describe:
+          'For `begin`: the certificate fingerprint `xoprobe` reported and the person accepted. The machine refuses to ' +
+          'send a password to an address that answers with any other.',
+      },
+      sealed: {
+        type: 'secret',
+        required: false,
+        max: 4096,
+        describe: 'For `run`: the admin sign-in, sealed to the key `begin` answered with, as epk.iv.ct.',
+      },
+    },
+    mutating: true,
+    summary:
+      'Onboard a Xen Orchestra pool from one machine: begin for a key to seal the admin sign-in to, run with it ' +
+      'sealed, then follow its progress. The sign-in is used once and never kept.',
   },
 
   // A REPOSITORY TOKEN FOR A RUNNER, minted by a permanent box that holds the

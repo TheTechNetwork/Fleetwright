@@ -60,6 +60,10 @@ export const DEFAULT_DENY = ([
   // a phone to keep with the minter; an agent has no key to seal it to and no
   // business asking.
   'setuptoken',
+  // ADDING A HYPERVISOR takes an admin sign-in sealed on a phone to the
+  // machine that runs it. An agent has no key to seal it to, and bringing a
+  // pool into the fleet is not something to reach for unasked.
+  'xosetup',
   // NOT `forget`, ANY MORE. It was withheld as "destroys a conversation that
   // cannot be recovered", and that stopped being true when the seven-day
   // recycle bin shipped — `forget` is now the RECOVERABLE one and `purge` is
