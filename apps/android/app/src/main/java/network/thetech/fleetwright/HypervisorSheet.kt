@@ -300,6 +300,17 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     refusal = olderThanPolicy(hostId)
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
+                // AND A SETUP ONLY TO A MACHINE NEW ENOUGH TO HAND THE TOKEN
+                // BACK. An older one keeps the pool's token in a file of its
+                // own, which is what this app says does not happen, and resets
+                // what the fleet may use on the way. Seen: the release on disk,
+                // a sidecar still running the one before. `can` came in the
+                // release after the hand-off, so an empty one is older than both.
+                !policy && setup.can.isEmpty() -> {
+                    password = ""
+                    refusal = "$hostId is running a Fleetwright older than this app, and an older machine keeps the pool's token itself instead of handing it to this phone. Nothing was sent. Update that machine (Update, then Restart to apply), then try again."
+                    runCatching { fleet.xosetup("cancel", job = setup.job) }
+                }
                 // The machine signed over an empty pin for a plain setup, and
                 // the phone checks the same bytes (XoSetup.signingInput).
                 setup.key == null || !XoSetup.verifyKeySig(setup.hostKey, setup.keySig, runCatching { XoSetup.signingInput(where, setup.job, setup.key, pin ?: "") }.getOrDefault(ByteArray(0))) -> {

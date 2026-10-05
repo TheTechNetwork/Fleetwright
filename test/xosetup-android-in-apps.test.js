@@ -355,3 +355,14 @@ test('Android: kind=xosetup becomes one ongoing notification per job, then one t
   assert.ok(ANDROID.includes('resumingSetup = openSetup'));
   assert.match(file('MainActivity.kt'), /getStringExtra\(XoSetupNotice\.EXTRA_KIND\) != XoSetupNotice\.KIND/);
 });
+
+test('Android: a setup goes only to a machine new enough to hand the token back, checked before anything is sealed', () => {
+  const sheet = file('HypervisorSheet.kt');
+  const guard = sheet.indexOf('!policy && setup.can.isEmpty() -> {');
+  assert.ok(guard > 0, 'no guard for a machine too old to hand the token back');
+  assert.ok(guard < sheet.indexOf('XoSetup.verifyKeySig('), 'checked after the key, so after the comparison could begin');
+  const block = sheet.slice(guard, sheet.indexOf('}', guard));
+  assert.match(block, /password = ""/);
+  assert.match(block, /keeps the pool's token itself instead of handing it to this phone\. Nothing was sent\./);
+  assert.match(sheet.slice(guard, guard + 900), /fleet\.xosetup\("cancel", job = setup\.job\)/);
+});
