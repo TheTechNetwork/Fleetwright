@@ -40,9 +40,18 @@ import SwiftUI
 /// Resume and an answer, and a setup that ends while the phone is in a pocket
 /// already arrives as a notification.
 ///
-/// NOTHING HERE IS KEPT. No UserDefaults, no keychain, no outbox: every
-/// intent carries an idempotency key so a send that could not reach the fleet
-/// is refused rather than held on disk (Fleet.runSetup).
+/// NOTHING IS HELD FOR A RETRY. No outbox: every intent carries an
+/// idempotency key so a send that could not reach the fleet is refused rather
+/// than held on disk (Fleet.runSetup).
+///
+/// WHAT IS KEPT IS WHAT THE PERSON ASKED TO KEEP, and where it worked
+/// (XOSaved). The machine that got through is remembered by address, so the
+/// next time this screen opens on that pool it starts there instead of asking
+/// every machine, and asks them all only when that one does not get through.
+/// The sign-in and the person's word for the certificate are kept only when
+/// they turn on "Keep on this phone", in a Keychain item that opens to Face
+/// ID or Touch ID and nothing else, and only once the machine has signed in
+/// with them, so a mistyped password is never the one kept.
 ///
 /// THE SAME SCREEN CHANGES WHAT THE FLEET MAY USE on a pool this phone holds
 /// (`policyFor`), because the first three of its four steps are the same
@@ -107,6 +116,22 @@ struct AddHypervisorView: View {
     /// What the machine read, opened, while it waits on the person.
     @State private var inventory: XOPolicy.Inventory?
     @State private var choice = XOPolicy.Choice()
+    /// What this phone kept for this address, once Face ID has opened it.
+    @State private var remembered: XOSaved.Entry?
+    /// "Keep on this phone": on when what is on screen came from what was
+    /// kept, and turning it off then forgets it at once.
+    @State private var keep = false
+    @State private var keepLoaded = false
+    /// The machine chosen is the one that got through last time, chosen
+    /// without asking the others, and nothing has gone wrong with it yet.
+    @State private var viaMemory = false
+    /// What to keep, held in memory from the send until the machine has
+    /// signed in with it (`notePath`), and only when `keep` is on.
+    @State private var pendingSave: XOSaved.Entry?
+    /// One sentence about what was kept or forgotten, or why the remembered
+    /// machine was not enough, under the progress.
+    @State private var keepNote = ""
+    private let biometry = XOSaved.biometryName()
 
     private struct Begun {
         let job: String
@@ -176,9 +201,9 @@ struct AddHypervisorView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: job) { await follow() }
         // The address is already known, so the first question is asked for
-        // the person: which machines can reach it.
+        // the person, starting from the machine that got through last time.
         .task {
-            if isPolicy, probes == nil, !probing { await probe() }
+            if isPolicy, probes == nil, !probing { await openRemembered() }
         }
     }
 
@@ -271,6 +296,11 @@ struct AddHypervisorView: View {
     /// plain HTTP. `xo` nil is cannot tell and is said as that, never rounded
     /// to yes or no (C-5). The same words as Android (XoSetup.describe).
     private func describe(_ probe: Fleet.Probe) -> String {
+        // NOT ASKED THIS TIME, so nothing it found is claimed: only that it
+        // got through last time, which is why it is tried first.
+        if viaMemory, chosen?.hostId == probe.hostId {
+            return "Got through last time, so it is tried first"
+        }
         if probe.plainHTTP {
             if probe.xo == true { return "Reached Xen Orchestra over plain HTTP" }
             if probe.xo == false { return "Reached something over plain HTTP, and it does not look like Xen Orchestra" }
@@ -304,17 +334,24 @@ struct AddHypervisorView: View {
             if let cert = chosen.cert {
                 if chosen.certificateTrusted {
                     certificateChecksOut(chosen)
-                } else {
+                } else if chosen.certificate != nil || !rememberedAccepts(chosen) {
+                    // The details, whenever a machine read them. A path
+                    // taken from memory has none, and is shown only for a
+                    // certificate the person already accepted (directPath).
                     certificateQuestion(chosen)
                 }
-                Text("SHA-256, as \(chosen.hostId) saw it. The sign-in goes only to a server that answers with this certificate.")
+                Text(viaMemory
+                     ? "SHA-256, as it was last time. The sign-in goes only to a server that answers with this certificate."
+                     : "SHA-256, as \(chosen.hostId) saw it. The sign-in goes only to a server that answers with this certificate.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                 Text(XOSetupKey.grouped(cert))
                     .fleetType(.labelMono)
                     .foregroundStyle(Design.Palette.ink)
                     .textSelection(.enabled)
-                if !chosen.certificateTrusted {
+                if !chosen.certificateTrusted, rememberedAccepts(chosen) {
+                    rememberedLine("You accepted this certificate before, and this phone kept that behind \(biometry ?? "Face ID").")
+                } else if !chosen.certificateTrusted {
                     Toggle(isOn: $acknowledged) {
                         Text("I checked this certificate and trust it")
                             .fleetType(.bodyStrong)
@@ -326,14 +363,18 @@ struct AddHypervisorView: View {
                 }
             } else if chosen.plainHTTP {
                 plainQuestion(chosen)
-                Toggle(isOn: $plainAccepted) {
-                    Text("Send it without HTTPS anyway")
-                        .fleetType(.bodyStrong)
-                        .foregroundStyle(Design.Palette.ink)
+                if rememberedAccepts(chosen) {
+                    rememberedLine("You chose to send it without HTTPS before, and this phone kept that behind \(biometry ?? "Face ID").")
+                } else {
+                    Toggle(isOn: $plainAccepted) {
+                        Text("Send it without HTTPS anyway")
+                            .fleetType(.bodyStrong)
+                            .foregroundStyle(Design.Palette.ink)
+                    }
+                    .tint(Design.Palette.accent)
+                    .frame(minHeight: 44)
+                    .disabled(busy || toCompare != nil)
                 }
-                .tint(Design.Palette.accent)
-                .frame(minHeight: 44)
-                .disabled(busy || toCompare != nil)
             }
             TextField("Xen Orchestra admin email", text: $email)
                 .textContentType(.emailAddress)
@@ -344,6 +385,26 @@ struct AddHypervisorView: View {
             SecureField("Its password", text: $password)
                 .textContentType(.password)
                 .disabled(busy || toCompare != nil)
+            // OFFERED ONLY WHERE IT CAN BE KEPT: a phone with no Face ID or
+            // Touch ID enrolled could not make the item (C-2).
+            if let biometry {
+                Toggle(isOn: $keep) {
+                    Text("Keep on this phone, behind \(biometry)")
+                        .fleetType(.bodyStrong)
+                        .foregroundStyle(Design.Palette.ink)
+                }
+                .tint(Design.Palette.accent)
+                .frame(minHeight: 44)
+                .disabled(busy || toCompare != nil)
+                // Turned off over what was kept: forgotten now, not at the
+                // next send, so the switch says what the phone holds.
+                .onChange(of: keep) { _, on in
+                    guard !on, keepLoaded else { return }
+                    XOSaved.forget(trimmedAddress)
+                    remembered = nil
+                    keepLoaded = false
+                }
+            }
             if let toCompare {
                 compareRows(toCompare)
             } else {
@@ -353,19 +414,42 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Sign in to Xen Orchestra")
         } footer: {
-            if isPolicy {
-                Text("Used once, by \(chosen.hostId), to read the pool and apply what you choose, and not kept. It is sealed on this phone "
-                     + "to a key only that machine holds, so the fleet relays it and cannot read it, and neither this phone nor the fleet keeps it.")
-            } else {
-                Text("Used once, by \(chosen.hostId), to make a limited fleetwright user and its token. It is sealed on this phone to a "
-                     + "key only that machine holds, so the fleet relays it and cannot read it, and neither this phone nor the fleet keeps it.")
-            }
+            Text(signInFooter(chosen))
         }
+    }
+
+    /// What happens to the sign-in, in the words that are true for the
+    /// switch as it stands: kept behind Face ID on this phone, or by nobody.
+    /// The fleet never keeps it either way. The same words as Android.
+    private func signInFooter(_ chosen: Fleet.Probe) -> String {
+        let use = isPolicy ? "to read the pool and apply what you choose" : "to make a limited fleetwright user and its token"
+        let sealed = "It is sealed on this phone to a key only that machine holds, so the fleet relays it and cannot read it"
+        if keep, let biometry {
+            let word = chosen.certificateTrusted ? "" : ", and your word for the certificate,"
+            return "Used by \(chosen.hostId) \(use). \(sealed). This phone keeps it\(word) in its "
+                + "Keychain behind \(biometry), once \(chosen.hostId) has signed in with it; the fleet never keeps it."
+        }
+        return "Used once, by \(chosen.hostId), \(use), and not kept. \(sealed), and neither this phone nor the fleet keeps it."
+    }
+
+    /// The person's earlier word, said in place of the question it answers.
+    private func rememberedLine(_ text: String) -> some View {
+        Text(text)
+            .fleetType(.label)
+            .foregroundStyle(Design.Palette.inkDim)
+            .frame(minHeight: 44, alignment: .leading)
     }
 
     /// One calm line: the machine checked the certificate and found nothing
     /// wrong, so nothing is asked.
     private func certificateChecksOut(_ probe: Fleet.Probe) -> some View {
+        // FROM MEMORY, said as when it was checked: nothing was asked this
+        // time, and the machine checks it again before it signs in.
+        if viaMemory {
+            return Text("Its certificate checked out when this pool was set up, and \(probe.hostId) checks it again before signing in.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.ink)
+        }
         let c = probe.certificate
         var line = "Its certificate checks out"
         if let subject = c?.subject, !subject.isBlank { line += ": issued to \(subject)" }
@@ -440,8 +524,15 @@ struct AddHypervisorView: View {
     /// and their word again for no certificate at all. False for a probe
     /// that is neither, which is never offered and so never asked.
     private func accepted(_ probe: Fleet.Probe) -> Bool {
-        if probe.cert != nil { return probe.certificateTrusted || acknowledged }
-        return probe.plainHTTP && plainAccepted
+        if probe.cert != nil { return probe.certificateTrusted || acknowledged || rememberedAccepts(probe) }
+        return probe.plainHTTP && (plainAccepted || rememberedAccepts(probe))
+    }
+
+    /// The person's word for what this machine found, kept on this phone
+    /// behind Face ID and opened: the same fingerprint they accepted, or
+    /// plain HTTP again. A different certificate is asked about in full.
+    private func rememberedAccepts(_ probe: Fleet.Probe) -> Bool {
+        remembered?.accepts(probe) == true
     }
 
     @ViewBuilder private func detail(_ label: String, _ value: String?) -> some View {
@@ -515,6 +606,11 @@ struct AddHypervisorView: View {
                 case nil:
                     EmptyView()
                 }
+                if !keepNote.isBlank {
+                    Text(keepNote)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
             }
             .animation(Design.Motion.change, value: progress?.phase)
             .animation(Design.Motion.change, value: progress?.state)
@@ -531,7 +627,13 @@ struct AddHypervisorView: View {
             } else {
                 // Stopped or cancelled. A new begin, because the key was for
                 // the job that ended; the machine picks up where it got to.
-                Button("Try again") { reset() }
+                // A remembered machine that did not get through is not tried
+                // twice: every machine is asked.
+                Button("Try again") {
+                    let askAll = viaMemory && progress?.phase == "connect"
+                    reset()
+                    if askAll { Task { await probe() } }
+                }
             }
         } header: {
             sectionHead("On \(hostId)")
@@ -641,8 +743,9 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Way out")
         } footer: {
-            Text("The network the edge router’s WAN will go on, so labs reach the internet through it. It is recorded in "
-                 + "Xen Orchestra as the fleetwright-egress tag on that network. Only a network chosen above can be the way out.")
+            Text("The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not "
+                 + "your LAN. The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag "
+                 + "on that network, for when it is. Only a network chosen above can be the way out.")
         }
     }
 
@@ -737,6 +840,7 @@ struct AddHypervisorView: View {
     private func probe() async {
         probing = true
         defer { probing = false }
+        viaMemory = false
         probes = nil
         chosen = nil
         probeText = ""
@@ -757,9 +861,125 @@ struct AddHypervisorView: View {
             probes = found
             // One machine that can is not a choice, so it is chosen. Over
             // plain HTTP too: choosing shows the warning, and sends nothing.
-            if offered.count == 1 { chosen = offered.first }
+            // Among several, the one that got through last time is chosen,
+            // and the others stay a tap away.
+            if offered.count == 1 {
+                chosen = offered.first
+            } else if let via = XOSaved.machine(for: trimmedAddress) {
+                chosen = offered.first { $0.hostId == via }
+            }
+            // An address typed on Add a hypervisor that this phone kept a
+            // sign-in for: opened now, once there is something to send it to.
+            if remembered == nil, XOSaved.has(trimmedAddress) { await unlockRemembered() }
         } catch {
             probeText = error.localizedDescription
+        }
+    }
+
+    /// FIRST, WHERE IT WORKED LAST TIME. What was kept is opened (Face ID),
+    /// and when the machine that got through last time is known and the
+    /// certificate needs nobody's word or has the person's kept word, that
+    /// machine is chosen and nothing else is asked: `begin` goes to it, and
+    /// it holds the sign-in to the pinned certificate as it always does, so
+    /// a server that changed fails at `connect` with nothing sent to it.
+    /// Anything less asks every machine, as before, and chooses that one
+    /// from the answers when it is among them.
+    @MainActor
+    private func openRemembered() async {
+        await unlockRemembered()
+        if let via = XOSaved.machine(for: trimmedAddress), let path = directPath(via) {
+            probes = [path]
+            chosen = path
+            viaMemory = true
+            return
+        }
+        await probe()
+    }
+
+    @MainActor
+    private func unlockRemembered() async {
+        guard XOSaved.has(trimmedAddress),
+              let entry = await XOSaved.unlock(trimmedAddress, reason: "Sign in to Xen Orchestra at \(trimmedAddress)")
+        else { return }
+        remembered = entry
+        if let login = entry.login {
+            email = login.email
+            password = login.password
+        }
+        keep = true
+        keepLoaded = true
+    }
+
+    /// The remembered machine as a probe nobody ran: over plain HTTP if the
+    /// person accepted that, with the fingerprint they accepted, or with the
+    /// one pinned at setup when it checked out then. Nil when none of those
+    /// is known, and every machine is asked.
+    private func directPath(_ via: String) -> Fleet.Probe? {
+        if let accepted = remembered?.accepted {
+            if accepted.plain {
+                return Fleet.Probe(hostId: via, reachable: true, xo: nil, tls: false, cert: nil, certificate: nil, version: nil)
+            }
+            if let pin = accepted.pin {
+                return Fleet.Probe(hostId: via, reachable: true, xo: nil, tls: true, cert: pin, certificate: nil, version: nil)
+            }
+        }
+        if let pinned = XOSetupHandoff.pinnedCertificate(trimmedAddress), pinned.trusted {
+            let checked = Fleet.Probe.Certificate(trusted: true, problems: nil, subject: nil, issuer: nil, notBefore: nil, notAfter: nil, names: nil)
+            return Fleet.Probe(hostId: via, reachable: true, xo: nil, tls: true, cert: pinned.pin, certificate: checked, version: nil)
+        }
+        return nil
+    }
+
+    /// What to keep once the machine has signed in with it: the sign-in, and
+    /// the person's word for what this machine found when it was asked for
+    /// (a certificate that checks out needs none). Nil when the switch is off.
+    private func entryToKeep(_ probe: Fleet.Probe) -> XOSaved.Entry? {
+        guard keep, biometry != nil else { return nil }
+        var accepted: XOSaved.Entry.Accepted?
+        if let cert = probe.cert, !probe.certificateTrusted {
+            accepted = .init(pin: cert, plain: false)
+        } else if probe.cert == nil, probe.plainHTTP {
+            accepted = .init(pin: nil, plain: true)
+        }
+        return XOSaved.Entry(login: .init(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password),
+                             accepted: accepted, savedAt: Date())
+    }
+
+    /// WHERE IT GOT TO decides what is kept. Past `sign-in`, the machine got
+    /// through and signed in: that machine is remembered for this address,
+    /// and what the person asked to keep is written, once. Stopped at
+    /// `connect` on a machine chosen from memory: said, and Try again asks
+    /// every machine. Stopped at `sign-in` with a kept password: that
+    /// password is wrong now, and is forgotten rather than offered again.
+    @MainActor
+    private func notePath(_ state: Fleet.SetupState) {
+        let now = state.state ?? ""
+        let phase = state.phase ?? ""
+        let past = now == "done" || now == "choosing" || (XOSetupWords.isLive(now) && !phase.isEmpty && phase != "connect" && phase != "sign-in")
+        if past {
+            if !hostId.isEmpty { XOSaved.rememberMachine(hostId, for: trimmedAddress) }
+            if let entry = pendingSave {
+                pendingSave = nil
+                if XOSaved.save(entry, for: trimmedAddress) {
+                    remembered = entry
+                    keepLoaded = true
+                    keepNote = "The sign-in is kept on this phone behind \(biometry ?? "Face ID") now."
+                } else {
+                    keepNote = "This phone could not keep the sign-in, so it will be asked for next time."
+                }
+            }
+            return
+        }
+        guard now == "failed" else { return }
+        pendingSave = nil
+        if phase == "connect", viaMemory {
+            keepNote = "\(hostId) got through last time and did not this time. Try again asks all your machines and shows the certificate in full."
+        } else if phase == "sign-in", keepLoaded {
+            XOSaved.forget(trimmedAddress)
+            remembered = nil
+            keepLoaded = false
+            keep = false
+            keepNote = "The kept sign-in did not work, so this phone no longer keeps it."
         }
     }
 
@@ -790,12 +1010,12 @@ struct AddHypervisorView: View {
             plain = false
             if probe.certificateTrusted {
                 trust = nil
-            } else if acknowledged {
+            } else if acknowledged || rememberedAccepts(probe) {
                 trust = "accepted"
             } else {
                 return
             }
-        } else if probe.plainHTTP, plainAccepted {
+        } else if probe.plainHTTP, plainAccepted || rememberedAccepts(probe) {
             pin = nil
             trust = nil
             plain = true
@@ -818,7 +1038,16 @@ struct AddHypervisorView: View {
             guard reply.ok != false, let setup = reply.xosetup, let begunJob = setup.job,
                   let key = setup.key, let keySig = setup.keySig, let hostKey = setup.hostKey
             else {
-                refuse(reply.text ?? "\(probe.hostId) did not begin the setup.")
+                let why = reply.text ?? "\(probe.hostId) did not begin the setup."
+                // THE REMEMBERED MACHINE IS A FIRST TRY, NOT THE ONLY ONE:
+                // switched off, or no longer in the fleet, and every machine
+                // is asked instead, with the reason kept on screen.
+                if viaMemory {
+                    await self.probe()
+                    refuse("\(why) Your other machines were asked instead.")
+                    return
+                }
+                refuse(why)
                 return
             }
             let machine = reply.hostId ?? probe.hostId
@@ -917,6 +1146,7 @@ struct AddHypervisorView: View {
             refuse(error.localizedDescription)
             return
         }
+        pendingSave = chosen.flatMap { entryToKeep($0) }
         password = ""
         toCompare = nil
         let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
@@ -1006,6 +1236,7 @@ struct AddHypervisorView: View {
             refuse(error.localizedDescription)
             return
         }
+        pendingSave = chosen.flatMap { entryToKeep($0) }
         password = ""
         toCompare = nil
         let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
@@ -1114,6 +1345,7 @@ struct AddHypervisorView: View {
     private func apply(_ state: Fleet.SetupState) async {
         progress = state
         guard let job else { return }
+        notePath(state)
         if isPolicy {
             await applyPolicyState(state, job: job)
             return
@@ -1133,12 +1365,17 @@ struct AddHypervisorView: View {
         inventory = nil
         choice = XOPolicy.Choice()
         toCompare = nil
-        password = ""
+        // A kept password comes back for the next try; a typed one does not.
+        password = remembered?.login?.password ?? ""
+        pendingSave = nil
+        keepNote = ""
         result = ""
         failed = false
     }
 
     private func refuse(_ text: String) {
+        // Nothing waits to be kept for a send that did not go.
+        pendingSave = nil
         result = text
         failed = true
     }
