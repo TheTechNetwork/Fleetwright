@@ -477,7 +477,7 @@ const chosenBefore = () => ({ id: 'rs-0', name: 'fleetwright', subjects: ['u-old
 /** Begin and run a policy job, and wait until it is waiting on the person. */
 async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, actor = 'eli@example.com') {
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
-  assert.deepEqual(begun.xosetup.can, ['policy'], 'a machine that can says so before any sign-in is sealed');
+  assert.deepEqual(begun.xosetup.can, ['policy', 'edge'], 'a machine that can says so before any sign-in is sealed');
   const reply = await newSealKey();
   const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' });
   const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });

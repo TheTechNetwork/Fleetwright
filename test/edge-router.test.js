@@ -1,0 +1,299 @@
+// The edge router: the configuration written into OPNsense's image, the patch
+// that writes it, and the calls that make the uplink and the VM.
+//
+//   node --test test/edge-router.test.js
+//
+// What is guarded is what a pool depends on: the configuration fits exactly
+// where the default was and says what the edge must be (no login, labs kept
+// off everything private); a wrong offset or a damaged image is refused
+// before a disk is written; a download that is not the published image is
+// never used; the VM is made in the order that boots (WAN first, the disk
+// attached and bootable, checksum offload off) and nothing half-made is left
+// when a step fails. The image itself is 3 GiB and is not fetched here: its
+// default configuration is the fixture, taken from the published 26.7 image,
+// and the patched image was booted in QEMU when this was written.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { PassThrough, Readable } from 'node:stream';
+
+import { ConfigPatch, EDGE, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureUplink, fetchImage, isDefaultConfig } from '../src/fleet/host/edge-router.js';
+import { checkPolicy } from '../src/fleet/host/xo-setup.js';
+
+const DEFAULT = readFileSync(new URL('./fixtures/opnsense-26.7-config.xml', import.meta.url));
+
+/** Every opening tag is closed in order: enough to catch a typo that would leave OPNsense with no configuration. */
+function balanced(/** @type {string} */ xml) {
+  const stack = [];
+  for (const m of xml.replace(/<\?xml[^>]*\?>/, '').matchAll(/<(\/?)([A-Za-z_][\w.-]*)([^>]*?)(\/?)>/g)) {
+    const [, close, name, , selfClosing] = m;
+    if (selfClosing) continue;
+    if (close) {
+      if (stack.pop() !== name) return false;
+    } else stack.push(name);
+  }
+  return stack.length === 0;
+}
+
+test('the edge configuration fits exactly where the default was, and says what the edge is', () => {
+  const config = edgeConfig();
+  assert.equal(config.length, OPNSENSE_IMAGE.config.length, 'not the length of the file it replaces');
+  const xml = config.toString('utf8');
+  // The padding is trailing whitespace only, which XML allows after the root.
+  assert.match(xml, /<\/opnsense>\n *$/);
+  assert.ok(balanced(xml.trimEnd()), 'the XML does not close what it opens');
+  // Xen's interfaces, in the order the VM's are made; none left to assign at a console.
+  assert.match(xml, /<wan><enable>1<\/enable><if>xn0<\/if>[\s\S]*?<ipaddr>dhcp<\/ipaddr><blockpriv>0<\/blockpriv><blockbogons>0<\/blockbogons><\/wan>/);
+  assert.ok(xml.includes(`<lan><enable>1</enable><if>xn1</if><descr>LAN</descr><ipaddr>${EDGE.lan.address}</ipaddr><subnet>${EDGE.lan.prefix}</subnet></lan>`), 'the LAN is not on xn1 at the edge address');
+  assert.ok(!xml.includes('mismatch'), 'an interface is left for somebody to assign');
+  assert.ok(!xml.includes('trigger_initial_wizard'));
+  // No login anywhere, and no rule that lets a lab at the web interface.
+  assert.match(xml, /<user><name>root<\/name>[\s\S]*?<password>\*<\/password>/);
+  assert.match(xml, /<noantilockout>1<\/noantilockout>/);
+  // Labs: DNS from the edge, nothing private, then the internet, in that order.
+  const rules = [...xml.matchAll(/<rule>[\s\S]*?<sequence>(\d+)<\/sequence><action>(\w+)<\/action>[\s\S]*?<destination_net>([^<]+)<\/destination_net>/g)].map((m) => [Number(m[1]), m[2], m[3]]);
+  assert.deepEqual(rules, [[1, 'pass', 'lanip'], [2, 'block', 'fleetwright_private'], [3, 'pass', 'any']]);
+  const alias = /<name>fleetwright_private<\/name><type>network<\/type><content>([^<]*)<\/content>/.exec(xml);
+  assert.ok(alias, 'no alias for what labs may not reach');
+  assert.deepEqual(alias[1].split('\n'), [...NOT_FROM_LABS]);
+  for (const range of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16']) assert.ok(NOT_FROM_LABS.includes(range), range);
+});
+
+test('a configuration that does not fit is refused rather than truncated', () => {
+  assert.throws(() => edgeConfig({ length: 1000 }), /is \d+ bytes and the file it replaces is 1000/);
+});
+
+test('the default configuration pinned for the image is the one the image has', () => {
+  assert.equal(DEFAULT.length, OPNSENSE_IMAGE.config.length);
+  assert.equal(isDefaultConfig(DEFAULT), true);
+  const changed = Buffer.from(DEFAULT);
+  changed[100] ^= 1;
+  assert.equal(isDefaultConfig(changed), false);
+});
+
+/** A small image: the default configuration at `offset` inside `total` bytes of a pattern. */
+function image(/** @type {number} */ offset, /** @type {number} */ total, region = DEFAULT) {
+  const buf = Buffer.alloc(total);
+  for (let i = 0; i < total; i++) buf[i] = i % 251;
+  region.copy(buf, offset);
+  return buf;
+}
+
+/** Stream `buf` through a ConfigPatch in chunks of `size`, collecting the output or the error. */
+async function patch(/** @type {Buffer} */ buf, /** @type {number} */ size, /** @type {any} */ opts) {
+  const chunks = [];
+  for (let i = 0; i < buf.length; i += size) chunks.push(buf.subarray(i, i + size));
+  const out = [];
+  const p = new ConfigPatch(opts);
+  try {
+    for await (const c of Readable.from(chunks).pipe(p)) out.push(c);
+    return Buffer.concat(out);
+  } catch (e) {
+    return /** @type {Error} */ (e);
+  }
+}
+
+test('the patch replaces exactly the configuration, however the image arrives in pieces', async () => {
+  const offset = 300_001;
+  const total = 400_000;
+  const replacement = edgeConfig();
+  const want = image(offset, total);
+  replacement.copy(want, offset);
+  for (const size of [1, 7, 4096, 5234, 65536, total]) {
+    const got = await patch(image(offset, total), size, { offset, replacement, total });
+    assert.ok(Buffer.isBuffer(got), `chunks of ${size}: ${got}`);
+    assert.ok(got.equals(want), `chunks of ${size} came out different`);
+  }
+});
+
+test('an image without the default configuration at the offset, or of the wrong size, is not written', async () => {
+  const offset = 4096;
+  const replacement = edgeConfig();
+  const wrong = Buffer.from(DEFAULT);
+  wrong[0] = 0x20;
+  const moved = await patch(image(offset, 20_000, wrong), 1000, { offset, replacement, total: 20_000 });
+  assert.match(String(moved), /does not have the default configuration where it should/);
+  const short = await patch(image(offset, 20_000), 1000, { offset, replacement, total: 30_000 });
+  assert.match(String(short), /unpacked to 20000 bytes, not 30000/);
+  const cut = await patch(image(offset, 20_000).subarray(0, offset + 100), 1000, { offset, replacement, total: offset + 100 });
+  assert.match(String(cut), /ended inside its configuration/);
+});
+
+test('a download that is not the published image is never used, and nothing is left behind', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fw-edge-'));
+  const fetchImpl = /** @type {any} */ (async () => new Response('not the image'));
+  await assert.rejects(fetchImage({ dir, fetchImpl }), /not the published/);
+  assert.deepEqual(readdirSync(dir), []);
+  const refused = /** @type {any} */ (async () => new Response('gone', { status: 404 }));
+  await assert.rejects(fetchImage({ dir, fetchImpl: refused }), /answered 404/);
+});
+
+/** A stand-in for Xen Orchestra's admin connection: answers from `objects`, records every call. */
+function xo(/** @type {Record<string, any[]>} */ objects, /** @type {Record<string, (p: any) => any>} */ answers = {}) {
+  /** @type {[string, any][]} */
+  const calls = [];
+  return {
+    calls,
+    async call(/** @type {string} */ method, /** @type {any} */ params) {
+      calls.push([method, params]);
+      if (answers[method]) return answers[method](params);
+      if (method === 'xo.getAllObjects') {
+        const { type, ...match } = params.filter;
+        return Object.fromEntries(
+          (objects[type] || []).filter((o) => Object.entries(match).every(([k, v]) => o[k] === v)).map((o) => [o.id, o]),
+        );
+      }
+      return null;
+    },
+  };
+}
+
+const GiB = 1024 ** 3;
+const SRS = [
+  { id: 'sr-small', $pool: 'p1', size: 4 * GiB, physical_usage: 2 * GiB },
+  { id: 'sr-big', $pool: 'p1', size: 500 * GiB, physical_usage: 100 * GiB },
+  { id: 'sr-other-pool', $pool: 'p2', size: 900 * GiB, physical_usage: 0 },
+];
+const TEMPLATE = { id: 'tpl-other', $pool: 'p1', name_label: 'Other install media' };
+
+/** Everything ensureEdge needs, with the download, unpack and upload stood in for. */
+function edgeArgs(/** @type {any} */ admin, /** @type {any} */ extra = {}) {
+  /** @type {string[]} */
+  const said = [];
+  return {
+    said,
+    args: {
+      admin,
+      pool: 'p1',
+      egress: { id: 'net-wan', name: 'eth0.10' },
+      uplink: 'net-up',
+      srs: SRS,
+      address: 'xo.lan',
+      pin: 'a'.repeat(64),
+      plain: false,
+      imageDir: '/nowhere',
+      say: (/** @type {string} */ t) => said.push(t),
+      getImage: async () => '/nowhere/image.bz2',
+      unpackImpl: () => new PassThrough(),
+      upload: async (/** @type {any} */ u) => {
+        assert.equal(u.size, OPNSENSE_IMAGE.rawSize);
+        assert.equal(u.sendTo, '/import/abc');
+        assert.ok(u.body instanceof ConfigPatch, 'the disk is not written through the patch');
+        return 'vdi-1';
+      },
+      ...extra,
+    },
+  };
+}
+
+test('the edge router is made in the order that boots: disk in, WAN first, checksum offload off, started', async () => {
+  const admin = xo(
+    { VM: [], 'VM-template': [TEMPLATE], VIF: [{ id: 'vif-a', $VM: 'vm-1', device: '0' }, { id: 'vif-b', $VM: 'vm-1', device: '1' }] },
+    { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-1' },
+  );
+  const { args, said } = edgeArgs(admin);
+  const done = await ensureEdge(args);
+  const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects');
+  assert.deepEqual(methods, ['disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vif.set', 'vm.start']);
+  const params = Object.fromEntries(admin.calls);
+  // On the chosen storage in this pool with the most room.
+  assert.equal(params['disk.import'].sr, 'sr-big');
+  assert.equal(params['disk.import'].type, 'iso');
+  const made = params['vm.create'];
+  assert.equal(made.template, 'tpl-other');
+  assert.deepEqual(made.VIFs, [{ network: 'net-wan' }, { network: 'net-up' }]);
+  assert.deepEqual(made.VDIs, []);
+  assert.deepEqual(made.tags, [EDGE.tag]);
+  assert.ok(!made.tags.includes('fleetwright'), "the fleet's token could manage its own way out");
+  assert.deepEqual(params['vm.attachDisk'], { vm: 'vm-1', vdi: 'vdi-1', bootable: true, position: '0' });
+  assert.deepEqual(admin.calls.filter(([m]) => m === 'vif.set').map(([, p]) => p), [
+    { id: 'vif-a', txChecksumming: false },
+    { id: 'vif-b', txChecksumming: false },
+  ]);
+  assert.deepEqual(params['vm.start'], { id: 'vm-1' });
+  assert.match(done, /The edge router is up: OPNsense 26\.7, its WAN on eth0\.10 and its LAN on fleetwright-uplink at 10\.254\.0\.1\/24/);
+  assert.ok(said.some((t) => t.startsWith('Downloading OPNsense')), 'the person is not told about the download');
+});
+
+test('an edge router already there is not built again: its WAN follows the way out, and it is started', async () => {
+  const admin = xo({
+    VM: [{ id: 'vm-old', $pool: 'p1', tags: [EDGE.tag], power_state: 'Halted' }],
+    VIF: [{ id: 'vif-w', $VM: 'vm-old', device: '0', $network: 'net-before' }],
+  });
+  const { args } = edgeArgs(admin);
+  const done = await ensureEdge(args);
+  const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects');
+  assert.deepEqual(methods, ['vif.set', 'vm.start']);
+  assert.deepEqual(admin.calls.find(([m]) => m === 'vif.set')?.[1], { id: 'vif-w', network: 'net-wan' });
+  assert.match(done, /already there[\s\S]*WAN moved to eth0\.10[\s\S]*was started/);
+});
+
+test('a build that fails leaves nothing half-made behind', async () => {
+  const admin = xo(
+    { VM: [], 'VM-template': [TEMPLATE], VIF: [] },
+    {
+      'disk.import': () => ({ $sendTo: '/import/abc' }),
+      'vm.create': () => {
+        throw new Error('no memory left on the host');
+      },
+    },
+  );
+  const { args } = edgeArgs(admin);
+  await assert.rejects(ensureEdge(args), /no memory left/);
+  assert.deepEqual(admin.calls.find(([m]) => m === 'vdi.delete')?.[1], { id: 'vdi-1' });
+  // Made, then failing to start: the VM goes, with its disk.
+  const later = xo(
+    { VM: [], 'VM-template': [TEMPLATE], VIF: [] },
+    {
+      'disk.import': () => ({ $sendTo: '/import/abc' }),
+      'vm.create': () => 'vm-2',
+      'vm.start': () => {
+        throw new Error('HOST_NOT_ENOUGH_FREE_MEMORY');
+      },
+    },
+  );
+  await assert.rejects(ensureEdge(edgeArgs(later).args), /HOST_NOT_ENOUGH_FREE_MEMORY/);
+  assert.deepEqual(later.calls.find(([m]) => m === 'vm.delete')?.[1], { id: 'vm-2', deleteDisks: true });
+});
+
+test('nothing is downloaded or made without room for the disk or a template to make it from', async () => {
+  const full = xo({ VM: [], 'VM-template': [TEMPLATE] });
+  const tight = SRS.map((s) => ({ ...s, physical_usage: s.size }));
+  await assert.rejects(ensureEdge(edgeArgs(full, { srs: tight }).args), /has 3 GiB free/);
+  const bare = xo({ VM: [], 'VM-template': [] });
+  await assert.rejects(ensureEdge(edgeArgs(bare).args), /no "Other install media" template/);
+  for (const admin of [full, bare]) {
+    assert.ok(!admin.calls.some(([m]) => m === 'disk.import' || m === 'vm.create'));
+  }
+});
+
+test('the uplink is made once per pool and the fleet may use it', async () => {
+  const fresh = xo({}, { 'network.create': () => 'net-up' });
+  const id = await ensureUplink({ admin: fresh, pool: 'p1', networks: [{ id: 'n-x', name_label: 'fleetwright-uplink', $pool: 'p2' }], setId: 'rs-1', inSet: [] });
+  assert.equal(id, 'net-up');
+  assert.deepEqual(fresh.calls.map(([m, p]) => [m, p.pool ?? p.id, p.name ?? p.object]), [
+    ['network.create', 'p1', 'fleetwright-uplink'],
+    ['resourceSet.addObject', 'rs-1', 'net-up'],
+  ]);
+  const there = xo({});
+  const again = await ensureUplink({ admin: there, pool: 'p1', networks: [{ id: 'net-up', name_label: 'fleetwright-uplink', $pool: 'p1' }], setId: 'rs-1', inSet: ['net-up'] });
+  assert.equal(again, 'net-up');
+  assert.deepEqual(there.calls, []);
+});
+
+test('the edge router is asked for only with a way out for its WAN', () => {
+  const choices = { srs: new Map([['sr1', 100 * GiB]]), networks: new Set(['n1', 'n2']), capacity: { cpus: 8, memory: 32 * GiB } };
+  const base = { v: 1, srs: ['sr1'], networks: ['n1', 'n2'], limits: { cpus: 2, memory: 4 * GiB, disk: 20 * GiB } };
+  const none = checkPolicy({ ...base, egress: null, edge: true }, choices);
+  assert.equal(none.ok, false);
+  assert.match(/** @type {any} */ (none).text, /needs a way out/);
+  const asked = checkPolicy({ ...base, egress: 'n2', edge: true }, choices);
+  assert.equal(asked.ok && asked.policy.edge, true);
+  // Anything but `true` is no: an older phone sends nothing and builds nothing.
+  const old = checkPolicy({ ...base, egress: 'n2' }, choices);
+  assert.equal(old.ok && old.policy.edge, false);
+  assert.ok(!existsSync('/nowhere'));
+});

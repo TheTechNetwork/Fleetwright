@@ -71,6 +71,7 @@ import { XOSETUP_STEPS, XOPOLICY_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../p
 import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
+import { EDGE, ensureEdge, ensureUplink } from './edge-router.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -100,6 +101,8 @@ const FINISHED_TTL_MS = 6 * 60 * 60_000;
 const POLICY_WAIT_MS = 10 * 60_000;
 /** The tag on the network the edge router's WAN goes on: the way out of every lab. */
 export const EGRESS_TAG = 'fleetwright-egress';
+/** What building the edge router asks of the server, checked before anything is made. */
+export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start']);
 /** The smallest limits a policy may set: one vCPU, a GiB of memory, ten of disk. */
 const MIN_MEMORY = 1024 ** 3;
 const MIN_DISK = 10 * 1024 ** 3;
@@ -311,9 +314,10 @@ export class XoSetups {
       ok: true,
       text: 'Ready for the sign-in. Check the key is this machine’s, then send it sealed.',
       // WHAT ELSE A JOB HERE CAN BE, so a phone sends a policy change only to
-      // a machine that will not take it for a whole setup. Not signed: a
-      // coordinator that strips it makes the phone refuse, which is safe.
-      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['policy'] },
+      // a machine that will not take it for a whole setup, and asks for the
+      // edge router only of one that can build it. Not signed: a coordinator
+      // that strips it makes the phone refuse or not offer, which is safe.
+      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['policy', 'edge'] },
     };
   }
 
@@ -578,6 +582,10 @@ export class XoSetups {
         const set = sets.find((/** @type {any} */ s) => s?.name === FLEET_SET);
         if (!set) throw new Error('this pool has not been added to the fleet yet, so there is no policy to change. Add it first. Nothing was changed.');
         ctx.setId = set.id;
+        // WHETHER EACH POOL HAS ITS EDGE ROUTER, so the phone can say so and
+        // offer to build one only where there is none.
+        const vms = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {});
+        ctx.edges = vms.filter((/** @type {any} */ v) => Array.isArray(v?.tags) && v.tags.includes(EDGE.tag));
         const inventory = inventoryOf(ctx, set);
         ctx.rec.choices = choicesOf(inventory);
         const box = await seal({ to: ctx.rec.reply, aad: xosetupInventoryAad(ctx.rec.job, ctx.rec.address), payload: inventory });
@@ -617,6 +625,32 @@ export class XoSetups {
           }
         }
         ctx.summary = said.join(' ');
+        // THE EDGE ROUTER, when the person asked for it: the uplink, then the
+        // router on it (edge-router.js). Inside this step and not steps of its
+        // own, so a phone that predates it still reads the progress as the
+        // step it knows, with the machine's sentence under it saying where the
+        // download and the disk have got to.
+        if (p.edge) {
+          const missing = EDGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
+          if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the edge router cannot be built. The policy was applied.`);
+          const way = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress);
+          if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
+          const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
+          return await ensureEdge({
+            admin: ctx.admin,
+            pool: way.$pool,
+            egress: { id: p.egress, name: String(way.name_label || 'the way out').slice(0, 80) },
+            uplink,
+            srs: (ctx.srs || []).filter((/** @type {any} */ s) => p.srs.includes(s?.id)),
+            address: ctx.rec.address,
+            pin: ctx.rec.pin,
+            plain: ctx.rec.plain === true,
+            imageDir: path.join(this.stateDir || '.', 'edge'),
+            say: (/** @type {string} */ text) => {
+              ctx.rec.text = text;
+            },
+          });
+        }
       },
     ];
   }
@@ -844,12 +878,19 @@ export function inventoryOf(ctx, set) {
       egress: Array.isArray(n.tags) && n.tags.includes(EGRESS_TAG),
     }));
   const objects = new Set(Array.isArray(set?.objects) ? set.objects.map(String) : []);
+  // Each pool's edge router, by pool, and whether it is running: what the
+  // phone needs to say "it is there" rather than offer to build another.
+  const edges = (ctx.edges || []).map((/** @type {any} */ v) => ({
+    pool: v.$pool ? String(v.$pool) : null,
+    running: v.power_state === 'Running',
+  }));
   return {
     v: 1,
     address: ctx.rec.address,
     pools,
     srs,
     networks,
+    edges,
     capacity: {
       cpus: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.cpus?.cores) || 0), 0),
       memory: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.memory?.size) || 0), 0),
@@ -893,7 +934,9 @@ export function currentLimits(set) {
  * each limit must be at least a usable machine and at most what is there.
  *
  * @param {any} p @param {ReturnType<typeof choicesOf>|null} choices
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * `edge` asks for the edge router on the way out; it needs one.
+ *
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -909,6 +952,8 @@ export function checkPolicy(p, choices) {
   if (egress !== null && !networks.includes(egress)) {
     return { ok: false, text: 'The way out has to be one of the networks the fleet may use.' };
   }
+  const edge = p.edge === true;
+  if (edge && egress === null) return { ok: false, text: 'The edge router needs a way out: choose the network its WAN goes on.' };
   const cpus = Number(p.limits?.cpus);
   const memory = Number(p.limits?.memory);
   const disk = Number(p.limits?.disk);
@@ -919,7 +964,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, limits: { cpus, memory, disk } } };
 }
 
 /**
