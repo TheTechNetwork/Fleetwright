@@ -103,3 +103,74 @@ test('iOS: the way out names the router it is for, and says it is not built yet'
   assert.ok(SCREEN.includes('The network the edge router, an OPNsense VM, will put its WAN on'));
   assert.ok(SCREEN.includes('The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag '));
 });
+
+// ─── Android ────────────────────────────────────────────────────────────────
+
+const KT = 'apps/android/app/src/main/java/network/thetech/fleetwright/';
+const SAVED_KT = read(`${KT}XoSaved.kt`);
+const SHEET = read(`${KT}HypervisorSheet.kt`);
+/** One local function's text in the sheet, to the next one at the same depth. */
+const kfn = (/** @type {string} */ name) => {
+  const at = SHEET.search(new RegExp(`\\n {4}(?:suspend )?fun ${name}\\(`));
+  assert.ok(at > 0, `no ${name}`);
+  const next = SHEET.slice(at + 1).search(/\n {4}(?:suspend )?fun |\n {4}\/\/ |\n {4}LaunchedEffect/);
+  return bare(SHEET.slice(at, next > 0 ? at + 1 + next : undefined));
+};
+
+test('Android: what is kept opens after a strong fingerprint or face, under a key of its own, and is offered only where it can be', () => {
+  // Every use, after a strong check; retired by a new fingerprint or face.
+  assert.match(SAVED_KT, /\.setUserAuthenticationRequired\(true\)\s*\.setUserAuthenticationParameters\(0, KeyProperties\.AUTH_BIOMETRIC_STRONG\)\s*\.setInvalidatedByBiometricEnrollment\(true\)/);
+  // Not the fleet credential's key, which opens on a locked phone.
+  assert.match(SAVED_KT, /private const val KEY_ALIAS = "fleetwright\.xo-saved"/);
+  assert.match(SAVED_KT, /BiometricPrompt\.CryptoObject\(cipher\)/);
+  assert.match(read('apps/android/app/src/main/AndroidManifest.xml'), /<uses-permission android:name="android\.permission\.USE_BIOMETRIC" \/>/);
+  // The box exists only when a strong check is enrolled (C-2).
+  assert.match(SAVED_KT, /canAuthenticate\(BiometricManager\.Authenticators\.BIOMETRIC_STRONG\) == BiometricManager\.BIOMETRIC_SUCCESS/);
+  assert.match(SHEET, /if \(canKeep\) \{[\s\S]{0,2400}?Text\("Keep on this phone, behind your fingerprint or face"/);
+  assert.match(SHEET, /if \(!on && keepLoaded\) \{\s*XoSaved\.forget\(settings, address\.trim\(\)\)/);
+});
+
+test('Android: a kept acceptance stands for the certificate it was given for and no other', () => {
+  assert.match(SAVED_KT, /if \(cert != null\) return acceptedPin == cert\s*return XoSetup\.plain\(probe\) && acceptedPlain/);
+  // The box comes back whenever the kept word does not match.
+  assert.match(SHEET, /if \(kept\) \{\s*Text\(\s*"You accepted this certificate before, and this phone kept that behind your fingerprint or face\."/);
+  assert.match(SHEET, /\} else \{\s*Row\([\s\S]{0,300}?toggleable\(value = acknowledged/);
+  assert.match(kfn('begin'), /val trust = if \(plain\) null else XoSetup\.trustFor\(p\.certificate, acknowledged \|\| kept\)/);
+});
+
+test('Android: nothing is written until the machine has signed in with it, and a password that stops working is dropped', () => {
+  const note = kfn('notePath');
+  assert.match(note, /val past = s\.state == "done" \|\| s\.state == "choosing" \|\|\s*\(s\.state == "running" && phase\.isNotEmpty\(\) && phase != "connect" && phase != "sign-in"\)/);
+  assert.match(note, /if \(past\) \{[\s\S]*?XoSaved\.keep\(settings, where, it\)[\s\S]*?return\s*\}/);
+  assert.equal((bare(SHEET).match(/XoSaved\.keep\(/g) ?? []).length, 1, 'something else writes what is kept');
+  assert.match(note, /phase == "sign-in" && keepLoaded\) \{\s*XoSaved\.forget\(settings, where\)/);
+  // Sealed while the password is still here, before the machine's seal, and
+  // dropped when the send is refused.
+  for (const name of ['run', 'runPolicy']) {
+    assert.match(kfn(name), /pendingSave = pick\?\.let \{ sealToKeep\(it, p\.email\) \}\s*val sealed = Xo(?:Setup|Policy)\.sealSignIn/);
+    assert.match(kfn(name), /if \(!r\.ok\) \{\s*pendingSave = null/);
+  }
+});
+
+test('Android: the machine that got through last time is tried first, and every machine is asked when it does not', () => {
+  assert.match(kfn('openRemembered'), /val path = XoSaved\.machine\(settings, address\.trim\(\)\)\?\.let \{ directPath\(it\) \}\s*if \(path != null\) \{[\s\S]*?viaMemory = true\s*return\s*\}\s*probe\(\)/);
+  assert.match(kfn('directPath'), /XoHandoff\.pinnedCertificate\(settings, address\.trim\(\)\)/);
+  assert.match(kfn('begin'), /\(!r\.ok \|\| setup == null\) && viaMemory -> \{[\s\S]*?probe\(\)\s*refusal = "\$why Your other machines were asked instead\."/);
+  assert.match(kfn('startAgain'), /val askAll = viaMemory && progress\?\.state == "failed" && progress\?\.phase == "connect"[\s\S]*?if \(askAll\) probe\(\)/);
+  assert.match(kfn('probe'), /chosen = able\.singleOrNull\(\)\?\.hostId \?: able\.firstOrNull \{ it\.hostId == via \}\?\.hostId/);
+  assert.match(kfn('notePath'), /if \(past\) \{\s*if \(runningOn\.isNotBlank\(\)\) XoSaved\.rememberMachine\(settings, where, runningOn\)/);
+});
+
+test('both phones say the same things about what is remembered', () => {
+  for (const words of [
+    'Got through last time, so it is tried first',
+    ' got through last time and did not this time.',
+    'The kept sign-in did not work, so this phone no longer keeps it.',
+    ' Your other machines were asked instead.',
+    'checks it again before signing in.',
+    'The network the edge router, an OPNsense VM, will put its WAN on',
+  ]) {
+    assert.ok(SCREEN.includes(words), `iOS: ${words}`);
+    assert.ok(SHEET.includes(words) || read(`${KT}PolicyForm.kt`).includes(words), `Android: ${words}`);
+  }
+});

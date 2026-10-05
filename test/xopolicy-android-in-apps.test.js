@@ -66,7 +66,7 @@ test('Android: the key the pool comes back to lives in memory, never on disk or 
   const runPolicy = fn(sheet, 'suspend fun runPolicy(');
   // A one-off key, not XoHandoff's, which writes its private half down so a
   // token can be collected with the app closed.
-  assert.match(runPolicy, /val reply = Seal\.newKey\(\)\s*val sealed = XoPolicy\.sealSignIn\([^\n]*reply\.publicKey\)\s*password = ""/);
+  assert.match(runPolicy, /val reply = Seal\.newKey\(\)\s*(?:pendingSave = [^\n]*\s*)?val sealed = XoPolicy\.sealSignIn\([^\n]*reply\.publicKey\)\s*password = ""/);
   assert.ok(!runPolicy.includes('XoHandoff'), 'the policy path never touches XoHandoff');
   // Held in `remember`, which a rotation drops, not `rememberSaveable`.
   assert.match(sheet, /var policyKey by remember \{ mutableStateOf<Seal\.OneUseKey\?>\(null\) \}/);
@@ -154,10 +154,10 @@ test('Android: the words are the machine’s and iOS’s', () => {
   }
   assert.ok(form.includes('title = "None yet"'));
   assert.ok(sheet.includes('Text(if (applying) "Applying…" else "Apply")'));
-  // The way out is described as what it records, and never as a router
-  // that exists.
-  assert.ok(form.includes('"The network the edge router\'s WAN will go on: the one way out of every lab. Choosing it records it in Xen " +'));
-  assert.ok(form.includes('"Orchestra, as the fleetwright-egress tag on that network; it does not build the router."'));
+  // The way out is described as what it records, names the router it is
+  // for, and never as a router that exists: iOS's words.
+  assert.ok(form.includes('"The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +'));
+  assert.ok(form.includes('"your LAN. The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag " +'));
   assert.ok(sheet.includes('"$machine waits ten minutes for your choice, then lets go without changing anything."'));
   assert.ok(sheet.includes('"Used once, on ${pick.hostId}, to read the pool and apply what you choose, and not kept. " +'));
   // Every step the protocol has, in its order, said as the machine says it.

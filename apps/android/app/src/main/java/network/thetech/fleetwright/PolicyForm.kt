@@ -78,8 +78,9 @@ internal fun PolicyForm(inv: XoPolicy.Inventory, choice: XoPolicy.Choice, enable
     // yet, and a sentence that implied one was would be the screen claiming
     // a state it does not know (C-5).
     Hint(
-        "The network the edge router's WAN will go on: the one way out of every lab. Choosing it records it in Xen " +
-            "Orchestra, as the fleetwright-egress tag on that network; it does not build the router.",
+        "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +
+            "your LAN. The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag " +
+            "on that network, for when it is. Only a network chosen above can be the way out.",
     )
     inv.networks.filter { it.id in choice.networks }.forEach { n ->
         RadioRow(

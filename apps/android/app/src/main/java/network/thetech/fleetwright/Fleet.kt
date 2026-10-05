@@ -2447,6 +2447,25 @@ class Settings(context: Context) {
         get() = prefs.getString("xoPending", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoPending") else putString("xoPending", value) }.apply()
 
+    /**
+     * The machine that last got through to each Xen Orchestra address, as
+     * XoSaved writes it: a JSON object of address to host. Not a secret.
+     */
+    var xoVia: String
+        get() = prefs.getString("xoVia", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoVia") else putString("xoVia", value) }.apply()
+
+    /**
+     * A Xen Orchestra sign-in the person chose to keep, as XoSaved sealed it
+     * under its own fingerprint-bound key: ciphertext here, and nothing this
+     * class can open. An empty value removes it.
+     */
+    fun xoSaved(address: String): String? = prefs.getString("xoSaved.$address", null)
+
+    fun putXoSaved(address: String, sealed: String) {
+        prefs.edit().apply { if (sealed.isEmpty()) remove("xoSaved.$address") else putString("xoSaved.$address", sealed) }.apply()
+    }
+
     /** Who this device is signed in as. Not a secret — it is displayed. */
     var signedInAs: String
         get() = prefs.getString("signedInAs", "") ?: ""

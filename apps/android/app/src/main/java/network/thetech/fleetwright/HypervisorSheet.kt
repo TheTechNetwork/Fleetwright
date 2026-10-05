@@ -34,6 +34,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -74,11 +75,20 @@ import kotlinx.coroutines.launch
  * THE PASSWORD IS IN MEMORY FOR AS LONG AS IT TAKES TO SEAL IT, and no longer.
  * It is sealed to the job's key on this phone, so the coordinator relays
  * ciphertext; the field is cleared the moment the sealed string exists, and
- * again on every way out of the sign-in step. Nothing here writes it anywhere,
- * logs it, or hands it to the outbox: every send is given an id, which is what
- * keeps a send the fleet did not answer off this phone's disk (Fleet.xosetup).
- * It is the one input NOT in rememberSaveable, for the same reason: saved
- * state is written to a Bundle, and a Bundle is a place.
+ * again on every way out of the sign-in step. Nothing here logs it or hands
+ * it to the outbox: every send is given an id, which is what keeps a send the
+ * fleet did not answer off this phone's disk (Fleet.xosetup). It is the one
+ * input NOT in rememberSaveable, for the same reason: saved state is written
+ * to a Bundle, and a Bundle is a place.
+ *
+ * UNLESS THE PERSON ASKS TO KEEP IT. "Keep on this phone" seals the sign-in
+ * and their word for the certificate under a key that opens only after a
+ * fingerprint or face check (XoSaved), at the moment the sign-in is sealed
+ * for the machine, and writes that ciphertext only once the machine has
+ * signed in with it, so a mistyped password is never the one kept. And the
+ * machine that got through is remembered by address: the next change on the
+ * same pool starts there, and asks every machine only when it does not get
+ * through.
  *
  * WHAT SURVIVES A ROTATION. The job, the machine running it, the address,
  * the machine chosen and the acknowledgement are saveable, so turning the
@@ -173,6 +183,20 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // needs to read it while they change what it was about.
     var choiceRefusal by remember { mutableStateOf("") }
 
+    // WHAT THIS PHONE REMEMBERS (XoSaved). What was kept, once a fingerprint
+    // or face opened it; the switch, on when what is on screen came from it;
+    // the machine chosen from memory without asking the others; and the
+    // sealed copy waiting for the machine to sign in with it.
+    val context = LocalContext.current
+    val canKeep = remember { XoSaved.available(context) }
+    var remembered by remember { mutableStateOf<XoSaved.Entry?>(null) }
+    var keep by remember { mutableStateOf(false) }
+    var keepLoaded by remember { mutableStateOf(false) }
+    var viaMemory by rememberSaveable { mutableStateOf(false) }
+    var pendingSave by remember { mutableStateOf<String?>(null) }
+    var keepNote by remember { mutableStateOf("") }
+    var openedOnce by rememberSaveable { mutableStateOf(false) }
+
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     // WHO CAN RUN IT: the machines that reached it over HTTPS and saw a
     // certificate, then the ones answered in plain HTTP. The pinned ones
@@ -181,9 +205,27 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     val reachable = pinned + probes.orEmpty().filter { XoSetup.plain(it) }
     val pick = reachable.firstOrNull { it.hostId == chosen }
 
+    /** The person's word for what this machine found, kept and opened: the same fingerprint, or plain HTTP again. */
+    fun rememberedAccepts(p: Fleet.Probe): Boolean = remembered?.accepts(p) == true
+
+    /** Open what was kept for this address, which puts the fingerprint or face prompt up. */
+    suspend fun unlockRemembered() {
+        val where = address.trim()
+        if (!XoSaved.has(settings, where)) return
+        val entry = XoSaved.unlock(context, settings, where) ?: return
+        remembered = entry
+        if (entry.hasLogin) {
+            email = entry.email.orEmpty()
+            password = entry.password.orEmpty()
+        }
+        keep = true
+        keepLoaded = true
+    }
+
     fun probe() {
         scope.launch {
             probing = true
+            viaMemory = false
             probeText = ""
             probes = null
             chosen = null
@@ -192,14 +234,111 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             val r = fleet.xoprobe(address.trim())
             if (r.ok && r.probes != null) {
                 probes = r.probes
-                // One machine that can is chosen for them; two is a decision.
-                // A lone plain-HTTP machine is chosen too: choosing it shows
-                // the card that asks, and nothing is sent until it is answered.
-                chosen = r.probes.filter { XoSetup.pinned(it) || XoSetup.plain(it) }.singleOrNull()?.hostId
+                // One machine that can is chosen for them; two is a decision,
+                // unless one of them got through last time, which is chosen
+                // and the others stay a tap away. A lone plain-HTTP machine is
+                // chosen too: choosing it shows the card that asks, and
+                // nothing is sent until it is answered.
+                val able = r.probes.filter { XoSetup.pinned(it) || XoSetup.plain(it) }
+                val via = XoSaved.machine(settings, address.trim())
+                chosen = able.singleOrNull()?.hostId ?: able.firstOrNull { it.hostId == via }?.hostId
+                // An address this phone kept a sign-in for: opened now, once
+                // there is something to send it to.
+                if (remembered == null) unlockRemembered()
             } else {
                 probeText = r.text.ifBlank { "The fleet did not answer the probe." }
             }
             probing = false
+        }
+    }
+
+    /**
+     * The remembered machine as a probe nobody ran: plain HTTP if the person
+     * accepted that, the fingerprint they accepted, or the one pinned at
+     * setup when it checked out then. Null when none is known.
+     */
+    fun directPath(via: String): Fleet.Probe? {
+        val kept = remembered
+        if (kept != null && kept.acceptedPlain) return Fleet.Probe(via, reachable = true, xo = null, tls = false, cert = null, version = null)
+        kept?.acceptedPin?.let { return Fleet.Probe(via, reachable = true, xo = null, tls = true, cert = it, version = null) }
+        val pinned = XoHandoff.pinnedCertificate(settings, address.trim())
+        if (pinned != null && pinned.second) {
+            val checked = Fleet.Certificate(trusted = true, problems = emptyList(), subject = null, issuer = null, notBefore = null, notAfter = null, names = emptyList())
+            return Fleet.Probe(via, reachable = true, xo = null, tls = true, cert = pinned.first, version = null, certificate = checked)
+        }
+        return null
+    }
+
+    /**
+     * FIRST, WHERE IT WORKED LAST TIME. What was kept is opened, and when the
+     * machine that got through last time is known and the certificate needs
+     * nobody's word or has the person's kept word, that machine is chosen and
+     * nothing else is asked: `begin` goes to it, and it holds the sign-in to
+     * the pinned certificate as it always does, so a server that changed
+     * fails at `connect` with nothing sent to it. Anything less asks every
+     * machine, as before.
+     */
+    suspend fun openRemembered() {
+        unlockRemembered()
+        val path = XoSaved.machine(settings, address.trim())?.let { directPath(it) }
+        if (path != null) {
+            probes = listOf(path)
+            chosen = path.hostId
+            viaMemory = true
+            return
+        }
+        probe()
+    }
+
+    /**
+     * The copy to keep, sealed behind a fingerprint or face now, while the
+     * password is still here, or null: the box is off, nothing changed since
+     * it was kept, or the person cancelled the prompt (said, and the sign-in
+     * goes ahead).
+     */
+    suspend fun sealToKeep(p: Fleet.Probe, who: String): String? {
+        if (!keep || !canKeep) return null
+        val plain = XoSetup.plain(p)
+        val trusted = !plain && p.certificate?.trusted == true
+        val entry = XoSaved.Entry(who, password, if (!plain && !trusted) p.cert else null, plain)
+        if (keepLoaded && entry == remembered) return null
+        return XoSaved.seal(context, entry, address.trim()).also {
+            if (it == null) keepNote = "Nothing was kept, because the fingerprint or face check did not finish. The sign-in went ahead."
+        }
+    }
+
+    /**
+     * WHERE IT GOT TO decides what is kept. Past `sign-in`: that machine is
+     * remembered for this address, and the sealed copy is written, once.
+     * Stopped at `connect` on a machine chosen from memory: said, and Start
+     * again asks every machine. Stopped at `sign-in` with a kept password:
+     * forgotten rather than offered again. The same rule as iOS's notePath.
+     */
+    fun notePath(s: Fleet.Setup) {
+        val where = address.trim()
+        val phase = s.phase.orEmpty()
+        val past = s.state == "done" || s.state == "choosing" ||
+            (s.state == "running" && phase.isNotEmpty() && phase != "connect" && phase != "sign-in")
+        if (past) {
+            if (runningOn.isNotBlank()) XoSaved.rememberMachine(settings, where, runningOn)
+            pendingSave?.let {
+                pendingSave = null
+                XoSaved.keep(settings, where, it)
+                keepLoaded = true
+                keepNote = "The sign-in is kept on this phone behind your fingerprint or face now."
+            }
+            return
+        }
+        if (s.state != "failed") return
+        pendingSave = null
+        if (phase == "connect" && viaMemory) {
+            keepNote = "$runningOn got through last time and did not this time. Start again asks all your machines and shows the certificate in full."
+        } else if (phase == "sign-in" && keepLoaded) {
+            XoSaved.forget(settings, where)
+            remembered = null
+            keepLoaded = false
+            keep = false
+            keepNote = "The kept sign-in did not work, so this phone no longer keeps it."
         }
     }
 
@@ -223,10 +362,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             return
         }
         val reply = Seal.newKey()
+        pendingSave = pick?.let { sealToKeep(it, p.email) }
         val sealed = XoPolicy.sealSignIn(key, p.setup.job, p.where, p.email, password, reply.publicKey)
         password = ""
         val r = fleet.xosetup("run", job = p.setup.job, sealed = sealed)
         if (!r.ok) {
+            pendingSave = null
             refusal = r.text.ifBlank { "${p.hostId} did not take the sign-in." }
             return
         }
@@ -250,10 +391,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         }
         val key = p.setup.key ?: return
         val reply = XoHandoff.newKey(settings, p.setup.job, p.where)
+        pendingSave = pick?.let { sealToKeep(it, p.email) }
         val sealed = XoSetup.sealSignIn(key, p.setup.job, p.where, p.email, password, reply.publicKey)
         password = ""
         val r = fleet.xosetup("run", job = p.setup.job, sealed = sealed)
         if (!r.ok) {
+            pendingSave = null
             XoHandoff.forget(settings, p.setup.job)
             refusal = r.text.ifBlank { "${p.hostId} did not take the sign-in." }
             return
@@ -278,8 +421,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         // exist; refusing it is cheaper than finding out.
         val plain = XoSetup.plain(p)
         val pin = if (plain) null else (p.cert ?: return)
-        if (plain && !plainAccepted) return
-        val trust = if (plain) null else XoSetup.trustFor(p.certificate, acknowledged)
+        val kept = rememberedAccepts(p)
+        if (plain && !plainAccepted && !kept) return
+        val trust = if (plain) null else XoSetup.trustFor(p.certificate, acknowledged || kept)
         if (!plain && p.certificate?.trusted != true && trust == null) return
         scope.launch {
             beginning = true
@@ -290,6 +434,14 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             val setup = r.xosetup
             val hostId = r.hostId ?: p.hostId
             when {
+                // THE REMEMBERED MACHINE IS A FIRST TRY, NOT THE ONLY ONE:
+                // switched off or gone, and every machine is asked instead,
+                // with the reason kept on screen.
+                (!r.ok || setup == null) && viaMemory -> {
+                    val why = r.text.ifBlank { "${p.hostId} did not start the setup." }
+                    probe()
+                    refusal = "$why Your other machines were asked instead."
+                }
                 !r.ok || setup == null -> refusal = r.text.ifBlank { "${p.hostId} did not start the setup." }
                 // ONLY TO A MACHINE THAT SAYS IT CAN, asked before the key is
                 // so much as checked: a machine older than the policy job
@@ -344,11 +496,17 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     }
 
     fun startAgain() {
+        // A remembered machine that did not get through is not tried twice.
+        val askAll = viaMemory && progress?.state == "failed" && progress?.phase == "connect"
         job = null
         progress = null
         handedBack = null
         refusal = ""
-        password = ""
+        // A kept password comes back for the next try; a typed one does not.
+        password = remembered?.password.orEmpty()
+        pendingSave = null
+        keepNote = ""
+        if (askAll) probe()
         cancelAccepted = false
         cancelText = ""
         pollStopped = false
@@ -410,6 +568,15 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         }
     }
 
+    // A POOL THIS PHONE HOLDS opens on the machine that got through last
+    // time, once per screen: a rotation does not put the prompt up again.
+    LaunchedEffect(Unit) {
+        if (policy && job == null && !openedOnce) {
+            openedOnce = true
+            openRemembered()
+        }
+    }
+
     // THE POLL, ONLY WHILE THIS IS ON SCREEN. Leaving the screen cancels the
     // effect; the notification carries on without it. It ends when the setup
     // does, when the fleet says it has no such job, or after five asks in a
@@ -427,6 +594,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             val r = fleet.xosetup("status", job = id)
             if (r.ok && r.xosetup != null) {
                 progress = r.xosetup
+                r.hostId?.let { runningOn = it }
+                notePath(r.xosetup)
                 XoHandoff.collect(settings, id, r.xosetup)?.let { handedBack = it }
                 if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
                 // CHOOSING IS NOT AN END: the loop goes on asking, so this
@@ -478,6 +647,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     is XoHandoff.Outcome.Failed -> Hint(outcome.why, color = Design.Palette.bad.now)
                     null -> {}
                 }
+                if (keepNote.isNotBlank()) Hint(keepNote)
                 when {
                     pollStopped -> {
                         Hint(
@@ -681,7 +851,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                                     Spacer(Modifier.width(Design.Space.insideTight))
                                     Column(Modifier.weight(1f)) {
                                         Text(p.hostId, style = Design.Style.body, color = Design.Palette.ink.now)
-                                        Text(XoSetup.describe(p), style = Design.Style.label, color = Design.Palette.inkDim.now)
+                                        // NOT ASKED THIS TIME, so nothing it found is
+                                        // claimed: only why it is tried first.
+                                        Text(
+                                            if (viaMemory && p.hostId == chosen) "Got through last time, so it is tried first" else XoSetup.describe(p),
+                                            style = Design.Style.label,
+                                            color = Design.Palette.inkDim.now,
+                                        )
                                     }
                                 }
                             }
@@ -695,8 +871,15 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     val plain = XoSetup.plain(pick)
                     val certificate = pick.certificate
                     val trusted = !plain && certificate?.trusted == true
+                    val kept = rememberedAccepts(pick)
                     when {
-                        plain -> PlainAsk(pick, address, plainAccepted, enabled = !beginning, onAccepted = { plainAccepted = it })
+                        plain -> PlainAsk(pick, address, plainAccepted, enabled = !beginning, onAccepted = { plainAccepted = it }, kept = kept)
+                        viaMemory && trusted && cert != null -> {
+                            // FROM MEMORY, said as when it was checked: nothing
+                            // was asked this time, and the machine checks again.
+                            Hint("Its certificate checked out when this pool was set up, and ${pick.hostId} checks it again before signing in.", color = Design.Palette.ink.now)
+                            PinLines(cert, pick.hostId, address, fromMemory = true)
+                        }
                         certificate != null && trusted && cert != null -> {
                             // CALM. It checks out, so nothing is asked; the pin
                             // still shows, because it is what the machine holds
@@ -704,11 +887,18 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             Hint(XoSetup.trustedLine(certificate), color = Design.Palette.ink.now)
                             PinLines(cert, pick.hostId, address)
                         }
-                        else -> CertificateAsk(pick, address, acknowledged, enabled = !beginning, onAcknowledged = { acknowledged = it })
+                        // A path from memory has no details to show, and is
+                        // taken only for a certificate the person accepted.
+                        viaMemory && kept && cert != null && certificate == null -> {
+                            PinLines(cert, pick.hostId, address, fromMemory = true)
+                            Hint("You accepted this certificate before, and this phone kept that behind your fingerprint or face.")
+                        }
+                        else -> CertificateAsk(pick, address, acknowledged, enabled = !beginning, onAcknowledged = { acknowledged = it }, kept = kept)
                     }
                     // WHAT THE PERSON HAS SAID YES TO, for the card that was
-                    // shown: nothing needed for a certificate that checks out.
-                    val consented = if (plain) plainAccepted else (trusted || acknowledged)
+                    // shown, now or kept: nothing needed for a certificate
+                    // that checks out.
+                    val consented = if (plain) plainAccepted || kept else (trusted || acknowledged || kept)
 
                     SectionHead("Xen Orchestra admin sign-in")
                     OutlinedTextField(
@@ -738,13 +928,53 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                         ),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // OFFERED ONLY WHERE IT CAN BE KEPT: a phone with no strong
+                    // fingerprint or face enrolled could not make the key (C-2).
+                    if (canKeep) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .toggleable(
+                                    value = keep,
+                                    enabled = !beginning,
+                                    role = Role.Checkbox,
+                                    onValueChange = { on ->
+                                        keep = on
+                                        // Unticked over what was kept: forgotten
+                                        // now, so the box says what the phone holds.
+                                        if (!on && keepLoaded) {
+                                            XoSaved.forget(settings, address.trim())
+                                            remembered = null
+                                            keepLoaded = false
+                                        }
+                                    },
+                                ),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = keep, onCheckedChange = null, enabled = !beginning)
+                            Spacer(Modifier.width(Design.Space.insideTight))
+                            Text("Keep on this phone, behind your fingerprint or face", style = Design.Style.body, color = Design.Palette.ink.now)
+                        }
+                    }
+                    // WHO KEEPS IT, for the box as it stands. The fleet never does.
+                    val word = if (trusted) "" else ", and your word for the certificate,"
                     Hint(
-                        if (policy) {
-                            "Used once, on ${pick.hostId}, to read the pool and apply what you choose, and not kept. " +
-                                "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
-                        } else {
-                            "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
-                                "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
+                        when {
+                            keep && canKeep && policy ->
+                                "Used on ${pick.hostId} to read the pool and apply what you choose. It is sealed to that machine on this " +
+                                    "phone; the fleet relays it and cannot read it. This phone keeps it$word encrypted behind your " +
+                                    "fingerprint or face, once ${pick.hostId} has signed in with it; the fleet never keeps it."
+                            keep && canKeep ->
+                                "Used on ${pick.hostId} to make a limited fleetwright user and its token. It is sealed to that machine on " +
+                                    "this phone; the fleet relays it and cannot read it. This phone keeps it$word encrypted behind your " +
+                                    "fingerprint or face, once ${pick.hostId} has signed in with it; the fleet never keeps it."
+                            policy ->
+                                "Used once, on ${pick.hostId}, to read the pool and apply what you choose, and not kept. " +
+                                    "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
+                            else ->
+                                "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
+                                    "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
                         },
                     )
                     // OFF UNTIL THE CERTIFICATE IS EITHER FINE OR ACKNOWLEDGED,
@@ -786,7 +1016,7 @@ private fun ProbeLine(p: Fleet.Probe) {
  * a browser before going on.
  */
 @Composable
-private fun PinLines(cert: String, hostId: String, address: String) {
+private fun PinLines(cert: String, hostId: String, address: String, fromMemory: Boolean = false) {
     Text("Certificate SHA-256", style = Design.Style.label, color = Design.Palette.inkDim.now)
     SelectionContainer {
         Text(
@@ -796,7 +1026,10 @@ private fun PinLines(cert: String, hostId: String, address: String) {
             color = Design.Palette.ink.now,
         )
     }
-    Hint("The certificate $hostId saw at $address. Compare it with the one your browser shows for Xen Orchestra; the machine refuses to send the sign-in to any other.")
+    Hint(
+        if (fromMemory) "The certificate at $address as it was last time. The machine refuses to send the sign-in to any other."
+        else "The certificate $hostId saw at $address. Compare it with the one your browser shows for Xen Orchestra; the machine refuses to send the sign-in to any other.",
+    )
 }
 
 /**
@@ -808,7 +1041,7 @@ private fun PinLines(cert: String, hostId: String, address: String) {
  * card reads the same with the colour gone.
  */
 @Composable
-private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Boolean, enabled: Boolean, onAcknowledged: (Boolean) -> Unit) {
+private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Boolean, enabled: Boolean, onAcknowledged: (Boolean) -> Unit, kept: Boolean = false) {
     val c = probe.certificate
     Column(
         Modifier
@@ -833,16 +1066,26 @@ private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Bo
             Detail("Names", c.names.takeIf { it.isNotEmpty() }?.joinToString(", "))
         }
         probe.cert?.let { PinLines(it, probe.hostId, address) }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .toggleable(value = acknowledged, enabled = enabled, role = Role.Checkbox, onValueChange = onAcknowledged),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Checkbox(checked = acknowledged, onCheckedChange = null, enabled = enabled)
-            Spacer(Modifier.width(Design.Space.insideTight))
-            Text("I checked this certificate and trust it", style = Design.Style.body, color = Design.Palette.ink.now)
+        // THE PERSON'S EARLIER WORD for this same fingerprint, said in place
+        // of the box it answers. A different certificate gets the box.
+        if (kept) {
+            Text(
+                "You accepted this certificate before, and this phone kept that behind your fingerprint or face.",
+                style = Design.Style.bodySmall,
+                color = Design.Palette.inkDim.now,
+            )
+        } else {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .toggleable(value = acknowledged, enabled = enabled, role = Role.Checkbox, onValueChange = onAcknowledged),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = acknowledged, onCheckedChange = null, enabled = enabled)
+                Spacer(Modifier.width(Design.Space.insideTight))
+                Text("I checked this certificate and trust it", style = Design.Style.body, color = Design.Palette.ink.now)
+            }
         }
     }
 }
@@ -859,7 +1102,7 @@ private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Bo
  * card reads the same with the colour gone.
  */
 @Composable
-private fun PlainAsk(probe: Fleet.Probe, address: String, accepted: Boolean, enabled: Boolean, onAccepted: (Boolean) -> Unit) {
+private fun PlainAsk(probe: Fleet.Probe, address: String, accepted: Boolean, enabled: Boolean, onAccepted: (Boolean) -> Unit, kept: Boolean = false) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -880,16 +1123,24 @@ private fun PlainAsk(probe: Fleet.Probe, address: String, accepted: Boolean, ena
             style = Design.Style.bodySmall,
             color = Design.Palette.ink.now,
         )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .toggleable(value = accepted, enabled = enabled, role = Role.Checkbox, onValueChange = onAccepted),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Checkbox(checked = accepted, onCheckedChange = null, enabled = enabled)
-            Spacer(Modifier.width(Design.Space.insideTight))
-            Text("Send it without HTTPS anyway", style = Design.Style.body, color = Design.Palette.ink.now)
+        if (kept) {
+            Text(
+                "You chose to send it without HTTPS before, and this phone kept that behind your fingerprint or face.",
+                style = Design.Style.bodySmall,
+                color = Design.Palette.inkDim.now,
+            )
+        } else {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .toggleable(value = accepted, enabled = enabled, role = Role.Checkbox, onValueChange = onAccepted),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = accepted, onCheckedChange = null, enabled = enabled)
+                Spacer(Modifier.width(Design.Space.insideTight))
+                Text("Send it without HTTPS anyway", style = Design.Style.body, color = Design.Palette.ink.now)
+            }
         }
     }
 }
