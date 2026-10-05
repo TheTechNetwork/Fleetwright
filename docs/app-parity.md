@@ -241,6 +241,7 @@ says on health which journals a box has so the buttons are only ever live.)
 | **ask for a temporary machine** (`provision`) | picker, stepper and button under Add a machine, only when `/api/hosts` names a runner repository | chips, minutes and button under Hosts, same gate | `/provision` |
 | **runner tokens** (`/api/runner-tokens`) | Runner tokens under Add a machine: mint, shown once, list, revoke | Runner tokens under Hosts, the same | curl |
 | **add a hypervisor** (`xoprobe`, `xosetup`) | Add a hypervisor under Machines, admins only | Add a hypervisor under Machines, admins only | — |
+| **a Xen Orchestra on plain HTTP** | offered after the HTTPS machines; a warning card says the password and token cross unencrypted, with how to give it HTTPS; Begin waits for "Send it without HTTPS anyway" | the same card and switch; Set up waits for it | — |
 | **a certificate that does not check out** | shown in full under Sign in (problems, issued to and by, dates, names, SHA-256); Begin waits for a toggle | the same, in a card; Set up waits for a checkbox | — |
 | **setup progress with the app closed** | a Live Activity on the Lock Screen and in the Dynamic Island (`/api/xosetup/activity`) | one ongoing notification with a progress bar, ProgressStyle on Android 16 | — |
 
