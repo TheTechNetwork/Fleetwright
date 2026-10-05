@@ -160,7 +160,7 @@ test('iOS: the key is checked as the machine’s before anything is sealed to it
 test('iOS: the sign-in is sealed under the documented AAD, as the documented payload, and the password is gone the moment it is', () => {
   assert.match(IOS, /static func xosetupAAD\(job: String, address: String\) -> String \{ "fleetwright-xosetup\/v1:\\\(job\):\\\(address\)" \}/);
   const send = SCREEN.slice(SCREEN.indexOf('private func send('), SCREEN.indexOf('private func abandon('));
-  assert.match(send, /Seal\.seal\(\s*to: begun\.key,\s*aad: Seal\.xosetupAAD\(job: begun\.job, address: begun\.address\),\s*payload: \["v": 1, "xo": \["email": [^\]]*, "password": password\]\]/);
+  assert.match(send, /Seal\.seal\(\s*to: begun\.key,\s*aad: Seal\.xosetupAAD\(job: begun\.job, address: begun\.address\),\s*payload: \[\s*"v": 1,\s*"xo": \["email": [^\]]*, "password": password\],\s*"reply": reply\.publicKey,\s*\]/);
   // Sealed first, then cleared, then sent: a failed send leaves no password
   // on the screen.
   const sealAt = send.indexOf('Seal.seal(');
@@ -178,6 +178,33 @@ test('iOS: the sign-in is sealed under the documented AAD, as the documented pay
   assert.match(SCREEN, /SecureField\("Its password", text: \$password\)/);
   // Cancelling the comparison clears it too, and drops the job on the machine.
   assert.match(SCREEN, /private func abandon\(\) async \{\s*password = ""\s*toCompare = nil\s*if let begun \{ _ = try\? await fleet\.cancelSetup\(job: begun\.job\) \}/);
+});
+
+test('iOS: the token comes back to this phone, to a key sent inside the seal, and is kept in the Keychain alone', async () => {
+  const { xosetupHandoffAad } = await import('../src/fleet/seal.js');
+  const HANDOFF = read('apps/ios/Fleetwright/XOSetupHandoff.swift');
+  // THE SAME BINDING the machine seals under, built the same way.
+  assert.equal(xosetupHandoffAad('J', 'A'), 'fleetwright-xosetup-handoff/v1:J:A');
+  assert.match(IOS, /static func xosetupHandoffAAD\(job: String, address: String\) -> String \{ "fleetwright-xosetup-handoff\/v1:\\\(job\):\\\(address\)" \}/);
+  assert.match(HANDOFF, /Seal\.open\(key, aad: Seal\.xosetupHandoffAAD\(job: job, address: address\)/);
+  // The key is made before the seal and goes inside it, never as a param the
+  // coordinator could swap.
+  const send = SCREEN.slice(SCREEN.indexOf('private func send('), SCREEN.indexOf('private func abandon('));
+  assert.ok(send.indexOf('XOSetupHandoff.newKey(job: begun.job, address: begun.address)') < send.indexOf('Seal.seal('));
+  assert.doesNotMatch(IOS, /params\["reply"\] = reply\.publicKey|"phase": "run", "job": job, "sealed": sealed, "reply"/);
+  // Its private half outlives the screen in the Keychain until it is used,
+  // and every launch collects what a closed app was handed.
+  assert.match(HANDOFF, /Keychain\.set\(key\.privateKey\.rawRepresentation\.base64EncodedString\(\), for: replyAccount\(job\)\)/);
+  assert.match(IOS, /XOSetupActivities\.resume\(fleet: Fleet\(settings: settings\)\)[\s\S]{0,300}XOSetupHandoff\.collectPending\(fleet: Fleet\(settings: settings\)\)/);
+  // The screen collects when it sees done, and says where the token is only
+  // once it knows (C-5).
+  assert.match(SCREEN, /if let outcome = XOSetupHandoff\.collect\(job: job, state: state\) \{ handedBack = outcome \}/);
+  assert.match(SCREEN, /case \.kept:\s*Text\("The token is in this phone’s Keychain now, and no machine in the fleet keeps a copy\."\)/);
+  // Kept in the Keychain, this device only, and never anywhere else.
+  assert.match(HANDOFF, /Keychain\.set\(text, for: tokenAccount\(entry\.address\)\)/);
+  assert.match(IOS, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  const code = HANDOFF.replace(/\/\/[^\n]*/g, '');
+  assert.doesNotMatch(code, /UserDefaults[^\n]*token|FileManager|Outbox|print\(/);
 });
 
 test('iOS: progress is polled only while the screen is open, with Cancel while it runs', () => {
