@@ -151,6 +151,18 @@ class MainActivity : ComponentActivity() {
         WebAuth.deliver(intent)
         notifiedSession.value = sessionNamedBy(intent)
         notifiedHost.value = hostNamedBy(intent)
+        notifiedSetup.value = setupNamedBy(intent)
+    }
+
+    /**
+     * The hypervisor setup a tapped progress notification was about
+     * (XoSetupNotice), by job, or null. Opens Machines on its progress.
+     */
+    private val notifiedSetup = mutableStateOf<String?>(null)
+
+    private fun setupNamedBy(intent: Intent?): String? {
+        if (intent?.getStringExtra(XoSetupNotice.EXTRA_KIND) != XoSetupNotice.KIND) return null
+        return intent.getStringExtra(XoSetupNotice.EXTRA_JOB)?.takeIf { XoSetup.JOB_RE.matches(it) }
     }
 
     /**
@@ -218,6 +230,7 @@ class MainActivity : ComponentActivity() {
         WebAuth.deliver(intent)
         notifiedSession.value = sessionNamedBy(intent)
         notifiedHost.value = hostNamedBy(intent)
+        notifiedSetup.value = setupNamedBy(intent)
 
         // A fleet app that cannot tell you a session is waiting has lost its
         // main reason to exist, so this is asked as soon as there is a fleet.
@@ -249,6 +262,7 @@ class MainActivity : ComponentActivity() {
                     launchKindId = intent?.getStringExtra(SessionKinds.EXTRA_KIND_ID),
                     notifiedSession = notifiedSession.value,
                     notifiedHost = notifiedHost.value,
+                    notifiedSetup = notifiedSetup.value,
                 )
             }
         }
@@ -278,6 +292,7 @@ fun FleetScreen(
     launchKindId: String? = null,
     notifiedSession: String? = null,
     notifiedHost: String? = null,
+    notifiedSetup: String? = null,
 ) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -474,6 +489,15 @@ fun FleetScreen(
             tab = "machines"
         }
     }
+    // A hypervisor setup's progress notification, tapped: Machines, with the
+    // job's progress open, rather than whatever was on screen last.
+    var openSetup by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(notifiedSetup) {
+        if (notifiedSetup != null) {
+            openSetup = notifiedSetup
+            tab = "machines"
+        }
+    }
     // AND THE SESSION THE NOTIFICATION WAS ABOUT IS OPENED, once per tap,
     // from the fresh list once it has arrived and still holds the name.
     var openedFor by remember { mutableStateOf<String?>(null) }
@@ -611,6 +635,8 @@ fun FleetScreen(
                 opening = openHost,
                 onOpened = { openHost = null },
                 modifier = inner,
+                resumingSetup = openSetup,
+                onResumed = { openSetup = null },
             )
             "you" -> YouScreen(
                 settings = settings,
