@@ -32,8 +32,8 @@ test('Android: the screen asks the address, probes, then begins, runs, polls and
   const sheet = file('HypervisorSheet.kt');
   const order = [
     'fleet.xoprobe(address.trim())',
-    'fleet.xosetup("begin", address = where, pin = pin, host = p.hostId)',
-    'fleet.xosetup("run", job = setup.job, sealed = sealed)',
+    'fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust)',
+    'fleet.xosetup("run", job = p.setup.job, sealed = sealed)',
     'fleet.xosetup("status", job = id)',
     'fleet.xosetup("cancel", job = setup.job)',
   ];
@@ -86,8 +86,8 @@ test('Android: the key is verified against the documented signing input before a
   assert.ok(sheet.includes('That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent.'));
   // Approved in the vault and matching: proceed. Otherwise the person compares.
   assert.match(sheet, /grants\?\.any \{ it\.fingerprint == fingerprint \}/);
-  assert.match(sheet, /approved -> run\(setup, hostId\)/);
-  assert.ok(sheet.includes('Compare this with what fleetwright-sidecar identity prints on $unvouchedHost.'));
+  assert.match(sheet, /approved -> run\(pending\)/);
+  assert.ok(sheet.includes('Compare this with what fleetwright-sidecar identity prints on ${waitingOn.hostId}.'));
   assert.ok(sheet.includes('Text("They match")'));
   assert.ok(sheet.includes('If they differ, cancel: the sign-in has not left this phone, and will not.'));
 });
@@ -108,7 +108,7 @@ test('Android: the password lives in memory until it is sealed, and is never wri
   const drops = sheet.split('password = ""').length - 1;
   assert.ok(drops >= 5, `the password is cleared on ${drops} paths; expected the seal, the two hard stops, the comparison's Cancel, Start again and Done`);
   // A password field, not a text field.
-  assert.match(sheet, /label = \{ Text\("Admin password"\) \},\s*singleLine = true,\s*visualTransformation = PasswordVisualTransformation\(\)/);
+  assert.match(sheet, /label = \{ Text\("Admin password"\) \},\s*singleLine = true,\s*enabled = !beginning,\s*visualTransformation = PasswordVisualTransformation\(\)/);
   // Nothing persists it: no preferences, no outbox, no log line.
   assert.doesNotMatch(sheet, /SharedPreferences|prefs\.|Log\.[idwe]\(/);
   // Every xosetup send carries an id, which is what keeps it out of the outbox
@@ -122,8 +122,8 @@ test('Android: the password lives in memory until it is sealed, and is never wri
 
 test('Android: progress is polled only while the screen is open, and the words are the steps’ words', () => {
   const sheet = file('HypervisorSheet.kt');
-  // A LaunchedEffect keyed on the job: leaving the screen cancels it.
-  assert.match(sheet, /LaunchedEffect\(job\) \{[\s\S]*?fleet\.xosetup\("status", job = id\)/);
+  // A LaunchedEffect keyed on the job (and on Ask again): leaving the screen cancels it.
+  assert.match(sheet, /LaunchedEffect\(job, asks\) \{[\s\S]*?fleet\.xosetup\("status", job = id\)/);
   assert.ok(sheet.includes('delay(2_000)'));
   // The steps, in the host's order, each with its words. Same words as iOS.
   const xo = file('XoSetup.kt');
@@ -145,8 +145,93 @@ test('Android: progress is polled only while the screen is open, and the words a
     last = i;
   }
   assert.ok(xo.includes('return "Step $n of ${maxOf(of, 1)}"'), 'an unknown key is said as its number');
-  // Cancel is offered while it runs, and only then.
-  assert.match(sheet, /"running", "waiting" -> \{[\s\S]*?Text\(if \(cancelling\) "Cancelling…" else "Cancel"\)/);
+  // Cancel is offered while it runs and the fleet has not yet taken one;
+  // once it has, the host's sentence stands where the button was (C-2).
+  assert.match(sheet, /\(setup\.state == "running" \|\| setup\.state == "waiting"\) && !cancelAccepted -> \{[\s\S]*?Text\(if \(cancelling\) "Cancelling…" else "Cancel"\)/);
+  assert.match(sheet, /if \(r\.ok\) \{[\s\S]*?cancelAccepted = true\s*cancelText = r\.text/);
+  assert.match(sheet, /\(setup\.state == "running" \|\| setup\.state == "waiting"\) -> \{\s*Hint\(cancelText\.ifBlank \{ "Cancelling after this step\." \}/);
+});
+
+test('Android: a poll that is refused stops, says so, and paints no state the fleet did not report', () => {
+  const sheet = file('HypervisorSheet.kt');
+  // C-5: "Stopped" is the machine's word for its own job. The screen never
+  // builds a failed Setup of its own to say it.
+  assert.doesNotMatch(sheet, /Fleet\.Setup\(id, "failed"/);
+  assert.doesNotMatch(sheet, /Setup\([^)]*"failed"/);
+  // The poll ends on the fleet's word that it has no such job, or after five
+  // unanswered asks, and the screen says which.
+  assert.match(sheet, /if \(r\.code == "unknown_job" \|\| unanswered >= 5\) \{/);
+  assert.ok(sheet.includes('"The fleet has no setup with this id for you, so there is nothing more to ask it."'));
+  assert.ok(sheet.includes('"Asked five times with no answer, so this has stopped asking."'));
+  // Both offer a way on: Ask again (when asking could help) and Start again.
+  assert.match(sheet, /if \(!pollGone\) \{\s*OutlinedButton\(onClick = \{ asks\+\+ \}[\s\S]*?Text\("Ask again"\)/);
+  // The coordinator's code is read as data beside ok and text, not parsed from the sentence.
+  assert.match(file('Fleet.kt'), /code = json\.optJSONObject\("error"\)\?\.optString\("code"\)/);
+});
+
+test('Android: a certificate that does not check out is acknowledged, having been shown', () => {
+  const xo = file('XoSetup.kt');
+  const sheet = file('HypervisorSheet.kt');
+  // One line per problem, in the words iOS uses (test/xosetup-in-apps.test.js).
+  for (const line of [
+    'Self-signed: nothing but the server itself vouches for it.',
+    'Signed by an authority this machine does not trust.',
+    'Expired on ${',
+    'Not valid until ${',
+    'Issued for a different name than $address.',
+    'This machine could not read the certificate’s details.',
+  ]) {
+    assert.ok(xo.includes(line), `the app says: ${line}`);
+  }
+  // The details a person checks against the padlock: who it is for, who
+  // signed it, when it is good, which names it carries, and the pin.
+  for (const label of ['"Issued to"', '"Issued by"', '"Valid from"', '"Valid until"', '"Names"', '"Certificate SHA-256"']) {
+    assert.ok(sheet.includes(label), `the card shows ${label}`);
+  }
+  // A trusted certificate is one calm line and no question.
+  assert.ok(xo.includes('"Its certificate checks out: ${parts.joinToString(", ")}."'));
+  assert.match(sheet, /if \(certificate != null && trusted\) \{[\s\S]*?Hint\(XoSetup\.trustedLine\(certificate\)/);
+  // Otherwise the card that asks: the attention ring, this screen's one
+  // tone, and an explicit box at the design's 48dp, off while beginning.
+  assert.match(sheet, /fleetCard\(radius = Design\.Radius\.cardSmall, ring = Design\.Palette\.attention\.now\)/);
+  assert.match(sheet, /\.heightIn\(min = 48\.dp\)\s*\.toggleable\(value = acknowledged, enabled = enabled, role = Role\.Checkbox/);
+  assert.ok(sheet.includes('Checkbox(checked = acknowledged, onCheckedChange = null, enabled = enabled)'));
+  assert.ok(sheet.includes('Text("I checked this certificate and trust it"'));
+  // Set up is off until the certificate is either fine or acknowledged.
+  assert.match(sheet, /enabled = !beginning && email\.isNotBlank\(\) && password\.isNotEmpty\(\) && \(trusted \|\| acknowledged\)/);
+  // The acknowledgement was about one certificate: a new address, a new
+  // machine or a new probe each untick it.
+  const resets = sheet.split('acknowledged = false').length - 1;
+  assert.ok(resets >= 3, `the acknowledgement resets on ${resets} paths; expected the address, the machine and the probe`);
+  assert.match(sheet, /address = next\s*probes = null\s*probeText = ""\s*chosen = null\s*acknowledged = false/);
+  assert.match(sheet, /chosen = p\.hostId\s*(?:\/\/[^\n]*\n\s*)*acknowledged = false/);
+  // `trust = accepted` goes with begin only for an acknowledged certificate
+  // that did not check out; a trusted one sends nothing.
+  assert.ok(xo.includes('if (c?.trusted == true) null else if (acknowledged) "accepted" else null'));
+  assert.ok(sheet.includes('val trust = XoSetup.trustFor(p.certificate, acknowledged)'));
+  assert.match(file('Fleet.kt'), /if \(trust != null\) put\("trust", trust\)/);
+  // The coordinator's shape, read tolerantly: trusted only when said AND clean.
+  assert.ok(xo.includes('trusted = json.optBoolean("trusted", false) && problems.isEmpty()'));
+});
+
+test('Android: a setup in progress survives a rotation and a second notification tap', () => {
+  const sheet = file('HypervisorSheet.kt');
+  for (const name of ['address', 'chosen', 'acknowledged', 'job', 'runningOn']) {
+    assert.match(sheet, new RegExp(`var ${name} by rememberSaveable \\{`), `${name} is saveable`);
+  }
+  // And the password is not: a Bundle is a place.
+  assert.match(sheet, /var password by remember \{ mutableStateOf\(""\) \}/);
+  const machines = file('MachinesScreen.kt');
+  assert.match(machines, /var addingHypervisor by rememberSaveable \{/);
+  assert.match(machines, /var hypervisorJob by rememberSaveable \{/);
+  // Keyed on the job, so a tap for another job retargets the open sheet.
+  assert.match(machines, /key\(hypervisorJob\) \{\s*HypervisorSheet\(settings, resumeJob = hypervisorJob/);
+  // `run` seals under the address and email `begin` was sent with, while the
+  // fields stay frozen until it answers.
+  assert.match(sheet, /XoSetup\.sealSignIn\(key, p\.setup\.job, p\.where, p\.email, password\)/);
+  assert.doesNotMatch(sheet, /sealSignIn\([^\n]*address\.trim\(\)/);
+  const frozen = sheet.match(/enabled = !beginning,/g)?.length ?? 0;
+  assert.ok(frozen >= 3, `${frozen} inputs freeze while beginning; expected the address, the email and the password`);
 });
 
 test('Android: the design’s tokens only, and a change of state moves', () => {
@@ -179,6 +264,9 @@ test('Android: kind=xosetup becomes one ongoing notification per job, then one t
   // Android 16's Live Update, behind the SDK check, and nowhere without it.
   assert.match(notice, /Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.BAKLAVA[\s\S]*?Notification\.ProgressStyle\(\)/);
   assert.ok(notice.includes('.setRequestPromotedOngoing(true)'));
+  // Which is ignored without this permission, so the manifest declares it.
+  const manifest = readFileSync(new URL('../apps/android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.ok(manifest.includes('<uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />'));
   // The same titles the coordinator sends (core.js #onSetupProgress).
   for (const title of ['Adding a hypervisor', 'Hypervisor added', 'Hypervisor setup stopped', 'Hypervisor setup cancelled']) {
     assert.ok(notice.includes(`"${title}"`), `the notification says: ${title}`);

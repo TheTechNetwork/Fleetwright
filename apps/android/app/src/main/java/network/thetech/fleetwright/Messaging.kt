@@ -66,6 +66,15 @@ class Messaging : FirebaseMessagingService() {
         // A HYPERVISOR SETUP'S PROGRESS IS THE OTHER EXCEPTION: not a
         // notification per step, but one that is updated in place, with a
         // bar. XoSetupNotice draws it from the step numbers in `data`.
+        //
+        // `kind` IS READ IN THE CLEAR, AND THAT RESTS ON ANDROID PUSHES BEING
+        // UNENCRYPTED: this app registers no pushKey, so the coordinator
+        // sends `data` as plain fields and never a sealed envelope. If a
+        // pushKey is ever registered for Android, the coordinator will seal
+        // the payload and this read finds no `kind` at the top level; it
+        // must then open the envelope first and read `kind` from inside it,
+        // or every setup update silently falls through to the session path
+        // below and is logged as noise.
         if (message.data[XoSetupNotice.EXTRA_KIND] == XoSetupNotice.KIND) {
             XoSetupNotice.post(applicationContext, message.data)
             return

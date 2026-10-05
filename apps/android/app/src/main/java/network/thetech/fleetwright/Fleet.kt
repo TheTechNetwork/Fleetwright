@@ -633,6 +633,13 @@ class Fleet(
         val probes: List<Probe>? = null,
         /** Where a hypervisor setup has got to, when the reply is about one. */
         val xosetup: Setup? = null,
+        /**
+         * The coordinator's `error.code` on a refusal, or null. A code, not a
+         * sentence, because a screen that decides from the text decides from
+         * whatever the wording is this week: `unknown_job` is what tells the
+         * setup poll to stop asking.
+         */
+        val code: String? = null,
     )
 
     /**
@@ -640,6 +647,9 @@ class Fleet(
      * null is "answered, and it could not tell what by", which is not "not
      * Xen Orchestra". `cert` is the SHA-256 of the certificate that answered,
      * lowercase hex, and null when nothing did or nothing was TLS.
+     * `certificate` is what that certificate says about itself and whether
+     * the machine trusts it (core.js `narrowCertificate`); null is "could not
+     * read it", which is shown as exactly that and never as "fine".
      */
     data class Probe(
         val hostId: String,
@@ -648,6 +658,23 @@ class Fleet(
         val tls: Boolean,
         val cert: String?,
         val version: String?,
+        val certificate: Certificate? = null,
+    )
+
+    /**
+     * A certificate as a probe describes it. `trusted` is true only when the
+     * machine said so and named no problem; `problems` is a subset of
+     * XoSetup.CERT_PROBLEMS, in the machine's order; the dates are ISO 8601;
+     * every text field is null when the machine did not say.
+     */
+    data class Certificate(
+        val trusted: Boolean,
+        val problems: List<String>,
+        val subject: String?,
+        val issuer: String?,
+        val notBefore: String?,
+        val notAfter: String?,
+        val names: List<String>,
     )
 
     /**
@@ -1317,6 +1344,7 @@ class Fleet(
         pin: String? = null,
         sealed: String? = null,
         host: String? = null,
+        trust: String? = null,
     ): Reply =
         intent(
             "xosetup",
@@ -1326,6 +1354,11 @@ class Fleet(
                 if (address != null) put("address", address)
                 if (pin != null) put("pin", pin)
                 if (sealed != null) put("sealed", sealed)
+                // ONLY WHEN THE PERSON SAID SO, and only about a certificate
+                // that needed saying: the host refuses `connect` on one that
+                // does not check out unless this is "accepted", and a trusted
+                // one is never asked about (XoSetup.trustFor).
+                if (trust != null) put("trust", trust)
             },
             host = host,
             idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),
@@ -1739,6 +1772,7 @@ class Fleet(
                 Reply(
                     ok = json.optBoolean("ok", false),
                     text = json.optString("text", ""),
+                    code = json.optJSONObject("error")?.optString("code")?.takeIf { it.isNotBlank() && it != "null" },
                     sessions = parseSessions(json.optJSONArray("sessions")),
                     connections = parseConnections(json.optJSONObject("connections")),
                     entries = json.optJSONArray("entries")?.let { a ->
@@ -1847,6 +1881,7 @@ class Fleet(
                                     tls = p.optBoolean("tls", false),
                                     cert = p.optString("cert").takeIf { XoSetup.PIN_RE.matches(it) },
                                     version = p.optString("version").takeIf { it.isNotBlank() && it != "null" },
+                                    certificate = XoSetup.certificate(p.optJSONObject("certificate")),
                                 )
                             }
                         }
