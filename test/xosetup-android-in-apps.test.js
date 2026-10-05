@@ -114,7 +114,7 @@ test('Android: the token comes back to this phone, to a key sent inside the seal
   assert.ok(handoff.includes('fun aad(job: String, address: String): String = "fleetwright-xosetup-handoff/v1:$job:$address"'));
   assert.ok(handoff.includes('Seal.open(key, aad(job, address), sealed)'));
   // The key is made before the seal and goes inside it, never as a param.
-  assert.match(sheet, /val reply = XoHandoff\.newKey\(settings, p\.setup\.job, p\.where\)\s*val sealed = XoSetup\.sealSignIn\([^\n]*reply\.publicKey\)/);
+  assert.match(sheet, /val reply = XoHandoff\.newKey\(settings, p\.setup\.job, p\.where\)\s*(?:pendingSave = [^\n]*\s*)?val sealed = XoSetup\.sealSignIn\([^\n]*reply\.publicKey\)/);
   const xosetup = file('Fleet.kt').slice(file('Fleet.kt').indexOf('suspend fun xosetup('), file('Fleet.kt').indexOf('/** Forget a stored credential.'));
   assert.ok(xosetup.length > 0 && !xosetup.includes('"reply"'), 'the reply key is never an xosetup param');
   // Kept encrypted under the Keystore key, and collected on every sign-in
@@ -226,7 +226,7 @@ test('Android: a certificate that does not check out is acknowledged, having bee
   assert.ok(sheet.includes('Checkbox(checked = acknowledged, onCheckedChange = null, enabled = enabled)'));
   assert.ok(sheet.includes('Text("I checked this certificate and trust it"'));
   // Set up is off until the certificate is either fine or acknowledged.
-  assert.match(sheet, /val consented = if \(plain\) plainAccepted else \(trusted \|\| acknowledged\)/);
+  assert.match(sheet, /val consented = if \(plain\) plainAccepted \|\| kept else \(trusted \|\| acknowledged \|\| kept\)/);
   assert.match(sheet, /enabled = !beginning && email\.isNotBlank\(\) && password\.isNotEmpty\(\) && consented/);
   // The acknowledgement was about one certificate: a new address, a new
   // machine or a new probe each untick it.
@@ -237,7 +237,9 @@ test('Android: a certificate that does not check out is acknowledged, having bee
   // `trust = accepted` goes with begin only for an acknowledged certificate
   // that did not check out; a trusted one sends nothing.
   assert.ok(xo.includes('if (c?.trusted == true) null else if (acknowledged) "accepted" else null'));
-  assert.ok(sheet.includes('val trust = if (plain) null else XoSetup.trustFor(p.certificate, acknowledged)'));
+  // The acknowledgement given now, or kept on this phone for this same
+  // certificate (XoSaved, held to the fingerprint in xo-saved-in-apps.test.js).
+  assert.ok(sheet.includes('val trust = if (plain) null else XoSetup.trustFor(p.certificate, acknowledged || kept)'));
   assert.match(file('Fleet.kt'), /if \(trust != null\) put\("trust", trust\)/);
   // The coordinator's shape, read tolerantly: trusted only when said AND clean.
   assert.ok(xo.includes('trusted = json.optBoolean("trusted", false) && problems.isEmpty()'));
@@ -271,8 +273,8 @@ test('Android: a Xen Orchestra answering in plain HTTP can be chosen, once the p
   assert.ok(card.includes('Text("Send it without HTTPS anyway"'));
   // Shown instead of the certificate card for a plain machine, and the
   // acceptance gates Set up the way the acknowledgement does.
-  assert.match(sheet, /plain -> PlainAsk\(pick, address, plainAccepted, enabled = !beginning, onAccepted = \{ plainAccepted = it \}\)/);
-  assert.match(sheet, /val consented = if \(plain\) plainAccepted else \(trusted \|\| acknowledged\)/);
+  assert.match(sheet, /plain -> PlainAsk\(pick, address, plainAccepted, enabled = !beginning, onAccepted = \{ plainAccepted = it \}, kept = kept\)/);
+  assert.match(sheet, /val consented = if \(plain\) plainAccepted \|\| kept else \(trusted \|\| acknowledged \|\| kept\)/);
   // Saveable, and reset where the acknowledgement is: the address, the
   // machine and the probe.
   assert.match(sheet, /var plainAccepted by rememberSaveable \{/);
@@ -282,7 +284,7 @@ test('Android: a Xen Orchestra answering in plain HTTP can be chosen, once the p
   // `begin` for a plain machine: no pin, no trust, `plain = accepted`, and
   // nothing sent until the box is ticked. The key is checked over an empty
   // pin, which is what the machine signed.
-  assert.match(sheet, /val plain = XoSetup\.plain\(p\)\s*val pin = if \(plain\) null else \(p\.cert \?: return\)\s*if \(plain && !plainAccepted\) return\s*val trust = if \(plain\) null else XoSetup\.trustFor/);
+  assert.match(sheet, /val plain = XoSetup\.plain\(p\)\s*val pin = if \(plain\) null else \(p\.cert \?: return\)\s*val kept = rememberedAccepts\(p\)\s*if \(plain && !plainAccepted && !kept\) return\s*val trust = if \(plain\) null else XoSetup\.trustFor/);
   assert.ok(sheet.includes('XoSetup.signingInput(where, setup.job, setup.key, pin ?: "")'));
   assert.ok(xo.includes('require(pin.isEmpty() || PIN_RE.matches(pin))'));
   const fleet = file('Fleet.kt');

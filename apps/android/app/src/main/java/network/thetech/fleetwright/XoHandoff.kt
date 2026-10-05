@@ -136,6 +136,18 @@ internal object XoHandoff {
         (0 until pools.length()).mapNotNull { i -> pools.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() && it != "null" } }
     }.getOrNull()
 
+    /**
+     * The certificate the machine pinned when this pool was set up, and
+     * whether it checked out then: what the remembered path starts from when
+     * the certificate needed nobody's word (XoSaved). Null for a pool with no
+     * record here, or one set up over plain HTTP.
+     */
+    fun pinnedCertificate(settings: Settings, address: String): Pair<String, Boolean>? = runCatching {
+        val record = JSONObject(settings.secret(tokenName(address)) ?: return@runCatching null)
+        val pin = record.optString("pin").takeIf { it.isNotBlank() && it != "null" } ?: return@runCatching null
+        pin to (record.optJSONObject("certificate")?.optBoolean("trusted", false) == true)
+    }.getOrNull()
+
     private fun heldAddresses(settings: Settings): List<String> = runCatching {
         val all = JSONArray(settings.xoHeld.ifBlank { "[]" })
         (0 until all.length()).map { all.getString(it) }
