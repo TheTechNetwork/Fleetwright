@@ -129,7 +129,7 @@ export async function probe(address, { timeoutMs = 4_000 } = {}) {
         certificate: null,
         version: null,
         text: xo
-          ? `Xen Orchestra answered at ${address} over plain HTTP, without HTTPS. It can be set up once you accept that the sign-in crosses the network unencrypted.`
+          ? `Xen Orchestra answered at ${address} over plain HTTP, without HTTPS. It can be set up once you accept that the sign-in crosses the network unencrypted, or given HTTPS first: in the installer's xo-install.cfg, set PORT="443", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT="true", then run it again.`
           : `Something answered at ${address} over plain HTTP, and it does not look like Xen Orchestra.`,
       };
     }

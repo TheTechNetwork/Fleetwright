@@ -207,8 +207,9 @@ struct AddHypervisorView: View {
         // Reached, but not over HTTPS: the one case with a fix on the far side.
         if let plain = all.first(where: { $0.reachable == true && $0.tls != true }) {
             return "\(plain.hostId) reached \(trimmedAddress), but not over HTTPS. Setup needs HTTPS, because the sign-in is only "
-                + "ever sent to a server whose certificate was pinned first. The Xen Orchestra installer turns it on by default; "
-                + "turn it on there, or give its HTTPS port here."
+                + "ever sent to a server whose certificate was pinned first. Xen Orchestra serves plain HTTP until it is given a "
+                + "certificate: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and "
+                + "AUTOCERT=\"true\", then run it again. Or give its HTTPS port here."
         }
         return "No machine reached \(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one "
             + "of these is on a network that can reach it: \(all.map(\.hostId).sorted().joined(separator: ", "))."
