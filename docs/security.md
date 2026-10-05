@@ -275,6 +275,14 @@ machine of the fleet, through the coordinator.
   to the widget with no hook that could decrypt it first, so it carries step
   numbers and a key from a fixed list, never an address or a name. The words
   travel in the ordinary notification, which is sealed.
+- **Changing what the fleet may use needs the admin sign-in again**, sealed
+  the same way. The pool's inventory goes back sealed to the phone, the
+  person's choice comes back sealed to the job's key, and the machine
+  checks it against what it showed before applying it as the resource set,
+  which is what bounds the fleet's token. A compromised coordinator can drop
+  or delay either message; it cannot read the pool's storage and networks
+  or change what was chosen. The machine holds the signed-in session, not
+  the password, for at most ten minutes while the person chooses.
 - **What is kept** is the limited user's token, and only on the phone that
   asked. The phone puts a key of its own inside the sealed sign-in; the
   machine seals the token to it under a binding of its own
