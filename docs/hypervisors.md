@@ -262,30 +262,58 @@ For a pool that already has Xen Orchestra, which is the common case and the
 owner's: `xoprobe`, then `xosetup` on the machine the person picks.
 
 1. **The probe** reports whether the machine reached the address over TLS,
-   whether it looks like Xen Orchestra, and the certificate's SHA-256. The
-   person accepts that certificate; it is the **pin** every later connection
-   is held to. Without TLS the setup refuses, because it sends a password.
-2. **`begin`**: the machine makes a key for this job and signs it with its
+   whether it looks like Xen Orchestra (it reads `/signin`, because `/` is a
+   redirect with no page), and the certificate: its SHA-256, who it was
+   issued to and by, its dates and names, and everything wrong with it —
+   self-signed, signed by an authority the machine does not trust, expired,
+   not yet valid, for a different name. The certificate is the **pin** every
+   later connection is held to. Without TLS the setup refuses, because it
+   sends a password.
+2. **The person accepts a certificate that does not check out, having seen
+   it.** One that checks out is a line and no question. One that does not —
+   which is every Xen Orchestra built from sources, since the installer makes
+   its own — is shown in full on the phone, each problem in a sentence, and
+   Begin waits for the person to say they checked it and trust it. Only then
+   does `begin` carry `trust: accepted`, and the machine refuses to connect to
+   such a certificate without it, before a byte is sent. The pin is what keeps
+   a password from the wrong server; this is what keeps a pool from being set
+   up through a certificate nobody looked at.
+3. **`begin`**: the machine makes a key for this job and signs it with its
    enrolment key, over the job, the address, the pin and the key. The phone
    checks the signature against the fingerprint it approved for the vault,
    or asks the person to compare it with `fleetwright-sidecar identity`.
-3. **`run`**: the admin sign-in, sealed to that key under
+4. **`run`**: the admin sign-in, sealed to that key under
    `fleetwright-xosetup/v1:<job>:<address>`. The machine then runs, reporting
    each as it goes (`XOSETUP_STEPS`):
    connect (pinned) → sign in (must be an admin) → inventory (stops, changing
    nothing, if Xen Orchestra lacks a method setup uses) → the `fleetwright`
    user (a password nobody sees) → its resource set (half of the pool's
    vCPUs, memory and default storage) → a token, minted signed in as that
-   user → updates → hand-off, keeping only the token.
-4. **Updates** come from [XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater)'s
+   user for 180 days (under the half a year Xen Orchestra allows out of the
+   box; a server capped lower gives its own default) → updates → hand-off,
+   keeping only the token.
+5. **Updates** come from [XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater)'s
    own `installer-updates` plugin when the pool has it: loaded, kept loaded,
    and set to update itself daily unless a person had switched that off, in
    which case it is left off and the summary says so. Xen Orchestra stays
    current without the fleet holding an admin credential to do it.
 
-The method names are Xen Orchestra's JSON-RPC as its source and its Terraform
-provider use them, tested against a stand-in; the inventory step is the guard
-for a live server that names one differently.
+**Run against a real Xen Orchestra**, built from sources with the installer's
+update plugin added, every step ran: the pin, the WebSocket, sign-in, the
+method list, the user and resource set (made, then found again on a second
+run), a token the limited user signs in with and admin calls refuse, and the
+plugin turned on, then left alone the second time. That run found two faults
+the suite's stand-in had hidden — `/` has no title, and a year-long token is
+over the server's cap — and both are fixed. What has not run is a real XCP-ng
+pool behind it: that Xen Orchestra had none, so the pool, host and storage
+fields the limits are worked out from are checked against Xen Orchestra's
+source, not a live answer. The inventory step still asks for the method list
+first and stops, changing nothing, if one is missing.
+
+**The coordinator keeps each job in storage**, not memory: on Cloudflare it
+is a Durable Object evicted between messages as a matter of course, and a
+person reading a fingerprint and typing a password is a gap it is evicted
+across.
 
 **Where the token lives for now** is the machine that ran the setup, 0600 in
 its sidecar's state directory. The dedicated machine on the pool, and the

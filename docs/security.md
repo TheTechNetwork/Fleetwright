@@ -249,6 +249,14 @@ machine of the fleet, through the coordinator.
   is refuse, or send the request to a different machine of the fleet, which
   then runs the setup; the phone's signature check names the machine it
   verified.
+- **A certificate nothing vouches for is accepted by a person, not by
+  default.** The probe reports what is wrong with the certificate as well as
+  its fingerprint; the phone shows it, and `begin` carries `trust: accepted`
+  only after the person says they checked it. The machine refuses to connect
+  to a certificate that does not check out without it. This is not what keeps
+  the password from another server — the pin is — and a coordinator could set
+  the flag itself; what it would gain is a setup the phone then has to seal a
+  sign-in for, which the phone does only after asking.
 - **The probe is a port scan, one address at a time.** `xoprobe` asks every
   permanent machine to reach an address on its network, and answers with
   whether something did, whether it looks like Xen Orchestra and its
