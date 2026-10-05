@@ -166,6 +166,13 @@ Orchestra, the pool masters and everything else on your LAN sit on. Everything
 a lab does leaves through it, so it is the boundary; the router inside the lab
 is the instrument, not the wall.
 
+**Which network the edge router's WAN goes on is the person's choice**, made
+on the phone when they change the pool's policy (below, "The policy"), and
+recorded in Xen Orchestra as the `fleetwright-egress` tag on that
+network, so it can be seen and changed there too. It has to be one of the
+networks the fleet may use, or the fleet could not attach a router to it.
+The edge router is OPNsense, for the reasons in "Templates" below.
+
 **Onboarding makes it, so nobody configures a switch.** It is a private
 network inside the pool, and its only way out is a permanent **edge** router:
 one more OPNsense VM, `fleetwright-edge`, with its WAN on the management
@@ -361,6 +368,61 @@ closed, is the opt-in route that page describes, not the default.
 Run against a real Xen Orchestra over HTTPS and plain HTTP: the phone's key
 opened the token, the token signed in as the limited user and an admin call
 was refused, and the machine's state directory was empty afterwards.
+
+### The policy: what the fleet may use
+
+Setup finishes in one go, with defaults: the resource set it makes holds
+each pool's default storage repository and no network, with half the pool's
+vCPUs and memory and half the default storage's free space. **It applies
+those only when it makes the set.** A set that is already there was made by
+an earlier run, or changed since, and running setup again for a new token
+leaves it as it is.
+
+Changing it is its own flow, from the app: Machines → Hypervisors → the pool
+→ Change what it may use. The Hypervisors list is the pools this phone keeps
+a token for, written when it collects one, so a pool set up before the list
+existed appears there once it is set up again. It is a job like setup, begun on a machine that
+reaches the pool, with the admin sign-in sealed to that job's key, and it
+needs that admin sign-in each time, because the limited token cannot widen
+its own resource set and must not be able to.
+
+1. **The sealed sign-in says `purpose: policy`**, inside the seal, so a
+   coordinator cannot turn a policy change into a setup or the other way
+   round. The phone sends it only to a machine whose `begin` said it can
+   (`can: ["policy"]`); an older machine would take it for a whole setup.
+2. **The machine signs in, reads the pool, and hands the phone its
+   inventory**: the storage repositories a disk can go on (not an ISO
+   library or a removable drive), with size, free space and whether they are
+   shared; the networks, with their VLAN and which one is the way out now;
+   the hosts' vCPUs and memory; and what the fleet may use today. Sealed to
+   the phone's key under `fleetwright-xosetup-inventory/v1:<job>:<address>`,
+   because a network map is not the coordinator's to read. The password is
+   gone from the machine's memory as soon as it has signed in; the job holds
+   the signed-in session, for at most ten minutes.
+3. **The person chooses**: which storage and which networks, which of those
+   is the way out, and the limits. Sealed to the job's key under
+   `fleetwright-xosetup-policy/v1:<job>:<address>`, phase `policy`.
+4. **The machine checks the choice against what it showed**, because the
+   phone's screen is not the bound: every id must be one the inventory
+   listed, at least one storage repository, the way out one of the chosen
+   networks, at least one vCPU, a GiB of memory and ten of disk, and at most
+   what the hosts have and the chosen storage holds. A choice that fails is
+   refused and the job goes on waiting. One that passes becomes the resource
+   set (`resourceSet.set`, its storage, networks and limits), and the egress
+   tag moves to the chosen network.
+
+The key the inventory comes back to lives in the screen's memory and
+nowhere else, so a screen that is rebuilt while the machine waits (an
+Android phone turned, an app closed) can no longer open it, says so, and
+offers Cancel. Cancelled, or left for ten minutes, it changes nothing. A policy job sends
+no progress events: it is driven from a screen that is open, and its steps
+are not onboarding's.
+
+Run against a real Xen Orchestra: the inventory opened with the phone's
+key, the choice became the resource set's limits, and a setup run again
+afterwards left them as they were. That Xen Orchestra has no pool behind it,
+so the storage was a stand-in and no network was tagged; `tag.add` and
+`tag.remove` are checked against the methods it lists, not a live network.
 
 ### Next: deploying Xen Orchestra, and the phone's own network
 
