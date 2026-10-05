@@ -30,6 +30,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, readdirSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
 import { RELEASES_DIR, decideRelease, fileUrl, releasePaths, releasesToPrune, verifyDownload } from './release.js';
+import { INSTALL_ROOT } from './resources.js';
 
 /**
  * Is this install laid out so a release can be swapped in?
@@ -135,6 +136,30 @@ export function currentVersion(installDir) {
   if (!layout.ok) return null;
   const v = installedVersion(releasePaths(layout.base, '').link);
   return v === 'unknown' ? null : v;
+}
+
+/**
+ * The release THIS PROCESS is running and the one `current` points at, when
+ * they differ, or null when they agree or either cannot be read.
+ *
+ * WHY BOTH ARE NEEDED, AND WHY installedVersion WAS NOT ENOUGH. A release
+ * install sets FLEETWRIGHT_INSTALL_DIR to `<base>/current`, so
+ * `installedVersion(cfg.installDir)` follows the symlink and reads whatever
+ * is on disk now, not what the process loaded. A box therefore reported
+ * "already on main-209" while its sidecar ran the release before: setups it
+ * ran kept the pool's token on the machine, and nothing anywhere said the
+ * sidecar was behind. INSTALL_ROOT is found from the running module's own
+ * file, symlinks resolved, so it names the tree this process actually loaded.
+ *
+ * @param {string} installDir  the configured install, normally `<base>/current`
+ * @param {string} [runningRoot]  the tree this process loaded; INSTALL_ROOT unless a test says otherwise
+ * @returns {{ running: string, onDisk: string } | null}
+ */
+export function versionDrift(installDir, runningRoot = INSTALL_ROOT) {
+  const running = installedVersion(runningRoot);
+  const onDisk = currentVersion(installDir);
+  if (running === 'unknown' || !onDisk || running === onDisk) return null;
+  return { running, onDisk };
 }
 
 /**

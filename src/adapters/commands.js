@@ -95,7 +95,7 @@ import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../c
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
 import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf, refreshSandboxImageStep } from '../core/update.js';
-import { applyRelease, currentVersion } from '../core/release-apply.js';
+import { applyRelease, currentVersion, versionDrift } from '../core/release-apply.js';
 import { armConfirmation } from '../core/update-confirm.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { listSecretNames } from '../core/secret-store.js';
@@ -2006,8 +2006,14 @@ export const COMMANDS = {
       if (status.packaged) {
         const r = await checkRelease(ctx.cfg);
         const helper = helperState({ installRoot: ctx.cfg.installDir });
+        // WHAT THIS PROCESS RUNS, beside what is on disk. The check above
+        // compares the disk with the manifest, and "already on main-209" was
+        // all it said on a box running something older (versionDrift).
+        const drift = versionDrift(ctx.cfg.installDir);
         app = {
           kind: 'release',
+          // The release this hub loaded, when it is not the one on disk.
+          ...(drift ? { running: drift.running } : {}),
           // TRI-STATE, AND NULL IS A REAL VALUE. `Boolean(r.available)` reports
           // "cannot tell" as "nothing waiting", which is the reassuring half of
           // an unanswered question — the exact failure the `appPending` field
@@ -2055,7 +2061,11 @@ export const COMMANDS = {
           // saying. Compared against the tree this hub runs, without root;
           // null is cannot tell and adds nothing to the text.
           helper,
-          text: [r.message, describeHelper(helper, ctx.cfg.installDir)].filter(Boolean).join('\n\n'),
+          text: [
+            r.message,
+            drift ? `This hub is still running ${drift.running}; ${drift.onDisk} is on disk and starts when it restarts (/update --restart).` : '',
+            describeHelper(helper, ctx.cfg.installDir),
+          ].filter(Boolean).join('\n\n'),
         };
       } else if (status.ok && ctx.cfg.releaseManifest && migrationState(ctx.cfg, status, await checkRelease(ctx.cfg)).can) {
         // A CHECKOUT THAT COULD STOP BEING ONE. Counting commits here while
