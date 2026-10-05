@@ -893,11 +893,13 @@ struct Fleet {
         /// It looks like Xen Orchestra. NIL IS CANNOT TELL: a machine that
         /// reached something it could not identify has not said no.
         let xo: Bool?
-        /// It answered over HTTPS, which setup needs: a password is only ever
-        /// sent to a server whose certificate was pinned.
+        /// It answered over HTTPS, so there is a certificate to pin and the
+        /// password travels under it. False is plain HTTP: setup can still
+        /// run, but only once the person has read that the password and the
+        /// token would cross that network unencrypted and said to go on.
         let tls: Bool?
         /// SHA-256 of that certificate, lowercase hex, for the person to
-        /// accept and `begin` to pin.
+        /// accept and `begin` to pin. Nil over plain HTTP.
         let cert: String?
         /// What that certificate says about itself and whether the machine
         /// trusts it. NIL IS COULD NOT READ IT, which the screen says in those
@@ -907,9 +909,14 @@ struct Fleet {
         let version: String?
         var id: String { hostId }
 
-        /// Setup can be run from this machine: it reached the address over
-        /// HTTPS and saw a certificate to pin.
+        /// Setup can be run from this machine with a certificate pinned: it
+        /// reached the address over HTTPS and saw one.
         var canRunSetup: Bool { reachable == true && tls == true && cert != nil }
+
+        /// It reached the address, and what answered spoke plain HTTP. The
+        /// machine said so in as many words (`tls: false`); a machine that
+        /// did not say either way is neither this nor `canRunSetup`.
+        var plainHTTP: Bool { reachable == true && tls == false }
 
         /// The machine vouched for the certificate and named nothing wrong
         /// with it. Anything less is asked about before `begin`.
@@ -975,9 +982,18 @@ struct Fleet {
     /// to such a certificate without it (src/fleet/host/xo-setup.js, the
     /// connect step). Nothing is sent for one that checks out: the word means
     /// a person accepted something, and nobody was asked.
-    func beginSetup(address: String, pin: String, host: String, trust: String? = nil) async throws -> Reply {
-        var params = ["phase": "begin", "address": address, "pin": pin]
+    ///
+    /// `plain` is the other thing a person can accept: no HTTPS at all. It
+    /// goes as `plain: accepted` with NO pin, because there is no certificate
+    /// to pin, and the machine then signs the job's key over an empty pin
+    /// (XOSetupKey). A begin with neither a pin nor `plain` is refused by the
+    /// fleet, and the screen never sends one: either there is a certificate,
+    /// or the person said to go without.
+    func beginSetup(address: String, pin: String?, host: String, trust: String? = nil, plain: Bool = false) async throws -> Reply {
+        var params = ["phase": "begin", "address": address]
+        if let pin { params["pin"] = pin }
         if let trust { params["trust"] = trust }
+        if plain { params["plain"] = "accepted" }
         return try await intent("xosetup", params: params, host: host, idempotencyKey: "app-\(UUID().uuidString)")
     }
 
