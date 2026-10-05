@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, XOSETUP_JOB_RE, XOSETUP_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
@@ -195,6 +195,15 @@ export class CoordinatorCore {
     // one is separate from `clients`: a credential that cannot be confused for
     // another cannot be accepted in its place by a check somebody forgot.
     this.runnerTickets = new RunnerTickets({ now });
+    /**
+     * Hypervisor onboarding jobs, by the id the host made: which machine runs
+     * each, whose it is, where it has got to, and the Live Activity tokens its
+     * owner's phone registered for it. MEMORY ONLY, like the authorizations
+     * below: a job lasts minutes, the host holds the real state, and a phone
+     * that finds this forgotten after a restart asks the host with `status`.
+     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[] }>}
+     */
+    this.setups = new Map();
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
     // runner-repos.js for why a member may, and what bounds it.
     this.runnerRepos = new RunnerRepos({ now });
@@ -464,6 +473,9 @@ export class CoordinatorCore {
    * @param {any} msg
    */
   async #onHostEvent(hostId, msg) {
+    // ONBOARDING PROGRESS IS ITS OWN AUDIENCE: the job's owner, on the surfaces
+    // that show progress, never the ring every phone reads.
+    if (msg.event === 'xosetup.progress') return this.#onSetupProgress(hostId, msg);
     const event = {
       hostId,
       event: String(msg.event || 'unknown'),
@@ -695,6 +707,184 @@ export class CoordinatorCore {
       // A push provider being down must never take the coordinator with it.
       this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
     }
+  }
+
+  /**
+   * One phase of hypervisor onboarding. docs/hypervisors.md.
+   *
+   * `begin` is placed like anything pinned: the machine the caller chose, or
+   * the only one there is. Every later phase goes to the machine that answered
+   * `begin`, from the job record, whatever the caller asked for — the sealed
+   * sign-in can only be opened there — and only for the person who began it.
+   * A job this coordinator does not know is refused in the same words as one
+   * that is somebody else's.
+   *
+   * @param {any} spec
+   * @param {Record<string, any>} params
+   * @returns {Promise<any>}
+   */
+  async #setup(spec, params) {
+    const phase = String(params.phase);
+    const owner = spec.requester?.email ? String(spec.requester.email).toLowerCase() : null;
+    if (phase === 'begin') {
+      if (!params.address) {
+        return { ok: false, error: { code: 'bad_params' }, text: 'Say where Xen Orchestra answers: xosetup begin needs an address.' };
+      }
+      const placement = place(this.registry, spec, { preferHost: typeof spec.preferHost === 'string' ? spec.preferHost : '', requester: spec.requester ?? null });
+      if (placement.kind !== 'host' || !placement.host) {
+        return { ok: false, error: { code: placement.code || 'no_hosts' }, text: placement.reason || 'No machine can run the setup.' };
+      }
+      const hostId = placement.host.hostId;
+      /** @type {any} */
+      const answer = await this.dispatch({ ...spec, preferHost: hostId, setupRouted: true });
+      const job = answer?.xosetup?.job;
+      if (answer?.ok !== false && typeof job === 'string' && XOSETUP_JOB_RE.test(job)) {
+        this.#pruneSetups();
+        this.setups.set(job, { hostId, owner, startedAt: this.now(), last: null, activities: [] });
+      }
+      return answer ? { ...answer, hostId } : answer;
+    }
+    const job = String(params.job || '');
+    const rec = this.setups.get(job);
+    if (!rec || rec.owner !== owner) {
+      return {
+        ok: false,
+        error: { code: 'unknown_job' },
+        text: 'No setup with that id is running for you. Start again from Add a hypervisor.',
+      };
+    }
+    /** @type {any} */
+    const answer = await this.dispatch({ ...spec, preferHost: rec.hostId, setupRouted: true });
+    return answer ? { ...answer, hostId: rec.hostId } : answer;
+  }
+
+  /** Forget jobs a day old, and keep the map bounded whatever happens. */
+  #pruneSetups() {
+    const cutoff = this.now() - 24 * 60 * 60_000;
+    for (const [job, rec] of this.setups) if (rec.startedAt < cutoff) this.setups.delete(job);
+    while (this.setups.size >= 50) this.setups.delete(/** @type {string} */ (this.setups.keys().next().value));
+  }
+
+  /**
+   * A host says an onboarding job moved. Narrowed, then shown to the job's
+   * owner: a Live Activity update on iOS, an ongoing notification on Android,
+   * and an ordinary notification on both when it ends.
+   *
+   * ONLY FROM THE MACHINE RUNNING IT. Any other host naming the job is
+   * ignored, so one machine cannot paint progress onto another's setup.
+   *
+   * @param {string} hostId
+   * @param {any} msg
+   */
+  async #onSetupProgress(hostId, msg) {
+    const job = String(msg.job || '');
+    const rec = this.setups.get(job);
+    if (!rec || rec.hostId !== hostId) {
+      this.log.warn(`coordinator: ${hostId} reported progress for a setup it is not running`);
+      return;
+    }
+    const progress = narrowProgress(msg);
+    if (!progress) return;
+    rec.last = progress;
+    if (!this.push) return;
+
+    const ended = progress.state !== 'running';
+    // THE LIVE ACTIVITY: numbers and a key, never words a lock screen should
+    // not show — see ActivityUpdate in push.js for why it cannot be sealed.
+    if (rec.activities.length && this.push.activity) {
+      try {
+        const r = await this.push.activity(rec.activities, {
+          event: ended ? 'end' : 'update',
+          state: { step: progress.step, of: progress.of, phase: progress.phase, state: progress.state },
+          ...(ended ? { dismissAt: this.now() + 15 * 60_000 } : {}),
+        });
+        if (r.dead.length) rec.activities = rec.activities.filter((t) => !r.dead.includes(t));
+      } catch (e) {
+        this.log.warn(`coordinator: live activity update failed: ${/** @type {Error} */ (e).message}`);
+      }
+    }
+
+    const devices = this.#devicesOf(rec.owner);
+    // Android draws progress as one ongoing notification the app keeps up to
+    // date, so every step goes there. iOS has the Live Activity for that and
+    // hears only the end, as an ordinary notification.
+    const targets = ended ? devices : devices.filter((d) => d.platform !== 'ios');
+    if (!targets.length) return;
+    const title = progress.state === 'done'
+      ? 'Hypervisor added'
+      : progress.state === 'failed'
+        ? 'Hypervisor setup stopped'
+        : progress.state === 'cancelled'
+          ? 'Hypervisor setup cancelled'
+          : 'Adding a hypervisor';
+    const body = progress.text || `Step ${Math.min(progress.step + 1, progress.of)} of ${progress.of}`;
+    try {
+      await this.push.send(targets, {
+        title,
+        body,
+        // Android draws progress itself, as one ongoing notification; a tray
+        // notification per step would sit on top of it whenever the app is in
+        // the background, which is the whole time it matters.
+        drawnByApp: true,
+        data: {
+          kind: 'xosetup',
+          // The collapse key both providers read: each step replaces the last.
+          name: `xosetup-${job}`,
+          job,
+          hostId,
+          step: String(progress.step),
+          of: String(progress.of),
+          phase: progress.phase,
+          state: progress.state,
+        },
+      });
+    } catch (e) {
+      this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  /**
+   * A phone registers the push token of the Live Activity it started for a
+   * job, so progress reaches the Lock Screen and the Dynamic Island while the
+   * app is closed. Answers with where the job has got to, so an activity that
+   * starts late starts right.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {any} body
+   */
+  registerSetupActivity(requester, body) {
+    const job = String(body?.job || '');
+    const token = String(body?.token || '').toLowerCase();
+    if (!XOSETUP_JOB_RE.test(job) || !/^[0-9a-f]{64,400}$/.test(token)) {
+      return { ok: false, error: { code: 'bad_params' }, text: 'That is not a setup job and a Live Activity token.' };
+    }
+    const owner = requester?.email ? String(requester.email).toLowerCase() : null;
+    const rec = this.setups.get(job);
+    if (!rec || rec.owner !== owner) {
+      return { ok: false, error: { code: 'unknown_job' }, text: 'No setup with that id is running for you.' };
+    }
+    if (!rec.activities.includes(token)) {
+      rec.activities.push(token);
+      // A phone that reinstalls or restarts the activity gets a new token;
+      // four is more than one person's phones and still bounded.
+      if (rec.activities.length > 4) rec.activities.splice(0, rec.activities.length - 4);
+    }
+    return { ok: true, job, hostId: rec.hostId, progress: rec.last };
+  }
+
+  /**
+   * The registered devices of one person, by verified email — or, for null,
+   * the operator's: unattributed means the fleet's, here as in #notify.
+   *
+   * @param {string|null} owner
+   */
+  #devicesOf(owner) {
+    return [...this.devices.values()].filter((d) => {
+      const client = d.clientId ? this.clients.clients.get(d.clientId) : null;
+      if (d.clientId && client?.revokedAt) return false;
+      if (!d.clientId || client?.admin) return owner === null || Boolean(client?.admin) || !d.clientId;
+      return String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === owner;
+    });
   }
 
   /**
@@ -1134,8 +1324,10 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean }} spec
    *   `internal`, for `mint` only: set by the coordinator itself, never by a route
+   *   `setupRouted`, for `xosetup` only: set by #setup once it has placed the job, never by a route
+   * @returns {Promise<any>}
    *   `startAfter`, for `provision` only: a session to start on the runner once
    *   it joins — title, brief and mode, checked by `start`'s own rules
    */
@@ -1232,6 +1424,19 @@ export class CoordinatorCore {
           'Connecting your OWN credential needs no permission \u2014 leave the scope off.',
       };
     }
+
+    // ADDING A HYPERVISOR IS AN ADMIN'S, the probe included. It brings a pool
+    // into the fleet with an admin sign-in, and the probe asks every machine to
+    // reach an address on its network; neither is a member's to do. The
+    // break-glass token arrives with no requester and is the operator's.
+    if ((spec.verb === 'xoprobe' || spec.verb === 'xosetup') && spec.requester && !spec.requester.admin) {
+      return {
+        ok: false,
+        error: { code: 'not_admin' },
+        text: 'Only this fleet\u2019s admin can add a hypervisor.',
+      };
+    }
+    if (spec.verb === 'xosetup' && spec.setupRouted !== true) return this.#setup(spec, shaped.params);
 
     // ASKING FOR A MACHINE THAT DOES NOT EXIST YET.
     //
@@ -1426,6 +1631,13 @@ export class CoordinatorCore {
       // token found, attributed to it. A box without one has nothing to
       // check, and its "No GitHub token is stored here" stays in its own line
       // of `hosts` rather than standing for the fleet.
+      // WHICH MACHINES CAN REACH A HYPERVISOR, attributed, because the answer
+      // is per machine and the app offers only the ones that could. Narrowed
+      // to the fields a probe has, so nothing else a host put on it travels.
+      const probes = results.some((r) => r?.xoprobe && typeof r.xoprobe === 'object')
+        ? results.map((r) => ({ hostId: r.hostId, ...narrowProbe(r.xoprobe) }))
+        : undefined;
+
       const checked = results.filter((r) => r?.check && typeof r.check === 'object');
       const answered = checked.find((r) => r.check.ok) ?? checked[0];
       const check = answered ? { ...answered.check, hostId: answered.hostId } : undefined;
@@ -1437,6 +1649,7 @@ export class CoordinatorCore {
         ...(connections ? { connections } : {}),
         ...(profiles ? { profiles } : {}),
         ...(secrets ? { secrets } : {}),
+        ...(probes ? { probes } : {}),
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.
@@ -3103,6 +3316,63 @@ const NOTIFIABLE = new Set([
  * where iOS keeps them.
  */
 export const PROMPT_CATEGORY = 'fleet.prompt';
+
+/**
+ * Where an onboarding job has got to, as a host may report it.
+ *
+ * @typedef {object} SetupProgress
+ * @property {number} step   index into XOSETUP_STEPS of the step now running, or the count when finished
+ * @property {number} of     how many steps there are
+ * @property {string} phase  the step's key, or `done`
+ * @property {'running'|'done'|'failed'|'cancelled'} state
+ * @property {string} text   one sentence for the person, never shown on a Live Activity
+ * @property {number} at
+ */
+
+/**
+ * A host's progress report, narrowed to its known shape or refused.
+ * NARROWED, NOT FORWARDED, for the reason promptForPush gives: what a host
+ * sends crosses into a payload the coordinator signs its name to.
+ *
+ * @param {any} msg
+ * @returns {SetupProgress|null}
+ */
+export function narrowProgress(msg) {
+  const of = Number(msg?.of);
+  const step = Number(msg?.step);
+  if (!Number.isInteger(of) || of < 1 || of > 32 || !Number.isInteger(step) || step < 0 || step > of) return null;
+  const state = String(msg?.state || '');
+  if (!['running', 'done', 'failed', 'cancelled'].includes(state)) return null;
+  const phase = String(msg?.phase || '');
+  if (!XOSETUP_STEPS.includes(phase) && phase !== 'done') return null;
+  return {
+    step,
+    of,
+    phase,
+    state: /** @type {SetupProgress['state']} */ (state),
+    text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 200) : '',
+    at: Date.now(),
+  };
+}
+
+/**
+ * A probe answer, narrowed to the fields a probe has.
+ *
+ * @param {any} p
+ */
+export function narrowProbe(p) {
+  if (!p || typeof p !== 'object') return { reachable: false, xo: null, tls: false, cert: null, version: null };
+  const cert = typeof p.cert === 'string' && CERT_PIN_RE.test(p.cert) ? p.cert : null;
+  return {
+    reachable: p.reachable === true,
+    // null is cannot-tell: a host that reached something it could not identify
+    // has not said it is not Xen Orchestra.
+    xo: p.xo === true ? true : p.xo === false ? false : null,
+    tls: p.tls === true,
+    cert,
+    version: typeof p.version === 'string' ? p.version.slice(0, 40) : null,
+  };
+}
 
 /**
  * The answerable part of a host's prompt, narrowed to what a notification may
