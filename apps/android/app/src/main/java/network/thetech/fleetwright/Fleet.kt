@@ -702,6 +702,19 @@ class Fleet(
          * keeps no copy (XoHandoff).
          */
         val handoff: String? = null,
+        /**
+         * What else a job on this machine can be, from `begin`: "policy" on a
+         * machine that can change what the fleet may use on a pool. EMPTY IS
+         * A MACHINE OLDER THAN THAT, and the phone sends it no policy sign-in
+         * at all rather than one it would run as a setup.
+         */
+        val can: List<String> = emptyList(),
+        /**
+         * A policy job waiting on the person (`choosing`): the pool's storage,
+         * networks and capacity, sealed by the machine to the key this phone
+         * sent inside the sign-in, as epk.iv.ct (XoPolicy.openInventory).
+         */
+        val inventory: String? = null,
     )
 
     /**
@@ -1340,6 +1353,11 @@ class Fleet(
      * answered `begin`, whatever host this phone might name, because the key
      * is in that machine's memory and nowhere else.
      *
+     * `policy` names the job and carries the person's choice of what the
+     * fleet may use on the pool, sealed to the same key (XoPolicy.sealChoice);
+     * the job is one whose sealed sign-in said so, which only the machine
+     * can read.
+     *
      * NEVER HELD, for the same reason as [setupToken] and more so: `run`
      * carries the admin sign-in, sealed, and a sealed sign-in on a phone's
      * disk waiting to be replayed is a credential kept. Passing an id is what
@@ -1916,6 +1934,10 @@ class Fleet(
                             hostKey = s.optJSONObject("hostKey"),
                             fingerprint = s.optString("fingerprint").takeIf { it.isNotBlank() && it != "null" },
                             handoff = s.optString("handoff").takeIf { it.split(".").size == 3 },
+                            can = s.optJSONArray("can")?.let { a ->
+                                (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { it.isNotBlank() && !a.isNull(i) } }
+                            } ?: emptyList(),
+                            inventory = s.optString("inventory").takeIf { it.split(".").size == 3 },
                         )
                     },
                 )
@@ -2410,6 +2432,15 @@ class Settings(context: Context) {
     }
 
     fun secret(name: String): String? = prefs.getString("secret.$name.enc", null)?.let { decrypt(it) }
+
+    /**
+     * The Xen Orchestra addresses this phone keeps a token for, as XoHandoff
+     * writes them: a JSON array of strings. Not a secret: the token is kept
+     * apart, encrypted, and this is the list Machines shows them from.
+     */
+    var xoHeld: String
+        get() = prefs.getString("xoHeld", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoHeld") else putString("xoHeld", value) }.apply()
 
     /** The hypervisor setups still owed a token, as XoHandoff writes them. Not a secret. */
     var xoPending: String

@@ -1,0 +1,316 @@
+package network.thetech.fleetwright
+
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlin.math.roundToLong
+
+/**
+ * Changing what the fleet may use on a hypervisor pool: the half that is
+ * arithmetic and words, kept apart from the screen so a JVM test can run it,
+ * as XoSetup is for adding one. docs/hypervisors.md, and the `policy` phase
+ * of `xosetup` in src/fleet/protocol/intents.js.
+ *
+ * WHY A JOB OF ITS OWN. Setup applies defaults when it first makes the pool's
+ * resource set (the pools' default storage, half the pool, no networks) and
+ * never touches an existing one again, so a person's choice survives running
+ * setup again for a new token. Changing that choice is begun the same way as
+ * setup (a probe, a machine, its key checked before anything is sealed), and
+ * differs in three places, all here:
+ *
+ *   1. The sealed sign-in carries `purpose: "policy"` INSIDE the seal, where
+ *      the coordinator relaying it can neither read nor change it, and a key
+ *      this phone made for the pool to come back to. That key is kept in
+ *      memory and nowhere else: this is a screen somebody is looking at, not
+ *      a token to collect with the app closed (XoHandoff is that, and writes
+ *      its key down because it has to).
+ *   2. The machine signs in, reads the pool, and hands back its storage,
+ *      networks and capacity sealed to that key under
+ *      `fleetwright-xosetup-inventory/v1:<job>:<address>`, because a network
+ *      map is not the coordinator's to read. [openInventory].
+ *   3. The person's choice goes back sealed to the job's key, the one `begin`
+ *      answered with and the phone already checked, under
+ *      `fleetwright-xosetup-policy/v1:<job>:<address>`. [sealChoice].
+ *
+ * THE RULES ARE THE MACHINE'S, mirrored. checkPolicy in xo-setup.js is the
+ * bound and refuses anything outside it; [problem] says the same thing here
+ * first, in the same words, so Apply is offered only for a choice the machine
+ * will take, and a refusal is never the first the person hears of a rule.
+ */
+internal object XoPolicy {
+
+    /** What the sealed sign-in names as its purpose. Inside the seal, never a param. */
+    const val PURPOSE = "policy"
+
+    const val GIB = 1024L * 1024L * 1024L
+
+    /** The smallest limits the machine accepts: a GiB of memory, ten of disk, one vCPU. */
+    const val MIN_MEMORY = GIB
+    const val MIN_DISK = 10 * GIB
+
+    /**
+     * A policy job's steps, in XOPOLICY_STEPS order, with the words the
+     * machine uses for each (STEP_WORDS in xo-setup.js): onboarding's first
+     * three, then the person's choice and applying it.
+     */
+    val STEPS: List<Pair<String, String>> = listOf(
+        "connect" to "Reaching Xen Orchestra",
+        "sign-in" to "Signing in",
+        "inventory" to "Reading the pool",
+        "choose" to "Waiting for your choice",
+        "apply" to "Applying what you chose",
+    )
+
+    fun stepWords(phase: String?, step: Int, of: Int): String {
+        if (phase == "done") return "Done"
+        STEPS.firstOrNull { it.first == phase }?.let { return it.second }
+        val n = (step + 1).coerceIn(1, maxOf(of, 1))
+        return "Step $n of ${maxOf(of, 1)}"
+    }
+
+    /** The pool, sealed by the machine to this phone's key: this job, this address. */
+    fun inventoryAad(job: String, address: String): String = "fleetwright-xosetup-inventory/v1:$job:$address"
+
+    /** The person's choice, sealed by this phone to the job's key: this job, this address. */
+    fun policyAad(job: String, address: String): String = "fleetwright-xosetup-policy/v1:$job:$address"
+
+    data class Pool(val id: String, val name: String)
+
+    /** A storage repository a VM's disk can go on. Bytes, as the machine counts them. */
+    data class Storage(val id: String, val name: String, val pool: String?, val size: Long, val free: Long, val shared: Boolean)
+
+    /** A network. [vlan] is null for one with no VLAN; [egress] is the one tagged as the way out now. */
+    data class Network(val id: String, val name: String, val pool: String?, val vlan: Int?, val egress: Boolean)
+
+    /** A resource set's limits as they stand. NULL IS NO LIMIT SET, not zero (currentLimits in xo-setup.js). */
+    data class Limits(val cpus: Long?, val memory: Long?, val disk: Long?)
+
+    /**
+     * What the machine read: the pool's storage and networks, what its hosts
+     * add up to, and what the fleet may use now.
+     */
+    data class Inventory(
+        val address: String,
+        val pools: List<Pool>,
+        val srs: List<Storage>,
+        val networks: List<Network>,
+        val cpus: Int,
+        val memory: Long,
+        val currentSrs: List<String>,
+        val currentNetworks: List<String>,
+        val currentLimits: Limits,
+    )
+
+    /**
+     * What the person has chosen so far. Memory and disk in whole GiB, which
+     * is what a stepper moves in and what the machine says back; the payload
+     * multiplies them out to bytes.
+     */
+    data class Choice(
+        val srs: Set<String>,
+        val networks: Set<String>,
+        val egress: String?,
+        val cpus: Int,
+        val memoryGib: Long,
+        val diskGib: Long,
+    )
+
+    /**
+     * The admin sign-in for a policy job, sealed to the job's key under the
+     * same binding as setup's (XoSetup.aad), with [reply], the key the pool
+     * comes back to, and the purpose beside it. Returned rather than kept:
+     * the caller clears the password the moment this returns.
+     */
+    fun sealSignIn(key: String, job: String, address: String, email: String, password: String, reply: String): String {
+        val payload = JSONObject()
+            .put("v", 1)
+            .put("xo", JSONObject().put("email", email).put("password", password))
+            .put("reply", reply)
+            .put("purpose", PURPOSE)
+        return joined(Seal.seal(key, XoSetup.aad(job, address), payload))
+    }
+
+    /**
+     * The pool as the machine sealed it, or null for anything that does not
+     * open under this job and address with this key, or opens to something
+     * that is not an inventory of that address.
+     */
+    fun openInventory(sealed: String, job: String, address: String, key: Seal.OneUseKey): Inventory? = runCatching {
+        val parts = sealed.split(".")
+        require(parts.size == 3)
+        val box = JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2])
+        parse(Seal.open(key, inventoryAad(job, address), box))?.takeIf { it.address == address }
+    }.getOrNull()
+
+    /**
+     * An inventory, read tolerantly: anything without an id is dropped, every
+     * size is a Long at least zero, a VLAN or a limit that is JSON null stays
+     * null (org.json would otherwise hand back 0, and "VLAN 0" and "no
+     * limit" are not the same thing as nothing said), and what the fleet may
+     * use now is held to ids the inventory lists.
+     */
+    fun parse(json: JSONObject): Inventory? {
+        if (json.optInt("v", 0) != 1) return null
+        val address = json.optString("address").takeIf { it.isNotBlank() && !json.isNull("address") } ?: return null
+        fun text(o: JSONObject, key: String): String? = o.takeIf { it.has(key) && !it.isNull(key) }?.optString(key)?.takeIf { it.isNotBlank() }
+        fun objects(key: String): List<JSONObject> {
+            val a: JSONArray = json.optJSONArray(key) ?: return emptyList()
+            return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+        }
+        val pools = objects("pools").mapNotNull { p -> text(p, "id")?.let { Pool(it, text(p, "name") ?: "") } }
+        val srs = objects("srs").mapNotNull { s ->
+            val id = text(s, "id") ?: return@mapNotNull null
+            Storage(
+                id = id,
+                name = text(s, "name") ?: "",
+                pool = text(s, "pool"),
+                size = s.optLong("size", 0L).coerceAtLeast(0L),
+                free = s.optLong("free", 0L).coerceAtLeast(0L),
+                shared = s.optBoolean("shared", false),
+            )
+        }
+        val networks = objects("networks").mapNotNull { n ->
+            val id = text(n, "id") ?: return@mapNotNull null
+            Network(
+                id = id,
+                name = text(n, "name") ?: "",
+                pool = text(n, "pool"),
+                vlan = if (!n.has("vlan") || n.isNull("vlan")) null else n.optInt("vlan", -1).takeIf { it >= 0 },
+                egress = n.optBoolean("egress", false),
+            )
+        }
+        val capacity = json.optJSONObject("capacity")
+        val current = json.optJSONObject("current")
+        fun ids(key: String, known: Set<String>): List<String> {
+            val a = current?.optJSONArray(key) ?: return emptyList()
+            return (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { !a.isNull(i) && it in known } }.distinct()
+        }
+        val limits = current?.optJSONObject("limits")
+        fun limit(key: String): Long? {
+            if (limits == null || !limits.has(key) || limits.isNull(key)) return null
+            val v = limits.optDouble(key, Double.NaN)
+            return if (v.isFinite() && v > 0) v.roundToLong() else null
+        }
+        return Inventory(
+            address = address,
+            pools = pools,
+            srs = srs,
+            networks = networks,
+            cpus = capacity?.optInt("cpus", 0)?.coerceAtLeast(0) ?: 0,
+            memory = capacity?.optLong("memory", 0L)?.coerceAtLeast(0L) ?: 0L,
+            currentSrs = ids("srs", srs.map { it.id }.toSet()),
+            currentNetworks = ids("networks", networks.map { it.id }.toSet()),
+            currentLimits = Limits(limit("cpus"), limit("memory"), limit("disk")),
+        )
+    }
+
+    // THE BOUNDS, as checkPolicy works them out: at least a usable machine,
+    // at most what is there. A pool that reported nothing still has room for
+    // the minimum, because the machine allows exactly that.
+    fun maxCpus(inv: Inventory): Int = maxOf(1, inv.cpus)
+    fun maxMemoryGib(inv: Inventory): Long = maxOf(MIN_MEMORY, inv.memory) / GIB
+    fun maxDiskGib(inv: Inventory, srs: Set<String>): Long = maxOf(MIN_DISK, room(inv, srs)) / GIB
+
+    /** What the chosen storage holds in all, which is as much disk as the fleet could be allowed. */
+    fun room(inv: Inventory, srs: Set<String>): Long = inv.srs.filter { it.id in srs }.sumOf { it.size }
+
+    /**
+     * Where the form starts: what the fleet may use now, and for a limit with
+     * nothing set, half of what is there, as setup's own defaults are. The
+     * way out starts on the network already tagged as it, when that network
+     * is one the fleet may use; otherwise none, which the person can change.
+     */
+    fun defaults(inv: Inventory): Choice {
+        val srs = inv.currentSrs.toSet()
+        val networks = inv.currentNetworks.toSet()
+        val egress = inv.networks.firstOrNull { it.egress && it.id in networks }?.id
+        val cpus = (inv.currentLimits.cpus ?: (inv.cpus / 2).toLong()).coerceIn(1L, maxCpus(inv).toLong()).toInt()
+        val memory = (inv.currentLimits.memory?.let { gibRounded(it) } ?: (inv.memory / 2 / GIB)).coerceIn(1L, maxMemoryGib(inv))
+        val free = inv.srs.filter { it.id in srs }.sumOf { it.free }
+        val disk = (inv.currentLimits.disk?.let { gibRounded(it) } ?: (free / 2 / GIB)).coerceIn(MIN_DISK / GIB, maxDiskGib(inv, srs))
+        return Choice(srs, networks, egress, cpus, memory, disk)
+    }
+
+    /**
+     * Storage switched on or off. The disk limit follows it down, because
+     * it cannot be more than the storage chosen holds.
+     */
+    fun withStorage(inv: Inventory, c: Choice, id: String, on: Boolean): Choice {
+        val srs = if (on) c.srs + id else c.srs - id
+        return c.copy(srs = srs, diskGib = c.diskGib.coerceIn(MIN_DISK / GIB, maxDiskGib(inv, srs)))
+    }
+
+    /**
+     * A network switched on or off. The way out has to be one of the
+     * networks chosen, so switching that one off leaves none.
+     */
+    fun withNetwork(c: Choice, id: String, on: Boolean): Choice {
+        val networks = if (on) c.networks + id else c.networks - id
+        return c.copy(networks = networks, egress = c.egress?.takeIf { it in networks })
+    }
+
+    /**
+     * How far one press of a stepper moves: one, until a range is long
+     * enough that one at a time is a chore, then the largest power of two
+     * that crosses it in about sixteen presses. Powers of two because that is
+     * how memory is sized, and disk does not mind.
+     */
+    fun stepFor(max: Long): Long {
+        var step = 1L
+        while (step * 2 <= max / 16) step *= 2
+        return step
+    }
+
+    /**
+     * What stops this choice being applied, in the machine's own words, or
+     * null when it would take it. The same checks in the same order as
+     * checkPolicy, so the sentence under a switched-off Apply is the one the
+     * machine would have sent back.
+     */
+    fun problem(inv: Inventory, c: Choice): String? {
+        if (c.srs.isEmpty()) return "Choose at least one storage repository: a VM needs somewhere for its disk."
+        val srIds = inv.srs.map { it.id }.toSet()
+        val networkIds = inv.networks.map { it.id }.toSet()
+        if (!srIds.containsAll(c.srs) || !networkIds.containsAll(c.networks)) {
+            return "That names storage or a network this pool did not list. Nothing was changed."
+        }
+        if (c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
+        val maxCpus = maxCpus(inv)
+        if (c.cpus < 1 || c.cpus > maxCpus) return "vCPUs are between 1 and $maxCpus, what the pool has."
+        val maxMemory = maxOf(MIN_MEMORY, inv.memory)
+        val memory = c.memoryGib * GIB
+        if (memory < MIN_MEMORY || memory > maxMemory) return "Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has."
+        val maxDisk = maxOf(MIN_DISK, room(inv, c.srs))
+        val disk = c.diskGib * GIB
+        if (disk < MIN_DISK || disk > maxDisk) return "Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen."
+        return null
+    }
+
+    /**
+     * The choice as the machine reads it: ids in the order the pool listed
+     * them, the way out or JSON null, and the limits in bytes.
+     */
+    fun payload(inv: Inventory, c: Choice): JSONObject =
+        JSONObject()
+            .put("v", 1)
+            .put("srs", JSONArray(inv.srs.map { it.id }.filter { it in c.srs }))
+            .put("networks", JSONArray(inv.networks.map { it.id }.filter { it in c.networks }))
+            .put("egress", c.egress ?: JSONObject.NULL)
+            .put("limits", JSONObject().put("cpus", c.cpus).put("memory", c.memoryGib * GIB).put("disk", c.diskGib * GIB))
+
+    /** The choice, sealed to the job's key, as the one string `policy` carries. */
+    fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice): String =
+        joined(Seal.seal(key, policyAad(job, address), payload(inv, c)))
+
+    /** Bytes as a person reads a size here: whole GiB, rounded, as the machine says them. */
+    fun gib(bytes: Long): String = "${gibRounded(bytes)} GiB"
+
+    /** One storage repository's second line: how much is free of how much, and whether every host in the pool sees it. */
+    fun storageLine(s: Storage): String = "${gib(s.free)} free of ${gib(s.size)} · ${if (s.shared) "shared" else "local"}"
+
+    /** One network's second line. */
+    fun networkLine(n: Network): String = n.vlan?.let { "VLAN $it" } ?: "no VLAN"
+
+    private fun gibRounded(bytes: Long): Long = (bytes.toDouble() / GIB).roundToLong()
+
+    private fun joined(sealed: JSONObject): String = "${sealed.getString("epk")}.${sealed.getString("iv")}.${sealed.getString("ct")}"
+}
