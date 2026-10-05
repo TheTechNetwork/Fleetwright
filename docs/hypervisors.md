@@ -173,18 +173,36 @@ network, so it can be seen and changed there too. It has to be one of the
 networks the fleet may use, or the fleet could not attach a router to it.
 The edge router is OPNsense, for the reasons in "Templates" below.
 
-**Onboarding makes it, so nobody configures a switch.** It is a private
-network inside the pool, and its only way out is a permanent **edge** router:
-one more OPNsense VM, `fleetwright-edge`, with its WAN on the management
-network and its LAN on `fleetwright-uplink`. Its rules are fixed at
-onboarding and never touched by a session: out to the internet, and nothing
-to any private, link-local or multicast range, so a lab can reach the world
-and cannot reach your LAN, the pool's API or another lab. A pool that already
-has a suitable VLAN can be pointed at it instead; nothing requires it.
+**The policy screen builds it, so nobody configures a switch.** Under Way
+out, a machine that can build it offers *Build the edge router on it*
+(or *Keep the edge router on it* when the pool has one). Apply then
+(`src/fleet/host/edge-router.js`):
+
+1. Makes `fleetwright-uplink`, a private network in the pool with no
+   interface of its own, and adds it to what the fleet may use.
+2. Builds `fleetwright-edge`, an OPNsense 26.7 VM: 2 vCPUs, 2 GiB and a
+   3 GiB disk on the storage chosen, its WAN (`xn0`) on the way out and its
+   LAN (`xn1`) on the uplink at 10.254.0.1/24. Its rules, in order:
+   - labs may ask the edge for names (DNS);
+   - nothing to 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 or 224/4,
+     so no lab reaches your LAN, the pool's API or another lab;
+   - anything else, out through automatic NAT.
+   It hands out 10.254.0.100–250 and answers DNS with Unbound. It has **no
+   login** (root's password is `*`) and no anti-lockout rule, because the only
+   thing that could reach it is a lab, and it is not tagged `fleetwright`, so
+   the fleet's token cannot touch the fleet's own way out.
+3. When it is already there, moves its WAN if the way out changed and starts
+   it if it was stopped. Nothing is rebuilt.
+
+A failure part-way deletes what it made. A pool with more than one host keeps
+labs on the edge's host, because a network with no interface is host-local
+without Xen Orchestra's SDN controller. A pool that already has a suitable
+VLAN can be pointed at it instead; nothing requires the uplink.
 
 ## Templates, built by onboarding
 
-Neither exists yet, and nobody builds them by hand:
+Nobody builds them by hand. The Debian template does not exist yet; the
+OPNsense image is built, for the edge router:
 
 - **Linux.** Debian's official cloud image (the `genericcloud` build, which
   already runs cloud-init) is downloaded, checked against Debian's published
@@ -192,14 +210,23 @@ Neither exists yet, and nobody builds them by hand:
   that installs the Xen guest tools and the fleetwright package without
   enrolling and gives the service user sudo, then powers off and is converted
   to `fleetwright-debian-13`.
-- **OPNsense.** Its prebuilt disk image is downloaded and checked the same
-  way, and booted beside a small second disk holding a generated
-  `config.xml`: interfaces assigned, LAN addressed, the Xen guest tools
-  plugin, the API enabled with a bootstrap key only the hypervisor host knows.
-  OPNsense's importer reads a configuration from attached media at first
-  boot, which is what makes this unattended. **This is the step to prove
-  first on real hardware**, because it is the one that rests on an OPNsense
-  behaviour rather than on an API.
+- **OPNsense, built and proved for the edge router.** Not from a second disk:
+  OPNsense's configuration importer waits for a key press at the console, so
+  attached media is not read unattended. What first boot does read is
+  `/usr/local/etc/config.xml`: with no `/conf/config.xml` yet, the importer
+  times out and copies that file into place. In the 26.7 nano image it is
+  5,234 contiguous bytes at a fixed offset of a plain UFS2 file system. So the
+  machine downloads the image once, checks it against OPNsense's published
+  SHA-256, unpacks it with `bzip2`, and streams it to Xen Orchestra's disk
+  import with exactly those bytes replaced by the edge's configuration,
+  padded to the same length (inode, size and blocks untouched). The bytes it
+  replaces are checked first against their own pinned SHA-256, so a wrong
+  offset fails rather than corrupting the disk. **Booted in QEMU** from the
+  published image patched this way: no key press, the console banner showed
+  `fleetwright-edge.internal` with the LAN at 10.254.0.1/24 and the WAN on
+  DHCP, and `pfctl` showed the three LAN rules above in order, with automatic
+  NAT. Labs' own routers will use the same technique with their own
+  configuration.
 
 Rebuilding is the same script with the newest image, so a template is
 replaced rather than patched, and the old one is deleted once nothing was
@@ -467,11 +494,13 @@ sign-in. The phone now remembers where it worked.
 The fleet never sees any of it. What leaves the phone is what always did:
 the sign-in sealed to one job's key on one machine.
 
-**The way out is recorded, not routed yet.** The policy's way out is the
-network the edge OPNsense VM will put its WAN on (["The uplink"](#the-uplink)).
-Choosing it tags that network `fleetwright-egress` in Xen Orchestra. The
-router itself, with the OPNsense template it is cloned from, is not built
-yet; the screen says that in as many words.
+**The way out is where the edge router goes.** The policy's way out is the
+network the edge OPNsense VM puts its WAN on, recorded as the
+`fleetwright-egress` tag on that network. With *Build the edge router on it*
+on, Apply builds the router there (["The uplink"](#the-uplink)); the phone
+shows the machine's progress under "Applying what you chose", from the
+download to the disk. The machine running the job needs `bzip2`, and says
+which package to install when it has none.
 
 ### Next: deploying Xen Orchestra, and the phone's own network
 
