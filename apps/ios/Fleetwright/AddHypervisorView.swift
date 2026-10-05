@@ -1043,7 +1043,7 @@ struct AddHypervisorView: View {
                 // switched off, or no longer in the fleet, and every machine
                 // is asked instead, with the reason kept on screen.
                 if viaMemory {
-                    await probe()
+                    await self.probe()
                     refuse("\(why) Your other machines were asked instead.")
                     return
                 }
