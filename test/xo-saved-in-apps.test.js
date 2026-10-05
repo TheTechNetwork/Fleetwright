@@ -99,9 +99,20 @@ test('iOS: the sign-in footer says who keeps it, for the switch as it stands', (
   assert.ok(SCREEN.includes('and neither this phone nor the fleet keeps it.'));
 });
 
-test('iOS: the way out names the router it is for, and says it is not built yet', () => {
+test('iOS: the way out names the router it is for, and offers to build it only where it can be built', () => {
   assert.ok(SCREEN.includes('The network the edge router, an OPNsense VM, will put its WAN on'));
-  assert.ok(SCREEN.includes('The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag '));
+  // Offered by a machine that said it can, and only with a way out (C-2).
+  assert.match(SCREEN, /canEdge: begun\.can\.contains\("edge"\)/);
+  assert.match(SCREEN, /if canEdge, choice\.egress != nil \{\s*Toggle\(isOn: \$choice\.edge\)/);
+  assert.match(SCREEN, /\.onChange\(of: choice\.egress\) \{ _, way in\s*if way == nil \{ choice\.edge = false \}/);
+  // Built where there is none, kept where there is, and the cost said first.
+  assert.ok(SCREEN.includes('there == nil ? "Build the edge router on it" : "Keep the edge router on it"'));
+  assert.ok(SCREEN.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
+  assert.ok(SCREEN.includes('is too old to build the router; update it to have it built from here.'));
+  // What goes to the machine, which checkPolicy reads, and its one rule.
+  const POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
+  assert.match(POLICY, /"edge": edge,/);
+  assert.ok(POLICY.includes('The edge router needs a way out: choose the network its WAN goes on.'));
 });
 
 // ─── Android ────────────────────────────────────────────────────────────────

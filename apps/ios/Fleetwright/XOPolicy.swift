@@ -40,6 +40,9 @@ enum XOPolicy {
         let networks: [Network]
         let capacity: Capacity
         let current: Current
+        /// Each pool's edge router, from a machine that can build one; nil
+        /// from one older than that, which is "cannot tell", never "none".
+        let edges: [Edge]?
 
         struct Pool: Decodable, Equatable, Identifiable {
             let id: String
@@ -77,6 +80,18 @@ enum XOPolicy {
             let vlan: Int?
             /// Tagged `fleetwright-egress` in Xen Orchestra now.
             let egress: Bool
+        }
+
+        /// The edge router on a pool, and whether it is running.
+        struct Edge: Decodable, Equatable {
+            let pool: String?
+            let running: Bool
+        }
+
+        /// The edge router on the pool this network is in, if it has one.
+        func edge(on network: String?) -> Edge? {
+            guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return nil }
+            return edges?.first { $0.pool == pool }
         }
 
         struct Capacity: Decodable, Equatable {
@@ -145,6 +160,9 @@ enum XOPolicy {
         var networks: Set<String> = []
         /// The network the edge router's WAN will go on, or nil for none yet.
         var egress: String?
+        /// Build the edge router on the way out, or keep the one there in
+        /// step with it. Needs a way out; goes with it when it goes.
+        var edge = false
         var cpus = 1
         var memoryGiB = XOPolicy.minMemoryGiB
         var diskGiB = XOPolicy.minDiskGiB
@@ -160,6 +178,8 @@ enum XOPolicy {
             let networks = Set(inv.current.networks).intersection(inv.networks.map(\.id))
             c.networks = networks
             c.egress = inv.networks.first { $0.egress && networks.contains($0.id) }?.id
+            // On when there is one already, so Apply keeps it on the way out.
+            c.edge = inv.edge(on: c.egress) != nil
             c.cpus = XOPolicy.clamp(inv.current.limits.cpus ?? inv.capacity.cpus / 2, inv.cpuRange)
             let memory = inv.current.limits.memory.map(XOPolicy.nearestGiB) ?? Int(clamping: inv.capacity.memory / 2 / XOPolicy.gib)
             c.memoryGiB = XOPolicy.clamp(memory, inv.memoryRange)
@@ -180,7 +200,10 @@ enum XOPolicy {
         /// fleet's VMs could not put a router's WAN on one they may not use.
         mutating func setNetwork(_ id: String, on: Bool) {
             if on { networks.insert(id) } else { networks.remove(id) }
-            if let egress, !networks.contains(egress) { self.egress = nil }
+            if let egress, !networks.contains(egress) {
+                self.egress = nil
+                edge = false
+            }
         }
 
         /// Why the machine would refuse this, in its own words
@@ -191,6 +214,7 @@ enum XOPolicy {
                 return "That names storage or a network this pool did not list."
             }
             if let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
+            if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
             if !inv.cpuRange.contains(cpus) { return "vCPUs are between 1 and \(inv.cpuRange.upperBound), what the pool has." }
             if !inv.memoryRange.contains(memoryGiB) {
                 return "Memory is between 1 GiB and \(inv.memoryRange.upperBound) GiB, what the pool has."
@@ -214,6 +238,7 @@ enum XOPolicy {
                 "srs": inv.srs.map(\.id).filter { srs.contains($0) },
                 "networks": inv.networks.map(\.id).filter { networks.contains($0) },
                 "egress": way,
+                "edge": edge,
                 "limits": limits,
             ]
         }

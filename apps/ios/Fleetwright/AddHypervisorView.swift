@@ -147,6 +147,9 @@ struct AddHypervisorView: View {
         let key: String
         let address: String
         let reply: Seal.OneUseKey
+        /// The machine said it can build the edge router (`can` holds
+        /// "edge"), so the switch is offered; an older one never is (C-2).
+        let canEdge: Bool
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -723,10 +726,14 @@ struct AddHypervisorView: View {
 
     /// THE WAY OUT, which is a choice among the networks chosen above and
     /// nothing else: the machine refuses any other (checkPolicy), so the
-    /// picker never offers one. Said as what it will be used for, not as a
-    /// router that is there: the edge router is not built yet.
+    /// picker never offers one. Then the edge router on it, offered only by a
+    /// machine that can build one: built when the pool has none, kept on the
+    /// way out when it has. What building costs is said before it is asked
+    /// for, because it downloads and makes a VM.
     private func wayOutSection(_ inv: XOPolicy.Inventory) -> some View {
-        Section {
+        let canEdge = policyJob?.canEdge == true
+        let there = inv.edge(on: choice.egress)
+        return Section {
             Picker(selection: $choice.egress) {
                 Text("None yet").tag(String?.none)
                 ForEach(inv.networks.filter { choice.networks.contains($0.id) }) { network in
@@ -740,13 +747,43 @@ struct AddHypervisorView: View {
             .tint(Design.Palette.accent)
             .frame(minHeight: 44)
             .disabled(busy)
+            // No way out, no router: the switch goes off with it.
+            .onChange(of: choice.egress) { _, way in
+                if way == nil { choice.edge = false }
+            }
+            if canEdge, choice.egress != nil {
+                Toggle(isOn: $choice.edge) {
+                    policyRow(there == nil ? "Build the edge router on it" : "Keep the edge router on it", edgeLine(there))
+                }
+                .tint(Design.Palette.accent)
+                .frame(minHeight: 44)
+                .disabled(busy)
+            }
         } header: {
             sectionHead("Way out")
         } footer: {
-            Text("The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not "
-                 + "your LAN. The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag "
-                 + "on that network, for when it is. Only a network chosen above can be the way out.")
+            Text(wayOutFooter(canEdge: canEdge))
         }
+    }
+
+    /// What the switch does, in the concrete: what it costs when there is no
+    /// router, and what Apply does to the one that is there. The same words
+    /// as Android (PolicyForm.kt).
+    private func edgeLine(_ there: XOPolicy.Inventory.Edge?) -> String {
+        guard let there else {
+            return "An OPNsense VM with 2 vCPUs, 2 GiB of memory and a 3 GiB disk on the storage chosen. "
+                + "\(hostId) downloads OPNsense once, about 470 MB, and builds it while you wait."
+        }
+        return there.running
+            ? "It is there and running. Apply keeps its WAN on this network."
+            : "It is there and stopped. Apply keeps its WAN on this network and starts it."
+    }
+
+    private func wayOutFooter(canEdge: Bool) -> String {
+        let what = "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not "
+            + "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. Only a network chosen above "
+            + "can be the way out."
+        return canEdge ? what : what + " \(hostId) is too old to build the router; update it to have it built from here."
     }
 
     private func limitsSection(_ inv: XOPolicy.Inventory) -> some View {
@@ -1246,7 +1283,7 @@ struct AddHypervisorView: View {
                 refuse(answer.text ?? "\(begun.hostId) did not take the sign-in.")
                 return
             }
-            policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply)
+            policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
