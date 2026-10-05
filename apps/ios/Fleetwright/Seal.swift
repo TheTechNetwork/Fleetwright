@@ -45,6 +45,17 @@ enum Seal {
     /// sealed sign-in and a sealed token can never be taken for each other
     /// (xosetupHandoffAad in src/fleet/seal.js; XOSetupHandoff).
     static func xosetupHandoffAAD(job: String, address: String) -> String { "fleetwright-xosetup-handoff/v1:\(job):\(address)" }
+    /// What a policy job read from the pool (its storage, networks, capacity
+    /// and what the fleet may use now), on its way back to the key this phone
+    /// sent inside the policy sign-in. A network map is not the coordinator's
+    /// to read, so it travels sealed like the token does, under a name of its
+    /// own (xosetupInventoryAad in src/fleet/seal.js; XOPolicy).
+    static func xosetupInventoryAAD(job: String, address: String) -> String { "fleetwright-xosetup-inventory/v1:\(job):\(address)" }
+    /// The person's choice for that job, sealed to the job's key from `begin`
+    /// (the key the sign-in went to), so the machine can tell it came from
+    /// the phone that saw the inventory and not from the coordinator
+    /// (xosetupPolicyAad in src/fleet/seal.js).
+    static func xosetupPolicyAAD(job: String, address: String) -> String { "fleetwright-xosetup-policy/v1:\(job):\(address)" }
 
     enum Failure: LocalizedError {
         case notAKey, notSealed

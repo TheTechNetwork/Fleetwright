@@ -27,6 +27,9 @@ struct MachinesView: View {
     @State private var loaded = false
     /// The machine whose page is showing.
     @State private var showing: String?
+    /// The pools this phone holds a token for (XOSetupHandoff), read when
+    /// the list is, not on every redraw: each is a Keychain read.
+    @State private var hypervisors: [XOSetupHandoff.Held] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Enrolled, and not saying anything: membership with no report.
@@ -109,6 +112,19 @@ struct MachinesView: View {
                 .fleetCard(radius: Design.Radius.cardSmall)
                 .fleetRow()
             }
+
+            // THE POOLS THIS PHONE HOLDS, each a way into changing what the
+            // fleet may use there. Behind the same gate as Add a hypervisor,
+            // for the same reason, and drawn only when there is one: a
+            // heading over nothing is a screen promising something it does
+            // not have. The rows are cards of the one shape (RHYTHM 1): the
+            // address at the weight a hostname gets, then what the record
+            // says the pools are called.
+            // A method rather than more of this body, for the reason
+            // healthLines gives.
+            if settings.configured && settings.showsAdmin && !hypervisors.isEmpty {
+                hypervisorRows
+            }
         }
         .listStyle(.plain)
         .listRowSpacing(Design.Space.groupTight)
@@ -119,6 +135,45 @@ struct MachinesView: View {
         .task(id: "\(settings.credential)|\(settings.viewAsMember)") { await loadHosts() }
         .onChange(of: opening) { _, _ in openAsked() }
         .navigationDestination(item: $showing) { id in hostPage(id) }
+        // Back from adding one, the new pool is listed.
+        .onAppear { hypervisors = XOSetupHandoff.heldPools() }
+    }
+
+    @ViewBuilder private var hypervisorRows: some View {
+        Text("Hypervisors")
+            .fleetType(.section)
+            .foregroundStyle(Design.Palette.ink)
+            .accessibilityAddTraits(.isHeader)
+            .padding(.top, Design.Space.insideTight)
+            .fleetRow()
+        ForEach(hypervisors) { pool in
+            NavigationLink {
+                AddHypervisorView(settings: settings, policyFor: pool.address)
+            } label: {
+                hypervisorRow(pool)
+            }
+            .fleetCard(radius: Design.Radius.cardSmall)
+            .fleetRow()
+        }
+    }
+
+    private func hypervisorRow(_ pool: XOSetupHandoff.Held) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            Text(pool.address)
+                .fleetType(.bodyStrong)
+                .foregroundStyle(Design.Palette.ink)
+            // Nil is a record that did not say, and is said as that.
+            Text(pool.pools.map { $0.isEmpty ? "Its record lists no pools" : $0.joined(separator: ", ") }
+                 ?? "Pool names not recorded")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            // What the row is for, in words, since the address alone does
+            // not say. Dim like the line above: a way in, not news.
+            Text("Change what it may use")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+        }
+        .frame(minHeight: 44, alignment: .leading)
     }
 
     /// Push the page somebody asked for from elsewhere, once this list knows
@@ -263,6 +318,7 @@ struct MachinesView: View {
     @MainActor
     private func loadHosts() async {
         guard settings.configured else { return }
+        hypervisors = XOSetupHandoff.heldPools()
         // TWO ANSWERS, ONE WAIT: the cost is the slower of them, not the sum.
         // Enrolled is the membership (keys, revocation); reporting is what
         // each machine is saying now. Different questions.

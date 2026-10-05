@@ -24,12 +24,23 @@ import Foundation
 /// THE TOKEN IS KEPT in the Keychain, this device only, under the address,
 /// as the record the machine sealed: the address, the pinned certificate (or
 /// plain HTTP), the limited user, its resource set and the token.
+///
+/// WHICH POOLS THIS PHONE HOLDS is a list of addresses beside it, in
+/// UserDefaults, because the Keychain cannot be asked "what is under
+/// hypervisor.*" without a query of its own and an address is not a secret.
+/// It is what Machines lists under Hypervisors. An address counts only while
+/// its record is still in the Keychain: a backup restored to another phone
+/// brings the list and not the record (this device only), and a list that
+/// claimed a pool the phone cannot act on would be a claim with nothing
+/// behind it (C-5). Pools added before the list existed are not on it until
+/// they are set up again.
 enum XOSetupHandoff {
     /// How long a job's key is worth keeping: the machine forgets a finished
     /// job after six hours (FINISHED_TTL_MS in xo-setup.js).
     static let keepFor: TimeInterval = 6 * 60 * 60
 
     private static let pendingKey = "xosetup.pending"
+    private static let heldKey = "hypervisors.held"
     private static func replyAccount(_ job: String) -> String { "xosetup-reply.\(job)" }
     static func tokenAccount(_ address: String) -> String { "hypervisor.\(address)" }
 
@@ -81,6 +92,7 @@ enum XOSetupHandoff {
             return .failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one.")
         }
         Keychain.set(text, for: tokenAccount(entry.address))
+        remember(entry.address)
         forget(job: job)
         return .kept
     }
@@ -121,6 +133,47 @@ enum XOSetupHandoff {
                 forget(job: entry.job)
             }
         }
+    }
+
+    /// A pool this phone holds a record for, as Machines lists it.
+    struct Held: Identifiable, Equatable {
+        let address: String
+        /// The pool names the machine put in the record, or nil when the
+        /// record did not say: nil is "not recorded", never "no pools".
+        let pools: [String]?
+        var id: String { address }
+    }
+
+    /// The pools this phone holds a record for, oldest first, with what each
+    /// record says about its pools. Only those whose record is still in the
+    /// Keychain.
+    static func heldPools() -> [Held] {
+        let listed = UserDefaults.standard.stringArray(forKey: heldKey) ?? []
+        return listed.compactMap { (address) -> Held? in
+            guard let record = Keychain.get(tokenAccount(address)), !record.isEmpty else { return nil }
+            return Held(address: address, pools: poolNames(record))
+        }
+    }
+
+    /// The same, as addresses.
+    static func held() -> [String] { heldPools().map(\.address) }
+
+    /// The pool names in a kept record: each pool's name, or the start of its
+    /// id when Xen Orchestra gave it none. Nil for a record that does not say.
+    static func poolNames(_ record: String) -> [String]? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(record.utf8)) as? [String: Any],
+              let pools = object["pools"] as? [[String: Any]]
+        else { return nil }
+        return pools.map { (pool) -> String in
+            let name = (pool["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? "Unnamed pool \(String((pool["id"] as? String ?? "").prefix(8)))" : name
+        }
+    }
+
+    private static func remember(_ address: String) {
+        var all = (UserDefaults.standard.stringArray(forKey: heldKey) ?? []).filter { $0 != address }
+        all.append(address)
+        UserDefaults.standard.set(all, forKey: heldKey)
     }
 
     static func pending() -> [Pending] {

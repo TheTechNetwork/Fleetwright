@@ -43,9 +43,27 @@ import SwiftUI
 /// NOTHING HERE IS KEPT. No UserDefaults, no keychain, no outbox: every
 /// intent carries an idempotency key so a send that could not reach the fleet
 /// is refused rather than held on disk (Fleet.runSetup).
+///
+/// THE SAME SCREEN CHANGES WHAT THE FLEET MAY USE on a pool this phone holds
+/// (`policyFor`), because the first three of its four steps are the same
+/// steps: which machine, which certificate, whose key. Only the sealed
+/// sign-in differs, saying `purpose: policy` and carrying a key that lives in
+/// this screen's memory alone, and what follows `run`: the machine reads the
+/// pool and hands back an inventory sealed to that key, the person chooses,
+/// and the choice goes back sealed to the job's key (XOPolicy). No Live
+/// Activity: the machine waits on the person, so the person is on this screen.
 struct AddHypervisorView: View {
     let settings: Settings
+    /// The pool whose policy this changes, or nil to add one. Its address is
+    /// the one this phone holds a record for, so it is not edited here.
+    let policyFor: String?
     @Environment(\.dismiss) private var dismiss
+
+    init(settings: Settings, policyFor address: String? = nil) {
+        self.settings = settings
+        self.policyFor = address
+        _address = State(initialValue: address ?? "")
+    }
 
     @State private var address = ""
     @State private var probing = false
@@ -82,6 +100,13 @@ struct AddHypervisorView: View {
     /// Whether the token the machine handed back is in this phone's
     /// Keychain, once the job is done (XOSetupHandoff).
     @State private var handedBack: XOSetupHandoff.Outcome?
+    /// A policy job, once its sign-in is sent: the job's key to seal the
+    /// choice to, and the key the inventory comes back to. In memory and
+    /// nowhere else; dropped when the job ends.
+    @State private var policyJob: PolicyJob?
+    /// What the machine read, opened, while it waits on the person.
+    @State private var inventory: XOPolicy.Inventory?
+    @State private var choice = XOPolicy.Choice()
 
     private struct Begun {
         let job: String
@@ -89,6 +114,14 @@ struct AddHypervisorView: View {
         let address: String
         let key: String
         let fingerprint: String
+        /// What else a job on that machine can be (`can` in begin's answer).
+        let can: [String]
+    }
+
+    private struct PolicyJob {
+        let key: String
+        let address: String
+        let reply: Seal.OneUseKey
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -101,8 +134,18 @@ struct AddHypervisorView: View {
     /// there is one, and the warning card otherwise.
     private var plainReached: [Fleet.Probe] { (probes ?? []).filter { $0.plainHTTP } }
     private var offered: [Fleet.Probe] { reached + plainReached }
-    /// Still going, so the screen keeps asking and offers Cancel.
-    private var running: Bool { job != nil && XOSetupWords.isLive(progress?.state ?? "running") }
+    private var isPolicy: Bool { policyFor != nil }
+    /// Still going, so the screen keeps asking and offers Cancel. A policy
+    /// job waiting on the person is still going: the machine can still time
+    /// out, and Cancel still lets it go.
+    private var running: Bool {
+        guard job != nil else { return false }
+        let state = progress?.state ?? "running"
+        return XOSetupWords.isLive(state) || (isPolicy && state == "choosing")
+    }
+    /// The machine is waiting on the person's choice, and nobody has asked
+    /// it to stop: the form is the screen.
+    private var choosing: Bool { isPolicy && progress?.state == "choosing" && !cancelRequested }
     private var liveState: XOSetupAttributes.ContentState? { XOSetupActivities.contentState(progress) }
 
     var body: some View {
@@ -110,7 +153,13 @@ struct AddHypervisorView: View {
             whereSection
             if probes != nil { machinesSection }
             if let chosen, job == nil { signInSection(chosen) }
-            if let job { progressSection(job) }
+            if let job {
+                if choosing, let inventory {
+                    policySections(inventory, job: job)
+                } else {
+                    progressSection(job)
+                }
+            }
             if !result.isBlank {
                 Section {
                     Text(result)
@@ -123,9 +172,14 @@ struct AddHypervisorView: View {
         .scrollContentBackground(.hidden)
         .background(Design.Palette.bg)
         .listRowBackground(Design.Palette.card)
-        .navigationTitle("Add a hypervisor")
+        .navigationTitle(isPolicy ? "What the fleet may use" : "Add a hypervisor")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: job) { await follow() }
+        // The address is already known, so the first question is asked for
+        // the person: which machines can reach it.
+        .task {
+            if isPolicy, probes == nil, !probing { await probe() }
+        }
     }
 
     // MARK: Where
@@ -137,7 +191,7 @@ struct AddHypervisorView: View {
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .disabled(job != nil || busy)
+                .disabled(job != nil || busy || isPolicy)
                 // WHAT WAS FOUND WAS FOUND FOR AN ADDRESS. Edited, the old
                 // machines, certificate and acknowledgement would stand on
                 // screen for a different one, and `begin` would pair the new
@@ -161,8 +215,13 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Where")
         } footer: {
-            Text("A host name or address, with a port if it is not 443, and no https:// in front. "
-                 + "The setup runs from one of your permanent machines, so one of them has to be on a network that reaches it.")
+            if isPolicy {
+                Text("The pool this phone holds a token for. The change runs from one of your permanent machines, "
+                     + "so one of them has to be on a network that reaches it.")
+            } else {
+                Text("A host name or address, with a port if it is not 443, and no https:// in front. "
+                     + "The setup runs from one of your permanent machines, so one of them has to be on a network that reaches it.")
+            }
         }
     }
 
@@ -294,8 +353,13 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Sign in to Xen Orchestra")
         } footer: {
-            Text("Used once, by \(chosen.hostId), to make a limited fleetwright user and its token. It is sealed on this phone to a "
-                 + "key only that machine holds, so the fleet relays it and cannot read it, and neither this phone nor the fleet keeps it.")
+            if isPolicy {
+                Text("Used once, by \(chosen.hostId), to read the pool and apply what you choose, and not kept. It is sealed on this phone "
+                     + "to a key only that machine holds, so the fleet relays it and cannot read it, and neither this phone nor the fleet keeps it.")
+            } else {
+                Text("Used once, by \(chosen.hostId), to make a limited fleetwright user and its token. It is sealed on this phone to a "
+                     + "key only that machine holds, so the fleet relays it and cannot read it, and neither this phone nor the fleet keeps it.")
+            }
         }
     }
 
@@ -350,10 +414,19 @@ struct AddHypervisorView: View {
             Text("This Xen Orchestra answers without HTTPS")
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.attention)
-            Text("The admin password you type, and the token the fleet keeps afterwards, would cross the network between "
-                 + "\(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.ink)
+            if isPolicy {
+                // No token is made by a policy change; what crosses is the
+                // password and what the pool is made of.
+                Text("The admin password you type, and the pool's storage and networks, would cross the network between "
+                     + "\(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            } else {
+                Text("The admin password you type, and the token the fleet keeps afterwards, would cross the network between "
+                     + "\(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            }
             Text("To give it HTTPS instead: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, "
                  + "PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again.")
                 .fleetType(.label)
@@ -408,7 +481,7 @@ struct AddHypervisorView: View {
     private func progressSection(_ job: String) -> some View {
         Section {
             VStack(alignment: .leading, spacing: Design.Space.insideTight) {
-                Text(liveState.map(XOSetupWords.headline) ?? "Starting on \(hostId)")
+                Text(liveState.map { headline($0) } ?? "Starting on \(hostId)")
                     .fleetType(.bodyStrong)
                     .foregroundStyle(tone(progress?.state))
                     .contentTransition(.opacity)
@@ -465,6 +538,12 @@ struct AddHypervisorView: View {
         }
     }
 
+    /// Onboarding's words, or a policy change's: the steps are shared, the
+    /// ends are not.
+    private func headline(_ state: XOSetupAttributes.ContentState) -> String {
+        isPolicy ? XOPolicy.statusLine(state) : XOSetupWords.headline(state)
+    }
+
     /// The tone agrees with the headline it is on: finished, stopped,
     /// stopped by you, or still going.
     private func tone(_ state: String?) -> Color {
@@ -474,6 +553,182 @@ struct AddHypervisorView: View {
         case "cancelled": return Design.Palette.inkDim
         default: return Design.Palette.ink
         }
+    }
+
+    // MARK: What the fleet may use
+
+    /// The form a policy job waits on: storage, networks, the way out and the
+    /// limits, each starting where the pool is now (XOPolicy.Choice.initial),
+    /// then the one line about time and the two ways out of it. Every row is
+    /// a platform control on the card colour, the same shape as the sign-in
+    /// rows above it (RHYTHM 1); the one thing that spends emphasis is the
+    /// reason Apply is not offered yet, because it is the screen asking.
+    @ViewBuilder private func policySections(_ inv: XOPolicy.Inventory, job: String) -> some View {
+        storageSection(inv)
+        networksSection(inv)
+        wayOutSection(inv)
+        limitsSection(inv)
+        applySection(inv, job: job)
+    }
+
+    private func storageSection(_ inv: XOPolicy.Inventory) -> some View {
+        Section {
+            if inv.srs.isEmpty {
+                // Said, because nothing can be applied without one and an
+                // empty section would leave Apply greyed out for no reason.
+                Text("This pool listed no storage a VM’s disk can go on, so there is nothing to choose here.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            } else {
+                ForEach(inv.srs) { sr in
+                    Toggle(isOn: storageBinding(sr.id, inv)) {
+                        policyRow(XOPolicy.title(sr.name, id: sr.id), storageLine(sr, inv))
+                    }
+                    .tint(Design.Palette.accent)
+                    .frame(minHeight: 44)
+                    .disabled(busy)
+                }
+            }
+        } header: {
+            sectionHead("Storage")
+        } footer: {
+            Text("Where the fleet’s VMs may put their disks.")
+        }
+    }
+
+    private func networksSection(_ inv: XOPolicy.Inventory) -> some View {
+        Section {
+            if inv.networks.isEmpty {
+                Text("This pool listed no networks to choose from.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            } else {
+                ForEach(inv.networks) { network in
+                    Toggle(isOn: networkBinding(network.id)) {
+                        policyRow(XOPolicy.title(network.name, id: network.id), networkLine(network, inv))
+                    }
+                    .tint(Design.Palette.accent)
+                    .frame(minHeight: 44)
+                    .disabled(busy)
+                }
+            }
+        } header: {
+            sectionHead("Networks")
+        } footer: {
+            Text("The networks the fleet’s VMs may be attached to.")
+        }
+    }
+
+    /// THE WAY OUT, which is a choice among the networks chosen above and
+    /// nothing else: the machine refuses any other (checkPolicy), so the
+    /// picker never offers one. Said as what it will be used for, not as a
+    /// router that is there: the edge router is not built yet.
+    private func wayOutSection(_ inv: XOPolicy.Inventory) -> some View {
+        Section {
+            Picker(selection: $choice.egress) {
+                Text("None yet").tag(String?.none)
+                ForEach(inv.networks.filter { choice.networks.contains($0.id) }) { network in
+                    Text(XOPolicy.title(network.name, id: network.id)).tag(String?.some(network.id))
+                }
+            } label: {
+                Text("Network")
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            .tint(Design.Palette.accent)
+            .frame(minHeight: 44)
+            .disabled(busy)
+        } header: {
+            sectionHead("Way out")
+        } footer: {
+            Text("The network the edge router’s WAN will go on, so labs reach the internet through it. It is recorded in "
+                 + "Xen Orchestra as the fleetwright-egress tag on that network. Only a network chosen above can be the way out.")
+        }
+    }
+
+    private func limitsSection(_ inv: XOPolicy.Inventory) -> some View {
+        let disk = inv.diskRange(for: choice.srs)
+        return Section {
+            Stepper(value: $choice.cpus, in: inv.cpuRange) {
+                policyRow("vCPUs", "\(choice.cpus)" + (inv.capacity.cpus > 0 ? " of \(inv.capacity.cpus) in the pool" : ""))
+            }
+            .frame(minHeight: 44)
+            .disabled(busy)
+            Stepper(value: $choice.memoryGiB, in: inv.memoryRange) {
+                policyRow("Memory", "\(choice.memoryGiB) GiB"
+                          + (inv.capacity.memory > 0 ? " of \(XOPolicy.gibText(inv.capacity.memory)) in the pool" : ""))
+            }
+            .frame(minHeight: 44)
+            .disabled(busy)
+            // Ten at a time: the range is the size of the storage chosen,
+            // and a pool's storage is counted in hundreds of GiB.
+            Stepper(value: $choice.diskGiB, in: disk, step: 10) {
+                policyRow("Disk", "\(choice.diskGiB) GiB of \(disk.upperBound.formatted()) GiB on the storage chosen")
+            }
+            .frame(minHeight: 44)
+            .disabled(busy)
+        } header: {
+            sectionHead("Limits")
+        } footer: {
+            Text("The most the fleet’s VMs may use between them. Xen Orchestra holds them to it.")
+        }
+    }
+
+    /// Apply is offered only for a choice the machine will take, and when it
+    /// is not, the reason is the line above it rather than a button that
+    /// does nothing (C-2). Cancel lets the machine go now rather than at the
+    /// end of the ten minutes.
+    private func applySection(_ inv: XOPolicy.Inventory, job: String) -> some View {
+        let problem = choice.problem(in: inv)
+        return Section {
+            Text("\(hostId) waits ten minutes for this from when it read the pool, then lets go of the sign-in without changing anything.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            if let problem {
+                Text(problem)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            }
+            Button(busy ? "Applying…" : "Apply") { Task { await applyPolicy(inv, job: job) } }
+                .disabled(busy || problem != nil)
+            Button("Cancel", role: .destructive) { Task { await cancel(job) } }
+                .disabled(busy)
+        } header: {
+            sectionHead("On \(hostId)")
+        }
+    }
+
+    private func policyRow(_ title: String, _ detail: String) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            Text(title)
+                .fleetType(.bodyStrong)
+                .foregroundStyle(Design.Palette.ink)
+            Text(detail)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+        }
+    }
+
+    /// "412 GiB free of 931 GiB, shared", and the pool it is in when the
+    /// inventory has more than one.
+    private func storageLine(_ sr: XOPolicy.Inventory.Storage, _ inv: XOPolicy.Inventory) -> String {
+        var line = "\(XOPolicy.room(sr)), \(sr.shared ? "shared" : "local")"
+        if let pool = inv.poolName(sr.pool) { line += ", in \(pool)" }
+        return line
+    }
+
+    private func networkLine(_ network: XOPolicy.Inventory.Network, _ inv: XOPolicy.Inventory) -> String {
+        var line = XOPolicy.vlan(network)
+        if let pool = inv.poolName(network.pool) { line += ", in \(pool)" }
+        return line
+    }
+
+    private func storageBinding(_ id: String, _ inv: XOPolicy.Inventory) -> Binding<Bool> {
+        Binding(get: { choice.srs.contains(id) }, set: { on in choice.setStorage(id, on: on, in: inv) })
+    }
+
+    private func networkBinding(_ id: String) -> Binding<Bool> {
+        Binding(get: { choice.networks.contains(id) }, set: { on in choice.setNetwork(id, on: on) })
     }
 
     // MARK: Actions
@@ -567,6 +822,16 @@ struct AddHypervisorView: View {
                 return
             }
             let machine = reply.hostId ?? probe.hostId
+            let can = setup.can ?? []
+            // A POLICY CHANGE GOES ONLY TO A MACHINE THAT SAYS IT CAN TAKE
+            // ONE, asked before anything is sealed: an older machine would
+            // open the sign-in, ignore `purpose`, and run onboarding with it,
+            // making a token nobody asked for.
+            if isPolicy, !can.contains("policy") {
+                _ = try? await fleet.cancelSetup(job: begunJob)
+                refuse("\(machine) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
+                return
+            }
             // THE KEY IS CHECKED BEFORE ANYTHING IS SEALED TO IT. A bad
             // signature is a hard stop, said in one sentence: whatever
             // answered, it was not that machine signing for this key. Over
@@ -581,7 +846,7 @@ struct AddHypervisorView: View {
             // the reply: it is what the person compares, and what the vault
             // approved.
             let fingerprint = PhoneVault.fingerprint(hostKey)
-            begun = Begun(job: begunJob, hostId: machine, address: target, key: key, fingerprint: fingerprint)
+            begun = Begun(job: begunJob, hostId: machine, address: target, key: key, fingerprint: fingerprint, can: can)
             let approved = await approvedFingerprint(of: machine)
             if approved == fingerprint {
                 await send()
@@ -615,6 +880,10 @@ struct AddHypervisorView: View {
     @MainActor
     private func send() async {
         guard let begun else { return }
+        if isPolicy {
+            await sendForPolicy(begun)
+            return
+        }
         busy = true
         defer { busy = false }
         let sealed: [String: String]
@@ -688,6 +957,124 @@ struct AddHypervisorView: View {
         }
     }
 
+    /// The sign-in for a policy job: the same seal to the same job key under
+    /// the same binding as onboarding's, saying `purpose: policy` inside it,
+    /// where the coordinator cannot change it.
+    ///
+    /// WHERE THE POOL COMES BACK TO is a key made here and held in this
+    /// screen's memory and nowhere else: not XOSetupHandoff's, which waits in
+    /// the Keychain for a token, because nothing comes back to a policy job
+    /// once this screen is gone. The machine waits ten minutes for a choice
+    /// and then lets go, so a key kept past the screen would open nothing.
+    @MainActor
+    private func sendForPolicy(_ begun: Begun) async {
+        // Asked again here, where the seal is, so no path reaches it without.
+        guard begun.can.contains("policy") else {
+            _ = try? await fleet.cancelSetup(job: begun.job)
+            self.begun = nil
+            refuse("\(begun.hostId) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
+            return
+        }
+        busy = true
+        defer { busy = false }
+        let reply = Seal.newKey()
+        let sealed: [String: String]
+        do {
+            sealed = try Seal.seal(
+                to: begun.key,
+                aad: Seal.xosetupAAD(job: begun.job, address: begun.address),
+                payload: [
+                    "v": 1,
+                    "xo": ["email": email.trimmingCharacters(in: .whitespacesAndNewlines), "password": password],
+                    "reply": reply.publicKey,
+                    "purpose": "policy",
+                ]
+            )
+        } catch {
+            refuse(error.localizedDescription)
+            return
+        }
+        password = ""
+        toCompare = nil
+        let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
+        do {
+            let answer = try await fleet.runSetup(job: begun.job, sealed: joined)
+            guard answer.ok != false else {
+                refuse(answer.text ?? "\(begun.hostId) did not take the sign-in.")
+                return
+            }
+            policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply)
+            hostId = begun.hostId
+            progress = answer.xosetup
+            job = begun.job
+            self.begun = nil
+        } catch {
+            // The send may have arrived. Then the machine reads the pool and
+            // waits for a choice nobody can make, and lets go after ten
+            // minutes having changed nothing; a new Begin cancels it sooner.
+            refuse(error.localizedDescription)
+        }
+    }
+
+    /// What the fleet said about a policy job. The inventory is opened the
+    /// first time it is seen and never again, so a poll does not put back a
+    /// choice the person is halfway through; and the keys go the moment the
+    /// job is over, whichever way it ended.
+    @MainActor
+    private func applyPolicyState(_ state: Fleet.SetupState, job: String) async {
+        if state.state == "choosing", inventory == nil, let sealed = state.inventory, let policyJob {
+            if let opened = XOPolicy.open(sealed, job: job, address: policyJob.address, key: policyJob.reply) {
+                withAnimation(Design.Motion.change) {
+                    inventory = opened
+                    choice = XOPolicy.Choice.initial(for: opened)
+                }
+            } else {
+                // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
+                // one it can choose for, and the machine is holding a signed-in
+                // session open waiting.
+                refuse("What \(hostId) read did not open with this phone’s key, so it is not shown and nothing was changed. "
+                       + "It has been asked to stop; try again.")
+                _ = try? await fleet.cancelSetup(job: job)
+                cancelRequested = true
+            }
+        }
+        if let now = state.state, !XOSetupWords.isLive(now), now != "choosing" {
+            policyJob = nil
+            inventory = nil
+        }
+    }
+
+    /// The person's choice, sealed to the job's key under the policy binding
+    /// and sent. A choice the machine refuses leaves the job waiting, and its
+    /// sentence is shown under the form, which stays.
+    @MainActor
+    private func applyPolicy(_ inv: XOPolicy.Inventory, job: String) async {
+        guard let policyJob, choice.problem(in: inv) == nil else { return }
+        busy = true
+        defer { busy = false }
+        result = ""
+        failed = false
+        let sealed: [String: String]
+        do {
+            sealed = try Seal.seal(
+                to: policyJob.key,
+                aad: Seal.xosetupPolicyAAD(job: job, address: policyJob.address),
+                payload: choice.payload(in: inv)
+            )
+        } catch {
+            refuse(error.localizedDescription)
+            return
+        }
+        let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
+        do {
+            let answer = try await fleet.setupPolicy(job: job, sealed: joined)
+            if let state = answer.xosetup { await apply(state) }
+            if answer.ok == false { refuse(answer.text ?? "\(hostId) did not take that choice.") }
+        } catch {
+            refuse(error.localizedDescription)
+        }
+    }
+
     /// Ask where the job is every few seconds while this screen is open and
     /// the job is live. `.task(id: job)` cancels this when the screen goes or
     /// the job changes, and Task.sleep throws on cancellation, so the loop
@@ -715,6 +1102,10 @@ struct AddHypervisorView: View {
     private func apply(_ state: Fleet.SetupState) async {
         progress = state
         guard let job else { return }
+        if isPolicy {
+            await applyPolicyState(state, job: job)
+            return
+        }
         if let outcome = XOSetupHandoff.collect(job: job, state: state) { handedBack = outcome }
         if state.state == "failed" || state.state == "cancelled" { XOSetupHandoff.forget(job: job) }
         await XOSetupActivities.apply(job: job, progress: state)
@@ -726,6 +1117,9 @@ struct AddHypervisorView: View {
         begun = nil
         cancelRequested = false
         handedBack = nil
+        policyJob = nil
+        inventory = nil
+        choice = XOPolicy.Choice()
         toCompare = nil
         password = ""
         result = ""
