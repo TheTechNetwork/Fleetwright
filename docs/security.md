@@ -275,11 +275,17 @@ machine of the fleet, through the coordinator.
   to the widget with no hook that could decrypt it first, so it carries step
   numbers and a key from a fixed list, never an address or a name. The words
   travel in the ordinary notification, which is sealed.
-- **What is kept** is the limited user's token, 0600 in the sidecar's state
-  directory of the machine that ran the setup. That machine can then do what
-  the token can, which Xen Orchestra bounds with the resource set. It is the
-  proxying machine for now; the dedicated machine on the pool is the next
-  round's.
+- **What is kept** is the limited user's token, and only on the phone that
+  asked. The phone puts a key of its own inside the sealed sign-in; the
+  machine seals the token to it under a binding of its own
+  (`fleetwright-xosetup-handoff/v1:<job>:<address>`) and writes nothing. The
+  coordinator relays that ciphertext too, and cannot swap the key, which
+  came inside a seal it cannot open. The phone keeps the token in the
+  Keychain (this device only) or under the Android Keystore key. What it can
+  do is bounded in Xen Orchestra by the resource set. The machine that ran
+  the setup holds nothing after the job; until the job is forgotten (six
+  hours) it holds the sealed copy in memory, which only the phone can
+  open.
 
 **A device's own GitHub sign-in, and the dispatch it makes.** Starting a
 runner no longer needs a permanent box (`runner-central.md`, "Without a
