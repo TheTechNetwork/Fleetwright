@@ -1327,10 +1327,12 @@ class Fleet(
      * in src/fleet/protocol/intents.js.
      *
      * `begin` goes to the machine chosen ([host]) with the address and the
-     * certificate fingerprint the person accepted. Every later phase names the
-     * job alone: the coordinator routes it to the machine that answered
-     * `begin`, whatever host this phone might name, because the key is in
-     * that machine's memory and nowhere else.
+     * certificate fingerprint the person accepted, or, for a Xen Orchestra
+     * that answers in plain HTTP, no [pin] and [plain] set to "accepted"
+     * once the person has read what crosses that network. Every later phase
+     * names the job alone: the coordinator routes it to the machine that
+     * answered `begin`, whatever host this phone might name, because the key
+     * is in that machine's memory and nowhere else.
      *
      * NEVER HELD, for the same reason as [setupToken] and more so: `run`
      * carries the admin sign-in, sealed, and a sealed sign-in on a phone's
@@ -1345,6 +1347,7 @@ class Fleet(
         sealed: String? = null,
         host: String? = null,
         trust: String? = null,
+        plain: String? = null,
     ): Reply =
         intent(
             "xosetup",
@@ -1359,6 +1362,12 @@ class Fleet(
                 // does not check out unless this is "accepted", and a trusted
                 // one is never asked about (XoSetup.trustFor).
                 if (trust != null) put("trust", trust)
+                // THE SAME RULE FOR NO CERTIFICATE AT ALL. With no pin the
+                // host refuses `begin` unless this is "accepted", which the
+                // sheet sends only after the person ticked the box under the
+                // sentence that says their password would cross the network
+                // readable. Never beside a pin: the two are different setups.
+                if (plain != null) put("plain", plain)
             },
             host = host,
             idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),

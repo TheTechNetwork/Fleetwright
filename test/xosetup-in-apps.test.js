@@ -19,7 +19,8 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 
 import { iosSources } from './helpers/ios-sources.js';
-import { XOSETUP_STEPS } from '../src/fleet/protocol/intents.js';
+import { VERBS, XOSETUP_STEPS } from '../src/fleet/protocol/intents.js';
+import { signingInput } from '../src/fleet/crypto.js';
 
 const IOS = iosSources();
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -46,29 +47,80 @@ test('iOS: the screen asks every machine first, then runs one job on one machine
   }
   // `begin` names the machine the person chose; the coordinator routes every
   // later phase back to it from the job, so none of them names one. Its
-  // params are built first, because `trust` goes only when a person gave it.
-  assert.match(IOS, /var params = \["phase": "begin", "address": address, "pin": pin\]\s*if let trust \{ params\["trust"\] = trust \}\s*return try await intent\("xosetup", params: params, host: host/);
+  // params are built first, because `pin` goes only when there is a
+  // certificate, and `trust` and `plain` only when a person gave their word.
+  assert.match(IOS, /var params = \["phase": "begin", "address": address\]\s*if let pin \{ params\["pin"\] = pin \}\s*if let trust \{ params\["trust"\] = trust \}\s*if plain \{ params\["plain"\] = "accepted" \}\s*return try await intent\("xosetup", params: params, host: host/);
   // NEVER HELD: each carries an idempotency key, which keeps a send that could
   // not reach the fleet out of the outbox and off the disk.
   const sends = IOS.match(/intent\("(?:xoprobe|xosetup)"[^\n]*\n?[^\n]*idempotencyKey: "app-\\\(UUID\(\)\.uuidString\)"/g) ?? [];
   assert.equal(sends.length, 5, 'every probe and phase is sent with an idempotency key');
 });
 
-test('iOS: only a machine that reached the address over HTTPS is offered, and the alternatives are said plainly', () => {
+test('iOS: a machine that reached the address is offered, HTTPS with a certificate first, and the alternatives are said plainly', () => {
   assert.match(SCREEN, /filter \{ \$0\.reachable == true && \$0\.tls == true && \$0\.cert != nil \}/);
-  // What the person reads when nothing can run it, and what to check.
+  assert.match(SCREEN, /ForEach\(offered\)/);
+  assert.match(SCREEN, /private var offered: \[Fleet\.Probe\] \{ reached \+ plainReached \}/);
+  // What the person reads when nothing can run it, and what to check. Plain
+  // HTTP is offered now, so no sentence on the screen claims setup needs HTTPS.
   assert.ok(SCREEN.includes('No machine reached \\(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one '));
-  assert.ok(SCREEN.includes('Setup needs HTTPS, because the sign-in is only '));
-  // The installer serves plain HTTP on 80 unless xo-install.cfg names a
-  // certificate, so the screen says how to give it one, never that it has one.
+  assert.ok(!SCREEN.includes('Setup needs HTTPS'));
+  assert.ok(!SCREEN.includes('needs HTTPS'));
+  // How to give it HTTPS instead is said, and never that it has HTTPS already.
   assert.ok(!SCREEN.includes('on by default'));
   assert.ok(SCREEN.includes('xo-install.cfg') && SCREEN.includes('AUTOCERT'));
   // The certificate the machine saw is shown for acceptance, grouped so it can
   // be compared against a terminal, and `begin` pins exactly that one.
   assert.match(SCREEN, /Text\(XOSetupKey\.grouped\(cert\)\)/);
-  assert.match(SCREEN, /guard let pin = probe\.cert else \{ return \}[\s\S]{0,1500}?beginSetup\(address: target, pin: pin, host: probe\.hostId, trust: trust\)/);
+  assert.match(SCREEN, /if let cert = probe\.cert \{\s*pin = cert\s*plain = false[\s\S]{0,1500}?beginSetup\(address: target, pin: pin, host: probe\.hostId, trust: trust, plain: plain\)/);
   // Cannot tell is said as cannot tell.
   assert.ok(SCREEN.includes('cannot tell whether it is Xen Orchestra'));
+});
+
+test('iOS: a machine that reached the address over plain HTTP is offered after the HTTPS ones, behind a warning the person accepts', () => {
+  // The coordinator's shape for plain HTTP is `reachable: true, tls: false`,
+  // and that, in as many words, is what is offered: a machine that said
+  // neither is not rounded to either.
+  assert.match(IOS, /var plainHTTP: Bool \{ reachable == true && tls == false \}/);
+  // The row says what it reached and how; cannot tell stays cannot tell.
+  for (const words of [
+    'Reached Xen Orchestra over plain HTTP',
+    'Reached something over plain HTTP, and it does not look like Xen Orchestra',
+    'Reached something over plain HTTP; cannot tell whether it is Xen Orchestra',
+  ]) {
+    assert.ok(SCREEN.includes(`"${words}"`), words);
+  }
+  // The warning: the heading in the attention tone, then the two things that
+  // would travel in the clear and between which machines, then the lines of
+  // xo-install.cfg that would make it HTTPS. The same words as Android.
+  assert.match(SCREEN, /Text\("This Xen Orchestra answers without HTTPS"\)\s*\.fleetType\(\.bodyStrong\)\s*\.foregroundStyle\(Design\.Palette\.attention\)/);
+  assert.ok(SCREEN.includes('The admin password you type, and the token the fleet keeps afterwards, would cross the network between '));
+  assert.ok(SCREEN.includes('\\(probe.hostId) and \\(trimmedAddress) unencrypted. Anything on that network could read them.'));
+  assert.ok(SCREEN.includes('To give it HTTPS instead: in the installer\'s xo-install.cfg, set PORT=\\"443\\", PATH_TO_HTTPS_CERT, '));
+  assert.ok(SCREEN.includes('PATH_TO_HTTPS_KEY and AUTOCERT=\\"true\\", then run it again.'));
+  assert.ok(!SCREEN.includes('on by default'));
+  // Shown only when there is no certificate: never both questions at once.
+  assert.match(SCREEN, /if let cert = chosen\.cert \{[\s\S]*?\} else if chosen\.plainHTTP \{\s*plainQuestion\(chosen\)\s*Toggle\(isOn: \$plainAccepted\) \{\s*Text\("Send it without HTTPS anyway"\)[\s\S]{0,200}?\.frame\(minHeight: 44\)/);
+  // Begin waits for the toggle, and for nothing less.
+  assert.match(SCREEN, /\.disabled\(busy \|\| email\.isBlank \|\| password\.isEmpty \|\| !accepted\(chosen\)\)/);
+  assert.match(SCREEN, /private func accepted\(_ probe: Fleet\.Probe\) -> Bool \{\s*if probe\.cert != nil \{ return probe\.certificateTrusted \|\| acknowledged \}\s*return probe\.plainHTTP && plainAccepted\s*\}/);
+  // The toggle resets on the same changes as the certificate's: the address,
+  // the machine, and a new probe.
+  assert.match(SCREEN, /\.onChange\(of: address\)[\s\S]{0,500}?acknowledged = false\s*plainAccepted = false/);
+  assert.match(SCREEN, /if chosen\?\.hostId != probe\.hostId \{\s*acknowledged = false\s*plainAccepted = false\s*\}/);
+  const probe = SCREEN.slice(SCREEN.indexOf('private func probe()'), SCREEN.indexOf('private func choose('));
+  assert.match(probe, /acknowledged = false\s*plainAccepted = false/);
+  // What leaves the phone: `plain: accepted`, no pin, no trust, and only once
+  // the person has said so. The one word the coordinator takes.
+  assert.match(SCREEN, /\} else if probe\.plainHTTP, plainAccepted \{\s*pin = nil\s*trust = nil\s*plain = true\s*\} else \{\s*return\s*\}/);
+  assert.deepEqual(VERBS.xosetup.params.plain.values, ['accepted']);
+  // The key is still checked, over the pin the machine signed: the empty
+  // string, in the bytes, the way the host's own canonical JSON writes it.
+  assert.match(SCREEN, /XOSetupKey\.isSigned\([^\n]*pin: pin \?\? ""\)/);
+  assert.match(IOS, /guard isJob\(job\), pin\.isEmpty \|\| isPin\(pin\), Seal\.isKey\(key\), isAddress\(address\)/);
+  assert.equal(
+    signingInput('xosetup-key', { address: 'xo.lan', job: 'j', key: 'k', pin: '' }),
+    'agent-fleet/v1/xosetup-key\n{"address":"xo.lan","job":"j","key":"k","pin":""}',
+  );
 });
 
 test('iOS: the key is checked as the machine’s before anything is sealed to it', () => {
@@ -255,7 +307,8 @@ test('iOS: a certificate that does not check out is shown in full and accepted b
   for (const label of ['"Issued to"', '"Issued by"', '"Valid"', '"Names"']) assert.ok(SCREEN.includes(label), label);
   // The question, and Begin waits for its answer.
   assert.match(SCREEN, /Toggle\(isOn: \$acknowledged\)/);
-  assert.match(SCREEN, /\.disabled\(busy \|\| email\.isBlank \|\| password\.isEmpty \|\| \(!chosen\.certificateTrusted && !acknowledged\)\)/);
+  assert.match(SCREEN, /\.disabled\(busy \|\| email\.isBlank \|\| password\.isEmpty \|\| !accepted\(chosen\)\)/);
+  assert.match(SCREEN, /if probe\.cert != nil \{ return probe\.certificateTrusted \|\| acknowledged \}/);
   // `trust` goes only with the person's word, and never for a trusted one.
   assert.match(SCREEN, /if probe\.certificateTrusted \{\s*trust = nil\s*\} else if acknowledged \{\s*trust = "accepted"\s*\} else \{\s*return\s*\}/);
   // What was found for one address is not left standing for another.

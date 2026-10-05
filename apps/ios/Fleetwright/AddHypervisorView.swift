@@ -12,7 +12,11 @@ import SwiftUI
 ///   1. `xoprobe`: every permanent machine tries the address, and the person
 ///      picks one that reached it over HTTPS and sees the certificate it saw,
 ///      because the sign-in is only ever sent to a server that answers with
-///      that one certificate (the pin).
+///      that one certificate (the pin). A machine that reached it over plain
+///      HTTP is offered too, after those: there is nothing to pin, so before
+///      anything is typed the person is told that the password and the token
+///      would cross that network unencrypted, and Begin waits until they have
+///      said to go on anyway.
 ///   2. `xosetup begin`, on that machine: it makes a key for this job alone
 ///      and signs it with its enrolment key. THE KEY IS CHECKED BEFORE
 ///      ANYTHING IS SEALED TO IT (XOSetupKey): a coordinator that wanted the
@@ -68,6 +72,10 @@ struct AddHypervisorView: View {
     /// out, and said they trust it anyway. Reset whenever what it was said
     /// about changes: the address, the machine, or the probe.
     @State private var acknowledged = false
+    /// The person read that there is no HTTPS at this address, what that
+    /// means for the password and the token, and said to send it anyway.
+    /// Reset on the same changes as `acknowledged`, for the same reason.
+    @State private var plainAccepted = false
     /// Cancel was pressed and the machine said it would stop after the step
     /// it is on: the button is not offered twice.
     @State private var cancelRequested = false
@@ -82,9 +90,14 @@ struct AddHypervisorView: View {
 
     private var fleet: Fleet { Fleet(settings: settings) }
     private var trimmedAddress: String { address.trimmingCharacters(in: .whitespacesAndNewlines) }
-    /// The machines setup could run from: reached it, over HTTPS, with a
-    /// certificate to pin.
+    /// The machines setup could run from with a certificate pinned: reached
+    /// it, over HTTPS, and saw one.
     private var reached: [Fleet.Probe] { (probes ?? []).filter { $0.reachable == true && $0.tls == true && $0.cert != nil } }
+    /// The machines that reached it over plain HTTP. Offered after the ones
+    /// above, because the order is the recommendation: a certificate when
+    /// there is one, and the warning card otherwise.
+    private var plainReached: [Fleet.Probe] { (probes ?? []).filter { $0.plainHTTP } }
+    private var offered: [Fleet.Probe] { reached + plainReached }
     /// Still going, so the screen keeps asking and offers Cancel.
     private var running: Bool { job != nil && XOSetupWords.isLive(progress?.state ?? "running") }
     private var liveState: XOSetupAttributes.ContentState? { XOSetupActivities.contentState(progress) }
@@ -132,6 +145,7 @@ struct AddHypervisorView: View {
                     chosen = nil
                     probeText = ""
                     acknowledged = false
+                    plainAccepted = false
                     toCompare = nil
                 }
             Button(probing ? "Asking your machines…" : "Find a machine that can reach it") { Task { await probe() } }
@@ -153,14 +167,14 @@ struct AddHypervisorView: View {
 
     private var machinesSection: some View {
         Section {
-            if reached.isEmpty {
+            if offered.isEmpty {
                 // SAID PLAINLY, WITH WHAT TO CHECK. An empty list under a
                 // heading is a screen that has stopped talking.
                 Text(nobodyReached)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
             } else {
-                ForEach(reached) { probe in
+                ForEach(offered) { probe in
                     Button { choose(probe) } label: { probeRow(probe) }
                         .disabled(job != nil)
                 }
@@ -191,25 +205,31 @@ struct AddHypervisorView: View {
         .frame(minHeight: 44)
     }
 
-    /// What this machine found, in its own three answers. `xo` nil is cannot
-    /// tell and is said as that, never rounded to yes or no (C-5).
+    /// What this machine found, in its own three answers, over HTTPS or over
+    /// plain HTTP. `xo` nil is cannot tell and is said as that, never rounded
+    /// to yes or no (C-5). The same words as Android (XoSetup.describe).
     private func describe(_ probe: Fleet.Probe) -> String {
+        if probe.plainHTTP {
+            if probe.xo == true { return "Reached Xen Orchestra over plain HTTP" }
+            if probe.xo == false { return "Reached something over plain HTTP, and it does not look like Xen Orchestra" }
+            return "Reached something over plain HTTP; cannot tell whether it is Xen Orchestra"
+        }
         if probe.xo == true { return "Reached Xen Orchestra" + (probe.version.map { " \($0)" } ?? "") }
         if probe.xo == false { return "Reached something there over HTTPS, and it does not look like Xen Orchestra" }
         return "Reached something there over HTTPS; cannot tell whether it is Xen Orchestra"
     }
 
+    /// Nothing is offered. Plain HTTP is offered now, so the only machine
+    /// that reached the address and is not listed is one whose answer said
+    /// neither HTTPS nor plain, which is said as that and not as "nobody".
     private var nobodyReached: String {
         let all = probes ?? []
         if all.isEmpty {
             return "No permanent machine is connected, so nothing could try \(trimmedAddress). A machine has to be in the fleet to run the setup."
         }
-        // Reached, but not over HTTPS: the one case with a fix on the far side.
-        if let plain = all.first(where: { $0.reachable == true && $0.tls != true }) {
-            return "\(plain.hostId) reached \(trimmedAddress), but not over HTTPS. Setup needs HTTPS, because the sign-in is only "
-                + "ever sent to a server whose certificate was pinned first. Xen Orchestra serves plain HTTP until it is given a "
-                + "certificate: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and "
-                + "AUTOCERT=\"true\", then run it again. Or give its HTTPS port here."
+        if let odd = all.first(where: { $0.reachable == true }) {
+            return "\(odd.hostId) reached \(trimmedAddress), but did not say whether it was over HTTPS or show a certificate, "
+                + "so setup cannot run from it. Update that machine, then ask again."
         }
         return "No machine reached \(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one "
             + "of these is on a network that can reach it: \(all.map(\.hostId).sorted().joined(separator: ", "))."
@@ -242,6 +262,16 @@ struct AddHypervisorView: View {
                     .frame(minHeight: 44)
                     .disabled(busy || toCompare != nil)
                 }
+            } else if chosen.plainHTTP {
+                plainQuestion(chosen)
+                Toggle(isOn: $plainAccepted) {
+                    Text("Send it without HTTPS anyway")
+                        .fleetType(.bodyStrong)
+                        .foregroundStyle(Design.Palette.ink)
+                }
+                .tint(Design.Palette.accent)
+                .frame(minHeight: 44)
+                .disabled(busy || toCompare != nil)
             }
             TextField("Xen Orchestra admin email", text: $email)
                 .textContentType(.emailAddress)
@@ -256,7 +286,7 @@ struct AddHypervisorView: View {
                 compareRows(toCompare)
             } else {
                 Button(busy ? "Beginning…" : "Begin on \(chosen.hostId)") { Task { await begin(chosen) } }
-                    .disabled(busy || email.isBlank || password.isEmpty || (!chosen.certificateTrusted && !acknowledged))
+                    .disabled(busy || email.isBlank || password.isEmpty || !accepted(chosen))
             }
         } header: {
             sectionHead("Sign in to Xen Orchestra")
@@ -303,6 +333,39 @@ struct AddHypervisorView: View {
             }
         }
         .padding(.vertical, Design.Space.hair)
+    }
+
+    /// THE OTHER QUESTION, for an address with no HTTPS at all. The same
+    /// emphasis as the certificate question and never both at once, since a
+    /// machine either saw a certificate or did not. Said in the concrete: the
+    /// two things that would travel in the clear, between which two machines,
+    /// and the lines of xo-install.cfg that would make it HTTPS instead, so
+    /// the person is choosing between two things they can picture. The same
+    /// words as Android.
+    @ViewBuilder private func plainQuestion(_ probe: Fleet.Probe) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+            Text("This Xen Orchestra answers without HTTPS")
+                .fleetType(.bodyStrong)
+                .foregroundStyle(Design.Palette.attention)
+            Text("The admin password you type, and the token the fleet keeps afterwards, would cross the network between "
+                 + "\(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.ink)
+            Text("To give it HTTPS instead: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, "
+                 + "PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.ink)
+        }
+        .padding(.vertical, Design.Space.hair)
+    }
+
+    /// Whatever this machine's probe asks has been answered: nothing, for a
+    /// certificate that checks out; the person's word for one that does not;
+    /// and their word again for no certificate at all. False for a probe
+    /// that is neither, which is never offered and so never asked.
+    private func accepted(_ probe: Fleet.Probe) -> Bool {
+        if probe.cert != nil { return probe.certificateTrusted || acknowledged }
+        return probe.plainHTTP && plainAccepted
     }
 
     @ViewBuilder private func detail(_ label: String, _ value: String?) -> some View {
@@ -406,6 +469,7 @@ struct AddHypervisorView: View {
         chosen = nil
         probeText = ""
         acknowledged = false
+        plainAccepted = false
         result = ""
         failed = false
         do {
@@ -419,15 +483,19 @@ struct AddHypervisorView: View {
                 return
             }
             probes = found
-            // One machine that can is not a choice, so it is chosen.
-            if reached.count == 1 { chosen = reached.first }
+            // One machine that can is not a choice, so it is chosen. Over
+            // plain HTTP too: choosing shows the warning, and sends nothing.
+            if offered.count == 1 { chosen = offered.first }
         } catch {
             probeText = error.localizedDescription
         }
     }
 
     private func choose(_ probe: Fleet.Probe) {
-        if chosen?.hostId != probe.hostId { acknowledged = false }
+        if chosen?.hostId != probe.hostId {
+            acknowledged = false
+            plainAccepted = false
+        }
         chosen = probe
         toCompare = nil
         begun = nil
@@ -437,14 +505,28 @@ struct AddHypervisorView: View {
 
     @MainActor
     private func begin(_ probe: Fleet.Probe) async {
-        guard let pin = probe.cert else { return }
-        // A trusted certificate is never asked about, so nothing is said for
-        // it; one that does not check out goes only with the person's word.
+        // WHAT GOES WITH BEGIN is exactly what the person was asked. A
+        // trusted certificate is never asked about, so nothing is said for
+        // it; one that does not check out goes only with the person's word;
+        // and no certificate goes with no pin and the person's word for that,
+        // `plain`. Anything else is not sent.
+        let pin: String?
         let trust: String?
-        if probe.certificateTrusted {
+        let plain: Bool
+        if let cert = probe.cert {
+            pin = cert
+            plain = false
+            if probe.certificateTrusted {
+                trust = nil
+            } else if acknowledged {
+                trust = "accepted"
+            } else {
+                return
+            }
+        } else if probe.plainHTTP, plainAccepted {
+            pin = nil
             trust = nil
-        } else if acknowledged {
-            trust = "accepted"
+            plain = true
         } else {
             return
         }
@@ -460,7 +542,7 @@ struct AddHypervisorView: View {
             begun = nil
         }
         do {
-            let reply = try await fleet.beginSetup(address: target, pin: pin, host: probe.hostId, trust: trust)
+            let reply = try await fleet.beginSetup(address: target, pin: pin, host: probe.hostId, trust: trust, plain: plain)
             guard reply.ok != false, let setup = reply.xosetup, let begunJob = setup.job,
                   let key = setup.key, let keySig = setup.keySig, let hostKey = setup.hostKey
             else {
@@ -470,8 +552,10 @@ struct AddHypervisorView: View {
             let machine = reply.hostId ?? probe.hostId
             // THE KEY IS CHECKED BEFORE ANYTHING IS SEALED TO IT. A bad
             // signature is a hard stop, said in one sentence: whatever
-            // answered, it was not that machine signing for this key.
-            guard XOSetupKey.isSigned(key: key, keySig: keySig, hostKey: hostKey, address: target, job: begunJob, pin: pin) else {
+            // answered, it was not that machine signing for this key. Over
+            // plain HTTP the machine signed over an empty pin, and that is
+            // what is checked: `"pin":""` in the bytes, not a missing key.
+            guard XOSetupKey.isSigned(key: key, keySig: keySig, hostKey: hostKey, address: target, job: begunJob, pin: pin ?? "") else {
                 _ = try? await fleet.cancelSetup(job: begunJob)
                 refuse("The key \(machine) answered with did not come from that machine, so the sign-in was not sent.")
                 return

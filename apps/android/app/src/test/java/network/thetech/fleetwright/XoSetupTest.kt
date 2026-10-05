@@ -85,6 +85,12 @@ class XoSetupTest {
             "agent-fleet/v1/xosetup-key\n{\"address\":\"xo.lan:443\",\"job\":\"a1b2c3d4e5f6\",\"key\":\"${key}\",\"pin\":\"${pin}\"}",
             String(XoSetup.signingInput(address, job, key, pin), Charsets.UTF_8),
         )
+        // Plain HTTP: no certificate, so the machine signs over an empty pin,
+        // and the key stays in the JSON rather than being dropped.
+        assertEquals(
+            "agent-fleet/v1/xosetup-key\n{\"address\":\"xo.lan:443\",\"job\":\"a1b2c3d4e5f6\",\"key\":\"${key}\",\"pin\":\"\"}",
+            String(XoSetup.signingInput(address, job, key, ""), Charsets.UTF_8),
+        )
     }
 
     @Test
@@ -96,6 +102,12 @@ class XoSetupTest {
         repeat(40) {
             assertTrue(XoSetup.verifyKeySig(hostKey, sign(input), input))
         }
+        // And over the empty pin of a plain-HTTP setup, which is a different
+        // input from any fingerprint's: a signature for one is not for the other.
+        val plain = XoSetup.signingInput(address, job, key, "")
+        assertTrue(XoSetup.verifyKeySig(hostKey, sign(plain), plain))
+        assertFalse(XoSetup.verifyKeySig(hostKey, sign(plain), input))
+        assertFalse(XoSetup.verifyKeySig(hostKey, sign(input), plain))
     }
 
     @Test
@@ -129,6 +141,34 @@ class XoSetupTest {
         }
         assertTrue(runCatching { XoSetup.signingInput(address, "A1B2C3D4E5F6", key, pin) }.isFailure)
         assertTrue(runCatching { XoSetup.signingInput(address, job, key, pin.uppercase()) }.isFailure)
+        // A pin is a whole fingerprint or nothing: a part of one is neither.
+        assertTrue(runCatching { XoSetup.signingInput(address, job, key, pin.take(63)) }.isFailure)
+        assertTrue(runCatching { XoSetup.signingInput(address, job, key, " ") }.isFailure)
+    }
+
+    @Test
+    fun whoCanRunItAndWhatEachProbeSays() {
+        val https = Fleet.Probe("deb14", reachable = true, xo = true, tls = true, cert = pin, version = "5.100.0")
+        val plain = https.copy(hostId = "rpi", tls = false, cert = null, version = null)
+        val noCert = https.copy(hostId = "nuc", cert = null)
+        val unreached = https.copy(hostId = "far", reachable = false)
+        assertTrue(XoSetup.pinned(https))
+        assertFalse(XoSetup.plain(https))
+        assertTrue(XoSetup.plain(plain))
+        assertFalse(XoSetup.pinned(plain))
+        // Over TLS with no readable certificate is neither: nothing to pin to,
+        // and not plain HTTP either.
+        assertFalse(XoSetup.pinned(noCert))
+        assertFalse(XoSetup.plain(noCert))
+        assertFalse(XoSetup.pinned(unreached))
+        assertFalse(XoSetup.plain(unreached))
+        // What was found over plain HTTP, with `xo` kept three-valued: null is
+        // cannot tell, and is never rounded to no.
+        assertEquals("Reached Xen Orchestra over plain HTTP", XoSetup.describe(plain))
+        assertEquals("Reached something over plain HTTP, and it does not look like Xen Orchestra", XoSetup.describe(plain.copy(xo = false)))
+        assertEquals("Reached something over plain HTTP; cannot tell whether it is Xen Orchestra", XoSetup.describe(plain.copy(xo = null)))
+        assertEquals("Reached it over HTTPS. Xen Orchestra 5.100.0", XoSetup.describe(https))
+        assertEquals("Could not reach it", XoSetup.describe(unreached))
     }
 
     @Test
