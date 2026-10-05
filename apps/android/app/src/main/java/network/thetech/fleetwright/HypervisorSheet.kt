@@ -86,15 +86,31 @@ import kotlinx.coroutines.launch
  * The probes are not: they are an answer from the fleet, and asking again is
  * one tap.
  *
+ * CHANGING WHAT THE FLEET MAY USE is this screen again, for a pool this
+ * phone already keeps a token for ([policyFor]): the same probe, machine,
+ * certificate, sign-in and key check, because the job is begun exactly as a
+ * setup is, then a form where the steps would be. It differs where XoPolicy
+ * says. `begin` must answer that the machine can (`can` holds "policy"),
+ * checked before anything is sealed, because an older machine would run a
+ * policy sign-in as a setup. The sign-in carries the purpose inside the
+ * seal, and a key for the pool to come back to that lives in this screen's
+ * memory alone: not saveable, not the Keystore, gone when the screen goes. So
+ * a screen rebuilt while the machine waits says it can no longer open what
+ * the machine sent, and offers Cancel, rather than pretending otherwise.
+ *
  * @param resumeJob a job a notification was tapped for: straight to its
  *   progress, from `status`, with nothing to type.
+ * @param policyFor a pool's address, to change what the fleet may use on it
+ *   instead of adding it. The address is fixed: it is the pool the token is
+ *   kept for.
  */
 @Composable
-internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDismiss: () -> Unit) {
+internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, policyFor: String? = null, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val fleet = remember { Fleet(settings) }
+    val policy = policyFor != null
 
-    var address by rememberSaveable { mutableStateOf("") }
+    var address by rememberSaveable { mutableStateOf(policyFor ?: "") }
     var probing by remember { mutableStateOf(false) }
     // NULL IS NOT ASKED. An empty list is a fleet with nothing permanent to ask.
     var probes by remember { mutableStateOf<List<Fleet.Probe>?>(null) }
@@ -137,6 +153,26 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     var pollGone by remember { mutableStateOf(false) }
     var asks by rememberSaveable { mutableStateOf(0) }
 
+    // A POLICY JOB. The job's key as `begin` gave it and this phone checked
+    // it, which is what the choice is sealed to (a `status` answer carries no
+    // key, and one that did would be the coordinator's word for it). The key
+    // the pool comes back to, IN MEMORY ONLY. What the pool has, once opened,
+    // and what the person has chosen from it.
+    var jobKey by remember { mutableStateOf<String?>(null) }
+    var policyKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
+    var inventory by remember { mutableStateOf<XoPolicy.Inventory?>(null) }
+    var choice by remember { mutableStateOf<XoPolicy.Choice?>(null) }
+    // The machine sent the pool and it did not open here: the key went with
+    // a rebuilt screen, or the sealed copy is not what the machine sealed.
+    var unopened by remember { mutableStateOf(false) }
+    var applying by remember { mutableStateOf(false) }
+    // The machine took the choice: the form goes, and is not offered again.
+    var applied by rememberSaveable { mutableStateOf(false) }
+    // What the machine said when it did not take the choice. Kept apart from
+    // `refusal`, which the poll clears on every answer, because the person
+    // needs to read it while they change what it was about.
+    var choiceRefusal by remember { mutableStateOf("") }
+
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     // WHO CAN RUN IT: the machines that reached it over HTTPS and saw a
     // certificate, then the ones answered in plain HTTP. The pinned ones
@@ -167,6 +203,40 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
         }
     }
 
+    fun olderThanPolicy(hostId: String) =
+        "$hostId is older than changing a policy, so nothing was sent. Update it, or choose another machine that reaches $address."
+
+    /**
+     * `run` for a policy job: the same seal, under the same binding, with the
+     * purpose inside it and a reply key made here and kept only in memory.
+     * Never XoHandoff's key, which is written down so a token can be
+     * collected with the app closed: what comes back here is for this screen
+     * to show now, and nothing comes back afterwards to collect.
+     */
+    suspend fun runPolicy(p: Pending) {
+        val key = p.setup.key ?: return
+        // ASKED AGAIN, though begin already refused: this is the last line
+        // before a sign-in is sealed.
+        if (XoPolicy.PURPOSE !in p.setup.can) {
+            password = ""
+            refusal = olderThanPolicy(p.hostId)
+            return
+        }
+        val reply = Seal.newKey()
+        val sealed = XoPolicy.sealSignIn(key, p.setup.job, p.where, p.email, password, reply.publicKey)
+        password = ""
+        val r = fleet.xosetup("run", job = p.setup.job, sealed = sealed)
+        if (!r.ok) {
+            refusal = r.text.ifBlank { "${p.hostId} did not take the sign-in." }
+            return
+        }
+        jobKey = key
+        policyKey = reply
+        job = p.setup.job
+        runningOn = r.hostId ?: p.hostId
+        progress = r.xosetup ?: p.setup.copy(state = "running")
+    }
+
     /**
      * `run`: seal the sign-in to the job's key, drop the password, send. The
      * address and the email are the ones `begin` was sent with, not whatever
@@ -174,6 +244,10 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
      * sign-in sealed under a different one would be refused as a replay.
      */
     suspend fun run(p: Pending) {
+        if (policy) {
+            runPolicy(p)
+            return
+        }
         val key = p.setup.key ?: return
         val reply = XoHandoff.newKey(settings, p.setup.job, p.where)
         val sealed = XoSetup.sealSignIn(key, p.setup.job, p.where, p.email, password, reply.publicKey)
@@ -217,6 +291,15 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
             val hostId = r.hostId ?: p.hostId
             when {
                 !r.ok || setup == null -> refusal = r.text.ifBlank { "${p.hostId} did not start the setup." }
+                // ONLY TO A MACHINE THAT SAYS IT CAN, asked before the key is
+                // so much as checked: a machine older than the policy job
+                // would read the sign-in as a setup and add the pool again.
+                // Its job is let go rather than left holding a slot.
+                policy && XoPolicy.PURPOSE !in setup.can -> {
+                    password = ""
+                    refusal = olderThanPolicy(hostId)
+                    runCatching { fleet.xosetup("cancel", job = setup.job) }
+                }
                 // The machine signed over an empty pin for a plain setup, and
                 // the phone checks the same bytes (XoSetup.signingInput).
                 setup.key == null || !XoSetup.verifyKeySig(setup.hostKey, setup.keySig, runCatching { XoSetup.signingInput(where, setup.job, setup.key, pin ?: "") }.getOrDefault(ByteArray(0))) -> {
@@ -259,6 +342,61 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
         cancelText = ""
         pollStopped = false
         pollGone = false
+        jobKey = null
+        policyKey = null
+        inventory = null
+        choice = null
+        unopened = false
+        applied = false
+        choiceRefusal = ""
+    }
+
+    fun cancelJob(setup: Fleet.Setup) {
+        scope.launch {
+            cancelling = true
+            val r = fleet.xosetup("cancel", job = setup.job)
+            if (r.ok) {
+                // OFFERED ONCE. The fleet has the cancel; what the host said
+                // about it stands in for the button until the state changes.
+                cancelAccepted = true
+                cancelText = r.text
+                r.xosetup?.let { progress = it }
+            } else {
+                refusal = r.text.ifBlank { "Could not cancel." }
+            }
+            cancelling = false
+        }
+    }
+
+    /**
+     * `policy`: the choice, sealed to the job's key under its own binding.
+     * Off unless XoPolicy finds nothing the machine would refuse, so a
+     * refusal here is the machine knowing something this phone did not (the
+     * ten minutes ran out, say), and its words are shown on the form, which
+     * stays, because the machine is still waiting.
+     */
+    fun applyChoice(setup: Fleet.Setup) {
+        val key = jobKey ?: return
+        val inv = inventory ?: return
+        val c = choice ?: return
+        if (XoPolicy.problem(inv, c) != null) return
+        scope.launch {
+            applying = true
+            choiceRefusal = ""
+            val sealed = XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c)
+            val r = fleet.xosetup("policy", job = setup.job, sealed = sealed)
+            if (r.ok) {
+                // Nothing left to open or choose: the key and the pool go.
+                applied = true
+                policyKey = null
+                inventory = null
+                choice = null
+            } else {
+                choiceRefusal = r.text.ifBlank { "The fleet did not answer, so the choice was not applied. Try again." }
+            }
+            r.xosetup?.let { progress = it }
+            applying = false
+        }
     }
 
     // THE POLL, ONLY WHILE THIS IS ON SCREEN. Leaving the screen cancels the
@@ -280,6 +418,20 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                 progress = r.xosetup
                 XoHandoff.collect(settings, id, r.xosetup)?.let { handedBack = it }
                 if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
+                // CHOOSING IS NOT AN END: the loop goes on asking, so this
+                // screen hears when the machine lets go. The pool is opened
+                // once, the first time it arrives, and never after the
+                // choice has gone, whatever a late answer still says.
+                val pool = r.xosetup.inventory
+                if (policy && r.xosetup.state == "choosing" && pool != null && inventory == null && !applied && !unopened) {
+                    val opened = policyKey?.let { XoPolicy.openInventory(pool, id, address.trim(), it) }
+                    if (opened != null) {
+                        inventory = opened
+                        choice = XoPolicy.defaults(opened)
+                    } else {
+                        unopened = true
+                    }
+                }
                 refusal = ""
                 unanswered = 0
                 r.hostId?.let { runningOn = it }
@@ -298,17 +450,17 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
         }
     }
 
-    FullScreen(title = "Add a hypervisor", onDismiss = { password = ""; onDismiss() }) {
+    FullScreen(title = if (policy) "What the fleet may use" else "Add a hypervisor", onDismiss = { password = ""; onDismiss() }) {
         val setup = progress
         val waitingOn = unvouched
         when {
             job != null -> {
-                SectionHead("Setting up")
+                SectionHead(if (policy) address else "Setting up")
                 if (runningOn.isNotBlank()) Hint("On $runningOn", color = Design.Palette.ink.now)
                 if (setup == null) {
                     if (!pollStopped) Hint("Asking where it has got to…")
                 } else {
-                    SetupProgress(setup)
+                    SetupProgress(setup, policy)
                 }
                 when (val outcome = handedBack) {
                     XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted, and no machine in the fleet keeps a copy.")
@@ -328,32 +480,72 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                             TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }
                         }
                     }
+                    // THE FORM, while the machine waits on it, and only then.
+                    policy && setup != null && setup.state == "choosing" -> {
+                        val inv = inventory
+                        val c = choice
+                        val machine = runningOn.ifBlank { "The machine" }
+                        when {
+                            // The machine has the cancel and has not yet said
+                            // it let go; nothing is applied before a choice.
+                            cancelAccepted -> Hint("Cancelling. Nothing has been changed.", color = Design.Palette.ink.now)
+                            applied -> Hint("Sent. $machine is applying it.", color = Design.Palette.ink.now)
+                            inv != null && c != null -> {
+                                PolicyForm(inv, c, enabled = !applying && !cancelling, onChange = { choice = it })
+                                val problem = XoPolicy.problem(inv, c)
+                                Hint("$machine waits ten minutes for your choice, then lets go without changing anything.")
+                                // WHY APPLY IS OFF, in the machine's words, so
+                                // a switched-off button is never a mystery.
+                                if (problem != null) Hint(problem, color = Design.Palette.ink.now)
+                                if (choiceRefusal.isNotBlank()) Hint(choiceRefusal, color = Design.Palette.bad.now)
+                                Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                                    OutlinedButton(
+                                        enabled = !applying && !cancelling && problem == null,
+                                        onClick = { applyChoice(setup) },
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                    ) { Text(if (applying) "Applying…" else "Apply") }
+                                    TextButton(
+                                        enabled = !applying && !cancelling,
+                                        onClick = { cancelJob(setup) },
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                    ) { Text(if (cancelling) "Cancelling…" else "Cancel") }
+                                }
+                            }
+                            unopened -> {
+                                Hint(
+                                    "What the pool has did not open with this screen's key, so it cannot be shown. That key is kept " +
+                                        "in memory only, and goes when the screen does: if the phone turned or the app was closed " +
+                                        "since, that is why. Cancel, and start again.",
+                                    color = Design.Palette.attention.now,
+                                )
+                                TextButton(
+                                    enabled = !cancelling,
+                                    onClick = { cancelJob(setup) },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) { Text(if (cancelling) "Cancelling…" else "Cancel") }
+                            }
+                            else -> Hint("Opening what the pool has…")
+                        }
+                    }
+                    // AFTER THE CHOICE, nothing to stop: apply is the last
+                    // step, and a Cancel there would be a button that lied.
+                    policy && applied && setup != null && setup.state == "running" -> {}
                     setup != null && (setup.state == "running" || setup.state == "waiting") && !cancelAccepted -> {
                         TextButton(
                             enabled = !cancelling,
-                            onClick = {
-                                scope.launch {
-                                    cancelling = true
-                                    val r = fleet.xosetup("cancel", job = setup.job)
-                                    if (r.ok) {
-                                        // OFFERED ONCE. The fleet has the cancel;
-                                        // what the host said about it stands in
-                                        // for the button until the state changes.
-                                        cancelAccepted = true
-                                        cancelText = r.text
-                                        r.xosetup?.let { progress = it }
-                                    } else {
-                                        refusal = r.text.ifBlank { "Could not cancel." }
-                                    }
-                                    cancelling = false
-                                }
-                            },
+                            onClick = { cancelJob(setup) },
                             modifier = Modifier.heightIn(min = 48.dp),
                         ) { Text(if (cancelling) "Cancelling…" else "Cancel") }
-                        Hint("It stops between steps. What was made so far is tagged fleetwright, and running the setup again picks up from what exists.")
+                        Hint(
+                            if (policy) "It stops between steps, and nothing is changed until you have chosen."
+                            else "It stops between steps. What was made so far is tagged fleetwright, and running the setup again picks up from what exists.",
+                        )
                     }
                     setup != null && (setup.state == "running" || setup.state == "waiting") -> {
                         Hint(cancelText.ifBlank { "Cancelling after this step." }, color = Design.Palette.ink.now)
+                    }
+                    policy && setup != null && setup.state == "done" -> {
+                        TextButton(onClick = { password = ""; onDismiss() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Done") }
                     }
                     setup != null -> {
                         TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }
@@ -394,7 +586,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
             }
             else -> {
                 SectionHead("Where Xen Orchestra answers")
-                OutlinedTextField(
+                if (policy) {
+                    // FIXED: the pool this phone keeps a token for, as the
+                    // setup that made the token was begun.
+                    Text(address, style = Design.Style.body, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
+                    Hint("Changing what the fleet may use starts the way adding the pool did: a machine that reaches it, and an admin sign-in.")
+                } else OutlinedTextField(
                     value = address,
                     onValueChange = { typed ->
                         val next = typed.trim()
@@ -430,7 +627,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
 
                 val found = probes
                 if (found != null) {
-                    SectionHead("Which machine runs the setup")
+                    SectionHead(if (policy) "Which machine reads the pool" else "Which machine runs the setup")
                     when {
                         found.isEmpty() -> Hint("This fleet has no permanent machine to ask. Add a machine first; a temporary one cannot hold the pool's token.")
                         reachable.isEmpty() -> {
@@ -442,7 +639,10 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                             found.forEach { p -> ProbeLine(p) }
                         }
                         else -> {
-                            Hint("Only a machine that reaches it can. The machine keeps the pool's token afterwards, so pick one that stays.")
+                            Hint(
+                                if (policy) "Only a machine that reaches it can. It signs in, reads the pool, applies what you choose, and keeps nothing afterwards."
+                                else "Only a machine that reaches it can. The machine keeps the pool's token afterwards, so pick one that stays.",
+                            )
                             reachable.forEach { p ->
                                 Row(
                                     Modifier
@@ -528,8 +728,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Hint(
-                        "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
-                            "It is sealed to that machine on this phone; the fleet relays it and cannot read it.",
+                        if (policy) {
+                            "Used once, on ${pick.hostId}, to read the pool and apply what you choose, and not kept. " +
+                                "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
+                        } else {
+                            "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
+                                "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
+                        },
                     )
                     // OFF UNTIL THE CERTIFICATE IS EITHER FINE OR ACKNOWLEDGED,
                     // or plain HTTP has been accepted: the host would refuse
@@ -539,7 +744,15 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         enabled = !beginning && email.isNotBlank() && password.isNotEmpty() && consented,
                         onClick = { begin() },
                         modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text(if (beginning) "Checking ${pick.hostId}'s key…" else "Set up on ${pick.hostId}") }
+                    ) {
+                        Text(
+                            when {
+                                beginning -> "Checking ${pick.hostId}'s key…"
+                                policy -> "Read the pool on ${pick.hostId}"
+                                else -> "Set up on ${pick.hostId}"
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -686,8 +899,8 @@ private fun Detail(label: String, value: String?) {
  * crossfade is what Reduce Motion keeps.
  */
 @Composable
-private fun SetupProgress(setup: Fleet.Setup) {
-    val of = setup.of ?: XoSetup.STEPS.size
+private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false) {
+    val of = setup.of ?: (if (policy) XoPolicy.STEPS.size else XoSetup.STEPS.size)
     val step = setup.step ?: 0
     val ended = setup.state == "done" || setup.state == "failed" || setup.state == "cancelled"
     val fraction = if (setup.state == "done") 1f else (step.toFloat() / of.coerceAtLeast(1)).coerceIn(0f, 1f)
@@ -700,10 +913,11 @@ private fun SetupProgress(setup: Fleet.Setup) {
     }
     val words = when (setup.state) {
         "waiting" -> "Waiting for the sign-in"
-        "done" -> "Added"
+        "choosing" -> "Waiting for your choice"
+        "done" -> if (policy) "Changed" else "Added"
         "failed" -> "Stopped"
         "cancelled" -> "Cancelled"
-        else -> XoSetup.stepWords(setup.phase, step, of)
+        else -> if (policy) XoPolicy.stepWords(setup.phase, step, of) else XoSetup.stepWords(setup.phase, step, of)
     }
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         LinearProgressIndicator(
@@ -722,6 +936,8 @@ private fun SetupProgress(setup: Fleet.Setup) {
         if (!ended && setup.state == "running") {
             Text("Step ${(step + 1).coerceAtMost(of)} of $of", style = Design.Style.label, color = Design.Palette.inkDim.now)
         }
-        setup.text?.let { Quoted(it) }
+        // While it waits on the person, the machine's sentence only says so
+        // again; the form under it is what to read.
+        if (setup.state != "choosing") setup.text?.let { Quoted(it) }
     }
 }

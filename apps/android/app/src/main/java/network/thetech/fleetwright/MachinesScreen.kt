@@ -90,6 +90,13 @@ fun MachinesScreen(
     // that forgot these would close the progress on a job still running.
     var addingHypervisor by rememberSaveable { mutableStateOf(false) }
     var hypervisorJob by rememberSaveable { mutableStateOf<String?>(null) }
+    // A pool whose policy is being changed, by address. Saveable for the same
+    // reason; the job itself starts over after a rotation (HypervisorSheet).
+    var policyFor by rememberSaveable { mutableStateOf<String?>(null) }
+    // THE POOLS THIS PHONE KEEPS A TOKEN FOR, read again whenever a sheet that
+    // could have added one closes. On this phone and nowhere else, so this is
+    // the one place that can list them.
+    val held = remember(addingHypervisor, policyFor) { XoHandoff.held(settings) }
 
     LaunchedEffect(resumingSetup) {
         if (resumingSetup != null) {
@@ -145,6 +152,11 @@ fun MachinesScreen(
             HypervisorSheet(settings, resumeJob = hypervisorJob, onDismiss = { addingHypervisor = false; hypervisorJob = null })
         }
     }
+    policyFor?.let { pool ->
+        key(pool) {
+            HypervisorSheet(settings, policyFor = pool, onDismiss = { policyFor = null })
+        }
+    }
 
     // Enrolled, and not saying anything: membership with no report.
     val silent = hosts.filter { h -> fleetHosts.none { it.hostId == h.hostId } }
@@ -192,6 +204,21 @@ fun MachinesScreen(
                     SilentCard(host = host, onClick = { showing = host.hostId })
                 }
             }
+            // ADMINS ONLY, as Add a hypervisor is: changing a pool's policy
+            // takes an admin sign-in and the verb refuses a member. Drawn only
+            // when this phone holds a pool, because an empty section is a
+            // heading that promises something and lists nothing.
+            if (settings.configured && admin == true && held.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                        SectionHead("Hypervisors")
+                        Hint("Pools whose token this phone keeps. Open one to change what the fleet may use on it.")
+                        Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                            held.forEach { h -> HeldRow(h, onClick = { policyFor = h.address }) }
+                        }
+                    }
+                }
+            }
             if (settings.configured) {
                 // ONE ROW, AFTER THE LIST. Adding a machine is something done
                 // once per machine; the list is read every time.
@@ -212,6 +239,38 @@ fun MachinesScreen(
             }
             item { Spacer(Modifier.heightIn(min = Design.Space.group)) }
         }
+    }
+}
+
+/**
+ * A pool this phone keeps a token for: its address, and the pools the machine
+ * named when it handed the token over, or that it named none this phone can
+ * read. The row is the way in, to change what the fleet may use on it; that
+ * is said to TalkBack as the action, and in the hint above for the eye.
+ */
+@Composable
+private fun HeldRow(held: XoHandoff.Held, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(onClickLabel = "Change what it may use", role = Role.Button, onClick = onClick)
+            .padding(vertical = Design.Space.insideTight),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+            Text(held.address, style = Design.Style.body, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
+            Text(
+                when {
+                    held.pools == null -> "This phone cannot read which pools it has."
+                    held.pools.isEmpty() -> "Its pools have no names."
+                    else -> held.pools.joinToString(", ")
+                },
+                style = Design.Style.label,
+                color = Design.Palette.inkDim.now,
+            )
+        }
+        Text("  ›", style = Design.Style.body, color = Design.Palette.inkDim.now)
     }
 }
 

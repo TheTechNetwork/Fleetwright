@@ -103,7 +103,48 @@ internal object XoHandoff {
             return Outcome.Failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one.")
         }
         settings.putSecret(tokenName(entry.address), record)
+        hold(settings, entry.address)
         return Outcome.Kept
+    }
+
+    /**
+     * A pool this phone keeps a token for, as Machines lists it. [pools] is
+     * the pool names the machine put in the record it sealed, NULL when the
+     * record names none this phone can read: said as that, never as a pool
+     * with no name.
+     */
+    data class Held(val address: String, val pools: List<String>?)
+
+    /**
+     * The pools this phone keeps a token for, in the order they were added.
+     * An address whose token is no longer here (a Keystore key lost to a
+     * restore makes every kept secret unreadable) is not listed: this phone
+     * no longer holds it, whatever the list says.
+     */
+    fun held(settings: Settings): List<Held> =
+        heldAddresses(settings).mapNotNull { address ->
+            settings.secret(tokenName(address))?.let { Held(address, poolNames(it)) }
+        }
+
+    /**
+     * The pool names in a kept token record (`pools: [{ id, name }]`, written
+     * at hand-off), or null when it has none to read. A pool whose name is
+     * blank is left out rather than shown as nothing.
+     */
+    fun poolNames(record: String): List<String>? = runCatching {
+        val pools = JSONObject(record).optJSONArray("pools") ?: return@runCatching null
+        (0 until pools.length()).mapNotNull { i -> pools.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() && it != "null" } }
+    }.getOrNull()
+
+    private fun heldAddresses(settings: Settings): List<String> = runCatching {
+        val all = JSONArray(settings.xoHeld.ifBlank { "[]" })
+        (0 until all.length()).map { all.getString(it) }
+    }.getOrDefault(emptyList())
+
+    /** Recorded once per address: a second setup of the same pool replaces its token, not its row. */
+    private fun hold(settings: Settings, address: String) {
+        val all = heldAddresses(settings)
+        if (address !in all) settings.xoHeld = JSONArray(all + address).toString()
     }
 
     /**
