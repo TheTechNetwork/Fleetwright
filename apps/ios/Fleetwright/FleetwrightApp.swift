@@ -249,6 +249,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // started it; its push token is relayed again from here, or the
         // Lock Screen stops moving after a relaunch (XOSetupActivities).
         XOSetupActivities.resume(fleet: Fleet(settings: settings))
+        // And a token a finished setup handed back while the app was closed
+        // is collected into the Keychain (XOSetupHandoff).
+        Task { await XOSetupHandoff.collectPending(fleet: Fleet(settings: settings)) }
         let granted = (try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         guard granted else { return }

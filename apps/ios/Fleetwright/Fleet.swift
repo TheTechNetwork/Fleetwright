@@ -963,6 +963,10 @@ struct Fleet {
         /// compare with what the box prints.
         var hostKey: Host.PublicKey?
         var fingerprint: String?
+        /// Once done: the limited user's token, sealed by the machine to the
+        /// key this phone sent inside the sign-in, as epk.iv.ct. The machine
+        /// keeps no copy (XOSetupHandoff).
+        var handoff: String?
     }
 
     /// Ask every permanent machine whether it can reach a Xen Orchestra

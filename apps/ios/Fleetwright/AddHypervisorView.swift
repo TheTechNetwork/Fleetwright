@@ -79,6 +79,9 @@ struct AddHypervisorView: View {
     /// Cancel was pressed and the machine said it would stop after the step
     /// it is on: the button is not offered twice.
     @State private var cancelRequested = false
+    /// Whether the token the machine handed back is in this phone's
+    /// Keychain, once the job is done (XOSetupHandoff).
+    @State private var handedBack: XOSetupHandoff.Outcome?
 
     private struct Begun {
         let job: String
@@ -425,6 +428,20 @@ struct AddHypervisorView: View {
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
+                // WHERE THE TOKEN IS, said only once this phone knows: the
+                // machine says it kept none, and this says whether it is here.
+                switch handedBack {
+                case .kept:
+                    Text("The token is in this phone’s Keychain now, and no machine in the fleet keeps a copy.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                case .failed(let why):
+                    Text(why)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.bad)
+                case nil:
+                    EmptyView()
+                }
             }
             .animation(Design.Motion.change, value: progress?.phase)
             .animation(Design.Motion.change, value: progress?.state)
@@ -601,13 +618,21 @@ struct AddHypervisorView: View {
         busy = true
         defer { busy = false }
         let sealed: [String: String]
+        // WHERE THE TOKEN COMES BACK TO, inside the same seal as the sign-in,
+        // so the coordinator cannot swap in a key of its own (XOSetupHandoff).
+        let reply = XOSetupHandoff.newKey(job: begun.job, address: begun.address)
         do {
             sealed = try Seal.seal(
                 to: begun.key,
                 aad: Seal.xosetupAAD(job: begun.job, address: begun.address),
-                payload: ["v": 1, "xo": ["email": email.trimmingCharacters(in: .whitespacesAndNewlines), "password": password]]
+                payload: [
+                    "v": 1,
+                    "xo": ["email": email.trimmingCharacters(in: .whitespacesAndNewlines), "password": password],
+                    "reply": reply.publicKey,
+                ]
             )
         } catch {
+            XOSetupHandoff.forget(job: begun.job)
             refuse(error.localizedDescription)
             return
         }
@@ -615,17 +640,21 @@ struct AddHypervisorView: View {
         toCompare = nil
         let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
         do {
-            let reply = try await fleet.runSetup(job: begun.job, sealed: joined)
-            guard reply.ok != false else {
-                refuse(reply.text ?? "\(begun.hostId) did not take the sign-in.")
+            let answer = try await fleet.runSetup(job: begun.job, sealed: joined)
+            guard answer.ok != false else {
+                XOSetupHandoff.forget(job: begun.job)
+                refuse(answer.text ?? "\(begun.hostId) did not take the sign-in.")
                 return
             }
             hostId = begun.hostId
-            progress = reply.xosetup
+            progress = answer.xosetup
             job = begun.job
             self.begun = nil
-            XOSetupActivities.start(fleet: fleet, job: begun.job, hostId: begun.hostId, address: begun.address, progress: reply.xosetup)
+            XOSetupActivities.start(fleet: fleet, job: begun.job, hostId: begun.hostId, address: begun.address, progress: answer.xosetup)
         } catch {
+            // NOT FORGOTTEN: the send may have arrived and the job be running,
+            // and the key is what its token comes back to. The next launch
+            // asks, and drops it if the fleet never heard of the job.
             refuse(error.localizedDescription)
         }
     }
@@ -685,7 +714,10 @@ struct AddHypervisorView: View {
     @MainActor
     private func apply(_ state: Fleet.SetupState) async {
         progress = state
-        if let job { await XOSetupActivities.apply(job: job, progress: state) }
+        guard let job else { return }
+        if let outcome = XOSetupHandoff.collect(job: job, state: state) { handedBack = outcome }
+        if state.state == "failed" || state.state == "cancelled" { XOSetupHandoff.forget(job: job) }
+        await XOSetupActivities.apply(job: job, progress: state)
     }
 
     private func reset() {
@@ -693,6 +725,7 @@ struct AddHypervisorView: View {
         progress = nil
         begun = nil
         cancelRequested = false
+        handedBack = nil
         toCompare = nil
         password = ""
         result = ""

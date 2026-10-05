@@ -40,6 +40,11 @@ enum Seal {
     /// sealed sign-in cannot be replayed into another job or at another pool:
     /// the machine opens it under the same two values it was given at `begin`.
     static func xosetupAAD(job: String, address: String) -> String { "fleetwright-xosetup/v1:\(job):\(address)" }
+    /// What the machine seals the limited user's token under on its way back
+    /// to this phone: the same job and address under a name of its own, so a
+    /// sealed sign-in and a sealed token can never be taken for each other
+    /// (xosetupHandoffAad in src/fleet/seal.js; XOSetupHandoff).
+    static func xosetupHandoffAAD(job: String, address: String) -> String { "fleetwright-xosetup-handoff/v1:\(job):\(address)" }
 
     enum Failure: LocalizedError {
         case notAKey, notSealed
