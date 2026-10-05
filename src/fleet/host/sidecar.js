@@ -217,10 +217,10 @@ export class Sidecar {
     // process that loaded it (bin/fleetwright-sidecar). Null: no vault here.
     vaultKey = null,
     vaultIntervalMs = 10 * 60_000,
-    // WHERE A HYPERVISOR'S LIMITED TOKEN IS KEPT once onboarding has made one
-    // (src/fleet/host/xo-setup.js): this process's own state directory, the
-    // one beside its key. Null refuses onboarding rather than writing it
-    // somewhere nobody chose.
+    // THIS PROCESS'S OWN STATE DIRECTORY, the one beside its key, where the
+    // first version of hypervisor onboarding kept a pool's token. Nothing is
+    // kept there now (src/fleet/host/xo-setup.js, hand-off); it is only where
+    // a setup run again looks for that old file to remove it.
     xoStateDir = null,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
@@ -492,9 +492,6 @@ export class Sidecar {
    * @param {import('../protocol/intents.js').Intent} intent
    */
   async #xosetup(intent) {
-    if (!this.xoStateDir) {
-      return { ok: false, text: 'This machine has nowhere set aside to keep a hypervisor’s token, so it cannot run the setup.' };
-    }
     if (!this.xoSetups) {
       this.xoSetups = new XoSetups({
         signer: this.vaultKey,

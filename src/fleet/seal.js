@@ -125,6 +125,20 @@ export function xosetupAad(job, address) {
 }
 
 /**
+ * What the limited user's token is sealed under on its way back from the
+ * machine that ran the setup to the phone that asked for it: the same job and
+ * address, under its own name, so the sign-in going one way and the token
+ * coming back can never be taken for each other. The phone builds the same
+ * string. The machine keeps none of it (src/fleet/host/xo-setup.js, hand-off).
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function xosetupHandoffAad(job, address) {
+  return `fleetwright-xosetup-handoff/v1:${job}:${address}`;
+}
+
+/**
  * The additional data a Claude login is kept under AT REST in the minter: the
  * GitHub account it belongs to. A stored row moved under another account does
  * not open, so storage that could be rearranged still could not hand one
