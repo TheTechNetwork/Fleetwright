@@ -70,6 +70,11 @@ enum XOSetupWords {
         case "token": return "Making its token"
         case "updates": return "Turning on updates"
         case "hand-off": return "Handing over"
+        // A policy job's own two steps (XOPOLICY_STEPS), in the words the
+        // host leaves on the job (STEP_WORDS in xo-setup.js). Its first three
+        // are onboarding's, above.
+        case "choose": return "Waiting for your choice"
+        case "apply": return "Applying what you chose"
         case "done": return "Hypervisor added"
         default: return "Step \(min(step + 1, max(of, 1))) of \(max(of, 1))"
         }

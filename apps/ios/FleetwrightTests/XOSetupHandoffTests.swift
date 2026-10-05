@@ -54,4 +54,13 @@ final class XOSetupHandoffTests: XCTestCase {
         empty["token"] = ""
         XCTAssertNil(XOSetupHandoff.open(try sealed(empty, to: key, aad: aad), job: job, address: address, key: key))
     }
+
+    /// What Machines lists under Hypervisors: the names the record carries,
+    /// and nil, never an empty list, for a record that does not say.
+    func testTheRecordsPoolNamesAreReadAndAMissingListIsNotNone() {
+        let record = #"{"v":1,"address":"xo.lan","token":"t","pools":[{"id":"p1","name":"rack"},{"id":"0123456789","name":" "}]}"#
+        XCTAssertEqual(XOSetupHandoff.poolNames(record), ["rack", "Unnamed pool 01234567"])
+        XCTAssertNil(XOSetupHandoff.poolNames(#"{"v":1,"address":"xo.lan","token":"t"}"#))
+        XCTAssertEqual(XOSetupHandoff.poolNames(#"{"pools":[]}"#), [])
+    }
 }

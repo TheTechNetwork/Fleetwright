@@ -947,7 +947,8 @@ struct Fleet {
     /// in `begin`'s answer; the step fields only once it is running.
     struct SetupState: Codable, Hashable {
         let job: String?
-        /// `waiting`, `running`, `done`, `failed` or `cancelled`.
+        /// `waiting`, `running`, `done`, `failed` or `cancelled`; and for a
+        /// policy job, `choosing` while the machine waits on the person.
         let state: String?
         var step: Int?
         var of: Int?
@@ -967,6 +968,14 @@ struct Fleet {
         /// key this phone sent inside the sign-in, as epk.iv.ct. The machine
         /// keeps no copy (XOSetupHandoff).
         var handoff: String?
+        /// In `begin`'s answer: what else a job on this machine can be, so a
+        /// policy change is sent only to a machine that knows what one is.
+        /// Nil is a machine older than the question, and is read as no.
+        var can: [String]?
+        /// While a policy job is `choosing`: the pool's storage, networks and
+        /// capacity, sealed by the machine to the key this phone sent inside
+        /// the policy sign-in, as epk.iv.ct (XOPolicy.open).
+        var inventory: String?
     }
 
     /// Ask every permanent machine whether it can reach a Xen Orchestra
@@ -1010,6 +1019,16 @@ struct Fleet {
     /// is a credential on a disk for nothing.
     func runSetup(job: String, sealed: String) async throws -> Reply {
         try await intent("xosetup", params: ["phase": "run", "job": job, "sealed": sealed],
+                         idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// The person's choice for a policy job, sealed on this phone to the
+    /// job's key as `epk.iv.ct` once they have seen the pool (XOPolicy).
+    /// Never held, for the reason `runSetup` gives, and because the machine
+    /// stops waiting for it after ten minutes: a choice replayed later lands
+    /// on a job that has let go, or on nothing.
+    func setupPolicy(job: String, sealed: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "policy", "job": job, "sealed": sealed],
                          idempotencyKey: "app-\(UUID().uuidString)")
     }
 

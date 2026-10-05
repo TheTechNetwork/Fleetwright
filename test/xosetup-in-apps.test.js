@@ -53,7 +53,9 @@ test('iOS: the screen asks every machine first, then runs one job on one machine
   // NEVER HELD: each carries an idempotency key, which keeps a send that could
   // not reach the fleet out of the outbox and off the disk.
   const sends = IOS.match(/intent\("(?:xoprobe|xosetup)"[^\n]*\n?[^\n]*idempotencyKey: "app-\\\(UUID\(\)\.uuidString\)"/g) ?? [];
-  assert.equal(sends.length, 5, 'every probe and phase is sent with an idempotency key');
+  // Six: the probe, and begin, run, status, cancel and policy
+  // (test/xopolicy-ios-in-apps.test.js has the last).
+  assert.equal(sends.length, 6, 'every probe and phase is sent with an idempotency key');
 });
 
 test('iOS: a machine that reached the address is offered, HTTPS with a certificate first, and the alternatives are said plainly', () => {
