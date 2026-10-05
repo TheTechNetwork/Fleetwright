@@ -108,7 +108,8 @@ import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
-import { runnerAuthKind } from '../core/runner-login.js';
+import { runnerAuthKind, runnerAuthFor } from '../core/runner-login.js';
+import { checkClaudeAuth, describeTokenCheck } from '../core/claude-token-check.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageLists, runUpgrade, runPackageUpgrade } from '../core/upgrades.js';
 import { fetchNotes, describeNotes, changelogRepo } from '../core/changelog.js';
@@ -386,10 +387,15 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
  *   3. who it belongs to, because a linked account and the shared one fail
  *      independently and only one of them is what `auth status` was reading
  *
+ * AND A FOURTH, where nothing is linked: what a session runs on instead — a
+ * kept `claude setup-token`, a token from the person's vault, or a runner
+ * repository's API key — asked of the API with one real request, because none
+ * of those has a file that says whether it still works (claude-token-check.js).
+ *
  * @param {any} ctx
- * @returns {string}
+ * @returns {Promise<string>}
  */
-function verifyClaude(ctx) {
+async function verifyClaude(ctx) {
   const auth = ctx.login.status();
   // WHICH MACHINE, FIRST. Claude is per machine and this reply is read on a
   // phone, under a fleet-wide row, after a Test that went to one box. Every
@@ -407,12 +413,25 @@ function verifyClaude(ctx) {
   }
   const picked = pickCredentialSource(ctx.cfg, ctx.actor);
   const mine = picked.account !== 'shared';
-  if (!picked.source && picked.tokenFile) {
-    // NOTHING LINKED HERE, AND THE VAULT HAS IT: said as what will happen,
-    // because "not linked" would send somebody to link what they already kept.
-    lines.push('');
-    lines.push(`A session you start on ${ctx.cfg.hostname} runs on the Claude login from your vault, since none is linked here.`);
-    return lines.join('\n');
+  if (!picked.source) {
+    // NOTHING LINKED HERE, AND SOMETHING ELSE WILL CARRY THE SESSION: said as
+    // what will happen, then tested, because "not linked" would send somebody
+    // to link what they already kept — and a kept token that was revoked was
+    // reported as nothing at all while every session on the runner stopped
+    // at "401 OAuth access token is invalid".
+    const auth = runnerAuthFor(ctx.cfg, emailFromActor(ctx.actor));
+    if (auth && auth.kind !== 'linked') {
+      lines.push('');
+      lines.push(`A session you start on ${ctx.cfg.hostname} runs on ${
+        auth.kind === 'key'
+          ? 'the runner repository’s API key'
+          : auth.login
+            ? `the Claude login ${auth.login} keeps for runners`
+            : 'the Claude login from your vault'
+      }, since none is linked here.`);
+      lines.push(describeTokenCheck(auth, await checkClaudeAuth(auth, { fetchImpl: ctx.fetchImpl ?? globalThis.fetch })));
+      return lines.join('\n');
+    }
   }
   if (!picked.source) {
     // WHOSE ACCOUNT IS MISSING, in their own words. The box has no Claude
@@ -1420,7 +1439,7 @@ export const COMMANDS = {
     run: async (ctx, args, flags) => {
       const provider = (args[0] || '').toLowerCase();
       if (!provider) return { ok: false, text: 'Usage: /verify <provider>' };
-      if (provider === 'claude') return { ok: true, text: verifyClaude(ctx) };
+      if (provider === 'claude') return { ok: true, text: await verifyClaude(ctx) };
       const row = flags?.has('host') === true ? HOST_ROW : rowForActor(ctx.actor);
       if (row === null) return { ok: false, text: 'Could not tell whose credential to check.' };
       const r = await new Connections(ctx.cfg.stateDir).check(row, provider);

@@ -45,7 +45,7 @@ import path from 'node:path';
 import { XOSETUP_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../protocol/intents.js';
 import { newSealKey, open as openSealed, xosetupAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
-import { certSha256, splitAddress, connectXo, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
+import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -95,8 +95,9 @@ const TOKEN_LIFETIME_MS = 180 * 24 * 60 * 60_000;
  * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, certificate: ReturnType<typeof describeCertificate>, version: string|null, text: string }>}
  */
 // FOUR SECONDS AN ATTEMPT, and at most two attempts (HTTPS, then plain HTTP
-// on 80), so a probe answers inside the coordinator's ten-second fan-out
-// deadline even for an address that drops packets.
+// on 80, or on the address's own port), so a probe answers inside the
+// coordinator's ten-second fan-out deadline even for an address that drops
+// packets.
 export async function probe(address, { timeoutMs = 4_000 } = {}) {
   const { host, port, explicitPort } = splitAddress(address);
   const secure = await getRoot({ host, port, secure: true, timeoutMs });
@@ -112,19 +113,24 @@ export async function probe(address, { timeoutMs = 4_000 } = {}) {
       text: xo ? `Xen Orchestra answered at ${address}.` : `Something answered at ${address}, and it does not look like Xen Orchestra.`,
     };
   }
-  // NO TLS ON 443: try plain HTTP on 80, only to say what is there. Onboarding
-  // refuses to send a password over it, and the answer says why.
-  if (!explicitPort) {
-    const plain = await getRoot({ host, port: 80, secure: false, timeoutMs });
+  // NO TLS: plain HTTP, on 80 for a bare address and on the address's own port
+  // for one that named it — which is what the installer's default PORT="80"
+  // gives, and what a person who moved it gave. Setup can run over it once the
+  // person has accepted on the phone that the sign-in crosses unencrypted.
+  {
+    const plain = await getRoot({ host, port: explicitPort ? port : 80, secure: false, timeoutMs });
     if (plain.ok) {
+      const xo = looksLikeXo(plain.body);
       return {
         reachable: true,
-        xo: looksLikeXo(plain.body),
+        xo,
         tls: false,
         cert: null,
         certificate: null,
         version: null,
-        text: `${address} answers without HTTPS. Setup sends an admin password, so it needs HTTPS — the Xen Orchestra installer turns it on by default.`,
+        text: xo
+          ? `Xen Orchestra answered at ${address} over plain HTTP, without HTTPS. It can be set up once you accept that the sign-in crosses the network unencrypted, or given HTTPS first: in the installer's xo-install.cfg, set PORT="443", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT="true", then run it again.`
+          : `Something answered at ${address} over plain HTTP, and it does not look like Xen Orchestra.`,
       };
     }
   }
@@ -199,16 +205,18 @@ export class XoSetups {
    *   emit: (event: Record<string, any>) => void,
    *   stateDir: string,
    *   connect?: typeof connectXo,
+   *   connectPlain?: typeof connectXoPlain,
    *   fingerprint: (jwk: any) => Promise<string>,
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, fingerprint, now = () => Date.now(), log }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log }) {
     this.signer = signer;
     this.emit = emit;
     this.stateDir = stateDir;
     this.connect = connect;
+    this.connectPlain = connectPlain;
     this.fingerprint = fingerprint;
     this.now = now;
     this.log = log || { info() {}, warn() {} };
@@ -217,9 +225,9 @@ export class XoSetups {
   }
 
   /**
-   * @param {{ address: string, pin?: string|null, trust?: string|null, actor: string|null }} args
+   * @param {{ address: string, pin?: string|null, trust?: string|null, plain?: string|null, actor: string|null }} args
    */
-  async begin({ address, pin, trust = null, actor }) {
+  async begin({ address, pin, trust = null, plain = null, actor }) {
     this.#prune();
     // A JOB IS SOMEBODY'S: status, run and cancel are refused to anyone else,
     // and a job begun with no name on it would be everybody's who also had none.
@@ -230,20 +238,26 @@ export class XoSetups {
         text: 'This machine has no enrolment key to sign a setup key with, so a phone could not tell the key was this machine’s. Enrol it with a pin first.',
       };
     }
-    if (!pin || !CERT_PIN_RE.test(pin)) {
-      return { ok: false, text: 'Setup needs the certificate you accepted. Check the address from the app first.' };
+    // NO PIN IS PLAIN HTTP, and only with the person's word for it. A pin and
+    // `plain` together is a client that cannot decide, and is refused.
+    const overHttp = !pin && plain === 'accepted';
+    if (!overHttp && (!pin || !CERT_PIN_RE.test(pin))) {
+      return { ok: false, text: 'Setup needs the certificate you accepted, or your acceptance of plain HTTP. Check the address from the app first.' };
     }
     if ([...this.jobs.values()].filter((j) => j.state === 'waiting' || j.state === 'running').length >= 3) {
       return { ok: false, text: 'This machine is already running three setups. Wait for one to finish.' };
     }
     const job = randomBytes(6).toString('hex');
     const key = await newSealKey();
-    const keySig = await this.signer.sign(signingInput('xosetup-key', { address, job, key: key.publicKey, pin }));
+    // Over plain HTTP there is no certificate, and the key is signed over an
+    // empty pin, which the phone checks it against.
+    const keySig = await this.signer.sign(signingInput('xosetup-key', { address, job, key: key.publicKey, pin: overHttp ? '' : pin }));
     const hostKey = { kty: 'EC', crv: 'P-256', x: this.signer.publicJwk.x, y: this.signer.publicJwk.y };
     this.jobs.set(job, {
       job,
       address,
-      pin,
+      pin: overHttp ? null : pin,
+      plain: overHttp,
       trust: trust === 'accepted' ? 'accepted' : null,
       actor,
       key,
@@ -324,6 +338,17 @@ export class XoSetups {
       rec.text = 'Cancelling after this step.';
     }
     return { ok: true, text: rec.text, xosetup: status(rec) };
+  }
+
+  /**
+   * A connection for this job: pinned TLS, or plain HTTP when the person
+   * accepted it — the same each time it is asked, so the limited user's token
+   * is made over what the admin's sign-in went over.
+   *
+   * @param {any} rec
+   */
+  #open(rec) {
+    return rec.plain ? this.connectPlain({ address: rec.address }) : this.connect({ address: rec.address, pin: rec.pin });
   }
 
   /** @param {string} job @param {string|null} actor */
@@ -417,7 +442,10 @@ export class XoSetups {
     return [
       // connect
       async (/** @type {any} */ ctx) => {
-        ctx.admin = await this.connect({ address: ctx.rec.address, pin: ctx.rec.pin });
+        ctx.admin = await this.#open(ctx.rec);
+        // Over plain HTTP the person already accepted that there is no
+        // certificate at all, so there is nothing to ask of one.
+        if (ctx.rec.plain) return 'It was set up over plain HTTP, as you accepted: the sign-in crossed the network unencrypted.';
         // THE PERSON'S WORD, for a certificate nothing vouches for. The pin
         // already held this connection to the certificate they saw; this
         // holds the setup to their having been told what was wrong with it.
@@ -485,7 +513,7 @@ export class XoSetups {
       },
       // token
       async (/** @type {any} */ ctx) => {
-        ctx.limited = await this.connect({ address: ctx.rec.address, pin: ctx.rec.pin });
+        ctx.limited = await this.#open(ctx.rec);
         await ctx.limited.call('session.signIn', { email: FLEET_USER, password: ctx.password });
         const description = 'fleetwright';
         try {
@@ -538,6 +566,8 @@ export class XoSetups {
           certificate: ctx.certificate
             ? { trusted: ctx.certificate.trusted, accepted: ctx.rec.trust === 'accepted', notAfter: ctx.certificate.notAfter }
             : null,
+          // Every later call with this token crosses the network as it is.
+          plain: ctx.rec.plain === true,
           limits: ctx.limits,
           pools: ctx.pools.map((/** @type {any} */ p) => ({ id: p.id, name: String(p.name_label || '').slice(0, 80) })),
           savedAt: new Date(this.now()).toISOString(),
