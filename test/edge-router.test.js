@@ -47,7 +47,7 @@ test('the edge configuration fits exactly where the default was, and says what t
   assert.ok(balanced(xml.trimEnd()), 'the XML does not close what it opens');
   // Xen's interfaces, in the order the VM's are made; none left to assign at a console.
   assert.match(xml, /<wan><enable>1<\/enable><if>xn0<\/if>[\s\S]*?<ipaddr>dhcp<\/ipaddr><blockpriv>0<\/blockpriv><blockbogons>0<\/blockbogons><\/wan>/);
-  assert.match(xml, new RegExp(`<lan><enable>1</enable><if>xn1</if><descr>LAN</descr><ipaddr>${EDGE.lan.address.replace(/\./g, '\\.')}</ipaddr><subnet>${EDGE.lan.prefix}</subnet></lan>`));
+  assert.ok(xml.includes(`<lan><enable>1</enable><if>xn1</if><descr>LAN</descr><ipaddr>${EDGE.lan.address}</ipaddr><subnet>${EDGE.lan.prefix}</subnet></lan>`), 'the LAN is not on xn1 at the edge address');
   assert.ok(!xml.includes('mismatch'), 'an interface is left for somebody to assign');
   assert.ok(!xml.includes('trigger_initial_wizard'));
   // No login anywhere, and no rule that lets a lab at the web interface.
