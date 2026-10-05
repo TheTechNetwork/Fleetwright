@@ -267,8 +267,18 @@ owner's: `xoprobe`, then `xosetup` on the machine the person picks.
    issued to and by, its dates and names, and everything wrong with it —
    self-signed, signed by an authority the machine does not trust, expired,
    not yet valid, for a different name. The certificate is the **pin** every
-   later connection is held to. Without TLS the setup refuses, because it
-   sends a password.
+   later connection is held to.
+   **Without TLS**, which is what the installer gives until `xo-install.cfg`
+   names a certificate (its default is `PORT="80"`), the probe says it reached
+   Xen Orchestra over plain HTTP, on 80 or the address's own port. The phone
+   then says what that means, in those words: the admin password and the token
+   the fleet keeps would cross the network unencrypted. It says how to give
+   Xen Orchestra HTTPS instead (`PORT="443"`, `PATH_TO_HTTPS_CERT`,
+   `PATH_TO_HTTPS_KEY`, `AUTOCERT="true"`, run the installer again), and Begin
+   waits for the person to say send it anyway. Only then does `begin` carry
+   `plain: accepted` and no pin; the machine signs the job's key over an empty
+   pin, runs every step over HTTP, and the kept record says `plain`. Run
+   against a real Xen Orchestra on HTTP, all steps.
 2. **The person accepts a certificate that does not check out, having seen
    it.** One that checks out is a line and no question. One that does not —
    which is every Xen Orchestra built from sources, since the installer makes

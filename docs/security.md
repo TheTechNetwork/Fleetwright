@@ -249,6 +249,15 @@ machine of the fleet, through the coordinator.
   is refuse, or send the request to a different machine of the fleet, which
   then runs the setup; the phone's signature check names the machine it
   verified.
+- **Except over plain HTTP, which a person chose.** A Xen Orchestra with no
+  certificate has nothing to pin, and setting it up there means the admin
+  sign-in, and every later call with the fleet's token, crosses the network
+  between that machine and Xen Orchestra as it is. Anything on that path can
+  read and redirect it. The phone says so in those words and `begin` carries
+  `plain: accepted` only after the person says send it anyway; the sign-in is
+  still sealed from the phone to the machine, so the coordinator never sees
+  it. The bound is the network between the machine and Xen Orchestra, which
+  for the common case is one LAN the person owns.
 - **A certificate nothing vouches for is accepted by a person, not by
   default.** The probe reports what is wrong with the certificate as well as
   its fingerprint; the phone shows it, and `begin` carries `trust: accepted`
