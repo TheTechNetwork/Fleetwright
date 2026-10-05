@@ -23,9 +23,9 @@
 // Orchestra with exactly those bytes replaced by this file's configuration,
 // padded to the same length, and the file system is otherwise untouched:
 // same inode, same size, same blocks. XML allows the trailing whitespace the
-// padding is made of. Before a byte is replaced, the original is checked to
-// be the default configuration it should be, so a wrong offset fails instead
-// of corrupting the disk.
+// padding is made of. Before a byte is replaced, the original is checked
+// against the default configuration's own SHA-256, so a wrong offset fails
+// instead of corrupting the disk.
 //
 // WHAT RUNS WHERE. The machine running the policy job downloads the image
 // (once, kept in its state directory, checked before every use), unpacks it
@@ -59,8 +59,8 @@ export const OPNSENSE_IMAGE = Object.freeze({
   sha256: '28d5e2f37e40d87468a924e3006ef10e2ddc6de485b85333d9e3958c84d0cb9d',
   compressedSize: 490849116,
   rawSize: 3221225472,
-  /** /usr/local/etc/config.xml, as the nano build left it. */
-  config: Object.freeze({ offset: 712876032, length: 5234 }),
+  /** /usr/local/etc/config.xml, as the nano build left it, and its SHA-256. */
+  config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
 });
 
 /** Names in Xen Orchestra. The edge is not tagged `fleetwright`, so the fleet's token cannot touch it. */
@@ -138,20 +138,14 @@ export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0
 }
 
 /**
- * Is this the default configuration the nano image ships? Checked on the
- * bytes about to be replaced, so an offset that is wrong for the image fails
- * the build before the disk is written.
+ * Is this the default configuration the nano image ships, byte for byte?
+ * Checked on the bytes about to be replaced, so an offset that is wrong for
+ * the image fails the build before the disk is written.
  *
  * @param {Buffer} original
  */
-export function looksLikeDefaultConfig(original) {
-  const text = original.toString('latin1');
-  return (
-    text.startsWith('<?xml version="1.0"?>\n<opnsense>\n') &&
-    text.endsWith('</opnsense>\n') &&
-    text.includes('<if>mismatch0</if>') &&
-    text.includes('<name>root</name>')
-  );
+export function isDefaultConfig(original) {
+  return createHash('sha256').update(original).digest('hex') === OPNSENSE_IMAGE.config.sha256;
 }
 
 /**
@@ -165,7 +159,7 @@ export class ConfigPatch extends Transform {
   /**
    * @param {{ offset: number, replacement: Buffer, total: number, check?: (original: Buffer) => boolean }} opts
    */
-  constructor({ offset, replacement, total, check = looksLikeDefaultConfig }) {
+  constructor({ offset, replacement, total, check = isDefaultConfig }) {
     super();
     this.offset = offset;
     this.regionEnd = offset + replacement.length;
@@ -411,12 +405,12 @@ export async function ensureUplink({ admin, pool, networks, setId, inSet }) {
  *   address: string, pin: string|null, plain: boolean,
  *   imageDir: string,
  *   say: (text: string) => void,
- *   fetchImpl?: typeof fetch,
+ *   getImage?: typeof fetchImage,
  *   unpackImpl?: typeof unpack,
  *   upload?: typeof uploadDisk,
  * }} opts
  */
-export async function ensureEdge({ admin, pool, egress, uplink, srs, address, pin, plain, imageDir, say, fetchImpl, unpackImpl = unpack, upload = uploadDisk }) {
+export async function ensureEdge({ admin, pool, egress, uplink, srs, address, pin, plain, imageDir, say, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
   const vms = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {});
   const edge = /** @type {any} */ (vms.find((v) => /** @type {any} */ (v)?.$pool === pool && /** @type {any} */ (v)?.tags?.includes?.(EDGE.tag)));
   if (edge) {
@@ -445,9 +439,8 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, address, pi
   if (!template) throw new Error(`this pool has no "${EDGE.template}" template to make the edge router from. Nothing was built`);
 
   say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}.`);
-  const file = await fetchImage({
+  const file = await getImage({
     dir: imageDir,
-    ...(fetchImpl ? { fetchImpl } : {}),
     onProgress: (d, t) => say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}: ${mb(d)} of ${mb(t)} MB.`),
   });
 
