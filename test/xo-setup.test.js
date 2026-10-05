@@ -23,10 +23,10 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER } from '../src/fleet/host/xo-setup.js';
+import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits } from '../src/fleet/host/xo-setup.js';
 import { frame, parseFrame } from '../src/fleet/host/xo-ws.js';
-import { XOSETUP_STEPS } from '../src/fleet/protocol/intents.js';
-import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad } from '../src/fleet/seal.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS } from '../src/fleet/protocol/intents.js';
+import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
 const openssl = spawnSync('openssl', ['version']).status === 0;
@@ -49,24 +49,37 @@ function certificate() {
  * call, per connection, so a test can say what was asked and as whom.
  *
  * @param {import('node:test').TestContext} t
- * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean }} [opts]
+ * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[] }} [opts]
  */
-async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false } = {}) {
+async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [] } = {}) {
   const { key, cert, pin } = certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
   const users = /** @type {any[]} */ ([{ id: 'u-admin', email: 'admin@admin.net', permission: admin ? 'admin' : 'none' }]);
-  const sets = /** @type {any[]} */ ([]);
+  const sets = /** @type {any[]} */ (given);
+  /** @type {Map<string, string[]>} the tags each network carries, as tag.add and tag.remove leave them */
+  const tags = new Map([['net-mgmt', ['fleetwright-egress']], ['net-lab', []], ['net-dmz', []]]);
   const passwords = new Map([['admin@admin.net', PASSWORD]]);
   const methods = Object.fromEntries(
-    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure']
+    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove']
       .filter((m) => !drop.includes(m))
       .map((m) => [m, {}]),
   );
   const objects = {
     pool: { p1: { id: 'p1', type: 'pool', name_label: 'Home', default_SR: 'sr1' } },
     host: { h1: { id: 'h1', type: 'host', cpus: { cores: 16 }, memory: { size: 64 * 1024 ** 3 } } },
-    SR: { sr1: { id: 'sr1', type: 'SR', size: 1000 * 1024 ** 3, physical_usage: 200 * 1024 ** 3 } },
+    SR: {
+      sr1: { id: 'sr1', type: 'SR', name_label: 'Local storage', $pool: 'p1', size: 1000 * 1024 ** 3, physical_usage: 200 * 1024 ** 3, content_type: 'user', shared: false },
+      sr2: { id: 'sr2', type: 'SR', name_label: 'NFS', $pool: 'p1', size: 4000 * 1024 ** 3, physical_usage: 1000 * 1024 ** 3, content_type: 'user', shared: true },
+      iso: { id: 'iso', type: 'SR', name_label: 'ISOs', $pool: 'p1', size: 50 * 1024 ** 3, physical_usage: 10 * 1024 ** 3, content_type: 'iso', shared: true },
+    },
+    get network() {
+      return Object.fromEntries(['net-mgmt', 'net-lab', 'net-dmz'].map((id, i) => [id, { id, type: 'network', name_label: ['Pool-wide network associated with eth0', 'lab', 'dmz'][i], $pool: 'p1', tags: [...(tags.get(id) ?? [])] }]));
+    },
+    PIF: {
+      pif1: { id: 'pif1', type: 'PIF', $network: 'net-mgmt', vlan: -1 },
+      pif2: { id: 'pif2', type: 'PIF', $network: 'net-dmz', vlan: 30 },
+    },
   };
   let conns = 0;
   /** @param {import('node:net').Socket} socket */
@@ -119,7 +132,7 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
             break;
           }
           case 'system.getMethodsInfo': answer(methods); break;
-          case 'xo.getAllObjects': answer(objects[/** @type {'pool'|'host'|'SR'} */ (p.filter?.type)] ?? {}); break;
+          case 'xo.getAllObjects': answer(/** @type {any} */ (objects)[p.filter?.type] ?? {}); break;
           case 'user.getAll': answer(users); break;
           case 'user.create': {
             const u = { id: `u-${users.length}`, email: p.email, permission: p.permission };
@@ -136,7 +149,14 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
             answer(set);
             break;
           }
-          case 'resourceSet.set': answer(true); break;
+          case 'resourceSet.set': {
+            const set = sets.find((x) => x.id === p.id);
+            if (set) Object.assign(set, p);
+            answer(true);
+            break;
+          }
+          case 'tag.add': tags.set(p.id, [...(tags.get(p.id) ?? []), p.tag]); answer(true); break;
+          case 'tag.remove': tags.set(p.id, (tags.get(p.id) ?? []).filter((x) => x !== p.tag)); answer(true); break;
           case 'token.create':
             // Xen Orchestra's own cap, and the words a limited user is given for going over it.
             if (p.expiresIn !== undefined && p.expiresIn > maxTokenMs) refuse('unknown error from the peer');
@@ -153,11 +173,11 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => server.close());
   const address = `127.0.0.1:${/** @type {import('node:net').AddressInfo} */ (server.address()).port}`;
-  return { address, pin, calls, users, sets };
+  return { address, pin, calls, users, sets, tags };
 }
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine() {
+async function machine(/** @type {{ policyWaitMs?: number }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -167,6 +187,7 @@ async function machine() {
     emit: (e) => events.push(e),
     stateDir,
     fingerprint,
+    ...opts,
   });
   return { setups, events, stateDir, keys };
 }
@@ -446,4 +467,165 @@ test('a Xen Orchestra on plain HTTP is set up once the person accepted it, and k
   assert.equal(kept.plain, true);
   assert.equal(kept.pin, null);
   assert.equal(kept.token, 'tok-limited-123');
+});
+
+// --- what the fleet may use: setup's defaults, and the person's own choice ---
+
+/** A resource set an earlier run made and a person has since changed. */
+const chosenBefore = () => ({ id: 'rs-0', name: 'fleetwright', subjects: ['u-old'], objects: ['sr2', 'net-lab'], limits: { cpus: { total: 4, available: 4 }, memory: { total: 8 * 1024 ** 3, available: 8 * 1024 ** 3 }, disk: { total: 100 * 1024 ** 3, available: 100 * 1024 ** 3 } } });
+
+/** Begin and run a policy job, and wait until it is waiting on the person. */
+async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, actor = 'eli@example.com') {
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  assert.deepEqual(begun.xosetup.can, ['policy'], 'a machine that can says so before any sign-in is sealed');
+  const reply = await newSealKey();
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' });
+  const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
+  assert.equal(ran.ok, true, ran.text);
+  /** @type {any} */
+  let s;
+  for (let i = 0; i < 400; i++) {
+    s = setups.status({ job: begun.xosetup.job, actor }).xosetup;
+    if (s.state !== 'running') break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return { begun, reply, state: s };
+}
+
+/** What the phone sends once it has chosen, sealed to the job's key. */
+async function choose(/** @type {any} */ begun, /** @type {string} */ address, /** @type {any} */ policy) {
+  const box = await seal({ to: begun.xosetup.key, aad: xosetupPolicyAad(begun.xosetup.job, address), payload: policy });
+  return `${box.epk}.${box.iv}.${box.ct}`;
+}
+
+test('a setup run again leaves what the fleet may use as a person left it', { skip }, async (t) => {
+  const xo = await standIn(t, { sets: [chosenBefore()] });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed, reply } = await phone(begun, xo.address, xo.pin);
+  await setups.run({ job: begun.xosetup.job, sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  const set = xo.calls.find((c) => c.method === 'resourceSet.set');
+  assert.deepEqual(Object.keys(set?.params ?? {}).sort(), ['id', 'subjects'], 'only the user is pointed at it; its storage, networks and limits are not touched');
+  assert.deepEqual(xo.sets[0].objects, ['sr2', 'net-lab']);
+  assert.match(end.text, /already set, and was left as it was/);
+  const kept = await collect(end, reply, xo.address);
+  assert.deepEqual(kept.limits, { cpus: 4, memory: 8 * 1024 ** 3, disk: 100 * 1024 ** 3 }, 'what the phone keeps is what is in force');
+});
+
+test('a policy is chosen on the phone from the pool it was shown, sealed both ways, and Xen Orchestra enforces it', { skip }, async (t) => {
+  const xo = await standIn(t, { sets: [chosenBefore()] });
+  const { setups, events } = await machine();
+  const actor = 'eli@example.com';
+  const { begun, reply, state } = await choosing(xo, setups, actor);
+  assert.equal(state.state, 'choosing', state.text);
+  assert.equal(state.phase, 'choose');
+  assert.equal(state.of, XOPOLICY_STEPS.length);
+
+  // THE POOL, opened only with the phone's key and under its own binding.
+  const [epk, iv, ct] = state.inventory.split('.');
+  const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  await assert.rejects(open({ ...reply, aad: xosetupHandoffAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(inventory.srs.map((/** @type {any} */ s) => s.id), ['sr1', 'sr2'], 'an ISO library is not somewhere a disk can go');
+  assert.deepEqual(inventory.srs[1], { id: 'sr2', name: 'NFS', pool: 'p1', size: 4000 * 1024 ** 3, free: 3000 * 1024 ** 3, shared: true });
+  assert.deepEqual(inventory.networks.map((/** @type {any} */ n) => [n.id, n.vlan, n.egress]), [['net-mgmt', null, true], ['net-lab', null, false], ['net-dmz', 30, false]]);
+  assert.deepEqual(inventory.capacity, { cpus: 16, memory: 64 * 1024 ** 3 });
+  assert.deepEqual(inventory.current, { srs: ['sr2'], networks: ['net-lab'], limits: { cpus: 4, memory: 8 * 1024 ** 3, disk: 100 * 1024 ** 3 } });
+
+  const job = begun.xosetup.job;
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab', 'net-dmz'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  // A CHOICE THE POOL DID NOT OFFER is refused, and the job goes on waiting.
+  const bad = await setups.policy({ job, sealed: await choose(begun, xo.address, { ...good, networks: ['net-elsewhere'] }), actor });
+  assert.equal(bad.ok, false);
+  assert.match(bad.text, /did not list/);
+  assert.equal(setups.status({ job, actor }).xosetup.state, 'choosing');
+  // Sealed under the sign-in's binding, it is not a choice at all.
+  const box = await seal({ to: begun.xosetup.key, aad: xosetupAad(job, xo.address), payload: good });
+  assert.equal((await setups.policy({ job, sealed: `${box.epk}.${box.iv}.${box.ct}`, actor })).ok, false);
+  // Nor is it anybody's but theirs.
+  assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor: 'sam@example.com' })).ok, false);
+
+  const took = await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor });
+  assert.equal(took.ok, true, took.text);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.deepEqual(xo.calls.filter((c) => c.method === 'resourceSet.set').map((c) => c.params), [
+    { id: 'rs-0', objects: ['sr1', 'sr2', 'net-lab', 'net-dmz'], limits: good.limits },
+  ]);
+  // THE WAY OUT MOVED, not doubled.
+  assert.deepEqual(xo.tags.get('net-mgmt'), []);
+  assert.deepEqual(xo.tags.get('net-dmz'), ['fleetwright-egress']);
+  assert.match(end.text, /Labs leave through dmz\./);
+  // Nothing about the fleet's user or token changed, nothing went to a Lock
+  // Screen, and the password is nowhere.
+  assert.ok(!xo.calls.some((c) => /^(user|token)\./.test(c.method)));
+  assert.deepEqual(events, [], 'a policy job reports no progress events');
+  assert.equal(end.handoff, undefined);
+  assert.equal(end.inventory, undefined, 'the pool is not handed out once the choice is made');
+  assert.ok(!JSON.stringify(setups.status({ job, actor })).includes(PASSWORD));
+  // Its key has opened the one more thing it was for, and opens nothing now.
+  assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, false);
+});
+
+test('a policy for a pool that was never added changes nothing', { skip }, async (t) => {
+  const xo = await standIn(t);
+  const { setups } = await machine();
+  const { state } = await choosing(xo, setups);
+  assert.equal(state.state, 'failed');
+  assert.equal(state.phase, 'choose');
+  assert.match(state.text, /has not been added to the fleet yet/);
+  assert.ok(!xo.calls.some((c) => /\.(create|set)$|^tag\./.test(c.method)));
+});
+
+test('a policy job cancelled, or left, while it waits changes nothing', { skip }, async (t) => {
+  const xo = await standIn(t, { sets: [chosenBefore()] });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const { begun } = await choosing(xo, setups, actor);
+  setups.cancel({ job: begun.xosetup.job, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'cancelled');
+  assert.match(end.text, /before anything was changed/);
+
+  const slow = await machine({ policyWaitMs: 50 });
+  const left = await choosing(xo, slow.setups, actor);
+  assert.equal(left.state.state, 'choosing');
+  /** @type {any} */
+  let gone;
+  for (let i = 0; i < 100 && (!gone || gone.state === 'choosing'); i++) {
+    await new Promise((r) => setTimeout(r, 10));
+    gone = slow.setups.status({ job: left.begun.xosetup.job, actor }).xosetup;
+  }
+  assert.equal(gone.state, 'failed');
+  assert.match(gone.text, /nobody chose within ten minutes\. Nothing was changed\./);
+  assert.ok(!xo.calls.some((c) => c.method === 'resourceSet.set' || c.method.startsWith('tag.')));
+});
+
+test('a choice is held to what the pool has, and the way out to what the fleet may use', () => {
+  const choices = {
+    srs: new Map([['a', 100 * 1024 ** 3], ['b', 50 * 1024 ** 3]]),
+    networks: new Set(['n1', 'n2']),
+    capacity: { cpus: 8, memory: 32 * 1024 ** 3 },
+  };
+  const ok = { v: 1, srs: ['a'], networks: ['n1'], egress: 'n1', limits: { cpus: 2, memory: 4 * 1024 ** 3, disk: 50 * 1024 ** 3 } };
+  assert.equal(checkPolicy(ok, choices).ok, true);
+  assert.equal(checkPolicy({ ...ok, egress: null }, choices).ok, true, 'no way out yet is a choice');
+  const refused = [
+    [{ ...ok, srs: [] }, /at least one storage/],
+    [{ ...ok, egress: 'n2' }, /one of the networks the fleet may use/],
+    [{ ...ok, limits: { ...ok.limits, cpus: 9 } }, /between 1 and 8/],
+    [{ ...ok, limits: { ...ok.limits, cpus: 1.5 } }, /between 1 and 8/],
+    [{ ...ok, limits: { ...ok.limits, memory: 512 * 1024 ** 2 } }, /between 1 GiB/],
+    [{ ...ok, limits: { ...ok.limits, disk: 101 * 1024 ** 3 } }, /between 10 GiB and 100 GiB/],
+    [{ ...ok, v: 2 }, /not a choice/],
+  ];
+  for (const [p, words] of refused) {
+    const r = checkPolicy(p, choices);
+    assert.equal(r.ok, false, JSON.stringify(p));
+    assert.match(/** @type {any} */ (r).text, /** @type {RegExp} */ (words));
+  }
+  assert.equal(checkPolicy(ok, null).ok, false, 'nothing to check it against is a refusal');
+  assert.deepEqual(currentLimits({ limits: { cpus: { total: 4 }, memory: 1024, disk: null } }), { cpus: 4, memory: 1024, disk: null });
 });

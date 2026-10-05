@@ -139,6 +139,25 @@ export function xosetupHandoffAad(job, address) {
 }
 
 /**
+ * What a pool's inventory is sealed under on its way from the machine to the
+ * phone changing its policy, and what the person's choice is sealed under on
+ * its way back. Each its own name over the same job and address, so none of
+ * the four messages one job carries can stand in for another.
+ * src/fleet/host/xo-setup.js, the policy job.
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function xosetupInventoryAad(job, address) {
+  return `fleetwright-xosetup-inventory/v1:${job}:${address}`;
+}
+
+/** @param {string} job @param {string} address */
+export function xosetupPolicyAad(job, address) {
+  return `fleetwright-xosetup-policy/v1:${job}:${address}`;
+}
+
+/**
  * The additional data a Claude login is kept under AT REST in the minter: the
  * GitHub account it belongs to. A stored row moved under another account does
  * not open, so storage that could be rearranged still could not hand one
