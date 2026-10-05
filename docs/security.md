@@ -283,6 +283,23 @@ machine of the fleet, through the coordinator.
   or delay either message; it cannot read the pool's storage and networks
   or change what was chosen. The machine holds the signed-in session, not
   the password, for at most ten minutes while the person chooses.
+- **The admin sign-in can be kept on the phone, when the person asks.**
+  *Keep on this phone* puts the admin email and password, and the
+  fingerprint of the certificate they accepted, in a Keychain item that
+  opens to Face ID or Touch ID only (this device only, gone with the
+  passcode), or under an Android Keystore key that needs a strong
+  biometric check for every use and is retired by a new enrolment. That is
+  an admin credential at rest on a phone. The bound is the phone's own
+  biometric unlock, and what is kept never leaves it: the fleet still
+  receives only the sign-in sealed to one job's key. It is written only
+  after the machine signed in with it, and is off unless turned on.
+- **A kept acceptance is the person's earlier word, for that certificate
+  only.** With it the phone sends `trust: accepted` without asking again,
+  but only for a probe or a remembered path carrying the same fingerprint.
+  A different certificate is asked about in full. The remembered machine
+  changes nothing about where the sign-in can go: `begin` names it, the
+  coordinator can still route elsewhere or refuse, and the key check names
+  the machine that signed.
 - **What is kept** is the limited user's token, and only on the phone that
   asked. The phone puts a key of its own inside the sealed sign-in; the
   machine seals the token to it under a binding of its own
