@@ -530,6 +530,9 @@ fun FleetScreen(
         }
         pending = outbox.held.size
         if (sent > 0) reload(keepStatus = true)
+        // A token a finished hypervisor setup handed back while the app was
+        // closed is collected now (XoHandoff).
+        XoHandoff.collectPending(settings, fleet)
     }
 
     if (showStart) {

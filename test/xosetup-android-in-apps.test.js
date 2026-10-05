@@ -101,8 +101,31 @@ test('Android: the sign-in is sealed with the app’s own seal, to the job’s k
   const xo = file('XoSetup.kt');
   assert.ok(xo.includes('fun aad(job: String, address: String): String = "fleetwright-xosetup/v1:$job:$address"'));
   assert.ok(xo.includes('Seal.seal(key, aad(job, address), payload)'), 'Seal.kt, not a second construction');
-  assert.ok(xo.includes('JSONObject().put("v", 1).put("xo", JSONObject().put("email", email).put("password", password))'));
+  assert.ok(xo.includes('JSONObject().put("v", 1).put("xo", JSONObject().put("email", email).put("password", password)).put("reply", reply)'));
   assert.ok(xo.includes('"${sealed.getString("epk")}.${sealed.getString("iv")}.${sealed.getString("ct")}"'), 'sent as epk.iv.ct');
+});
+
+test('Android: the token comes back to this phone, to a key sent inside the seal, and is kept encrypted alone', async () => {
+  const { xosetupHandoffAad } = await import('../src/fleet/seal.js');
+  const handoff = file('XoHandoff.kt');
+  const sheet = file('HypervisorSheet.kt');
+  // THE SAME BINDING the machine seals under.
+  assert.equal(xosetupHandoffAad('J', 'A'), 'fleetwright-xosetup-handoff/v1:J:A');
+  assert.ok(handoff.includes('fun aad(job: String, address: String): String = "fleetwright-xosetup-handoff/v1:$job:$address"'));
+  assert.ok(handoff.includes('Seal.open(key, aad(job, address), sealed)'));
+  // The key is made before the seal and goes inside it, never as a param.
+  assert.match(sheet, /val reply = XoHandoff\.newKey\(settings, p\.setup\.job, p\.where\)\s*val sealed = XoSetup\.sealSignIn\([^\n]*reply\.publicKey\)/);
+  const xosetup = file('Fleet.kt').slice(file('Fleet.kt').indexOf('suspend fun xosetup('), file('Fleet.kt').indexOf('/** Forget a stored credential.'));
+  assert.ok(xosetup.length > 0 && !xosetup.includes('"reply"'), 'the reply key is never an xosetup param');
+  // Kept encrypted under the Keystore key, and collected on every sign-in
+  // and launch as well as by the open screen.
+  assert.ok(file('Fleet.kt').includes('putString("secret.$name.enc", encrypt(value))'));
+  assert.ok(handoff.includes('settings.putSecret(tokenName(entry.address), record)'));
+  assert.match(file('MainActivity.kt'), /XoHandoff\.collectPending\(settings, fleet\)/);
+  assert.match(sheet, /XoHandoff\.collect\(settings, id, r\.xosetup\)\?\.let \{ handedBack = it \}/);
+  // Said only once this phone knows (C-5).
+  assert.match(sheet, /XoHandoff\.Outcome\.Kept -> Hint\("The token is kept on this phone now, encrypted, and no machine in the fleet keeps a copy\."\)/);
+  assert.doesNotMatch(handoff, /Log\.[idwe]\(|println\(/);
 });
 
 test('Android: the password lives in memory until it is sealed, and is never written or logged', () => {
@@ -281,7 +304,7 @@ test('Android: a setup in progress survives a rotation and a second notification
   assert.match(machines, /key\(hypervisorJob\) \{\s*HypervisorSheet\(settings, resumeJob = hypervisorJob/);
   // `run` seals under the address and email `begin` was sent with, while the
   // fields stay frozen until it answers.
-  assert.match(sheet, /XoSetup\.sealSignIn\(key, p\.setup\.job, p\.where, p\.email, password\)/);
+  assert.match(sheet, /XoSetup\.sealSignIn\(key, p\.setup\.job, p\.where, p\.email, password, reply\.publicKey\)/);
   assert.doesNotMatch(sheet, /sealSignIn\([^\n]*address\.trim\(\)/);
   const frozen = sheet.match(/enabled = !beginning,/g)?.length ?? 0;
   assert.ok(frozen >= 3, `${frozen} inputs freeze while beginning; expected the address, the email and the password`);
