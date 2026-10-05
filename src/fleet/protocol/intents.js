@@ -1247,6 +1247,20 @@ export const VERBS = Object.freeze({
           'For `begin`: `accepted` when the person was shown why the certificate is not trusted and accepted it. ' +
           'Required for any certificate that does not check out.',
       },
+      // PLAIN HTTP, ACCEPTED BY A PERSON. Xen Orchestra built from sources
+      // serves HTTP on 80 until it is given a certificate, which is the
+      // installer's default. With this and no `pin`, the machine sets the pool
+      // up over HTTP: the admin sign-in and every later call with the fleet's
+      // token cross that network unencrypted, which the phone says in those
+      // words before the person can send it. Without it, no pin is a refusal.
+      plain: {
+        type: 'enum',
+        required: false,
+        values: ['accepted'],
+        describe:
+          'For `begin`, with no `pin`: `accepted` when the person was told the sign-in and the fleet\'s token would ' +
+          'cross the network unencrypted and chose to go on. The key is then signed over an empty pin.',
+      },
     },
     mutating: true,
     summary:

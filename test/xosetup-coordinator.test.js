@@ -273,3 +273,13 @@ test('a machine that did not answer the probe is not listed as finding nothing',
   assert.deepEqual(r.probes.map((/** @type {any} */ p) => p.hostId), ['deb14']);
   assert.match(r.hosts.find((/** @type {any} */ h) => h.hostId === 'rpi-7550').text, /does not know/);
 });
+
+test('a plain-HTTP setup reaches its machine with the person’s acceptance and no pin', async () => {
+  const { core, asked } = fleet(['deb14'], machine);
+  const r = await core.dispatch({ verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', plain: 'accepted' }, actor: `fleet:${admin.email}`, requester: admin });
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(asked.at(-1)?.spec.params, { phase: 'begin', address: 'xo.lan', plain: 'accepted' });
+  // Only the one word: anything else is not an acceptance.
+  const odd = await core.dispatch({ verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', plain: 'yes' }, actor: `fleet:${admin.email}`, requester: admin });
+  assert.equal(odd.ok, false);
+});
