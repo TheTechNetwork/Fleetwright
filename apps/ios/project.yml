@@ -40,6 +40,19 @@ packages:
     url: https://github.com/getsentry/sentry-cocoa
     exactVersion: 9.30.0
 
+# THE VERSION, ONCE, FOR EVERY TARGET. App Store Connect refuses an upload
+# whose extension carries a different CFBundleShortVersionString or
+# CFBundleVersion from its app, and both plists read these two settings — so
+# they live at project level, where one bump moves the app and the Live
+# Activity extension together, rather than as two lines that would drift the
+# first time somebody bumped one. test/version.test.js still finds
+# MARKETING_VERSION here and holds it to package.json; the archive still
+# overrides CURRENT_PROJECT_VERSION from the command line, for every target.
+settings:
+  base:
+    MARKETING_VERSION: "0.4.5"
+    CURRENT_PROJECT_VERSION: "1"
+
 targets:
   Fleetwright:
     type: application
@@ -48,6 +61,11 @@ targets:
       - path: Fleetwright
     dependencies:
       - package: Sentry
+      # THE LIVE ACTIVITY EXTENSION, embedded. A dependency on an
+      # app-extension target is what makes XcodeGen copy it into the app's
+      # PlugIns, and building this scheme builds it, so CI's simulator build
+      # type-checks it on every pull request without a second invocation.
+      - target: FleetwrightActivity
     # THE TEST TARGET JOINS THIS TARGET'S SCHEME, rather than being declared in
     # a `schemes:` block of its own. CI runs `xcodebuild -scheme Fleetwright`,
     # and a test target that exists but is in no scheme's test action is a
@@ -212,13 +230,28 @@ targets:
         # Remote notifications are the entire reason for the app over a
         # Shortcut: a Shortcut cannot tell you a session is waiting.
         UIBackgroundModes: [remote-notification]
+        # A LIVE ACTIVITY FOR A HYPERVISOR BEING ADDED (docs/hypervisors.md).
+        # Without this key ActivityKit refuses to start one, quietly: the
+        # request throws, the screen keeps polling, and the Lock Screen shows
+        # nothing with nothing anywhere saying why. The views are in the
+        # FleetwrightActivity extension below; the pushes that move them are
+        # APNs `liveactivity` pushes from the coordinator.
+        NSSupportsLiveActivities: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: network.thetech.fleetwright
-        MARKETING_VERSION: "0.4.5"
-        CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
+        # WHICH PROFILE SIGNS THIS TARGET, named per target rather than once
+        # on the command line. ios.yml used to pass PROVISIONING_PROFILE_SPECIFIER
+        # to xcodebuild, and a command-line setting applies to every target
+        # in the build — fine with one bundle, wrong with two, because the
+        # extension needs a profile for ITS bundle id and would have been
+        # handed the app's. So each target reads a variable of its own and
+        # the workflow passes two. Locally the variable is unset, which is an
+        # empty specifier, which is what a project with automatic signing had
+        # before.
+        PROVISIONING_PROFILE_SPECIFIER: $(FLEETWRIGHT_APP_PROFILE)
         # Names the app icon in Assets.xcassets. Setting it is also what makes
         # Xcode write CFBundleIconName into the Info.plist, which App Store
         # Connect requires (error 90713) and which cannot be supplied by hand —
@@ -270,6 +303,51 @@ targets:
         com.apple.developer.applesignin:
           - Default
 
+
+  # THE LIVE ACTIVITY EXTENSION: the Lock Screen and Dynamic Island face of a
+  # hypervisor being added (docs/hypervisors.md). An extension because that is
+  # the only place iOS draws a Live Activity from; nothing else is in it.
+  #
+  # IT COMPILES TWO OF THE APP'S FILES BESIDE ITS OWN. XOSetupActivity.swift
+  # is the ActivityAttributes type: ActivityKit matches an activity to its
+  # view by that type, so the app and the extension must compile the same
+  # declaration, and listing the file in both targets is how one declaration
+  # reaches two bundles. Design.swift is the palette and the scale, so the
+  # Lock Screen is on the same numbers as the app and the console.
+  #
+  # ITS BUNDLE ID IS THE APP'S WITH A SUFFIX, which Apple requires of an
+  # extension, and it needs a provisioning profile of its own for it. CI gets
+  # that profile from the App Store Connect API on every release
+  # (tools/ensure-ios-extension-profile.mjs, run by ios.yml), so there is no
+  # second secret to make by hand.
+  FleetwrightActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: FleetwrightActivity
+      - path: Fleetwright/XOSetupActivity.swift
+      - path: Fleetwright/Design.swift
+    info:
+      # Generated and gitignored, like the app's.
+      path: FleetwrightActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Fleetwright
+        # Bound to the build settings for the reason the app's are: a literal
+        # here would make the extension's version disagree with the app's,
+        # which App Store Connect refuses.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: network.thetech.fleetwright.Activity
+        SWIFT_VERSION: "5.9"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        # An extension is installed inside its app, never on its own.
+        SKIP_INSTALL: YES
+        # Its own profile; see the app target's note on this setting.
+        PROVISIONING_PROFILE_SPECIFIER: $(FLEETWRIGHT_ACTIVITY_PROFILE)
 
   # UNIT TESTS, plain XCTest — no simulator UI, no XCUITest.
   #
