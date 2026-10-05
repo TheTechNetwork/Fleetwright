@@ -158,6 +158,19 @@ enum XOSetupHandoff {
     /// The same, as addresses.
     static func held() -> [String] { heldPools().map(\.address) }
 
+    /// The certificate the machine pinned when this pool was set up, and
+    /// whether it checked out then: what the remembered path starts from
+    /// when the certificate needed nobody's word (XOSaved). Nil for a pool
+    /// with no record here, or one set up over plain HTTP.
+    static func pinnedCertificate(_ address: String) -> (pin: String, trusted: Bool)? {
+        guard let record = Keychain.get(tokenAccount(address)),
+              let object = try? JSONSerialization.jsonObject(with: Data(record.utf8)) as? [String: Any],
+              let pin = object["pin"] as? String, !pin.isEmpty
+        else { return nil }
+        let certificate = object["certificate"] as? [String: Any]
+        return (pin, certificate?["trusted"] as? Bool == true)
+    }
+
     /// The pool names in a kept record: each pool's name, or the start of its
     /// id when Xen Orchestra gave it none. Nil for a record that does not say.
     static func poolNames(_ record: String) -> [String]? {

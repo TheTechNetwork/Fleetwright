@@ -101,10 +101,11 @@ test('iOS: a machine that reached the address over plain HTTP is offered after t
   assert.ok(SCREEN.includes('PATH_TO_HTTPS_KEY and AUTOCERT=\\"true\\", then run it again.'));
   assert.ok(!SCREEN.includes('on by default'));
   // Shown only when there is no certificate: never both questions at once.
-  assert.match(SCREEN, /if let cert = chosen\.cert \{[\s\S]*?\} else if chosen\.plainHTTP \{\s*plainQuestion\(chosen\)\s*Toggle\(isOn: \$plainAccepted\) \{\s*Text\("Send it without HTTPS anyway"\)[\s\S]{0,200}?\.frame\(minHeight: 44\)/);
+  // The toggle stands unless the person's kept word for plain HTTP does.
+  assert.match(SCREEN, /if let cert = chosen\.cert \{[\s\S]*?\} else if chosen\.plainHTTP \{\s*plainQuestion\(chosen\)\s*if rememberedAccepts\(chosen\) \{[\s\S]{0,300}?\} else \{\s*Toggle\(isOn: \$plainAccepted\) \{\s*Text\("Send it without HTTPS anyway"\)[\s\S]{0,300}?\.frame\(minHeight: 44\)/);
   // Begin waits for the toggle, and for nothing less.
   assert.match(SCREEN, /\.disabled\(busy \|\| email\.isBlank \|\| password\.isEmpty \|\| !accepted\(chosen\)\)/);
-  assert.match(SCREEN, /private func accepted\(_ probe: Fleet\.Probe\) -> Bool \{\s*if probe\.cert != nil \{ return probe\.certificateTrusted \|\| acknowledged \}\s*return probe\.plainHTTP && plainAccepted\s*\}/);
+  assert.match(SCREEN, /private func accepted\(_ probe: Fleet\.Probe\) -> Bool \{\s*if probe\.cert != nil \{ return probe\.certificateTrusted \|\| acknowledged \|\| rememberedAccepts\(probe\) \}\s*return probe\.plainHTTP && \(plainAccepted \|\| rememberedAccepts\(probe\)\)\s*\}/);
   // The toggle resets on the same changes as the certificate's: the address,
   // the machine, and a new probe.
   assert.match(SCREEN, /\.onChange\(of: address\)[\s\S]{0,500}?acknowledged = false\s*plainAccepted = false/);
@@ -113,7 +114,7 @@ test('iOS: a machine that reached the address over plain HTTP is offered after t
   assert.match(probe, /acknowledged = false\s*plainAccepted = false/);
   // What leaves the phone: `plain: accepted`, no pin, no trust, and only once
   // the person has said so. The one word the coordinator takes.
-  assert.match(SCREEN, /\} else if probe\.plainHTTP, plainAccepted \{\s*pin = nil\s*trust = nil\s*plain = true\s*\} else \{\s*return\s*\}/);
+  assert.match(SCREEN, /\} else if probe\.plainHTTP, plainAccepted \|\| rememberedAccepts\(probe\) \{\s*pin = nil\s*trust = nil\s*plain = true\s*\} else \{\s*return\s*\}/);
   assert.deepEqual(VERBS.xosetup.params.plain.values, ['accepted']);
   // The key is still checked, over the pin the machine signed: the empty
   // string, in the bytes, the way the host's own canonical JSON writes it.
@@ -218,7 +219,7 @@ test('iOS: progress is polled only while the screen is open, with Cancel while i
   assert.match(SCREEN, /refuse\(reply\.text \?\? "It could not be stopped\."\)\s*\} else \{\s*cancelRequested = true/);
   // Done has a way out; a stopped job has a way back in.
   assert.match(SCREEN, /else if progress\?\.state == "done" \{\s*Button\("Done"\) \{ dismiss\(\) \}/);
-  assert.match(SCREEN, /Button\("Try again"\) \{ reset\(\) \}/);
+  assert.match(SCREEN, /Button\("Try again"\) \{[\s\S]{0,200}?reset\(\)/);
   // A change of step crossfades (MOTION 2), and nothing loops.
   assert.match(SCREEN, /\.contentTransition\(\.opacity\)/);
   assert.match(SCREEN, /\.animation\(Design\.Motion\.change, value: progress\?\.phase\)/);
@@ -337,9 +338,11 @@ test('iOS: a certificate that does not check out is shown in full and accepted b
   // The question, and Begin waits for its answer.
   assert.match(SCREEN, /Toggle\(isOn: \$acknowledged\)/);
   assert.match(SCREEN, /\.disabled\(busy \|\| email\.isBlank \|\| password\.isEmpty \|\| !accepted\(chosen\)\)/);
-  assert.match(SCREEN, /if probe\.cert != nil \{ return probe\.certificateTrusted \|\| acknowledged \}/);
+  // The person's word, given now or kept on this phone for this same
+  // certificate (XOSaved, held to the fingerprint in xo-saved-in-apps.test.js).
+  assert.match(SCREEN, /if probe\.cert != nil \{ return probe\.certificateTrusted \|\| acknowledged \|\| rememberedAccepts\(probe\) \}/);
   // `trust` goes only with the person's word, and never for a trusted one.
-  assert.match(SCREEN, /if probe\.certificateTrusted \{\s*trust = nil\s*\} else if acknowledged \{\s*trust = "accepted"\s*\} else \{\s*return\s*\}/);
+  assert.match(SCREEN, /if probe\.certificateTrusted \{\s*trust = nil\s*\} else if acknowledged \|\| rememberedAccepts\(probe\) \{\s*trust = "accepted"\s*\} else \{\s*return\s*\}/);
   // What was found for one address is not left standing for another.
   assert.match(SCREEN, /\.onChange\(of: address\)[\s\S]{0,400}?probes = nil[\s\S]{0,80}?chosen = nil[\s\S]{0,80}?acknowledged = false/);
 });

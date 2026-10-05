@@ -104,9 +104,13 @@ targets:
         # question left is whether the person holding the phone meant it.
         # That is the question Face ID answers, and it answers it better than
         # retyping a name that is on the screen above.
+        #
+        # AND OPENING A XEN ORCHESTRA SIGN-IN the person chose to keep on this
+        # phone (XOSaved), which is a Keychain item that opens to nothing else.
         NSFaceIDUsageDescription: >-
           Confirming a reboot, which ends every session running on that
-          machine.
+          machine, and opening a Xen Orchestra sign-in you chose to keep on
+          this phone.
         # THE DSN, READ AT LAUNCH. Not a secret — it identifies a project and
         # grants only the ability to post events to it. Empty means no
         # reporting, which is what a fork or a fresh clone gets; FleetwrightApp
