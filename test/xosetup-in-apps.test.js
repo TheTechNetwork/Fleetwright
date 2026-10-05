@@ -65,6 +65,9 @@ test('iOS: a machine that reached the address is offered, HTTPS with a certifica
   assert.ok(SCREEN.includes('No machine reached \\(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one '));
   assert.ok(!SCREEN.includes('Setup needs HTTPS'));
   assert.ok(!SCREEN.includes('needs HTTPS'));
+  // How to give it HTTPS instead is said, and never that it has HTTPS already.
+  assert.ok(!SCREEN.includes('on by default'));
+  assert.ok(SCREEN.includes('xo-install.cfg') && SCREEN.includes('AUTOCERT'));
   // The certificate the machine saw is shown for acceptance, grouped so it can
   // be compared against a terminal, and `begin` pins exactly that one.
   assert.match(SCREEN, /Text\(XOSetupKey\.grouped\(cert\)\)/);

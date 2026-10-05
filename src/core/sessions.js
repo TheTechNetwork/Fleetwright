@@ -24,6 +24,7 @@ import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { resolveWorkdir } from './trust.js';
 import { ensureDirectConfig, removeDirectConfig } from './direct-config.js';
 import { noRemoteControl } from './runner-auth-words.js';
+import { onRunner } from './runner-login.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
 import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
@@ -516,7 +517,10 @@ export class SessionManager {
       configDir = staged.dir;
       runnerAuth = staged.auth ?? null;
     }
-    const noLink = noRemoteControl(runnerAuth?.kind);
+    // NO REMOTE CONTROL WHERE IT CANNOT COME UP, AND NONE ON A RUNNER: not
+    // merely not waited for, but not asked of the CLI at all, so a session
+    // whose credential cannot open it is not launched with the flag.
+    const noLink = noRemoteControl(runnerAuth?.kind, onRunner(this.cfg));
     if (noLink) this.noRemoteControl.set(name, noLink);
     else this.noRemoteControl.delete(name);
     this.inFlight.add(name);
@@ -532,6 +536,7 @@ export class SessionManager {
         prompt,
         configDir,
         runnerAuth,
+        remoteControl: noLink ? false : null,
         // Whose download cache this session shares (claude.js cacheVolumeFor).
         owner: this.registry.get(name)?.createdBy ?? actor,
       });
@@ -1245,6 +1250,7 @@ export class SessionManager {
           // session brought back after a reboot with no hook and no broker.
           hookSocket: await this.#ensureHookSocket(rec.name),
           owner: rec.createdBy ?? null,
+          remoteControl: onRunner(this.cfg) || this.noRemoteControl.has(rec.name) ? false : null,
         });
         this.activity.delete(rec.name);
         const spawned = newSession({ name: rec.name, cwd: rec.cwd || this.cfg.workdir, command });
@@ -1275,8 +1281,9 @@ export class SessionManager {
     // Remote Control is verified opportunistically for restored sessions: the
     // session is already useful over tmux, so a slow RC attach must not hold
     // startup. Failures are logged, never fatal.
-    if (this.cfg.remoteControl) {
+    if (this.cfg.remoteControl && !onRunner(this.cfg)) {
       for (const name of restored) {
+        if (this.noRemoteControl.has(name)) continue;
         const rc = await verifyRemoteControl(this.cfg, name);
         if (rc.online) this.registry.upsert(name, { rcUrl: rc.url, detail: `restored · ${rc.detail}` });
         else log.warn(`restore ${name}: ${rc.detail}`);
