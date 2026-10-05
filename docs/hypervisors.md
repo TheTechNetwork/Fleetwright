@@ -430,6 +430,49 @@ afterwards left them as they were. That Xen Orchestra has no pool behind it,
 so the storage was a stand-in and no network was tagged; `tag.add` and
 `tag.remove` are checked against the methods it lists, not a live network.
 
+### The path it used last
+
+A change of policy used to start from nothing every time: "Asking your
+machines…", then the machine, then the certificate question, then the
+sign-in. The phone now remembers where it worked.
+
+- **The machine that got through**, by address, once a job on it has passed
+  `sign-in`. The policy screen opens on that machine and asks nobody else.
+  It takes that path only when the certificate needs no one's word (it
+  checked out when the pool was set up) or has the person's kept word, below.
+  Otherwise every machine is asked as before, and the remembered one is
+  chosen from the answers when it is among them. If it refuses `begin`
+  (switched off, gone from the fleet), every machine is asked at once and
+  the reason stays on screen. If it fails at `connect`, Try again asks
+  every machine and shows the certificate in full. The machine still holds
+  the sign-in to the pinned certificate, so a server that changed fails
+  with nothing sent to it.
+- **The sign-in and the person's word for the certificate**, only when they
+  turn on *Keep on this phone*:
+  - **iOS:** a Keychain item per address that opens to Face ID or Touch ID
+    and nothing else (`.biometryCurrentSet`, `WhenPasscodeSetThisDeviceOnly`,
+    `XOSaved.swift`).
+  - **Android:** encrypted under a Keystore key of its own that needs a
+    strong fingerprint or face check for every use and is retired by a new
+    enrolment (`XoSaved.kt`). It is not the fleet credential's key, which
+    opens on a locked phone so a notification can be answered.
+  - It is written only once the machine has signed in with it, so a mistyped
+    password is never the one kept. A kept password that then fails at
+    `sign-in` is forgotten, and the screen says so.
+  - The acceptance is kept as the fingerprint that was accepted, or as
+    "plain HTTP", so it stands for that certificate and no other. A server
+    that answers with a different one is asked about in full.
+  - Turning the switch off forgets it then.
+
+The fleet never sees any of it. What leaves the phone is what always did:
+the sign-in sealed to one job's key on one machine.
+
+**The way out is recorded, not routed yet.** The policy's way out is the
+network the edge OPNsense VM will put its WAN on (["The uplink"](#the-uplink)).
+Choosing it tags that network `fleetwright-egress` in Xen Orchestra. The
+router itself, with the OPNsense template it is cloned from, is not built
+yet; the screen says that in as many words.
+
 ### Next: deploying Xen Orchestra, and the phone's own network
 
 - **A pool without Xen Orchestra** is deployed with the same installer's
