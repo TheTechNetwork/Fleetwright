@@ -32,7 +32,7 @@ test('Android: the screen asks the address, probes, then begins, runs, polls and
   const sheet = file('HypervisorSheet.kt');
   const order = [
     'fleet.xoprobe(address.trim())',
-    'fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust)',
+    'fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust, plain = if (plain) "accepted" else null)',
     'fleet.xosetup("run", job = p.setup.job, sealed = sealed)',
     'fleet.xosetup("status", job = id)',
     'fleet.xosetup("cancel", job = setup.job)',
@@ -48,8 +48,13 @@ test('Android: the screen asks the address, probes, then begins, runs, polls and
   assert.ok(at[3] > at[2] && at[4] > at[2], 'status and cancel after run');
   // The address field takes no scheme, and says so.
   assert.ok(sheet.includes('A host name or IP address, with a port if it is not 443. No https://.'));
-  // Only a machine that reached it over TLS with a certificate is offered.
-  assert.match(sheet, /filter \{ it\.reachable && it\.tls && it\.cert != null \}/);
+  // A machine that reached it over TLS with a certificate is offered first;
+  // one answered in plain HTTP after those, and only with the card that asks
+  // (the plain-HTTP test below).
+  const xo = file('XoSetup.kt');
+  assert.ok(xo.includes('fun pinned(probe: Fleet.Probe): Boolean = probe.reachable && probe.tls && probe.cert != null'));
+  assert.ok(xo.includes('fun plain(probe: Fleet.Probe): Boolean = probe.reachable && !probe.tls'));
+  assert.match(sheet, /val pinned = probes\.orEmpty\(\)\.filter \{ XoSetup\.pinned\(it\) \}\s*val reachable = pinned \+ probes\.orEmpty\(\)\.filter \{ XoSetup\.plain\(it\) \}/);
 });
 
 test('Android: begin goes to the chosen machine; every later phase names the job alone', () => {
@@ -190,7 +195,7 @@ test('Android: a certificate that does not check out is acknowledged, having bee
   }
   // A trusted certificate is one calm line and no question.
   assert.ok(xo.includes('"Its certificate checks out: ${parts.joinToString(", ")}."'));
-  assert.match(sheet, /if \(certificate != null && trusted\) \{[\s\S]*?Hint\(XoSetup\.trustedLine\(certificate\)/);
+  assert.match(sheet, /certificate != null && trusted && cert != null -> \{[\s\S]*?Hint\(XoSetup\.trustedLine\(certificate\)/);
   // Otherwise the card that asks: the attention ring, this screen's one
   // tone, and an explicit box at the design's 48dp, off while beginning.
   assert.match(sheet, /fleetCard\(radius = Design\.Radius\.cardSmall, ring = Design\.Palette\.attention\.now\)/);
@@ -198,7 +203,8 @@ test('Android: a certificate that does not check out is acknowledged, having bee
   assert.ok(sheet.includes('Checkbox(checked = acknowledged, onCheckedChange = null, enabled = enabled)'));
   assert.ok(sheet.includes('Text("I checked this certificate and trust it"'));
   // Set up is off until the certificate is either fine or acknowledged.
-  assert.match(sheet, /enabled = !beginning && email\.isNotBlank\(\) && password\.isNotEmpty\(\) && \(trusted \|\| acknowledged\)/);
+  assert.match(sheet, /val consented = if \(plain\) plainAccepted else \(trusted \|\| acknowledged\)/);
+  assert.match(sheet, /enabled = !beginning && email\.isNotBlank\(\) && password\.isNotEmpty\(\) && consented/);
   // The acknowledgement was about one certificate: a new address, a new
   // machine or a new probe each untick it.
   const resets = sheet.split('acknowledged = false').length - 1;
@@ -208,10 +214,57 @@ test('Android: a certificate that does not check out is acknowledged, having bee
   // `trust = accepted` goes with begin only for an acknowledged certificate
   // that did not check out; a trusted one sends nothing.
   assert.ok(xo.includes('if (c?.trusted == true) null else if (acknowledged) "accepted" else null'));
-  assert.ok(sheet.includes('val trust = XoSetup.trustFor(p.certificate, acknowledged)'));
+  assert.ok(sheet.includes('val trust = if (plain) null else XoSetup.trustFor(p.certificate, acknowledged)'));
   assert.match(file('Fleet.kt'), /if \(trust != null\) put\("trust", trust\)/);
   // The coordinator's shape, read tolerantly: trusted only when said AND clean.
   assert.ok(xo.includes('trusted = json.optBoolean("trusted", false) && problems.isEmpty()'));
+});
+
+test('Android: a Xen Orchestra answering in plain HTTP can be chosen, once the person has read what would cross the wire', () => {
+  const xo = file('XoSetup.kt');
+  const sheet = file('HypervisorSheet.kt');
+  // What the row says, with `xo` three-valued: the same words as iOS.
+  for (const line of [
+    'true -> "Reached Xen Orchestra over plain HTTP"',
+    'false -> "Reached something over plain HTTP, and it does not look like Xen Orchestra"',
+    'null -> "Reached something over plain HTTP; cannot tell whether it is Xen Orchestra"',
+  ]) {
+    assert.ok(xo.includes(line), `the row says: ${line}`);
+  }
+  // The old refusal is gone with the rule it stated.
+  assert.ok(!xo.includes('Setup needs HTTPS'));
+  // The card that asks, in the certificate card's ring, with the stakes in
+  // words that name both ends, the fix on the far side, and a 48dp box that
+  // says what it does.
+  const card = sheet.slice(sheet.indexOf('private fun PlainAsk('), sheet.indexOf('private fun Detail('));
+  assert.ok(card.includes('.fleetCard(radius = Design.Radius.cardSmall, ring = Design.Palette.attention.now)'));
+  assert.ok(card.includes('Text("This Xen Orchestra answers without HTTPS", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)'));
+  assert.ok(card.includes('"The admin password you type, and the token the fleet keeps afterwards, would cross the network between " +'));
+  assert.ok(card.includes('"${probe.hostId} and $address unencrypted. Anything on that network could read them."'));
+  assert.ok(card.includes('"To give it HTTPS instead: in the installer\'s xo-install.cfg, set PORT=\\"443\\", PATH_TO_HTTPS_CERT, " +'));
+  assert.ok(card.includes('"PATH_TO_HTTPS_KEY and AUTOCERT=\\"true\\", then run it again."'));
+  assert.match(card, /\.heightIn\(min = 48\.dp\)\s*\.toggleable\(value = accepted, enabled = enabled, role = Role\.Checkbox/);
+  assert.ok(card.includes('Checkbox(checked = accepted, onCheckedChange = null, enabled = enabled)'));
+  assert.ok(card.includes('Text("Send it without HTTPS anyway"'));
+  // Shown instead of the certificate card for a plain machine, and the
+  // acceptance gates Set up the way the acknowledgement does.
+  assert.match(sheet, /plain -> PlainAsk\(pick, address, plainAccepted, enabled = !beginning, onAccepted = \{ plainAccepted = it \}\)/);
+  assert.match(sheet, /val consented = if \(plain\) plainAccepted else \(trusted \|\| acknowledged\)/);
+  // Saveable, and reset where the acknowledgement is: the address, the
+  // machine and the probe.
+  assert.match(sheet, /var plainAccepted by rememberSaveable \{/);
+  assert.match(sheet, /acknowledged = false\s*plainAccepted = false\s*val r = fleet\.xoprobe/);
+  assert.match(sheet, /chosen = null\s*acknowledged = false\s*plainAccepted = false\s*\}/);
+  assert.match(sheet, /chosen = p\.hostId\s*(?:\/\/[^\n]*\n\s*)*acknowledged = false\s*plainAccepted = false/);
+  // `begin` for a plain machine: no pin, no trust, `plain = accepted`, and
+  // nothing sent until the box is ticked. The key is checked over an empty
+  // pin, which is what the machine signed.
+  assert.match(sheet, /val plain = XoSetup\.plain\(p\)\s*val pin = if \(plain\) null else \(p\.cert \?: return\)\s*if \(plain && !plainAccepted\) return\s*val trust = if \(plain\) null else XoSetup\.trustFor/);
+  assert.ok(sheet.includes('XoSetup.signingInput(where, setup.job, setup.key, pin ?: "")'));
+  assert.ok(xo.includes('require(pin.isEmpty() || PIN_RE.matches(pin))'));
+  const fleet = file('Fleet.kt');
+  assert.match(fleet, /if \(trust != null\) put\("trust", trust\)[\s\S]*?if \(plain != null\) put\("plain", plain\)/);
+  assert.match(fleet, /if \(pin != null\) put\("pin", pin\)/, 'no pin key at all for a plain setup, not an empty one');
 });
 
 test('Android: a setup in progress survives a rotation and a second notification tap', () => {

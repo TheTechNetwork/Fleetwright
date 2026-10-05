@@ -57,14 +57,19 @@ import kotlinx.coroutines.launch
  * screen is open, because the fleet also pushes them to a notification
  * (XoSetupNotice) for the phone in a pocket.
  *
- * THE CERTIFICATE IS THE ONE CARD HERE THAT ASKS A QUESTION. A certificate
- * that checks out is one calm line. One that does not gets the attention
- * ring the design spends on exactly this, what is wrong with it in words, its
+ * ONE CARD HERE ASKS A QUESTION, AND IT IS ONE OF TWO. A certificate that
+ * checks out is one calm line. One that does not gets the attention ring the
+ * design spends on exactly this, what is wrong with it in words, its
  * details, and a box the person ticks having read them; Set up stays off
  * until they do, and `begin` then carries `trust = accepted`, which is what
- * the host looks for before it will connect. The box unticks itself when the
- * address, the machine or the probe changes, because it was about the
- * certificate those three named.
+ * the host looks for before it will connect. A Xen Orchestra that answers in
+ * plain HTTP, which is what the installer builds until it is given a
+ * certificate, gets the other card in the same ring: that the password typed
+ * here and the token the fleet keeps would cross that network readable, how
+ * to give it HTTPS instead, and a box that says send it anyway; `begin` then
+ * carries `plain = accepted` and no pin, and the host refuses it without.
+ * Either box unticks itself when the address, the machine or the probe
+ * changes, because it was about what those three named.
  *
  * THE PASSWORD IS IN MEMORY FOR AS LONG AS IT TAKES TO SEAL IT, and no longer.
  * It is sealed to the job's key on this phone, so the coordinator relays
@@ -99,6 +104,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     // and trusts it anyway. About one certificate: reset with the address,
     // the machine, and every new probe.
     var acknowledged by rememberSaveable { mutableStateOf(false) }
+    // The person has read that, with no HTTPS, the password and the token
+    // would cross the network readable between the chosen machine and the
+    // address, and said to send it anyway. About one machine at one address:
+    // reset where the acknowledgement is.
+    var plainAccepted by rememberSaveable { mutableStateOf(false) }
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -125,7 +135,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     var asks by rememberSaveable { mutableStateOf(0) }
 
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
-    val reachable = probes.orEmpty().filter { it.reachable && it.tls && it.cert != null }
+    // WHO CAN RUN IT: the machines that reached it over HTTPS and saw a
+    // certificate, then the ones answered in plain HTTP. The pinned ones
+    // first, because they are the ones with nothing to accept.
+    val pinned = probes.orEmpty().filter { XoSetup.pinned(it) }
+    val reachable = pinned + probes.orEmpty().filter { XoSetup.plain(it) }
     val pick = reachable.firstOrNull { it.hostId == chosen }
 
     fun probe() {
@@ -135,11 +149,14 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
             probes = null
             chosen = null
             acknowledged = false
+            plainAccepted = false
             val r = fleet.xoprobe(address.trim())
             if (r.ok && r.probes != null) {
                 probes = r.probes
                 // One machine that can is chosen for them; two is a decision.
-                chosen = r.probes.filter { it.reachable && it.tls && it.cert != null }.singleOrNull()?.hostId
+                // A lone plain-HTTP machine is chosen too: choosing it shows
+                // the card that asks, and nothing is sent until it is answered.
+                chosen = r.probes.filter { XoSetup.pinned(it) || XoSetup.plain(it) }.singleOrNull()?.hostId
             } else {
                 probeText = r.text.ifBlank { "The fleet did not answer the probe." }
             }
@@ -175,24 +192,29 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
      */
     fun begin() {
         val p = pick ?: return
-        val pin = p.cert ?: return
-        // "accepted" for a certificate that did not check out and was
-        // acknowledged; nothing for one that did. The button is off until the
-        // box is ticked, so a null here for an untrusted certificate is a
-        // path that should not exist; refusing it is cheaper than finding out.
-        val trust = XoSetup.trustFor(p.certificate, acknowledged)
-        if (p.certificate?.trusted != true && trust == null) return
+        // TWO SETUPS, NEVER MIXED. Pinned: the certificate's fingerprint, and
+        // `trust` for one that did not check out. Plain: no pin at all, and
+        // `plain = accepted`. The button is off until the box for whichever
+        // this is has been ticked, so a return here is a path that should not
+        // exist; refusing it is cheaper than finding out.
+        val plain = XoSetup.plain(p)
+        val pin = if (plain) null else (p.cert ?: return)
+        if (plain && !plainAccepted) return
+        val trust = if (plain) null else XoSetup.trustFor(p.certificate, acknowledged)
+        if (!plain && p.certificate?.trusted != true && trust == null) return
         scope.launch {
             beginning = true
             refusal = ""
             val where = address.trim()
             val who = email.trim()
-            val r = fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust)
+            val r = fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust, plain = if (plain) "accepted" else null)
             val setup = r.xosetup
             val hostId = r.hostId ?: p.hostId
             when {
                 !r.ok || setup == null -> refusal = r.text.ifBlank { "${p.hostId} did not start the setup." }
-                setup.key == null || !XoSetup.verifyKeySig(setup.hostKey, setup.keySig, runCatching { XoSetup.signingInput(where, setup.job, setup.key, pin) }.getOrDefault(ByteArray(0))) -> {
+                // The machine signed over an empty pin for a plain setup, and
+                // the phone checks the same bytes (XoSetup.signingInput).
+                setup.key == null || !XoSetup.verifyKeySig(setup.hostKey, setup.keySig, runCatching { XoSetup.signingInput(where, setup.job, setup.key, pin ?: "") }.getOrDefault(ByteArray(0))) -> {
                     // A HARD STOP. The key was not signed by the key offered as
                     // the machine's, so it is nobody's key worth sealing to.
                     password = ""
@@ -371,6 +393,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                             probeText = ""
                             chosen = null
                             acknowledged = false
+                            plainAccepted = false
                         }
                     },
                     label = { Text("Address") },
@@ -399,7 +422,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         found.isEmpty() -> Hint("This fleet has no permanent machine to ask. Add a machine first; a temporary one cannot hold the pool's token.")
                         reachable.isEmpty() -> {
                             Hint(
-                                "No machine reached $address over HTTPS. Check the address and the port, that Xen Orchestra is " +
+                                "No machine reached $address. Check the address and the port, that Xen Orchestra is " +
                                     "running, and that one of these machines is on a network that can see it.",
                                 color = Design.Palette.attention.now,
                             )
@@ -420,9 +443,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                                                 if (chosen != p.hostId) {
                                                     chosen = p.hostId
                                                     // Another machine saw its own
-                                                    // certificate; the tick was for
-                                                    // the last one's.
+                                                    // certificate, or its own lack
+                                                    // of one; the tick was for the
+                                                    // last one's.
                                                     acknowledged = false
+                                                    plainAccepted = false
                                                 }
                                             },
                                         ),
@@ -441,19 +466,25 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                     }
                 }
 
-                val cert = pick?.cert
-                if (pick != null && cert != null) {
+                if (pick != null) {
+                    val cert = pick.cert
+                    val plain = XoSetup.plain(pick)
                     val certificate = pick.certificate
-                    val trusted = certificate?.trusted == true
-                    if (certificate != null && trusted) {
-                        // CALM. It checks out, so nothing is asked; the pin
-                        // still shows, because it is what the machine holds
-                        // the sign-in to.
-                        Hint(XoSetup.trustedLine(certificate), color = Design.Palette.ink.now)
-                        PinLines(cert, pick.hostId, address)
-                    } else {
-                        CertificateAsk(pick, address, acknowledged, enabled = !beginning, onAcknowledged = { acknowledged = it })
+                    val trusted = !plain && certificate?.trusted == true
+                    when {
+                        plain -> PlainAsk(pick, address, plainAccepted, enabled = !beginning, onAccepted = { plainAccepted = it })
+                        certificate != null && trusted && cert != null -> {
+                            // CALM. It checks out, so nothing is asked; the pin
+                            // still shows, because it is what the machine holds
+                            // the sign-in to.
+                            Hint(XoSetup.trustedLine(certificate), color = Design.Palette.ink.now)
+                            PinLines(cert, pick.hostId, address)
+                        }
+                        else -> CertificateAsk(pick, address, acknowledged, enabled = !beginning, onAcknowledged = { acknowledged = it })
                     }
+                    // WHAT THE PERSON HAS SAID YES TO, for the card that was
+                    // shown: nothing needed for a certificate that checks out.
+                    val consented = if (plain) plainAccepted else (trusted || acknowledged)
 
                     SectionHead("Xen Orchestra admin sign-in")
                     OutlinedTextField(
@@ -487,11 +518,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                         "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
                             "It is sealed to that machine on this phone; the fleet relays it and cannot read it.",
                     )
-                    // OFF UNTIL THE CERTIFICATE IS EITHER FINE OR ACKNOWLEDGED:
-                    // the host would refuse `connect` anyway, and a button
-                    // that leads to a refusal is a button that lied.
+                    // OFF UNTIL THE CERTIFICATE IS EITHER FINE OR ACKNOWLEDGED,
+                    // or plain HTTP has been accepted: the host would refuse
+                    // anyway, and a button that leads to a refusal is a button
+                    // that lied.
                     OutlinedButton(
-                        enabled = !beginning && email.isNotBlank() && password.isNotEmpty() && (trusted || acknowledged),
+                        enabled = !beginning && email.isNotBlank() && password.isNotEmpty() && consented,
                         onClick = { begin() },
                         modifier = Modifier.heightIn(min = 48.dp),
                     ) { Text(if (beginning) "Checking ${pick.hostId}'s key…" else "Set up on ${pick.hostId}") }
@@ -574,6 +606,53 @@ private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Bo
             Checkbox(checked = acknowledged, onCheckedChange = null, enabled = enabled)
             Spacer(Modifier.width(Design.Space.insideTight))
             Text("I checked this certificate and trust it", style = Design.Style.body, color = Design.Palette.ink.now)
+        }
+    }
+}
+
+/**
+ * The other card that asks: a Xen Orchestra answering in plain HTTP. The same
+ * ring and the same shape as CertificateAsk, because it is the same kind of
+ * question, with different stakes: not "is this the right server" but "the
+ * password and the token would be readable on the wire between these two".
+ * It names both ends, because "the network" is nobody's network; it says how
+ * to give the server HTTPS instead, in the installer's own variable names,
+ * because the fix is on the far side and the person may well go and do it;
+ * and the box says what ticking it does. The heading carries the word, so the
+ * card reads the same with the colour gone.
+ */
+@Composable
+private fun PlainAsk(probe: Fleet.Probe, address: String, accepted: Boolean, enabled: Boolean, onAccepted: (Boolean) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .fleetCard(radius = Design.Radius.cardSmall, ring = Design.Palette.attention.now)
+            .padding(Design.Space.groupTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+    ) {
+        Text("This Xen Orchestra answers without HTTPS", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)
+        Text(
+            "The admin password you type, and the token the fleet keeps afterwards, would cross the network between " +
+                "${probe.hostId} and $address unencrypted. Anything on that network could read them.",
+            style = Design.Style.bodySmall,
+            color = Design.Palette.ink.now,
+        )
+        Text(
+            "To give it HTTPS instead: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, " +
+                "PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again.",
+            style = Design.Style.bodySmall,
+            color = Design.Palette.ink.now,
+        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .toggleable(value = accepted, enabled = enabled, role = Role.Checkbox, onValueChange = onAccepted),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = accepted, onCheckedChange = null, enabled = enabled)
+            Spacer(Modifier.width(Design.Space.insideTight))
+            Text("Send it without HTTPS anyway", style = Design.Style.body, color = Design.Palette.ink.now)
         }
     }
 }
