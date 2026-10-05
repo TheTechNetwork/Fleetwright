@@ -211,6 +211,24 @@ box is still untouched — instead of after the swap, where systemd restarts the
 corpse every three seconds and the box is unreachable by the tool that would
 fix it.
 
+**`/update --restart` on a box already on the newest release still restarts.**
+It used to answer "already on main-209" and stop, which is the one answer
+that cannot help the person asking: the release is on disk, and a service that
+started before it landed (most often the sidecar) is still running the one
+before. A hypervisor setup run on such a box went to the old sidecar and kept
+the pool's token on the machine. An explicit restart now restarts onto the
+release already there and writes the marker the sidecar follows, as the git
+path always has.
+
+**And the version a box reports is the one each process runs.** The reason
+nobody could see that sidecar was that every version read went through
+`<base>/current`, which follows the symlink to the disk: `head` and
+`installed` were the same read, so a sidecar on the old release reported the
+new one. The sidecar now reads `head` from its own tree (`INSTALL_ROOT`,
+symlinks resolved) and `installed` from `current`, and `/updates` says so in
+words when they differ, for the hub and for the sidecar separately
+(`versionDrift` in `src/core/release-apply.js`).
+
 Step 1 checks **protocol before version** so a host one flag day behind is told
 that, rather than told it is up to date. And it downloads nothing on a
 mismatch: there is no point spending bandwidth on a release that is going to be
