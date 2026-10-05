@@ -19,15 +19,25 @@
  * prints nothing about it in the pane, so the host is the only thing that
  * knows.
  *
+ * ON A RUNNER, NONE AT ALL, whatever it runs on. Even a person's linked login
+ * there is not worth the attempt: a runner is a job that does its task and
+ * ends, nobody is driving it, and launching the CLI with `--remote-control`
+ * on a credential that cannot open it was a second way for the session to
+ * trip at startup instead of working. Its log is how it is followed.
+ *
  * @param {'token'|'key'|'linked'|null|undefined} kind  RunnerAuth's kind
+ * @param {boolean} [runner]  this host is a runner (runner-login.js onRunner)
  * @returns {string|null}
  */
-export function noRemoteControl(kind) {
+export function noRemoteControl(kind, runner = false) {
   if (kind === 'key') {
     return 'It runs on the runner repository’s API key, and an API key cannot open Remote Control, so there is no claude.ai link for it.';
   }
   if (kind === 'token') {
     return 'It runs on a Claude token from `claude setup-token`, which can make model requests but cannot open Remote Control, so there is no claude.ai link for it.';
+  }
+  if (runner) {
+    return 'It runs on a runner, which does its task and ends without Remote Control, so there is no claude.ai link for it. Its log is how you follow it.';
   }
   return null;
 }
