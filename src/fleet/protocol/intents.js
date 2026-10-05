@@ -1152,9 +1152,10 @@ export const VERBS = Object.freeze({
   // once, so the app can offer only the ones that can run its onboarding.
   // docs/hypervisors.md.
   //
-  // WHAT A HOST DOES WITH IT is one TLS handshake and one GET of `/` at the
-  // address, and what comes back is reduced to whether anything answered,
-  // whether it looks like Xen Orchestra, and the certificate's fingerprint.
+  // WHAT A HOST DOES WITH IT is one TLS handshake and one GET of `/signin` at
+  // the address, and what comes back is reduced to whether anything answered,
+  // whether it looks like Xen Orchestra, the certificate's fingerprint, and
+  // what the certificate says and whether it checks out (narrowProbe).
   // That bounds what a compromised coordinator gains from asking: whether an
   // address on a host's network answers HTTPS, which is a port scan one
   // address at a time and nothing a page could carry. Admin only, checked in
@@ -1231,6 +1232,20 @@ export const VERBS = Object.freeze({
         required: false,
         max: 4096,
         describe: 'For `run`: the admin sign-in, sealed to the key `begin` answered with, as epk.iv.ct.',
+      },
+      // THE PERSON'S ACKNOWLEDGEMENT of a certificate nothing vouches for —
+      // self-signed, expired, for another name — after the phone showed them
+      // its details and what is wrong with it. Without it the machine stops at
+      // `connect` on any certificate that does not check out. It is not what
+      // keeps a password from the wrong server, the pin is; it keeps a client
+      // that skipped the question from setting up a pool nobody looked at.
+      trust: {
+        type: 'enum',
+        required: false,
+        values: ['accepted'],
+        describe:
+          'For `begin`: `accepted` when the person was shown why the certificate is not trusted and accepted it. ' +
+          'Required for any certificate that does not check out.',
       },
     },
     mutating: true,

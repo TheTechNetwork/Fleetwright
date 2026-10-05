@@ -69,6 +69,8 @@ const BOUNDED = {
   enrollment: 'src/fleet/coordinator/enrollment.js',
   events: 'worker/src/fleet-do.js',
   devices: 'src/fleet/coordinator/core.js',
+  // Hypervisor setups: a day's window and a count, both in core.js.
+  xosetups: 'src/fleet/coordinator/core.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */
@@ -171,4 +173,26 @@ test('a full runner repository store still fits in one Durable Object value', as
   assert.ok(refused, `the runner repository store did not refuse within ${FILL_CAP} rows`);
   const bytes = new TextEncoder().encode(JSON.stringify(repos.serialise())).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full runner repository store is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full hypervisor setup store still fits in one Durable Object value', async () => {
+  // Every row as wide as it can get: four Live Activity tokens at the longest
+  // the route accepts, and progress text at its cap.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({});
+  const rows = [];
+  for (let i = 0; i < FILL_CAP; i++) {
+    rows.push([i.toString(16).padStart(12, '0'), {
+      hostId: 'h'.repeat(64),
+      owner: `${'e'.repeat(64)}@${'d'.repeat(180)}.com`,
+      startedAt: Date.now(),
+      last: { step: 1, of: 8, phase: 'user', state: 'running', text: 'x'.repeat(200), at: Date.now() },
+      activities: ['a', 'b', 'c', 'd'].map((c) => c.repeat(400)),
+    }]);
+  }
+  core.restoreSetups(rows);
+  const kept = core.serialiseSetups();
+  assert.ok(kept.length < FILL_CAP, 'the setup store took every row it was given, so it has no ceiling');
+  const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full setup store is ${bytes} bytes, which does not fit in a DO value`);
 });
