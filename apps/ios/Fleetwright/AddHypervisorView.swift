@@ -832,6 +832,18 @@ struct AddHypervisorView: View {
                 refuse("\(machine) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
                 return
             }
+            // AND A SETUP GOES ONLY TO A MACHINE NEW ENOUGH TO HAND THE TOKEN
+            // BACK. An older one keeps the pool's token in a file of its own,
+            // which is exactly what this app tells the person does not happen,
+            // and it resets what the fleet may use to its defaults on the way.
+            // Seen: a machine that had the release on disk but a sidecar still
+            // running the one before. `can` came in the release after the
+            // hand-off, so a machine that sends none is older than both.
+            if !isPolicy, can.isEmpty {
+                _ = try? await fleet.cancelSetup(job: begunJob)
+                refuse("\(machine) is running a Fleetwright older than this app, and an older machine keeps the pool’s token itself instead of handing it to this phone. Nothing was sent. Update that machine (Update, then Restart to apply), then try again.")
+                return
+            }
             // THE KEY IS CHECKED BEFORE ANYTHING IS SEALED TO IT. A bad
             // signature is a hard stop, said in one sentence: whatever
             // answered, it was not that machine signing for this key. Over
