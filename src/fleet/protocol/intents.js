@@ -85,6 +85,20 @@ export const XOSETUP_STEPS = Object.freeze([
   'hand-off', // the token to the machine that will use it; the sign-in dropped
 ]);
 
+/**
+ * What changing a pool's policy does, in order, by key: the same first three
+ * as onboarding, then the person's choice and applying it. A policy job is
+ * driven from a screen that is open, so it reports no progress events, and
+ * these keys are for that screen. docs/hypervisors.md, "The policy".
+ */
+export const XOPOLICY_STEPS = Object.freeze([
+  'connect',
+  'sign-in',
+  'inventory',
+  'choose', // the pool's storage and networks, sealed to the phone, waiting on the person
+  'apply', // what they chose, as the resource set and the egress network's tag
+]);
+
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
 //
 // A VERSION BUMP IS A FLAG DAY, and this is the second one. Adding a VERB is
@@ -1189,7 +1203,12 @@ export const VERBS = Object.freeze({
   //           coordinator relays ciphertext. The machine opens it, runs the
   //           steps in XOSETUP_STEPS, and keeps nothing of it afterwards;
   //   status  where it has got to, for an app that was closed;
-  //   cancel  stop between steps.
+  //   cancel  stop between steps;
+  //   policy  for a job whose sealed sign-in asked to change what the fleet
+  //           may use rather than to add the pool: the person's choice of
+  //           storage, networks, the egress network and limits, sealed to the
+  //           same key, after `status` handed them the pool's inventory sealed
+  //           to theirs (XOPOLICY_STEPS).
   //
   // PROGRESS ARRIVES AS AN EVENT, `xosetup.progress`, for the job's owner
   // only, and becomes a Live Activity on iOS and an ongoing notification on
@@ -1200,7 +1219,7 @@ export const VERBS = Object.freeze({
   // answers `unknown_verb` and strands nothing.
   xosetup: {
     params: {
-      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel'] },
+      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel', 'policy'] },
       job: {
         type: 'text',
         required: false,
@@ -1231,7 +1250,9 @@ export const VERBS = Object.freeze({
         type: 'secret',
         required: false,
         max: 4096,
-        describe: 'For `run`: the admin sign-in, sealed to the key `begin` answered with, as epk.iv.ct.',
+        describe:
+          'For `run`: the admin sign-in, sealed to the key `begin` answered with, as epk.iv.ct. For `policy`: what ' +
+          'the person chose, sealed to the same key.',
       },
       // THE PERSON'S ACKNOWLEDGEMENT of a certificate nothing vouches for —
       // self-signed, expired, for another name — after the phone showed them
