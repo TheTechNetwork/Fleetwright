@@ -354,3 +354,15 @@ test('iOS: a Live Activity that has heard nothing says so, and one the app gave 
   // Tokens are relayed again after a relaunch.
   assert.match(read('apps/ios/Fleetwright/FleetwrightApp.swift'), /XOSetupActivities\.resume\(fleet: Fleet\(settings: settings\)\)/);
 });
+
+test('iOS: a setup goes only to a machine new enough to hand the token back, checked before anything is sealed', () => {
+  // SEEN: a machine with the release on disk and a sidecar still running the
+  // one before kept the token and reset the resource set, and the phone only
+  // found out afterwards. `can` arrived after the hand-off, so none is older.
+  const guard = SCREEN.indexOf('if !isPolicy, can.isEmpty {');
+  assert.ok(guard > 0, 'no guard for a machine too old to hand the token back');
+  assert.ok(guard < SCREEN.indexOf('guard XOSetupKey.isSigned('), 'checked after the key, so after the comparison could begin');
+  const block = SCREEN.slice(guard, SCREEN.indexOf('return', guard));
+  assert.match(block, /fleet\.cancelSetup\(job: begunJob\)/);
+  assert.match(block, /keeps the pool’s token itself instead of handing it to this phone\. Nothing was sent\./);
+});
