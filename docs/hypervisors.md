@@ -358,7 +358,13 @@ the pool's key.
   same store until then.
 
 An app older than this sends no key, and the machine refuses its sign-in
-before anything is made in Xen Orchestra, saying to update the app. Losing
+before anything is made in Xen Orchestra, saying to update the app. The other
+way round is refused too: a machine older than the hand-off would keep the
+token itself, so the phone sends a setup only to a machine whose `begin` lists
+what it `can` do (the field came in the release after the hand-off), and
+otherwise cancels the job and names the machine to update. Seen: a box with
+the new release on disk and a sidecar still running the old one, which
+`/update --restart` now fixes ([`packaging.md`](./packaging.md)). Losing
 the phone loses the token, not the pool: running the setup again finds the
 user and its resource set and makes a new token. This is the phone-direct
 model [`manage.md`](./manage.md) sets out for managing the pool; holding the
