@@ -293,6 +293,15 @@ machine of the fleet, through the coordinator.
   biometric unlock, and what is kept never leaves it: the fleet still
   receives only the sign-in sealed to one job's key. It is written only
   after the machine signed in with it, and is off unless turned on.
+- **The edge router is built from a pinned image, with nobody's login.**
+  The machine downloads OPNsense's published nano image, refuses it unless
+  its SHA-256 is the one pinned in the source, and replaces only the default
+  configuration's bytes, after checking those against their own pinned hash.
+  The disk goes to Xen Orchestra over the job's pinned connection. The router
+  has no account anyone can sign in to (root's password is `*`) and no
+  anti-lockout rule, so a lab, the only thing on its LAN side, cannot change
+  the rules that keep it off the person's LAN. It is not tagged `fleetwright`,
+  so the fleet's limited token cannot stop, move or delete it.
 - **A kept acceptance is the person's earlier word, for that certificate
   only.** With it the phone sends `trust: accepted` without asking again,
   but only for a probe or a remembered path carrying the same fingerprint.
