@@ -48,9 +48,9 @@ function certificate() {
  * call, per connection, so a test can say what was asked and as whom.
  *
  * @param {import('node:test').TestContext} t
- * @param {{ admin?: boolean, drop?: string[], plugin?: any }} [opts]
+ * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number }} [opts]
  */
-async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} } } = {}) {
+async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000 } = {}) {
   const { key, cert, pin } = certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -135,7 +135,11 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
             break;
           }
           case 'resourceSet.set': answer(true); break;
-          case 'token.create': answer(as === FLEET_USER ? 'tok-limited-123' : 'tok-WRONG-USER'); break;
+          case 'token.create':
+            // Xen Orchestra's own cap, and the words a limited user is given for going over it.
+            if (p.expiresIn !== undefined && p.expiresIn > maxTokenMs) refuse('unknown error from the peer');
+            else answer(as === FLEET_USER ? 'tok-limited-123' : 'tok-WRONG-USER');
+            break;
           case 'plugin.get': answer(plugin ? [plugin] : []); break;
           default: answer(true);
         }
@@ -188,6 +192,11 @@ test('the probe says Xen Orchestra answered, over TLS, and which certificate', {
   assert.equal(found.tls, true);
   assert.equal(found.xo, true);
   assert.equal(found.cert, xo.pin);
+  // What the person is shown before accepting it: all of what is wrong.
+  assert.equal(found.certificate?.trusted, false);
+  assert.deepEqual(found.certificate?.problems, ['self-signed', 'name-mismatch']);
+  assert.equal(found.certificate?.subject, 'CN=xo.test');
+  assert.ok(found.certificate?.notAfter && Date.parse(found.certificate.notAfter) > Date.now());
   const nothing = await probe('127.0.0.1:1', { timeoutMs: 2000 });
   assert.equal(nothing.reachable, false);
 });
@@ -197,7 +206,7 @@ test('a pool is onboarded end to end, and only the limited token is kept', { ski
   const { setups, events, stateDir, keys } = await machine();
   const actor = 'eli@example.com';
 
-  const begun = await setups.begin({ address: xo.address, pin: xo.pin, actor });
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.equal(begun.ok, true, begun.text);
   // THE PHONE CAN TELL THE KEY IS THIS MACHINE'S: signed by its enrolment key,
   // over the job, the address, the pin and the key together.
@@ -248,7 +257,7 @@ test('a server with a different certificate is never sent a byte of the sign-in'
   const { setups, events } = await machine();
   const actor = 'eli@example.com';
   const otherPin = 'f'.repeat(64);
-  const begun = await setups.begin({ address: xo.address, pin: otherPin, actor });
+  const begun = await setups.begin({ address: xo.address, pin: otherPin, trust: 'accepted', actor });
   const { sealed } = await phone(begun, xo.address, otherPin);
   await setups.run({ job: begun.xosetup.job, sealed, actor });
   const end = await finished(setups, begun.xosetup.job, actor);
@@ -263,7 +272,7 @@ test('an account that is not an admin is told so, and nothing is made', { skip }
   const xo = await standIn(t, { admin: false });
   const { setups } = await machine();
   const actor = 'eli@example.com';
-  const begun = await setups.begin({ address: xo.address, pin: xo.pin, actor });
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'failed');
@@ -278,7 +287,7 @@ test('a Xen Orchestra without a method setup needs stops before changing anythin
   const xo = await standIn(t, { drop: ['resourceSet.create'] });
   const { setups } = await machine();
   const actor = 'eli@example.com';
-  const begun = await setups.begin({ address: xo.address, pin: xo.pin, actor });
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'failed');
@@ -292,7 +301,7 @@ test('automatic updates switched off by a person stay off', { skip }, async (t) 
   const xo = await standIn(t, { plugin: { id: 'installer-updates', loaded: true, autoload: true, configuration: { autoUpdate: false } } });
   const { setups } = await machine();
   const actor = 'eli@example.com';
-  const begun = await setups.begin({ address: xo.address, pin: xo.pin, actor });
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'done', end.text);
@@ -329,4 +338,38 @@ test('the limits are half of what the pool has, and every step has words', () =>
     { cpus: 4, memory: 1024 ** 3, disk: 10 * 1024 ** 3 },
   );
   for (const key of XOSETUP_STEPS) assert.ok(STEP_WORDS[key], key);
+});
+
+test('a certificate nothing vouches for stops setup unless the person accepted it, before a byte is sent', { skip }, async (t) => {
+  const xo = await standIn(t);
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, actor });
+  await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'failed');
+  assert.equal(end.phase, 'connect');
+  assert.match(end.text, /is self-signed, is for a different name, and nobody accepted it/);
+  assert.equal(xo.calls.length, 0);
+});
+
+test('a server that caps tokens lower still gets one, at its own default length', { skip }, async (t) => {
+  const xo = await standIn(t, { maxTokenMs: 30 * 24 * 60 * 60_000 });
+  const { setups, stateDir } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  const asks = xo.calls.filter((c) => c.method === 'token.create').map((c) => c.params.expiresIn);
+  assert.deepEqual(asks, [180 * 24 * 60 * 60_000, undefined]);
+  const dir = path.join(stateDir, 'hypervisors');
+  const kept = JSON.parse(readFileSync(path.join(dir, readdirSync(dir)[0]), 'utf8'));
+  assert.equal(kept.tokenExpires, null, 'the length is the server’s, which it does not say');
+  assert.deepEqual({ trusted: kept.certificate.trusted, accepted: kept.certificate.accepted }, { trusted: false, accepted: true });
+});
+
+test('a setup begun with nobody’s name on it is refused', async () => {
+  const { setups } = await machine();
+  assert.equal((await setups.begin({ address: 'xo.lan', pin: 'a'.repeat(64), actor: null })).ok, false);
 });

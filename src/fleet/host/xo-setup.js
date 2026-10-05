@@ -22,12 +22,19 @@
 // plugin when the pool has it (github.com/00o-sh/XenOrchestraInstallerUpdater);
 // and keep only the token. The admin sign-in is never written anywhere.
 //
-// WHAT IS NOT VERIFIED AGAINST A LIVE POOL. The method names below are Xen
-// Orchestra's JSON-RPC API as its own source and its Terraform provider use it;
-// the suite drives them against a stand-in. So `inventory` asks the server for
-// its method list first and stops, naming what is missing, before changing
-// anything — a wrong guess here fails in step three with a sentence, never in
-// step five with half a user made.
+// WHAT HAS RUN AGAINST A REAL XEN ORCHESTRA, and what has not. Every step has
+// run against Xen Orchestra built from sources, with the installer's update
+// plugin added: the pinned TLS, the WebSocket, sign-in, the method list, the
+// user and resource set (made, and found again on a second run), a token the
+// limited user can sign in with and admin calls refuse, and the plugin turned
+// on and left alone the second time. That found two faults the stand-in
+// could not: `/` is a redirect with no title, and a year-long token is over
+// the server's cap. NOT RUN: a real XCP-ng pool behind it — that Xen
+// Orchestra had none, so `inventory` was handed one — which leaves the
+// pool, host and SR fields `limitsFrom` reads checked against Xen
+// Orchestra's source but not a live answer. `inventory` still asks for the
+// method list first and stops, naming what is missing, before changing
+// anything.
 
 import tls from 'node:tls';
 import net from 'node:net';
@@ -38,7 +45,7 @@ import path from 'node:path';
 import { XOSETUP_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../protocol/intents.js';
 import { newSealKey, open as openSealed, xosetupAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
-import { certSha256, splitAddress, connectXo } from './xo-ws.js';
+import { certSha256, splitAddress, connectXo, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -64,18 +71,33 @@ export const REQUIRED_METHODS = Object.freeze([
 const WAITING_TTL_MS = 10 * 60_000;
 /** How long a finished job can still be asked about. */
 const FINISHED_TTL_MS = 6 * 60 * 60_000;
-/** A token for the limited user lives a year; renewing it is the next round's. */
-const TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60_000;
+/**
+ * What the limited user's token is asked to live: 180 days, under the half a
+ * year Xen Orchestra allows out of the box (`maxTokenValidity = '0.5 year'`).
+ * Asking for more fails, and as a limited user the refusal arrives as
+ * "unknown error from the peer" — so a server configured lower still gets a
+ * token, at its own default length, rather than a setup that stops at step
+ * six. Renewing it is the next round's.
+ */
+const TOKEN_LIFETIME_MS = 180 * 24 * 60 * 60_000;
 
 /**
  * Can this machine reach Xen Orchestra at an address? One TLS handshake and
- * one GET of `/`, reduced to what a probe is allowed to say.
+ * one GET of `/signin`, reduced to what a probe is allowed to say.
+ *
+ * `/signin` AND NOT `/`: Xen Orchestra answers `/` with a redirect to
+ * `/signin` and no body, so a probe of `/` called every real one "something
+ * that does not look like Xen Orchestra". Found against a running Xen
+ * Orchestra, not the suite's stand-in, which had served its title at `/`.
  *
  * @param {string} address
  * @param {{ timeoutMs?: number }} [opts]
- * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, version: string|null, text: string }>}
+ * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, certificate: ReturnType<typeof describeCertificate>, version: string|null, text: string }>}
  */
-export async function probe(address, { timeoutMs = 8_000 } = {}) {
+// FOUR SECONDS AN ATTEMPT, and at most two attempts (HTTPS, then plain HTTP
+// on 80), so a probe answers inside the coordinator's ten-second fan-out
+// deadline even for an address that drops packets.
+export async function probe(address, { timeoutMs = 4_000 } = {}) {
   const { host, port, explicitPort } = splitAddress(address);
   const secure = await getRoot({ host, port, secure: true, timeoutMs });
   if (secure.ok) {
@@ -85,6 +107,7 @@ export async function probe(address, { timeoutMs = 8_000 } = {}) {
       xo,
       tls: true,
       cert: secure.cert,
+      certificate: secure.certificate,
       version: null,
       text: xo ? `Xen Orchestra answered at ${address}.` : `Something answered at ${address}, and it does not look like Xen Orchestra.`,
     };
@@ -99,12 +122,13 @@ export async function probe(address, { timeoutMs = 8_000 } = {}) {
         xo: looksLikeXo(plain.body),
         tls: false,
         cert: null,
+        certificate: null,
         version: null,
         text: `${address} answers without HTTPS. Setup sends an admin password, so it needs HTTPS — the Xen Orchestra installer turns it on by default.`,
       };
     }
   }
-  return { reachable: false, xo: null, tls: false, cert: null, version: null, text: `Nothing answered at ${address} from here (${secure.error}).` };
+  return { reachable: false, xo: null, tls: false, cert: null, certificate: null, version: null, text: `Nothing answered at ${address} from here (${secure.error}).` };
 }
 
 /** @param {string} body */
@@ -114,12 +138,14 @@ function looksLikeXo(body) {
 
 /**
  * @param {{ host: string, port: number, secure: boolean, timeoutMs: number }} opts
- * @returns {Promise<{ ok: true, body: string, cert: string|null } | { ok: false, error: string }>}
+ * @returns {Promise<{ ok: true, body: string, cert: string|null, certificate: ReturnType<typeof describeCertificate> } | { ok: false, error: string }>}
  */
 function getRoot({ host, port, secure, timeoutMs }) {
   return new Promise((resolve) => {
     let body = '';
     let cert = /** @type {string|null} */ (null);
+    /** @type {ReturnType<typeof describeCertificate>} */
+    let certificate = null;
     let settled = false;
     /** @param {any} r */
     const done = (r) => {
@@ -137,17 +163,18 @@ function getRoot({ host, port, secure, timeoutMs }) {
       if (secure) {
         const peer = /** @type {import('node:tls').TLSSocket} */ (socket).getPeerCertificate();
         cert = peer?.raw ? certSha256(peer.raw) : null;
+        certificate = describeCertificate(/** @type {import('node:tls').TLSSocket} */ (socket), host);
       }
       const hostHeader = net.isIPv6(host) ? `[${host}]` : host;
-      socket.write(`GET / HTTP/1.1\r\nHost: ${hostHeader}\r\nConnection: close\r\nAccept: text/html\r\n\r\n`);
+      socket.write(`GET /signin HTTP/1.1\r\nHost: ${hostHeader}\r\nConnection: close\r\nAccept: text/html\r\n\r\n`);
     };
     socket.once(secure ? 'secureConnect' : 'connect', request);
     socket.on('data', (chunk) => {
       body += chunk.toString('latin1');
-      if (body.length > 64 * 1024) done({ ok: true, body, cert });
+      if (body.length > 64 * 1024) done({ ok: true, body, cert, certificate });
     });
-    socket.on('end', () => done({ ok: true, body, cert }));
-    socket.on('close', () => done(body ? { ok: true, body, cert } : { ok: false, error: 'the connection closed' }));
+    socket.on('end', () => done({ ok: true, body, cert, certificate }));
+    socket.on('close', () => done(body ? { ok: true, body, cert, certificate } : { ok: false, error: 'the connection closed' }));
     socket.on('error', (e) => done({ ok: false, error: /** @type {NodeJS.ErrnoException} */ (e).code || e.message }));
   });
 }
@@ -190,10 +217,13 @@ export class XoSetups {
   }
 
   /**
-   * @param {{ address: string, pin?: string|null, actor: string|null }} args
+   * @param {{ address: string, pin?: string|null, trust?: string|null, actor: string|null }} args
    */
-  async begin({ address, pin, actor }) {
+  async begin({ address, pin, trust = null, actor }) {
     this.#prune();
+    // A JOB IS SOMEBODY'S: status, run and cancel are refused to anyone else,
+    // and a job begun with no name on it would be everybody's who also had none.
+    if (!actor) return { ok: false, text: 'Setup has to be asked for by a signed-in person.' };
     if (!this.signer) {
       return {
         ok: false,
@@ -214,6 +244,7 @@ export class XoSetups {
       job,
       address,
       pin,
+      trust: trust === 'accepted' ? 'accepted' : null,
       actor,
       key,
       state: 'waiting',
@@ -387,6 +418,15 @@ export class XoSetups {
       // connect
       async (/** @type {any} */ ctx) => {
         ctx.admin = await this.connect({ address: ctx.rec.address, pin: ctx.rec.pin });
+        // THE PERSON'S WORD, for a certificate nothing vouches for. The pin
+        // already held this connection to the certificate they saw; this
+        // holds the setup to their having been told what was wrong with it.
+        const c = ctx.admin.certificate;
+        if (!c?.trusted && ctx.rec.trust !== 'accepted') {
+          const wrong = c?.problems?.length ? c.problems.map((/** @type {string} */ k) => CERT_PROBLEM_WORDS[k] ?? k).join(', ') : 'could not be checked';
+          throw new Error(`the certificate ${wrong}, and nobody accepted it on the phone. Nothing was sent.`);
+        }
+        ctx.certificate = c;
       },
       // sign-in
       async (/** @type {any} */ ctx) => {
@@ -447,7 +487,16 @@ export class XoSetups {
       async (/** @type {any} */ ctx) => {
         ctx.limited = await this.connect({ address: ctx.rec.address, pin: ctx.rec.pin });
         await ctx.limited.call('session.signIn', { email: FLEET_USER, password: ctx.password });
-        ctx.token = await ctx.limited.call('token.create', { expiresIn: TOKEN_LIFETIME_MS });
+        const description = 'fleetwright';
+        try {
+          ctx.token = await ctx.limited.call('token.create', { description, expiresIn: TOKEN_LIFETIME_MS });
+          ctx.tokenExpires = this.now() + TOKEN_LIFETIME_MS;
+        } catch {
+          // A server whose maximum is under 180 days: its own default, which
+          // is never over its maximum.
+          ctx.token = await ctx.limited.call('token.create', { description });
+          ctx.tokenExpires = null;
+        }
         if (typeof ctx.token !== 'string' || !ctx.token) throw new Error('Xen Orchestra did not hand back a token.');
         ctx.limited.close();
         ctx.limited = null;
@@ -484,6 +533,11 @@ export class XoSetups {
           userId: ctx.userId,
           resourceSet: ctx.setId ?? null,
           token: ctx.token,
+          // null is the server's default length, which it does not say.
+          tokenExpires: ctx.tokenExpires ? new Date(ctx.tokenExpires).toISOString() : null,
+          certificate: ctx.certificate
+            ? { trusted: ctx.certificate.trusted, accepted: ctx.rec.trust === 'accepted', notAfter: ctx.certificate.notAfter }
+            : null,
           limits: ctx.limits,
           pools: ctx.pools.map((/** @type {any} */ p) => ({ id: p.id, name: String(p.name_label || '').slice(0, 80) })),
           savedAt: new Date(this.now()).toISOString(),

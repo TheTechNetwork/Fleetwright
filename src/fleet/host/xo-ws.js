@@ -21,7 +21,7 @@
 
 import tls from 'node:tls';
 import net from 'node:net';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, X509Certificate } from 'node:crypto';
 
 /** What RFC 6455 appends to the key before hashing it, to prove an upgrade was understood. */
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -33,6 +33,72 @@ const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 export function certSha256(der) {
   return createHash('sha256').update(der).digest('hex');
 }
+
+/**
+ * What a server's certificate says about itself, and what is wrong with it,
+ * for the person deciding whether to accept it.
+ *
+ * WORKED OUT HERE rather than read off `authorizationError` alone, because
+ * that names only the first thing OpenSSL tripped on: a self-signed
+ * certificate that has also expired, for a different name, says only
+ * "self-signed", and the person accepting it should hear all three.
+ * `trusted` is the machine's own verdict — the chain checks out against the
+ * authorities Node trusts AND the name matches — with nothing found wrong.
+ *
+ * @param {import('node:tls').TLSSocket} socket
+ * @param {string} host
+ * @param {number} [now]
+ * @returns {{ trusted: boolean, problems: string[], subject: string, issuer: string, notBefore: string|null, notAfter: string|null, names: string[] } | null}
+ */
+export function describeCertificate(socket, host, now = Date.now()) {
+  const peer = socket.getPeerCertificate();
+  if (!peer?.raw) return null;
+  /** @type {X509Certificate} */
+  let x;
+  try {
+    x = new X509Certificate(peer.raw);
+  } catch {
+    return null;
+  }
+  const problems = [];
+  let selfSigned = false;
+  try {
+    selfSigned = x.checkIssued(x) && x.verify(x.publicKey);
+  } catch {
+    selfSigned = false;
+  }
+  const code = socket.authorized ? null : String(socket.authorizationError || 'UNKNOWN');
+  if (selfSigned) problems.push('self-signed');
+  else if (code && !['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'ERR_TLS_CERT_ALTNAME_INVALID'].includes(code)) problems.push('untrusted-issuer');
+  const from = Date.parse(x.validFrom);
+  const to = Date.parse(x.validTo);
+  if (Number.isFinite(to) && to < now) problems.push('expired');
+  if (Number.isFinite(from) && from > now) problems.push('not-yet-valid');
+  const matches = net.isIP(host) ? x.checkIP(host) : x.checkHost(host);
+  if (!matches) problems.push('name-mismatch');
+  const names = String(x.subjectAltName || '')
+    .split(/,\s*/)
+    .map((n) => n.replace(/^(DNS|IP Address):/, '').trim())
+    .filter(Boolean);
+  return {
+    trusted: socket.authorized === true && problems.length === 0,
+    problems,
+    subject: x.subject.split('\n').join(', '),
+    issuer: x.issuer.split('\n').join(', '),
+    notBefore: Number.isFinite(from) ? new Date(from).toISOString() : null,
+    notAfter: Number.isFinite(to) ? new Date(to).toISOString() : null,
+    names,
+  };
+}
+
+/** What each problem a certificate can have reads as, after "the certificate". */
+export const CERT_PROBLEM_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
+  'self-signed': 'is self-signed',
+  'untrusted-issuer': 'is signed by an authority this machine does not trust',
+  expired: 'has expired',
+  'not-yet-valid': 'is not valid yet',
+  'name-mismatch': 'is for a different name',
+}));
 
 /**
  * An address as the protocol carries it — `name`, `name:port`, `[v6]` or
@@ -111,13 +177,21 @@ export function upgrade(socket, { host, port, path = '/api/', timeoutMs = 15_000
     const hostHeader = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`;
     let head = Buffer.alloc(0);
     const timer = setTimeout(() => fail(new Error('Xen Orchestra did not accept the WebSocket upgrade in time')), timeoutMs);
+    let settled = false;
     /** @param {Error} e */
     const fail = (e) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       socket.off('data', onData);
+      socket.off('close', onClose);
       socket.destroy();
       reject(e);
     };
+    // A server that hangs up mid-handshake is said so at once, not after the
+    // whole timeout spent waiting for an answer that cannot come.
+    const onClose = () => fail(new Error('Xen Orchestra closed the connection before accepting the API upgrade'));
+    socket.once('close', onClose);
     /** @param {Buffer} chunk */
     const onData = (chunk) => {
       head = Buffer.concat([head, chunk]);
@@ -128,6 +202,8 @@ export function upgrade(socket, { host, port, path = '/api/', timeoutMs = 15_000
       }
       clearTimeout(timer);
       socket.off('data', onData);
+      socket.off('close', onClose);
+      settled = true;
       const lines = head.subarray(0, end).toString('latin1').split('\r\n');
       const status = /^HTTP\/1\.1 (\d{3})/.exec(lines[0] || '');
       const headers = new Map(lines.slice(1).map((l) => {
@@ -308,6 +384,8 @@ export class XoRpc {
   constructor(link, { callTimeoutMs = 60_000 } = {}) {
     this.link = link;
     this.callTimeoutMs = callTimeoutMs;
+    /** @type {ReturnType<typeof describeCertificate>} What the server's certificate is, as `connectXo` found it. */
+    this.certificate = null;
     this.nextId = 1;
     /** @type {Map<number, { resolve: (v: any) => void, reject: (e: Error) => void, timer: ReturnType<typeof setTimeout> }>} */
     this.pending = new Map();
@@ -383,6 +461,9 @@ export class XoRpc {
 export async function connectXo({ address, pin, timeoutMs = 15_000 }) {
   const { host, port } = splitAddress(address);
   const socket = await connectPinnedTls({ host, port, pin, timeoutMs });
+  const certificate = describeCertificate(socket, host);
   const link = await upgrade(socket, { host, port, timeoutMs });
-  return new XoRpc(link);
+  const rpc = new XoRpc(link);
+  rpc.certificate = certificate;
+  return rpc;
 }
