@@ -59,7 +59,10 @@ test('iOS: only a machine that reached the address over HTTPS is offered, and th
   // What the person reads when nothing can run it, and what to check.
   assert.ok(SCREEN.includes('No machine reached \\(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one '));
   assert.ok(SCREEN.includes('Setup needs HTTPS, because the sign-in is only '));
-  assert.ok(SCREEN.includes('The Xen Orchestra installer turns it on by default'));
+  // The installer serves plain HTTP on 80 unless xo-install.cfg names a
+  // certificate, so the screen says how to give it one, never that it has one.
+  assert.ok(!SCREEN.includes('on by default'));
+  assert.ok(SCREEN.includes('xo-install.cfg') && SCREEN.includes('AUTOCERT'));
   // The certificate the machine saw is shown for acceptance, grouped so it can
   // be compared against a terminal, and `begin` pins exactly that one.
   assert.match(SCREEN, /Text\(XOSetupKey\.grouped\(cert\)\)/);

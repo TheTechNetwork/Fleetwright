@@ -165,12 +165,12 @@ internal object XoSetup {
     /**
      * How a probe reads to a person, and whether this machine can run the
      * setup. Only a machine that reached the address over TLS can: the
-     * installer's default is HTTPS, and the pin that protects the sign-in on
+     * installer's default is plain HTTP on 80 (HTTPS only once xo-install.cfg names a certificate), and the pin that protects the sign-in on
      * its way is the certificate's, so no certificate means nothing to pin.
      */
     fun describe(probe: Fleet.Probe): String = when {
         !probe.reachable -> "Could not reach it"
-        !probe.tls || probe.cert == null -> "Answered without HTTPS. Setup needs HTTPS, which the Xen Orchestra installer turns on by default."
+        !probe.tls || probe.cert == null -> "Answered without HTTPS. Setup needs HTTPS, and Xen Orchestra serves plain HTTP until it is given a certificate: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again."
         probe.xo == true -> "Reached it over HTTPS" + (probe.version?.let { ". Xen Orchestra $it" } ?: ". Looks like Xen Orchestra")
         probe.xo == false -> "Reached it over HTTPS, but it does not look like Xen Orchestra"
         else -> "Reached it over HTTPS. Cannot tell what is answering"

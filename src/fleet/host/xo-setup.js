@@ -124,7 +124,7 @@ export async function probe(address, { timeoutMs = 4_000 } = {}) {
         cert: null,
         certificate: null,
         version: null,
-        text: `${address} answers without HTTPS. Setup sends an admin password, so it needs HTTPS — the Xen Orchestra installer turns it on by default.`,
+        text: `${address} answers without HTTPS. Setup sends an admin password, so it needs HTTPS, and Xen Orchestra serves plain HTTP until it is given a certificate: in the installer's xo-install.cfg, set PORT="443", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT="true", then run it again.`,
       };
     }
   }
