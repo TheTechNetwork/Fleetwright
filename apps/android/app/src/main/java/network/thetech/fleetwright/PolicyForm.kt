@@ -41,7 +41,14 @@ import androidx.compose.ui.unit.dp
  * a combination the sheet does not know about.
  */
 @Composable
-internal fun PolicyForm(inv: XoPolicy.Inventory, choice: XoPolicy.Choice, enabled: Boolean, onChange: (XoPolicy.Choice) -> Unit) {
+internal fun PolicyForm(
+    inv: XoPolicy.Inventory,
+    choice: XoPolicy.Choice,
+    enabled: Boolean,
+    canEdge: Boolean,
+    machine: String,
+    onChange: (XoPolicy.Choice) -> Unit,
+) {
     // WHICH POOL, said only when there is more than one to confuse it with.
     val poolNames = inv.pools.associate { it.id to it.name }
     fun inPool(pool: String?): String =
@@ -74,14 +81,12 @@ internal fun PolicyForm(inv: XoPolicy.Inventory, choice: XoPolicy.Choice, enable
     }
 
     SectionHead("Way out")
-    // WHAT CHOOSING IT DOES, and what it does not: the router is not built
-    // yet, and a sentence that implied one was would be the screen claiming
-    // a state it does not know (C-5).
-    Hint(
-        "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +
-            "your LAN. The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag " +
-            "on that network, for when it is. Only a network chosen above can be the way out.",
-    )
+    // WHAT CHOOSING IT DOES, in iOS's words: the network is recorded, and
+    // the router is built on it only when the switch below asks for it.
+    val wayOut = "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +
+        "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. Only a network chosen above " +
+        "can be the way out."
+    Hint(if (canEdge) wayOut else "$wayOut $machine is too old to build the router; update it to have it built from here.")
     inv.networks.filter { it.id in choice.networks }.forEach { n ->
         RadioRow(
             selected = choice.egress == n.id,
@@ -96,8 +101,28 @@ internal fun PolicyForm(inv: XoPolicy.Inventory, choice: XoPolicy.Choice, enable
         enabled = enabled,
         title = "None yet",
         line = if (choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
-        onClick = { onChange(choice.copy(egress = null)) },
+        // No way out, no router: the switch goes off with it.
+        onClick = { onChange(choice.copy(egress = null, edge = false)) },
     )
+    // THE EDGE ROUTER, offered only by a machine that can build it and only
+    // with a way out (C-2): built when the pool has none, kept in step when
+    // it has, and what building costs said before it is asked for.
+    if (canEdge && choice.egress != null) {
+        val there = XoPolicy.edgeOn(inv, choice.egress)
+        CheckRow(
+            checked = choice.edge,
+            enabled = enabled,
+            title = if (there == null) "Build the edge router on it" else "Keep the edge router on it",
+            line = when {
+                there == null ->
+                    "An OPNsense VM with 2 vCPUs, 2 GiB of memory and a 3 GiB disk on the storage chosen. " +
+                        "$machine downloads OPNsense once, about 470 MB, and builds it while you wait."
+                there.running -> "It is there and running. Apply keeps its WAN on this network."
+                else -> "It is there and stopped. Apply keeps its WAN on this network and starts it."
+            },
+            onChange = { on -> onChange(choice.copy(edge = on)) },
+        )
+    }
 
     SectionHead("Limits")
     Hint("The most the fleet's machines may use between them. Xen Orchestra holds them to it.")

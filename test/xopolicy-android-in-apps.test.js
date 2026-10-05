@@ -154,10 +154,18 @@ test('Android: the words are the machine’s and iOS’s', () => {
   }
   assert.ok(form.includes('title = "None yet"'));
   assert.ok(sheet.includes('Text(if (applying) "Applying…" else "Apply")'));
-  // The way out is described as what it records, names the router it is
-  // for, and never as a router that exists: iOS's words.
+  // The way out says what it records and names the router it is for; the
+  // router is offered by a machine that can build it, with a way out, and
+  // its cost said first: iOS's words.
   assert.ok(form.includes('"The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +'));
-  assert.ok(form.includes('"your LAN. The router is not built yet: choosing now records it in Xen Orchestra as the fleetwright-egress tag " +'));
+  assert.ok(form.includes('is too old to build the router; update it to have it built from here.'));
+  assert.match(form, /if \(canEdge && choice\.egress != null\) \{/);
+  assert.ok(form.includes('title = if (there == null) "Build the edge router on it" else "Keep the edge router on it"'));
+  assert.ok(form.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
+  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false)) }'));
+  assert.match(sheet, /canEdge = "edge" in p\.setup\.can/);
+  assert.match(policy, /\.put\("edge", c\.edge\)/);
+  assert.ok(policy.includes('The edge router needs a way out: choose the network its WAN goes on.'));
   assert.ok(sheet.includes('"$machine waits ten minutes for your choice, then lets go without changing anything."'));
   assert.ok(sheet.includes('"Used once, on ${pick.hostId}, to read the pool and apply what you choose, and not kept. " +'));
   // Every step the protocol has, in its order, said as the machine says it.

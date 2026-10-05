@@ -98,7 +98,21 @@ internal object XoPolicy {
         val currentSrs: List<String>,
         val currentNetworks: List<String>,
         val currentLimits: Limits,
+        /**
+         * Each pool's edge router, from a machine that can build one; null
+         * from one older than that, which is "cannot tell", never "none".
+         */
+        val edges: List<Edge>? = null,
     )
+
+    /** The edge router on a pool, and whether it is running. */
+    data class Edge(val pool: String?, val running: Boolean)
+
+    /** The edge router on the pool this network is in, if it has one. */
+    fun edgeOn(inv: Inventory, network: String?): Edge? {
+        val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return null
+        return inv.edges?.firstOrNull { it.pool == pool }
+    }
 
     /**
      * What the person has chosen so far. Memory and disk in whole GiB, which
@@ -112,6 +126,11 @@ internal object XoPolicy {
         val cpus: Int,
         val memoryGib: Long,
         val diskGib: Long,
+        /**
+         * Build the edge router on the way out, or keep the one there in step
+         * with it. Needs a way out, and goes with it.
+         */
+        val edge: Boolean = false,
     )
 
     /**
@@ -200,6 +219,11 @@ internal object XoPolicy {
             currentSrs = ids("srs", srs.map { it.id }.toSet()),
             currentNetworks = ids("networks", networks.map { it.id }.toSet()),
             currentLimits = Limits(limit("cpus"), limit("memory"), limit("disk")),
+            edges = json.optJSONArray("edges")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    a.optJSONObject(i)?.let { e -> Edge(text(e, "pool"), e.optBoolean("running", false)) }
+                }
+            },
         )
     }
 
@@ -227,7 +251,8 @@ internal object XoPolicy {
         val memory = (inv.currentLimits.memory?.let { gibRounded(it) } ?: (inv.memory / 2 / GIB)).coerceIn(1L, maxMemoryGib(inv))
         val free = inv.srs.filter { it.id in srs }.sumOf { it.free }
         val disk = (inv.currentLimits.disk?.let { gibRounded(it) } ?: (free / 2 / GIB)).coerceIn(MIN_DISK / GIB, maxDiskGib(inv, srs))
-        return Choice(srs, networks, egress, cpus, memory, disk)
+        // On when there is one already, so Apply keeps it on the way out.
+        return Choice(srs, networks, egress, cpus, memory, disk, edge = edgeOn(inv, egress) != null)
     }
 
     /**
@@ -245,7 +270,8 @@ internal object XoPolicy {
      */
     fun withNetwork(c: Choice, id: String, on: Boolean): Choice {
         val networks = if (on) c.networks + id else c.networks - id
-        return c.copy(networks = networks, egress = c.egress?.takeIf { it in networks })
+        val egress = c.egress?.takeIf { it in networks }
+        return c.copy(networks = networks, egress = egress, edge = c.edge && egress != null)
     }
 
     /**
@@ -274,6 +300,7 @@ internal object XoPolicy {
             return "That names storage or a network this pool did not list. Nothing was changed."
         }
         if (c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
+        if (c.edge && c.egress == null) return "The edge router needs a way out: choose the network its WAN goes on."
         val maxCpus = maxCpus(inv)
         if (c.cpus < 1 || c.cpus > maxCpus) return "vCPUs are between 1 and $maxCpus, what the pool has."
         val maxMemory = maxOf(MIN_MEMORY, inv.memory)
@@ -295,6 +322,7 @@ internal object XoPolicy {
             .put("srs", JSONArray(inv.srs.map { it.id }.filter { it in c.srs }))
             .put("networks", JSONArray(inv.networks.map { it.id }.filter { it in c.networks }))
             .put("egress", c.egress ?: JSONObject.NULL)
+            .put("edge", c.edge)
             .put("limits", JSONObject().put("cpus", c.cpus).put("memory", c.memoryGib * GIB).put("disk", c.diskGib * GIB))
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
