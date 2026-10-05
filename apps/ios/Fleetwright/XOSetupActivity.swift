@@ -33,6 +33,11 @@ struct XOSetupAttributes: ActivityAttributes {
         var phase: String
         /// `waiting`, `running`, `done`, `failed` or `cancelled`.
         var state: String
+        /// When this phone last heard about the job: set by the app on the
+        /// content it writes itself, and nil on content the coordinator
+        /// pushed, which does not carry it. The Lock Screen names this time
+        /// when the content has gone stale, so "no word" says since when.
+        var since: Date? = nil
     }
 
     /// The job `begin` answered with. Local; never pushed.
@@ -94,4 +99,17 @@ enum XOSetupWords {
 
     /// Still moving: an activity in this state is updated, not ended.
     static func isLive(_ state: String) -> Bool { state == "running" || state == "waiting" }
+
+    /// What the Lock Screen says once the content has gone stale and the job
+    /// was still live when last heard of: not that it stopped, which nobody
+    /// knows, only since when nothing has been heard (C-5). The time is
+    /// named when the content carries it; content the coordinator pushed
+    /// does not, and then the sentence has no time in it rather than one
+    /// made up here.
+    static func silence(_ s: XOSetupAttributes.ContentState) -> String {
+        if let since = s.since {
+            return "No word since \(since.formatted(date: .omitted, time: .shortened)). Open Fleetwright to check."
+        }
+        return "No word for a while. Open Fleetwright to check."
+    }
 }

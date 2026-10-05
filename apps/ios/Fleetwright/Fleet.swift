@@ -899,12 +899,40 @@ struct Fleet {
         /// SHA-256 of that certificate, lowercase hex, for the person to
         /// accept and `begin` to pin.
         let cert: String?
+        /// What that certificate says about itself and whether the machine
+        /// trusts it. NIL IS COULD NOT READ IT, which the screen says in those
+        /// words and then asks about, exactly as it asks about one that does
+        /// not check out: the doubtful case lands on the side that asks.
+        let certificate: Certificate?
         let version: String?
         var id: String { hostId }
 
         /// Setup can be run from this machine: it reached the address over
         /// HTTPS and saw a certificate to pin.
         var canRunSetup: Bool { reachable == true && tls == true && cert != nil }
+
+        /// The machine vouched for the certificate and named nothing wrong
+        /// with it. Anything less is asked about before `begin`.
+        var certificateTrusted: Bool { certificate?.trusted == true }
+
+        /// `narrowCertificate` in src/fleet/coordinator/core.js is the shape.
+        /// Every field optional, because the screen shows what it was given
+        /// and says what it was not, rather than refusing a reply that is
+        /// missing a date.
+        struct Certificate: Codable, Hashable {
+            /// True only when the machine said so AND named no problem.
+            let trusted: Bool?
+            /// From CERT_PROBLEMS: `self-signed`, `untrusted-issuer`,
+            /// `expired`, `not-yet-valid`, `name-mismatch`.
+            let problems: [String]?
+            let subject: String?
+            let issuer: String?
+            /// ISO 8601, as the coordinator writes it.
+            let notBefore: String?
+            let notAfter: String?
+            /// The names it was issued for.
+            let names: [String]?
+        }
     }
 
     /// Where a hypervisor setup is, in the shape every `xosetup` phase and
@@ -941,9 +969,16 @@ struct Fleet {
     /// Begin onboarding a hypervisor on ONE chosen machine, pinning the
     /// certificate `xoprobe` saw there. The reply carries the key to seal the
     /// sign-in to, signed by the machine (SetupState).
-    func beginSetup(address: String, pin: String, host: String) async throws -> Reply {
-        try await intent("xosetup", params: ["phase": "begin", "address": address, "pin": pin], host: host,
-                         idempotencyKey: "app-\(UUID().uuidString)")
+    ///
+    /// `trust` is "accepted" only when the certificate did not check out and
+    /// the person was shown why and said so; the machine refuses to connect
+    /// to such a certificate without it (src/fleet/host/xo-setup.js, the
+    /// connect step). Nothing is sent for one that checks out: the word means
+    /// a person accepted something, and nobody was asked.
+    func beginSetup(address: String, pin: String, host: String, trust: String? = nil) async throws -> Reply {
+        var params = ["phase": "begin", "address": address, "pin": pin]
+        if let trust { params["trust"] = trust }
+        return try await intent("xosetup", params: params, host: host, idempotencyKey: "app-\(UUID().uuidString)")
     }
 
     /// The admin sign-in, sealed on this phone to the job's key as
@@ -979,9 +1014,14 @@ struct Fleet {
     }
 
     /// Tell the coordinator where this job's Live Activity updates go: the
-    /// activity's push token, hex. Only the job's owner may; an answer with
-    /// `ok: false` is a sentence for the screen, not a throw, because the
-    /// screen keeps working without the Lock Screen.
+    /// activity's push token, hex. Only the job's owner may.
+    ///
+    /// A REFUSAL IS AN ANSWER HERE, NOT A THROW: the coordinator sends it as
+    /// a 4xx with `ok: false` in the body, and `send` throws only on a 401 or
+    /// on not reaching the fleet at all. Nobody shows the sentence either
+    /// way. The caller (XOSetupActivities) skips the answer and keeps the
+    /// activity where it was, because the screen keeps polling and the job
+    /// keeps running without the Lock Screen.
     func registerSetupActivity(job: String, token: String) async throws -> SetupActivityRegistration {
         let data = try await post("/api/xosetup/activity", body: ["job": job, "token": token])
         return try JSONDecoder().decode(SetupActivityRegistration.self, from: data)

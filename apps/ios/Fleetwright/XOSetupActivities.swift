@@ -18,6 +18,17 @@ import Foundation
 /// deployment target is 26 (project.yml), so a guard would be unreachable,
 /// which is the rule FleetwrightApp states for the same case.
 enum XOSetupActivities {
+    /// How long content this phone wrote is believed before the Lock Screen
+    /// says it has heard nothing. A step takes seconds and the whole setup
+    /// minutes, so twenty of them without a word is a job that has gone
+    /// quiet, not a slow one; the coordinator forgets a job after a day.
+    static let staleAfter: TimeInterval = 20 * 60
+
+    /// The activities whose push tokens this process is already relaying,
+    /// by activity id, so a credential change or a second launch path does
+    /// not start a second loop for the same one.
+    @MainActor private static var followed = Set<String>()
+
     /// Start one for a job whose sign-in was just accepted, and keep the
     /// coordinator told where its updates go.
     ///
@@ -34,33 +45,63 @@ enum XOSetupActivities {
         // bar and no ordinal (XOSetupWords.ordinal), rather than a bar that
         // claims a length nobody has reported.
         let first = contentState(progress)
-            ?? XOSetupAttributes.ContentState(step: 0, of: 0, phase: "connect", state: "running")
+            ?? XOSetupAttributes.ContentState(step: 0, of: 0, phase: "connect", state: "running", since: Date())
         let activity: Activity<XOSetupAttributes>
         do {
             activity = try Activity<XOSetupAttributes>.request(
                 attributes: attributes,
-                content: ActivityContent(state: first, staleDate: nil),
+                content: content(first),
                 pushType: .token
             )
         } catch {
             return
         }
-        // THE TOKEN, EVERY TIME IT CHANGES. iOS hands an activity a push
-        // token shortly after it starts and may rotate it; the coordinator
-        // keeps the last four per job and drops the ones APNs says are dead.
-        // Hex, as the device token is sent (Fleet.registerDevice), and the
-        // answer carries where the job already is, so an activity that
-        // registered late starts right rather than at step one.
+        follow(activity, fleet: fleet)
+    }
+
+    /// At launch: every activity this app left on the Lock Screen gets its
+    /// token relayed again. The loop in `follow` dies with the process, and
+    /// iOS may hand a surviving activity a new token after a relaunch; a
+    /// coordinator that is never told it pushes to a token nobody reads, and
+    /// the Lock Screen keeps saying whatever it said when the app was killed.
+    @MainActor
+    static func resume(fleet: Fleet) {
+        for activity in Activity<XOSetupAttributes>.activities {
+            follow(activity, fleet: fleet)
+        }
+    }
+
+    /// THE TOKEN, EVERY TIME IT CHANGES. iOS hands an activity a push token
+    /// shortly after it starts and may rotate it; the coordinator keeps the
+    /// last four per job and drops the ones APNs says are dead. Hex, as the
+    /// device token is sent (Fleet.registerDevice), and the answer carries
+    /// where the job already is, so an activity that registered late starts
+    /// right rather than at step one.
+    ///
+    /// The token it already holds goes first, because on a relaunch the
+    /// sequence reports changes and the current one is not a change.
+    @MainActor
+    private static func follow(_ activity: Activity<XOSetupAttributes>, fleet: Fleet) {
+        guard !followed.contains(activity.id) else { return }
+        followed.insert(activity.id)
+        let job = activity.attributes.job
         Task {
+            if let token = activity.pushToken {
+                await register(token, for: job, on: activity, fleet: fleet)
+            }
             for await token in activity.pushTokenUpdates {
-                let hex = token.map { String(format: "%02x", $0) }.joined()
-                guard let latest = try? await fleet.registerSetupActivity(job: job, token: hex),
-                      latest.ok == true,
-                      let state = contentState(latest.progress)
-                else { continue }
-                await activity.update(ActivityContent(state: state, staleDate: nil))
+                await register(token, for: job, on: activity, fleet: fleet)
             }
         }
+    }
+
+    private static func register(_ token: Data, for job: String, on activity: Activity<XOSetupAttributes>, fleet: Fleet) async {
+        let hex = token.map { String(format: "%02x", $0) }.joined()
+        guard let latest = try? await fleet.registerSetupActivity(job: job, token: hex),
+              latest.ok == true,
+              let state = contentState(latest.progress)
+        else { return }
+        await show(state, on: activity)
     }
 
     /// What the screen learned by polling, applied to the activity for that
@@ -68,24 +109,52 @@ enum XOSetupActivities {
     /// that is over ends the activity with its last state showing, and the
     /// Lock Screen keeps it for a quarter of an hour, which is the time the
     /// coordinator's own `end` push gives it (#onSetupProgress).
+    ///
+    /// A REPLY WITH A STATE AND NO STEP STILL ENDS IT. When the coordinator
+    /// no longer knows the job the screen declares it failed with no step
+    /// behind the word, and the first version of this returned on the
+    /// missing step, so the Lock Screen went on saying "running" for a job
+    /// the app had just called dead. Now the activity keeps the step it last
+    /// showed and takes the new state. A live state with no step is still
+    /// nothing new to say.
     static func apply(job: String, progress: Fleet.SetupState) async {
-        guard let state = contentState(progress) else { return }
+        guard let newState = progress.state else { return }
+        let fresh = contentState(progress)
+        if fresh == nil, XOSetupWords.isLive(newState) { return }
         for activity in Activity<XOSetupAttributes>.activities where activity.attributes.job == job {
-            let content = ActivityContent(state: state, staleDate: nil)
-            if XOSetupWords.isLive(state.state) {
-                await activity.update(content)
-            } else {
-                await activity.end(content, dismissalPolicy: .after(Date(timeIntervalSinceNow: 15 * 60)))
-            }
+            var state = fresh ?? activity.content.state
+            state.state = newState
+            state.since = Date()
+            await show(state, on: activity)
         }
+    }
+
+    /// Update while it is live, end once it is not. One place, so the token
+    /// loop and the screen's polling cannot disagree about which.
+    private static func show(_ state: XOSetupAttributes.ContentState, on activity: Activity<XOSetupAttributes>) async {
+        let content = content(state)
+        if XOSetupWords.isLive(state.state) {
+            await activity.update(content)
+        } else {
+            await activity.end(content, dismissalPolicy: .after(Date(timeIntervalSinceNow: 15 * 60)))
+        }
+    }
+
+    /// The content, with the date it goes stale: twenty minutes on, while
+    /// the job is live, after which the Lock Screen says it has heard nothing
+    /// (`context.isStale` in FleetwrightActivity). A finished job is not
+    /// waiting for word, so its content never goes stale.
+    static func content(_ state: XOSetupAttributes.ContentState) -> ActivityContent<XOSetupAttributes.ContentState> {
+        ActivityContent(state: state, staleDate: XOSetupWords.isLive(state.state) ? Date(timeIntervalSinceNow: staleAfter) : nil)
     }
 
     /// The activity's content from a reply, or nil when the reply has not
     /// said where the job is: `begin`'s answer, or an older coordinator's.
+    /// Stamped with now, because this phone just heard it.
     static func contentState(_ progress: Fleet.SetupState?) -> XOSetupAttributes.ContentState? {
         guard let progress, let step = progress.step, let of = progress.of,
               let phase = progress.phase, let state = progress.state
         else { return nil }
-        return XOSetupAttributes.ContentState(step: step, of: of, phase: phase, state: state)
+        return XOSetupAttributes.ContentState(step: step, of: of, phase: phase, state: state, since: Date())
     }
 }

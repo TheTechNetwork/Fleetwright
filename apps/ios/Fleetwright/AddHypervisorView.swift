@@ -64,6 +64,13 @@ struct AddHypervisorView: View {
     @State private var job: String?
     @State private var hostId = ""
     @State private var progress: Fleet.SetupState?
+    /// The person read what is wrong with a certificate that does not check
+    /// out, and said they trust it anyway. Reset whenever what it was said
+    /// about changes: the address, the machine, or the probe.
+    @State private var acknowledged = false
+    /// Cancel was pressed and the machine said it would stop after the step
+    /// it is on: the button is not offered twice.
+    @State private var cancelRequested = false
 
     private struct Begun {
         let job: String
@@ -114,7 +121,19 @@ struct AddHypervisorView: View {
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .disabled(job != nil)
+                .disabled(job != nil || busy)
+                // WHAT WAS FOUND WAS FOUND FOR AN ADDRESS. Edited, the old
+                // machines, certificate and acknowledgement would stand on
+                // screen for a different one, and `begin` would pair the new
+                // address with the old pin.
+                .onChange(of: address) { _, _ in
+                    guard job == nil else { return }
+                    probes = nil
+                    chosen = nil
+                    probeText = ""
+                    acknowledged = false
+                    toCompare = nil
+                }
             Button(probing ? "Asking your machines…" : "Find a machine that can reach it") { Task { await probe() } }
                 .disabled(probing || busy || job != nil || !XOSetupKey.isAddress(trimmedAddress))
             if !probeText.isBlank {
@@ -200,13 +219,28 @@ struct AddHypervisorView: View {
     private func signInSection(_ chosen: Fleet.Probe) -> some View {
         Section {
             if let cert = chosen.cert {
-                Text("Its certificate, as \(chosen.hostId) saw it. The sign-in goes only to a server that answers with this one.")
+                if chosen.certificateTrusted {
+                    certificateChecksOut(chosen)
+                } else {
+                    certificateQuestion(chosen)
+                }
+                Text("SHA-256, as \(chosen.hostId) saw it. The sign-in goes only to a server that answers with this certificate.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                 Text(XOSetupKey.grouped(cert))
                     .fleetType(.labelMono)
                     .foregroundStyle(Design.Palette.ink)
                     .textSelection(.enabled)
+                if !chosen.certificateTrusted {
+                    Toggle(isOn: $acknowledged) {
+                        Text("I checked this certificate and trust it")
+                            .fleetType(.bodyStrong)
+                            .foregroundStyle(Design.Palette.ink)
+                    }
+                    .tint(Design.Palette.accent)
+                    .frame(minHeight: 44)
+                    .disabled(busy || toCompare != nil)
+                }
             }
             TextField("Xen Orchestra admin email", text: $email)
                 .textContentType(.emailAddress)
@@ -221,13 +255,66 @@ struct AddHypervisorView: View {
                 compareRows(toCompare)
             } else {
                 Button(busy ? "Beginning…" : "Begin on \(chosen.hostId)") { Task { await begin(chosen) } }
-                    .disabled(busy || email.isBlank || password.isEmpty)
+                    .disabled(busy || email.isBlank || password.isEmpty || (!chosen.certificateTrusted && !acknowledged))
             }
         } header: {
             sectionHead("Sign in to Xen Orchestra")
         } footer: {
             Text("Used once, by \(chosen.hostId), to make a limited fleetwright user and its token. It is sealed on this phone to a "
                  + "key only that machine holds, so the fleet relays it and cannot read it, and neither this phone nor the fleet keeps it.")
+        }
+    }
+
+    /// One calm line: the machine checked the certificate and found nothing
+    /// wrong, so nothing is asked.
+    private func certificateChecksOut(_ probe: Fleet.Probe) -> some View {
+        let c = probe.certificate
+        var line = "Its certificate checks out"
+        if let subject = c?.subject, !subject.isBlank { line += ": issued to \(subject)" }
+        if let issuer = c?.issuer, !issuer.isBlank { line += " by \(issuer)" }
+        if let until = CertificateWords.date(c?.notAfter) { line += ", valid until \(until)" }
+        return Text(line + ".")
+            .fleetType(.label)
+            .foregroundStyle(Design.Palette.ink)
+    }
+
+    /// THE QUESTION THIS SCREEN ASKS. A certificate nothing vouches for is
+    /// what every Xen Orchestra built from sources serves, so this is the
+    /// common case and not an alarm; but the person is the only one who can
+    /// say it is theirs, so they are shown everything wrong with it and what
+    /// it says about itself before they are asked. The one card on the
+    /// screen that spends emphasis, because it is the one asking.
+    @ViewBuilder private func certificateQuestion(_ probe: Fleet.Probe) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+            Text("This certificate does not check out")
+                .fleetType(.bodyStrong)
+                .foregroundStyle(Design.Palette.attention)
+            ForEach(CertificateWords.problems(probe.certificate, address: trimmedAddress), id: \.self) { line in
+                Text(line)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            if let c = probe.certificate {
+                detail("Issued to", c.subject)
+                detail("Issued by", c.issuer)
+                detail("Valid", CertificateWords.validity(c))
+                detail("Names", (c.names ?? []).isEmpty ? nil : (c.names ?? []).joined(separator: ", "))
+            }
+        }
+        .padding(.vertical, Design.Space.hair)
+    }
+
+    @ViewBuilder private func detail(_ label: String, _ value: String?) -> some View {
+        if let value, !value.isBlank {
+            VStack(alignment: .leading, spacing: Design.Space.hair) {
+                Text(label)
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
+                Text(value)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+                    .textSelection(.enabled)
+            }
         }
     }
 
@@ -278,9 +365,13 @@ struct AddHypervisorView: View {
             .animation(Design.Motion.change, value: progress?.phase)
             .animation(Design.Motion.change, value: progress?.state)
             .padding(.vertical, Design.Space.hair)
-            if running {
+            if running, !cancelRequested {
                 Button("Cancel", role: .destructive) { Task { await cancel(job) } }
                     .disabled(busy)
+            } else if running {
+                // Asked for, and the machine stops between steps; its own
+                // sentence above says so. Not offered a second time (C-2).
+                EmptyView()
             } else if progress?.state == "done" {
                 Button("Done") { dismiss() }
             } else {
@@ -313,6 +404,7 @@ struct AddHypervisorView: View {
         probes = nil
         chosen = nil
         probeText = ""
+        acknowledged = false
         result = ""
         failed = false
         do {
@@ -334,6 +426,7 @@ struct AddHypervisorView: View {
     }
 
     private func choose(_ probe: Fleet.Probe) {
+        if chosen?.hostId != probe.hostId { acknowledged = false }
         chosen = probe
         toCompare = nil
         begun = nil
@@ -344,13 +437,29 @@ struct AddHypervisorView: View {
     @MainActor
     private func begin(_ probe: Fleet.Probe) async {
         guard let pin = probe.cert else { return }
+        // A trusted certificate is never asked about, so nothing is said for
+        // it; one that does not check out goes only with the person's word.
+        let trust: String?
+        if probe.certificateTrusted {
+            trust = nil
+        } else if acknowledged {
+            trust = "accepted"
+        } else {
+            return
+        }
         busy = true
         defer { busy = false }
         result = ""
         failed = false
         let target = trimmedAddress
+        // AN EARLIER BEGIN THAT NEVER RAN: its machine is still holding the
+        // job open, and three of those fill its slots. Let it go first.
+        if let stale = begun {
+            _ = try? await fleet.cancelSetup(job: stale.job)
+            begun = nil
+        }
         do {
-            let reply = try await fleet.beginSetup(address: target, pin: pin, host: probe.hostId)
+            let reply = try await fleet.beginSetup(address: target, pin: pin, host: probe.hostId, trust: trust)
             guard reply.ok != false, let setup = reply.xosetup, let begunJob = setup.job,
                   let key = setup.key, let keySig = setup.keySig, let hostKey = setup.hostKey
             else {
@@ -455,7 +564,11 @@ struct AddHypervisorView: View {
         do {
             let reply = try await fleet.cancelSetup(job: job)
             if let state = reply.xosetup { await apply(state) }
-            if reply.ok == false { refuse(reply.text ?? "It could not be stopped.") }
+            if reply.ok == false {
+                refuse(reply.text ?? "It could not be stopped.")
+            } else {
+                cancelRequested = true
+            }
         } catch {
             refuse(error.localizedDescription)
         }
@@ -494,6 +607,7 @@ struct AddHypervisorView: View {
         job = nil
         progress = nil
         begun = nil
+        cancelRequested = false
         toCompare = nil
         password = ""
         result = ""
@@ -507,5 +621,45 @@ struct AddHypervisorView: View {
 
     private func sectionHead(_ text: String) -> some View {
         Text(text).fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+    }
+}
+
+/// What a certificate's problems and dates read as, in the same words on
+/// Android (CertificateWords in HypervisorSheet.kt): the problems from
+/// `narrowCertificate` in src/fleet/coordinator/core.js, one sentence each.
+enum CertificateWords {
+    static func problems(_ c: Fleet.Probe.Certificate?, address: String) -> [String] {
+        guard let c else { return ["This machine could not read the certificate’s details."] }
+        let lines = (c.problems ?? []).compactMap { key -> String? in
+            switch key {
+            case "self-signed": return "Self-signed: nothing but the server itself vouches for it."
+            case "untrusted-issuer": return "Signed by an authority this machine does not trust."
+            case "expired": return "Expired on \(date(c.notAfter) ?? "a date this machine did not say")."
+            case "not-yet-valid": return "Not valid until \(date(c.notBefore) ?? "a date this machine did not say")."
+            case "name-mismatch": return "Issued for a different name than \(address)."
+            default: return nil
+            }
+        }
+        // Not trusted and nothing named: the machine could not say why.
+        return lines.isEmpty ? ["Not trusted by that machine, which did not say why."] : lines
+    }
+
+    static func validity(_ c: Fleet.Probe.Certificate) -> String? {
+        switch (date(c.notBefore), date(c.notAfter)) {
+        case let (from?, until?): return "\(from) to \(until)"
+        case (nil, let until?): return "until \(until)"
+        case (let from?, nil): return "from \(from)"
+        default: return nil
+        }
+    }
+
+    /// A medium date, from the ISO 8601 the coordinator writes (with
+    /// milliseconds, which the plain formatter refuses), or nil.
+    static func date(_ iso: String?) -> String? {
+        guard let iso else { return nil }
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let when = precise.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else { return nil }
+        return when.formatted(date: .abbreviated, time: .omitted)
     }
 }
