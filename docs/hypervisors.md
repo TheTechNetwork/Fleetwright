@@ -301,7 +301,7 @@ owner's: `xoprobe`, then `xosetup` on the machine the person picks.
    vCPUs, memory and default storage) → a token, minted signed in as that
    user for 180 days (under the half a year Xen Orchestra allows out of the
    box; a server capped lower gives its own default) → updates → hand-off,
-   keeping only the token.
+   sealing the token back to the phone and keeping nothing.
 5. **Updates** come from [XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater)'s
    own `installer-updates` plugin when the pool has it: loaded, kept loaded,
    and set to update itself daily unless a person had switched that off, in
@@ -325,9 +325,42 @@ is a Durable Object evicted between messages as a matter of course, and a
 person reading a fingerprint and typing a password is a gap it is evicted
 across.
 
-**Where the token lives for now** is the machine that ran the setup, 0600 in
-its sidecar's state directory. The dedicated machine on the pool, and the
-token moving to it, are the next round with the templates.
+**Where the token lives is the phone that asked for it**, not the machine
+that ran the setup. That machine is only the one that could reach Xen
+Orchestra when somebody wanted to add it, and the pool must not stop being
+manageable because it was retired, rebuilt or switched off. The first
+version wrote the token to a file on it, which made it the one thing holding
+the pool's key.
+
+- **The phone makes a key** for the token to come back to and puts it inside
+  the sealed sign-in, beside the password, so the coordinator relaying it
+  cannot swap in a key of its own.
+- **The machine seals the token record to it** at hand-off (the address, the
+  pin or plain HTTP, the limited user, its resource set and the token) under
+  `fleetwright-xosetup-handoff/v1:<job>:<address>`, its own binding, so a
+  sealed token and a sealed sign-in can never be taken for each other. It
+  writes nothing to disk, and removes the file the first version kept for
+  that pool if there is one.
+- **`status` carries the sealed copy** to whoever began the job, once it is
+  done, until the machine forgets the job six hours later. Progress events,
+  which reach a Lock Screen, never carry it.
+- **The phone keeps it** in the iOS Keychain (this device only) or encrypted
+  under the Android Keystore key the fleet credential uses, and says so on
+  the setup screen only once it has. A phone that was closed at the end
+  collects it at its next launch; the private half of its key waits in the
+  same store until then.
+
+An app older than this sends no key, and the machine refuses its sign-in
+before anything is made in Xen Orchestra, saying to update the app. Losing
+the phone loses the token, not the pool: running the setup again finds the
+user and its resource set and makes a new token. This is the phone-direct
+model [`manage.md`](./manage.md) sets out for managing the pool; holding the
+token on a fleet machine as well, so the pool can be acted on with the app
+closed, is the opt-in route that page describes, not the default.
+
+Run against a real Xen Orchestra over HTTPS and plain HTTP: the phone's key
+opened the token, the token signed in as the limited user and an admin call
+was refused, and the machine's state directory was empty afterwards.
 
 ### Next: deploying Xen Orchestra, and the phone's own network
 

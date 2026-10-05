@@ -244,6 +244,7 @@ says on health which journals a box has so the buttons are only ever live.)
 | **a Xen Orchestra on plain HTTP** | offered after the HTTPS machines; a warning card says the password and token cross unencrypted, with how to give it HTTPS; Begin waits for "Send it without HTTPS anyway" | the same card and switch; Set up waits for it | — |
 | **a certificate that does not check out** | shown in full under Sign in (problems, issued to and by, dates, names, SHA-256); Begin waits for a toggle | the same, in a card; Set up waits for a checkbox | — |
 | **setup progress with the app closed** | a Live Activity on the Lock Screen and in the Dynamic Island (`/api/xosetup/activity`) | one ongoing notification with a progress bar, ProgressStyle on Android 16 | — |
+| **the pool's token, once set up** | handed back sealed to a key sent inside the sign-in, kept in the Keychain (this device only); collected at launch if the app was closed; the setup screen says it is kept only once it is | the same, kept encrypted under the Keystore key; collected at sign-in and launch | — |
 
 **A gap this table caught, in the round that added the profile row.** Android's
 `SessionKind` had no `host` field at all, while iOS has had one since placement

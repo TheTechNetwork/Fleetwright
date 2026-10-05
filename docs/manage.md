@@ -73,7 +73,11 @@ machine holds it.
 
 ## The first slice: Xen Orchestra, phone-direct
 
-**Connecting.** The person enters an address; the phone does what `xoprobe`
+**Connecting.** A pool added through Add a hypervisor already has its token
+on the phone: setup seals it back to the phone that asked and the machine
+that ran it keeps none (`hypervisors.md`, "Where the token lives"), so for
+that pool connecting is reading the Keychain. For a pool added another way,
+the person enters an address; the phone does what `xoprobe`
 does from a machine (one TLS handshake, the certificate's SHA-256 shown for
 them to accept) and pins that certificate for every connection after. Then
 either a Xen Orchestra token, or an email and password used once to make one
