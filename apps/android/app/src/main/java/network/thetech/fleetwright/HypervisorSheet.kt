@@ -169,6 +169,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // the pool comes back to, IN MEMORY ONLY. What the pool has, once opened,
     // and what the person has chosen from it.
     var jobKey by remember { mutableStateOf<String?>(null) }
+    // The machine said it can build the edge router (`can` holds "edge"), so
+    // the form offers it; an older one never is offered (C-2).
+    var canEdge by remember { mutableStateOf(false) }
     var policyKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
     var inventory by remember { mutableStateOf<XoPolicy.Inventory?>(null) }
     var choice by remember { mutableStateOf<XoPolicy.Choice?>(null) }
@@ -372,6 +375,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             return
         }
         jobKey = key
+        canEdge = "edge" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -672,7 +676,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             cancelAccepted -> Hint("Cancelling. Nothing has been changed.", color = Design.Palette.ink.now)
                             applied -> Hint("Sent. $machine is applying it.", color = Design.Palette.ink.now)
                             inv != null && c != null -> {
-                                PolicyForm(inv, c, enabled = !applying && !cancelling, onChange = { choice = it })
+                                PolicyForm(inv, c, enabled = !applying && !cancelling, canEdge = canEdge, machine = machine, onChange = { choice = it })
                                 val problem = XoPolicy.problem(inv, c)
                                 Hint("$machine waits ten minutes for your choice, then lets go without changing anything.")
                                 // WHY APPLY IS OFF, in the machine's words, so

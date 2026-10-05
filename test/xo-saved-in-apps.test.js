@@ -180,6 +180,10 @@ test('both phones say the same things about what is remembered', () => {
     ' Your other machines were asked instead.',
     'checks it again before signing in.',
     'The network the edge router, an OPNsense VM, will put its WAN on',
+    'downloads OPNsense once, about 470 MB, and builds it while you wait.',
+    'It is there and running. Apply keeps its WAN on this network.',
+    'It is there and stopped. Apply keeps its WAN on this network and starts it.',
+    'is too old to build the router; update it to have it built from here.',
   ]) {
     assert.ok(SCREEN.includes(words), `iOS: ${words}`);
     assert.ok(SHEET.includes(words) || read(`${KT}PolicyForm.kt`).includes(words), `Android: ${words}`);

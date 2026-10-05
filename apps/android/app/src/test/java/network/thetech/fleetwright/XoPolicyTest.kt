@@ -62,6 +62,36 @@ class XoPolicyTest {
     private fun inventory(json: JSONObject = inventoryJson()): XoPolicy.Inventory = XoPolicy.parse(json)!!
 
     @Test
+    fun anOlderMachineSaysNothingAboutEdgeRoutersAndThatIsNotNone() {
+        val inv = inventory()
+        assertEquals(null, inv.edges)
+        assertFalse(XoPolicy.defaults(inv).edge)
+    }
+
+    @Test
+    fun theSwitchStartsOnWhenThePoolHasOneSoApplyKeepsIt() {
+        val inv = inventory(inventoryJson().put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", false))))
+        assertEquals(false, XoPolicy.edgeOn(inv, "net-lab")?.running)
+        assertTrue(XoPolicy.defaults(inv).edge)
+        assertFalse(XoPolicy.defaults(inventory(inventoryJson().put("edges", JSONArray()))).edge)
+    }
+
+    @Test
+    fun theEdgeRouterGoesWithItsWayOut() {
+        val inv = inventory(inventoryJson().put("edges", JSONArray()))
+        val asked = XoPolicy.defaults(inv).copy(edge = true)
+        assertEquals(null, XoPolicy.problem(inv, asked))
+        assertTrue(XoPolicy.payload(inv, asked).getBoolean("edge"))
+        val dropped = XoPolicy.withNetwork(asked, "net-lab", false)
+        assertEquals(null, dropped.egress)
+        assertFalse("a router with no way out was left asked for", dropped.edge)
+        assertEquals(
+            "The edge router needs a way out: choose the network its WAN goes on.",
+            XoPolicy.problem(inv, dropped.copy(edge = true)),
+        )
+    }
+
+    @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in
         // src/fleet/seal.js, and neither is setup's or the token's.
