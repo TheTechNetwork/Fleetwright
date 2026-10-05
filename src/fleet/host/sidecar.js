@@ -513,6 +513,8 @@ export class Sidecar {
         return this.xoSetups.status({ job: String(p.job || ''), actor });
       case 'cancel':
         return this.xoSetups.cancel({ job: String(p.job || ''), actor });
+      case 'policy':
+        return this.xoSetups.policy({ job: String(p.job || ''), sealed: String(p.sealed || ''), actor });
       default:
         return { ok: false, text: 'Unknown setup phase.' };
     }
