@@ -759,9 +759,14 @@ export class Sidecar {
       // for flat JSON and one round trip per action, because the consumer is a
       // Shortcut as often as it is an app.
       const single = sessions && sessions.length === 1 ? sessions[0] : null;
+      // THE SIDECAR'S OWN HALF of "is this box up to date". The hub answers
+      // for itself and for the disk; it cannot see that this process is
+      // running an older release than both, and work that runs here (setups,
+      // mints, the vault) runs that older code until it restarts.
+      const behind = intent.verb === 'updates' ? this.#behind() : '';
       return reply({
         ok: r.ok !== false,
-        text: r.text ?? '',
+        text: behind ? `${r.text ?? ''}\n\n${behind}` : (r.text ?? ''),
         ...(sessions ? { sessions } : {}),
         ...(single?.rcUrl ? { rcUrl: single.rcUrl } : {}),
         ...(r.buttons ? { buttons: r.buttons } : {}),
@@ -1751,6 +1756,23 @@ export class Sidecar {
     this.onRestartRequested = null;
     this.log.warn('sidecar: new code was installed — restarting to pick it up');
     hook(at);
+  }
+
+  /**
+   * A sentence when this sidecar is running a different release from the one
+   * on disk, and nothing otherwise: `version()` reads `head` from this
+   * process's own tree and `installed` from `current`.
+   */
+  #behind() {
+    /** @type {any} */
+    let v = null;
+    try {
+      v = this.version?.() ?? null;
+    } catch {
+      return '';
+    }
+    if (!v?.head || !v?.installed || v.head === v.installed) return '';
+    return `The sidecar here is still running ${v.head}; ${v.installed} is on disk. What the sidecar runs (hypervisor setups among it) is the older code until it restarts: /update --restart.`;
   }
 
   #recall(/** @type {string} */ id) {

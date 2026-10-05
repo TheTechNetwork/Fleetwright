@@ -14,6 +14,7 @@ import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
 import { updateStatus } from '../src/core/update.js';
 import { installedVersion, currentVersion } from '../src/core/release-apply.js';
+import { INSTALL_ROOT } from '../src/core/resources.js';
 import { helperState } from '../src/core/migrate.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { recordCoordinatorReached } from '../src/fleet/host/evidence.js';
@@ -256,7 +257,12 @@ const sidecar = new Sidecar({
       // stays null: a release is not on one, and inventing "release" there
       // would be a word the app might one day try to use.
       if (st.packaged) {
-        const v = installedVersion(hub.installDir);
+        // FROM THIS PROCESS'S OWN TREE, not from hub.installDir. On a release
+        // install that is `<base>/current`, which follows the symlink to
+        // whatever is on disk now, so `head` and `installed` were the same
+        // read and a sidecar running an old release reported the new one.
+        // INSTALL_ROOT is found from this bundle's own file, symlinks resolved.
+        const v = installedVersion(INSTALL_ROOT);
         // AND WHAT `current` POINTS AT, which is a different question once an
         // update has landed and this process has not restarted. `head` is
         // what this sidecar is running, read from its own directory;
