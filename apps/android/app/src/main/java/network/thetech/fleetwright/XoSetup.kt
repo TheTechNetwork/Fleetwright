@@ -91,12 +91,16 @@ internal object XoSetup {
      * its own shape first, which is what makes writing the JSON by hand safe:
      * none of them can contain a quote, a backslash or anything else JSON
      * would have to escape.
+     *
+     * [pin] is empty for a setup over plain HTTP: there is no certificate, so
+     * the machine signs over `"pin":""`, and the phone checks the same bytes.
+     * Empty or a fingerprint, nothing between.
      */
     fun signingInput(address: String, job: String, key: String, pin: String): ByteArray {
         require(ADDRESS_RE.matches(address)) { "not a Xen Orchestra address" }
         require(JOB_RE.matches(job)) { "not a setup job" }
         require(Seal.KEY_RE.matches(key)) { "not a P-256 public key" }
-        require(PIN_RE.matches(pin)) { "not a certificate fingerprint" }
+        require(pin.isEmpty() || PIN_RE.matches(pin)) { "not a certificate fingerprint" }
         return "agent-fleet/v1/xosetup-key\n{\"address\":\"$address\",\"job\":\"$job\",\"key\":\"$key\",\"pin\":\"$pin\"}"
             .toByteArray(Charsets.UTF_8)
     }
@@ -163,14 +167,35 @@ internal object XoSetup {
     }
 
     /**
-     * How a probe reads to a person, and whether this machine can run the
-     * setup. Only a machine that reached the address over TLS can: the
-     * installer's default is HTTPS, and the pin that protects the sign-in on
-     * its way is the certificate's, so no certificate means nothing to pin.
+     * A machine that reached the address over TLS and saw its certificate:
+     * the setup is pinned to that certificate, and the sign-in goes to no
+     * other server.
+     */
+    fun pinned(probe: Fleet.Probe): Boolean = probe.reachable && probe.tls && probe.cert != null
+
+    /**
+     * A machine that reached the address and was answered in plain HTTP. It
+     * can run the setup too, once the person has read that the sign-in and
+     * the fleet's token would cross that network readable and said to go on
+     * anyway; the screen asks that, in those words, before it offers Set up.
+     * Reached over TLS without a readable certificate is neither: nothing to
+     * pin to, and not plain either, so it is said and not offered.
+     */
+    fun plain(probe: Fleet.Probe): Boolean = probe.reachable && !probe.tls
+
+    /**
+     * How a probe reads to a person. `xo` is three-valued and said as such:
+     * null is cannot tell, never rounded to yes or no (C-5). The words are
+     * iOS's.
      */
     fun describe(probe: Fleet.Probe): String = when {
         !probe.reachable -> "Could not reach it"
-        !probe.tls || probe.cert == null -> "Answered without HTTPS. Setup needs HTTPS, which the Xen Orchestra installer turns on by default."
+        !probe.tls -> when (probe.xo) {
+            true -> "Reached Xen Orchestra over plain HTTP"
+            false -> "Reached something over plain HTTP, and it does not look like Xen Orchestra"
+            null -> "Reached something over plain HTTP; cannot tell whether it is Xen Orchestra"
+        }
+        probe.cert == null -> "Reached it over HTTPS, but could not read its certificate, so there is nothing to pin the sign-in to"
         probe.xo == true -> "Reached it over HTTPS" + (probe.version?.let { ". Xen Orchestra $it" } ?: ". Looks like Xen Orchestra")
         probe.xo == false -> "Reached it over HTTPS, but it does not look like Xen Orchestra"
         else -> "Reached it over HTTPS. Cannot tell what is answering"
