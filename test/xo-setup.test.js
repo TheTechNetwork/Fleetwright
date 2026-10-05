@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { createHash, X509Certificate } from 'node:crypto';
 import tls from 'node:tls';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -48,9 +49,9 @@ function certificate() {
  * call, per connection, so a test can say what was asked and as whom.
  *
  * @param {import('node:test').TestContext} t
- * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number }} [opts]
+ * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean }} [opts]
  */
-async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000 } = {}) {
+async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false } = {}) {
   const { key, cert, pin } = certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -68,7 +69,8 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
     SR: { sr1: { id: 'sr1', type: 'SR', size: 1000 * 1024 ** 3, physical_usage: 200 * 1024 ** 3 } },
   };
   let conns = 0;
-  const server = tls.createServer({ key, cert }, (socket) => {
+  /** @param {import('node:net').Socket} socket */
+  const serve = (socket) => {
     const conn = ++conns;
     /** @type {string|null} */
     let as = null;
@@ -145,7 +147,9 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
         }
       }
     });
-  });
+  };
+  // PLAIN HTTP is the installer's default; the same stand-in, without TLS.
+  const server = plain ? net.createServer(serve) : tls.createServer({ key, cert }, serve);
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => server.close());
   const address = `127.0.0.1:${/** @type {import('node:net').AddressInfo} */ (server.address()).port}`;
@@ -372,4 +376,36 @@ test('a server that caps tokens lower still gets one, at its own default length'
 test('a setup begun with nobody’s name on it is refused', async () => {
   const { setups } = await machine();
   assert.equal((await setups.begin({ address: 'xo.lan', pin: 'a'.repeat(64), actor: null })).ok, false);
+});
+
+test('a Xen Orchestra on plain HTTP is set up once the person accepted it, and kept saying so', { skip }, async (t) => {
+  const xo = await standIn(t, { plain: true });
+  const found = await probe(xo.address);
+  assert.equal(found.reachable, true);
+  assert.equal(found.tls, false);
+  assert.equal(found.xo, true);
+  assert.equal(found.cert, null);
+  assert.match(found.text, /over plain HTTP/);
+
+  const { setups, stateDir } = await machine();
+  const actor = 'eli@example.com';
+  // No pin and no acceptance is still a refusal.
+  assert.equal((await setups.begin({ address: xo.address, pin: null, actor })).ok, false);
+  // A pin and `plain` together is a client that cannot decide.
+  assert.equal((await setups.begin({ address: xo.address, pin: 'a'.repeat(64), plain: 'accepted', actor })).ok, true, 'a pin wins: it is the HTTPS path');
+
+  const begun = await setups.begin({ address: xo.address, pin: null, plain: 'accepted', actor });
+  assert.equal(begun.ok, true, begun.text);
+  // Signed over an empty pin, which is what the phone checks it against.
+  const { signed, sealed } = await phone(begun, xo.address, '');
+  assert.equal(signed, true);
+  await setups.run({ job: begun.xosetup.job, sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.match(end.text, /over plain HTTP, as you accepted/);
+  const dir = path.join(stateDir, 'hypervisors');
+  const kept = JSON.parse(readFileSync(path.join(dir, readdirSync(dir)[0]), 'utf8'));
+  assert.equal(kept.plain, true);
+  assert.equal(kept.pin, null);
+  assert.equal(kept.token, 'tok-limited-123');
 });

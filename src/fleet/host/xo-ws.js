@@ -386,6 +386,8 @@ export class XoRpc {
     this.callTimeoutMs = callTimeoutMs;
     /** @type {ReturnType<typeof describeCertificate>} What the server's certificate is, as `connectXo` found it. */
     this.certificate = null;
+    /** Opened over plain HTTP by `connectXoPlain`, with no TLS at all. */
+    this.plain = false;
     this.nextId = 1;
     /** @type {Map<number, { resolve: (v: any) => void, reject: (e: Error) => void, timer: ReturnType<typeof setTimeout> }>} */
     this.pending = new Map();
@@ -450,6 +452,41 @@ export class XoRpc {
       p.resolve(msg.result);
     }
   }
+}
+
+/**
+ * Xen Orchestra's API over PLAIN HTTP, for a person who accepted that: no
+ * TLS, so no certificate and nothing to pin, and everything said on it —
+ * the admin sign-in first — crosses the network as it is. Only ever reached
+ * with `plain: accepted` from the phone (xo-setup.js begin).
+ *
+ * The port is the address's, or 80, where Xen Orchestra built from sources
+ * listens until it is given a certificate.
+ *
+ * @param {{ address: string, timeoutMs?: number }} opts
+ * @returns {Promise<XoRpc>}
+ */
+export async function connectXoPlain({ address, timeoutMs = 15_000 }) {
+  const { host, port } = splitAddress(address, 80);
+  const socket = await new Promise((resolve, reject) => {
+    const s = net.connect({ host, port });
+    const timer = setTimeout(() => {
+      s.destroy();
+      reject(new Error(`${host}:${port} did not answer within ${Math.round(timeoutMs / 1000)} seconds`));
+    }, timeoutMs);
+    s.once('connect', () => {
+      clearTimeout(timer);
+      resolve(s);
+    });
+    s.once('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+  });
+  const link = await upgrade(/** @type {any} */ (socket), { host, port, timeoutMs });
+  const rpc = new XoRpc(link);
+  rpc.plain = true;
+  return rpc;
 }
 
 /**
