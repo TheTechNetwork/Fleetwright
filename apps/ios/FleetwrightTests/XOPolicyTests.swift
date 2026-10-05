@@ -20,8 +20,10 @@ final class XOPolicyTests: XCTestCase {
     private func inventoryJSON(limits: String = #"{"cpus":40,"memory":null,"disk":null}"#,
                                current srs: String = #"["sr-a"]"#,
                                networks: String = #"["net-wan"]"#,
-                               address: String = "xo.lan") -> Data {
-        Data("""
+                               address: String = "xo.lan",
+                               edges: String? = nil) -> Data {
+        let tail = edges.map { ",\"edges\":" + $0 } ?? ""
+        return Data("""
         {"v":1,"address":"\(address)",
          "pools":[{"id":"pool-1","name":"rack"}],
          "srs":[
@@ -33,7 +35,7 @@ final class XOPolicyTests: XCTestCase {
            {"id":"net-lab","name":"lab","pool":"pool-1","vlan":null,"egress":false}
          ],
          "capacity":{"cpus":16,"memory":\(64 * gib)},
-         "current":{"srs":\(srs),"networks":\(networks),"limits":\(limits)}}
+         "current":{"srs":\(srs),"networks":\(networks),"limits":\(limits)}\(tail)}
         """.utf8)
     }
 
@@ -66,6 +68,34 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertNil(XOPolicy.decode(inventoryJSON(address: "other.lan"), address: address))
         let v2 = String(decoding: inventoryJSON(), as: UTF8.self).replacingOccurrences(of: "\"v\":1", with: "\"v\":2")
         XCTAssertNil(XOPolicy.decode(Data(v2.utf8), address: address))
+    }
+
+    // MARK: The edge router
+
+    func testAnOlderMachineSaysNothingAboutEdgeRoutersAndThatIsNotNone() throws {
+        let inv = try inventory()
+        XCTAssertNil(inv.edges, "an inventory without edges is cannot tell, not none")
+        XCTAssertFalse(XOPolicy.Choice.initial(for: inv).edge)
+    }
+
+    func testTheSwitchStartsOnWhenThePoolHasOneSoApplyKeepsIt() throws {
+        let inv = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":false}]"#))
+        XCTAssertEqual(inv.edge(on: "net-wan")?.running, false)
+        XCTAssertTrue(XOPolicy.Choice.initial(for: inv).edge)
+        let none = try inventory(inventoryJSON(edges: "[]"))
+        XCTAssertFalse(XOPolicy.Choice.initial(for: none).edge)
+    }
+
+    func testTheEdgeRouterGoesWithItsWayOut() throws {
+        let inv = try inventory(inventoryJSON(edges: "[]"))
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.edge = true
+        XCTAssertNil(c.problem(in: inv))
+        c.setNetwork("net-wan", on: false)
+        XCTAssertNil(c.egress)
+        XCTAssertFalse(c.edge, "a router with no way out was left asked for")
+        c.edge = true
+        XCTAssertEqual(c.problem(in: inv), "The edge router needs a way out: choose the network its WAN goes on.")
     }
 
     // MARK: Where the screen starts
@@ -172,7 +202,7 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(limits["cpus"] as? Int, 16)
         XCTAssertEqual((limits["memory"] as? NSNumber)?.int64Value, 32 * gib)
         XCTAssertEqual((limits["disk"] as? NSNumber)?.int64Value, 150 * gib)
-        XCTAssertEqual(Set(object.keys), ["v", "srs", "networks", "egress", "limits"])
+        XCTAssertEqual(Set(object.keys), ["v", "srs", "networks", "egress", "edge", "limits"])
     }
 
     func testNoWayOutIsSentAsNull() throws {
