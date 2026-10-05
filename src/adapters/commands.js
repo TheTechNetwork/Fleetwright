@@ -95,7 +95,7 @@ import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../c
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
 import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf, refreshSandboxImageStep } from '../core/update.js';
-import { applyRelease, currentVersion } from '../core/release-apply.js';
+import { applyRelease, currentVersion, versionDrift } from '../core/release-apply.js';
 import { armConfirmation } from '../core/update-confirm.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { listSecretNames } from '../core/secret-store.js';
@@ -1855,7 +1855,24 @@ export const COMMANDS = {
           // a rollout needs is only that it is stable per machine.
           hostKey: ctx.cfg.hostname,
           dryRun: flags.has('check'),
+          ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
         });
+        // AN EXPLICIT RESTART ON A BOX ALREADY CURRENT IS STILL A RESTART, as
+        // it is on the git path (runUpdate). It used to answer "already on
+        // main-209" and do nothing, which is the one answer that cannot fix
+        // the case it is asked in: the release is on disk, and a service that
+        // started before it landed (the sidecar, most often) is still running
+        // the one before. Seen as a hypervisor setup that handed no token back
+        // because the sidecar running it predated the hand-off, on a box that
+        // reported itself up to date. The marker restartSelf writes is what
+        // brings the sidecar over.
+        if (flags.has('restart') && r.ok && !r.changed && r.reason === 'current') {
+          const restarted = restartSelf({ head: currentVersion(ctx.cfg.installDir), actor: ctx.actor ?? null, stateDir: ctx.cfg.stateDir ?? null });
+          return {
+            ok: restarted.ok,
+            text: `${r.message}\n\nNothing new to fetch, so this restarts onto the release already here, and the sidecar follows: a service that started before it landed is still running the one before.\n\n${restarted.message}`,
+          };
+        }
         // The same two-step as the git path: the code lands, then somebody
         // decides when to restart. A release that restarted the box the moment
         // it downloaded would apply itself while sessions were mid-answer.
@@ -1989,8 +2006,14 @@ export const COMMANDS = {
       if (status.packaged) {
         const r = await checkRelease(ctx.cfg);
         const helper = helperState({ installRoot: ctx.cfg.installDir });
+        // WHAT THIS PROCESS RUNS, beside what is on disk. The check above
+        // compares the disk with the manifest, and "already on main-209" was
+        // all it said on a box running something older (versionDrift).
+        const drift = versionDrift(ctx.cfg.installDir);
         app = {
           kind: 'release',
+          // The release this hub loaded, when it is not the one on disk.
+          ...(drift ? { running: drift.running } : {}),
           // TRI-STATE, AND NULL IS A REAL VALUE. `Boolean(r.available)` reports
           // "cannot tell" as "nothing waiting", which is the reassuring half of
           // an unanswered question — the exact failure the `appPending` field
@@ -2038,7 +2061,11 @@ export const COMMANDS = {
           // saying. Compared against the tree this hub runs, without root;
           // null is cannot tell and adds nothing to the text.
           helper,
-          text: [r.message, describeHelper(helper, ctx.cfg.installDir)].filter(Boolean).join('\n\n'),
+          text: [
+            r.message,
+            drift ? `This hub is still running ${drift.running}; ${drift.onDisk} is on disk and starts when it restarts (/update --restart).` : '',
+            describeHelper(helper, ctx.cfg.installDir),
+          ].filter(Boolean).join('\n\n'),
         };
       } else if (status.ok && ctx.cfg.releaseManifest && migrationState(ctx.cfg, status, await checkRelease(ctx.cfg)).can) {
         // A CHECKOUT THAT COULD STOP BEING ONE. Counting commits here while
