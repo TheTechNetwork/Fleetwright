@@ -922,9 +922,12 @@ test('adding a hypervisor is answered here and never reaches the hub', async (t)
   assert.deepEqual(stub.commands, [], 'nothing reached fleetwright');
 });
 
-test('a machine with nowhere to keep a hypervisor token refuses to begin', async (t) => {
-  const { sidecar } = await setup(t);
+test('a machine needs nowhere to keep a hypervisor token, because it keeps none', async (t) => {
+  // The first version refused here without a state directory, because the
+  // token was written to it. The token now goes back to the phone sealed, so
+  // a state directory is only where an old copy is looked for.
+  const keys = await generateKeyPair();
+  const { sidecar } = await setup(t, {}, { vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ m) => sign(keys.privateJwk, m) } });
   const r = await sidecar.handle(intent({ verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', pin: 'a'.repeat(64) }, actor: 'eli@example.com' }));
-  assert.equal(r.ok, false);
-  assert.match(r.text, /nowhere set aside/);
+  assert.equal(r.ok, true, r.text);
 });

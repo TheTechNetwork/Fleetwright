@@ -16,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { createHash, X509Certificate } from 'node:crypto';
 import tls from 'node:tls';
 import net from 'node:net';
@@ -26,7 +26,7 @@ import path from 'node:path';
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER } from '../src/fleet/host/xo-setup.js';
 import { frame, parseFrame } from '../src/fleet/host/xo-ws.js';
 import { XOSETUP_STEPS } from '../src/fleet/protocol/intents.js';
-import { seal, xosetupAad } from '../src/fleet/seal.js';
+import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
 const openssl = spawnSync('openssl', ['version']).status === 0;
@@ -181,12 +181,23 @@ async function finished(/** @type {XoSetups} */ setups, /** @type {string} */ jo
   throw new Error('the job never finished');
 }
 
-/** What the phone does with `begin`'s answer: check the signature, then seal. */
-async function phone(/** @type {any} */ begun, /** @type {string} */ address, /** @type {string} */ pin, payload = { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD } }) {
+/**
+ * What the phone does with `begin`'s answer: check the signature, make a key
+ * for the token to come back to, and seal both the sign-in and that key.
+ */
+async function phone(/** @type {any} */ begun, /** @type {string} */ address, /** @type {string} */ pin, payload = /** @type {any} */ (null)) {
   const { job, key, keySig, hostKey } = begun.xosetup;
   const signed = await verify(hostKey, keySig, signingInput('xosetup-key', { address, job, key, pin }));
-  const box = await seal({ to: key, aad: xosetupAad(job, address), payload });
-  return { signed, sealed: `${box.epk}.${box.iv}.${box.ct}` };
+  const reply = await newSealKey();
+  const inside = payload ?? { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey };
+  const box = await seal({ to: key, aad: xosetupAad(job, address), payload: inside });
+  return { signed, sealed: `${box.epk}.${box.iv}.${box.ct}`, reply };
+}
+
+/** What the phone does with a finished job: open the token record it was handed. */
+async function collect(/** @type {any} */ end, /** @type {{ privateKey: CryptoKey, publicKey: string }} */ reply, /** @type {string} */ address) {
+  const [epk, iv, ct] = String(end.handoff).split('.');
+  return /** @type {any} */ (await open({ ...reply, aad: xosetupHandoffAad(end.job, address), sealed: { epk, iv, ct } }));
 }
 
 test('the probe says Xen Orchestra answered, over TLS, and which certificate', { skip }, async (t) => {
@@ -205,7 +216,7 @@ test('the probe says Xen Orchestra answered, over TLS, and which certificate', {
   assert.equal(nothing.reachable, false);
 });
 
-test('a pool is onboarded end to end, and only the limited token is kept', { skip }, async (t) => {
+test('a pool is onboarded end to end, and the limited token goes back to the phone, kept nowhere here', { skip }, async (t) => {
   const xo = await standIn(t);
   const { setups, events, stateDir, keys } = await machine();
   const actor = 'eli@example.com';
@@ -215,8 +226,12 @@ test('a pool is onboarded end to end, and only the limited token is kept', { ski
   // THE PHONE CAN TELL THE KEY IS THIS MACHINE'S: signed by its enrolment key,
   // over the job, the address, the pin and the key together.
   assert.equal(begun.xosetup.fingerprint, await fingerprint(keys.publicJwk));
-  const { signed, sealed } = await phone(begun, xo.address, xo.pin);
+  const { signed, sealed, reply } = await phone(begun, xo.address, xo.pin);
   assert.equal(signed, true);
+  // A COPY THE FIRST VERSION KEPT for this pool, which the next run removes.
+  const old = path.join(stateDir, 'hypervisors', `${xo.address.replace(/[^A-Za-z0-9.-]+/g, '_')}.json`);
+  mkdirSync(path.dirname(old), { recursive: true });
+  writeFileSync(old, '{"token":"tok-old"}\n');
   const swapped = await verify(begun.xosetup.hostKey, begun.xosetup.keySig, signingInput('xosetup-key', { address: 'evil.lan', job: begun.xosetup.job, key: begun.xosetup.key, pin: xo.pin }));
   assert.equal(swapped, false, 'the signature covers the address');
 
@@ -245,15 +260,39 @@ test('a pool is onboarded end to end, and only the limited token is kept', { ski
   assert.ok(xo.calls.some((c) => c.method === 'plugin.load'));
   assert.deepEqual(xo.calls.find((c) => c.method === 'plugin.configure')?.params, { id: 'installer-updates', configuration: { autoUpdate: true } });
 
-  // KEPT: the token, 0600, and nothing of the admin sign-in anywhere.
-  const dir = path.join(stateDir, 'hypervisors');
-  const [file] = readdirSync(dir);
-  const kept = JSON.parse(readFileSync(path.join(dir, file), 'utf8'));
+  // HANDED BACK, sealed to the phone's key: the token and what it is for.
+  const kept = await collect(end, reply, xo.address);
   assert.equal(kept.token, 'tok-limited-123');
-  assert.equal(statSync(path.join(dir, file)).mode & 0o777, 0o600);
-  const everything = JSON.stringify({ kept, events, status: end });
+  assert.equal(kept.address, xo.address);
+  assert.equal(kept.pin, xo.pin);
+  assert.equal(kept.user, FLEET_USER);
+  // KEPT NOWHERE HERE: not on disk, and not in what the coordinator relays.
+  assert.equal(existsSync(old), false, 'the old copy is gone');
+  const everything = JSON.stringify({ events, status: end });
+  assert.ok(!everything.includes('tok-limited-123'), 'the token is only ever sealed');
   assert.ok(!everything.includes(PASSWORD), 'the admin password went nowhere');
-  assert.ok(!JSON.stringify(kept).includes('admin@admin.net'), 'the admin sign-in is not in what was kept');
+  assert.ok(!JSON.stringify(kept).includes('admin@admin.net'), 'the admin sign-in is not in what was handed back');
+  assert.ok(events.every((e) => !('handoff' in e)), 'progress events, which reach a Lock Screen, never carry it');
+  // ONLY UNDER ITS OWN BINDING: the sealed token is not a sealed sign-in.
+  const [epk, iv, ct] = end.handoff.split('.');
+  await assert.rejects(open({ ...reply, aad: xosetupAad(end.job, xo.address), sealed: { epk, iv, ct } }));
+  // And only to whoever began it.
+  assert.equal(setups.status({ job: end.job, actor: 'sam@example.com' }).ok, false);
+});
+
+test('a sign-in with nowhere to hand the token back is refused before anything is made', { skip }, async (t) => {
+  // An app older than the hand-off. Running it would make a user and a token
+  // in Xen Orchestra that no phone could ever be given.
+  const xo = await standIn(t);
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD } });
+  const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
+  assert.equal(ran.ok, false);
+  assert.match(ran.text, /no key to hand the token back to, so nothing was started/);
+  assert.equal(ran.xosetup?.state, 'failed');
+  assert.equal(xo.calls.length, 0, 'Xen Orchestra was never reached');
 });
 
 test('a server with a different certificate is never sent a byte of the sign-in', { skip }, async (t) => {
@@ -359,16 +398,16 @@ test('a certificate nothing vouches for stops setup unless the person accepted i
 
 test('a server that caps tokens lower still gets one, at its own default length', { skip }, async (t) => {
   const xo = await standIn(t, { maxTokenMs: 30 * 24 * 60 * 60_000 });
-  const { setups, stateDir } = await machine();
+  const { setups } = await machine();
   const actor = 'eli@example.com';
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
-  await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
+  const { sealed, reply } = await phone(begun, xo.address, xo.pin);
+  await setups.run({ job: begun.xosetup.job, sealed, actor });
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'done', end.text);
   const asks = xo.calls.filter((c) => c.method === 'token.create').map((c) => c.params.expiresIn);
   assert.deepEqual(asks, [180 * 24 * 60 * 60_000, undefined]);
-  const dir = path.join(stateDir, 'hypervisors');
-  const kept = JSON.parse(readFileSync(path.join(dir, readdirSync(dir)[0]), 'utf8'));
+  const kept = await collect(end, reply, xo.address);
   assert.equal(kept.tokenExpires, null, 'the length is the server’s, which it does not say');
   assert.deepEqual({ trusted: kept.certificate.trusted, accepted: kept.certificate.accepted }, { trusted: false, accepted: true });
 });
@@ -387,7 +426,7 @@ test('a Xen Orchestra on plain HTTP is set up once the person accepted it, and k
   assert.equal(found.cert, null);
   assert.match(found.text, /over plain HTTP/);
 
-  const { setups, stateDir } = await machine();
+  const { setups } = await machine();
   const actor = 'eli@example.com';
   // No pin and no acceptance is still a refusal.
   assert.equal((await setups.begin({ address: xo.address, pin: null, actor })).ok, false);
@@ -397,14 +436,13 @@ test('a Xen Orchestra on plain HTTP is set up once the person accepted it, and k
   const begun = await setups.begin({ address: xo.address, pin: null, plain: 'accepted', actor });
   assert.equal(begun.ok, true, begun.text);
   // Signed over an empty pin, which is what the phone checks it against.
-  const { signed, sealed } = await phone(begun, xo.address, '');
+  const { signed, sealed, reply } = await phone(begun, xo.address, '');
   assert.equal(signed, true);
   await setups.run({ job: begun.xosetup.job, sealed, actor });
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'done', end.text);
   assert.match(end.text, /over plain HTTP, as you accepted/);
-  const dir = path.join(stateDir, 'hypervisors');
-  const kept = JSON.parse(readFileSync(path.join(dir, readdirSync(dir)[0]), 'utf8'));
+  const kept = await collect(end, reply, xo.address);
   assert.equal(kept.plain, true);
   assert.equal(kept.pin, null);
   assert.equal(kept.token, 'tok-limited-123');

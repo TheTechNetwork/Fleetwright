@@ -15,12 +15,23 @@
 //   run     The admin sign-in, sealed on the phone to that key with the job
 //           and address as the binding, so a sealed sign-in for one job cannot
 //           be replayed into another. Opened here, used for the steps below,
-//           and wiped when they finish, whichever way they finish.
+//           and wiped when they finish, whichever way they finish. Inside the
+//           same seal, a key the phone made for the token to come back to.
 //
 // THE STEPS (XOSETUP_STEPS) make the limited `fleetwright` user, the resource
 // set that bounds it, and a token for it; turn on the installer's own update
 // plugin when the pool has it (github.com/00o-sh/XenOrchestraInstallerUpdater);
-// and keep only the token. The admin sign-in is never written anywhere.
+// and hand the token back. The admin sign-in is never written anywhere.
+//
+// THIS MACHINE KEEPS NOTHING. It is the one that could reach Xen Orchestra
+// when somebody wanted to add it, and that is all it is: the pool must not
+// stop being manageable because this machine was retired, rebuilt or offline.
+// The first version wrote the token to a file here, which made the machine
+// that happened to run the setup the only thing holding the pool's key. Now
+// the hand-off seals the token to the phone's key, under its own binding
+// (seal.js, xosetupHandoffAad), and `status` carries the sealed copy to that
+// person until the job is forgotten. The key came inside the sealed sign-in,
+// so a coordinator cannot put its own in its place and be handed the token.
 //
 // WHAT HAS RUN AGAINST A REAL XEN ORCHESTRA, and what has not. Every step has
 // run against Xen Orchestra built from sources, with the installer's update
@@ -39,11 +50,11 @@
 import tls from 'node:tls';
 import net from 'node:net';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import { XOSETUP_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../protocol/intents.js';
-import { newSealKey, open as openSealed, xosetupAad } from '../seal.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xosetupAad, xosetupHandoffAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 
@@ -193,6 +204,8 @@ function getRoot({ host, port, secure, timeoutMs }) {
  * @property {number} of
  * @property {string} phase
  * @property {string} text
+ * @property {string} [handoff]  once done: the limited user's token record,
+ *   sealed to the key the phone sent inside the sign-in, as epk.iv.ct
  */
 
 /**
@@ -203,7 +216,7 @@ export class XoSetups {
    * @param {{
    *   signer: { publicJwk: { kty?: string, crv?: string, x: string, y: string }, sign: (message: string) => Promise<string> }|null,
    *   emit: (event: Record<string, any>) => void,
-   *   stateDir: string,
+   *   stateDir?: string|null,
    *   connect?: typeof connectXo,
    *   connectPlain?: typeof connectXoPlain,
    *   fingerprint: (jwk: any) => Promise<string>,
@@ -299,6 +312,15 @@ export class XoSetups {
     }
     // ONE USE: the key goes as soon as it has opened the one thing it exists for.
     rec.key = null;
+    // WHERE THE TOKEN GOES BACK TO, checked before anything is made: an app
+    // too old to send one would otherwise have a user and a token made for
+    // it in Xen Orchestra that nobody could ever be handed.
+    if (!SEAL_KEY_RE.test(String(inside?.reply || ''))) {
+      rec.state = 'failed';
+      rec.text = 'The app gave no key to hand the token back to, so nothing was started. Update the app and try again.';
+      return { ok: false, text: rec.text, xosetup: status(rec) };
+    }
+    rec.reply = String(inside.reply);
     const xo = inside?.v === 1 && inside.xo && typeof inside.xo === 'object' ? inside.xo : null;
     const creds = xo && typeof xo.email === 'string' && typeof xo.password === 'string'
       ? { email: xo.email, password: xo.password }
@@ -554,7 +576,8 @@ export class XoSetups {
       },
       // hand-off
       async (/** @type {any} */ ctx) => {
-        this.#keep({
+        const record = {
+          v: 1,
           address: ctx.rec.address,
           pin: ctx.rec.pin,
           user: FLEET_USER,
@@ -571,27 +594,31 @@ export class XoSetups {
           limits: ctx.limits,
           pools: ctx.pools.map((/** @type {any} */ p) => ({ id: p.id, name: String(p.name_label || '').slice(0, 80) })),
           savedAt: new Date(this.now()).toISOString(),
-        });
-        ctx.summary = `${ctx.rec.address} is in the fleet: ${plural(ctx.pools.length, 'pool')}, worked through a limited user. The admin sign-in was not kept.`;
+        };
+        const box = await seal({ to: ctx.rec.reply, aad: xosetupHandoffAad(ctx.rec.job, ctx.rec.address), payload: record });
+        ctx.rec.handoff = `${box.epk}.${box.iv}.${box.ct}`;
+        this.#forgetOldCopy(ctx.rec.address);
+        ctx.summary = `${ctx.rec.address} is in the fleet: ${plural(ctx.pools.length, 'pool')}, worked through a limited user. Its token was sealed to your phone and this machine kept no copy; the admin sign-in was not kept either.`;
       },
     ];
   }
 
   /**
-   * The one thing kept: the limited user's token, beside the address and pin
-   * it is for. 0600 in a 0700 directory, written whole then renamed, so a
-   * reader never sees half a file.
+   * The file the first version kept the token in, removed when the same pool
+   * is set up again, so a machine that once held a pool's key stops holding
+   * it the next time anybody runs the setup there. Nothing else reads it.
    *
-   * @param {Record<string, any>} record
+   * @param {string} address
    */
-  #keep(record) {
-    const dir = path.join(this.stateDir, 'hypervisors');
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const name = record.address.replace(/[^A-Za-z0-9.-]+/g, '_');
-    const file = path.join(dir, `${name}.json`);
-    const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tmp, file);
+  #forgetOldCopy(address) {
+    if (!this.stateDir) return;
+    const name = address.replace(/[^A-Za-z0-9.-]+/g, '_');
+    try {
+      unlinkSync(path.join(this.stateDir, 'hypervisors', `${name}.json`));
+      this.log.info(`xosetup: removed the token the first version kept here for ${address}`);
+    } catch {
+      /* never kept here */
+    }
   }
 }
 
@@ -628,7 +655,12 @@ export function limitsFrom(hosts, srs, pools) {
 
 /** @param {any} rec @returns {SetupStatus} */
 function status(rec) {
-  return { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text };
+  const s = { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text };
+  // THE TOKEN, SEALED, to the person who began the job (`#mine` already
+  // checked) and only once it is done. Asked for as often as the phone likes
+  // until the job is forgotten, because a phone that was closed at the end
+  // collects it whenever it next looks.
+  return rec.state === 'done' && rec.handoff ? { ...s, handoff: rec.handoff } : s;
 }
 
 function unknown() {
