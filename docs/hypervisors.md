@@ -1,7 +1,10 @@
 # A machine from your own hypervisor
 
-**Status: design. Nothing here is built.** XCP-ng first, through Xen
-Orchestra; Proxmox second, behind the same interface.
+**Status: onboarding a pool that already has Xen Orchestra is built, through
+a machine already in the fleet** ("What ships first", below). Templates,
+labs, the dedicated machine and deploying Xen Orchestra are designed and not
+built. XCP-ng first, through Xen Orchestra; Proxmox second, behind the same
+interface.
 
 A session today runs in a container on a box, or on a GitHub Actions runner
 that is gone in six hours. Neither is a real machine on a network you own:
@@ -245,8 +248,64 @@ Machines → Add a hypervisor: the pool's address, and one of
 The credential is **sealed on the phone to the host that will run the
 script**, the same way a GitHub code is sealed to the box that exchanges it,
 so the coordinator relays ciphertext it cannot read. The host that runs it is
-one already in the fleet that can reach the pool's address; the app offers
-the ones whose health says they can, and refuses with what to do if none can.
+one already in the fleet that can reach the pool's address; the app asks them
+all (`xoprobe`) and offers the ones that reached it, and says what to check
+if none did.
+
+**The app can close.** The machine runs the setup; progress reaches the phone
+as a Live Activity on the Lock Screen and in the Dynamic Island on iOS, and as
+one ongoing notification on Android.
+
+### What ships first
+
+For a pool that already has Xen Orchestra, which is the common case and the
+owner's: `xoprobe`, then `xosetup` on the machine the person picks.
+
+1. **The probe** reports whether the machine reached the address over TLS,
+   whether it looks like Xen Orchestra, and the certificate's SHA-256. The
+   person accepts that certificate; it is the **pin** every later connection
+   is held to. Without TLS the setup refuses, because it sends a password.
+2. **`begin`**: the machine makes a key for this job and signs it with its
+   enrolment key, over the job, the address, the pin and the key. The phone
+   checks the signature against the fingerprint it approved for the vault,
+   or asks the person to compare it with `fleetwright-sidecar identity`.
+3. **`run`**: the admin sign-in, sealed to that key under
+   `fleetwright-xosetup/v1:<job>:<address>`. The machine then runs, reporting
+   each as it goes (`XOSETUP_STEPS`):
+   connect (pinned) → sign in (must be an admin) → inventory (stops, changing
+   nothing, if Xen Orchestra lacks a method setup uses) → the `fleetwright`
+   user (a password nobody sees) → its resource set (half of the pool's
+   vCPUs, memory and default storage) → a token, minted signed in as that
+   user → updates → hand-off, keeping only the token.
+4. **Updates** come from [XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater)'s
+   own `installer-updates` plugin when the pool has it: loaded, kept loaded,
+   and set to update itself daily unless a person had switched that off, in
+   which case it is left off and the summary says so. Xen Orchestra stays
+   current without the fleet holding an admin credential to do it.
+
+The method names are Xen Orchestra's JSON-RPC as its source and its Terraform
+provider use them, tested against a stand-in; the inventory step is the guard
+for a live server that names one differently.
+
+**Where the token lives for now** is the machine that ran the setup, 0600 in
+its sidecar's state directory. The dedicated machine on the pool, and the
+token moving to it, are the next round with the templates.
+
+### Next: deploying Xen Orchestra, and the phone's own network
+
+- **A pool without Xen Orchestra** is deployed with the same installer's
+  `xo-remote-deploy.sh`, which already does the hard part over SSH to the
+  pool master: a checksum-verified cloud image cached on the storage
+  repository, a VM made with cloud-init that runs `xo-install.sh`, and
+  progress read back through xenstore so nothing needs to reach the VM. The
+  same image cache and cloud-init path builds the templates and the dedicated
+  machine. It needs the pool master's root password, sealed the same way.
+- **No machine in the fleet can reach the pool**: the phone's own network
+  carries the first minute. The phone relays bytes between a machine and
+  Xen Orchestra over TLS the machine terminates, so neither the phone nor the
+  coordinator reads the sign-in; that first minute makes the dedicated machine
+  on the pool, which joins the fleet and runs everything after it with the
+  app closed.
 
 ### Without any host yet
 

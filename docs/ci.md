@@ -1066,6 +1066,23 @@ a profile's bytes cannot be read back out of App Store Connect), so after it run
 download the recreated profile from the portal and refresh
 `APPLE_PROVISIONING_PROFILE` by hand, exactly as in *Making the profile* above.
 
+### The Live Activity extension's profile, made by CI
+
+The app embeds a widget extension, `network.thetech.fleetwright.Activity`, for
+the hypervisor setup's Live Activity (`docs/hypervisors.md`), and an extension
+is signed with a profile of its own. Nobody makes that one by hand: the
+TestFlight job runs `tools/ensure-ios-extension-profile.mjs` with the same App
+Store Connect key, after importing the distribution certificate. It registers
+the bundle id if it is missing, reuses an active App Store profile for it that
+names the imported certificate and does not expire within thirty days, and
+otherwise replaces only a profile of its own name. It never mints a
+certificate. The archive is then given both profiles by name.
+
+**It needs a key that may manage identifiers and profiles** — Admin, or App
+Manager with access to Certificates, Identifiers & Profiles. A Developer-role
+key gets a 403 here, before the archive, and the step says so; that is the one
+thing about it only the account owner can change.
+
 ### If the account is already full
 
 Revoke the surplus in the portal under Certificates. The ones CI created are

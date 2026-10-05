@@ -369,3 +369,25 @@ It covered Android directly and, until the direct sender existed, iOS through
 the APNs bridge — one integration for both platforms, and crucially it needed
 **no Apple signing key**, which meant Android push could be tested before an
 iOS build existed at all.
+
+## Live Activities
+
+Adding a hypervisor (`docs/hypervisors.md`) shows its progress on the Lock
+Screen and in the Dynamic Island while the app is closed. The phone starts the
+activity, posts its push token to `POST /api/xosetup/activity`, and the
+coordinator sends each step to that token with APNs push type `liveactivity`
+on the topic `<bundle id>.push-type.liveactivity` (`apnsPusher().activity` in
+`src/fleet/push.js`). The last step sends `event: end` with a dismissal fifteen
+minutes later, and the ordinary notification beside it says how it ended.
+
+**Its content is not sealed, and that decides what is in it.** A notification
+is opened by the app's extension before it is shown; a Live Activity's
+`content-state` is handed straight to the widget, and ActivityKit runs nothing
+of ours first. So the payload is `{ step, of, phase, state }`, where `phase` is
+a key from `XOSETUP_STEPS` and the app has the words. The address and the
+machine's name are attributes the phone set when it started the activity, and
+never cross a push.
+
+Android has no Live Activity; the same steps arrive as data pushes, sealed as
+usual, and the app keeps one ongoing notification up to date with them.
+
