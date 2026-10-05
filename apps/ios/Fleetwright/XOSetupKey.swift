@@ -16,7 +16,12 @@ import Foundation
 ///
 /// WHAT IS SIGNED, exactly: the UTF-8 of "agent-fleet/v1/xosetup-key\n"
 /// followed by canonical JSON of {address, job, key, pin} with the keys sorted
-/// and no whitespace. The JSON is written out by hand rather than serialised,
+/// and no whitespace. Over plain HTTP there is no certificate and so no pin,
+/// and the machine signs over the empty string: `"pin":""`, the two quotes
+/// and nothing between, which is what this writes for "" as it is. The pin
+/// is still in the signed bytes, so a key signed for a plain setup cannot be
+/// passed off as one for a pinned setup at the same address, or the other
+/// way round. The JSON is written out by hand rather than serialised,
 /// as PhoneVault.fingerprint writes its JWK, because every value is checked to
 /// be plain ASCII with nothing to escape first, and a serialiser's choices
 /// about slashes and spaces are exactly the bytes this must not get wrong.
@@ -26,9 +31,10 @@ enum XOSetupKey {
 
     /// True only when `keySig` is `hostKey`'s signature over this job's key.
     /// Anything malformed is false, never a throw: the only thing the caller
-    /// does with the answer is refuse.
+    /// does with the answer is refuse. `pin` is the certificate's SHA-256, or
+    /// "" for a setup the person accepted over plain HTTP; nothing in between.
     static func isSigned(key: String, keySig: String, hostKey: Fleet.Host.PublicKey, address: String, job: String, pin: String) -> Bool {
-        guard isJob(job), isPin(pin), Seal.isKey(key), isAddress(address),
+        guard isJob(job), pin.isEmpty || isPin(pin), Seal.isKey(key), isAddress(address),
               hostKey.kty == "EC", hostKey.crv == "P-256",
               let x = Seal.unb64(hostKey.x), x.count == 32,
               let y = Seal.unb64(hostKey.y), y.count == 32,
