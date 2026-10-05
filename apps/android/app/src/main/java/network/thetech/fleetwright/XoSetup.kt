@@ -158,10 +158,12 @@ internal object XoSetup {
     /**
      * The admin sign-in, sealed to the job's key, as the one string `run`
      * carries. Built here and returned rather than kept: the caller clears the
-     * password the moment this returns.
+     * password the moment this returns. [reply] goes inside the same seal: the
+     * key the machine seals the token back to (XoHandoff), where the
+     * coordinator cannot swap it for one of its own.
      */
-    fun sealSignIn(key: String, job: String, address: String, email: String, password: String): String {
-        val payload = JSONObject().put("v", 1).put("xo", JSONObject().put("email", email).put("password", password))
+    fun sealSignIn(key: String, job: String, address: String, email: String, password: String, reply: String): String {
+        val payload = JSONObject().put("v", 1).put("xo", JSONObject().put("email", email).put("password", password)).put("reply", reply)
         val sealed = Seal.seal(key, aad(job, address), payload)
         return "${sealed.getString("epk")}.${sealed.getString("iv")}.${sealed.getString("ct")}"
     }

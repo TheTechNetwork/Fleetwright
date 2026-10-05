@@ -174,7 +174,8 @@ class XoSetupTest {
     @Test
     fun theSignInIsSealedToTheJobsKeyUnderItsAad() {
         val to = Seal.newKey()
-        val sealed = XoSetup.sealSignIn(to.publicKey, job, address, "admin@example.com", "hunter2")
+        val reply = Seal.newKey()
+        val sealed = XoSetup.sealSignIn(to.publicKey, job, address, "admin@example.com", "hunter2", reply.publicKey)
         val parts = sealed.split(".")
         assertEquals(3, parts.size)
         val opened = Seal.open(
@@ -185,6 +186,8 @@ class XoSetupTest {
         assertEquals(1, opened.getInt("v"))
         assertEquals("admin@example.com", opened.getJSONObject("xo").getString("email"))
         assertEquals("hunter2", opened.getJSONObject("xo").getString("password"))
+        // The key the token comes back to travels inside the seal.
+        assertEquals(reply.publicKey, opened.getString("reply"))
         // Another job's additional data does not open it.
         assertTrue(
             runCatching {

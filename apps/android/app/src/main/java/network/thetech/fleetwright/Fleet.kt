@@ -696,6 +696,12 @@ class Fleet(
         val keySig: String?,
         val hostKey: JSONObject?,
         val fingerprint: String?,
+        /**
+         * Once done: the limited user's token, sealed by the machine to the
+         * key this phone sent inside the sign-in, as epk.iv.ct. The machine
+         * keeps no copy (XoHandoff).
+         */
+        val handoff: String? = null,
     )
 
     /**
@@ -1909,6 +1915,7 @@ class Fleet(
                             keySig = s.optString("keySig").takeIf { it.isNotBlank() && it != "null" },
                             hostKey = s.optJSONObject("hostKey"),
                             fingerprint = s.optString("fingerprint").takeIf { it.isNotBlank() && it != "null" },
+                            handoff = s.optString("handoff").takeIf { it.split(".").size == 3 },
                         )
                     },
                 )
@@ -2390,6 +2397,24 @@ class Settings(context: Context) {
     var claudeSetupPutOff: Boolean
         get() = prefs.getBoolean("claudeSetupPutOff", false)
         set(value) = prefs.edit().putBoolean("claudeSetupPutOff", value).apply()
+
+    /**
+     * A secret kept by name, encrypted under the same Keystore key as the
+     * fleet credential: a hypervisor's token, and the key it comes back to
+     * (XoHandoff). An empty value removes it.
+     */
+    fun putSecret(name: String, value: String) {
+        prefs.edit().apply {
+            if (value.isEmpty()) remove("secret.$name.enc") else putString("secret.$name.enc", encrypt(value))
+        }.apply()
+    }
+
+    fun secret(name: String): String? = prefs.getString("secret.$name.enc", null)?.let { decrypt(it) }
+
+    /** The hypervisor setups still owed a token, as XoHandoff writes them. Not a secret. */
+    var xoPending: String
+        get() = prefs.getString("xoPending", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoPending") else putString("xoPending", value) }.apply()
 
     /** Who this device is signed in as. Not a secret — it is displayed. */
     var signedInAs: String

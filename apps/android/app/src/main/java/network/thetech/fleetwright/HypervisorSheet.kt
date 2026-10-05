@@ -123,6 +123,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     var job by rememberSaveable { mutableStateOf(resumeJob) }
     var runningOn by rememberSaveable { mutableStateOf("") }
     var progress by remember { mutableStateOf<Fleet.Setup?>(null) }
+    // Whether the token the machine handed back is kept on this phone, once
+    // the job is done (XoHandoff). Said only when this phone knows.
+    var handedBack by remember { mutableStateOf<XoHandoff.Outcome?>(null) }
     var cancelling by remember { mutableStateOf(false) }
     // The fleet took a cancel: the button is not offered again, and what the
     // host said about it is shown instead.
@@ -172,10 +175,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
      */
     suspend fun run(p: Pending) {
         val key = p.setup.key ?: return
-        val sealed = XoSetup.sealSignIn(key, p.setup.job, p.where, p.email, password)
+        val reply = XoHandoff.newKey(settings, p.setup.job, p.where)
+        val sealed = XoSetup.sealSignIn(key, p.setup.job, p.where, p.email, password, reply.publicKey)
         password = ""
         val r = fleet.xosetup("run", job = p.setup.job, sealed = sealed)
         if (!r.ok) {
+            XoHandoff.forget(settings, p.setup.job)
             refusal = r.text.ifBlank { "${p.hostId} did not take the sign-in." }
             return
         }
@@ -247,6 +252,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
     fun startAgain() {
         job = null
         progress = null
+        handedBack = null
         refusal = ""
         password = ""
         cancelAccepted = false
@@ -272,6 +278,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
             val r = fleet.xosetup("status", job = id)
             if (r.ok && r.xosetup != null) {
                 progress = r.xosetup
+                XoHandoff.collect(settings, id, r.xosetup)?.let { handedBack = it }
+                if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
                 refusal = ""
                 unanswered = 0
                 r.hostId?.let { runningOn = it }
@@ -301,6 +309,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, onDi
                     if (!pollStopped) Hint("Asking where it has got to…")
                 } else {
                     SetupProgress(setup)
+                }
+                when (val outcome = handedBack) {
+                    XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted, and no machine in the fleet keeps a copy.")
+                    is XoHandoff.Outcome.Failed -> Hint(outcome.why, color = Design.Palette.bad.now)
+                    null -> {}
                 }
                 when {
                     pollStopped -> {
