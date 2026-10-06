@@ -25,6 +25,8 @@ import Foundation
 /// key kept past the screen would be kept for nothing.
 enum XOPolicy {
     static let gib: Int64 = 1024 * 1024 * 1024
+    /// The edge router's raw disk, OPNSENSE_IMAGE.rawSize in edge-router.js.
+    static let edgeDiskBytes: Int64 = 3 * 1024 * 1024 * 1024
     /// The smallest limits the machine takes: a GiB of memory, ten of disk
     /// (MIN_MEMORY and MIN_DISK in xo-setup.js). One vCPU is the floor of
     /// `cpuRange`.
@@ -82,16 +84,27 @@ enum XOPolicy {
             let egress: Bool
         }
 
-        /// The edge router on a pool, and whether it is running.
+        /// The edge router on a pool, whether it is running, and the
+        /// storage its disk is on, by name (nil from a machine that predates
+        /// saying it, or when it cannot be told).
         struct Edge: Decodable, Equatable {
             let pool: String?
             let running: Bool
+            var sr: String? = nil
         }
 
         /// The edge router on the pool this network is in, if it has one.
         func edge(on network: String?) -> Edge? {
             guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return nil }
             return edges?.first { $0.pool == pool }
+        }
+
+        /// Storage the router's disk can go on: in the way out's pool, with
+        /// room for its 3 GiB raw disk. Any the pool listed, not only the
+        /// fleet's, because the router is not one of the fleet's VMs.
+        func edgeDisks(for network: String?) -> [Storage] {
+            guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return [] }
+            return srs.filter { $0.pool == pool && $0.free > XOPolicy.edgeDiskBytes }
         }
 
         struct Capacity: Decodable, Equatable {
@@ -167,6 +180,24 @@ enum XOPolicy {
         /// (`egress-any` in begin's `can`), not only one the fleet may use.
         /// An older one refuses those, so they are not offered to it.
         var anyWayOut = false
+        /// Where the router's disk goes, when the person picked; nil is the
+        /// default `edgeDisk(in:)` says. Asked for: "which disk did it put it
+        /// on?" The first version picked one and never said which.
+        var edgeSr: String?
+        /// The machine reads `edgeSr` (`edge-disk` in begin's `can`). An
+        /// older one ignores it, so it is neither offered nor sent.
+        var edgeDiskChoice = false
+
+        /// The storage the router's disk will go on: the person's pick while
+        /// it is still one that fits on the way out's pool, otherwise the
+        /// fleet's chosen storage there with the most room, otherwise the
+        /// pool's. Nil when nothing in that pool has room.
+        func edgeDisk(in inv: Inventory) -> String? {
+            let fits = inv.edgeDisks(for: egress)
+            if let edgeSr, fits.contains(where: { $0.id == edgeSr }) { return edgeSr }
+            let fleet = fits.filter { srs.contains($0.id) }
+            return (fleet.isEmpty ? fits : fleet).max { $0.free < $1.free }?.id
+        }
         var cpus = 1
         var memoryGiB = XOPolicy.minMemoryGiB
         var diskGiB = XOPolicy.minDiskGiB
@@ -224,6 +255,9 @@ enum XOPolicy {
             }
             if !anyWayOut, let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
             if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
+            if edgeDiskChoice, edge, inv.edge(on: egress) == nil, edgeDisk(in: inv) == nil {
+                return "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
+            }
             if !inv.cpuRange.contains(cpus) { return "vCPUs are between 1 and \(inv.cpuRange.upperBound), what the pool has." }
             if !inv.memoryRange.contains(memoryGiB) {
                 return "Memory is between 1 GiB and \(inv.memoryRange.upperBound) GiB, what the pool has."
@@ -242,7 +276,7 @@ enum XOPolicy {
                 "disk": Int64(diskGiB) * XOPolicy.gib,
             ]
             let way: Any = egress.map { $0 as Any } ?? NSNull()
-            return [
+            var out: [String: Any] = [
                 "v": 1,
                 "srs": inv.srs.map(\.id).filter { srs.contains($0) },
                 "networks": inv.networks.map(\.id).filter { networks.contains($0) },
@@ -250,6 +284,9 @@ enum XOPolicy {
                 "edge": edge,
                 "limits": limits,
             ]
+            // Only to a machine that reads it, and only with the router asked for.
+            if edgeDiskChoice, edge { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
+            return out
         }
     }
 
