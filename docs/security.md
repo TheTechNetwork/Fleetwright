@@ -350,8 +350,25 @@ machine of the fleet, through the coordinator.
   started the session asked for with it, and has their Claude login: the
   same reach as reading the machine's own disk, which the hypervisor always
   had. The box checks the image it clones is one it saw tagged
-  `fleetwright-image` on that person's pool, so the coordinator can name
-  which of the person's images, and nothing else.
+  `fleetwright-image` on that person's pool, and a network one it saw on
+  that pool, so the coordinator can name which of the person's images and
+  which of the networks the policy allows, and nothing else.
+- **Working a machine** (`vmctl`, `docs/hypervisors.md`, "Working a
+  machine"). The box works only a machine it tagged as made for the person
+  asking, under that person's pool token: restart, a size within the
+  resource set, an end no later than 350 minutes from when it was made, or
+  an end now. A compromised coordinator can do to a person's machines what
+  that person could, and nothing to anybody else's. The console is Xen
+  Orchestra's own page, signed in to there; the phone never holds the pool's
+  token for it.
+- **SSH keys** are public keys, kept as the named secret
+  `SSH_AUTHORIZED_KEYS` and checked on the phone and on the box to be public
+  keys and nothing else. They go on the machine's cloud-init drive beside
+  the ticket, and give their holder the `fleetwright` account with sudo on
+  machines made for that person. A machine on the uplink is reachable only
+  from behind the edge router; one started on a network of the person's own
+  is beside their own machines, which is why that is a choice and never the
+  default.
 
 **A device's own GitHub sign-in, and the dispatch it makes.** Starting a
 runner no longer needs a permanent box (`runner-central.md`, "Without a

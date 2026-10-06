@@ -245,6 +245,10 @@ says on health which journals a box has so the buttons are only ever live.)
 | **a certificate that does not check out** | shown in full under Sign in (problems, issued to and by, dates, names, SHA-256); Begin waits for a toggle | the same, in a card; Set up waits for a checkbox | — |
 | **setup progress with the app closed** | a Live Activity on the Lock Screen and in the Dynamic Island (`/api/xosetup/activity`) | one ongoing notification with a progress bar, ProgressStyle on Android 16 | — |
 | **what the fleet may use on a pool** (`xosetup` `policy`) | Machines → Hypervisors → the pool → Change what it may use: the admin sign-in, then storage, networks, the way out and limits from the pool's own inventory | the same, under Machines | — |
+| **a machine on your hypervisor** (`vmMachines`, `vmctl`) | Machines → On your hypervisor → its page, and from a `vm-` host's page: state, image, pool, network, size, end; the SSH command; Open its console in Xen Orchestra; Restart, Give it longer, Restart with this size, End it now, each asking first | the same page, full screen | — |
+| **SSH keys for those machines** | You → Credentials → SSH keys: public keys only, kept as `SSH_AUTHORIZED_KEYS` | the same, under You → Credentials | — |
+| **which operating systems the image is made of** (`xosetup` `policy` `images`) | a switch per image the machine can build, under Way out | the same | — |
+| **the network a new machine goes on** (`provision` `network`) | New session → Where → Network, when the pool has one besides Behind the edge router | the same chips | — |
 | **the pool's token, once set up** | handed back sealed to a key sent inside the sign-in, kept in the Keychain (this device only); collected at launch if the app was closed; the setup screen says it is kept only once it is | the same, kept encrypted under the Keystore key; collected at sign-in and launch | — |
 
 **A gap this table caught, in the round that added the profile row.** Android's

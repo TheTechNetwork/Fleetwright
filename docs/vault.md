@@ -18,6 +18,7 @@ person removes the box.
 | Cloudflare | the sign-in's access and refresh tokens | the access token; renewed in the minter |
 | Claude | a `claude setup-token`, the same one runners use | the token |
 | named secrets | `secret:NAME`, any value up to 8 KiB | the value, by name |
+| SSH keys | `secret:SSH_AUTHORIZED_KEYS`, public keys one a line, from You › Credentials › SSH keys | the value, as any named secret is; a machine made on the person's pool takes them on its `fleetwright` account ([hypervisors.md](./hypervisors.md), "Working a machine") |
 | hypervisors | `hypervisor:ADDRESS`, the record a pool's setup handed the phone | the record, held in the sidecar's memory and never given to the hub or a session ([hypervisors.md](./hypervisors.md), "Machines from your pool") |
 
 A box never holds a refresh token. Renewing happens in one place, inside the
