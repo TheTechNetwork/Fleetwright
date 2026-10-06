@@ -198,6 +198,31 @@ out, a machine that can build it offers *Build the edge router on it*
 3. When it is already there, moves its WAN if the way out changed and starts
    it if it was stopped. Nothing is rebuilt.
 
+**Its disk goes where the person says.** With the switch on, the phone asks
+*Its disk goes on*: any storage in the way out's pool with room for the
+3 GiB raw disk, the fleet's own first. It need not be storage the fleet may
+use, for the same reason as the WAN: the router is not one of the fleet's
+VMs. A machine that predates the question (no `edge-disk` in `can`) is not
+asked, and puts it on the fleet's storage there with the most room. Every
+line while it builds names the storage, the summary does, and a router that
+is there says on the phone which storage its disk is on.
+
+**The bar is the build's own.** The build is three parts: the download,
+writing the disk, and making and starting the VM. The machine reports how
+far through the whole build it is in thousandths, weighted by the bytes the
+first two move (the last is the final fiftieth). On the screen, on the Lock
+Screen and in Android's notification the bar is that, with the part and the
+percentage under it; before, it was the step, which sat at four fifths for
+the minutes the build takes. Events go when the part changes or the bar
+moves a twentieth, so a Lock Screen is not pushed to for every 16 MB.
+
+**Cancel stops it where it is.** The download, the unpack and the upload are
+torn down, and what was made is removed: the VM with its disk, the disk on
+its own, or a partial disk an upload left (attached to nothing, named for
+the router, on the storage it was going to; nothing else of that name is
+touched). The policy itself was already applied by then, and the job says
+so rather than that nothing changed.
+
 A failure part-way deletes what it made. A pool with more than one host keeps
 labs on the edge's host, because a network with no interface is host-local
 without Xen Orchestra's SDN controller. A pool that already has a suitable
