@@ -71,7 +71,8 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
  * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
  * @typedef {{ id: string, name: string, pool: string|null }} Network
- * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null }} Machine
+ * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
+ * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null, net: Traffic|null }} Machine
  * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string, holder?: boolean }} Seen
  */
 
@@ -107,6 +108,45 @@ function ipOf(vm) {
   const keys = Object.keys(addresses).sort();
   const v4 = keys.find((k) => /ipv4/.test(k)) ?? keys[0];
   return v4 ? String(addresses[v4]).slice(0, 45) : null;
+}
+
+/**
+ * How many of the pool's one-minute samples of a machine's traffic are kept:
+ * the last half hour. Within the coordinator's bound (MAX_NET_POINTS).
+ */
+export const NET_POINTS = 30;
+
+/**
+ * WHAT A MACHINE SENT AND RECEIVED, from Xen Orchestra's `vm.stats`: the
+ * hypervisor's own counters for its network interfaces, which nothing inside
+ * the machine can change. Bytes a second, every interface added together,
+ * oldest first, the last NET_POINTS of them. A sample no interface counted is
+ * null, never 0; anything that is not a reading is null for the whole.
+ *
+ * @param {any} stats what `vm.stats` answered
+ * @returns {Traffic|null}
+ */
+export function trafficFrom(stats) {
+  const interval = Number(stats?.interval);
+  const end = Number(stats?.endTimestamp);
+  const vifs = stats?.stats?.vifs;
+  if (!(interval > 0) || !(end > 0) || !vifs || typeof vifs !== 'object') return null;
+  // Keyed by interface ("0", "1") on the Xen Orchestra of today, an array of
+  // them on older ones: either way, a list of series.
+  /** @param {any} by */
+  const total = (by) => {
+    const lines = by && typeof by === 'object' ? Object.values(by).filter(Array.isArray) : [];
+    if (!lines.length) return null;
+    const length = Math.max(...lines.map((l) => l.length));
+    return Array.from({ length }, (_, i) => {
+      const counted = lines.map((l) => l[i]).filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+      return counted.length ? Math.round(counted.reduce((a, b) => a + b, 0)) : null;
+    }).slice(-NET_POINTS);
+  };
+  const rx = total(vifs.rx);
+  const tx = total(vifs.tx);
+  if (!rx || !tx || rx.length !== tx.length) return null;
+  return { interval, end: end * 1000, rx, tx };
 }
 
 /**
@@ -269,8 +309,16 @@ export class XoPools {
               memory: Number.isFinite(Number(v?.memory?.size)) ? Number(v.memory.size) : null,
               image: from ? imageNames.get(from) ?? null : null,
               network: tagValue(v, ON_PREFIX),
+              net: /** @type {Traffic|null} */ (null),
             };
           });
+        // AND WHAT EACH RUNNING ONE DID ON THE NETWORK, one at a time. A pool
+        // that will not say is cannot tell for that machine, not a reason to
+        // report nothing for the rest.
+        for (const m of machines) {
+          if (m.state !== 'Running') continue;
+          m.net = trafficFrom(await rpc.call('vm.stats', { id: m.vm, granularity: 'minutes' }).catch(() => null));
+        }
         this.seen.set(k, { address: record.address, owner, reachable: true, pools: pools.map((p) => ({ id: String(p.id), name: names.get(p.id) || '' })), images, networks, machines });
       } catch (e) {
         this.seen.set(k, { address: record.address, owner, reachable: false, pools: [], images: [], networks: [], machines: [], problem: String(/** @type {Error} */ (e).message).slice(0, 200) });

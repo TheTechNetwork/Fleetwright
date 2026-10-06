@@ -15,7 +15,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { XoPools, poolRecord, machineCloudConfig } from '../src/fleet/host/xo-pools.js';
+import { XoPools, poolRecord, machineCloudConfig, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
 import { VM_IMAGE, buildCloudConfig, ensureImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
@@ -32,9 +32,9 @@ const record = (extra = {}) => JSON.stringify({ v: 1, address: 'xo.lan', pin: PI
 
 /**
  * A Xen Orchestra stand-in: objects by type, every call recorded.
- * @param {{ objects?: any[], fail?: Record<string, string> }} [opts]
+ * @param {{ objects?: any[], fail?: Record<string, string>, stats?: Record<string, any> }} [opts]
  */
-function xo({ objects = [], fail = {} } = {}) {
+function xo({ objects = [], fail = {}, stats = {} } = {}) {
   /** @type {Array<{ method: string, params: any }>} */
   const calls = [];
   const rpc = {
@@ -51,6 +51,7 @@ function xo({ objects = [], fail = {} } = {}) {
         return Object.fromEntries(objects.filter((o) => Object.entries(f).every(([k, v]) => o[k] === v)).map((o) => [o.id, o]));
       }
       if (method === 'vm.create') return 'new-vm-id';
+      if (method === 'vm.stats') return stats[params.id] ?? true;
       return true;
     },
     close() {
@@ -202,12 +203,38 @@ test('a look reports the machines made there, what each is and where, for the ph
     tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + 600}`, `fleetwright-made:${s - 600}`, `fleetwright-from:${IMAGE}`, `fleetwright-for:${ELI}`, 'fleetwright-on:LAN'],
     mainIpAddress: '192.168.1.40', addresses: { '0/ipv6/0': 'fe80::1', '0/ipv4/0': '10.0.0.9', '1/ipv4/0': '192.168.1.40' }, CPUs: { number: 2 }, memory: { size: 4 * 1024 ** 3 },
   };
-  const pools = holder(xo({ objects: [pool, image, uplink, vm] }), () => now);
+  const paused = { ...vm, id: 'vm-stopped', name_label: 'vm-222222222222', power_state: 'Paused' };
+  const traffic = { endTimestamp: s, interval: 60, stats: { vifs: { rx: { 0: [100, 200] }, tx: { 0: [5, 6] } } } };
+  const stand = xo({ objects: [pool, image, uplink, vm, paused], stats: { 'vm-uuid': traffic, 'vm-stopped': traffic } });
+  const pools = holder(stand, () => now);
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
   await pools.refresh();
   assert.deepEqual(pools.report()[0].machines, [
-    { name: 'vm-111111111111', vm: 'vm-uuid', state: 'Running', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN' },
+    { name: 'vm-111111111111', vm: 'vm-uuid', state: 'Running', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', net: { interval: 60, end: s * 1000, rx: [100, 200], tx: [5, 6] } },
+    { name: 'vm-222222222222', vm: 'vm-stopped', state: 'Paused', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', net: null },
   ]);
+  assert.deepEqual(stand.calls.filter((c) => c.method === 'vm.stats').map((c) => c.params), [{ id: 'vm-uuid', granularity: 'minutes' }], 'only a running machine is asked what it did');
+});
+
+test('a machine’s traffic is every interface added up, the last half hour of it, with a sample nothing counted kept as a gap', () => {
+  const at = 1_799_999_940;
+  const long = Array.from({ length: NET_POINTS + 5 }, (_, i) => i);
+  assert.deepEqual(trafficFrom({ endTimestamp: at, interval: 60, stats: { vifs: { rx: { 0: [10, null, 1.6], 1: [5, null, null] }, tx: { 0: [1, null, 2], 1: [1, null, 'x'] } } } }),
+    { interval: 60, end: at * 1000, rx: [15, null, 2], tx: [2, null, 2] });
+  assert.deepEqual(trafficFrom({ endTimestamp: at, interval: 60, stats: { vifs: { rx: [long], tx: [long] } } })?.rx, long.slice(-NET_POINTS), 'an older Xen Orchestra lists its interfaces, and only the newest points are kept');
+  for (const bad of [true, null, {}, { endTimestamp: at, interval: 60, stats: {} }, { endTimestamp: at, interval: 0, stats: { vifs: { rx: [[1]], tx: [[1]] } } }, { interval: 60, stats: { vifs: { rx: [[1]], tx: [[1]] } } }, { endTimestamp: at, interval: 60, stats: { vifs: { rx: {}, tx: {} } } }, { endTimestamp: at, interval: 60, stats: { vifs: { rx: [[1, 2]], tx: [[1]] } } }])
+    assert.equal(trafficFrom(bad), null, JSON.stringify(bad));
+});
+
+test('a pool that will not say what one machine did is cannot tell for that one, and the rest are still reported', async () => {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const vm = { type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: 'Running', tags: [VM_IMAGE.sessionTag] };
+  const pools = holder(xo({ objects: [pool, image, vm], fail: { 'vm.stats': 'not allowed' } }), () => now);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  const [seen] = pools.report();
+  assert.equal(seen.reachable, true);
+  assert.deepEqual(seen.machines.map((m) => [m.name, m.net]), [['vm-111111111111', null]]);
 });
 
 /**
