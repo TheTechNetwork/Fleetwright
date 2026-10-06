@@ -216,10 +216,10 @@ export class ConfigPatch extends Transform {
  * SHA-256 every time it is used, so a file damaged on disk is downloaded
  * again rather than built from.
  *
- * @param {{ dir: string, fetchImpl?: typeof fetch, onProgress?: (done: number, total: number) => void }} opts
+ * @param {{ dir: string, fetchImpl?: typeof fetch, onProgress?: (done: number, total: number) => void, signal?: AbortSignal }} opts
  * @returns {Promise<string>} the path of the checked file
  */
-export async function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {} }) {
+export async function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}, signal }) {
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, path.basename(new URL(OPNSENSE_IMAGE.url).pathname));
   if (existsSync(file) && statSync(file).size === OPNSENSE_IMAGE.compressedSize && (await sha256Of(file)) === OPNSENSE_IMAGE.sha256) {
@@ -227,7 +227,7 @@ export async function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}
   }
   const part = `${file}.part`;
   rmSync(part, { force: true });
-  const res = await fetchImpl(OPNSENSE_IMAGE.url);
+  const res = await fetchImpl(OPNSENSE_IMAGE.url, signal ? { signal } : undefined);
   if (!res.ok || !res.body) throw new Error(`OPNsense's mirror answered ${res.status} for the image`);
   const hash = createHash('sha256');
   let got = 0;
@@ -243,7 +243,12 @@ export async function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}
       cb(null, chunk);
     },
   });
-  await pipeline(/** @type {any} */ (res.body), count, createWriteStream(part));
+  try {
+    await pipeline(/** @type {any} */ (res.body), count, createWriteStream(part), signal ? { signal } : {});
+  } catch (e) {
+    rmSync(part, { force: true });
+    throw e;
+  }
   const seen = hash.digest('hex');
   if (seen !== OPNSENSE_IMAGE.sha256) {
     rmSync(part, { force: true });
@@ -265,10 +270,11 @@ async function sha256Of(file) {
  * own; a machine without the tool is told which package to install.
  *
  * @param {string} file
- * @param {{ spawnImpl?: typeof spawn }} [opts]
+ * @param {{ spawnImpl?: typeof spawn, signal?: AbortSignal }} [opts]
  */
-export function unpack(file, { spawnImpl = spawn } = {}) {
+export function unpack(file, { spawnImpl = spawn, signal } = {}) {
   const child = spawnImpl('bzip2', ['-dc', file], { stdio: ['ignore', 'pipe', 'pipe'] });
+  signal?.addEventListener('abort', () => child.kill(), { once: true });
   let said = '';
   child.stderr?.on('data', (d) => {
     said = (said + d).slice(-400);
@@ -292,10 +298,10 @@ export function unpack(file, { spawnImpl = spawn } = {}) {
  * pin as the API (or plain HTTP when the person accepted that). Answers the
  * new VDI's id.
  *
- * @param {{ address: string, pin: string|null, plain: boolean, sendTo: string, body: import('node:stream').Readable, size: number, onProgress?: (done: number, total: number) => void, connectTls?: typeof connectPinnedTls }} opts
+ * @param {{ address: string, pin: string|null, plain: boolean, sendTo: string, body: import('node:stream').Readable, size: number, onProgress?: (done: number, total: number) => void, connectTls?: typeof connectPinnedTls, signal?: AbortSignal }} opts
  * @returns {Promise<string>}
  */
-export async function uploadDisk({ address, pin, plain, sendTo, body, size, onProgress = () => {}, connectTls = connectPinnedTls }) {
+export async function uploadDisk({ address, pin, plain, sendTo, body, size, onProgress = () => {}, connectTls = connectPinnedTls, signal }) {
   const { host, port } = splitAddress(address, plain ? 80 : 443);
   const socket = plain ? await connectPlain(host, port) : await connectTls({ host, port, pin: /** @type {string} */ (pin) });
   const boundary = `fleetwright${Date.now().toString(36)}`;
@@ -316,6 +322,18 @@ export async function uploadDisk({ address, pin, plain, sendTo, body, size, onPr
       createConnection: () => /** @type {any} */ (socket),
     });
     req.on('error', reject);
+    // CANCEL STOPS THE BYTES, not only the steps after them: the request is
+    // torn down and the body with it, and ensureEdge clears up after.
+    signal?.addEventListener(
+      'abort',
+      () => {
+        const e = new Error('cancelled');
+        body.destroy();
+        req.destroy(e);
+        reject(e);
+      },
+      { once: true },
+    );
     req.on('response', (res) => {
       let text = '';
       res.setEncoding('utf8');
@@ -392,9 +410,62 @@ export async function ensureUplink({ admin, pool, networks, setId, inSet }) {
 }
 
 /**
+ * Where the router's disk goes: the storage the person chose for it, or,
+ * when they chose none (a phone that predates the choice), the storage the
+ * fleet may use in this pool with the most room. Either must be in the pool
+ * and have room for the whole raw disk.
+ *
+ * @param {{ pool: string, srs: any[], fleetSrs: string[], sr?: string|null }} opts
+ */
+export function edgeStorage({ pool, srs, fleetSrs, sr = null }) {
+  const room = (/** @type {any} */ s) => (Number(s?.size) || 0) - (Number(s?.physical_usage) || 0);
+  const fits = (/** @type {any} */ s) => s?.$pool === pool && room(s) > OPNSENSE_IMAGE.rawSize;
+  if (sr) {
+    const chosen = srs.find((s) => s?.id === sr);
+    if (!chosen || chosen.$pool !== pool) throw new Error('the storage chosen for the edge router is not in the way out’s pool. Nothing was built');
+    if (!fits(chosen)) throw new Error(`${srName(chosen)} has no 3 GiB free for the edge router. Nothing was built`);
+    return chosen;
+  }
+  const best = srs.filter((s) => fleetSrs.includes(s?.id) && fits(s)).sort((a, b) => room(b) - room(a))[0];
+  if (!best) throw new Error('none of the storage the fleet may use in this pool has 3 GiB free for the edge router. Choose where its disk goes. Nothing was built');
+  return best;
+}
+
+/** A storage repository as a person knows it. @param {any} sr */
+export const srName = (sr) => String(sr?.name_label || sr?.id || 'the storage').slice(0, 80);
+
+/**
+ * How far a build has got, for the bar: which of its stages is running, and
+ * how far through the whole build that is, in thousandths. Weighted by the
+ * bytes each stage moves (the download, then the disk), because those are
+ * nearly all of the time; making and starting the VM is the last fiftieth.
+ *
+ * @typedef {{ stage: number, stages: number, fill: number }} BuildPart
+ */
+export const BUILD_STAGES = 3;
+const MAKING = 980;
+/** @param {number} downloaded @param {number} written */
+export function buildFill(downloaded, written) {
+  const bytes = OPNSENSE_IMAGE.compressedSize + OPNSENSE_IMAGE.rawSize;
+  return Math.min(MAKING, Math.floor((MAKING * (Math.min(downloaded, OPNSENSE_IMAGE.compressedSize) + Math.min(written, OPNSENSE_IMAGE.rawSize))) / bytes));
+}
+
+/**
  * The edge router on this pool: left as it is when it is there (its WAN moved
  * to the way out if that changed, and started if it was stopped), built when
  * it is not. Answers the sentence the job finishes with.
+ *
+ * WHAT THE PERSON IS TOLD, AS IT GOES: which stage of three, how far through
+ * the whole build in thousandths (`say`'s second argument), and in the words,
+ * the megabytes and the storage the disk is going on. Asked for: "this needs
+ * proper progress, also which disk did it put it on?" The first version held
+ * the bar at the step and never named the storage.
+ *
+ * CANCEL STOPS IT. `signal` aborts the download, the unpack and the upload
+ * where they are, and what was made is removed: the VM with its disk, the
+ * disk on its own, or a partial disk Xen Orchestra kept from an upload that
+ * was cut off (unattached, named for the router, on the storage it was going
+ * to). The first version's Cancel waited for the build to finish.
  *
  * @param {{
  *   admin: any,
@@ -402,15 +473,18 @@ export async function ensureUplink({ admin, pool, networks, setId, inSet }) {
  *   egress: { id: string, name: string },
  *   uplink: string,
  *   srs: any[],
+ *   fleetSrs: string[],
+ *   sr?: string|null,
  *   address: string, pin: string|null, plain: boolean,
  *   imageDir: string,
- *   say: (text: string) => void,
+ *   say: (text: string, part?: BuildPart) => void,
+ *   signal?: AbortSignal,
  *   getImage?: typeof fetchImage,
  *   unpackImpl?: typeof unpack,
  *   upload?: typeof uploadDisk,
  * }} opts
  */
-export async function ensureEdge({ admin, pool, egress, uplink, srs, address, pin, plain, imageDir, say, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
+export async function ensureEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
   const vms = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {});
   const edge = /** @type {any} */ (vms.find((v) => /** @type {any} */ (v)?.$pool === pool && /** @type {any} */ (v)?.tags?.includes?.(EDGE.tag)));
   if (edge) {
@@ -428,35 +502,40 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, address, pi
     return [`The edge router was already there, on ${egress.name}.`, ...said].join(' ');
   }
 
-  // A disk of 3 GiB, on the chosen storage in this pool with the most room.
-  const sr = srs
-    .filter((s) => s?.$pool === pool && (Number(s.size) || 0) - (Number(s.physical_usage) || 0) > OPNSENSE_IMAGE.rawSize)
-    .sort((a, b) => (b.size - b.physical_usage) - (a.size - a.physical_usage))[0];
-  if (!sr) throw new Error('none of the storage the fleet may use in this pool has 3 GiB free for the edge router. Nothing was built');
+  const sr = edgeStorage({ pool, srs, fleetSrs, sr: chosenSr });
+  const on = srName(sr);
 
   const templates = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {});
   const template = /** @type {any} */ (templates.find((t) => /** @type {any} */ (t)?.$pool === pool && /** @type {any} */ (t)?.name_label === EDGE.template));
   if (!template) throw new Error(`this pool has no "${EDGE.template}" template to make the edge router from. Nothing was built`);
 
-  say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}.`);
+  const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: BUILD_STAGES, fill });
+  say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}.`, stage(1, 0));
+  let downloaded = 0;
   const file = await getImage({
     dir: imageDir,
-    onProgress: (d, t) => say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}: ${mb(d)} of ${mb(t)} MB.`),
+    signal,
+    onProgress: (d, t) => {
+      downloaded = d;
+      say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}: ${mb(d)} of ${mb(t)} MB.`, stage(1, buildFill(d, 0)));
+    },
   });
+  signal?.throwIfAborted();
+  if (!downloaded) say(`OPNsense ${OPNSENSE_IMAGE.release} was already downloaded and checked.`, stage(1, buildFill(OPNSENSE_IMAGE.compressedSize, 0)));
 
   /** @type {string|null} */
   let vdi = null;
   /** @type {string|null} */
   let vm = null;
   try {
-    say('Writing the edge router’s disk.');
+    say(`Writing the edge router’s disk to ${on}.`, stage(2, buildFill(OPNSENSE_IMAGE.compressedSize, 0)));
     const { $sendTo } = await admin.call('disk.import', {
       sr: sr.id,
       type: 'iso',
       name: EDGE.vm,
       description: `OPNsense ${OPNSENSE_IMAGE.release}, configured by Fleetwright as the edge router`,
     });
-    const body = unpackImpl(file).pipe(new ConfigPatch({ offset: OPNSENSE_IMAGE.config.offset, replacement: edgeConfig(), total: OPNSENSE_IMAGE.rawSize }));
+    const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ offset: OPNSENSE_IMAGE.config.offset, replacement: edgeConfig(), total: OPNSENSE_IMAGE.rawSize }));
     vdi = await upload({
       address,
       pin,
@@ -464,10 +543,12 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, address, pi
       sendTo: $sendTo,
       body,
       size: OPNSENSE_IMAGE.rawSize,
-      onProgress: (d, t) => say(`Writing the edge router’s disk: ${mb(d)} of ${mb(t)} MB.`),
+      signal,
+      onProgress: (d, t) => say(`Writing the edge router’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, buildFill(OPNSENSE_IMAGE.compressedSize, d))),
     });
+    signal?.throwIfAborted();
 
-    say('Making the edge router.');
+    say(`Making the edge router, its disk on ${on}, and starting it.`, stage(3, MAKING));
     vm = await admin.call('vm.create', {
       template: template.id,
       name_label: EDGE.vm,
@@ -482,16 +563,36 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, address, pi
     await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
     const vifs = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: vm } })) || {});
     for (const v of vifs) await admin.call('vif.set', { id: /** @type {any} */ (v).id, txChecksumming: false });
+    signal?.throwIfAborted();
     await admin.call('vm.start', { id: vm });
   } catch (e) {
     // Nothing half-made is left for the next run to trip over.
     if (vm) await admin.call('vm.delete', { id: vm, deleteDisks: true }).catch(() => {});
     else if (vdi) await admin.call('vdi.delete', { id: vdi }).catch(() => {});
+    else await removePartialDisk(admin, sr.id);
     throw e;
   }
   const { address: lan, prefix } = EDGE.lan;
   return (
-    `The edge router is up: OPNsense ${OPNSENSE_IMAGE.release}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}. ` +
+    `The edge router is up: OPNsense ${OPNSENSE_IMAGE.release}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}, its disk on ${on}. ` +
     'Labs on the uplink reach the internet and nothing private. It has no login; its rules are fixed.'
   );
+}
+
+/**
+ * A disk an upload left behind when it was cut off: named for the router, on
+ * the storage it was going to, and attached to nothing. Only those, so the
+ * disk of a router that is there is never touched.
+ *
+ * @param {any} admin @param {string} sr
+ */
+async function removePartialDisk(admin, sr) {
+  try {
+    const vdis = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', name_label: EDGE.vm, $SR: sr } })) || {});
+    for (const d of /** @type {any[]} */ (vdis)) {
+      if (!Array.isArray(d?.$VBDs) || d.$VBDs.length === 0) await admin.call('vdi.delete', { id: d.id }).catch(() => {});
+    }
+  } catch {
+    /* clearing up is best effort; the error that brought us here is the one said */
+  }
 }

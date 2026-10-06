@@ -163,19 +163,26 @@ const TEMPLATE = { id: 'tpl-other', $pool: 'p1', name_label: 'Other install medi
 function edgeArgs(/** @type {any} */ admin, /** @type {any} */ extra = {}) {
   /** @type {string[]} */
   const said = [];
+  /** @type {any[]} */
+  const parts = [];
   return {
     said,
+    parts,
     args: {
       admin,
       pool: 'p1',
       egress: { id: 'net-wan', name: 'eth0.10' },
       uplink: 'net-up',
       srs: SRS,
+      fleetSrs: SRS.map((s) => s.id),
       address: 'xo.lan',
       pin: 'a'.repeat(64),
       plain: false,
       imageDir: '/nowhere',
-      say: (/** @type {string} */ t) => said.push(t),
+      say: (/** @type {string} */ t, /** @type {any} */ part) => {
+        said.push(t);
+        if (part) parts.push(part);
+      },
       getImage: async () => '/nowhere/image.bz2',
       unpackImpl: () => new PassThrough(),
       upload: async (/** @type {any} */ u) => {
@@ -216,6 +223,67 @@ test('the edge router is made in the order that boots: disk in, WAN first, check
   assert.deepEqual(params['vm.start'], { id: 'vm-1' });
   assert.match(done, /The edge router is up: OPNsense 26\.7, its WAN on eth0\.10 and its LAN on fleetwright-uplink at 10\.254\.0\.1\/24/);
   assert.ok(said.some((t) => t.startsWith('Downloading OPNsense')), 'the person is not told about the download');
+});
+
+test('the disk goes where the person chose, and the build says where and how far, stage by stage', async () => {
+  // ASKED FOR: "this needs proper progress, also which disk did it put it
+  // on?" The bar was the step, and the storage was never named.
+  const LOCAL = { id: 'sr-local', name_label: 'Local storage', $pool: 'p1', size: 100 * GiB, physical_usage: 10 * GiB };
+  const admin = xo(
+    { VM: [], 'VM-template': [TEMPLATE], VIF: [] },
+    { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-1' },
+  );
+  const { args, said, parts } = edgeArgs(admin, {
+    srs: [...SRS, LOCAL],
+    fleetSrs: ['sr-big'],
+    sr: 'sr-local',
+    getImage: async (/** @type {any} */ g) => {
+      g.onProgress(OPNSENSE_IMAGE.compressedSize / 2, OPNSENSE_IMAGE.compressedSize);
+      return '/nowhere/image.bz2';
+    },
+    upload: async (/** @type {any} */ u) => {
+      u.onProgress(OPNSENSE_IMAGE.rawSize / 2, OPNSENSE_IMAGE.rawSize);
+      return 'vdi-1';
+    },
+  });
+  const done = await ensureEdge(args);
+  assert.equal(Object.fromEntries(admin.calls)['disk.import'].sr, 'sr-local', 'not on the storage chosen, though the fleet may not use it');
+  assert.ok(said.includes('Writing the edge router’s disk to Local storage: 1536 of 3072 MB.'), said.join('\n'));
+  assert.match(done, /its disk on Local storage\./);
+  // Three stages, in order, and a bar that only moves forward and ends full
+  // but for starting the VM.
+  assert.deepEqual([...new Set(parts.map((p) => p.stage))], [1, 2, 3]);
+  assert.ok(parts.every((p) => p.stages === 3));
+  for (let i = 1; i < parts.length; i++) assert.ok(parts[i].fill >= parts[i - 1].fill, `the bar went back at ${i}`);
+  assert.ok(parts.at(-1).fill >= 980 && parts.at(-1).fill <= 1000);
+  assert.ok(parts.some((p) => p.fill > 0 && p.fill < 500), 'the download moved the bar');
+});
+
+test('cancel stops the build where it is and removes the partial disk, and only that one', async () => {
+  const controller = new AbortController();
+  const admin = xo(
+    {
+      VM: [],
+      'VM-template': [TEMPLATE],
+      VIF: [],
+      VDI: [
+        { id: 'vdi-partial', name_label: EDGE.vm, $SR: 'sr-big', $VBDs: [] },
+        { id: 'vdi-in-use', name_label: EDGE.vm, $SR: 'sr-big', $VBDs: ['vbd-1'] },
+      ],
+    },
+    { 'disk.import': () => ({ $sendTo: '/import/abc' }) },
+  );
+  const { args } = edgeArgs(admin, {
+    signal: controller.signal,
+    upload: async (/** @type {any} */ u) => {
+      assert.equal(u.signal, controller.signal, 'the upload is not told to stop');
+      controller.abort();
+      throw new Error('cancelled');
+    },
+  });
+  await assert.rejects(ensureEdge(args), /cancelled/);
+  assert.deepEqual(admin.calls.filter(([m]) => m === 'vdi.delete').map(([, p]) => p), [{ id: 'vdi-partial' }]);
+  assert.ok(!admin.calls.some(([m]) => m === 'vm.create'));
 });
 
 test('an edge router already there is not built again: its WAN follows the way out, and it is started', async () => {
@@ -262,7 +330,10 @@ test('a build that fails leaves nothing half-made behind', async () => {
 test('nothing is downloaded or made without room for the disk or a template to make it from', async () => {
   const full = xo({ VM: [], 'VM-template': [TEMPLATE] });
   const tight = SRS.map((s) => ({ ...s, physical_usage: s.size }));
-  await assert.rejects(ensureEdge(edgeArgs(full, { srs: tight }).args), /has 3 GiB free/);
+  await assert.rejects(ensureEdge(edgeArgs(full, { srs: tight }).args), /has 3 GiB free[\s\S]*Choose where its disk goes/);
+  // Storage the person chose is held to the way out's pool and to room.
+  await assert.rejects(ensureEdge(edgeArgs(full, { sr: 'sr-other-pool' }).args), /not in the way out’s pool/);
+  await assert.rejects(ensureEdge(edgeArgs(full, { sr: 'sr-small' }).args), /sr-small has no 3 GiB free/);
   const bare = xo({ VM: [], 'VM-template': [] });
   await assert.rejects(ensureEdge(edgeArgs(bare).args), /no "Other install media" template/);
   for (const admin of [full, bare]) {
@@ -295,5 +366,12 @@ test('the edge router is asked for only with a way out for its WAN', () => {
   // Anything but `true` is no: an older phone sends nothing and builds nothing.
   const old = checkPolicy({ ...base, egress: 'n2' }, choices);
   assert.equal(old.ok && old.policy.edge, false);
+  // Where its disk goes: storage the pool listed, or nothing said.
+  const placed = checkPolicy({ ...base, egress: 'n2', edge: true, edgeSr: 'sr1' }, choices);
+  assert.equal(placed.ok && placed.policy.edgeSr, 'sr1');
+  assert.equal(asked.ok && asked.policy.edgeSr, null);
+  const nowhere = checkPolicy({ ...base, egress: 'n2', edge: true, edgeSr: 'sr-x' }, choices);
+  assert.equal(nowhere.ok, false);
+  assert.match(/** @type {any} */ (nowhere).text, /storage this pool listed/);
   assert.ok(!existsSync('/nowhere'));
 });
