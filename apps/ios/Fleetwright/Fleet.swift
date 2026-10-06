@@ -535,7 +535,8 @@ struct Fleet {
     /// runner when it joins. It travels BESIDE the params, as `host` does: the
     /// box that dispatches the run never sees it.
     func provision(platform: String, minutes: Int? = nil, host: String? = nil,
-                   start: [String: String]? = nil, template: String? = nil, network: String? = nil) async throws -> Reply {
+                   start: [String: String]? = nil, template: String? = nil, network: String? = nil,
+                   group: String? = nil) async throws -> Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
         // Otherwise a box with your GitHub connection does, as it always did.
@@ -554,6 +555,8 @@ struct Fleet {
         if let template { params["template"] = template }
         // A NETWORK OF YOUR POOL instead of behind the edge router (protocol 9).
         if let network { params["network"] = network }
+        // AND A GROUP NETWORK beside it, to reach the others in that group (protocol 10).
+        if let group { params["group"] = group }
         return try await intent("provision", params: params, host: host, numeric: ["minutes"],
                                 extra: start.map { ["start": $0] } ?? [:])
     }
@@ -1368,6 +1371,9 @@ struct Fleet {
         /// The pool's networks a machine from it can go on besides the
         /// uplink; nil from a coordinator older than the choice.
         var networks: [Network]? = nil
+        /// The pool's group networks, for machines that work together; nil
+        /// from a coordinator older than them.
+        var groups: [Network]? = nil
         var id: String { template }
 
         struct Network: Codable, Hashable, Identifiable {
@@ -1411,6 +1417,10 @@ struct Fleet {
         /// What it sent and received, as the hypervisor counted it; nil is
         /// cannot tell, and a stopped machine has none.
         let net: Traffic?
+        /// The group network it is also on, by name, and its address there;
+        /// nil when it is in none, or from an older coordinator.
+        var group: String? = nil
+        var groupIp: String? = nil
         /// The Xen Orchestra it is on.
         let address: String
         /// Kept ready, and not yet taken by a session; nil from an older coordinator.

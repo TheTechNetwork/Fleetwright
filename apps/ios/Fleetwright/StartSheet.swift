@@ -51,6 +51,9 @@ struct StartRequest {
     /// And the network of your pool it goes on, or nil for behind the edge
     /// router, where it reaches the internet and nothing private.
     var network: String? = nil
+    /// And a group network beside it, to reach the other machines started
+    /// in the same group; nil for none.
+    var group: String? = nil
 }
 
 /// The machines the New session sheet can ask for, by the operating system a
@@ -116,6 +119,8 @@ struct StartSheet: View {
     /// The network a machine from your hypervisor goes on; empty is behind
     /// the edge router.
     @State private var vmNetwork = ""
+    /// The group network it joins as well; empty is none.
+    @State private var vmGroup = ""
 
     /// The operating system when a new machine is chosen, else nil: "vm" for
     /// one from your hypervisor.
@@ -320,6 +325,7 @@ struct StartSheet: View {
                         .onChange(of: host) { _, now in
                             if now.hasPrefix(newMachineTag) || now.hasPrefix(vmImageTag) { profile = ""; secret = "" }
                             vmNetwork = ""
+                            vmGroup = ""
                         }
                         // WHERE IT GOES ON YOUR POOL, offered only when the
                         // pool has a network besides the uplink. Behind the
@@ -329,6 +335,16 @@ struct StartSheet: View {
                             Picker("Network", selection: $vmNetwork) {
                                 Text("Behind the edge router").tag("")
                                 ForEach(networks) { network in Text(network.name).tag(network.id) }
+                            }
+                        }
+                        // WITH THE OTHERS IN A GROUP, offered only when the
+                        // pool has a group network. Asked for: "the 3 VMs need
+                        // to reach each other". Start each of them here with
+                        // the same group, and they do.
+                        if let groups = chosenImage?.groups, !groups.isEmpty {
+                            Picker("Work with others on", selection: $vmGroup) {
+                                Text("No group").tag("")
+                                ForEach(groups) { group in Text(group.name).tag(group.id) }
                             }
                         }
                         if chosenPlatform != nil {
@@ -525,7 +541,8 @@ struct StartSheet: View {
             minutes: platform == nil ? nil : machineMinutes,
             template: chosenImage?.template,
             imageLabel: chosenImage?.label,
-            network: chosenImage == nil || vmNetwork.isEmpty ? nil : vmNetwork
+            network: chosenImage == nil || vmNetwork.isEmpty ? nil : vmNetwork,
+            group: chosenImage == nil || vmGroup.isEmpty ? nil : vmGroup
         ))
         dismiss()
     }

@@ -112,7 +112,8 @@ test('iOS: the way out names the router it is for, and offers to build it only w
   // Any of the pool's networks as the way out, from a machine that takes it,
   // and only the fleet's from one that does not (checkPolicy).
   assert.match(SCREEN, /anyWayOut: begun\.can\.contains\("egress-any"\)/);
-  assert.match(SCREEN, /ForEach\(inv\.networks\.filter \{ anyWayOut \|\| choice\.networks\.contains\(\$0\.id\) \}\)/);
+  // Less the pool's group networks, which are no way out (vm-groups-in-apps).
+  assert.match(SCREEN, /ForEach\(inv\.choosable\.filter \{ anyWayOut \|\| choice\.networks\.contains\(\$0\.id\) \}\)/);
   assert.ok(SCREEN.includes('Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router.'));
   // What goes to the machine, which checkPolicy reads, and its one rule.
   const POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');

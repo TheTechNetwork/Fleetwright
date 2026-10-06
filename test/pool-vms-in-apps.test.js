@@ -41,7 +41,7 @@ test('iOS: a machine from your hypervisor is asked of the fleet, never of GitHub
   assert.match(IOS_FLEET, /if platform != "vm", phone\.signedIn \{/);
   assert.match(IOS_FLEET, /if let template \{ params\["template"\] = template \}/);
   assert.match(IOS_FLEET, /struct Reply: Codable \{ let vmImages: \[VMImage\]\? \}/);
-  assert.match(IOS_VIEW, /\.provision\(platform: platform, minutes: request\.minutes, start: start, template: request\.template,\s*network: request\.network\)/);
+  assert.match(IOS_VIEW, /\.provision\(platform: platform, minutes: request\.minutes, start: start, template: request\.template,\s*network: request\.network, group: request\.group\)/);
 });
 
 test('iOS: New session offers a machine from each of your images, drawn from the snapshot and nothing else', () => {
