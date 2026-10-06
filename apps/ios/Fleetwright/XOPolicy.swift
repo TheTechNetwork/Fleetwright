@@ -29,6 +29,9 @@ enum XOPolicy {
     static let edgeDiskBytes: Int64 = 3 * 1024 * 1024 * 1024
     /// The machine image's disk, VM_IMAGE.diskSize in vm-image.js.
     static let imageDiskBytes: Int64 = 20 * 1024 * 1024 * 1024
+    /// The image an older machine builds, and what an image that predates
+    /// saying which it is was made of.
+    static let debianKey = "debian-13"
     /// The smallest limits the machine takes: a GiB of memory, ten of disk
     /// (MIN_MEMORY and MIN_DISK in xo-setup.js). One vCPU is the floor of
     /// `cpuRange`.
@@ -50,6 +53,10 @@ enum XOPolicy {
         /// Each pool's machine image, from a machine that can build one; nil
         /// from one older than that, which is "cannot tell", never "none".
         var images: [Image]? = nil
+        /// The operating systems a machine image can be made of, from this
+        /// machine's catalogue (vm-image.js, IMAGES); nil from one older than
+        /// the choice, which builds Debian alone.
+        var imageKinds: [ImageKind]? = nil
 
         struct Pool: Decodable, Equatable, Identifiable {
             let id: String
@@ -102,6 +109,22 @@ enum XOPolicy {
         struct Image: Decodable, Equatable {
             let pool: String?
             let name: String
+            /// Which of the catalogue's images it is; nil from a machine that
+            /// predates saying, which only ever built Debian.
+            var key: String? = nil
+        }
+
+        /// One operating system an image can be made of.
+        struct ImageKind: Decodable, Equatable, Identifiable {
+            let key: String
+            let os: String
+            var id: String { key }
+        }
+
+        /// The images already on the pool this network is in, by key.
+        func imageKeys(on network: String?) -> Set<String> {
+            guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return [] }
+            return Set((images ?? []).filter { $0.pool == pool }.map { $0.key ?? XOPolicy.debianKey })
         }
 
         /// The machine image on the pool this network is in, if it has one.
@@ -211,11 +234,27 @@ enum XOPolicy {
         /// The machine builds one (`image` in begin's `can`). An older one
         /// cannot, so it is neither offered nor sent.
         var imageChoice = false
+        /// Which images to make, by key, for a machine that builds any of its
+        /// catalogue (`images` in begin's `can`). Asked for: "os selection
+        /// not just Debian".
+        var images: Set<String> = []
+        /// The machine takes `images`. An older one is sent `image` alone,
+        /// and offered Debian alone.
+        var imagesChoice = false
+
+        /// An image is asked for, in whichever form this machine reads.
+        var wantsImage: Bool { imagesChoice ? !images.isEmpty : image }
+
+        /// The images asked for that the way out's pool does not have yet.
+        func imagesToBuild(in inv: Inventory) -> Set<String> {
+            guard imageChoice, wantsImage else { return [] }
+            return (imagesChoice ? images : [XOPolicy.debianKey]).subtracting(inv.imageKeys(on: egress))
+        }
 
         /// The router or the image is to be built now, on storage still to
         /// be picked.
         func building(in inv: Inventory) -> (edge: Bool, image: Bool) {
-            (edge && inv.edge(on: egress) == nil, imageChoice && image && inv.image(on: egress) == nil)
+            (edge && inv.edge(on: egress) == nil, !imagesToBuild(in: inv).isEmpty)
         }
 
         /// How much room the disks being built need on the storage picked:
@@ -291,10 +330,10 @@ enum XOPolicy {
             }
             if !anyWayOut, let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
             if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
-            if imageChoice, image, egress == nil {
+            if imageChoice, wantsImage, egress == nil {
                 return "The machine image is built behind the edge router: choose the way out it leaves through."
             }
-            if imageChoice, image, !edge, inv.edge(on: egress) == nil {
+            if imageChoice, wantsImage, !edge, inv.edge(on: egress) == nil {
                 return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
             }
             let build = building(in: inv)
@@ -330,9 +369,15 @@ enum XOPolicy {
                 "limits": limits,
             ]
             // Only to a machine that builds an image, and only when asked.
-            if imageChoice, image { out["image"] = true }
+            if imageChoice, wantsImage {
+                if imagesChoice {
+                    out["images"] = (inv.imageKinds ?? []).map(\.key).filter { images.contains($0) }
+                } else {
+                    out["image"] = true
+                }
+            }
             // Only to a machine that reads it, and only with something to build.
-            if edgeDiskChoice, edge || (imageChoice && image) { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
+            if edgeDiskChoice, edge || (imageChoice && wantsImage) { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
             return out
         }
     }

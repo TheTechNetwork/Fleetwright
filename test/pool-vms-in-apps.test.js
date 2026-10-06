@@ -41,7 +41,7 @@ test('iOS: a machine from your hypervisor is asked of the fleet, never of GitHub
   assert.match(IOS_FLEET, /if platform != "vm", phone\.signedIn \{/);
   assert.match(IOS_FLEET, /if let template \{ params\["template"\] = template \}/);
   assert.match(IOS_FLEET, /struct Reply: Codable \{ let vmImages: \[VMImage\]\? \}/);
-  assert.match(IOS_VIEW, /\.provision\(platform: platform, minutes: request\.minutes, start: start, template: request\.template\)/);
+  assert.match(IOS_VIEW, /\.provision\(platform: platform, minutes: request\.minutes, start: start, template: request\.template,\s*network: request\.network\)/);
 });
 
 test('iOS: New session offers a machine from each of your images, drawn from the snapshot and nothing else', () => {
@@ -63,7 +63,7 @@ test('iOS: the machine image is offered only by a machine that builds one, where
   assert.match(IOS_SCREEN, /canImage: begun\.can\.contains\("image"\)/);
   assert.match(IOS_SCREEN, /if policyJob\?\.canImage == true, choice\.egress != nil \{/);
   assert.match(IOS_SCREEN, /if on, there == nil \{ choice\.edge = true \}/);
-  assert.match(IOS_POLICY, /if imageChoice, image \{ out\["image"\] = true \}/);
+  assert.match(IOS_POLICY, /if imageChoice, wantsImage \{\s*if imagesChoice \{[\s\S]*?\} else \{\s*out\["image"\] = true\s*\}/);
   assert.match(IOS_POLICY, /static let imageDiskBytes: Int64 = 20 \* 1024 \* 1024 \* 1024/);
 });
 

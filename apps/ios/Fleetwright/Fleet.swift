@@ -535,7 +535,7 @@ struct Fleet {
     /// runner when it joins. It travels BESIDE the params, as `host` does: the
     /// box that dispatches the run never sees it.
     func provision(platform: String, minutes: Int? = nil, host: String? = nil,
-                   start: [String: String]? = nil, template: String? = nil) async throws -> Reply {
+                   start: [String: String]? = nil, template: String? = nil, network: String? = nil) async throws -> Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
         // Otherwise a box with your GitHub connection does, as it always did.
@@ -552,6 +552,8 @@ struct Fleet {
         var params: [String: String] = ["platform": platform]
         if let minutes { params["minutes"] = String(minutes) }
         if let template { params["template"] = template }
+        // A NETWORK OF YOUR POOL instead of behind the edge router (protocol 9).
+        if let network { params["network"] = network }
         return try await intent("provision", params: params, host: host, numeric: ["minutes"],
                                 extra: start.map { ["start": $0] } ?? [:])
     }
@@ -1363,7 +1365,15 @@ struct Fleet {
         let poolName: String?
         let address: String
         let hosts: [String]
+        /// The pool's networks a machine from it can go on besides the
+        /// uplink; nil from a coordinator older than the choice.
+        var networks: [Network]? = nil
         var id: String { template }
+
+        struct Network: Codable, Hashable, Identifiable {
+            let id: String
+            let name: String
+        }
 
         /// "New machine from Fleetwright Debian 13 on rack", for a picker.
         var label: String { "New machine from \(name)" + (poolName.map { " on \($0)" } ?? "") }
@@ -1377,6 +1387,66 @@ struct Fleet {
         let data = try await get("/api/hosts")
         struct Reply: Codable { let vmImages: [VMImage]? }
         return try JSONDecoder().decode(Reply.self, from: data).vmImages ?? []
+    }
+
+    /// A machine made on one of your pools, as the box holding the pool last
+    /// saw it (docs/hypervisors.md, "Working a machine"). Every field but the
+    /// name may be nil, and nil is CANNOT TELL: Xen Orchestra had not said,
+    /// or the box had not looked since.
+    struct VMMachine: Codable, Hashable, Identifiable {
+        let name: String
+        /// Its id in Xen Orchestra, for the console link.
+        let vm: String?
+        /// Xen Orchestra's power state: Running, Halted, Suspended, Paused.
+        let state: String?
+        let ip: String?
+        /// When it is removed, ms since the epoch.
+        let until: Double?
+        let madeAt: Double?
+        let cpus: Int?
+        /// Bytes.
+        let memory: Double?
+        let image: String?
+        let network: String?
+        /// The Xen Orchestra it is on.
+        let address: String
+        var id: String { name }
+
+        /// The console in Xen Orchestra's own web UI, which signs you in
+        /// there: this phone never holds the pool's token.
+        var consoleURL: URL? {
+            guard let vm, !address.isEmpty else { return nil }
+            return URL(string: "https://\(address)/#/vms/\(vm)/console")
+        }
+
+        /// `ssh fleetwright@192.168.1.40`, or nil without an address.
+        var sshCommand: String? { ip.map { "ssh fleetwright@\($0)" } }
+
+        /// The longest a machine lives, from when it was made (xo-pools.js).
+        static let maxMinutes = 350
+    }
+
+    /// The machines on your pools: the `vmMachines` field of /api/hosts.
+    /// Empty is an answer (none); an older coordinator omits the field.
+    func vmMachines() async throws -> [VMMachine] {
+        let data = try await get("/api/hosts")
+        struct Reply: Codable { let vmMachines: [VMMachine]? }
+        return try JSONDecoder().decode(Reply.self, from: data).vmMachines ?? []
+    }
+
+    /// Work a machine on your pool: `reboot`, `extend` by `minutes`,
+    /// `resize` to `cpus` and `memory` GiB, or `stop`, which removes it.
+    ///
+    /// NEVER HELD on this phone: a restart or an end replayed hours later,
+    /// when the fleet answers again, is not what anybody asked for. The key
+    /// is what keeps it out of the outbox.
+    func vmctl(_ name: String, action: String, minutes: Int? = nil, cpus: Int? = nil, memoryGiB: Int? = nil) async throws -> Reply {
+        var params: [String: String] = ["name": name, "action": action]
+        if let minutes { params["minutes"] = String(minutes) }
+        if let cpus { params["cpus"] = String(cpus) }
+        if let memoryGiB { params["memory"] = String(memoryGiB) }
+        return try await intent("vmctl", params: params, numeric: ["minutes", "cpus", "memory"],
+                                idempotencyKey: "app-\(UUID().uuidString)")
     }
 
     func revokeClient(_ id: String) async throws -> Reply {

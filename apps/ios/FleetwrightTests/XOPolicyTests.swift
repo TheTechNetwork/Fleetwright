@@ -22,8 +22,10 @@ final class XOPolicyTests: XCTestCase {
                                networks: String = #"["net-wan"]"#,
                                address: String = "xo.lan",
                                edges: String? = nil,
-                               images: String? = nil) -> Data {
+                               images: String? = nil,
+                               imageKinds: String? = nil) -> Data {
         let tail = (edges.map { ",\"edges\":" + $0 } ?? "") + (images.map { ",\"images\":" + $0 } ?? "")
+            + (imageKinds.map { ",\"imageKinds\":" + $0 } ?? "")
         return Data("""
         {"v":1,"address":"\(address)",
          "pools":[{"id":"pool-1","name":"rack"}],
@@ -231,6 +233,33 @@ final class XOPolicyTests: XCTestCase {
         i.image = true
         XCTAssertEqual(i.building(in: imaged).image, false)
         XCTAssertNil(try inventory().images, "an older machine says nothing about images, which is not none")
+    }
+
+    /// Asked for: "os selection not just Debian". A machine that builds its
+    /// whole catalogue is sent the images chosen, in its own order, and only
+    /// the ones its pool does not have are built; an older one is sent
+    /// `image` alone, as before.
+    func testImagesAreChosenByOperatingSystemAndOnlyTheMissingOnesAreBuilt() throws {
+        let kinds = #"[{"key":"debian-13","os":"Debian 13"},{"key":"ubuntu-24.04","os":"Ubuntu 24.04 LTS"},{"key":"ubuntu-26.04","os":"Ubuntu 26.04 LTS"}]"#
+        let inv = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true}]"#,
+                                              images: #"[{"pool":"pool-1","name":"Fleetwright Debian 13"}]"#,
+                                              imageKinds: kinds))
+        XCTAssertEqual(inv.imageKinds?.map(\.os), ["Debian 13", "Ubuntu 24.04 LTS", "Ubuntu 26.04 LTS"])
+        XCTAssertEqual(inv.imageKeys(on: "net-wan"), ["debian-13"], "an image that predates saying is Debian")
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.edge = false
+        c.imageChoice = true
+        c.imagesChoice = true
+        c.images = ["ubuntu-26.04", "debian-13"]
+        XCTAssertNil(c.problem(in: inv))
+        XCTAssertEqual(c.payload(in: inv)["images"] as? [String], ["debian-13", "ubuntu-26.04"])
+        XCTAssertNil(c.payload(in: inv)["image"])
+        XCTAssertEqual(c.imagesToBuild(in: inv), ["ubuntu-26.04"])
+        XCTAssertEqual(c.building(in: inv).image, true)
+        c.images = ["debian-13"]
+        XCTAssertEqual(c.building(in: inv).image, false, "the one there is not built again")
+        c.images = []
+        XCTAssertNil(c.payload(in: inv)["images"], "none asked is nothing sent")
     }
 
     func testEachLimitIsHeldToTheMachinesBounds() throws {

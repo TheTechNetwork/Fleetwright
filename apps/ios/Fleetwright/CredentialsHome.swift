@@ -20,6 +20,9 @@ struct CredentialsHome: View {
             Section {
                 if PhoneGitHub(settings: settings).signedIn {
                     YourVault(settings: settings)
+                    // FOR THE MACHINES ON YOUR HYPERVISOR: kept like any
+                    // secret, given its own row because it is pasted, not typed.
+                    NavigationLink("SSH keys") { SSHKeysView(settings: settings) }
                 } else {
                     // The vault knows a person by this phone's GitHub sign-in,
                     // so the sign-in is offered at the point it is needed.

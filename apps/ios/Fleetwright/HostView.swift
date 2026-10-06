@@ -533,6 +533,17 @@ struct HostView: View {
 
     @ViewBuilder private var dangerSection: some View {
         Section {
+            // A MACHINE FROM YOUR HYPERVISOR is worked from its page there:
+            // console, SSH, a restart, longer, a new size. This page is the
+            // fleet's view of it; that one is the pool's.
+            if hostId.hasPrefix("vm-") {
+                NavigationLink {
+                    VMMachineView(settings: settings, name: hostId)
+                } label: {
+                    Text("On your hypervisor: console, SSH, size and end")
+                        .frame(minHeight: 44)
+                }
+            }
             // ONE STEP AT A TIME, AND ONLY THE ONE YOU ARE ON.
             //
             // This showed all three at once — a Reboot button, a PIN field, a
