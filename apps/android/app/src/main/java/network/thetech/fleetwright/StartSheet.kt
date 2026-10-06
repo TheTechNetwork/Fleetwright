@@ -66,6 +66,11 @@ data class StartRequest(
      */
     val template: String? = null,
     val imageLabel: String? = null,
+    /**
+     * And the network of your pool it goes on, or null for behind the edge
+     * router, where it reaches the internet and nothing private.
+     */
+    val network: String? = null,
 )
 
 /**
@@ -142,6 +147,8 @@ fun StartSheet(
     // for one from your hypervisor, with the image in `template`.
     var platform by remember { mutableStateOf("") }
     var template by remember { mutableStateOf("") }
+    // The network a machine from your hypervisor goes on; empty is behind the edge router.
+    var vmNetwork by remember { mutableStateOf("") }
     // The machine images on your own pools a new machine can come from, from
     // the snapshot. Drawn from this and only this (C-2).
     var images by remember { mutableStateOf<List<Fleet.VmImage>>(emptyList()) }
@@ -358,6 +365,7 @@ fun StartSheet(
                         images.forEach { image ->
                             AssistChip(
                                 onClick = {
+                                    vmNetwork = ""
                                     if (template == image.template) {
                                         template = ""
                                         platform = ""
@@ -386,6 +394,24 @@ fun StartSheet(
                                         if (platform.isNotEmpty()) { host = ""; profile = ""; secret = "" }
                                     },
                                     label = { Text(if (platform == choice.platform) "${choice.label} \u2713" else choice.label) },
+                                )
+                            }
+                        }
+                        // WHERE IT GOES ON YOUR POOL, offered only when the
+                        // pool has a network besides the uplink. Behind the
+                        // edge router is the default and the safe one: a
+                        // network of yours puts the machine beside your own.
+                        val networks = images.firstOrNull { it.template == template }?.networks.takeIf { platform == "vm" }
+                        if (!networks.isNullOrEmpty()) {
+                            Text("Network", style = MaterialTheme.typography.labelMedium)
+                            AssistChip(
+                                onClick = { vmNetwork = "" },
+                                label = { Text(if (vmNetwork.isEmpty()) "Behind the edge router \u2713" else "Behind the edge router") },
+                            )
+                            networks.forEach { n ->
+                                AssistChip(
+                                    onClick = { vmNetwork = if (vmNetwork == n.id) "" else n.id },
+                                    label = { Text(if (vmNetwork == n.id) "${n.name} \u2713" else n.name) },
                                 )
                             }
                         }
@@ -482,6 +508,7 @@ fun StartSheet(
                             minutes = machineMinutes.takeIf { platform.isNotEmpty() },
                             template = template.ifBlank { null }.takeIf { platform == "vm" },
                             imageLabel = images.firstOrNull { it.template == template }?.label.takeIf { platform == "vm" },
+                            network = vmNetwork.ifBlank { null }.takeIf { platform == "vm" },
                         ),
                     )
                     onDismiss()

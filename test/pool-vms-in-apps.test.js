@@ -88,7 +88,7 @@ test('Android: a machine from your hypervisor is asked of the fleet, never of Gi
   assert.match(A_FLEET, /if \(platform != "vm" && phone\.signedIn\) \{/);
   assert.match(A_FLEET, /if \(template == null\) mapOf\("platform" to platform\) else mapOf\("platform" to platform, "template" to template\)/);
   assert.match(A_FLEET, /get\("\/api\/hosts"\)\.optJSONArray\("vmImages"\)/);
-  assert.match(A_MAIN, /fleet\.provision\(platform, minutes = request\.minutes, start = start, template = request\.template\)/);
+  assert.match(A_MAIN, /fleet\.provision\(platform, minutes = request\.minutes, start = start, template = request\.template, network = request\.network\)/);
 });
 
 test('Android: New session offers a machine from each of your images, drawn from the snapshot and nothing else', () => {
@@ -109,7 +109,7 @@ test('Android: the machine image is offered only by a machine that builds one, w
   assert.match(A_HYPER, /canImage = "image" in p\.setup\.can/);
   assert.match(A_FORM, /if \(canImage && choice\.egress != null\) \{/);
   assert.match(A_FORM, /onChange = \{ on -> onChange\(choice\.copy\(image = on, edge = choice\.edge \|\| \(on && there == null\)\)\) \}/);
-  assert.match(A_POLICY, /\.apply \{ if \(c\.imageChoice && c\.image\) put\("image", true\) \}/);
+  assert.match(A_POLICY, /if \(c\.imageChoice && c\.wantsImage\) \{\s*if \(c\.imagesChoice\) \{[\s\S]*?\} else \{\s*put\("image", true\)\s*\}/);
   assert.match(A_POLICY, /const val IMAGE_DISK = 20L \* 1024 \* 1024 \* 1024/);
 });
 

@@ -112,7 +112,7 @@ internal fun PolicyForm(
         title = "None yet",
         line = if (!anyWayOut && choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
         // No way out, no router and no image: the switches go off with it.
-        onClick = { onChange(choice.copy(egress = null, edge = false, image = false)) },
+        onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet())) },
     )
     // THE EDGE ROUTER, offered only by a machine that can build it and only
     // with a way out (C-2): built when the pool has none, kept in step when
@@ -131,13 +131,42 @@ internal fun PolicyForm(
                 else -> "It is there and stopped. Apply keeps its WAN on this network and starts it." + (there.sr?.let { " Its disk is on $it." } ?: "")
             },
             // The image is built behind the router: no router, no image.
-            onChange = { on -> onChange(choice.copy(edge = on, image = choice.image && (on || there != null))) },
+            onChange = { on ->
+                val kept = on || there != null
+                onChange(choice.copy(edge = on, image = choice.image && kept, images = if (kept) choice.images else emptySet()))
+            },
         )
     }
     // THE MACHINE IMAGE sessions' machines are cloned from, offered only by a
     // machine that builds one, and only where there is none. Asked for:
     // "Still can't run sessions on it".
-    if (canImage && choice.egress != null) {
+    val kinds = inv.imageKinds
+    if (canImage && choice.egress != null && choice.imagesChoice && kinds != null) {
+        // ONE ROW PER OPERATING SYSTEM the machine can make an image of: said
+        // as there when the pool has it, a switch when it does not. Asked for:
+        // "os selection not just Debian".
+        val there = XoPolicy.edgeOn(inv, choice.egress)
+        val present = XoPolicy.imageKeysOn(inv, choice.egress)
+        kinds.forEach { kind ->
+            if (kind.key in present) {
+                Hint("${kind.os} machine image. It is there. New session › Where offers machines from it.")
+            } else {
+                CheckRow(
+                    checked = kind.key in choice.images,
+                    enabled = enabled,
+                    title = "Make the ${kind.os} machine image",
+                    line = imageLine(kind, machine),
+                    // Built behind the router, so asking for it asks for that too.
+                    onChange = { on ->
+                        onChange(choice.copy(
+                            images = if (on) choice.images + kind.key else choice.images - kind.key,
+                            edge = choice.edge || (on && there == null),
+                        ))
+                    },
+                )
+            }
+        }
+    } else if (canImage && choice.egress != null) {
         val there = XoPolicy.edgeOn(inv, choice.egress)
         val image = XoPolicy.imageOn(inv, choice.egress)
         if (image != null) {
@@ -308,3 +337,15 @@ private fun Stepper(
         }
     }
 }
+
+/** What making one of the images costs. The same words as iOS (AddHypervisorView.swift). */
+private fun imageLine(kind: XoPolicy.ImageKind, machine: String): String =
+    if (kind.key == XoPolicy.DEBIAN_KEY) {
+        "Debian 13 with Fleetwright installed, on a 20 GiB disk on the storage chosen. $machine downloads Debian once, " +
+            "about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new " +
+            "machine from it."
+    } else {
+        "${kind.os} with Fleetwright installed, on a 20 GiB disk on the storage chosen. $machine downloads its cloud " +
+            "image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can " +
+            "then start on a new machine from it."
+    }

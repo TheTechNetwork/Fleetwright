@@ -94,3 +94,60 @@ test('iOS says it in the shared words', () => {
   const ios = [I_FLEET, I_PAGE, I_LIST, I_HOST, I_SHEET, I_SSH, I_CREDS, I_SETUP, I_POLICY].join('\n');
   for (const words of SHARED) assert.ok(ios.includes(words), words);
 });
+
+// --- Android ------------------------------------------------------------------
+
+const ANDROID = (/** @type {string} */ f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`);
+const A_FLEET = ANDROID('Fleet.kt');
+const A_PAGE = ANDROID('VmMachinePage.kt');
+const A_LIST = ANDROID('MachinesScreen.kt');
+const A_SHEET = ANDROID('StartSheet.kt');
+const A_MAIN = ANDROID('MainActivity.kt');
+const A_SSH = ANDROID('SshKeysScreen.kt');
+const A_YOU = ANDROID('YouScreen.kt');
+const A_HYPER = ANDROID('HypervisorSheet.kt');
+const A_FORM = ANDROID('PolicyForm.kt');
+const A_POLICY = ANDROID('XoPolicy.kt');
+
+test('Android: the machines on your pools are read from the snapshot, and worked through the fleet, never held for later', () => {
+  assert.match(A_FLEET, /get\("\/api\/hosts"\)\.optJSONArray\("vmMachines"\)/);
+  assert.match(A_FLEET, /"vmctl",[\s\S]{0,300}idempotencyKey = "app-" \+ java\.util\.UUID\.randomUUID\(\)\.toString\(\),/);
+  assert.match(A_FLEET, /\(if \(network == null\) emptyMap\(\) else mapOf\("network" to network\)\)/);
+  assert.match(A_MAIN, /template = request\.template, network = request\.network\)/);
+  assert.match(A_LIST, /val onPools = async \{ Fleet\(settings\)\.vmMachines\(\) \}/);
+  assert.match(A_LIST, /if \(poolMachines\.isNotEmpty\(\)\) \{/);
+  assert.match(A_LIST, /if \(hostId\.startsWith\("vm-"\)\) \{/);
+});
+
+test('Android: a machine’s page opens Xen Orchestra’s own console, and offers only what can be done', () => {
+  assert.match(A_FLEET, /"https:\/\/\$address\/#\/vms\/\$vm\/console"/);
+  assert.match(A_FLEET, /val sshCommand: String\? get\(\) = ip\?\.let \{ "ssh fleetwright@\$it" \}/);
+  assert.match(A_PAGE, /enabled = !busy && m\.state == "Running"/);
+  assert.match(A_PAGE, /if \(canExtend\(m\)\) \{\s*Text\("Give it longer"/);
+  assert.match(A_PAGE, /return until < made \+ Fleet\.VmMachine\.MAX_MINUTES \* 60_000L/);
+  for (const ask of ['asking = "reboot"', 'asking = "resize"', 'asking = "stop"']) assert.ok(A_PAGE.includes(ask), ask);
+});
+
+test('Android: images are offered by operating system to a machine that builds them, and sent as a list', () => {
+  assert.match(A_HYPER, /canImages = "images" in p\.setup\.can/);
+  assert.match(A_HYPER, /imagesChoice = canImages && opened\.imageKinds != null,/);
+  assert.match(A_POLICY, /put\("images", JSONArray\(\(inv\.imageKinds \?: emptyList\(\)\)\.map \{ it\.key \}\.filter \{ it in c\.images \}\)\)/);
+  assert.match(A_FORM, /if \(canImage && choice\.egress != null && choice\.imagesChoice && kinds != null\) \{/);
+});
+
+test('Android: SSH keys are public keys only, kept as one secret in the vault', () => {
+  assert.match(A_SSH, /internal const val SSH_SECRET = "SSH_AUTHORIZED_KEYS"/);
+  assert.match(A_SSH, /vault\.keepSecret\(Fleet\(settings\), SSH_SECRET, lines\.joinToString\("\\n"\)\)/);
+  assert.match(A_SSH, /enabled = !busy && lines\.isNotEmpty\(\) && notKeys\.isEmpty\(\)/);
+  assert.match(A_YOU, /OpenRow\("SSH keys"\) \{ sshKeys = true \}/);
+});
+
+test('Android: a new machine goes behind the edge router unless a network of the pool is chosen', () => {
+  assert.match(A_SHEET, /if \(!networks\.isNullOrEmpty\(\)\) \{/);
+  assert.match(A_SHEET, /network = vmNetwork\.ifBlank \{ null \}\.takeIf \{ platform == "vm" \},/);
+});
+
+test('both phones say it in the same words', () => {
+  const android = [A_FLEET, A_PAGE, A_LIST, A_SHEET, A_MAIN, A_SSH, A_YOU, A_HYPER, A_FORM, A_POLICY].join('\n');
+  for (const words of SHARED) assert.ok(android.includes(words), `Android: ${words}`);
+});

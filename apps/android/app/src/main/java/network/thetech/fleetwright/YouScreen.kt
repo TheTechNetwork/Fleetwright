@@ -262,13 +262,18 @@ fun YouScreen(
 @Composable
 private fun CredentialsScreen(settings: Settings, onDismiss: () -> Unit) {
     var linked by remember { mutableStateOf(false) }
+    var sshKeys by remember { mutableStateOf(false) }
     // Bumped by the sign-in below, so the vault appears the moment it can.
     var generation by remember { mutableIntStateOf(0) }
     if (linked) CredentialsSheet(settings, host = null, onDismiss = { linked = false }, linkedOnly = true)
+    if (sshKeys) SshKeysScreen(settings, onDismiss = { sshKeys = false })
     FullScreen(title = "Credentials", onDismiss = onDismiss) {
         SectionHead("Your vault")
         if (generation >= 0 && PhoneGitHub(settings).signedIn) {
             YourVault(settings)
+            // FOR THE MACHINES ON YOUR HYPERVISOR: kept like any secret,
+            // given its own row because it is pasted, not typed.
+            OpenRow("SSH keys") { sshKeys = true }
         } else {
             // The vault knows a person by this phone's GitHub sign-in, so the
             // sign-in is offered at the point it is needed.

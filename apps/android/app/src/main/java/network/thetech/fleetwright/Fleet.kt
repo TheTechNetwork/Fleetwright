@@ -956,6 +956,7 @@ class Fleet(
         host: String? = null,
         start: Map<String, String>? = null,
         template: String? = null,
+        network: String? = null,
     ): Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
@@ -969,7 +970,9 @@ class Fleet(
         }
         return intent(
             "provision",
-            if (template == null) mapOf("platform" to platform) else mapOf("platform" to platform, "template" to template),
+            (if (template == null) mapOf("platform" to platform) else mapOf("platform" to platform, "template" to template)) +
+                // A NETWORK OF YOUR POOL instead of behind the edge router (protocol 9).
+                (if (network == null) emptyMap() else mapOf("network" to network)),
             host,
             numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
             extra = if (start == null) emptyMap() else mapOf("start" to JSONObject(start.toMap())),
@@ -1470,6 +1473,8 @@ class Fleet(
         val poolName: String?,
         val address: String,
         val hosts: List<String>,
+        /** The pool's networks a machine from it can go on besides the uplink; null from an older coordinator. */
+        val networks: List<VmNetwork>? = null,
     ) {
         /** "New machine from Fleetwright Debian 13 on rack", for a picker. */
         val label: String get() = "New machine from $name" + (poolName?.let { " on $it" } ?: "")
@@ -1495,10 +1500,103 @@ class Fleet(
                     poolName = o.optString("poolName").takeIf { it.isNotBlank() && it != "null" },
                     address = o.optString("address"),
                     hosts = if (hosts == null) emptyList() else (0 until hosts.length()).map { hosts.optString(it) },
+                    networks = o.optJSONArray("networks")?.let { a ->
+                        (0 until a.length()).mapNotNull { j ->
+                            val n = a.optJSONObject(j) ?: return@mapNotNull null
+                            val id = n.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                            VmNetwork(id, n.optString("name").ifBlank { id })
+                        }
+                    },
                 )
             }
         }
     }
+
+    /** A network of your pool a new machine can go on. */
+    data class VmNetwork(val id: String, val name: String)
+
+    /**
+     * A machine made on one of your pools, as the box holding the pool last
+     * saw it (docs/hypervisors.md, "Working a machine"). Every field but the
+     * name may be null, and null is CANNOT TELL: Xen Orchestra had not said,
+     * or the box had not looked since.
+     */
+    data class VmMachine(
+        val name: String,
+        /** Its id in Xen Orchestra, for the console link. */
+        val vm: String?,
+        /** Xen Orchestra's power state: Running, Halted, Suspended, Paused. */
+        val state: String?,
+        val ip: String?,
+        /** When it is removed, ms since the epoch. */
+        val until: Long?,
+        val madeAt: Long?,
+        val cpus: Int?,
+        /** Bytes. */
+        val memory: Long?,
+        val image: String?,
+        val network: String?,
+        /** The Xen Orchestra it is on. */
+        val address: String,
+    ) {
+        /**
+         * The console in Xen Orchestra's own web UI, which signs you in there:
+         * this phone never holds the pool's token.
+         */
+        val consoleUrl: String? get() = if (vm == null || address.isBlank()) null else "https://$address/#/vms/$vm/console"
+
+        /** `ssh fleetwright@192.168.1.40`, or null without an address. */
+        val sshCommand: String? get() = ip?.let { "ssh fleetwright@$it" }
+
+        companion object {
+            /** The longest a machine lives, from when it was made (xo-pools.js). */
+            const val MAX_MINUTES = 350
+        }
+    }
+
+    /**
+     * The machines on your pools: the `vmMachines` field of /api/hosts.
+     * Empty is an answer (none); an older coordinator omits the field.
+     */
+    suspend fun vmMachines(): Result<List<VmMachine>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val list = get("/api/hosts").optJSONArray("vmMachines") ?: return@runCatching emptyList()
+            fun JSONObject.str(k: String) = optString(k).takeIf { has(k) && !isNull(k) && it.isNotBlank() }
+            fun JSONObject.num(k: String) = if (has(k) && !isNull(k)) optDouble(k).takeIf { !it.isNaN() } else null
+            (0 until list.length()).mapNotNull { i ->
+                val o = list.optJSONObject(i) ?: return@mapNotNull null
+                VmMachine(
+                    name = o.str("name") ?: return@mapNotNull null,
+                    vm = o.str("vm"),
+                    state = o.str("state"),
+                    ip = o.str("ip"),
+                    until = o.num("until")?.toLong(),
+                    madeAt = o.num("madeAt")?.toLong(),
+                    cpus = o.num("cpus")?.toInt(),
+                    memory = o.num("memory")?.toLong(),
+                    image = o.str("image"),
+                    network = o.str("network"),
+                    address = o.optString("address"),
+                )
+            }
+        }
+    }
+
+    /**
+     * Work a machine on your pool: `reboot`, `extend` by [minutes], `resize`
+     * to [cpus] and [memoryGib], or `stop`, which removes it.
+     *
+     * NEVER HELD on this phone: a restart or an end replayed hours later, when
+     * the fleet answers again, is not what anybody asked for. The key is what
+     * keeps it out of the outbox.
+     */
+    suspend fun vmctl(name: String, action: String, minutes: Int? = null, cpus: Int? = null, memoryGib: Int? = null): Reply =
+        intent(
+            "vmctl",
+            mapOf("name" to name, "action" to action),
+            numeric = listOfNotNull(minutes?.let { "minutes" to it }, cpus?.let { "cpus" to it }, memoryGib?.let { "memory" to it }).toMap(),
+            idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),
+        )
 
     /**
      * Whether the person this credential belongs to is the fleet's admin.
