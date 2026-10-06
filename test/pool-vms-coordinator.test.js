@@ -201,6 +201,15 @@ test('a person sees their machines and the networks a new one can go on, and nob
   assert.deepEqual(mine.vmMachines.map((/** @type {any} */ m) => [m.name, m.ip, m.state, m.address]), [['vm-aaaaaaaaaaaa', '10.254.0.120', 'Running', 'xo.lan']]);
   assert.deepEqual(mine.vmImages[0].networks, [{ id: NET, name: 'LAN' }]);
   assert.deepEqual(core.snapshot(sam).vmMachines, []);
+  assert.equal(mine.vmMachines[0].until, 1_800_000_000_000);
+});
+
+test('a machine that did not report its end or size is cannot tell, not the epoch or nothing', () => {
+  const [entry] = withMachine(ELI);
+  const quiet = [{ ...entry, machines: [{ name: 'vm-aaaaaaaaaaaa', vm: null, state: null, ip: null, until: null, madeAt: null, cpus: null, memory: null, image: null, network: null }] }];
+  const { core } = fleet({ deb14: { xo: quiet, protocol: 9 } });
+  const [m] = core.snapshot(eli).vmMachines;
+  assert.deepEqual([m.until, m.madeAt, m.memory, m.cpus, m.state], [null, null, null, null, null]);
 });
 
 test('a machine can go on a network the person chose, and a box too old to carry that is not asked', async () => {
