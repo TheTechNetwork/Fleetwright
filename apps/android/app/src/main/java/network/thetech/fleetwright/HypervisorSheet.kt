@@ -172,6 +172,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // The machine said it can build the edge router (`can` holds "edge"), so
     // the form offers it; an older one never is offered (C-2).
     var canEdge by remember { mutableStateOf(false) }
+    // The machine takes any of the pool's networks as the way out (`can`
+    // holds "egress-any"); an older one only the fleet's.
+    var anyWayOut by remember { mutableStateOf(false) }
     var policyKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
     var inventory by remember { mutableStateOf<XoPolicy.Inventory?>(null) }
     var choice by remember { mutableStateOf<XoPolicy.Choice?>(null) }
@@ -376,6 +379,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         }
         jobKey = key
         canEdge = "edge" in p.setup.can
+        anyWayOut = "egress-any" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -611,7 +615,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     val opened = policyKey?.let { XoPolicy.openInventory(pool, id, address.trim(), it) }
                     if (opened != null) {
                         inventory = opened
-                        choice = XoPolicy.defaults(opened)
+                        choice = XoPolicy.defaults(opened, anyWayOut)
                     } else {
                         unopened = true
                     }

@@ -200,6 +200,8 @@ test('Android: the form is the design’s tokens, 48dp, with nothing offered tha
   // that does nothing (C-2).
   assert.ok(form.includes('enabled = enabled && value > min'));
   assert.ok(form.includes('enabled = enabled && value < max'));
-  // The way out offers only networks the fleet may use, as the machine requires.
-  assert.ok(form.includes('inv.networks.filter { it.id in choice.networks }.forEach'));
+  // The way out offers what the machine takes: any of the pool's networks
+  // where it said `egress-any`, and only the fleet's where it did not.
+  assert.ok(form.includes('inv.networks.filter { anyWayOut || it.id in choice.networks }.forEach'));
+  assert.ok(file('HypervisorSheet.kt').includes('anyWayOut = "egress-any" in p.setup.can'));
 });

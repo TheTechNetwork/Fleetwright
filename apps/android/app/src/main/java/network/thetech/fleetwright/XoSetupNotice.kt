@@ -87,18 +87,38 @@ internal object XoSetupNotice {
         )
 
         val running = state == "running" || state == "waiting"
-        val title = when (state) {
-            "done" -> "Hypervisor added"
-            "failed" -> "Hypervisor setup stopped"
-            "cancelled" -> "Hypervisor setup cancelled"
-            else -> "Adding a hypervisor"
+        // A CHANGE TO WHAT THE FLEET MAY USE reports too, from its apply step
+        // on, because building the edge router is minutes of download. Its
+        // end is not a hypervisor added; the coordinator says which it is
+        // (POLICY_TITLES in core.js), and one that predates that only ever
+        // sent setups.
+        val policy = data["purpose"] == "policy"
+        val title = if (policy) {
+            when (state) {
+                "done" -> "What the fleet may use is changed"
+                "failed" -> "The change stopped"
+                "cancelled" -> "The change was cancelled"
+                else -> "Changing what the fleet may use"
+            }
+        } else {
+            when (state) {
+                "done" -> "Hypervisor added"
+                "failed" -> "Hypervisor setup stopped"
+                "cancelled" -> "Hypervisor setup cancelled"
+                else -> "Adding a hypervisor"
+            }
         }
         val body = when (state) {
-            "done" -> if (hostId.isBlank()) "The pool is in the fleet." else "$hostId finished. The pool is in the fleet."
+            "done" -> when {
+                policy -> if (hostId.isBlank()) "Applied." else "$hostId applied it."
+                hostId.isBlank() -> "The pool is in the fleet."
+                else -> "$hostId finished. The pool is in the fleet."
+            }
             "failed" -> if (hostId.isBlank()) "Open to see what stopped it." else "Open to see what stopped it on $hostId."
             "cancelled" -> "Stopped between steps, as asked."
             "waiting" -> "Waiting for the sign-in"
-            else -> XoSetup.stepWords(data["phase"], step, of) + if (hostId.isBlank()) "" else " · on $hostId"
+            else -> (if (policy) XoPolicy.stepWords(data["phase"], step, of) else XoSetup.stepWords(data["phase"], step, of)) +
+                if (hostId.isBlank()) "" else " · on $hostId"
         }
 
         val tap = openIntent(context, job, id)

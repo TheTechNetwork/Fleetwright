@@ -83,11 +83,20 @@ internal fun PolicyForm(
     SectionHead("Way out")
     // WHAT CHOOSING IT DOES, in iOS's words: the network is recorded, and
     // the router is built on it only when the switch below asks for it.
+    // ANY OF THE POOL'S NETWORKS, on a machine that takes that (`egress-any`),
+    // and only the ones chosen above on one that does not, which is all it
+    // takes (checkPolicy). Asked for: the first version offered only the
+    // fleet's networks, and the WAN usually belongs on one that is not.
+    val anyWayOut = choice.anyWayOut
     val wayOut = "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +
-        "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. Only a network chosen above " +
-        "can be the way out."
+        "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. " +
+        if (anyWayOut) {
+            "Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router."
+        } else {
+            "Only a network chosen above can be the way out."
+        }
     Hint(if (canEdge) wayOut else "$wayOut $machine is too old to build the router; update it to have it built from here.")
-    inv.networks.filter { it.id in choice.networks }.forEach { n ->
+    inv.networks.filter { anyWayOut || it.id in choice.networks }.forEach { n ->
         RadioRow(
             selected = choice.egress == n.id,
             enabled = enabled,
@@ -100,7 +109,7 @@ internal fun PolicyForm(
         selected = choice.egress == null,
         enabled = enabled,
         title = "None yet",
-        line = if (choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
+        line = if (!anyWayOut && choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
         // No way out, no router: the switch goes off with it.
         onClick = { onChange(choice.copy(egress = null, edge = false)) },
     )
