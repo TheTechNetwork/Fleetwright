@@ -451,7 +451,10 @@ curl -fsSL '${target}' | sh
       // open since it existed; this front door refused it with 401 before
       // the object ever saw the request, and openapi.json did not list the
       // route, so the parity test could not tell.
-      (request.method === 'POST' && url.pathname === '/api/enroll/actions')
+      (request.method === 'POST' && url.pathname === '/api/enroll/actions') ||
+      // A machine from somebody's hypervisor has no fleet credential either;
+      // its single-use ticket is the credential (CoordinatorCore#enrolVm).
+      (request.method === 'POST' && url.pathname === '/api/enroll/vm')
     ) {
       return callFleet(env, request);
     }
@@ -1384,6 +1387,51 @@ const OPENAPI = JSON.stringify({
                           }
                         }
                       ]
+                    },
+                    "vmImages": {
+                      "description": "The machine images YOU can start a VM from, on your own hypervisor: one per image, from the boxes holding a pool token you kept in your vault. Empty when no box holds one of yours. Start one with `provision` (platform `vm`, `template`). Absent from an older coordinator, which means the same.",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "template",
+                          "name",
+                          "address",
+                          "hosts"
+                        ],
+                        "properties": {
+                          "template": {
+                            "type": "string",
+                            "description": "the image\u2019s id in Xen Orchestra, which `provision` takes as `template`"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "pool": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "poolName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "address": {
+                            "type": "string",
+                            "description": "the Xen Orchestra it is on"
+                          },
+                          "hosts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "the permanent boxes that can make it"
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -2445,13 +2493,61 @@ const OPENAPI = JSON.stringify({
         }
       }
     },
+    "/api/enroll/vm": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "security": [],
+        "summary": "Admit a machine from your hypervisor as an ephemeral host",
+        "description": "Reachable without a credential BECAUSE the ticket is the credential: minted by a `provision` for platform `vm`, single-use, forty-five minutes old at most, and bound to the person who asked. The box that cloned the machine booted it with the ticket in its cloud-init drive, which Xen Orchestra destroys after boot. The host id is derived from the ticket (`vm-<id>`), never chosen. See docs/hypervisors.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ticket",
+                  "publicJwk"
+                ],
+                "properties": {
+                  "ticket": {
+                    "type": "string",
+                    "description": "the `fwt_` ticket the machine was booted with"
+                  },
+                  "publicJwk": {
+                    "type": "object",
+                    "description": "the machine\u2019s own P-256 public key, made on it"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "enrolled: `hostId`, `fingerprint`, `ephemeral: true`"
+          },
+          "400": {
+            "description": "the key is not a P-256 public key"
+          },
+          "403": {
+            "description": "not a machine ticket, spent, or expired \u2014 `error.code` is `unclaimed`"
+          },
+          "507": {
+            "description": "the fleet has no room for another host \u2014 `hosts_full`"
+          }
+        }
+      }
+    },
     "/api/vault": {
       "post": {
         "tags": [
           "identity"
         ],
         "summary": "Read or change your vault",
-        "description": "`sealed` is `{ v: 1, github, email, op, at, reply, ... }` sealed on the device to the minting Worker's deposit key, where `op` is `list`, `put` or `forget` (a named secret `secret:NAME`, or `claude`), `connect` (a GitHub or Cloudflare sign-in: `provider`, `code`, `verifier`, `redirectUri`), `grant` (`hostKey`, the box's public key, and `label`) or `revoke` (`key`). The coordinator relays it unread beside the signed-in account, which the minter checks against `email` inside the seal. The answer is sealed to `reply`. See docs/vault.md.",
+        "description": "`sealed` is `{ v: 1, github, email, op, at, reply, ... }` sealed on the device to the minting Worker's deposit key, where `op` is `list`, `put` or `forget` (a named secret `secret:NAME`, a hypervisor\u2019s token record `hypervisor:ADDRESS`, or `claude`), `connect` (a GitHub or Cloudflare sign-in: `provider`, `code`, `verifier`, `redirectUri`), `grant` (`hostKey`, the box's public key, and `label`) or `revoke` (`key`). The coordinator relays it unread beside the signed-in account, which the minter checks against `email` inside the seal. The answer is sealed to `reply`. See docs/vault.md.",
         "requestBody": {
           "content": {
             "application/json": {

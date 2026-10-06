@@ -64,6 +64,14 @@ export const XO_ADDRESS_RE =
 /** A setup job id: twelve lowercase hex digits, made by the host. */
 export const XOSETUP_JOB_RE = /^[0-9a-f]{12}$/;
 
+/**
+ * A Xen Orchestra object id, as `provision` names a machine image by: the
+ * UUID XAPI gives every VM and template. Nothing looser, because the value is
+ * looked up in a pool and a lookup that accepted anything would be a lookup a
+ * caller could aim.
+ */
+export const XO_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /** A certificate fingerprint: SHA-256, lowercase hex. */
 export const CERT_PIN_RE = /^[0-9a-f]{64}$/;
 
@@ -158,8 +166,18 @@ export const XOPOLICY_STEPS = Object.freeze([
 // states what that widens. An older host is refused rather than handed a
 // start without its task (`since: 7`), because dropping it would start the
 // idle session this exists to end and report that it worked.
+//
+// v8, 6 Oct 2026: a machine can come from the person's OWN HYPERVISOR. A
+// `provision` for platform `vm` names a `template` (a Fleetwright machine
+// image on a Xen Orchestra pool) and is sent to a permanent box that holds
+// that pool's token from its people's vault, which clones the image, boots it
+// with the dispatch ticket and a Claude login for its owner, and lets it enrol
+// itself as a temporary host. An older host is never sent one: only a box
+// that reports a pool (health `xo`) is a holder, and it speaks 8 to say so;
+// the coordinator also refuses outright rather than have `template` dropped.
+// See docs/hypervisors.md, "Machines from your pool".
 /** @type {number} */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -1034,10 +1052,29 @@ export const VERBS = Object.freeze({
       platform: {
         type: 'enum',
         required: true,
-        values: ['macos', 'windows', 'linux', 'android'],
+        // `vm` IS NOT A WORKFLOW FILE. It is a machine cloned from an image on
+        // the person's own Xen Orchestra pool (`template`), by a box holding
+        // that pool's token. The other four select a workflow, and still only
+        // those four do: RUNNER_WORKFLOWS has no `vm` entry, so a ticket for a
+        // VM can never name a workflow a job could be admitted from.
+        values: ['macos', 'windows', 'linux', 'android', 'vm'],
         describe:
           'Which operating system to bring up. `android` is a Linux runner with the SDK and a hardware-accelerated ' +
-          'emulator, for driving an app rather than only building one.',
+          'emulator, for driving an app rather than only building one. `vm` is a machine from your own hypervisor, ' +
+          'cloned from the image named in `template`.',
+      },
+      // WHICH MACHINE IMAGE, for platform `vm`: the template's id in Xen
+      // Orchestra, as `status` lists it under the host that holds the pool.
+      // An id rather than a name, because a name is the person's and two
+      // pools can each have one called the same.
+      template: {
+        type: 'text',
+        required: false,
+        max: 36,
+        pattern: XO_UUID_RE,
+        shapeName: 'a Xen Orchestra template id',
+        since: 8,
+        describe: 'For platform `vm`: which machine image to clone, by its id. Ignored for the others.',
       },
       // HOW LONG TO PAY FOR. The job ends itself after this and the disconnect
       // retires the host — there is no cleanup step to forget. GitHub kills a
@@ -1089,11 +1126,13 @@ export const VERBS = Object.freeze({
     },
     mutating: true,
     summary:
-      'Ask for a temporary machine — macOS, Windows, Linux or an Android emulator — that joins the fleet as an ' +
+      'Ask for a temporary machine — macOS, Windows, Linux, an Android emulator, or a VM cloned from a machine image ' +
+      'on your own hypervisor (`vm`, with `template`) — that joins the fleet as an ' +
       'ephemeral host for the minutes you name and is destroyed when the job ends. It does NOT return a host: the ' +
       'runner takes a few minutes to boot and appears in `status` as a host owned by you. Sessions started there ' +
-      'are lost when it goes, so collect what you need before then. It spends GitHub Actions minutes and bills any ' +
-      'session it runs to the runner repository’s API key.',
+      'are lost when it goes, so collect what you need before then. A runner spends GitHub Actions minutes and bills ' +
+      'any session it runs to the runner repository’s API key; a VM is counted against the pool’s limits and its ' +
+      'sessions run on your own Claude login from your vault.',
   },
 
   // CHECKING A RUNNER REPOSITORY BEFORE ANYBODY RELIES ON IT, with the asking

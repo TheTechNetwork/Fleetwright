@@ -532,6 +532,19 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
           : `${preferHost} is not a host this fleet knows.`,
       };
     }
+    // SOMEBODY ELSE'S TEMPORARY MACHINE IS NOT YOURS BY NAMING IT. The rule
+    // below (`usable`) filtered other people's runners out of placement by
+    // capacity and nowhere else, so naming one put work on it: a member who
+    // read a runner's id off the host list could start a session on a machine
+    // that exists for somebody else's job and bills them. Said as the host
+    // being unavailable to them, which is what it is.
+    if (chosen.ephemeral && chosen.owner && chosen.owner !== requester?.email) {
+      return {
+        kind: 'refused',
+        code: 'host_unavailable',
+        reason: `${preferHost} is a temporary machine somebody else asked for. It takes work only from them.`,
+      };
+    }
     if ((chosen.health?.free ?? 0) <= 0) {
       return {
         kind: 'refused',
