@@ -33,6 +33,7 @@ import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
 import { loadMinter } from '../src/fleet/host/minter-config.js';
 import { sign } from '../src/fleet/crypto.js';
 import { actionsJobToken, serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
+import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
 // systemd supplies this file with EnvironmentFile=; a shell does not, which is
@@ -77,6 +78,8 @@ Environment:
   FLEETWRIGHT_TRANSPORT          websocket (default) or stdio
   FLEETWRIGHT_HOST_KEY           this host's private key file (default /var/lib/fleetwright-sidecar/host-key.json)
   FLEETWRIGHT_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip
+  FLEETWRIGHT_VM_JOIN            on a machine from a hypervisor: the file it was booted with,
+                                 which it enrols itself with once (install/fleetwright-vm-join)
 
 Repository tokens for runners (docs/runner-central.md) — on ONE permanent box:
   FLEETWRIGHT_GITHUB_APP_KEY        the GitHub App's private key, a PEM file (or the
@@ -144,6 +147,24 @@ async function run() {
     }
   }
 
+  // A MACHINE FROM SOMEBODY'S HYPERVISOR enrols itself, once, with the
+  // ticket it was booted with, before it dials: the name it dials under is
+  // the one the coordinator gives it here. See src/fleet/host/vm-join.js.
+  /** @type {{ email: string, token: string|null }|null} */
+  let fromVm = null;
+  if (cfg.vmJoin && key) {
+    try {
+      const name = await enrolVmOnce({ file: cfg.vmJoin, origin: cfg.coordinatorUrl, hostKeyFile: cfg.hostKeyFile, publicJwk: key.publicJwk });
+      if (name) {
+        cfg.hostId = name;
+        log.info(`this machine enrolled itself as ${name}, a temporary host`);
+      }
+    } catch (e) {
+      log.error(`this machine could not enrol itself: ${/** @type {Error} */ (e).message}`);
+    }
+    fromVm = vmLogin(cfg.vmJoin);
+  }
+
   const transport =
     cfg.transport === 'websocket'
       ? new WebSocketTransport({
@@ -189,9 +210,13 @@ const sidecar = new Sidecar({
     jobToken: actionsJobToken(process.env),
     // THIS BOX'S KEY, for asking its people's vault. The private half is
     // captured in the closure and goes nowhere else (docs/vault.md).
-    vaultKey: key
+    // NOT ON A MACHINE FROM A HYPERVISOR: nobody approved its key, which is
+    // new with every machine, and it is handed its owner's login instead.
+    vaultKey: key && !cfg.vmJoin
       ? { publicJwk: key.publicJwk, sign: (/** @type {string} */ message) => sign(key.privateJwk, message) }
       : null,
+    vmLogin: fromVm,
+    onVmLoginHanded: cfg.vmJoin ? () => forgetJoin(cfg.vmJoin) : null,
     // Where a hypervisor's limited token is kept after onboarding: this
     // process's own state directory, beside its key (src/fleet/host/xo-setup.js).
     xoStateDir: path.dirname(cfg.hostKeyFile),

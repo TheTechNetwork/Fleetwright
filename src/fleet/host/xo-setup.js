@@ -72,6 +72,7 @@ import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xosetupAad, xosetupH
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { EDGE, ensureEdge, ensureUplink, srName } from './edge-router.js';
+import { VM_IMAGE, ensureImage } from './vm-image.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -103,6 +104,8 @@ const POLICY_WAIT_MS = 10 * 60_000;
 export const EGRESS_TAG = 'fleetwright-egress';
 /** What building the edge router asks of the server, checked before anything is made. */
 export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start']);
+/** What building the machine image asks of the server, checked before anything is made. */
+export const IMAGE_METHODS = Object.freeze(['disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'tag.add', 'resourceSet.addObject']);
 /** The smallest limits a policy may set: one vCPU, a GiB of memory, ten of disk. */
 const MIN_MEMORY = 1024 ** 3;
 const MIN_DISK = 10 * 1024 ** 3;
@@ -249,10 +252,17 @@ export class XoSetups {
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   policyWaitMs?: number,
+   *   coordinatorUrl?: string|null,
+   *   buildImage?: typeof ensureImage,
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage }) {
     this.policyWaitMs = policyWaitMs;
+    // THE FLEET A MACHINE IMAGE INSTALLS FROM AND ITS MACHINES JOIN: this
+    // box's own, as it pinned it. Without one this box does not offer to
+    // build an image (`can`).
+    this.coordinatorUrl = coordinatorUrl;
+    this.buildImage = buildImage;
     this.signer = signer;
     this.emit = emit;
     this.stateDir = stateDir;
@@ -320,7 +330,18 @@ export class XoSetups {
       // checkPolicy), and asks where the router's disk goes only of one that
       // reads the answer (`edge-disk`). Not signed: a coordinator that strips
       // it makes the phone refuse or not offer, which is safe.
-      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['policy', 'edge', 'egress-any', 'edge-disk'] },
+      // And whether it builds the machine image sessions' machines are
+      // cloned from (`image`, vm-image.js): only a box that knows which fleet
+      // the image should install from.
+      xosetup: {
+        job,
+        state: 'waiting',
+        key: key.publicKey,
+        keySig,
+        hostKey,
+        fingerprint: await this.fingerprint(hostKey),
+        can: ['policy', 'edge', 'egress-any', 'edge-disk', ...(this.coordinatorUrl ? ['image'] : [])],
+      },
     };
   }
 
@@ -444,7 +465,9 @@ export class XoSetups {
       rec.cancelled = true;
       if (rec.abort) {
         rec.abort.abort();
-        rec.text = 'Stopping the edge router’s build and removing what it made.';
+        rec.text = rec.building === 'image'
+          ? 'Stopping the machine image’s build and removing what it made.'
+          : 'Stopping the edge router’s build and removing what it made.';
       } else {
         rec.text = 'Cancelling after this step.';
       }
@@ -563,9 +586,11 @@ export class XoSetups {
         rec.state = 'cancelled';
         // Cancelled during the build, the policy was already in force: say
         // so, rather than that nothing changed.
-        rec.text = rec.phase === 'apply'
-          ? 'Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.'
-          : 'Cancelled before anything was changed.';
+        rec.text = rec.phase !== 'apply'
+          ? 'Cancelled before anything was changed.'
+          : rec.building === 'image'
+            ? 'Cancelled while building the machine image. What the fleet may use was changed; the image was not made, and what was made of it was removed.'
+            : 'Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.';
       } else {
         rec.state = 'failed';
         rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
@@ -581,6 +606,7 @@ export class XoSetups {
       rec.inventory = null;
       rec.part = null;
       rec.abort = null;
+      rec.building = null;
       try {
         ctx.admin?.close();
       } catch {
@@ -625,6 +651,10 @@ export class XoSetups {
         ctx.edgeDisks = ctx.edges.length
           ? Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VDI', name_label: EDGE.vm } })) || {})
           : [];
+        // AND EACH POOL'S MACHINE IMAGE, so the phone offers to build one only
+        // where there is none.
+        const templates = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {});
+        ctx.images = templates.filter((/** @type {any} */ t) => Array.isArray(t?.tags) && t.tags.includes(VM_IMAGE.tag));
         const inventory = inventoryOf(ctx, set);
         ctx.rec.choices = choicesOf(inventory);
         const box = await seal({ to: ctx.rec.reply, aad: xosetupInventoryAad(ctx.rec.job, ctx.rec.address), payload: inventory });
@@ -669,42 +699,95 @@ export class XoSetups {
         // own, so a phone that predates it still reads the progress as the
         // step it knows, with the machine's sentence under it saying where the
         // download and the disk have got to.
+        if (!p.edge && !p.image) return;
+        const rec = ctx.rec;
+        // The words every time, for the screen that asks; an event only when
+        // the stage changes or the bar has moved a twentieth, so a Lock
+        // Screen is not pushed to for every 16 MB.
+        const say = (/** @type {string} */ text, /** @type {any} */ part) => {
+          if (rec.cancelled) return;
+          rec.text = text;
+          if (!part) return;
+          const before = rec.part;
+          rec.part = part;
+          if (!before || before.stage !== part.stage || Math.floor(before.fill / 50) !== Math.floor(part.fill / 50)) this.#report(rec);
+        };
+        const way = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress);
+        if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
+        /** @type {string[]} */
+        const built = [];
         if (p.edge) {
           const missing = EDGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the edge router cannot be built. The policy was applied.`);
-          const way = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress);
-          if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
-          const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
-          const rec = ctx.rec;
-          rec.abort = new AbortController();
-          return await ensureEdge({
-            admin: ctx.admin,
-            pool: way.$pool,
-            egress: { id: p.egress, name: String(way.name_label || 'the way out').slice(0, 80) },
-            uplink,
-            srs: ctx.srs || [],
-            fleetSrs: p.srs,
-            sr: p.edgeSr,
-            address: rec.address,
-            pin: rec.pin,
-            plain: rec.plain === true,
-            imageDir: path.join(this.stateDir || '.', 'edge'),
-            signal: rec.abort.signal,
-            // The words every time, for the screen that asks; an event only
-            // when the stage changes or the bar has moved a twentieth, so a
-            // Lock Screen is not pushed to for every 16 MB.
-            say: (/** @type {string} */ text, /** @type {any} */ part) => {
-              if (rec.cancelled) return;
-              rec.text = text;
-              if (!part) return;
-              const before = rec.part;
-              rec.part = part;
-              if (!before || before.stage !== part.stage || Math.floor(before.fill / 50) !== Math.floor(part.fill / 50)) this.#report(rec);
-            },
-          });
         }
+        if (p.image) {
+          const missing = IMAGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
+          if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the machine image cannot be built. The policy was applied.`);
+        }
+        const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
+        // THE MACHINE IMAGE, after the router, on the same pool: it is built
+        // on the uplink, so its install leaves through the router like every
+        // machine cloned from it will (vm-image.js).
+        if (p.image) {
+          const poolName = String((ctx.pools || []).find((/** @type {any} */ x) => x?.id === way.$pool)?.name_label || 'this pool').slice(0, 80);
+          const image = async () => {
+            rec.building = 'image';
+            rec.part = null;
+            rec.abort = new AbortController();
+            return this.buildImage({
+              admin: ctx.admin,
+              pool: way.$pool,
+              poolName,
+              uplink,
+              setId: ctx.setId,
+              srs: ctx.srs || [],
+              fleetSrs: p.srs,
+              sr: p.edgeSr,
+              address: rec.address,
+              pin: rec.pin,
+              plain: rec.plain === true,
+              imageDir: path.join(this.stateDir || '.', 'images'),
+              coordinatorUrl: /** @type {string} */ (this.coordinatorUrl),
+              signal: rec.abort.signal,
+              say,
+            });
+          };
+          if (!p.edge) return await image();
+          built.push(await this.#edge(ctx, p, way, uplink, say));
+          built.push(await image());
+          return built.join(' ');
+        }
+        return await this.#edge(ctx, p, way, uplink, say);
       },
     ];
+  }
+
+  /**
+   * The edge router, for the apply step.
+   *
+   * @param {any} ctx @param {any} p @param {any} way @param {string} uplink
+   * @param {(text: string, part?: any) => void} say
+   */
+  async #edge(ctx, p, way, uplink, say) {
+    const rec = ctx.rec;
+    rec.building = 'edge';
+    rec.part = null;
+    rec.abort = new AbortController();
+    return ensureEdge({
+      admin: ctx.admin,
+      pool: way.$pool,
+      egress: { id: p.egress, name: String(way.name_label || 'the way out').slice(0, 80) },
+      uplink,
+      srs: ctx.srs || [],
+      fleetSrs: p.srs,
+      sr: p.edgeSr,
+      address: rec.address,
+      pin: rec.pin,
+      plain: rec.plain === true,
+      imageDir: path.join(this.stateDir || '.', 'edge'),
+      signal: rec.abort.signal,
+      say,
+    });
   }
 
   /** The steps, in XOSETUP_STEPS order. Each may return the sentence it leaves on the job. */
@@ -942,6 +1025,12 @@ export function inventoryOf(ctx, set) {
       sr: sr ? srName(sr) : null,
     };
   });
+  // Each pool's machine image, by pool and name: what the phone needs to say
+  // "it is there" rather than offer to build another.
+  const images = (ctx.images || []).map((/** @type {any} */ t) => ({
+    pool: t.$pool ? String(t.$pool) : null,
+    name: String(t.name_label || VM_IMAGE.name).slice(0, 80),
+  }));
   return {
     v: 1,
     address: ctx.rec.address,
@@ -949,6 +1038,7 @@ export function inventoryOf(ctx, set) {
     srs,
     networks,
     edges,
+    images,
     capacity: {
       cpus: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.cpus?.cores) || 0), 0),
       memory: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.memory?.size) || 0), 0),
@@ -967,6 +1057,10 @@ function choicesOf(inventory) {
     srs: new Map(inventory.srs.map((/** @type {any} */ x) => [x.id, x.size])),
     networks: new Set(inventory.networks.map((/** @type {any} */ x) => x.id)),
     capacity: inventory.capacity,
+    // Which pool each network is in, and which pools have their edge router:
+    // a machine image is built behind one (checkPolicy).
+    networkPools: new Map(inventory.networks.map((/** @type {any} */ x) => [x.id, x.pool])),
+    edgePools: new Set((inventory.edges || []).map((/** @type {any} */ e) => e.pool)),
   };
 }
 
@@ -999,9 +1093,12 @@ export function currentLimits(set) {
  * the fleet's networks could not be picked at all.
  *
  * @param {any} p @param {ReturnType<typeof choicesOf>|null} choices
- * `edge` asks for the edge router on the way out; it needs one.
+ * `edge` asks for the edge router on the way out; it needs one. `image` asks
+ * for the machine image sessions' machines are cloned from, on the way out's
+ * pool; it is built behind the edge router, so it needs one there or asked
+ * for with it.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, image: boolean, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1023,6 +1120,11 @@ export function checkPolicy(p, choices) {
   // it is in the way out's pool and has room is checked where it is used.
   const edgeSr = p.edgeSr === null || p.edgeSr === undefined ? null : String(p.edgeSr);
   if (edgeSr !== null && !choices.srs.has(edgeSr)) return { ok: false, text: 'The edge router’s disk has to go on storage this pool listed. Nothing was changed.' };
+  const image = p.image === true;
+  if (image && egress === null) return { ok: false, text: 'The machine image is built behind the edge router: choose the way out it leaves through.' };
+  if (image && !edge && !choices.edgePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
+    return { ok: false, text: 'The machine image is built behind the edge router, and that pool has none yet. Build the router with it. Nothing was changed.' };
+  }
   const cpus = Number(p.limits?.cpus);
   const memory = Number(p.limits?.memory);
   const disk = Number(p.limits?.disk);
@@ -1033,7 +1135,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge ? edgeSr : null, limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image ? edgeSr : null, image, limits: { cpus, memory, disk } } };
 }
 
 /**

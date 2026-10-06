@@ -258,6 +258,8 @@ test('a box asks for its vault through the coordinator, and its sessions use wha
   await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' });
   await m.phone({ op: 'put', name: 'claude', value: `sk-ant-oat01-${'c'.repeat(40)}` });
   await m.phone({ op: 'connect', provider: 'cloudflare', code: 'cfcode1234', verifier: 'w'.repeat(64), redirectUri: 'https://fleet.test/oauth/cloudflare/callback' });
+  // A POOL'S TOKEN, which a box holds in memory and never writes down.
+  await m.phone({ op: 'put', name: 'hypervisor:xo.invalid', value: JSON.stringify({ v: 1, address: 'xo.invalid', pin: 'a'.repeat(64), token: 'xo-limited-token', resourceSet: 'set-1' }) });
   const keys = await generateKeyPair();
   await m.phone({ op: 'grant', hostKey: keys.publicJwk, label: 'office-box' });
 
@@ -311,6 +313,13 @@ test('a box asks for its vault through the coordinator, and its sessions use wha
   assert.equal(statSync(join(stateDir, 'vault', `${ELI}.json`)).mode & 0o777, 0o600);
   assert.equal(statSync(join(stateDir, 'vault')).mode & 0o777, 0o700);
   assert.ok(!readFileSync(join(stateDir, 'vault', `${ELI}.json`), 'utf8').includes('cf_refresh'), 'a box holds no refresh token');
+  // THE POOL'S TOKEN went to this process and not to the hub's files, and
+  // the box says it holds that pool (never the token) in its health.
+  assert.ok(!readFileSync(join(stateDir, 'vault', `${ELI}.json`), 'utf8').includes('xo-limited-token'), 'a pool token is never written down');
+  assert.equal([...sidecar.pools.held.values()][0]?.record.token, 'xo-limited-token');
+  const health = await sidecar.health();
+  assert.deepEqual(health.xo.map((/** @type {any} */ e) => [e.address, e.owner]), [['xo.invalid', ELI]]);
+  assert.ok(!JSON.stringify(health).includes('xo-limited-token'));
 
   // A SESSION ON THIS PERMANENT BOX, with nothing linked here, runs on the
   // vault's Claude login, read at exec time and never in the command line;
@@ -331,6 +340,7 @@ test('a box asks for its vault through the coordinator, and its sessions use wha
   await sidecar.syncVault();
   assert.equal(vaultSecret(cfg, ELI, 'NPM_TOKEN'), null);
   assert.equal(vaultClaudeFile(cfg, ELI), null);
+  assert.equal(sidecar.pools.held.size, 0, 'and the pool is no longer held');
   assert.ok(!existsSync(join(stateDir, 'vault', `${ELI}.json`)));
 
   // A BOX PRESENTING ANOTHER KEY is refused by the coordinator before the minter.
