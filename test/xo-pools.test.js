@@ -42,6 +42,9 @@ function xo({ objects = [], fail = {} } = {}) {
     async call(/** @type {string} */ method, /** @type {any} */ params = {}) {
       calls.push({ method, params });
       if (fail[method]) throw new Error(fail[method]);
+      // `vm.restart:clean` refuses only the clean one, as a machine without
+      // its guest agent does.
+      if (params?.force === false && fail[`${method}:clean`]) throw new Error(fail[`${method}:clean`]);
       if (method === 'session.signIn') return { id: 'u1', permission: 'none' };
       if (method === 'xo.getAllObjects') {
         const f = params.filter || {};
@@ -197,7 +200,7 @@ test('a look reports the machines made there, what each is and where, for the ph
   const vm = {
     type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: 'Running',
     tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + 600}`, `fleetwright-made:${s - 600}`, `fleetwright-from:${IMAGE}`, `fleetwright-for:${ELI}`, 'fleetwright-on:LAN'],
-    addresses: { '0/ipv6/0': 'fe80::1', '0/ipv4/0': '192.168.1.40' }, CPUs: { number: 2 }, memory: { size: 4 * 1024 ** 3 },
+    mainIpAddress: '192.168.1.40', addresses: { '0/ipv6/0': 'fe80::1', '0/ipv4/0': '10.0.0.9', '1/ipv4/0': '192.168.1.40' }, CPUs: { number: 2 }, memory: { size: 4 * 1024 ** 3 },
   };
   const pools = holder(xo({ objects: [pool, image, uplink, vm] }), () => now);
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
@@ -209,14 +212,14 @@ test('a look reports the machines made there, what each is and where, for the ph
 
 /**
  * A pool with one machine of Eli's on it, made `age` minutes ago and running
- * for `left` more.
- * @param {{ age?: number, left?: number, state?: string, fail?: Record<string, string>, owner?: string, tags?: string[] }} [o]
+ * for `left` more, with its guest agent unless `agent` is false.
+ * @param {{ age?: number, left?: number, state?: string, fail?: Record<string, string>, owner?: string, tags?: string[], agent?: boolean }} [o]
  */
-function withMachine({ age = 10, left = 20, state = 'Running', fail = {}, owner = ELI, tags = [] } = {}) {
+function withMachine({ age = 10, left = 20, state = 'Running', fail = {}, owner = ELI, tags = [], agent = true } = {}) {
   const now = Date.parse('2026-10-06T12:00:00Z');
   const s = Math.floor(now / 1000);
   const vm = {
-    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: state,
+    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: state, managementAgentDetected: agent,
     tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + left * 60}`, `fleetwright-made:${s - age * 60}`, `fleetwright-for:${owner}`, ...tags],
   };
   const stand = xo({ objects: [pool, image, vm], fail });
@@ -247,6 +250,22 @@ test('a machine is restarted, or ended now, only for the person it was made for'
   const down = new XoPools({ connect: /** @type {any} */ (async () => { throw new Error('ECONNREFUSED'); }) });
   down.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
   assert.equal((await down.control({ owner: ELI, name: 'vm-111111111111', action: 'reboot' })).unreachable, true);
+});
+
+test('a restart is clean where the machine has its guest agent, and hard where it has not or refuses', async () => {
+  // Xen Orchestra's own API: a clean reboot "Requires guest tools to be
+  // installed", and the image installs them only where the distribution has them.
+  let m = withMachine({ agent: false });
+  assert.equal((await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'reboot' })).ok, true);
+  assert.deepEqual(m.asked(), [['vm.restart', { id: 'vm-uuid', force: true }]]);
+
+  m = withMachine({ fail: { 'vm.restart:clean': 'VM_MISSING_PV_DRIVERS' } });
+  assert.equal((await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'reboot' })).ok, true);
+  assert.deepEqual(m.asked(), [['vm.restart', { id: 'vm-uuid', force: false }], ['vm.restart', { id: 'vm-uuid', force: true }]]);
+
+  m = withMachine({ agent: false });
+  assert.equal((await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', cpus: 2 })).ok, true);
+  assert.deepEqual(m.asked()[1], ['vm.stop', { id: 'vm-uuid', force: true }], 'a resize stops it hard too');
 });
 
 test('a machine is given longer up to its longest life from when it was made, and not past it', async () => {
