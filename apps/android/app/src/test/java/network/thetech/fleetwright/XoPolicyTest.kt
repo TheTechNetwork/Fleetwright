@@ -198,6 +198,27 @@ class XoPolicyTest {
         assertNull(XoPolicy.problem(inv, noLab))
     }
 
+    /**
+     * Asked for: a way out that is not one of the fleet's networks. A machine
+     * that takes that keeps the way out when its network goes off, starts
+     * with it where Xen Orchestra's tag is, and sends it.
+     */
+    @Test
+    fun onAMachineThatTakesAnyNetworkTheWayOutNeedNotBeTheFleets() {
+        val inv = inventory(inventoryJson(currentNetworks = listOf("net-mgmt")))
+        assertNull("an older machine would refuse it, so it is not chosen", XoPolicy.defaults(inv).egress)
+        val any = XoPolicy.defaults(inv, anyWayOut = true)
+        assertEquals("the tagged network, though the fleet may not use it", "net-lab", any.egress)
+        val off = XoPolicy.withNetwork(XoPolicy.withNetwork(any, "net-mgmt", false), "net-mgmt", true)
+        assertEquals("net-lab", off.egress)
+        assertNull(XoPolicy.problem(inv, off))
+        assertEquals("net-lab", XoPolicy.payload(inv, off).getString("egress"))
+        assertEquals(
+            "The way out has to be a network this pool listed. Nothing was changed.",
+            XoPolicy.problem(inv, off.copy(egress = "net-elsewhere")),
+        )
+    }
+
     @Test
     fun applyWaitsForWhatTheMachineWouldTake() {
         val inv = inventory()

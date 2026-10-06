@@ -189,6 +189,7 @@ test('both phones say the same things about what is remembered', () => {
     'It is there and running. Apply keeps its WAN on this network.',
     'It is there and stopped. Apply keeps its WAN on this network and starts it.',
     'is too old to build the router; update it to have it built from here.',
+    'Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router.',
   ]) {
     assert.ok(SCREEN.includes(words), `iOS: ${words}`);
     assert.ok(SHEET.includes(words) || read(`${KT}PolicyForm.kt`).includes(words), `Android: ${words}`);

@@ -131,6 +131,12 @@ internal object XoPolicy {
          * with it. Needs a way out, and goes with it.
          */
         val edge: Boolean = false,
+        /**
+         * The machine takes any of the pool's networks as the way out
+         * (`egress-any` in begin's `can`), not only one the fleet may use.
+         * An older one refuses those, so they are not offered to it.
+         */
+        val anyWayOut: Boolean = false,
     )
 
     /**
@@ -240,19 +246,20 @@ internal object XoPolicy {
     /**
      * Where the form starts: what the fleet may use now, and for a limit with
      * nothing set, half of what is there, as setup's own defaults are. The
-     * way out starts on the network already tagged as it, when that network
-     * is one the fleet may use; otherwise none, which the person can change.
+     * way out starts on the network already tagged as it, when the machine
+     * would take that network as the way out; otherwise none, which the
+     * person can change.
      */
-    fun defaults(inv: Inventory): Choice {
+    fun defaults(inv: Inventory, anyWayOut: Boolean = false): Choice {
         val srs = inv.currentSrs.toSet()
         val networks = inv.currentNetworks.toSet()
-        val egress = inv.networks.firstOrNull { it.egress && it.id in networks }?.id
+        val egress = inv.networks.firstOrNull { it.egress && (anyWayOut || it.id in networks) }?.id
         val cpus = (inv.currentLimits.cpus ?: (inv.cpus / 2).toLong()).coerceIn(1L, maxCpus(inv).toLong()).toInt()
         val memory = (inv.currentLimits.memory?.let { gibRounded(it) } ?: (inv.memory / 2 / GIB)).coerceIn(1L, maxMemoryGib(inv))
         val free = inv.srs.filter { it.id in srs }.sumOf { it.free }
         val disk = (inv.currentLimits.disk?.let { gibRounded(it) } ?: (free / 2 / GIB)).coerceIn(MIN_DISK / GIB, maxDiskGib(inv, srs))
         // On when there is one already, so Apply keeps it on the way out.
-        return Choice(srs, networks, egress, cpus, memory, disk, edge = edgeOn(inv, egress) != null)
+        return Choice(srs, networks, egress, cpus, memory, disk, edge = edgeOn(inv, egress) != null, anyWayOut = anyWayOut)
     }
 
     /**
@@ -265,12 +272,13 @@ internal object XoPolicy {
     }
 
     /**
-     * A network switched on or off. The way out has to be one of the
-     * networks chosen, so switching that one off leaves none.
+     * A network switched on or off. On a machine that holds the way out to
+     * the networks chosen, switching that one off leaves none; on one that
+     * takes any of the pool's, the way out stays where it is.
      */
     fun withNetwork(c: Choice, id: String, on: Boolean): Choice {
         val networks = if (on) c.networks + id else c.networks - id
-        val egress = c.egress?.takeIf { it in networks }
+        val egress = c.egress?.takeIf { c.anyWayOut || it in networks }
         return c.copy(networks = networks, egress = egress, edge = c.edge && egress != null)
     }
 
@@ -299,7 +307,8 @@ internal object XoPolicy {
         if (!srIds.containsAll(c.srs) || !networkIds.containsAll(c.networks)) {
             return "That names storage or a network this pool did not list. Nothing was changed."
         }
-        if (c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
+        if (c.egress != null && c.egress !in networkIds) return "The way out has to be a network this pool listed. Nothing was changed."
+        if (!c.anyWayOut && c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
         if (c.edge && c.egress == null) return "The edge router needs a way out: choose the network its WAN goes on."
         val maxCpus = maxCpus(inv)
         if (c.cpus < 1 || c.cpus > maxCpus) return "vCPUs are between 1 and $maxCpus, what the pool has."

@@ -345,10 +345,18 @@ test('Android: kind=xosetup becomes one ongoing notification per job, then one t
   // Which is ignored without this permission, so the manifest declares it.
   const manifest = readFileSync(new URL('../apps/android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
   assert.ok(manifest.includes('<uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />'));
-  // The same titles the coordinator sends (core.js #onSetupProgress).
-  for (const title of ['Adding a hypervisor', 'Hypervisor added', 'Hypervisor setup stopped', 'Hypervisor setup cancelled']) {
+  // The same titles the coordinator sends (SETUP_TITLES and POLICY_TITLES in
+  // core.js): a change to what the fleet may use, which reports from its
+  // apply step on, is not drawn as a hypervisor being added.
+  const core = readFileSync(new URL('../src/fleet/coordinator/core.js', import.meta.url), 'utf8');
+  for (const title of [
+    'Adding a hypervisor', 'Hypervisor added', 'Hypervisor setup stopped', 'Hypervisor setup cancelled',
+    'Changing what the fleet may use', 'What the fleet may use is changed', 'The change stopped', 'The change was cancelled',
+  ]) {
     assert.ok(notice.includes(`"${title}"`), `the notification says: ${title}`);
+    assert.ok(core.includes(`'${title}'`), `the coordinator says: ${title}`);
   }
+  assert.match(notice, /val policy = data\["purpose"\] == "policy"/);
   // Permission first, as every other notification here.
   assert.match(notice, /checkSelfPermission\(context, Manifest\.permission\.POST_NOTIFICATIONS\)/);
   // And an older update cannot move the bar backwards.
