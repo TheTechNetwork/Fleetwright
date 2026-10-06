@@ -366,15 +366,61 @@ out, a machine that can build it offers *Build the edge router on it*
    3 GiB disk on the storage chosen, its WAN (`xn0`) on the way out and its
    LAN (`xn1`) on the uplink at 10.254.0.1/24. Its rules, in order:
    - labs may ask the edge for names (DNS);
+   - no DNS or DNS over TLS to anywhere else, so the filtering below cannot
+     be stepped around by naming another resolver;
    - nothing to 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 or 224/4,
      so no lab reaches your LAN, the pool's API or another lab;
    - anything else, out through automatic NAT.
+   It also filters what the machines behind it do ("What the edge filters",
+   below).
    It hands out 10.254.0.100–250 and answers DNS with Unbound. It has **no
    login** (root's password is `*`) and no anti-lockout rule, because the only
    thing that could reach it is a lab, and it is not tagged `fleetwright`, so
    the fleet's token cannot touch the fleet's own way out.
 3. When it is already there, moves its WAN if the way out changed and starts
    it if it was stopped. Nothing is rebuilt.
+
+### What the edge filters
+
+> Network filtering/dns filtering to prevent malware and other security
+> issues. Deep packet inspection.
+
+Every machine behind the edge gets two filters, written into the edge's
+configuration like its rules (`EDGE_FILTER` in `src/fleet/host/edge-router.js`),
+so nothing in the fleet can switch them off.
+
+- **Names.** Unbound answers 0.0.0.0 for any name on two of OPNsense's
+  built-in blocklists: abuse.ch ThreatFox (malware and command-and-control
+  indicators) and Hagezi's threat intelligence feeds (malware, phishing,
+  scams). They are threat lists only, not ads or trackers, so ordinary work
+  does not trip them. A machine cannot step around the filter by naming
+  another resolver: DNS (53) and DNS over TLS (853) to anywhere but the edge
+  are blocked. DNS over HTTPS to a resolver by its address is not.
+- **Traffic.** Suricata watches the LAN side with four Emerging Threats Open
+  rule files: malware traffic, known botnet controllers, known-compromised
+  hosts and Cobalt Strike servers. It **detects and logs**, by each machine's
+  own address on the uplink. It does not drop: blocking mode on Xen's network
+  driver is a risk to every machine's connection, and the name filter is the
+  part that stops things.
+- **Kept fresh.** OPNsense fetches neither the lists nor the rules at boot,
+  only when a person applies a change in its web interface, which nobody
+  does here, or from cron. The edge keeps `/var` in memory, so both are gone
+  after a restart. So the configuration carries two cron jobs, every half
+  hour: the lists are cached for 20 hours, and rules are downloaded only when
+  their version changes. After an edge restart, filtering is back within
+  half an hour.
+
+**Booted in QEMU** from the pinned 26.7 image patched this way. The two cron
+jobs were in the crontab, Unbound was listening with its blocklist module
+loaded, and Suricata was running on the LAN interface with the four rule
+files and the uplink as its home network. `pfctl` showed the DNS rule before
+the private-ranges one, and a reload of every template was clean. The first
+version of this booted with Unbound's templates failing and no cron jobs,
+because a hand-written section stamped at the model's current version is
+never saved with its defaults (the comment on `edgeConfig` says how that was
+fixed). **Not run here:** the downloads themselves. This sandbox intercepts
+TLS and has no outbound DNS, so the first edge on a real pool is the first
+place the lists and rules arrive.
 
 **Its disk goes where the person says.** With the switch on, the phone asks
 *Its disk goes on*: any storage in the way out's pool with room for the
@@ -440,7 +486,7 @@ admin sign-in for as long as it runs:
   offset fails rather than corrupting the disk. **Booted in QEMU** from the
   published image patched this way: no key press, the console banner showed
   `fleetwright-edge.internal` with the LAN at 10.254.0.1/24 and the WAN on
-  DHCP, and `pfctl` showed the three LAN rules above in order, with automatic
+  DHCP, and `pfctl` showed the LAN rules above in order, with automatic
   NAT. Labs' own routers will use the same technique with their own
   configuration.
 
