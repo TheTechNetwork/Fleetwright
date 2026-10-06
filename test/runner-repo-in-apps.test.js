@@ -72,5 +72,5 @@ test('a new machine carries the session, and is never held offline without it', 
   assert.match(IOS, /extra\.isEmpty,/);
   assert.match(ANDROID, /extra\.isEmpty\(\) && isDeliveryFailure/);
   assert.match(IOS, /\.provision\(platform: platform, minutes: request\.minutes, start: start, template: request\.template,\s*network: request\.network\)/);
-  assert.match(ANDROID, /fleet\.provision\(platform, minutes = request\.minutes, start = start, template = request\.template\)/);
+  assert.match(ANDROID, /fleet\.provision\(platform, minutes = request\.minutes, start = start, template = request\.template, network = request\.network\)/);
 });

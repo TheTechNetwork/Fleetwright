@@ -108,10 +108,38 @@ internal object XoPolicy {
          * from one older than that, which is "cannot tell", never "none".
          */
         val images: List<Image>? = null,
+        /**
+         * The operating systems a machine image can be made of, from this
+         * machine's catalogue (vm-image.js, IMAGES); null from one older than
+         * the choice, which builds Debian alone.
+         */
+        val imageKinds: List<ImageKind>? = null,
     )
 
-    /** A pool's machine image: the template sessions' machines are cloned from. */
-    data class Image(val pool: String?, val name: String)
+    /**
+     * A pool's machine image: the template sessions' machines are cloned
+     * from. [key] is which of the catalogue's it is; null from a machine that
+     * predates saying, which only ever built Debian.
+     */
+    data class Image(val pool: String?, val name: String, val key: String? = null)
+
+    /** One operating system an image can be made of. */
+    data class ImageKind(val key: String, val os: String)
+
+    /** The image an older machine builds, and what an image that predates saying which it is was made of. */
+    const val DEBIAN_KEY = "debian-13"
+
+    /** The images already on the pool this network is in, by key. */
+    fun imageKeysOn(inv: Inventory, network: String?): Set<String> {
+        val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return emptySet()
+        return (inv.images ?: emptyList()).filter { it.pool == pool }.map { it.key ?: DEBIAN_KEY }.toSet()
+    }
+
+    /** The images asked for that the way out's pool does not have yet. */
+    fun imagesToBuild(inv: Inventory, c: Choice): Set<String> {
+        if (!c.imageChoice || !c.wantsImage) return emptySet()
+        return (if (c.imagesChoice) c.images else setOf(DEBIAN_KEY)) - imageKeysOn(inv, c.egress)
+    }
 
     /** The machine image on the pool this network is in, if it has one. */
     fun imageOn(inv: Inventory, network: String?): Image? {
@@ -124,7 +152,7 @@ internal object XoPolicy {
 
     /** The router or the image is to be built now, on storage still to be picked. */
     fun building(inv: Inventory, c: Choice): Pair<Boolean, Boolean> =
-        (c.edge && edgeOn(inv, c.egress) == null) to (c.imageChoice && c.image && imageOn(inv, c.egress) == null)
+        (c.edge && edgeOn(inv, c.egress) == null) to imagesToBuild(inv, c).isNotEmpty()
 
     /** How much room the disks being built need: the image's when it is one of them, the router's otherwise. */
     fun diskNeed(inv: Inventory, c: Choice): Long = if (building(inv, c).second) IMAGE_DISK else EDGE_DISK
@@ -202,7 +230,18 @@ internal object XoPolicy {
         val image: Boolean = false,
         /** The machine builds one (`image` in begin's `can`). An older one cannot, so it is neither offered nor sent. */
         val imageChoice: Boolean = false,
-    )
+        /**
+         * Which images to make, by key, for a machine that builds any of its
+         * catalogue (`images` in begin's `can`). Asked for: "os selection
+         * not just Debian".
+         */
+        val images: Set<String> = emptySet(),
+        /** The machine takes [images]. An older one is sent `image` alone, and offered Debian alone. */
+        val imagesChoice: Boolean = false,
+    ) {
+        /** An image is asked for, in whichever form this machine reads. */
+        val wantsImage: Boolean get() = if (imagesChoice) images.isNotEmpty() else image
+    }
 
     /**
      * The admin sign-in for a policy job, sealed to the job's key under the
@@ -297,7 +336,15 @@ internal object XoPolicy {
             },
             images = json.optJSONArray("images")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
-                    a.optJSONObject(i)?.let { m -> Image(text(m, "pool"), text(m, "name") ?: "Fleetwright Debian 13") }
+                    a.optJSONObject(i)?.let { m -> Image(text(m, "pool"), text(m, "name") ?: "Fleetwright Debian 13", text(m, "key")) }
+                }
+            },
+            imageKinds = json.optJSONArray("imageKinds")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    a.optJSONObject(i)?.let { k ->
+                        val key = text(k, "key") ?: return@let null
+                        ImageKind(key, text(k, "os") ?: key)
+                    }
                 }
             },
         )
@@ -380,10 +427,10 @@ internal object XoPolicy {
         if (c.egress != null && c.egress !in networkIds) return "The way out has to be a network this pool listed. Nothing was changed."
         if (!c.anyWayOut && c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
         if (c.edge && c.egress == null) return "The edge router needs a way out: choose the network its WAN goes on."
-        if (c.imageChoice && c.image && c.egress == null) {
+        if (c.imageChoice && c.wantsImage && c.egress == null) {
             return "The machine image is built behind the edge router: choose the way out it leaves through."
         }
-        if (c.imageChoice && c.image && !c.edge && edgeOn(inv, c.egress) == null) {
+        if (c.imageChoice && c.wantsImage && !c.edge && edgeOn(inv, c.egress) == null) {
             return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
         }
         val (buildEdge, buildImage) = building(inv, c)
@@ -415,9 +462,17 @@ internal object XoPolicy {
             .put("edge", c.edge)
             .put("limits", JSONObject().put("cpus", c.cpus).put("memory", c.memoryGib * GIB).put("disk", c.diskGib * GIB))
             // Only to a machine that builds an image, and only when asked.
-            .apply { if (c.imageChoice && c.image) put("image", true) }
+            .apply {
+                if (c.imageChoice && c.wantsImage) {
+                    if (c.imagesChoice) {
+                        put("images", JSONArray((inv.imageKinds ?: emptyList()).map { it.key }.filter { it in c.images }))
+                    } else {
+                        put("image", true)
+                    }
+                }
+            }
             // Only to a machine that reads it, and only with something to build.
-            .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.image))) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
+            .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage))) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
     fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice): String =

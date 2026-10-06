@@ -181,6 +181,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // The machine builds the machine image sessions' machines are cloned
     // from (`can` holds "image"); an older one cannot.
     var canImage by remember { mutableStateOf(false) }
+    // It builds any of its catalogue's images, chosen together; an older one Debian alone.
+    var canImages by remember { mutableStateOf(false) }
     // What the fleet said when the token was kept there too, or what stood in
     // the way (XoHandoff.keepInFleet).
     var fleetNote by remember { mutableStateOf("") }
@@ -392,6 +394,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         anyWayOut = "egress-any" in p.setup.can
         edgeDisk = "edge-disk" in p.setup.can
         canImage = "image" in p.setup.can
+        canImages = "images" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -629,7 +632,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     val opened = policyKey?.let { XoPolicy.openInventory(pool, id, address.trim(), it) }
                     if (opened != null) {
                         inventory = opened
-                        choice = XoPolicy.defaults(opened, anyWayOut).copy(edgeDiskChoice = edgeDisk, imageChoice = canImage)
+                        choice = XoPolicy.defaults(opened, anyWayOut).copy(
+                            edgeDiskChoice = edgeDisk,
+                            imageChoice = canImage,
+                            imagesChoice = canImages && opened.imageKinds != null,
+                        )
                     } else {
                         unopened = true
                     }

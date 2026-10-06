@@ -130,6 +130,37 @@ class XoPolicyTest {
         assertNull("an older machine says nothing about images, which is not none", inventory().images)
     }
 
+    /**
+     * Asked for: "os selection not just Debian". A machine that builds its
+     * whole catalogue is sent the images chosen, in its own order, and only
+     * the ones its pool does not have are built; an older one is sent `image`
+     * alone, as before. The same rules as iOS.
+     */
+    @Test
+    fun imagesAreChosenByOperatingSystemAndOnlyTheMissingOnesAreBuilt() {
+        val kinds = JSONArray()
+            .put(JSONObject().put("key", "debian-13").put("os", "Debian 13"))
+            .put(JSONObject().put("key", "ubuntu-24.04").put("os", "Ubuntu 24.04 LTS"))
+            .put(JSONObject().put("key", "ubuntu-26.04").put("os", "Ubuntu 26.04 LTS"))
+        val inv = inventory(
+            inventoryJson()
+                .put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true)))
+                .put("images", JSONArray().put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Debian 13")))
+                .put("imageKinds", kinds),
+        )
+        assertEquals(listOf("Debian 13", "Ubuntu 24.04 LTS", "Ubuntu 26.04 LTS"), inv.imageKinds?.map { it.os })
+        assertEquals("an image that predates saying is Debian", setOf("debian-13"), XoPolicy.imageKeysOn(inv, "net-lab"))
+        val c = XoPolicy.defaults(inv).copy(edge = false, imageChoice = true, imagesChoice = true, images = setOf("ubuntu-26.04", "debian-13"))
+        assertNull(XoPolicy.problem(inv, c))
+        val sent = XoPolicy.payload(inv, c).getJSONArray("images")
+        assertEquals(listOf("debian-13", "ubuntu-26.04"), (0 until sent.length()).map { sent.getString(it) })
+        assertFalse(XoPolicy.payload(inv, c).has("image"))
+        assertEquals(setOf("ubuntu-26.04"), XoPolicy.imagesToBuild(inv, c))
+        assertTrue(XoPolicy.building(inv, c).second)
+        assertFalse("the one there is not built again", XoPolicy.building(inv, c.copy(images = setOf("debian-13"))).second)
+        assertFalse("none asked is nothing sent", XoPolicy.payload(inv, c.copy(images = emptySet())).has("images"))
+    }
+
     @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in

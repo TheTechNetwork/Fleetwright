@@ -80,6 +80,9 @@ fun MachinesScreen(
     val reduced = Design.Motion.reduced()
     var fleetHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
     var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
+    // The machines made on your pools, as the boxes holding them last saw.
+    var poolMachines by remember { mutableStateOf(listOf<Fleet.VmMachine>()) }
+    var showingPoolMachine by remember { mutableStateOf<String?>(null) }
     // HAS THE FIRST ANSWER ARRIVED? "No machines yet" before the fleet has
     // replied is a confident statement about a question nobody has asked.
     var loaded by remember { mutableStateOf(false) }
@@ -113,9 +116,11 @@ fun MachinesScreen(
         coroutineScope {
             val reporting = async { runCatching { Fleet(settings).fleetHosts() } }
             val members = async { runCatching { Fleet(settings).enrolledHosts() } }
+            val onPools = async { Fleet(settings).vmMachines() }
             // A FAILED REQUEST IS NOT AN EMPTY FLEET: keep what was there.
             reporting.await().onSuccess { fleetHosts = it }
             members.await().onSuccess { hosts = it }
+            onPools.await().onSuccess { poolMachines = it }
         }
         loaded = true
     }
@@ -142,6 +147,9 @@ fun MachinesScreen(
             onDismiss = { showing = null },
             onChanged = { scope.launch { loadHosts() } },
         )
+    }
+    showingPoolMachine?.let { name ->
+        VmMachinePage(settings, name, onDismiss = { showingPoolMachine = null; scope.launch { loadHosts() } })
     }
     if (adding) AddMachineSheet(settings, onDismiss = { adding = false })
     if (addingHypervisor) {
@@ -204,6 +212,17 @@ fun MachinesScreen(
                     SilentCard(host = host, onClick = { showing = host.hostId })
                 }
             }
+            // THE MACHINES ON YOUR HYPERVISOR, each a way to its page: its
+            // console, SSH, a restart, longer, a new size. Asked for: "Vm
+            // console, settings, reboot, ssh". Drawn only when there is one.
+            if (poolMachines.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                        SectionHead("On your hypervisor")
+                        poolMachines.forEach { m -> PoolMachineCard(m, onClick = { showingPoolMachine = m.name }) }
+                    }
+                }
+            }
             // ADMINS ONLY, as Add a hypervisor is: changing a pool's policy
             // takes an admin sign-in and the verb refuses a member. Drawn only
             // when this phone holds a pool, because an empty section is a
@@ -239,6 +258,34 @@ fun MachinesScreen(
             }
             item { Spacer(Modifier.heightIn(min = Design.Space.group)) }
         }
+    }
+}
+
+/** A machine on your hypervisor: its name, its state, and what it is. The same shape as every card here. */
+@Composable
+private fun PoolMachineCard(m: Fleet.VmMachine, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .fleetCard(radius = Design.Radius.cardSmall)
+            .clickable(onClickLabel = "Opens its page", role = Role.Button, onClick = onClick)
+            .heightIn(min = 48.dp)
+            .padding(Design.Space.groupTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(m.name, style = Design.Style.bodyStrong, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+            Text(
+                vmStateWords(m.state),
+                style = Design.Style.label,
+                color = if (m.state == "Running") Design.Palette.ok.now else Design.Palette.attention.now,
+            )
+        }
+        Text(
+            listOfNotNull(m.image, m.ip, m.until?.let { "ends ${relative(it)}" }).joinToString(" · "),
+            style = Design.Style.micro,
+            color = Design.Palette.inkDim.now,
+        )
     }
 }
 
@@ -422,6 +469,7 @@ private fun MachinePage(
     var rebootConfirm by remember { mutableStateOf("") }
     var confirmingRevoke by remember { mutableStateOf(false) }
     var pin by remember { mutableStateOf("") }
+    var poolPage by remember { mutableStateOf(false) }
 
     /** Re-read this machine from the fleet. A failure keeps what was there. */
     suspend fun reload() {
@@ -481,6 +529,7 @@ private fun MachinePage(
     if (claudeOpen) {
         CredentialsSheet(settings, hostId, onDismiss = { claudeOpen = false }, onlyClaude = true)
     }
+    if (poolPage) VmMachinePage(settings, hostId, onDismiss = { poolPage = false })
     if (confirmingRevoke) {
         AlertDialog(
             onDismissRequest = { confirmingRevoke = false },
@@ -698,6 +747,12 @@ private fun MachinePage(
         }
 
         SectionHead("This machine")
+        // A MACHINE FROM YOUR HYPERVISOR is worked from its page there:
+        // console, SSH, a restart, longer, a new size. This page is the
+        // fleet's view of it; that one is the pool's.
+        if (hostId.startsWith("vm-")) {
+            OpenRow("On your hypervisor: console, SSH, size and end") { poolPage = true }
+        }
         if (h != null) {
             // NO BUTTON FOR A THING THE BOX REFUSES. Same words as iOS, held
             // equal by test/grants-in-apps.test.js.

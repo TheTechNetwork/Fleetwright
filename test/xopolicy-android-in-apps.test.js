@@ -162,7 +162,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   assert.match(form, /if \(canEdge && choice\.egress != null\) \{/);
   assert.ok(form.includes('title = if (there == null) "Build the edge router on it" else "Keep the edge router on it"'));
   assert.ok(form.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
-  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false)) }'));
+  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet())) }'));
   assert.match(sheet, /canEdge = "edge" in p\.setup\.can/);
   assert.match(policy, /\.put\("edge", c\.edge\)/);
   assert.ok(policy.includes('The edge router needs a way out: choose the network its WAN goes on.'));
