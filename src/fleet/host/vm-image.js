@@ -30,7 +30,7 @@
 // its log can be read in Xen Orchestra's console; the next build removes it.
 //
 // NOT RUN against a real pool: Xen Orchestra's calls here are its documented
-// ones (disk.import, disk.resize, vm.create with cloudConfig,
+// ones (disk.import, disk.resize or vdi.set, vm.create with cloudConfig,
 // vm.convertToTemplate, resourceSet.addObject), exercised against the suite's
 // stand-in.
 
@@ -322,6 +322,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   say: (text: string, part?: { stage: number, stages: number, fill: number }) => void,
  *   signal?: AbortSignal,
  *   image?: string,
+ *   resize?: 'disk.resize'|'vdi.set',
  *   getImage?: typeof fetchPinned,
  *   unpackImpl?: typeof unpackDebian,
  *   convert?: typeof convertQcow2,
@@ -334,6 +335,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function ensureImage({
   admin, pool, poolName = 'this pool', uplink, setId, srs, fleetSrs, sr: chosenSr = null, address, pin, plain, imageDir, coordinatorUrl, say, signal,
   image: key = DEBIAN_IMAGE.key,
+  resize = 'disk.resize',
   getImage = fetchPinned, unpackImpl = unpackDebian, convert = convertQcow2, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
 }) {
   const spec = IMAGES[key];
@@ -409,8 +411,10 @@ export async function ensureImage({
     });
     signal?.throwIfAborted();
     // ROOM FOR A SESSION. cloud-init grows the partition to fill it on the
-    // first boot, the build's and every clone's alike.
-    await admin.call('disk.resize', { id: vdi, size: VM_IMAGE.diskSize });
+    // first boot, the build's and every clone's alike. Through whichever
+    // call the server offers (RESIZE_METHODS in xo-setup.js): both take the
+    // disk's id and its new size in bytes.
+    await admin.call(resize === 'vdi.set' ? 'vdi.set' : 'disk.resize', { id: vdi, size: VM_IMAGE.diskSize });
 
     say(`Installing Fleetwright on the machine image, its disk on ${on}.`, stage(3, installFill(0)));
     vm = await admin.call('vm.create', {
