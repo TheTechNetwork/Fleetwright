@@ -15,7 +15,9 @@ import { UsageMonitor } from './core/usage.js';
 import { ensureApiToken, ensureSidecarToken } from './core/api-token.js';
 import { adoptBoxAccount, Accounts } from './core/accounts.js';
 import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
-import { readConfirmation, noteHealth } from './core/update-confirm.js';
+import { proveHub } from './core/update-confirm.js';
+import { shouldFollowRevert } from './core/restart-watch.js';
+import { versionDrift } from './core/release-apply.js';
 import { reclaimStale } from './core/reclaim.js';
 import { Connections, PROVIDERS } from './core/connectors.js';
 import { rowForActor, emailFromActor } from './core/accounts.js';
@@ -80,14 +82,9 @@ export async function main() {
   // reverts the release if this half, or the sidecar's, never arrives. Gated on
   // a trial existing, so a settled box pays nothing. Never fatal: a probe that
   // throws simply leaves the evidence unwritten, which is a revert, not a crash.
-  if (cfg.sandbox && readConfirmation(cfg)) {
-    try {
-      if (await canStartSession(cfg)) noteHealth(cfg, 'hub');
-      else log.warn('update: a release is on trial and a session did not start here — leaving it unconfirmed');
-    } catch (e) {
-      log.warn(`update: could not run the session probe: ${/** @type {Error} */ (e).message}`);
-    }
-  }
+  // A box with no sandbox proves tmux and the Claude CLI instead (proveHub).
+  const startedAt = Date.now();
+  await proveHub(cfg, { sandboxed: canStartSession });
 
   const registry = new Registry(cfg);
 
@@ -279,6 +276,18 @@ export async function main() {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  // FOLLOW A REVERT. When the watchdog puts an earlier release back, this hub
+  // exits and systemd starts it on that release, as the sidecar already does.
+  // Sessions are left running, as for any hub restart (KillMode=process).
+  setInterval(() => {
+    try {
+      if (shouldFollowRevert(cfg, startedAt, { drift: versionDrift })) {
+        log.warn('update: the release on trial was reverted — restarting onto the one put back');
+        void shutdown('revert');
+      }
+    } catch { /* a marker that cannot be read is no marker */ }
+  }, 15_000).unref?.();
 
   // A thrown error in a poll loop must not take the hub down silently.
   process.on('unhandledRejection', (e) => log.error('unhandled rejection', e));
