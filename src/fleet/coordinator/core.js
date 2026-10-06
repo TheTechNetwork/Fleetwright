@@ -1501,6 +1501,7 @@ export class CoordinatorCore {
     // it is by presenting a single-use value it could not have invented. See
     // src/fleet/coordinator/runner-tickets.js.
     if (spec.verb === 'provision' && shaped.params.platform === 'vm') return this.#provisionVm(spec, shaped.params);
+    if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
     if (spec.verb === 'provision') {
       const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null);
       if (minted.ok === false) return minted;
@@ -2474,15 +2475,16 @@ export class CoordinatorCore {
           'session there with a profile.',
       };
     }
-    if (spec.verb === 'provision' && spec.params?.platform === 'vm') {
+    if ((spec.verb === 'provision' && spec.params?.platform === 'vm') || spec.verb === 'vmctl') {
       const speaks = Number(host?.health?.protocol);
-      if (Number.isInteger(speaks) && speaks >= 8) return null;
+      const needs = spec.verb === 'vmctl' || spec.params?.network ? 9 : 8;
+      if (Number.isInteger(speaks) && speaks >= needs) return null;
       return {
         ok: false,
         error: { code: 'host_outdated' },
         text:
-          `${host?.hostId} is too old to make a machine on your hypervisor — it speaks protocol ` +
-          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs 8. Update it and ask again.`,
+          `${host?.hostId} is too old to ${spec.verb === 'vmctl' ? 'work' : 'make'} a machine on your hypervisor ${spec.params?.network ? 'on a network of your choosing ' : ''}— it speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${needs}. Update it and ask again.`,
       };
     }
     if (spec.verb !== 'provision' || !spec.params?.repo) return null;
@@ -3056,7 +3058,110 @@ export class CoordinatorCore {
       // somebody's pool. Empty is an answer (no box holds one of yours);
       // a coordinator too old to send it omits it, which reads the same.
       vmImages: this.vmImagesFor(requester),
+      // AND THE MACHINES ALREADY MADE FROM THEM, as the boxes holding the pool
+      // saw them on their last look: what each is, where, its address, and
+      // when it ends, so a machine's page can show it and offer what can be
+      // done to it (`vmctl`). Only the person's own.
+      vmMachines: this.vmMachinesFor(requester),
     };
+  }
+
+  /**
+   * The machines on a person's pools, by what the boxes holding them reported
+   * (health `xo[].machines`), one per name.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @returns {Array<Record<string, any>>}
+   */
+  vmMachinesFor(requester) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return [];
+    /** @type {Map<string, Record<string, any>>} */
+    const found = new Map();
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      for (const e of host.health.xo) {
+        if (String(e?.owner || '').toLowerCase() !== email || !Array.isArray(e?.machines)) continue;
+        for (const m of e.machines) {
+          const name = String(m?.name || '');
+          if (!/^vm-[0-9a-f]{12}$/.test(name) || found.has(name)) continue;
+          found.set(name, {
+            name,
+            vm: XO_UUID_RE.test(String(m.vm)) ? String(m.vm) : null,
+            state: typeof m.state === 'string' ? m.state.slice(0, 20) : null,
+            ip: typeof m.ip === 'string' ? m.ip.slice(0, 45) : null,
+            until: Number.isFinite(Number(m.until)) ? Number(m.until) : null,
+            madeAt: Number.isFinite(Number(m.madeAt)) ? Number(m.madeAt) : null,
+            cpus: Number.isInteger(m.cpus) ? m.cpus : null,
+            memory: Number.isFinite(Number(m.memory)) ? Number(m.memory) : null,
+            image: typeof m.image === 'string' ? m.image.slice(0, 80) : null,
+            network: typeof m.network === 'string' ? m.network.slice(0, 80) : null,
+            address: String(e.address || ''),
+            hosts: [host.hostId],
+          });
+        }
+      }
+    }
+    return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Work a machine on a person's pool: asked of each box holding one of
+   * their pools in turn, the ones that last saw the machine first, until one
+   * finds it. Only its owner may ask: a machine that enrolled is checked
+   * against its enrolment, and the box checks its own pools again.
+   *
+   * @param {any} spec @param {Record<string, any>} params
+   */
+  async #vmctl(spec, params) {
+    const owner = String(spec.requester?.email || '').toLowerCase();
+    if (!owner) return { ok: false, error: { code: 'not_signed_in' }, text: 'A machine is worked by the person it belongs to, so this needs a signed-in identity.' };
+    const name = String(params.name || '');
+    const enrolled = this.hostIds.get(name);
+    if (enrolled && String(enrolled.owner || '').toLowerCase() !== owner) {
+      return { ok: false, error: { code: 'not_yours' }, text: `${name} is somebody else’s machine.` };
+    }
+    if (params.action === 'extend' && params.minutes === undefined) return { ok: false, error: { code: 'bad_params' }, text: 'Say how many minutes longer.' };
+    if (params.action === 'resize' && params.cpus === undefined && params.memory === undefined) {
+      return { ok: false, error: { code: 'bad_params' }, text: 'Say how many vCPUs, or how much memory.' };
+    }
+    /** @type {Array<{ host: any, seen: boolean }>} */
+    const holders = [];
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      const mine = host.health.xo.filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === owner);
+      if (!mine.length) continue;
+      const seen = mine.some((/** @type {any} */ e) => Array.isArray(e?.machines) && e.machines.some((/** @type {any} */ m) => m?.name === name));
+      holders.push({ host, seen });
+    }
+    holders.sort((a, b) => Number(b.seen) - Number(a.seen) || a.host.hostId.localeCompare(b.host.hostId));
+    if (!holders.length) {
+      return { ok: false, error: { code: 'no_hosts' }, text: 'No connected box holds one of your pools, so nothing can reach that machine.' };
+    }
+    this.record({ event: 'vm.control', actor: spec.actor ?? null, text: `${owner} asked to ${params.action} ${name}` });
+    /** @type {string[]} */
+    const skipped = [];
+    for (const { host } of holders) {
+      if (this.#cannotCarry(host, spec)) {
+        skipped.push(`${host.hostId} (needs updating)`);
+        continue;
+      }
+      let answer;
+      try {
+        answer = explainUnknownVerb(await this.send(host, { ...spec, params }), host);
+      } catch (e) {
+        skipped.push(`${host.hostId} (${/** @type {Error} */ (e).message})`);
+        continue;
+      }
+      // NOT ON THIS BOX'S POOLS, or the pool could not be reached: the next
+      // box may hold the pool it is on. Anything else is the answer.
+      if (answer?.ok === false && (answer.unreachable === true || answer.notHere === true)) {
+        skipped.push(`${host.hostId} (${answer.text || 'not there'})`);
+        continue;
+      }
+      return { ...answer, hostId: host.hostId };
+    }
+    return { ok: false, error: { code: 'not_found' }, text: `No box holding your pools could find ${name}: ${skipped.join(', ')}.` };
   }
 
   /**
@@ -3064,12 +3169,12 @@ export class CoordinatorCore {
    * holding their pools' tokens reported (health `xo`, src/fleet/host/xo-pools.js).
    *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[] }>}
+   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }> }>}
    */
   vmImagesFor(requester) {
     const email = String(requester?.email || '').toLowerCase();
     if (!email) return [];
-    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[] }>} */
+    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }> }>} */
     const found = new Map();
     for (const h of this.#vmHolders(email, null)) {
       for (const entry of h.entries) {
@@ -3086,6 +3191,9 @@ export class CoordinatorCore {
             poolName: image.poolName,
             address: entry.address,
             hosts: [h.host.hostId],
+            // THE NETWORKS IT CAN GO ON besides the uplink: the pool's, that
+            // the fleet may use, for "reachable from my network".
+            networks: entry.networks.filter((/** @type {any} */ n) => !image.pool || !n.pool || n.pool === image.pool).map((/** @type {any} */ n) => ({ id: n.id, name: n.name })),
           });
         }
       }
@@ -3099,7 +3207,7 @@ export class CoordinatorCore {
    * given. In hostId order, so the same request goes to the same box.
    *
    * @param {string} email @param {string|null} template
-   * @returns {Array<{ host: any, entries: Array<{ address: string, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
+   * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
   #vmHolders(email, template) {
     /** @type {Array<{ host: any, entries: any[] }>} */
@@ -3110,6 +3218,9 @@ export class CoordinatorCore {
         .filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === email && e?.reachable !== false)
         .map((/** @type {any} */ e) => ({
           address: String(e.address || ''),
+          networks: (Array.isArray(e.networks) ? e.networks : [])
+            .filter((/** @type {any} */ n) => XO_UUID_RE.test(String(n?.id)))
+            .map((/** @type {any} */ n) => ({ id: String(n.id), name: String(n.name || '').slice(0, 80), pool: typeof n.pool === 'string' ? n.pool : null })),
           images: (Array.isArray(e.images) ? e.images : [])
             .filter((/** @type {any} */ i) => XO_UUID_RE.test(String(i?.id)) && (!template || i.id === template))
             .map((/** @type {any} */ i) => ({
@@ -3182,6 +3293,7 @@ export class CoordinatorCore {
     /** @type {Record<string, any>} */
     const vmParams = { platform: 'vm', template, ticket: ticket.token };
     if (params.minutes !== undefined) vmParams.minutes = params.minutes;
+    if (typeof params.network === 'string' && params.network) vmParams.network = params.network;
     const vmSpec = { ...spec, params: vmParams };
     /** @type {string[]} */
     const skipped = [];

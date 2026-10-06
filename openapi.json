@@ -795,6 +795,108 @@
                               "type": "string"
                             },
                             "description": "the permanent boxes that can make it"
+                          },
+                          "networks": {
+                            "type": "array",
+                            "description": "the pool\u2019s networks the fleet may use, which `provision` takes as `network` instead of the uplink behind the edge router",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "vmMachines": {
+                      "description": "The machines already made from your images, as the boxes holding your pools last saw them: one per name. Work one with `vmctl`. Absent from an older coordinator, which means none can be shown.",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "address",
+                          "hosts"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "its host id, vm-\u2026"
+                          },
+                          "vm": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "its id in Xen Orchestra"
+                          },
+                          "state": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Xen Orchestra\u2019s power state"
+                          },
+                          "ip": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "until": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "when it ends, epoch ms"
+                          },
+                          "madeAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "when it was made, epoch ms"
+                          },
+                          "cpus": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "memory": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "bytes"
+                          },
+                          "image": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "network": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "address": {
+                            "type": "string",
+                            "description": "the Xen Orchestra it is on"
+                          },
+                          "hosts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
                           }
                         }
                       }
@@ -1138,7 +1240,8 @@
                       "verify",
                       "writefile",
                       "xoprobe",
-                      "xosetup"
+                      "xosetup",
+                      "vmctl"
                     ]
                   },
                   "params": {

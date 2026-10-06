@@ -115,6 +115,10 @@ test('the verb set is exactly what is documented', () => {
     'updates',
     'upgrade',
     'verify',
+    // v9: working a machine from your own hypervisor once it exists. A new
+    // verb, so an older host answers `unknown_verb`; the version was spent on
+    // `provision { network }` beside it. docs/hypervisors.md.
+    'vmctl',
     'writefile',
     // Adding a hypervisor: can a machine reach it, and onboarding run on the
     // one that can. New verbs, so an older host answers `unknown_verb`.
@@ -254,8 +258,10 @@ test('only state-changing verbs are marked mutating', () => {
     // the idempotency key is what stops a retried request paying for a second
     // one — the reply comes back long before the runner does, so a caller that
     // retries on a slow answer is exactly the case.
+    // vmctl reboots, resizes or removes a machine, and the idempotency key is
+    // what stops a retried stop reporting "not found" for one it just removed.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile', 'xosetup'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xosetup'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);
