@@ -213,9 +213,17 @@ test('a policy job building the edge router reaches the Lock Screen as a change,
   assert.equal(sent[0].message.title, 'Changing what the fleet may use');
   assert.equal(sent[0].message.data.purpose, 'policy', 'Android draws its own words, so it is told which');
 
+  // HOW FAR THE BUILD HAS GOT, in thousandths, so the bar moves while the
+  // router's disk is written instead of sitting at four fifths. Asked for:
+  // "this needs proper progress".
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', purpose: 'policy', fill: 420, text: 'Writing the edge router’s disk to Local storage: 960 of 3072 MB.' });
+  assert.deepEqual(activities[1].update.state, { step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', fill: 420 });
+  assert.equal(sent[1].message.data.fill, '420');
+  assert.equal(narrowProgress({ step: apply, of: 5, phase: 'apply', state: 'running', purpose: 'policy', fill: 1001 })?.fill, null, 'past the end is not a fill');
+
   await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: XOPOLICY_STEPS.length, of: XOPOLICY_STEPS.length, phase: 'done', state: 'done', purpose: 'policy', text: 'The edge router is up.' });
-  assert.equal(activities[1].update.event, 'end');
-  assert.equal(sent[1].message.title, 'What the fleet may use is changed');
+  assert.equal(activities[2].update.event, 'end');
+  assert.equal(sent[2].message.title, 'What the fleet may use is changed');
 
   // A policy step from a host that did not say it is one is refused, as any
   // phase onboarding does not have is.

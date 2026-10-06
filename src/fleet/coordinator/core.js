@@ -839,7 +839,7 @@ export class CoordinatorCore {
       try {
         const r = await this.push.activity(rec.activities, {
           event: ended ? 'end' : 'update',
-          state: { step: progress.step, of: progress.of, phase: progress.phase, state: progress.state },
+          state: { step: progress.step, of: progress.of, phase: progress.phase, state: progress.state, ...(progress.fill === null ? {} : { fill: progress.fill }) },
           ...(ended ? { dismissAt: this.now() + 15 * 60_000 } : {}),
         });
         if (r.dead.length) rec.activities = rec.activities.filter((t) => !r.dead.includes(t));
@@ -872,6 +872,7 @@ export class CoordinatorCore {
           hostId,
           step: String(progress.step),
           of: String(progress.of),
+          ...(progress.fill === null ? {} : { fill: String(progress.fill) }),
           phase: progress.phase,
           state: progress.state,
           purpose: progress.purpose,
@@ -3383,6 +3384,8 @@ const POLICY_TITLES = Object.freeze({ running: 'Changing what the fleet may use'
  * @property {string} phase  the step's key, or `done`
  * @property {'running'|'done'|'failed'|'cancelled'} state
  * @property {'setup'|'policy'} purpose  adding a pool, or changing what the fleet may use on one
+ * @property {number|null} fill  how far the step now running has got, in thousandths, when the host can
+ *   tell (the edge router's download and disk), or null
  * @property {string} text   one sentence for the person, never shown on a Live Activity
  * @property {number} at
  */
@@ -3415,6 +3418,11 @@ export function narrowProgress(msg) {
     state: /** @type {SetupProgress['state']} */ (state),
     purpose: /** @type {SetupProgress['purpose']} */ (purpose),
     text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 200) : '',
+    // HOW FAR INTO THE STEP, in thousandths, for a step that is bytes
+    // moving and can say so: the edge router's build is most of a policy
+    // job, and "step 5 of 5" alone held the bar at four fifths for minutes.
+    // A number and nothing else, so a Lock Screen can draw it.
+    fill: Number.isInteger(msg?.fill) && msg.fill >= 0 && msg.fill <= 1000 ? msg.fill : null,
     at: Date.now(),
   };
 }
