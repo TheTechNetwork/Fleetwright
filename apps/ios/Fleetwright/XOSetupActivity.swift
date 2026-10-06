@@ -48,6 +48,10 @@ struct XOSetupAttributes: ActivityAttributes {
     /// Where Xen Orchestra answers. Kept for the app; the Lock Screen does not
     /// draw it, for the same reason the push does not carry it.
     let address: String
+    /// `policy` for a change to what the fleet may use, whose end is not a
+    /// hypervisor added; nil for adding one. Optional, so an activity a build
+    /// before it left on the Lock Screen still decodes, as the adding it was.
+    var purpose: String? = nil
 }
 
 /// The words for each step, in one place, so the screen in the app and the
@@ -84,13 +88,25 @@ enum XOSetupWords {
     ///
     /// The coordinator's end notification uses these same three titles, so a
     /// person who reads the banner and then the activity reads one sentence.
-    static func headline(_ s: XOSetupAttributes.ContentState) -> String {
+    static func headline(_ s: XOSetupAttributes.ContentState, purpose: String? = nil) -> String {
+        if purpose == "policy", let end = policyEnd(s.state) { return end }
         switch s.state {
         case "done": return "Hypervisor added"
         case "failed": return "Hypervisor setup stopped"
         case "cancelled": return "Hypervisor setup cancelled"
         case "waiting": return "Waiting for the sign-in"
         default: return phrase(phase: s.phase, step: s.step, of: s.of)
+        }
+    }
+
+    /// How a policy job ended, in the words the coordinator's banner uses
+    /// for it (POLICY_TITLES in core.js), or nil while it has not.
+    static func policyEnd(_ state: String) -> String? {
+        switch state {
+        case "done": return "What the fleet may use is changed"
+        case "failed": return "The change stopped"
+        case "cancelled": return "The change was cancelled"
+        default: return nil
         }
     }
 

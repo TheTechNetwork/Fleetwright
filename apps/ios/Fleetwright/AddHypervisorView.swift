@@ -150,6 +150,9 @@ struct AddHypervisorView: View {
         /// The machine said it can build the edge router (`can` holds
         /// "edge"), so the switch is offered; an older one never is (C-2).
         let canEdge: Bool
+        /// The machine takes any of the pool's networks as the way out
+        /// (`can` holds "egress-any"); an older one only the fleet's.
+        let anyWayOut: Bool
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -724,19 +727,23 @@ struct AddHypervisorView: View {
         }
     }
 
-    /// THE WAY OUT, which is a choice among the networks chosen above and
-    /// nothing else: the machine refuses any other (checkPolicy), so the
-    /// picker never offers one. Then the edge router on it, offered only by a
-    /// machine that can build one: built when the pool has none, kept on the
-    /// way out when it has. What building costs is said before it is asked
-    /// for, because it downloads and makes a VM.
+    /// THE WAY OUT: any of the pool's networks, on a machine that takes
+    /// that (`egress-any`), and on an older one only the networks chosen
+    /// above, which is all it takes (checkPolicy), so the picker never offers
+    /// one it would refuse. Asked for: the first version offered only the
+    /// fleet's networks, and the WAN usually belongs on one that is not.
+    /// Then the edge router on it, offered only by a machine that can build
+    /// one: built when the pool has none, kept on the way out when it has.
+    /// What building costs is said before it is asked for, because it
+    /// downloads and makes a VM.
     private func wayOutSection(_ inv: XOPolicy.Inventory) -> some View {
         let canEdge = policyJob?.canEdge == true
+        let anyWayOut = choice.anyWayOut
         let there = inv.edge(on: choice.egress)
         return Section {
             Picker(selection: $choice.egress) {
                 Text("None yet").tag(String?.none)
-                ForEach(inv.networks.filter { choice.networks.contains($0.id) }) { network in
+                ForEach(inv.networks.filter { anyWayOut || choice.networks.contains($0.id) }) { network in
                     Text(XOPolicy.title(network.name, id: network.id)).tag(String?.some(network.id))
                 }
             } label: {
@@ -762,7 +769,7 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Way out")
         } footer: {
-            Text(wayOutFooter(canEdge: canEdge))
+            Text(wayOutFooter(canEdge: canEdge, anyWayOut: anyWayOut))
         }
     }
 
@@ -779,10 +786,12 @@ struct AddHypervisorView: View {
             : "It is there and stopped. Apply keeps its WAN on this network and starts it."
     }
 
-    private func wayOutFooter(canEdge: Bool) -> String {
+    private func wayOutFooter(canEdge: Bool, anyWayOut: Bool) -> String {
         let what = "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not "
-            + "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. Only a network chosen above "
-            + "can be the way out."
+            + "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. "
+            + (anyWayOut
+                ? "Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router."
+                : "Only a network chosen above can be the way out.")
         return canEdge ? what : what + " \(hostId) is too old to build the router; update it to have it built from here."
     }
 
@@ -1283,7 +1292,8 @@ struct AddHypervisorView: View {
                 refuse(answer.text ?? "\(begun.hostId) did not take the sign-in.")
                 return
             }
-            policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"))
+            policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"),
+                                  anyWayOut: begun.can.contains("egress-any"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1306,7 +1316,7 @@ struct AddHypervisorView: View {
             if let opened = XOPolicy.open(sealed, job: job, address: policyJob.address, key: policyJob.reply) {
                 withAnimation(Design.Motion.change) {
                     inventory = opened
-                    choice = XOPolicy.Choice.initial(for: opened)
+                    choice = XOPolicy.Choice.initial(for: opened, anyWayOut: policyJob.anyWayOut)
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
@@ -1348,6 +1358,15 @@ struct AddHypervisorView: View {
         let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
         do {
             let answer = try await fleet.setupPolicy(job: job, sealed: joined)
+            if answer.ok != false {
+                // ON THE LOCK SCREEN FROM HERE, while it applies and builds,
+                // at the step it is on: the last, `apply`, of however many
+                // the machine said there are.
+                let of = answer.xosetup?.of ?? progress?.of ?? 0
+                let applying = XOSetupAttributes.ContentState(step: max(of - 1, 0), of: of, phase: "apply", state: "running", since: Date())
+                XOSetupActivities.start(fleet: fleet, job: job, hostId: hostId, address: policyJob.address,
+                                        progress: answer.xosetup, purpose: "policy", otherwise: applying)
+            }
             if let state = answer.xosetup { await apply(state) }
             if answer.ok == false { refuse(answer.text ?? "\(hostId) did not take that choice.") }
         } catch {
@@ -1385,6 +1404,10 @@ struct AddHypervisorView: View {
         notePath(state)
         if isPolicy {
             await applyPolicyState(state, job: job)
+            // The Lock Screen hears it too once there is an activity, which
+            // is from Apply on. Not while choosing: a poll that left before
+            // Apply and lands after it would end the activity as not live.
+            if state.state != "choosing" { await XOSetupActivities.apply(job: job, progress: state) }
             return
         }
         if let outcome = XOSetupHandoff.collect(job: job, state: state) { handedBack = outcome }

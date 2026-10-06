@@ -163,6 +163,10 @@ enum XOPolicy {
         /// Build the edge router on the way out, or keep the one there in
         /// step with it. Needs a way out; goes with it when it goes.
         var edge = false
+        /// The machine takes any of the pool's networks as the way out
+        /// (`egress-any` in begin's `can`), not only one the fleet may use.
+        /// An older one refuses those, so they are not offered to it.
+        var anyWayOut = false
         var cpus = 1
         var memoryGiB = XOPolicy.minMemoryGiB
         var diskGiB = XOPolicy.minDiskGiB
@@ -172,12 +176,13 @@ enum XOPolicy {
         /// (memory: half the pool; disk: half the free space on the storage
         /// chosen), the way onboarding sets the first one; every number is
         /// then held inside what the machine will take.
-        static func initial(for inv: Inventory) -> Choice {
+        static func initial(for inv: Inventory, anyWayOut: Bool = false) -> Choice {
             var c = Choice()
+            c.anyWayOut = anyWayOut
             c.srs = Set(inv.current.srs).intersection(inv.srs.map(\.id))
             let networks = Set(inv.current.networks).intersection(inv.networks.map(\.id))
             c.networks = networks
-            c.egress = inv.networks.first { $0.egress && networks.contains($0.id) }?.id
+            c.egress = inv.networks.first { $0.egress && (anyWayOut || networks.contains($0.id)) }?.id
             // On when there is one already, so Apply keeps it on the way out.
             c.edge = inv.edge(on: c.egress) != nil
             c.cpus = XOPolicy.clamp(inv.current.limits.cpus ?? inv.capacity.cpus / 2, inv.cpuRange)
@@ -196,11 +201,12 @@ enum XOPolicy {
             diskGiB = XOPolicy.clamp(diskGiB, inv.diskRange(for: srs))
         }
 
-        /// A network on or off. The way out goes with its network: the
-        /// fleet's VMs could not put a router's WAN on one they may not use.
+        /// A network on or off. On a machine that holds the way out to the
+        /// fleet's networks, the way out goes with its network; on one that
+        /// takes any of the pool's, it stays where it is.
         mutating func setNetwork(_ id: String, on: Bool) {
             if on { networks.insert(id) } else { networks.remove(id) }
-            if let egress, !networks.contains(egress) {
+            if !anyWayOut, let egress, !networks.contains(egress) {
                 self.egress = nil
                 edge = false
             }
@@ -213,7 +219,10 @@ enum XOPolicy {
             if !srs.isSubset(of: inv.srs.map(\.id)) || !networks.isSubset(of: inv.networks.map(\.id)) {
                 return "That names storage or a network this pool did not list."
             }
-            if let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
+            if let egress, !inv.networks.contains(where: { $0.id == egress }) {
+                return "The way out has to be a network this pool listed."
+            }
+            if !anyWayOut, let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
             if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
             if !inv.cpuRange.contains(cpus) { return "vCPUs are between 1 and \(inv.cpuRange.upperBound), what the pool has." }
             if !inv.memoryRange.contains(memoryGiB) {
@@ -268,10 +277,8 @@ enum XOPolicy {
     /// headline: its end is not a hypervisor added. The step words are
     /// shared (XOSetupWords.phrase).
     static func statusLine(_ s: XOSetupAttributes.ContentState) -> String {
+        if let end = XOSetupWords.policyEnd(s.state) { return end }
         switch s.state {
-        case "done": return "What the fleet may use is changed"
-        case "failed": return "The change stopped"
-        case "cancelled": return "The change was cancelled"
         case "waiting": return "Waiting for the sign-in"
         case "choosing": return "Waiting for your choice"
         default: return XOSetupWords.phrase(phase: s.phase, step: s.step, of: s.of)

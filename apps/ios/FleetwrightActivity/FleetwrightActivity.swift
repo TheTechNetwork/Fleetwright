@@ -36,7 +36,7 @@ struct XOSetupActivityWidget: Widget {
         ActivityConfiguration(for: XOSetupAttributes.self) { context in
             // The Lock Screen follows the phone's appearance, and so does the
             // tint under it, so both resolve in the same scheme.
-            XOSetupLockScreen(hostId: context.attributes.hostId, state: context.state, stale: context.isStale)
+            XOSetupLockScreen(hostId: context.attributes.hostId, state: context.state, stale: context.isStale, purpose: context.attributes.purpose)
                 .padding(Design.Space.groupTight)
                 .activityBackgroundTint(Design.Palette.card)
                 .activitySystemActionForegroundColor(Design.Palette.ink)
@@ -47,7 +47,7 @@ struct XOSetupActivityWidget: Widget {
             // resolve `ink` to near-black on black.
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    XOSetupMark(state: context.state)
+                    XOSetupMark(state: context.state, purpose: context.attributes.purpose)
                         .padding(.leading, Design.Space.insideTight)
                         .environment(\.colorScheme, .dark)
                 }
@@ -62,12 +62,12 @@ struct XOSetupActivityWidget: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    XOSetupLines(hostId: context.attributes.hostId, state: context.state, stale: context.isStale)
+                    XOSetupLines(hostId: context.attributes.hostId, state: context.state, stale: context.isStale, purpose: context.attributes.purpose)
                         .padding(.horizontal, Design.Space.insideTight)
                         .environment(\.colorScheme, .dark)
                 }
             } compactLeading: {
-                XOSetupMark(state: context.state)
+                XOSetupMark(state: context.state, purpose: context.attributes.purpose)
                     .environment(\.colorScheme, .dark)
             } compactTrailing: {
                 // A ratio, where there is room for a ratio and not a sentence.
@@ -79,7 +79,7 @@ struct XOSetupActivityWidget: Widget {
                         .environment(\.colorScheme, .dark)
                 }
             } minimal: {
-                XOSetupMark(state: context.state)
+                XOSetupMark(state: context.state, purpose: context.attributes.purpose)
                     .environment(\.colorScheme, .dark)
             }
             .keylineTint(Design.Palette.active)
@@ -93,12 +93,14 @@ struct XOSetupActivityWidget: Widget {
 /// is on the row in Machines that started it.
 struct XOSetupMark: View {
     let state: XOSetupAttributes.ContentState
+    /// `policy` for a change to what the fleet may use (XOSetupAttributes).
+    var purpose: String? = nil
 
     var body: some View {
         Image(systemName: XOSetupMarks.symbol(state))
             .foregroundStyle(XOSetupMarks.tone(state))
             .contentTransition(.symbolEffect(.replace))
-            .accessibilityLabel(XOSetupWords.headline(state))
+            .accessibilityLabel(XOSetupWords.headline(state, purpose: purpose))
     }
 }
 
@@ -110,10 +112,12 @@ struct XOSetupLines: View {
     /// Past the content's stale date: nothing has been heard for long enough
     /// that the step shown is no longer a claim about now.
     var stale: Bool = false
+    /// `policy` for a change to what the fleet may use (XOSetupAttributes).
+    var purpose: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.insideTight) {
-            Text(XOSetupWords.headline(state))
+            Text(XOSetupWords.headline(state, purpose: purpose))
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.ink)
                 .contentTransition(.opacity)
@@ -141,13 +145,14 @@ struct XOSetupLockScreen: View {
     let hostId: String
     let state: XOSetupAttributes.ContentState
     var stale: Bool = false
+    var purpose: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: Design.Space.inside) {
-            XOSetupMark(state: state)
+            XOSetupMark(state: state, purpose: purpose)
                 .fleetType(.title)
                 .padding(.top, Design.Space.hair)
-            XOSetupLines(hostId: hostId, state: state, stale: stale)
+            XOSetupLines(hostId: hostId, state: state, stale: stale, purpose: purpose)
             if let ordinal = XOSetupWords.ordinal(state) {
                 Text(ordinal)
                     .fleetType(.label)
