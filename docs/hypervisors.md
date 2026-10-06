@@ -112,9 +112,9 @@ hold the same Xen Orchestra.
 
 | Action | What the box does |
 |---|---|
-| **Restart** | `vm.restart`, clean. A session running on it ends; the machine is back in the fleet in a minute or so. |
+| **Restart** | `vm.restart`: clean where the machine reports its guest agent, hard where it does not or refuses the clean one (Xen Orchestra's clean reboot needs the guest tools, which the image installs only where the distribution has them). A session running on it ends; the machine is back in the fleet in a minute or so. |
 | **Give it longer** | Moves the end in its tag, never past 350 minutes from when it was made, so asking again and again does not keep a machine alive for ever. |
-| **Restart with this size** | Marks it busy so the sweep does not take the stop for done, stops it, sets vCPUs and memory, and starts it again whatever the pool said. Xen Orchestra holds the size to the resource set; a refusal restarts it at its old size and says why. |
+| **Restart with this size** | Marks it busy so the sweep does not take the stop for done, stops it (clean or hard, as Restart), sets vCPUs and memory, and starts it again whatever the pool said. Xen Orchestra holds the size to the resource set; a refusal restarts it at its old size and says why. |
 | **End it now** | Force-stops it and removes it with its disk. |
 
 Each that interrupts a session asks first. None is held on the phone to be
