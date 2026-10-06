@@ -53,6 +53,13 @@ const MAX_RUNNER_STARTS = 200;
  * rows are about 45 KiB of the 128 a value may hold (test/do-key-bounds).
  */
 const MAX_SETUPS = 20;
+/**
+ * Pins one policy job may ask for, for the machine of its own it makes on the
+ * pool. One is the ordinary case; a few cover a clone that failed to boot.
+ */
+export const MAX_HOLDER_PINS = 3;
+/** The name a pool's own machine enrols under: `holder-` and six hex. */
+export const HOLDER_ID_RE = /^holder-[0-9a-f]{6}$/;
 const SETUP_TTL_MS = 24 * 60 * 60_000;
 
 /**
@@ -123,6 +130,18 @@ const MAX_DEVICES = 150;
  *                                  before it existed.
  * @property {number} registeredAt
  */
+
+/**
+ * Whether a box says it is the pool's own machine for one of this person's
+ * pools (`xo[].holder`). It decides only the order boxes are asked in, among
+ * boxes the person already gave the token to, so a box that claims it wrongly
+ * gains nothing it did not have.
+ *
+ * @param {any} host @param {string} email
+ */
+function holds(host, email) {
+  return Array.isArray(host?.health?.xo) && host.health.xo.some((/** @type {any} */ e) => e?.holder === true && String(e?.owner || '').toLowerCase() === email);
+}
 
 export class CoordinatorCore {
   /**
@@ -214,7 +233,7 @@ export class CoordinatorCore {
      * fingerprint and typing a password is a gap it is evicted across. Every
      * later phase then answered `unknown_job`, and progress from a machine
      * still mid-run was dropped as coming from a job nobody had begun.
-     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[] }>}
+     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number }>}
      */
     this.setups = new Map();
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
@@ -442,6 +461,9 @@ export class CoordinatorCore {
     if (msg.kind === 'claude-login') return this.#onRunnerClaude(hostId, msg);
     // ANY BOX ASKING FOR WHAT ITS PEOPLE APPROVED IT TO HOLD, the same way.
     if (msg.kind === 'vault') return this.#onHostVault(hostId, msg);
+    // AND THE BOX RUNNING A POLICY JOB, for the pin its pool's own machine
+    // enrols with.
+    if (msg.kind === 'holder-pin') return this.#onHolderPin(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -2946,6 +2968,64 @@ export class CoordinatorCore {
   }
 
   /**
+   * A PIN FOR THE POOL'S OWN MACHINE: a permanent host the box running a
+   * policy job clones on the pool, which enrols itself with this and holds
+   * the pool's token once its owner approves it, so the pool does not depend
+   * on a laptop being awake. docs/hypervisors.md, "A machine of its own".
+   *
+   * ONLY THE BOX RUNNING THAT JOB, for the person who began it, and a few per
+   * job. The name is chosen here and is one no host has: re-enrolling an
+   * existing name replaces its key, so a pin a box could point at a name of
+   * its choosing would be a way to take over the build server. Single use and
+   * ten minutes, like every pin, so the box asks just before it clones.
+   *
+   * Holding the token is still the person's to give. Enrolling makes the
+   * machine a member of the fleet; only approving it on the phone hands it the
+   * pool, and nothing here can do that.
+   *
+   * @param {string} hostId
+   * @param {any} msg
+   */
+  #onHolderPin(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for a holder pin without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the job says so when it gets no answer */ }
+    };
+    const job = String(msg.job || '');
+    const rec = XOSETUP_JOB_RE.test(job) ? this.setups.get(job) : undefined;
+    if (!rec || rec.hostId !== hostId || !rec.owner) {
+      answer({ ok: false, error: { code: 'not_your_job' }, text: `${hostId} is not running that setup, so it is given no pin.` });
+      return;
+    }
+    rec.holderPins = (rec.holderPins ?? 0) + 1;
+    if (rec.holderPins > MAX_HOLDER_PINS) {
+      answer({ ok: false, error: { code: 'too_many' }, text: `This setup has asked for a pin ${MAX_HOLDER_PINS} times already. Start it again.` });
+      return;
+    }
+    let name = '';
+    for (let tries = 0; tries < 20 && (!name || this.hostIds?.get(name) || this.registry.hosts.has(name)); tries++) {
+      const bytes = globalThis.crypto.getRandomValues(new Uint8Array(3));
+      name = `holder-${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+    }
+    if (this.hostIds?.get(name) || this.registry.hosts.has(name)) {
+      answer({ ok: false, error: { code: 'no_name' }, text: 'No free name was found for the machine. Try again.' });
+      return;
+    }
+    const pin = this.enrollment.mint({ purpose: 'host', label: `Holds a pool for ${rec.owner}`, actor: rec.owner, hostId: name });
+    this.record({ event: 'holder.pin', actor: rec.owner, text: `${hostId} was given a pin for ${name}, the pool's own machine` });
+    this.onStateChanged?.();
+    answer({ ok: true, pin: pin.code, hostId: name, expiresAt: pin.expiresAt });
+  }
+
+  /**
    * Ask the minting Worker's Claude half, and turn "there is none" and "it did
    * not answer" into refusals like any other, so no caller has to know which
    * of the three it was.
@@ -3137,7 +3217,7 @@ export class CoordinatorCore {
       const seen = mine.some((/** @type {any} */ e) => Array.isArray(e?.machines) && e.machines.some((/** @type {any} */ m) => m?.name === name));
       holders.push({ host, seen });
     }
-    holders.sort((a, b) => Number(b.seen) - Number(a.seen) || a.host.hostId.localeCompare(b.host.hostId));
+    holders.sort((a, b) => Number(b.seen) - Number(a.seen) || Number(holds(b.host, owner)) - Number(holds(a.host, owner)) || a.host.hostId.localeCompare(b.host.hostId));
     if (!holders.length) {
       return { ok: false, error: { code: 'no_hosts' }, text: 'No connected box holds one of your pools, so nothing can reach that machine.' };
     }
@@ -3236,7 +3316,10 @@ export class CoordinatorCore {
         .filter((/** @type {any} */ e) => e.images.length);
       if (entries.length) out.push({ host, entries });
     }
-    return out.sort((a, b) => a.host.hostId.localeCompare(b.host.hostId));
+    // THE POOL'S OWN MACHINE FIRST, where it has one: it is there for this,
+    // and is up when the laptop that set the pool up is asleep. Any other box
+    // holding the token is the fallback, in name order.
+    return out.sort((a, b) => Number(holds(b.host, email)) - Number(holds(a.host, email)) || a.host.hostId.localeCompare(b.host.hostId));
   }
 
   /**
