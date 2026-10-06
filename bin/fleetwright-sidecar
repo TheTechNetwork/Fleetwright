@@ -157,7 +157,7 @@ async function run() {
       const name = await enrolVmOnce({ file: cfg.vmJoin, origin: cfg.coordinatorUrl, hostKeyFile: cfg.hostKeyFile, publicJwk: key.publicJwk });
       if (name) {
         cfg.hostId = name;
-        log.info(`this machine enrolled itself as ${name}, a temporary host`);
+        log.info(`this machine enrolled itself as ${name}, ${cfg.holderFor ? `the machine of its own that holds ${cfg.holderFor}` : 'a temporary host'}`);
       }
     } catch (e) {
       log.error(`this machine could not enrol itself: ${/** @type {Error} */ (e).message}`);
@@ -216,6 +216,7 @@ const sidecar = new Sidecar({
       ? { publicJwk: key.publicJwk, sign: (/** @type {string} */ message) => sign(key.privateJwk, message) }
       : null,
     vmLogin: fromVm,
+    holderFor: cfg.holderFor,
     onVmLoginHanded: cfg.vmJoin ? () => forgetJoin(cfg.vmJoin) : null,
     // Where a hypervisor's limited token is kept after onboarding: this
     // process's own state directory, beside its key (src/fleet/host/xo-setup.js).

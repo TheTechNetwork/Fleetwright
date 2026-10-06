@@ -73,6 +73,7 @@ import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { EDGE, ensureEdge, ensureUplink, srName } from './edge-router.js';
 import { VM_IMAGE, IMAGES, ensureImage, imageKeyOf } from './vm-image.js';
+import { HOLDER, ensureHolder } from './xo-holder.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -262,10 +263,16 @@ export class XoSetups {
    *   policyWaitMs?: number,
    *   coordinatorUrl?: string|null,
    *   buildImage?: typeof ensureImage,
+   *   holderPin?: ((job: string) => Promise<any>)|null,
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null }) {
     this.policyWaitMs = policyWaitMs;
+    // HOW THIS BOX ASKS THE FLEET FOR THE PIN a pool's own machine joins with
+    // (xo-holder.js), for one job. Without it this box does not offer to make
+    // one (`can`).
+    /** @type {((job: string) => Promise<any>)|null} */
+    this.holderPin = holderPin;
     // THE FLEET A MACHINE IMAGE INSTALLS FROM AND ITS MACHINES JOIN: this
     // box's own, as it pinned it. Without one this box does not offer to
     // build an image (`can`).
@@ -350,7 +357,9 @@ export class XoSetups {
         fingerprint: await this.fingerprint(hostKey),
         // `images`: it builds any of the catalogue's operating systems, chosen
         // together, not only Debian (vm-image.js, IMAGES).
-        can: ['policy', 'edge', 'egress-any', 'edge-disk', ...(this.coordinatorUrl ? ['image', 'images'] : [])],
+        // `holder`: it makes the pool a machine of its own (xo-holder.js),
+        // which needs both the fleet to join and a way to ask it for a pin.
+        can: ['policy', 'edge', 'egress-any', 'edge-disk', ...(this.coordinatorUrl ? ['image', 'images'] : []), ...(this.coordinatorUrl && this.holderPin ? ['holder'] : [])],
       },
     };
   }
@@ -598,7 +607,9 @@ export class XoSetups {
         // so, rather than that nothing changed.
         rec.text = rec.phase !== 'apply'
           ? 'Cancelled before anything was changed.'
-          : rec.building === 'image'
+          : rec.building === 'holder'
+            ? 'Cancelled while making the pool’s own machine. What the fleet may use was changed, and whatever else you asked for was built.'
+            : rec.building === 'image'
             ? 'Cancelled while building the machine image. What the fleet may use was changed; the image was not made, and what was made of it was removed.'
             : 'Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.';
       } else {
@@ -665,6 +676,9 @@ export class XoSetups {
         // where there is none.
         const templates = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {});
         ctx.images = templates.filter((/** @type {any} */ t) => Array.isArray(t?.tags) && t.tags.includes(VM_IMAGE.tag));
+        // AND EACH POOL'S OWN MACHINE, so the phone offers to make one only
+        // where there is none (xo-holder.js).
+        ctx.holders = vms.filter((/** @type {any} */ v) => Array.isArray(v?.tags) && v.tags.includes(HOLDER.tag));
         const inventory = inventoryOf(ctx, set);
         ctx.rec.choices = choicesOf(inventory);
         const box = await seal({ to: ctx.rec.reply, aad: xosetupInventoryAad(ctx.rec.job, ctx.rec.address), payload: inventory });
@@ -709,7 +723,7 @@ export class XoSetups {
         // own, so a phone that predates it still reads the progress as the
         // step it knows, with the machine's sentence under it saying where the
         // download and the disk have got to.
-        if (!p.edge && !p.image) return;
+        if (!p.edge && !p.image && !p.holder) return;
         const rec = ctx.rec;
         // The words every time, for the screen that asks; an event only when
         // the stage changes or the bar has moved a twentieth, so a Lock
@@ -730,6 +744,7 @@ export class XoSetups {
           const missing = EDGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the edge router cannot be built. The policy was applied.`);
         }
+        if (p.holder && !(this.holderPin && this.coordinatorUrl)) throw new Error('this machine cannot ask the fleet for the pin a pool’s own machine joins with. The policy was applied.');
         if (p.image) {
           const missing = IMAGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (!RESIZE_METHODS.some((m) => Object.hasOwn(ctx.methods, m))) missing.push(RESIZE_METHODS.join(' or '));
@@ -768,9 +783,26 @@ export class XoSetups {
           // ONE AFTER ANOTHER, router first: each image is built behind it.
           if (p.edge) built.push(await this.#edge(ctx, p, way, uplink, say));
           for (const key of p.images) built.push(await image(key));
-          return built.join(' ');
+        } else if (p.edge) {
+          built.push(await this.#edge(ctx, p, way, uplink, say));
         }
-        return await this.#edge(ctx, p, way, uplink, say);
+        // THE POOL'S OWN MACHINE, last: it is cloned from the image, which may
+        // have been built a moment ago.
+        if (p.holder) {
+          rec.building = 'holder';
+          rec.part = null;
+          rec.abort = null;
+          built.push(await ensureHolder({
+            admin: ctx.admin,
+            pool: way.$pool,
+            egress: { id: String(way.id), name: String(way.name_label || 'the way out').slice(0, 80) },
+            address: rec.address,
+            coordinatorUrl: /** @type {string} */ (this.coordinatorUrl),
+            askPin: () => /** @type {(job: string) => Promise<any>} */ (this.holderPin)(rec.job),
+            say: (text) => say(text, null),
+          }));
+        }
+        return built.join(' ');
       },
     ];
   }
@@ -1045,6 +1077,12 @@ export function inventoryOf(ctx, set) {
     name: String(t.name_label || VM_IMAGE.name).slice(0, 80),
     key: imageKeyOf(t),
   }));
+  // Each pool's own machine, by pool and name, and whether it is up.
+  const holders = (ctx.holders || []).map((/** @type {any} */ v) => ({
+    pool: v.$pool ? String(v.$pool) : null,
+    name: String(v.name_label || '').slice(0, 80),
+    running: v.power_state === 'Running',
+  }));
   return {
     v: 1,
     address: ctx.rec.address,
@@ -1053,6 +1091,7 @@ export function inventoryOf(ctx, set) {
     networks,
     edges,
     images,
+    holders,
     // WHICH OPERATING SYSTEMS AN IMAGE CAN BE MADE OF, from this machine's
     // catalogue, so the phone offers each and never one it cannot build.
     imageKinds: Object.values(IMAGES).map((/** @type {any} */ i) => ({ key: i.key, os: i.os })),
@@ -1079,6 +1118,9 @@ function choicesOf(inventory) {
     networkPools: new Map(inventory.networks.map((/** @type {any} */ x) => [x.id, x.pool])),
     edgePools: new Set((inventory.edges || []).map((/** @type {any} */ e) => e.pool)),
     imageKeys: new Set((inventory.imageKinds || []).map((/** @type {any} */ k) => k.key)),
+    // Which pools have a machine image already: the pool's own machine is
+    // cloned from one (checkPolicy).
+    imagePools: new Set((inventory.images || []).map((/** @type {any} */ i) => i.pool)),
   };
 }
 
@@ -1114,9 +1156,10 @@ export function currentLimits(set) {
  * `edge` asks for the edge router on the way out; it needs one. `image` asks
  * for the machine image sessions' machines are cloned from, on the way out's
  * pool; it is built behind the edge router, so it needs one there or asked
- * for with it.
+ * for with it. `holder` asks for the pool's own machine (xo-holder.js) on
+ * the way out, cloned from the pool's machine image, there or asked for.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, image: boolean, images: string[], limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, image: boolean, images: string[], holder: boolean, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1149,6 +1192,11 @@ export function checkPolicy(p, choices) {
   if (image && !edge && !choices.edgePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
     return { ok: false, text: 'The machine image is built behind the edge router, and that pool has none yet. Build the router with it. Nothing was changed.' };
   }
+  const holder = p.holder === true;
+  if (holder && egress === null) return { ok: false, text: 'The pool’s own machine goes on the way out: choose the network it is on.' };
+  if (holder && !image && !choices.imagePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
+    return { ok: false, text: 'The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it. Nothing was changed.' };
+  }
   const cpus = Number(p.limits?.cpus);
   const memory = Number(p.limits?.memory);
   const disk = Number(p.limits?.disk);
@@ -1159,7 +1207,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image ? edgeSr : null, image, images: asked, limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image ? edgeSr : null, image, images: asked, holder, limits: { cpus, memory, disk } } };
 }
 
 /**

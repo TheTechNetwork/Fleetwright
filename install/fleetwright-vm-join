@@ -21,6 +21,11 @@
 #      dials the fleet before it has a name of its own.
 #   4. Powers the machine off at its end. The box that made it removes it
 #      once it is off (xo-pools.js, sweep), so the end needs nobody.
+#
+# A POOL'S OWN MACHINE (src/fleet/host/xo-holder.js) is booted with a pin and
+# the name it is bound to instead of a ticket, and the Xen Orchestra it holds.
+# It has no end: step 4 is skipped, and the address it holds goes in the
+# sidecar's environment, so its health says it is that pool's own machine.
 set -euo pipefail
 
 JOIN="${1:?usage: fleetwright-vm-join JOIN_FILE}"
@@ -41,6 +46,8 @@ print("" if v is None else v)' "$JOIN" "$1"
 }
 
 COORDINATOR="$(field coordinator)"
+HOLDER="$(field holder)"
+case "$HOLDER" in *[!A-Za-z0-9.:\[\]-]*) say "the join file names a pool this cannot be"; exit 1 ;; esac
 MINUTES="$(field minutes)"
 case "$MINUTES" in '' | *[!0-9]*) MINUTES=60 ;; esac
 case "$COORDINATOR" in https://*) ;; *) say "the join file names no https coordinator"; exit 1 ;; esac
@@ -71,9 +78,15 @@ set_env() {
 }
 set_env FLEETWRIGHT_COORDINATOR_URL "$COORDINATOR"
 set_env FLEETWRIGHT_VM_JOIN "$STATE/vm-join.json"
+[ -z "$HOLDER" ] || set_env FLEETWRIGHT_HOLDER_FOR "$HOLDER"
 
 # --- 3. the services ----------------------------------------------------------
 systemctl enable --now fleetwright.service fleetwright-sidecar.service
+if [ -n "$HOLDER" ]; then
+  say "started; this machine joins $COORDINATOR as the machine of its own that holds $HOLDER"
+  say "it has no end, and holds the pool once its owner approves it on the phone"
+  exit 0
+fi
 say "started; this machine joins $COORDINATOR as its owner's temporary host"
 
 # --- 4. its end ---------------------------------------------------------------

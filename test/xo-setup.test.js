@@ -51,7 +51,7 @@ function certificate() {
  * @param {import('node:test').TestContext} t
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[] }} [opts]
  */
-async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}) } = {}) {
+async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}) } = {}) {
   const { key, cert, pin } = certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -82,6 +82,7 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
       pif2: { id: 'pif2', type: 'PIF', $network: 'net-dmz', vlan: 30 },
     },
     VM: vms,
+    'VM-template': templates,
   };
   let conns = 0;
   /** @param {import('node:net').Socket} socket */
@@ -180,7 +181,7 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
 }
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any }} */ opts = {}) {
+async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, holderPin?: any }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -482,7 +483,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', ...(setups.coordinatorUrl ? ['image', 'images'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', ...(setups.coordinatorUrl ? ['image', 'images'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -618,6 +619,39 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   assert.equal(asked[0].image, 'debian-13', 'a phone from before the choice asked for Debian');
   assert.equal(asked[0].resize, 'disk.resize', 'the long-standing name, where the server offers it');
   assert.deepEqual(inventory.imageKinds.map((/** @type {any} */ k) => k.key), ['debian-13', 'ubuntu-24.04', 'ubuntu-26.04']);
+});
+
+test('the pool’s own machine is made last, from its image, with a pin asked for this job, and the person told to approve it', { skip }, async (t) => {
+  // ASKED FOR: "dedicated hypervisor VM on the pool". src/fleet/host/xo-holder.js.
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start'],
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
+  });
+  /** @type {string[]} */
+  const pinsFor = [];
+  const { setups } = await machine({
+    coordinatorUrl: 'https://fleet.test',
+    holderPin: async (/** @type {string} */ job) => (pinsFor.push(job), { ok: true, pin: '123456', hostId: 'holder-0a1b2c' }),
+  });
+  const actor = 'eli@example.com';
+  const { begun, reply, state } = await choosing(xo, setups, actor);
+  const [epk, iv, ct] = state.inventory.split('.');
+  const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(inventory.holders, [], 'none yet, so the phone offers one');
+  const job = begun.xosetup.job;
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', holder: true, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  const took = await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor });
+  assert.equal(took.ok, true, took.text);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.match(end.text, /holder-0a1b2c is starting on dmz\. Approve it under Machines/);
+  assert.deepEqual(pinsFor, [job], 'one pin, for this job');
+  const made = xo.calls.find((/** @type {any} */ c) => c.method === 'vm.create');
+  assert.equal(made.as, 'admin@admin.net', 'with the admin sign-in, outside the fleet’s set');
+  assert.equal(made.params.template, 'tpl');
+  assert.deepEqual(made.params.VIFs, [{ network: 'net-dmz' }]);
 });
 
 test('a Xen Orchestra without disk.resize builds the image through vdi.set, and one with neither says both names', { skip }, async (t) => {

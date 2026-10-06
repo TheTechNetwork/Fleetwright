@@ -14,16 +14,24 @@
 // ticket is single-use and spent on the first start: it is removed from the
 // file the moment the coordinator has taken it, so a restart has nothing to
 // enrol with and dials under the name it was given, like any other host.
+//
+// THE POOL'S OWN MACHINE joins the same way with a pin instead of a ticket:
+// a permanent host, under the name the coordinator bound the pin to
+// (core.js, #onHolderPin), and nobody's temporary machine. The policy job
+// that cloned it asked for the pin just before it did. It holds nothing
+// until its owner approves it on the phone, like any other box.
 
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 
-import { recordAssignedName } from './identity.js';
+import { recordAssignedName, enrol } from './identity.js';
 
 const TICKET_RE = /^fwt_[0-9a-f]{12}_[0-9a-f]{48}$/;
+const PIN_RE = /^\d{6}$/;
+const HOLDER_ID_RE = /^holder-[0-9a-f]{6}$/;
 const CLAUDE_RE = /^[A-Za-z0-9._~+/=-]{20,2048}$/;
 
 /**
- * @typedef {{ v?: number, coordinator?: string, ticket?: string|null, owner?: string, claude?: string|null, minutes?: number }} JoinFile
+ * @typedef {{ v?: number, coordinator?: string, ticket?: string|null, owner?: string, claude?: string|null, minutes?: number, pin?: string|null, hostId?: string, holder?: string }} JoinFile
  */
 
 /** @param {string} file @returns {JoinFile|null} */
@@ -46,6 +54,17 @@ export function readJoin(file) {
  */
 export async function enrolVmOnce({ file, origin, hostKeyFile, publicJwk, fetchImpl = globalThis.fetch }) {
   const join = readJoin(file);
+  const pin = typeof join?.pin === 'string' ? join.pin : '';
+  const named = typeof join?.hostId === 'string' ? join.hostId : '';
+  if (PIN_RE.test(pin) && HOLDER_ID_RE.test(named)) {
+    // Spent either way, as the ticket below: a pin is redeemed before
+    // anything that can fail after it.
+    writeFileSync(file, `${JSON.stringify({ ...join, pin: null })}\n`, { mode: 0o600 });
+    const body = await enrol({ origin, code: pin, hostId: named, publicJwk, fetchImpl });
+    const hostId = typeof body?.hostId === 'string' ? body.hostId : named;
+    recordAssignedName(hostKeyFile, { hostId, origin });
+    return hostId;
+  }
   const ticket = typeof join?.ticket === 'string' ? join.ticket : '';
   if (!TICKET_RE.test(ticket)) return null;
   const res = await fetchImpl(new URL('/api/enroll/vm', origin), {
