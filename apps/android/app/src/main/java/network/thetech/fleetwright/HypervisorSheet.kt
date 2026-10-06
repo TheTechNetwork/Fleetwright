@@ -175,6 +175,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // The machine takes any of the pool's networks as the way out (`can`
     // holds "egress-any"); an older one only the fleet's.
     var anyWayOut by remember { mutableStateOf(false) }
+    // The machine puts the router's disk where the person says (`can` holds
+    // "edge-disk"); an older one picks it unasked.
+    var edgeDisk by remember { mutableStateOf(false) }
     var policyKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
     var inventory by remember { mutableStateOf<XoPolicy.Inventory?>(null) }
     var choice by remember { mutableStateOf<XoPolicy.Choice?>(null) }
@@ -380,6 +383,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         jobKey = key
         canEdge = "edge" in p.setup.can
         anyWayOut = "egress-any" in p.setup.can
+        edgeDisk = "edge-disk" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -615,7 +619,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     val opened = policyKey?.let { XoPolicy.openInventory(pool, id, address.trim(), it) }
                     if (opened != null) {
                         inventory = opened
-                        choice = XoPolicy.defaults(opened, anyWayOut)
+                        choice = XoPolicy.defaults(opened, anyWayOut).copy(edgeDiskChoice = edgeDisk)
                     } else {
                         unopened = true
                     }
@@ -1173,7 +1177,15 @@ private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false) {
     val of = setup.of ?: (if (policy) XoPolicy.STEPS.size else XoSetup.STEPS.size)
     val step = setup.step ?: 0
     val ended = setup.state == "done" || setup.state == "failed" || setup.state == "cancelled"
-    val fraction = if (setup.state == "done") 1f else (step.toFloat() / of.coerceAtLeast(1)).coerceIn(0f, 1f)
+    // THE BUILD'S OWN BAR while the machine says how far it has got. Asked
+    // for: "this needs proper progress"; the step alone held the bar at four
+    // fifths for the minutes the edge router takes.
+    val part = setup.part.takeIf { setup.state == "running" }
+    val fraction = when {
+        setup.state == "done" -> 1f
+        part != null -> part.fill / 1000f
+        else -> (step.toFloat() / of.coerceAtLeast(1)).coerceIn(0f, 1f)
+    }
     val shown by animateFloatAsState(fraction, animationSpec = Design.Motion.change(), label = "setup progress")
     val tone = when (setup.state) {
         "done" -> Design.Palette.ok.now
@@ -1204,7 +1216,9 @@ private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false) {
             Text(w, style = Design.Style.bodyStrong, color = if (ended) tone else Design.Palette.ink.now)
         }
         if (!ended && setup.state == "running") {
-            Text("Step ${(step + 1).coerceAtMost(of)} of $of", style = Design.Style.label, color = Design.Palette.inkDim.now)
+            val line = "Step ${(step + 1).coerceAtMost(of)} of $of" +
+                (part?.let { " · building the edge router, part ${it.stage} of ${it.stages} · ${it.fill / 10}%" } ?: "")
+            Text(line, style = Design.Style.label, color = Design.Palette.inkDim.now)
         }
         // While it waits on the person, the machine's sentence only says so
         // again; the form under it is what to read.

@@ -204,4 +204,10 @@ test('Android: the form is the design’s tokens, 48dp, with nothing offered tha
   // where it said `egress-any`, and only the fleet's where it did not.
   assert.ok(form.includes('inv.networks.filter { anyWayOut || it.id in choice.networks }.forEach'));
   assert.ok(file('HypervisorSheet.kt').includes('anyWayOut = "egress-any" in p.setup.can'));
+  // ASKED FOR: "this needs proper progress, also which disk did it put it on?"
+  assert.ok(file('HypervisorSheet.kt').includes('edgeDisk = "edge-disk" in p.setup.can'));
+  assert.ok(form.includes('if (choice.edge && there == null && choice.edgeDiskChoice) {'));
+  assert.ok(form.includes('there.sr?.let { " Its disk is on $it." }'));
+  assert.ok(file('HypervisorSheet.kt').includes('part != null -> part.fill / 1000f'));
+  assert.ok(file('HypervisorSheet.kt').includes(' · building the edge router, part ${it.stage} of ${it.stages} · ${it.fill / 10}%'));
 });

@@ -71,6 +71,9 @@ internal object XoSetupNotice {
         val state = data["state"].orEmpty()
         val of = data["of"]?.toIntOrNull()?.coerceIn(1, 32) ?: XoSetup.STEPS.size
         val step = data["step"]?.toIntOrNull()?.coerceIn(0, of) ?: 0
+        // How far the step has got, in thousandths, while the edge router
+        // builds: the bar is that, because it is what moves.
+        val fill = data["fill"]?.toIntOrNull()?.takeIf { it in 0..1000 }
         val hostId = data["hostId"].orEmpty()
         val id = ("xosetup-$job").hashCode()
 
@@ -133,12 +136,12 @@ internal object XoSetupNotice {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setRequestPromotedOngoing(true)
-                .setShortCriticalText("${(step + 1).coerceAtMost(of)}/$of")
+                .setShortCriticalText(if (fill != null) "${fill / 10}%" else "${(step + 1).coerceAtMost(of)}/$of")
                 .setContentIntent(tap)
                 .setStyle(
                     Notification.ProgressStyle()
-                        .setProgressSegments(listOf(Notification.ProgressStyle.Segment(of)))
-                        .setProgress(step)
+                        .setProgressSegments(listOf(Notification.ProgressStyle.Segment(if (fill != null) 1000 else of)))
+                        .setProgress(fill ?: step)
                         .setStyledByProgress(true),
                 )
                 .build()
@@ -153,7 +156,7 @@ internal object XoSetupNotice {
                 .setOnlyAlertOnce(running)
                 .setAutoCancel(!running)
                 .setContentIntent(tap)
-                .apply { if (running) setProgress(of, step, false) }
+                .apply { if (running) if (fill != null) setProgress(1000, fill, false) else setProgress(of, step, false) }
                 .build()
         }
         // THE SAME ID WHETHER RUNNING OR ENDED: the result replaces the
