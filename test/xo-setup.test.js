@@ -482,7 +482,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', ...(setups.coordinatorUrl ? ['image'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', ...(setups.coordinatorUrl ? ['image', 'images'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -615,6 +615,8 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   assert.equal(asked[0].sr, 'sr2');
   assert.equal(asked[0].coordinatorUrl, 'https://fleet.test');
   assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy'), 'its bar reaches the Lock Screen');
+  assert.equal(asked[0].image, 'debian-13', 'a phone from before the choice asked for Debian');
+  assert.deepEqual(inventory.imageKinds.map((/** @type {any} */ k) => k.key), ['debian-13', 'ubuntu-24.04', 'ubuntu-26.04']);
 });
 
 test('a policy for a pool that was never added changes nothing', { skip }, async (t) => {
@@ -686,6 +688,10 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   assert.equal(checkPolicy({ ...ok, image: true, egress: 'n2' }, pooled).ok, true, 'that pool has its router');
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true }, pooled)).text, /has none yet/);
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true, egress: null }, pooled)).text, /choose the way out/);
+  // ASKED FOR: "os selection not just Debian". Any of the catalogue, together.
+  const both = /** @type {any} */ (checkPolicy({ ...ok, images: ['ubuntu-24.04', 'debian-13', 'ubuntu-24.04'], edge: true }, pooled));
+  assert.deepEqual(both.policy.images, ['ubuntu-24.04', 'debian-13']);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, images: ['windows-11'], edge: true }, pooled)).text, /cannot build/);
   const imaged = /** @type {any} */ (checkPolicy({ ...ok, image: true, edge: true, edgeSr: 'b' }, pooled));
   assert.equal(imaged.policy.image, true);
   assert.equal(imaged.policy.edgeSr, 'b', 'where the disks go');

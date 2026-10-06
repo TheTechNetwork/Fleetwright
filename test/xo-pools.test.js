@@ -102,7 +102,7 @@ test('a look reports the pool’s machine images, and sweeps machines that are d
   });
   const pools = holder(stand, () => now);
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
-  assert.deepEqual(pools.report(), [{ address: 'xo.lan', owner: ELI, reachable: null, pools: [], images: [] }], 'not looked at yet is cannot tell');
+  assert.deepEqual(pools.report(), [{ address: 'xo.lan', owner: ELI, reachable: null, pools: [], images: [], networks: [], machines: [] }], 'not looked at yet is cannot tell');
   await pools.refresh();
   const [seen] = pools.report();
   assert.equal(seen.reachable, true);
@@ -148,9 +148,19 @@ test('a machine is made from the person’s own image, on the uplink, with its t
   assert.equal(made.resourceSet, 'set-1', 'counted against the pool’s limits');
   assert.deepEqual(made.VIFs, [{ network: 'net-uplink' }]);
   assert.equal(made.destroyCloudConfigVdiAfterBoot, true);
-  assert.deepEqual(made.tags, [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${Math.floor(now / 1000) + 30 * 60}`]);
+  assert.deepEqual(made.tags, [
+    VM_IMAGE.sessionTag,
+    `${VM_IMAGE.untilPrefix}${Math.floor(now / 1000) + 30 * 60}`,
+    `fleetwright-made:${Math.floor(now / 1000)}`,
+    `fleetwright-from:${IMAGE}`,
+    `fleetwright-for:${ELI}`,
+    'fleetwright-on:fleetwright-uplink',
+  ]);
   const join = JSON.parse(/** @type {string} */ (made.cloudConfig.split('\n').find((/** @type {string} */ l) => l.trim().startsWith('{"v":1'))).trim());
-  assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: CLAUDE, minutes: 30 });
+  // The power-off the machine schedules for itself is a backstop past the
+  // longest it can be given; its end is the box's to keep, by the tag, so an
+  // extension needs nothing from inside the machine.
+  assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: CLAUDE, minutes: 380 });
   assert.match(made.cloudConfig, /fleetwright-vm-join, \/run\/fleetwright\/join.json/);
 
   // A refusal from the pool itself is not "unreachable": another box would hear the same.
@@ -161,6 +171,140 @@ test('a machine is made from the person’s own image, on the uplink, with its t
   assert.equal(refused.ok, false);
   assert.equal(refused.unreachable, undefined);
   assert.match(refused.text, /limit exceeded/);
+});
+
+test('a machine can go on a network of the pool the person chose, and on no other', async () => {
+  const lan = { type: 'network', id: 'net-lan', name_label: 'LAN', $pool: 'pool-1' };
+  const stand = xo({ objects: [pool, image, uplink, lan] });
+  const pools = holder(stand);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  assert.deepEqual(pools.report()[0].networks, [{ id: 'net-lan', name: 'LAN', pool: 'pool-1' }], 'the uplink is the default, not a choice');
+  const refused = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, network: 'net-elsewhere', coordinatorUrl: 'https://fleet.test' });
+  assert.equal(refused.ok, false, 'not a network this box saw');
+  assert.ok(!stand.calls.some((c) => c.method === 'vm.create'));
+  const r = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, network: 'net-lan', coordinatorUrl: 'https://fleet.test' });
+  assert.equal(r.ok, true, r.text);
+  const made = /** @type {any} */ (stand.calls.find((c) => c.method === 'vm.create')).params;
+  assert.deepEqual(made.VIFs, [{ network: 'net-lan' }]);
+  assert.ok(made.tags.includes('fleetwright-on:LAN'));
+  assert.match(r.text, /on LAN/);
+});
+
+test('a look reports the machines made there, what each is and where, for the phone’s page of it', async () => {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const s = Math.floor(now / 1000);
+  const vm = {
+    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: 'Running',
+    tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + 600}`, `fleetwright-made:${s - 600}`, `fleetwright-from:${IMAGE}`, `fleetwright-for:${ELI}`, 'fleetwright-on:LAN'],
+    addresses: { '0/ipv6/0': 'fe80::1', '0/ipv4/0': '192.168.1.40' }, CPUs: { number: 2 }, memory: { size: 4 * 1024 ** 3 },
+  };
+  const pools = holder(xo({ objects: [pool, image, uplink, vm] }), () => now);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  assert.deepEqual(pools.report()[0].machines, [
+    { name: 'vm-111111111111', vm: 'vm-uuid', state: 'Running', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN' },
+  ]);
+});
+
+/**
+ * A pool with one machine of Eli's on it, made `age` minutes ago and running
+ * for `left` more.
+ * @param {{ age?: number, left?: number, state?: string, fail?: Record<string, string>, owner?: string, tags?: string[] }} [o]
+ */
+function withMachine({ age = 10, left = 20, state = 'Running', fail = {}, owner = ELI, tags = [] } = {}) {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const s = Math.floor(now / 1000);
+  const vm = {
+    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: state,
+    tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + left * 60}`, `fleetwright-made:${s - age * 60}`, `fleetwright-for:${owner}`, ...tags],
+  };
+  const stand = xo({ objects: [pool, image, vm], fail });
+  const pools = holder(stand, () => now);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  const asked = () => stand.calls.filter((c) => !['session.signIn', 'xo.getAllObjects'].includes(c.method)).map((c) => [c.method, c.params]);
+  return { pools, stand, asked, s };
+}
+
+test('a machine is restarted, or ended now, only for the person it was made for', async () => {
+  let m = withMachine();
+  assert.equal((await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'reboot' })).ok, true);
+  assert.deepEqual(m.asked()[0], ['vm.restart', { id: 'vm-uuid', force: false }]);
+
+  m = withMachine();
+  const ended = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'stop' });
+  assert.equal(ended.ok, true);
+  assert.deepEqual(m.asked().slice(0, 2), [['vm.stop', { id: 'vm-uuid', force: true }], ['vm.delete', { id: 'vm-uuid', deleteDisks: true }]]);
+
+  // Somebody else's machine on the same Xen Orchestra is not there for Eli.
+  m = withMachine({ owner: 'sam@example.com' });
+  const theirs = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'stop' });
+  assert.equal(theirs.notHere, true);
+  assert.deepEqual(m.asked(), []);
+
+  // A person with no pool here, or a pool that cannot be reached: the next box is asked.
+  assert.equal((await m.pools.control({ owner: 'sam@example.com', name: 'vm-111111111111', action: 'reboot' })).notHere, true);
+  const down = new XoPools({ connect: /** @type {any} */ (async () => { throw new Error('ECONNREFUSED'); }) });
+  down.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  assert.equal((await down.control({ owner: ELI, name: 'vm-111111111111', action: 'reboot' })).unreachable, true);
+});
+
+test('a machine is given longer up to its longest life from when it was made, and not past it', async () => {
+  let m = withMachine({ age: 10, left: 20 });
+  const r = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'extend', minutes: 60 });
+  assert.equal(r.ok, true, r.text);
+  assert.equal(r.until, (m.s + 80 * 60) * 1000);
+  assert.deepEqual(m.asked(), [
+    ['tag.add', { id: 'vm-uuid', tag: `${VM_IMAGE.untilPrefix}${m.s + 80 * 60}` }],
+    ['tag.remove', { id: 'vm-uuid', tag: `${VM_IMAGE.untilPrefix}${m.s + 20 * 60}` }],
+  ]);
+
+  m = withMachine({ age: 300, left: 40 });
+  const capped = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'extend', minutes: 60 });
+  assert.equal(capped.until, (m.s + 50 * 60) * 1000, 'made 300 minutes ago, so 50 more at most');
+  assert.match(capped.text, /the longest a machine can run/);
+
+  m = withMachine({ age: 330, left: 20 });
+  const full = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'extend', minutes: 30 });
+  assert.equal(full.ok, false);
+  assert.deepEqual(m.asked(), []);
+});
+
+test('a resize stops the machine marked busy so the sweep leaves it, and starts it again whatever the pool said', async () => {
+  let m = withMachine();
+  const r = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', cpus: 4, memory: 8 });
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(m.asked().slice(0, 5), [
+    ['tag.add', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+    ['vm.stop', { id: 'vm-uuid', force: false }],
+    ['vm.set', { id: 'vm-uuid', CPUs: 4, memory: 8 * 1024 ** 3 }],
+    ['vm.start', { id: 'vm-uuid' }],
+    ['tag.remove', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+  ]);
+  assert.match(r.text, /4 vCPUs and 8 GiB/);
+
+  m = withMachine({ fail: { 'vm.set': 'resource set limit exceeded' } });
+  const refused = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', cpus: 64 });
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /old size.*limit exceeded/);
+  assert.ok(m.asked().some(([method]) => method === 'vm.start'), 'not left stopped');
+  assert.ok(m.asked().some(([method, p]) => method === 'tag.remove' && p.tag === 'fleetwright-busy'), 'not left marked busy');
+
+  // Busy is left alone by the sweep, though stopped.
+  const busy = withMachine({ state: 'Halted', tags: ['fleetwright-busy'] });
+  await busy.pools.refresh();
+  assert.ok(!busy.asked().some(([method]) => method === 'vm.delete'));
+});
+
+test('a machine is given its owner’s SSH keys and sudo when they keep some, and nothing when they do not', () => {
+  const key = `ssh-ed25519 ${'A'.repeat(68)} eli@laptop`;
+  const pools = holder(xo());
+  pools.adopt([{ email: ELI, items: [{ name: 'secret:SSH_AUTHORIZED_KEYS', value: `${key}\nnot a key\nrm -rf /\n` }] }]);
+  assert.deepEqual(pools.ssh.get(ELI), [key], 'public keys only, a line each');
+  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60, sshKeys: [key] });
+  assert.match(config, /users:\n {2}- name: fleetwright\n/);
+  assert.ok(config.includes(`      - ${JSON.stringify(key)}`));
+  assert.ok(!machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60 }).includes('users:'));
 });
 
 test('the cloud-init a machine boots with is one join file and the join script, and carries what it was given', () => {
@@ -294,11 +438,11 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   const text = await ensureImage({ ...buildArgs(p), say: (t) => said.push(t) });
   assert.match(text, /machine image is ready on rack/);
   const order = p.calls.map((c) => c.method).filter((m) => m !== 'xo.getAllObjects');
-  assert.deepEqual(order, ['disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'tag.remove', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
+  assert.deepEqual(order, ['disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
   const create = /** @type {any} */ (p.calls.find((c) => c.method === 'vm.create')).params;
   assert.deepEqual(create.VIFs, [{ network: 'net-uplink' }], 'built behind the edge router');
   assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.resize')).params.size, VM_IMAGE.diskSize);
-  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'tag.add')).params, { id: 'build-vm', tag: VM_IMAGE.tag });
+  assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }]);
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'resourceSet.addObject')).params, { id: 'set-1', object: 'build-vm' });
   assert.ok(said.some((s) => /Installing Fleetwright on the machine image/.test(s)));
 

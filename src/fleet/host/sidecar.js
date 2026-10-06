@@ -176,6 +176,7 @@ export class Sidecar {
    *   promptText?: boolean,
    *   idleRestartMs?: number,
    *   renewIntervalMs?: number,
+   *   poolIntervalMs?: number,
    *   hubConfig?: any,
    *   fetchImpl?: typeof globalThis.fetch,
    *   watch?: boolean,
@@ -201,6 +202,10 @@ export class Sidecar {
     promptText = false,
     idleRestartMs = 0,
     renewIntervalMs = 3_600_000,
+    // How often the pools this box holds are looked at between vault passes:
+    // a machine's end is kept by the sweep, and a phone's page of a machine
+    // is only as fresh as the last look.
+    poolIntervalMs = 120_000,
     hubConfig = null,
     fetchImpl = globalThis.fetch,
     onRestartRequested = null,
@@ -285,7 +290,10 @@ export class Sidecar {
     this.healthTimer = null;
     /** @type {any} */
     this.renewTimer = null;
+    /** @type {ReturnType<typeof setInterval>|null} */
+    this.poolTimer = null;
     this.renewIntervalMs = renewIntervalMs;
+    this.poolIntervalMs = poolIntervalMs;
     // fleetwright's configuration AS THIS PROCESS SEES IT, which is the
     // defaults plus whatever of its environment the sidecar can read — and
     // /etc/fleetwright.env is root's, so mostly the defaults. Used for one
@@ -425,6 +433,14 @@ export class Sidecar {
       this.renewTimer = setInterval(() => void this.#renewProviders(), this.renewIntervalMs);
       this.renewTimer.unref?.();
     }
+    // THE POOLS, between vault passes, while it holds any: the sweep is what
+    // ends a machine at its end, so ten minutes late is too late.
+    if (this.pools && this.poolIntervalMs > 0) {
+      this.poolTimer = setInterval(() => {
+        if (this.pools?.held.size) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
+      }, this.poolIntervalMs);
+      this.poolTimer.unref?.();
+    }
     this.log.info(`sidecar: ${this.hostId} → ${this.transport.origin} (protocol v${PROTOCOL_VERSION})`);
     return true;
   }
@@ -434,6 +450,8 @@ export class Sidecar {
     this.healthTimer = null;
     if (this.renewTimer) clearInterval(this.renewTimer);
     this.renewTimer = null;
+    if (this.poolTimer) clearInterval(this.poolTimer);
+    this.poolTimer = null;
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.vaultTimer = null;
     this.watcher?.stop();
@@ -686,6 +704,7 @@ export class Sidecar {
       // is in its memory and nowhere else (xo-pools.js), and the ticket the
       // machine boots with must not become a command line.
       if (intent.verb === 'provision' && intent.params?.platform === 'vm') return reply(await this.#makeVm(intent));
+      if (intent.verb === 'vmctl') return reply(await this.#vmctl(intent));
 
       // A session on a runner waits for the answer about its owner's Claude
       // login, which is bounded by the mint timeout and never throws.
@@ -1145,6 +1164,7 @@ export class Sidecar {
       template: String(intent.params.template || ''),
       ticket: String(intent.params.ticket || ''),
       minutes: intent.params.minutes == null ? null : Number(intent.params.minutes),
+      network: intent.params.network ? String(intent.params.network) : null,
       coordinatorUrl: origin,
     };
     let r = await this.pools.make(ask);
@@ -1155,6 +1175,31 @@ export class Sidecar {
       await this.pools.refresh();
       r = await this.pools.make(ask);
     }
+    if (r.ok) setImmediate(() => void this.#pushHealth());
+    return r;
+  }
+
+  /**
+   * Work a machine on one of the asker's pools: restart, longer, a new size,
+   * or end it now (xo-pools.js, `control`). The coordinator checked the
+   * machine is theirs; the pool is asked under their token, and only a
+   * machine tagged as made for them is touched.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   */
+  async #vmctl(intent) {
+    if (!this.pools) return { ok: false, notHere: true, text: 'This box asks no vault, so it holds no hypervisor.' };
+    const owner = intent.actor ? String(intent.actor).toLowerCase() : '';
+    if (!owner) return { ok: false, text: 'A machine is worked by the person it belongs to.' };
+    const p = intent.params || {};
+    const r = await this.pools.control({
+      owner,
+      name: String(p.name || ''),
+      action: /** @type {any} */ (String(p.action || '')),
+      minutes: p.minutes == null ? null : Number(p.minutes),
+      cpus: p.cpus == null ? null : Number(p.cpus),
+      memory: p.memory == null ? null : Number(p.memory),
+    });
     if (r.ok) setImmediate(() => void this.#pushHealth());
     return r;
   }
