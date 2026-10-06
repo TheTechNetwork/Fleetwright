@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, XOSETUP_JOB_RE, XOSETUP_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
@@ -854,13 +854,7 @@ export class CoordinatorCore {
     // hears only the end, as an ordinary notification.
     const targets = ended ? devices : devices.filter((d) => d.platform !== 'ios');
     if (!targets.length) return;
-    const title = progress.state === 'done'
-      ? 'Hypervisor added'
-      : progress.state === 'failed'
-        ? 'Hypervisor setup stopped'
-        : progress.state === 'cancelled'
-          ? 'Hypervisor setup cancelled'
-          : 'Adding a hypervisor';
+    const title = (progress.purpose === 'policy' ? POLICY_TITLES : SETUP_TITLES)[progress.state];
     const body = progress.text || `Step ${Math.min(progress.step + 1, progress.of)} of ${progress.of}`;
     try {
       await this.push.send(targets, {
@@ -880,6 +874,7 @@ export class CoordinatorCore {
           of: String(progress.of),
           phase: progress.phase,
           state: progress.state,
+          purpose: progress.purpose,
         },
       });
     } catch (e) {
@@ -3369,6 +3364,17 @@ const NOTIFIABLE = new Set([
 export const PROMPT_CATEGORY = 'fleet.prompt';
 
 /**
+ * The titles of a job's notifications, by state. The phones draw the same
+ * words for the same state (XOSetupWords and XOPolicy.statusLine on iOS,
+ * XoSetupNotice on Android), so the banner and the screen say one thing.
+ *
+ * A policy job's end is not a hypervisor added, which is what the first
+ * version said for both, because policy jobs did not report at all.
+ */
+const SETUP_TITLES = Object.freeze({ running: 'Adding a hypervisor', done: 'Hypervisor added', failed: 'Hypervisor setup stopped', cancelled: 'Hypervisor setup cancelled' });
+const POLICY_TITLES = Object.freeze({ running: 'Changing what the fleet may use', done: 'What the fleet may use is changed', failed: 'The change stopped', cancelled: 'The change was cancelled' });
+
+/**
  * Where an onboarding job has got to, as a host may report it.
  *
  * @typedef {object} SetupProgress
@@ -3376,6 +3382,7 @@ export const PROMPT_CATEGORY = 'fleet.prompt';
  * @property {number} of     how many steps there are
  * @property {string} phase  the step's key, or `done`
  * @property {'running'|'done'|'failed'|'cancelled'} state
+ * @property {'setup'|'policy'} purpose  adding a pool, or changing what the fleet may use on one
  * @property {string} text   one sentence for the person, never shown on a Live Activity
  * @property {number} at
  */
@@ -3394,13 +3401,19 @@ export function narrowProgress(msg) {
   if (!Number.isInteger(of) || of < 1 || of > 32 || !Number.isInteger(step) || step < 0 || step > of) return null;
   const state = String(msg?.state || '');
   if (!['running', 'done', 'failed', 'cancelled'].includes(state)) return null;
+  // A POLICY JOB REPORTS TOO, once it is building something that takes
+  // minutes (the edge router's download), and its last two steps are its own.
+  // A host that predates `purpose` sends none, and only adds pools.
+  const purpose = msg?.purpose === 'policy' ? 'policy' : 'setup';
   const phase = String(msg?.phase || '');
-  if (!XOSETUP_STEPS.includes(phase) && phase !== 'done') return null;
+  const steps = purpose === 'policy' ? XOPOLICY_STEPS : XOSETUP_STEPS;
+  if (!steps.includes(phase) && phase !== 'done') return null;
   return {
     step,
     of,
     phase,
     state: /** @type {SetupProgress['state']} */ (state),
+    purpose: /** @type {SetupProgress['purpose']} */ (purpose),
     text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 200) : '',
     at: Date.now(),
   };
