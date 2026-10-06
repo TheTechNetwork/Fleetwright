@@ -44,6 +44,10 @@ struct StartRequest {
     var platform: String? = nil
     /// How long that machine stays, in minutes. Only with `platform`.
     var minutes: Int? = nil
+    /// For platform "vm": the machine image on your hypervisor it is cloned
+    /// from, and what to call it in a sentence.
+    var template: String? = nil
+    var imageLabel: String? = nil
 }
 
 /// The machines the New session sheet can ask for, by the operating system a
@@ -64,6 +68,8 @@ let newMachineChoices: [NewMachineChoice] = [
 /// The picker's tag for a new machine. A prefix no host id can carry, since a
 /// host id never contains a colon.
 private let newMachineTag = "new:"
+/// And for a new machine from one of your machine images, by its id.
+private let vmImageTag = "vm:"
 
 struct StartSheet: View {
     let settings: Settings
@@ -99,10 +105,22 @@ struct StartSheet: View {
     /// refuses the session it was started for, so New session says so here.
     @State private var claude: ClaudeKept?
     @State private var machineMinutes = 60
+    /// The machine images on your own pools a new machine can come from, from
+    /// the snapshot. Drawn from this and only this (C-2).
+    @State private var images: [Fleet.VMImage] = []
 
-    /// The operating system when a new machine is chosen, else nil.
+    /// The operating system when a new machine is chosen, else nil: "vm" for
+    /// one from your hypervisor.
     private var chosenPlatform: String? {
-        host.hasPrefix(newMachineTag) ? String(host.dropFirst(newMachineTag.count)) : nil
+        if host.hasPrefix(vmImageTag) { return "vm" }
+        return host.hasPrefix(newMachineTag) ? String(host.dropFirst(newMachineTag.count)) : nil
+    }
+
+    /// The machine image chosen, when it is one from your hypervisor.
+    private var chosenImage: Fleet.VMImage? {
+        guard host.hasPrefix(vmImageTag) else { return nil }
+        let id = String(host.dropFirst(vmImageTag.count))
+        return images.first { $0.template == id }
     }
 
     private var kinds: [SessionKind] { SessionKinds.all() }
@@ -269,11 +287,17 @@ struct StartSheet: View {
                 // decision, and a picker with one entry is furniture. A fleet
                 // that can start a machine always has a choice: here, or a new
                 // one.
-                if hosts.count > 1 || canStartMachine {
+                if hosts.count > 1 || canStartMachine || !images.isEmpty {
                     Section {
                         Picker("Host", selection: $host) {
                             Text("Wherever fits").tag("")
                             ForEach(hosts, id: \.self) { h in Text(h).tag(h) }
+                            // FROM YOUR OWN HYPERVISOR, first among the new
+                            // machines: up in a minute or two, and billed to
+                            // nobody. Asked for: "Still can't run sessions on it".
+                            ForEach(images) { image in
+                                Text(image.label).tag(vmImageTag + image.template)
+                            }
                             if canStartMachine {
                                 ForEach(newMachineChoices, id: \.platform) { choice in
                                     Text(choice.label).tag(newMachineTag + choice.platform)
@@ -284,7 +308,7 @@ struct StartSheet: View {
                         // a profile or a secret with, so choosing one clears
                         // both rather than leaving a start that is refused.
                         .onChange(of: host) { _, now in
-                            if now.hasPrefix(newMachineTag) { profile = ""; secret = "" }
+                            if now.hasPrefix(newMachineTag) || now.hasPrefix(vmImageTag) { profile = ""; secret = "" }
                         }
                         if chosenPlatform != nil {
                             // Five-minute steps between the protocol's bounds.
@@ -295,7 +319,15 @@ struct StartSheet: View {
                     } header: {
                         Text("Where").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
-                        if chosenPlatform != nil {
+                        if chosenPlatform == "vm" {
+                            Text("It is cloned from your machine image and joins in a minute or two. The session starts on it then"
+                                 + (taskIsEmpty
+                                    ? ", idle, with nothing to do. Give it a task above to put it to work."
+                                    : " and works on your task. You get a notification when it is back at its prompt.")
+                                 + " It powers off when the time runs out and is removed, with everything on it.")
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                        } else if chosenPlatform != nil {
                             // NO LINK PROMISED. A runner's credential cannot open
                             // Remote Control, so the notification that matters is
                             // the one when its task is done.
@@ -324,8 +356,11 @@ struct StartSheet: View {
                 // session. Nothing said so until after the machine had booted.
                 if chosenPlatform != nil, claude == .missing || claude == .needsGitHub {
                     Section {
-                        Text("No Claude login is kept for your runners, so this one runs on the runner repository's "
-                             + "API key if it has one, and cannot start the session if it does not.")
+                        Text(chosenPlatform == "vm"
+                             ? "No Claude login is kept in your vault, so a machine from your hypervisor has nothing to run "
+                               + "its session on. Keep one here first."
+                             : "No Claude login is kept for your runners, so this one runs on the runner repository's "
+                               + "API key if it has one, and cannot start the session if it does not.")
                             .fleetType(.bodySmall)
                             .foregroundStyle(Design.Palette.attention)
                         ClaudeSetup(settings: settings) { claude = .kept }
@@ -370,7 +405,8 @@ struct StartSheet: View {
                 // runner repository for this person. A failure offers none,
                 // which is the safe way round for a control that spends money.
                 canStartMachine = (try? await fleet.runners()) != nil
-                if canStartMachine { claude = await claudeKept(settings) }
+                images = (try? await fleet.vmImages()) ?? []
+                if canStartMachine || !images.isEmpty { claude = await claudeKept(settings) }
             }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
@@ -464,7 +500,9 @@ struct StartSheet: View {
             task: trimmedTask.isEmpty ? nil : trimmedTask,
             secret: secret.isEmpty || platform != nil ? nil : secret,
             platform: platform,
-            minutes: platform == nil ? nil : machineMinutes
+            minutes: platform == nil ? nil : machineMinutes,
+            template: chosenImage?.template,
+            imageLabel: chosenImage?.label
         ))
         dismiss()
     }

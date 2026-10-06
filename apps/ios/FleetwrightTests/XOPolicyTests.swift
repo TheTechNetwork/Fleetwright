@@ -21,8 +21,9 @@ final class XOPolicyTests: XCTestCase {
                                current srs: String = #"["sr-a"]"#,
                                networks: String = #"["net-wan"]"#,
                                address: String = "xo.lan",
-                               edges: String? = nil) -> Data {
-        let tail = edges.map { ",\"edges\":" + $0 } ?? ""
+                               edges: String? = nil,
+                               images: String? = nil) -> Data {
+        let tail = (edges.map { ",\"edges\":" + $0 } ?? "") + (images.map { ",\"images\":" + $0 } ?? "")
         return Data("""
         {"v":1,"address":"\(address)",
          "pools":[{"id":"pool-1","name":"rack"}],
@@ -191,6 +192,45 @@ final class XOPolicyTests: XCTestCase {
         c.edgeSr = "sr-gone"
         XCTAssertEqual(c.edgeDisk(in: inv), "sr-a", "a pick that no longer fits falls back")
         XCTAssertNil(c.problem(in: inv))
+    }
+
+    /// Asked for: "Still can't run sessions on it". The machine image is
+    /// offered by a machine that builds one, is built behind the edge router
+    /// (asked for with it, or there already), needs 20 GiB for its disk, and
+    /// is sent only to a machine that reads it.
+    func testTheMachineImageNeedsTheRouterAndRoomAndIsSentOnlyWhenItCanBeBuilt() throws {
+        let inv = try inventory()
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.edgeDiskChoice = true
+        c.image = true
+        XCTAssertNil(c.payload(in: inv)["image"], "an older machine is not sent it")
+        c.imageChoice = true
+        XCTAssertEqual(c.problem(in: inv), "The machine image is built behind the edge router, and that pool has none yet. Build the router with it.")
+        c.edge = true
+        XCTAssertNil(c.problem(in: inv))
+        XCTAssertEqual(c.payload(in: inv)["image"] as? Bool, true)
+        XCTAssertEqual(c.diskNeed(in: inv), XOPolicy.imageDiskBytes)
+        XCTAssertEqual(c.payload(in: inv)["edgeSr"] as? String, "sr-a")
+
+        // A pool with its router already: the image alone, and its disk still asked.
+        let routed = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true}]"#))
+        var r = XOPolicy.Choice.initial(for: routed)
+        r.edge = false
+        r.imageChoice = true
+        r.edgeDiskChoice = true
+        r.image = true
+        XCTAssertNil(r.problem(in: routed))
+        XCTAssertEqual(r.building(in: routed).image, true)
+        XCTAssertEqual(r.building(in: routed).edge, false)
+
+        // One already there is not built again, and says so.
+        let imaged = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true}]"#, images: #"[{"pool":"pool-1","name":"Fleetwright Debian 13"}]"#))
+        XCTAssertEqual(imaged.image(on: "net-wan")?.name, "Fleetwright Debian 13")
+        var i = XOPolicy.Choice.initial(for: imaged)
+        i.imageChoice = true
+        i.image = true
+        XCTAssertEqual(i.building(in: imaged).image, false)
+        XCTAssertNil(try inventory().images, "an older machine says nothing about images, which is not none")
     }
 
     func testEachLimitIsHeldToTheMachinesBounds() throws {

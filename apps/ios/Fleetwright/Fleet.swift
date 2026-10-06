@@ -535,12 +535,14 @@ struct Fleet {
     /// runner when it joins. It travels BESIDE the params, as `host` does: the
     /// box that dispatches the run never sees it.
     func provision(platform: String, minutes: Int? = nil, host: String? = nil,
-                   start: [String: String]? = nil) async throws -> Reply {
+                   start: [String: String]? = nil, template: String? = nil) async throws -> Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
         // Otherwise a box with your GitHub connection does, as it always did.
+        // A MACHINE FROM YOUR HYPERVISOR is never GitHub's: a box holding the
+        // pool's token makes it (protocol 8, `template`).
         let phone = PhoneGitHub(settings: settings)
-        if phone.signedIn {
+        if platform != "vm", phone.signedIn {
             do {
                 return try await phone.startRunner(self, platform: platform, minutes: minutes, start: start)
             } catch {
@@ -549,6 +551,7 @@ struct Fleet {
         }
         var params: [String: String] = ["platform": platform]
         if let minutes { params["minutes"] = String(minutes) }
+        if let template { params["template"] = template }
         return try await intent("provision", params: params, host: host, numeric: ["minutes"],
                                 extra: start.map { ["start": $0] } ?? [:])
     }
@@ -1350,6 +1353,32 @@ struct Fleet {
         return try JSONDecoder().decode(Reply.self, from: data).runners?.repo
     }
 
+    /// A machine image on one of your pools: what a new machine from your own
+    /// hypervisor is cloned from (docs/hypervisors.md, "Machines from your
+    /// pool"). `template` is what `provision` takes.
+    struct VMImage: Codable, Hashable, Identifiable {
+        let template: String
+        let name: String
+        let pool: String?
+        let poolName: String?
+        let address: String
+        let hosts: [String]
+        var id: String { template }
+
+        /// "New machine from Fleetwright Debian 13 on rack", for a picker.
+        var label: String { "New machine from \(name)" + (poolName.map { " on \($0)" } ?? "") }
+    }
+
+    /// The machine images you can start a machine from: the `vmImages` field
+    /// of /api/hosts, one per image, from the boxes holding a pool token you
+    /// kept in your vault. Empty is an answer (none of yours); an older
+    /// coordinator omits the field, which reads the same.
+    func vmImages() async throws -> [VMImage] {
+        let data = try await get("/api/hosts")
+        struct Reply: Codable { let vmImages: [VMImage]? }
+        return try JSONDecoder().decode(Reply.self, from: data).vmImages ?? []
+    }
+
     func revokeClient(_ id: String) async throws -> Reply {
         let path = "/api/clients/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
         return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))
@@ -1839,7 +1868,8 @@ struct Fleet {
         case "restore": return "Restoring \(name)"
         case "purge": return "Purging \(name)"
         case "answer": return "Answering \(name)"
-        case "provision": return "Asking for a \(params["platform"] ?? "temporary") machine"
+        case "provision":
+            return params["platform"] == "vm" ? "Asking your hypervisor for a machine" : "Asking for a \(params["platform"] ?? "temporary") machine"
         case "writefile": return "Writing \(params["path"] ?? "a file") in \(name)"
         case "copyfile": return "Copying \(params["path"] ?? "a file") in \(name)"
         case "deletefile": return "Deleting \(params["path"] ?? "a file") in \(name)"

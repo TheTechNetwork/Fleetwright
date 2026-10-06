@@ -109,6 +109,10 @@ struct AddHypervisorView: View {
     /// Whether the token the machine handed back is in this phone's
     /// Keychain, once the job is done (XOSetupHandoff).
     @State private var handedBack: XOSetupHandoff.Outcome?
+    /// What the fleet said when the token was kept there too, or what stood
+    /// in the way (XOSetupHandoff.keepInFleet).
+    @State private var fleetNote = ""
+    @State private var keepingInFleet = false
     /// A policy job, once its sign-in is sent: the job's key to seal the
     /// choice to, and the key the inventory comes back to. In memory and
     /// nowhere else; dropped when the job ends.
@@ -156,6 +160,9 @@ struct AddHypervisorView: View {
         /// The machine puts the router's disk where the person says
         /// (`can` holds "edge-disk"); an older one picks it unasked.
         let edgeDisk: Bool
+        /// The machine builds the machine image sessions' machines are
+        /// cloned from (`can` holds "image"); an older one cannot.
+        var canImage = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -184,6 +191,7 @@ struct AddHypervisorView: View {
 
     var body: some View {
         Form {
+            if let pool = policyFor, job == nil { fleetSection(pool) }
             whereSection
             if probes != nil { machinesSection }
             if let chosen, job == nil { signInSection(chosen) }
@@ -213,6 +221,35 @@ struct AddHypervisorView: View {
         // the person, starting from the machine that got through last time.
         .task {
             if isPolicy, probes == nil, !probing { await openRemembered() }
+        }
+    }
+
+    // MARK: In the fleet
+
+    /// Machines from this pool: its token kept in the fleet, so the boxes
+    /// this person approved can make them. Kept on every setup from now on;
+    /// this is for a pool set up before that, and for keeping it again.
+    private func fleetSection(_ pool: String) -> some View {
+        Section {
+            Button(keepingInFleet ? "Keeping…" : "Keep its token in the fleet") {
+                Task {
+                    keepingInFleet = true
+                    fleetNote = await XOSetupHandoff.keepInFleet(settings: settings, address: pool)
+                    keepingInFleet = false
+                }
+            }
+            .disabled(keepingInFleet)
+            .frame(minHeight: 44)
+            if !fleetNote.isBlank {
+                Text(fleetNote)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+        } header: {
+            sectionHead("Machines from this pool")
+        } footer: {
+            Text("The boxes you approved can then make machines on it for your sessions. They hold its token in memory only, "
+                 + "and stop being given it when you remove them from your vault.")
         }
     }
 
@@ -618,7 +655,7 @@ struct AddHypervisorView: View {
                 // machine says it kept none, and this says whether it is here.
                 switch handedBack {
                 case .kept:
-                    Text("The token is in this phone’s Keychain now, and no machine in the fleet keeps a copy.")
+                    Text("The token is in this phone’s Keychain now. No machine in the fleet keeps it on disk.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 case .failed(let why):
@@ -630,6 +667,11 @@ struct AddHypervisorView: View {
                 }
                 if !keepNote.isBlank {
                     Text(keepNote)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                if !fleetNote.isBlank {
+                    Text(fleetNote)
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
@@ -770,9 +812,9 @@ struct AddHypervisorView: View {
             .tint(Design.Palette.accent)
             .frame(minHeight: 44)
             .disabled(busy)
-            // No way out, no router: the switch goes off with it.
+            // No way out, no router and no image: the switches go off with it.
             .onChange(of: choice.egress) { _, way in
-                if way == nil { choice.edge = false }
+                if way == nil { choice.edge = false; choice.image = false }
             }
             if canEdge, choice.egress != nil {
                 Toggle(isOn: $choice.edge) {
@@ -781,13 +823,35 @@ struct AddHypervisorView: View {
                 .tint(Design.Palette.accent)
                 .frame(minHeight: 44)
                 .disabled(busy)
-                // WHERE ITS DISK GOES, asked before it is built and said
-                // while it is: any storage in the way out's pool with room,
-                // the fleet's own first. Asked for: "which disk did it put it
-                // on?"
-                if choice.edge, there == nil, choice.edgeDiskChoice {
-                    edgeDiskRow(inv)
+                // The image is built behind the router: no router, no image.
+                .onChange(of: choice.edge) { _, on in
+                    if !on, there == nil { choice.image = false }
                 }
+            }
+            // THE MACHINE IMAGE sessions' machines are cloned from, offered
+            // only by a machine that builds one, and only where there is none.
+            // Asked for: "Still can't run sessions on it".
+            if policyJob?.canImage == true, choice.egress != nil {
+                if let image = inv.image(on: choice.egress) {
+                    policyRow("Machine image", "\(image.name) is there. New session › Where offers machines from it.")
+                } else {
+                    Toggle(isOn: $choice.image) {
+                        policyRow("Make the machine image for sessions", imageLine)
+                    }
+                    .tint(Design.Palette.accent)
+                    .frame(minHeight: 44)
+                    .disabled(busy)
+                    // Built behind the router, so asking for it asks for that too.
+                    .onChange(of: choice.image) { _, on in
+                        if on, there == nil { choice.edge = true }
+                    }
+                }
+            }
+            // WHERE THE DISKS GO, asked before anything is built and said
+            // while it is: any storage in the way out's pool with room, the
+            // fleet's own first. Asked for: "which disk did it put it on?"
+            if choice.edgeDiskChoice, choice.building(in: inv).edge || choice.building(in: inv).image {
+                edgeDiskRow(inv)
             }
         } header: {
             sectionHead("Way out")
@@ -810,13 +874,24 @@ struct AddHypervisorView: View {
         return there.sr.map { "\(state) Its disk is on \($0)." } ?? state
     }
 
-    /// The storage the router's disk goes on, with the room each has. Nothing
-    /// to pick from is said, and Apply waits (XOPolicy.Choice.problem).
+    /// What making the image costs, before it is asked for. The same words as
+    /// Android (PolicyForm.kt).
+    private var imageLine: String {
+        "Debian 13 with Fleetwright installed, on a 20 GiB disk on the storage chosen. \(hostId) downloads Debian once, "
+            + "about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new "
+            + "machine from it."
+    }
+
+    /// The storage the disks being built go on, with the room each has.
+    /// Nothing to pick from is said, and Apply waits (XOPolicy.Choice.problem).
     @ViewBuilder
     private func edgeDiskRow(_ inv: XOPolicy.Inventory) -> some View {
-        let fits = inv.edgeDisks(for: choice.egress)
+        let build = choice.building(in: inv)
+        let fits = inv.edgeDisks(for: choice.egress, need: choice.diskNeed(in: inv))
         if fits.isEmpty {
-            Text("Nothing in the way out’s pool has 3 GiB free for its disk.")
+            Text(build.image
+                 ? "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
+                 : "Nothing in the way out’s pool has 3 GiB free for its disk.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.bad)
         } else {
@@ -825,7 +900,7 @@ struct AddHypervisorView: View {
                     Text("\(XOPolicy.title(sr.name, id: sr.id)), \(XOPolicy.gibText(sr.free)) free").tag(String?.some(sr.id))
                 }
             } label: {
-                Text("Its disk goes on")
+                Text(build.edge && build.image ? "Their disks go on" : build.image ? "The image’s disk goes on" : "Its disk goes on")
                     .fleetType(.bodyStrong)
                     .foregroundStyle(Design.Palette.ink)
             }
@@ -1342,7 +1417,8 @@ struct AddHypervisorView: View {
                 return
             }
             policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"),
-                                  anyWayOut: begun.can.contains("egress-any"), edgeDisk: begun.can.contains("edge-disk"))
+                                  anyWayOut: begun.can.contains("egress-any"), edgeDisk: begun.can.contains("edge-disk"),
+                                  canImage: begun.can.contains("image"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1367,6 +1443,7 @@ struct AddHypervisorView: View {
                     inventory = opened
                     choice = XOPolicy.Choice.initial(for: opened, anyWayOut: policyJob.anyWayOut)
                     choice.edgeDiskChoice = policyJob.edgeDisk
+                    choice.imageChoice = policyJob.canImage
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
@@ -1460,7 +1537,9 @@ struct AddHypervisorView: View {
             if state.state != "choosing" { await XOSetupActivities.apply(job: job, progress: state) }
             return
         }
-        if let outcome = XOSetupHandoff.collect(job: job, state: state) { handedBack = outcome }
+        let (outcome, inFleet) = await XOSetupHandoff.collectAndKeep(job: job, state: state, settings: settings)
+        if let outcome { handedBack = outcome }
+        if let inFleet { fleetNote = inFleet }
         if state.state == "failed" || state.state == "cancelled" { XOSetupHandoff.forget(job: job) }
         await XOSetupActivities.apply(job: job, progress: state)
     }
