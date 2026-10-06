@@ -112,7 +112,7 @@ internal fun PolicyForm(
         title = "None yet",
         line = if (!anyWayOut && choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
         // No way out, no router and no image: the switches go off with it.
-        onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet())) },
+        onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), holder = false)) },
     )
     // THE EDGE ROUTER, offered only by a machine that can build it and only
     // with a way out (C-2): built when the pool has none, kept in step when
@@ -181,6 +181,42 @@ internal fun PolicyForm(
                     "machine from it.",
                 // Built behind the router, so asking for it asks for that too.
                 onChange = { on -> onChange(choice.copy(image = on, edge = choice.edge || (on && there == null))) },
+            )
+        }
+    }
+    // THE POOL'S OWN MACHINE, offered only by a machine that makes one: said
+    // as there when the pool has it, a switch when it has not. Asked for:
+    // "dedicated hypervisor VM on the pool".
+    if (choice.holderChoice && choice.egress != null) {
+        val mine = XoPolicy.holderOn(inv, choice.egress)
+        if (mine != null) {
+            Hint(
+                "The pool’s own machine: " + if (mine.running) {
+                    "${mine.name} is there and running. It holds the pool once you have approved it under Machines."
+                } else {
+                    "${mine.name} is there and stopped. Apply starts it."
+                },
+            )
+        } else {
+            val router = XoPolicy.edgeOn(inv, choice.egress)
+            CheckRow(
+                checked = choice.holder,
+                enabled = enabled,
+                title = "Make the pool a machine of its own",
+                line = "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
+                    "fleet may use, so the pool does not need $machine to be awake. Once it joins, approve it under Machines and it " +
+                    "holds the pool.",
+                // Made from the image: asking for it asks for Debian's, and the
+                // router that is built behind, when the pool has neither.
+                onChange = { on ->
+                    val needsImage = on && XoPolicy.imageOn(inv, choice.egress) == null && !(choice.imageChoice && choice.wantsImage)
+                    onChange(choice.copy(
+                        holder = on,
+                        images = if (needsImage && choice.imagesChoice) choice.images + XoPolicy.DEBIAN_KEY else choice.images,
+                        image = choice.image || (needsImage && !choice.imagesChoice),
+                        edge = choice.edge || (needsImage && router == null),
+                    ))
+                },
             )
         }
     }
