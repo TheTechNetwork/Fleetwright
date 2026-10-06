@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { CoordinatorCore, MAX_NET_POINTS } from '../src/fleet/coordinator/core.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
 
@@ -210,6 +210,27 @@ test('a machine that did not report its end or size is cannot tell, not the epoc
   const { core } = fleet({ deb14: { xo: quiet, protocol: 9 } });
   const [m] = core.snapshot(eli).vmMachines;
   assert.deepEqual([m.until, m.madeAt, m.memory, m.cpus, m.state], [null, null, null, null, null]);
+  assert.equal(m.net, null, 'a machine the box sent no traffic for has none, not a flat line');
+});
+
+test('a machine’s traffic is passed on as the box counted it, gaps kept, and a malformed or oversized one is none', () => {
+  const [entry] = withMachine(ELI);
+  /** @param {any} net */
+  const seen = (net) => {
+    const { core } = fleet({ deb14: { xo: [{ ...entry, machines: [{ ...entry.machines[0], net }] }], protocol: 9 } });
+    return core.snapshot(eli).vmMachines[0].net;
+  };
+  const end = 1_799_999_940_000;
+  assert.deepEqual(seen({ interval: 60, end, rx: [1200.4, null, 9000], tx: [10, 'x', 20.6] }),
+    { interval: 60, end, rx: [1200, null, 9000], tx: [10, null, 21] }, 'a point the pool did not count stays a gap, not a 0');
+  const long = Array.from({ length: MAX_NET_POINTS + 1 }, () => 1);
+  for (const bad of [
+    { interval: 60, end, rx: long, tx: long },
+    { interval: 60, end, rx: [1, 2], tx: [1] },
+    { interval: 0, end, rx: [1], tx: [1] },
+    { interval: 60, rx: [1], tx: [1] },
+    { interval: 60, end, rx: 'lots', tx: [1] },
+  ]) assert.equal(seen(bad), null, JSON.stringify(bad).slice(0, 60));
 });
 
 test('a machine can go on a network the person chose, and a box too old to carry that is not asked', async () => {

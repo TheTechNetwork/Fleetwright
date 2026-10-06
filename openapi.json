@@ -888,6 +888,51 @@
                               "null"
                             ]
                           },
+                          "net": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "description": "what it sent and received as the hypervisor counted it; null is cannot tell (a box older than this, a pool that did not say, or a stopped machine)",
+                            "properties": {
+                              "interval": {
+                                "type": "number",
+                                "description": "seconds between points"
+                              },
+                              "end": {
+                                "type": "number",
+                                "description": "the last point's time, epoch ms"
+                              },
+                              "rx": {
+                                "type": "array",
+                                "maxItems": 60,
+                                "items": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ]
+                                },
+                                "description": "bytes a second, one point an interval, oldest first; null is a gap"
+                              },
+                              "tx": {
+                                "type": "array",
+                                "maxItems": 60,
+                                "items": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ]
+                                },
+                                "description": "bytes a second, one point an interval, oldest first; null is a gap"
+                              }
+                            },
+                            "required": [
+                              "interval",
+                              "end",
+                              "rx",
+                              "tx"
+                            ]
+                          },
                           "address": {
                             "type": "string",
                             "description": "the Xen Orchestra it is on"
