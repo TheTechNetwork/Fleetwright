@@ -219,6 +219,26 @@ class XoPolicyTest {
         )
     }
 
+    /**
+     * Asked for: "which disk did it put it on?" The router's disk goes on the
+     * storage picked, any in the way out's pool with room; unpicked, the
+     * fleet's there with the most room; and it is sent only to a machine
+     * that reads it.
+     */
+    @Test
+    fun theRoutersDiskGoesWhereItIsPickedAndIsSentOnlyToAMachineThatReadsIt() {
+        val inv = inventory()
+        val c = XoPolicy.defaults(inv).copy(edge = true)
+        assertEquals(listOf("sr-a", "sr-b"), XoPolicy.edgeDisks(inv, c.egress).map { it.id })
+        assertEquals("the fleet's storage first, though sr-b has more room", "sr-a", XoPolicy.edgeDisk(inv, c))
+        assertFalse("an older machine is not sent it", XoPolicy.payload(inv, c).has("edgeSr"))
+        val asked = c.copy(edgeDiskChoice = true)
+        assertEquals("sr-a", XoPolicy.payload(inv, asked).getString("edgeSr"))
+        assertEquals("sr-b", XoPolicy.payload(inv, asked.copy(edgeSr = "sr-b")).getString("edgeSr"))
+        assertEquals("a pick that no longer fits falls back", "sr-a", XoPolicy.edgeDisk(inv, asked.copy(edgeSr = "sr-gone")))
+        assertNull(XoPolicy.problem(inv, asked))
+    }
+
     @Test
     fun applyWaitsForWhatTheMachineWouldTake() {
         val inv = inventory()

@@ -684,6 +684,9 @@ class Fleet(
      * the step the machine is on, out of how many, by its key, and the
      * sentence the machine wrote about it.
      */
+    /** How far the edge router's build has got: stage of stages, and thousandths of the whole. */
+    data class BuildPart(val stage: Int, val stages: Int, val fill: Int)
+
     data class Setup(
         val job: String,
         /** waiting, running, done, failed or cancelled. */
@@ -715,6 +718,12 @@ class Fleet(
          * sent inside the sign-in, as epk.iv.ct (XoPolicy.openInventory).
          */
         val inventory: String? = null,
+        /**
+         * While a step that can say how far it has got is running (the edge
+         * router's build): which stage of how many, and how far through the
+         * whole build in thousandths. Null from an older machine.
+         */
+        val part: BuildPart? = null
     )
 
     /**
@@ -1938,6 +1947,12 @@ class Fleet(
                                 (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { it.isNotBlank() && !a.isNull(i) } }
                             } ?: emptyList(),
                             inventory = s.optString("inventory").takeIf { it.split(".").size == 3 },
+                            part = s.optJSONObject("part")?.let { p ->
+                                val stage = p.optInt("stage", -1)
+                                val stages = p.optInt("stages", -1)
+                                val fill = p.optInt("fill", -1)
+                                if (stage in 1..stages && fill in 0..1000) BuildPart(stage, stages, fill) else null
+                            },
                         )
                     },
                 )

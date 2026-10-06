@@ -126,11 +126,29 @@ internal fun PolicyForm(
                 there == null ->
                     "An OPNsense VM with 2 vCPUs, 2 GiB of memory and a 3 GiB disk on the storage chosen. " +
                         "$machine downloads OPNsense once, about 470 MB, and builds it while you wait."
-                there.running -> "It is there and running. Apply keeps its WAN on this network."
-                else -> "It is there and stopped. Apply keeps its WAN on this network and starts it."
+                there.running -> "It is there and running. Apply keeps its WAN on this network." + (there.sr?.let { " Its disk is on $it." } ?: "")
+                else -> "It is there and stopped. Apply keeps its WAN on this network and starts it." + (there.sr?.let { " Its disk is on $it." } ?: "")
             },
             onChange = { on -> onChange(choice.copy(edge = on)) },
         )
+        // WHERE ITS DISK GOES, asked before it is built and said while it is:
+        // any storage in the way out's pool with room, the fleet's own first.
+        // Asked for: "which disk did it put it on?"
+        if (choice.edge && there == null && choice.edgeDiskChoice) {
+            SectionHead("Its disk goes on")
+            val fits = XoPolicy.edgeDisks(inv, choice.egress)
+            if (fits.isEmpty()) Hint("Nothing in the way out’s pool has 3 GiB free for its disk.")
+            val picked = XoPolicy.edgeDisk(inv, choice)
+            fits.forEach { s ->
+                RadioRow(
+                    selected = picked == s.id,
+                    enabled = enabled,
+                    title = s.name.ifBlank { s.id },
+                    line = XoPolicy.storageLine(s),
+                    onClick = { onChange(choice.copy(edgeSr = s.id)) },
+                )
+            }
+        }
     }
 
     SectionHead("Limits")

@@ -357,6 +357,8 @@ test('Android: kind=xosetup becomes one ongoing notification per job, then one t
     assert.ok(core.includes(`'${title}'`), `the coordinator says: ${title}`);
   }
   assert.match(notice, /val policy = data\["purpose"\] == "policy"/);
+  // The edge router's build moves the bar by how far it has got, not by step.
+  assert.ok(notice.includes('if (fill != null) setProgress(1000, fill, false) else setProgress(of, step, false)'));
   // Permission first, as every other notification here.
   assert.match(notice, /checkSelfPermission\(context, Manifest\.permission\.POST_NOTIFICATIONS\)/);
   // And an older update cannot move the bar backwards.

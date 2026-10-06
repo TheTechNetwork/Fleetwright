@@ -106,12 +106,38 @@ internal object XoPolicy {
     )
 
     /** The edge router on a pool, and whether it is running. */
-    data class Edge(val pool: String?, val running: Boolean)
+    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null)
 
     /** The edge router on the pool this network is in, if it has one. */
     fun edgeOn(inv: Inventory, network: String?): Edge? {
         val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return null
         return inv.edges?.firstOrNull { it.pool == pool }
+    }
+
+    /** The edge router's raw disk, OPNSENSE_IMAGE.rawSize in edge-router.js. */
+    const val EDGE_DISK = 3L * 1024 * 1024 * 1024
+
+    /**
+     * Storage the router's disk can go on: in the way out's pool, with room
+     * for its 3 GiB raw disk. Any the pool listed, not only the fleet's,
+     * because the router is not one of the fleet's VMs.
+     */
+    fun edgeDisks(inv: Inventory, network: String?): List<Storage> {
+        val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return emptyList()
+        return inv.srs.filter { it.pool == pool && it.free > EDGE_DISK }
+    }
+
+    /**
+     * The storage the router's disk will go on: the person's pick while it
+     * still fits on the way out's pool, otherwise the fleet's chosen storage
+     * there with the most room, otherwise the pool's. Null when nothing in
+     * that pool has room. Asked for: "which disk did it put it on?"
+     */
+    fun edgeDisk(inv: Inventory, c: Choice): String? {
+        val fits = edgeDisks(inv, c.egress)
+        c.edgeSr?.let { pick -> if (fits.any { it.id == pick }) return pick }
+        val fleet = fits.filter { it.id in c.srs }
+        return (fleet.ifEmpty { fits }).maxByOrNull { it.free }?.id
     }
 
     /**
@@ -137,6 +163,13 @@ internal object XoPolicy {
          * An older one refuses those, so they are not offered to it.
          */
         val anyWayOut: Boolean = false,
+        /** Where the router's disk goes, when the person picked; null is [edgeDisk]'s default. */
+        val edgeSr: String? = null,
+        /**
+         * The machine reads [edgeSr] (`edge-disk` in begin's `can`). An older
+         * one ignores it, so it is neither offered nor sent.
+         */
+        val edgeDiskChoice: Boolean = false,
     )
 
     /**
@@ -227,7 +260,7 @@ internal object XoPolicy {
             currentLimits = Limits(limit("cpus"), limit("memory"), limit("disk")),
             edges = json.optJSONArray("edges")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
-                    a.optJSONObject(i)?.let { e -> Edge(text(e, "pool"), e.optBoolean("running", false)) }
+                    a.optJSONObject(i)?.let { e -> Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr")) }
                 }
             },
         )
@@ -310,6 +343,9 @@ internal object XoPolicy {
         if (c.egress != null && c.egress !in networkIds) return "The way out has to be a network this pool listed. Nothing was changed."
         if (!c.anyWayOut && c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
         if (c.edge && c.egress == null) return "The edge router needs a way out: choose the network its WAN goes on."
+        if (c.edgeDiskChoice && c.edge && edgeOn(inv, c.egress) == null && edgeDisk(inv, c) == null) {
+            return "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
+        }
         val maxCpus = maxCpus(inv)
         if (c.cpus < 1 || c.cpus > maxCpus) return "vCPUs are between 1 and $maxCpus, what the pool has."
         val maxMemory = maxOf(MIN_MEMORY, inv.memory)
@@ -333,6 +369,8 @@ internal object XoPolicy {
             .put("egress", c.egress ?: JSONObject.NULL)
             .put("edge", c.edge)
             .put("limits", JSONObject().put("cpus", c.cpus).put("memory", c.memoryGib * GIB).put("disk", c.diskGib * GIB))
+            // Only to a machine that reads it, and only with the router asked for.
+            .apply { if (c.edgeDiskChoice && c.edge) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
     fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice): String =
