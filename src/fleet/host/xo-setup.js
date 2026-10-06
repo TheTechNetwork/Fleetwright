@@ -314,10 +314,12 @@ export class XoSetups {
       ok: true,
       text: 'Ready for the sign-in. Check the key is this machine’s, then send it sealed.',
       // WHAT ELSE A JOB HERE CAN BE, so a phone sends a policy change only to
-      // a machine that will not take it for a whole setup, and asks for the
-      // edge router only of one that can build it. Not signed: a coordinator
-      // that strips it makes the phone refuse or not offer, which is safe.
-      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['policy', 'edge'] },
+      // a machine that will not take it for a whole setup, asks for the edge
+      // router only of one that can build it, and offers any of the pool's
+      // networks as the way out only to one that takes it (`egress-any`,
+      // checkPolicy). Not signed: a coordinator that strips it makes the
+      // phone refuse or not offer, which is safe.
+      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['policy', 'edge', 'egress-any'] },
     };
   }
 
@@ -480,12 +482,17 @@ export class XoSetups {
 
   /** @param {any} rec */
   #report(rec) {
-    // A POLICY JOB IS DRIVEN FROM A SCREEN THAT IS OPEN, and its steps are
-    // not onboarding's: an event would start an Android notification saying
-    // a hypervisor is being added.
-    if (rec.purpose === 'policy') return;
+    // A POLICY JOB REPORTS ONCE IT IS APPLYING. Until then it is driven from
+    // a screen that is open and waiting on the person; from then on it may be
+    // building the edge router, which is minutes of download, and the person
+    // has every reason to put the phone down. The report says its purpose,
+    // so it is not drawn as a hypervisor being added; a coordinator that
+    // predates `purpose` refuses its steps and draws nothing, which is how
+    // it was.
+    const policy = rec.purpose === 'policy';
+    if (policy && rec.phase !== 'apply' && rec.phase !== 'done') return;
     try {
-      this.emit({ event: 'xosetup.progress', job: rec.job, step: rec.step, of: rec.of, phase: rec.phase, state: rec.state, text: rec.text });
+      this.emit({ event: 'xosetup.progress', job: rec.job, step: rec.step, of: rec.of, phase: rec.phase, state: rec.state, text: rec.text, ...(policy ? { purpose: 'policy' } : {}) });
     } catch (e) {
       this.log.warn(`xosetup: could not report progress: ${/** @type {Error} */ (e).message}`);
     }
@@ -929,9 +936,16 @@ export function currentLimits(set) {
 
 /**
  * The person's choice, checked against what they were shown. Every id must
- * be one the inventory listed, the egress must be one of the networks
- * chosen (the fleet's VMs could not attach a router's WAN to any other), and
- * each limit must be at least a usable machine and at most what is there.
+ * be one the inventory listed, and each limit must be at least a usable
+ * machine and at most what is there.
+ *
+ * THE WAY OUT IS ANY NETWORK THE POOL LISTED, not only one the fleet may
+ * use. The first version held it to those, when the router was to be a
+ * fleet VM that could attach to nothing else; it is built with the admin
+ * sign-in now (edge-router.js), and a WAN the fleet's VMs may not attach
+ * to is the better place for it, since a lab on it would leave without
+ * passing through the router. Asked for: a way out that was not one of
+ * the fleet's networks could not be picked at all.
  *
  * @param {any} p @param {ReturnType<typeof choicesOf>|null} choices
  * `edge` asks for the edge router on the way out; it needs one.
@@ -949,8 +963,8 @@ export function checkPolicy(p, choices) {
     return { ok: false, text: 'That names storage or a network this pool did not list. Nothing was changed.' };
   }
   const egress = p.egress === null || p.egress === undefined ? null : String(p.egress);
-  if (egress !== null && !networks.includes(egress)) {
-    return { ok: false, text: 'The way out has to be one of the networks the fleet may use.' };
+  if (egress !== null && !choices.networks.has(egress)) {
+    return { ok: false, text: 'The way out has to be a network this pool listed. Nothing was changed.' };
   }
   const edge = p.edge === true;
   if (edge && egress === null) return { ok: false, text: 'The edge router needs a way out: choose the network its WAN goes on.' };

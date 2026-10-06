@@ -477,7 +477,7 @@ const chosenBefore = () => ({ id: 'rs-0', name: 'fleetwright', subjects: ['u-old
 /** Begin and run a policy job, and wait until it is waiting on the person. */
 async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, actor = 'eli@example.com') {
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
-  assert.deepEqual(begun.xosetup.can, ['policy', 'edge'], 'a machine that can says so before any sign-in is sealed');
+  assert.deepEqual(begun.xosetup.can, ['policy', 'edge', 'egress-any'], 'a machine that can says so before any sign-in is sealed');
   const reply = await newSealKey();
   const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' });
   const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
@@ -558,10 +558,11 @@ test('a policy is chosen on the phone from the pool it was shown, sealed both wa
   assert.deepEqual(xo.tags.get('net-mgmt'), []);
   assert.deepEqual(xo.tags.get('net-dmz'), ['fleetwright-egress']);
   assert.match(end.text, /Labs leave through dmz\./);
-  // Nothing about the fleet's user or token changed, nothing went to a Lock
-  // Screen, and the password is nowhere.
+  // Nothing about the fleet's user or token changed, and the password is
+  // nowhere. What reached a Lock Screen is the applying and the end, said as
+  // a policy job's, and not the steps the person watched on the open screen.
   assert.ok(!xo.calls.some((c) => /^(user|token)\./.test(c.method)));
-  assert.deepEqual(events, [], 'a policy job reports no progress events');
+  assert.deepEqual(events.map((/** @type {any} */ e) => [e.phase, e.state, e.purpose]), [['apply', 'running', 'policy'], ['done', 'done', 'policy']]);
   assert.equal(end.handoff, undefined);
   assert.equal(end.inventory, undefined, 'the pool is not handed out once the choice is made');
   assert.ok(!JSON.stringify(setups.status({ job, actor })).includes(PASSWORD));
@@ -603,7 +604,7 @@ test('a policy job cancelled, or left, while it waits changes nothing', { skip }
   assert.ok(!xo.calls.some((c) => c.method === 'resourceSet.set' || c.method.startsWith('tag.')));
 });
 
-test('a choice is held to what the pool has, and the way out to what the fleet may use', () => {
+test('a choice is held to what the pool has, and the way out to a network it listed', () => {
   const choices = {
     srs: new Map([['a', 100 * 1024 ** 3], ['b', 50 * 1024 ** 3]]),
     networks: new Set(['n1', 'n2']),
@@ -612,9 +613,12 @@ test('a choice is held to what the pool has, and the way out to what the fleet m
   const ok = { v: 1, srs: ['a'], networks: ['n1'], egress: 'n1', limits: { cpus: 2, memory: 4 * 1024 ** 3, disk: 50 * 1024 ** 3 } };
   assert.equal(checkPolicy(ok, choices).ok, true);
   assert.equal(checkPolicy({ ...ok, egress: null }, choices).ok, true, 'no way out yet is a choice');
+  // ASKED FOR: a way out the fleet's VMs may not use. The router's WAN is
+  // the better for it, since no lab can attach there and skip the router.
+  assert.equal(checkPolicy({ ...ok, egress: 'n2' }, choices).ok, true, 'any network the pool listed');
   const refused = [
     [{ ...ok, srs: [] }, /at least one storage/],
-    [{ ...ok, egress: 'n2' }, /one of the networks the fleet may use/],
+    [{ ...ok, egress: 'n3' }, /a network this pool listed/],
     [{ ...ok, limits: { ...ok.limits, cpus: 9 } }, /between 1 and 8/],
     [{ ...ok, limits: { ...ok.limits, cpus: 1.5 } }, /between 1 and 8/],
     [{ ...ok, limits: { ...ok.limits, memory: 512 * 1024 ** 2 } }, /between 1 GiB/],
