@@ -400,3 +400,50 @@ test('what is kept ready survives a restart, and a machine that never joined is 
   assert.equal(again.vmStandby.machines.size, asked.length);
   assert.deepEqual(again.vmStandby.tally(ELI, () => true), { ready: 0, starting: 0 }, 'asked for sixteen minutes ago and never enrolled');
 });
+
+// --- machines that work together (protocol 10) --------------------------------
+//
+// Asked for: "testing HA ... the 3 VMs need to reach each other ... a default
+// of isolate from each other and only allow outbound". docs/hypervisors.md,
+// "Machines that work together".
+
+const GROUP = '3a4b5c6d-7e8f-4a0b-9c1d-2e3f4a5b6c7d';
+
+test('a group network is offered apart from the networks a machine goes on, and a group is passed to a box that speaks 10', async () => {
+  const LAN = '2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a';
+  const xo = [{ ...holding(ELI)[0], networks: [{ id: LAN, name: 'LAN', pool: 'pool-1' }, { id: GROUP, name: 'fleetwright-group-1', pool: 'pool-1', group: true }] }];
+  const { core, asked } = fleet({ old: { xo, protocol: 9 }, deb14: { xo, protocol: 10 } });
+  const [image] = core.snapshot(eli).vmImages;
+  assert.deepEqual(image.networks, [{ id: LAN, name: 'LAN' }]);
+  assert.deepEqual(image.groups, [{ id: GROUP, name: 'fleetwright-group-1' }]);
+
+  const r = await core.dispatch(ask(eli, { group: GROUP }));
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(asked.map((x) => x.hostId), ['deb14'], 'a box that speaks 9 would drop the group, so it is not asked');
+  assert.equal(asked[0].spec.params.group, GROUP);
+});
+
+test('a machine asked for in a group is never one kept ready, which has no group network', async () => {
+  const xo = [{ ...holding(ELI)[0], networks: [{ id: GROUP, name: 'fleetwright-group-1', pool: 'pool-1', group: true }] }];
+  const { core, asked } = fleet({ deb14: { xo, protocol: 10 } });
+  await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
+  await madeOne(core);
+  const ticket = asked[0].spec.params.ticket;
+  const kept = `vm-${ticket.split('_')[1]}`;
+  await joinReady(core, kept, ticket);
+  const r = await core.dispatch(ask(eli, { group: GROUP }));
+  assert.notEqual(r.vm, kept);
+  assert.ok(core.vmStandby.isKept(kept));
+});
+
+test('a machine in a group says which group and its address there, and an address outside the group range is not passed on', () => {
+  const [entry] = withMachine(ELI);
+  const machine = { ...entry.machines[0], group: 'fleetwright-group-1', groupIp: '10.200.3.17' };
+  const odd = { ...entry.machines[0], name: 'vm-bbbbbbbbbbbb', group: 'fleetwright-group-1', groupIp: '192.168.1.5' };
+  const { core } = fleet({ deb14: { xo: [{ ...entry, machines: [machine, odd] }], protocol: 10 } });
+  const seen = core.snapshot(eli).vmMachines.map((/** @type {any} */ m) => [m.name, m.group, m.groupIp]);
+  assert.deepEqual(seen, [
+    ['vm-aaaaaaaaaaaa', 'fleetwright-group-1', '10.200.3.17'],
+    ['vm-bbbbbbbbbbbb', 'fleetwright-group-1', null],
+  ]);
+});
