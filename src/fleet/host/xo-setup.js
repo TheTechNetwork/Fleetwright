@@ -105,7 +105,15 @@ export const EGRESS_TAG = 'fleetwright-egress';
 /** What building the edge router asks of the server, checked before anything is made. */
 export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start']);
 /** What building the machine image asks of the server, checked before anything is made. */
-export const IMAGE_METHODS = Object.freeze(['disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'tag.add', 'resourceSet.addObject']);
+export const IMAGE_METHODS = Object.freeze(['disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'tag.add', 'resourceSet.addObject']);
+/**
+ * How the image's disk is grown, whichever of these the server offers, in
+ * this order. `disk.resize` is the long-standing name; a Xen Orchestra that
+ * does not list it grows a disk through `vdi.set` with a `size`, the call
+ * behind the REST API's PATCH /vdis/{id}. Seen on a real one: "this Xen
+ * Orchestra does not offer disk.resize, so the machine image cannot be built".
+ */
+export const RESIZE_METHODS = /** @type {readonly ('disk.resize'|'vdi.set')[]} */ (Object.freeze(['disk.resize', 'vdi.set']));
 /** The smallest limits a policy may set: one vCPU, a GiB of memory, ten of disk. */
 const MIN_MEMORY = 1024 ** 3;
 const MIN_DISK = 10 * 1024 ** 3;
@@ -724,6 +732,7 @@ export class XoSetups {
         }
         if (p.image) {
           const missing = IMAGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
+          if (!RESIZE_METHODS.some((m) => Object.hasOwn(ctx.methods, m))) missing.push(RESIZE_METHODS.join(' or '));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the machine image cannot be built. The policy was applied.`);
         }
         const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
@@ -739,6 +748,7 @@ export class XoSetups {
             return this.buildImage({
               image: key,
               admin: ctx.admin,
+              resize: RESIZE_METHODS.find((m) => Object.hasOwn(ctx.methods, m)),
               pool: way.$pool,
               poolName,
               uplink,

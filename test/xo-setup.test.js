@@ -616,7 +616,40 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   assert.equal(asked[0].coordinatorUrl, 'https://fleet.test');
   assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy'), 'its bar reaches the Lock Screen');
   assert.equal(asked[0].image, 'debian-13', 'a phone from before the choice asked for Debian');
+  assert.equal(asked[0].resize, 'disk.resize', 'the long-standing name, where the server offers it');
   assert.deepEqual(inventory.imageKinds.map((/** @type {any} */ k) => k.key), ['debian-13', 'ubuntu-24.04', 'ubuntu-26.04']);
+});
+
+test('a Xen Orchestra without disk.resize builds the image through vdi.set, and one with neither says both names', { skip }, async (t) => {
+  for (const [grow, expect] of [[['vdi.set'], 'vdi.set'], [[], null]]) {
+    const xo = await standIn(t, {
+      sets: [chosenBefore()],
+      more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate', ...grow],
+      vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    });
+    /** @type {any[]} */
+    const asked = [];
+    const { setups } = await machine({
+      coordinatorUrl: 'https://fleet.test',
+      buildImage: async (/** @type {any} */ o) => {
+        asked.push(o);
+        return 'The machine image is ready on Home.';
+      },
+    });
+    const actor = 'eli@example.com';
+    const { begun } = await choosing(xo, setups, actor);
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', image: true, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+    assert.equal((await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, begun.xosetup.job, actor);
+    if (expect) {
+      assert.equal(end.state, 'done', end.text);
+      assert.equal(asked[0].resize, expect);
+    } else {
+      assert.equal(end.state, 'failed');
+      assert.match(end.text, /does not offer disk\.resize or vdi\.set, so the machine image cannot be built/);
+      assert.equal(asked.length, 0);
+    }
+  }
 });
 
 test('a policy for a pool that was never added changes nothing', { skip }, async (t) => {

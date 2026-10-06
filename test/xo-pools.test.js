@@ -470,6 +470,15 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.ok(!there.calls.some((c) => c.method === 'disk.import'));
 });
 
+test('a Xen Orchestra without disk.resize grows the image’s disk through vdi.set, with the same id and size', async () => {
+  // SEEN ON A REAL ONE: "this Xen Orchestra does not offer disk.resize, so
+  // the machine image cannot be built".
+  const p = buildPool({ then: 'Halted' });
+  await ensureImage({ ...buildArgs(p), resize: 'vdi.set' });
+  assert.ok(!p.calls.some((c) => c.method === 'disk.resize'));
+  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vdi.set')).params, { id: 'vdi-1', size: VM_IMAGE.diskSize });
+});
+
 test('a build that reboots failed, and its VM is kept stopped, named for what happened', async () => {
   const p = buildPool({ then: 'rebooted' });
   await assert.rejects(ensureImage(buildArgs(p)), /did not install on the machine image.*fleetwright-image.log/s);
