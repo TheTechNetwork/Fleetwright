@@ -46,7 +46,7 @@ test('iOS: a machine from your hypervisor is asked of the fleet, never of GitHub
 
 test('iOS: New session offers a machine from each of your images, drawn from the snapshot and nothing else', () => {
   assert.match(IOS_SHEET, /images = \(try\? await fleet\.vmImages\(\)\) \?\? \[\]/);
-  assert.match(IOS_SHEET, /ForEach\(images\) \{ image in\s*Text\(image\.label\)\.tag\(vmImageTag \+ image\.template\)/);
+  assert.match(IOS_SHEET, /ForEach\(images\) \{ image in\s*Text\(standby\?\.template == image\.template[\s\S]{0,120}image\.label\)\s*\.tag\(vmImageTag \+ image\.template\)/);
   assert.match(IOS_SHEET, /if hosts\.count > 1 \|\| canStartMachine \|\| !images\.isEmpty \{/);
   assert.match(IOS_SHEET, /template: chosenImage\?\.template,/);
   assert.match(IOS_FLEET, /var label: String \{ "New machine from \\\(name\)" \+ \(poolName\.map \{ " on \\\(\$0\)" \} \?\? ""\) \}/);

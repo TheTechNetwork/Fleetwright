@@ -1,0 +1,52 @@
+// Machines kept ready on your hypervisor, on the phones: the setting, what it
+// costs said before it is asked for, the image in New session that has one
+// ready, and a kept machine named as one in the list.
+//
+//   node --test test/vm-standby-in-apps.test.js
+//
+// Read from the source the way every *-in-apps test is: neither phone builds
+// here. ASKED FOR: "standby vms to speed up session starts".
+// docs/hypervisors.md, "Machines kept ready".
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+const IOS = (/** @type {string} */ f) => read(`apps/ios/Fleetwright/${f}`);
+const I_FLEET = IOS('Fleet.swift');
+const I_VIEW = IOS('VMStandbyView.swift');
+const I_LIST = IOS('MachinesView.swift');
+const I_SHEET = IOS('StartSheet.swift');
+
+/** What both phones say, word for word. */
+const SHARED = [
+  'Keep machines ready',
+  'A session from this image starts on a ready one at once, and another is made behind it. Each uses a machine’s worth of your pool all the time, and is replaced when its 350 minutes run out.',
+  'None kept ready.',
+  ' ready now, ',
+  ' being made, of ',
+  'Stop keeping any',
+  'Keep them ready',
+  'kept ready',
+  ', ready now',
+  'Behind the edge router',
+];
+
+test('iOS: what is kept ready is read from the snapshot and set through the fleet, 0 to 3', () => {
+  assert.match(I_FLEET, /struct Reply: Codable \{ let vmStandby: VMStandby\? \}/);
+  assert.match(I_FLEET, /send\("PUT", "\/api\/vm-standby", body: body\)/);
+  assert.match(I_FLEET, /body\["network"\] = network\.map \{ \$0 as Any \} \?\? NSNull\(\)/);
+  assert.match(I_VIEW, /Stepper\("Keep \\\(count\) ready", value: \$count, in: 0\.\.\.3\)/);
+});
+
+test('iOS: the setting is offered only where an image is, and the image with one ready says so', () => {
+  assert.match(I_LIST, /if !poolImages\.isEmpty \{\s*NavigationLink \{\s*VMStandbyView/);
+  assert.match(I_SHEET, /standby\?\.template == image\.template && \(standby\?\.ready \?\? 0\) > 0/);
+  assert.match(I_LIST, /m\.standby == true \? "kept ready" : m\.image/);
+});
+
+test('iOS says it in the shared words', () => {
+  const ios = [I_FLEET, I_VIEW, I_LIST, I_SHEET].join('\n');
+  for (const words of SHARED) assert.ok(ios.includes(words), words);
+});
