@@ -325,6 +325,33 @@ machine of the fleet, through the coordinator.
   the setup holds nothing after the job; until the job is forgotten (six
   hours) it holds the sealed copy in memory, which only the phone can
   open.
+- **The same token, kept in the fleet** so a session can start on a machine
+  from the pool (`docs/hypervisors.md`, "Machines from your pool"). The phone
+  puts the record in the person's vault as `hypervisor:<address>`: sealed at
+  rest in the minting Worker, changed only by that person, handed only to a
+  box whose key they approved. The coordinator relays it sealed. A box takes
+  it out of the vault's answer before its hub sees it and **holds it in its
+  sidecar's memory only**, so no session can read it and no disk holds it;
+  a box removed from the vault stops being given it on the next pass. What
+  a compromised approved box can do with it is what the resource set allows:
+  clone the images in the set onto the storage and networks in the set,
+  within its limits. That is the bound the token always had, now reachable
+  from every box the person approved instead of from their phone alone.
+- **A machine from the pool is admitted by a ticket alone.** There is no
+  GitHub token beside it, so a VM ticket admits a machine: single use, at
+  most forty-five minutes, bound to the person who asked, and spendable only
+  at `/api/enroll/vm` (a runner's ticket is refused there, and a VM's at
+  `/api/enroll/actions`). The name is derived from the ticket, never chosen.
+  It travels only on the machine's cloud-init drive, with the person's Claude
+  login from their vault; the machine wipes the drive as its first act and
+  Xen Orchestra is asked to destroy it after boot. Somebody who read the
+  drive before then (a pool admin, or anything that can read that storage)
+  could enrol a machine of their own as that person's temporary host and be
+  started the session asked for with it, and has their Claude login: the
+  same reach as reading the machine's own disk, which the hypervisor always
+  had. The box checks the image it clones is one it saw tagged
+  `fleetwright-image` on that person's pool, so the coordinator can name
+  which of the person's images, and nothing else.
 
 **A device's own GitHub sign-in, and the dispatch it makes.** Starting a
 runner no longer needs a permanent box (`runner-central.md`, "Without a

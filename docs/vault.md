@@ -18,6 +18,7 @@ person removes the box.
 | Cloudflare | the sign-in's access and refresh tokens | the access token; renewed in the minter |
 | Claude | a `claude setup-token`, the same one runners use | the token |
 | named secrets | `secret:NAME`, any value up to 8 KiB | the value, by name |
+| hypervisors | `hypervisor:ADDRESS`, the record a pool's setup handed the phone | the record, held in the sidecar's memory and never given to the hub or a session ([hypervisors.md](./hypervisors.md), "Machines from your pool") |
 
 A box never holds a refresh token. Renewing happens in one place, inside the
 minter's single Durable Object, under a lock per person, so however many boxes
@@ -89,6 +90,11 @@ the more specific decision:
 | the broker (`git`, `gh`, `wrangler`, `fleet-cred`) | nothing for that provider is linked here |
 | a session's Claude login | no Claude account is linked here: a direct session gets `CLAUDE_CODE_OAUTH_TOKEN` with `ANTHROPIC_API_KEY` unset, a sandboxed one is seeded `.claude-token` for its entrypoint to export |
 | `fleet-secret NAME` | the box has no secret of that name |
+
+A hypervisor's record is the exception to all of this: the sidecar takes it
+out of the answer before fleetwright sees it, holds it in memory, and uses it
+to make machines on the pool (`src/fleet/host/xo-pools.js`). Nothing on the
+box writes it down.
 
 A runner is not a box anyone approves: its key is new every run. It goes on
 getting its owner's Claude login and its repository tokens the way it did

@@ -1,10 +1,13 @@
 # A machine from your own hypervisor
 
-**Status: onboarding a pool that already has Xen Orchestra is built, through
-a machine already in the fleet** ("What ships first", below). Templates,
-labs, the dedicated machine and deploying Xen Orchestra are designed and not
-built. XCP-ng first, through Xen Orchestra; Proxmox second, behind the same
-interface.
+**Status: built.** A pool that already has Xen Orchestra is added through a
+machine already in the fleet ("What ships first", below); the policy job
+builds its edge router and its **machine image**; and a session starts on a
+**new machine from that image** from New session › Where on either phone
+("Machines from your pool", next). **Not yet run:** a real XCP-ng pool behind
+Xen Orchestra. Labs, the dedicated machine and deploying Xen Orchestra are
+designed and not built. XCP-ng first, through Xen Orchestra; Proxmox second,
+behind the same interface.
 
 A session today runs in a container on a box, or on a GitHub Actions runner
 that is gone in six hours. Neither is a real machine on a network you own:
@@ -16,113 +19,139 @@ that gets there is the one runners already proved: a machine is cloned,
 **joins by itself**, does the job, and is destroyed. The difference is whose
 hardware it is, and where the credential that clones it lives.
 
+## Machines from your pool
+
+> Still can't run sessions on it.
+
+What happens, from the phone to a session on a VM:
+
+1. **The pool's token is kept in your vault.** Setup seals the limited user's
+   token to your phone (the hand-off, below). The phone now also puts that
+   record in your vault as `hypervisor:<address>`, after setup and from the
+   hypervisor's page (Machines › the pool › Keep its token in the fleet) for
+   a pool set up before. The minter checks the record names that address.
+2. **The boxes you approved hold it, in memory only.** Each sidecar pass
+   (every ten minutes) hands an approved box everything you keep, and the box
+   takes the pool records out before its hub sees the answer, so nothing
+   writes them to disk (`src/fleet/host/xo-pools.js`). Sessions never see
+   them: a pool's token is its own kind, not a named secret.
+3. **The box looks at the pool.** Signed in with the limited token, it finds
+   the Fleetwright machine images there (templates tagged
+   `fleetwright-image`) and reports them in its health, never the token. The
+   coordinator offers each person the images on their own pools as
+   `vmImages`, and both phones list them under New session › Where as "New
+   machine from Fleetwright Debian 13 on rack".
+4. **You start a session there.** `provision { platform: "vm", template,
+   minutes }`, with the session beside it as a runner's is. The coordinator
+   mints a single-use ticket bound to you, holds the session, and asks a box
+   that holds your pool with that image; one that cannot reach the pool hands
+   on to the next, and a refusal from the pool itself (no room in its limits)
+   is the answer.
+5. **The box clones the image** onto the uplink, behind the edge router,
+   counted against the resource set, tagged `fleetwright-session` and with
+   the time it must be gone by, booted with a cloud-init drive holding one
+   file: the coordinator, the ticket, whose machine it is, your Claude login
+   from your vault, and its minutes. Xen Orchestra is asked to destroy the
+   drive once the machine has booted.
+6. **The machine joins by itself.** `install/fleetwright-vm-join` wipes the
+   drive first, moves the file beside the sidecar's key and starts the
+   services, which the image left off. The sidecar enrols itself once at
+   `/api/enroll/vm` with the ticket, under the name the coordinator derives
+   from it (`vm-<ticket id>`), hands your Claude login to its hub as a
+   runner's is handed, and deletes the file. It is then a temporary host in
+   every way: yours, placed only by name, retired with its key on disconnect.
+7. **The session starts on it**, from the first health frame that says it
+   can take one; a frame from before its login has arrived holds the start
+   for the next.
+8. **It ends by itself.** The join script schedules a power-off at its end.
+   On its next pass the box removes, disks and all, every machine tagged
+   `fleetwright-session` that has stopped, and any still running fifteen
+   minutes past its end. Nothing else on the pool is touched.
+
+**What a session there runs on** is your own Claude login from your vault. A
+setup-token cannot open Remote Control, so, as on a runner, the
+notification that matters is the one when its task is done.
+
+**The machine image** is built by the policy job, which already holds the
+admin sign-in: switch on "Make the machine image for sessions" under Way out.
+It is Debian 13's own cloud image, pinned by its published SHA-512, with
+Fleetwright installed from this fleet's `/install` and not enrolled, built
+behind the edge router on the storage picked, and turned into a template in
+the resource set. Its build is on the Lock Screen and in Android's ongoing
+notification, like the router's. Details under "Templates, built by the
+policy job".
+
+**Not yet:** machines on the uplink can reach each other as well as the
+internet (one machine per network, and a group network for tests that need
+several, are the next round); a pool has to be added and approved boxes
+have to reach it; the first clone has not been run on a real XCP-ng pool.
+
 ## The credential, which is the whole design again
 
 A Xen Orchestra user that can create and delete VMs is root on the pool in
 every way that matters. `docs/wanted.md` already says where it may not live:
 the coordinator is the party this system treats as compromised, so a token
-there is every VM behind it. `runner-central.md` landed on the shape for
-GitHub and this is the same one.
+there is every VM behind it.
 
-**One permanent fleetwright host on the pool holds the Xen Orchestra token,
-and nothing else holds it.** A small VM of its own, not a box that does other
-work, so what can reach the token is exactly what runs on that VM. The
-coordinator asks it to act; it cannot read the token and cannot exceed what
-the token may do.
+**The fleet keeps it in your vault, and the boxes you approved hold it in
+memory.** The vault is the minting Worker's (docs/vault.md): sealed at rest
+under its own key, changed only by you from your phone, and handed only to a
+box whose key you approved, which checked the fingerprint. The coordinator
+relays it sealed and cannot read it. A box holds it in its sidecar process
+and writes it nowhere, and stops being given it on the next pass after you
+remove the box or forget the pool. So no single machine is the only thing
+that can reach the pool, and none keeps the key on disk.
 
 **And what the token may do is bounded in Xen Orchestra, not here.** The
 fleetwright user gets a **resource set**: the templates it may create from,
-the storage and networks it may use, and limits on vCPUs, memory, disk and VM
-count. Where the XO version has the newer ACLs, its rules are scoped by
-selector to VMs tagged `fleetwright`, so it cannot see or touch anything it
-did not make. A compromised hypervisor host is then a quota's worth of VMs
-from a known list of templates, and nothing on the pool that predates it.
-This is the bound to write down for the operator, because it is the one that
-holds when everything on our side has failed.
+the storage and networks it may use, and limits on vCPUs, memory and disk.
+A compromised box is then a quota's worth of VMs from the images in that
+set, and nothing on the pool that predates it. This is the bound to write
+down for the operator, because it is the one that holds when everything on
+our side has failed.
 
 ## What `provision` may express
 
 ```
-provision { template: <name>, minutes?: 5..1440, task? }
-provision { lab: <name>,      minutes?: 5..1440, task? }
+provision { platform: "vm", template: <Xen Orchestra template id>, minutes?: 5..350 }
 ```
 
-**A template is a file on the hypervisor host**, chosen by name, exactly as a
-task profile is. It says which XO template to clone, vCPUs, memory, disk,
-which networks, and the most minutes it may live:
-
-```json
-// /var/lib/fleetwright/templates/debian.json
-{
-  "xoTemplate": "fleetwright-debian-13",
-  "cpus": 2, "memoryGiB": 4, "diskGiB": 32,
-  "networks": ["fleetwright-uplink"],
-  "maxMinutes": 480
-}
-```
-
-`templates` lists what a hypervisor host has, fanned out like `profiles`, so a
-picker shows only names some host can honour. **The coordinator names a
-template and never carries one**: no XO template id, no network, no size and
-no cloud-init crosses the protocol. A compromised coordinator can ask for a
-Debian VM for eight hours, attributed to a real person; it cannot ask for a
-VM on the management network or one built from an image of its choosing.
-
-`template` and `lab` are new parameters on an existing verb, so they are
-`since: 8` and an older host is never handed them. They and `platform` are
-mutually exclusive: one says "a GitHub runner", the others "a VM, or a lab,
-from this pool". A `task` rides along
-the way it does on a held runner start (protocol 7).
+`template` is new on an existing verb, so it is `since: 8`, and only a box
+that reports a pool (and so speaks 8) is ever asked; the coordinator refuses
+rather than let it be dropped. **The id must be an image the box itself saw
+on your pool**, tagged `fleetwright-image`: the box checks its own report,
+not the coordinator's word. No network, size or cloud-init crosses the
+protocol. A compromised coordinator can ask for one of your images for a few
+hours, attributed to you; it cannot ask for a VM on the management network or
+one built from an image of its choosing. A task rides along the way it does
+on a held runner start (protocol 7).
 
 ## How a clone joins
 
-A fresh VM has nobody at a shell, so it joins the way a runner does, with
-the delivery changed:
-
-1. The coordinator mints a **ticket**: single-use, short-lived, ephemeral,
-   bound to the person who asked. The rules `runner-tickets.js` already
-   argues; what a leaked one costs is a machine attributed to the wrong
-   member, once.
-2. The hypervisor host creates the VM through Xen Orchestra's JSON-RPC API
-   (the one its Terraform and Pulumi providers drive): the template, a unique
-   name (`fw-<template>-<short id>`, which is also its host id, because two
-   clones under one identity is the clone bug again), the `fleetwright` tag,
-   an expiry, and **cloud-init user data** carrying the ticket and the
-   one-line install.
-3. Xen Orchestra is asked to **destroy the cloud-config disk after first
-   boot** (the Terraform provider's `destroy_cloud_config_vdi_after_boot`), so
-   the ticket is not left on a disk inside the guest after it is spent.
-4. The guest installs the package, enrols as a temporary host, and from there
-   it is a runner in every way the coordinator cares about: placed only by
-   name, retired on disconnect, its key revoked with it.
-
-The templates have the package installed and NOT enrolled, so first boot is
-an enrolment, not a download.
+See "Machines from your pool", steps 4 to 7. What a leaked ticket costs is
+more than a runner's, because there is no GitHub token beside it: somebody
+holding it before the machine spends it could enrol a machine of their own as
+your temporary host and be started the session you asked for with it. It is
+single use, forty-five minutes at most, travels only on the machine's
+cloud-init drive, which the machine wipes as its first act and Xen
+Orchestra destroys after boot, and the machine spends it within a minute or
+two of being made. A runner's ticket cannot be spent at `/api/enroll/vm`,
+and a VM's cannot be spent at `/api/enroll/actions`.
 
 ## Ending
 
-**The clock is on the VM, not in somebody's memory.** Every VM carries its
-expiry in Xen Orchestra beside the tag. The hypervisor host destroys, disks
-included:
-
-- a VM past its expiry, on a timer and when the host starts, so a hypervisor
-  host that was down cannot leave its VMs running for ever;
-- a VM whose host has been retired, when the coordinator says so;
-- on `stop` from the person who owns it.
-
-A VM tagged `fleetwright` that names no host this fleet knows is destroyed
-too. The tag is ours, so anything wearing it is ours to clean up, and the
-resource set means nothing else can wear it by accident.
+See "Machines from your pool", step 8. **The clock is on the VM**, in its
+`fleetwright-until` tag, and in a power-off it scheduled itself, so a box
+that was down cannot leave a machine running past its end for long: any box
+holding the pool sweeps it on its next pass.
 
 ## Inside the VM
 
 **The VM is the sandbox.** The session runs without a container: it gets the
 VM's own kernel, interfaces and `/dev`, which is what packet capture, routing
-and kernel work need. The template gives the service user passwordless sudo,
-because the machine exists for one job and is destroyed after it. Nothing
-outside the VM is reachable from inside except through the networks the
-template file lists. That makes the uplink the decision that matters most,
-which is the next section.
+and kernel work need. The machine exists for one job and is destroyed after
+it. That makes the uplink the decision that matters most, which is the next
+section.
 
 ## Labs: a router in front of the machine
 
@@ -228,17 +257,26 @@ labs on the edge's host, because a network with no interface is host-local
 without Xen Orchestra's SDN controller. A pool that already has a suitable
 VLAN can be pointed at it instead; nothing requires the uplink.
 
-## Templates, built by onboarding
+## Templates, built by the policy job
 
-Nobody builds them by hand. The Debian template does not exist yet; the
-OPNsense image is built, for the edge router:
+Nobody builds them by hand. Both are built by the policy job, which holds the
+admin sign-in for as long as it runs:
 
-- **Linux.** Debian's official cloud image (the `genericcloud` build, which
-  already runs cloud-init) is downloaded, checked against Debian's published
-  checksum, converted and imported. A builder VM boots it once with cloud-init
-  that installs the Xen guest tools and the fleetwright package without
-  enrolling and gives the service user sudo, then powers off and is converted
-  to `fleetwright-debian-13`.
+- **Linux, built** (`src/fleet/host/vm-image.js`). Debian 13's official cloud
+  image, the `genericcloud` build of 1 October 2026, pinned by the SHA-512
+  Debian publishes for it, is downloaded once and checked every time it is
+  used. Its raw disk is streamed out of the archive with `tar` and `xz`
+  straight into Xen Orchestra's disk import, grown to 20 GiB, and booted on
+  the uplink with cloud-init that installs Fleetwright from this fleet's own
+  `/install` with no pin, leaves its services off, and wipes what would make
+  two clones one machine (the machine id, SSH host keys, any host key) before
+  `cloud-init clean`. **It powers off when everything worked and reboots when
+  anything did not**: cloud-init does not run its script twice, so a reboot is
+  a VM that stays up, and its start time moving is read as the failure at
+  once. A failed build's VM is kept, stopped, as `fleetwright-image-build
+  (install failed)`, for its log; applying again removes it. A good one is
+  named Fleetwright Debian 13, tagged `fleetwright-image`, converted to a
+  template and put in the resource set.
 - **OPNsense, built and proved for the edge router.** Not from a second disk:
   OPNsense's configuration importer waits for a key press at the console, so
   attached media is not read unattended. What first boot does read is
@@ -277,21 +315,15 @@ files do not change between the two.
 
 ## Order of work
 
-Following `CONTRIBUTING.md`, coordinator first:
-
-1. **Coordinator, protocol 8:** `template` and `lab` on `provision`, the
-   `templates` verb, placement onto a host that publishes the template, the
-   ticket, and the onboarding verb that carries a sealed admin credential to
-   one chosen host.
-2. **Host:** the onboarding script, the Xen Orchestra driver, template and
-   lab files, the expiry reaper. Tested against a stand-in JSON-RPC server,
-   because the real one is on hardware this repository cannot reach.
-3. **Phones:** Add a hypervisor, its progress, and templates and labs in
-   the new-machine picker.
-4. **Docs.**
-
-Labs (step 2 again, with the router bootstrap) come after a single VM works
-on the real pool.
+Following `CONTRIBUTING.md`, coordinator first. **Done:** protocol 8
+(`template` on `provision`), the VM ticket and `/api/enroll/vm`, placement
+onto a box that holds the pool, the vault's `hypervisor:` kind; on the host,
+the pool holder, the clone, the sweep, the join and the machine image; both
+phones; these docs. **Next:** a network per machine and a group network for
+tests that need several machines to reach each other; machines kept booted
+and waiting so a session starts in seconds; DNS filtering and intrusion
+detection on the edge router; and what each machine did on the network, on
+the phone. Labs (a router of their own in front of a machine) after that.
 
 ## Onboarding: nothing made by hand
 
