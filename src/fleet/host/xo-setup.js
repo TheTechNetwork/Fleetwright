@@ -72,7 +72,7 @@ import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xosetupAad, xosetupH
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { EDGE, ensureEdge, ensureUplink, srName } from './edge-router.js';
-import { VM_IMAGE, ensureImage } from './vm-image.js';
+import { VM_IMAGE, IMAGES, ensureImage, imageKeyOf } from './vm-image.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -340,7 +340,9 @@ export class XoSetups {
         keySig,
         hostKey,
         fingerprint: await this.fingerprint(hostKey),
-        can: ['policy', 'edge', 'egress-any', 'edge-disk', ...(this.coordinatorUrl ? ['image'] : [])],
+        // `images`: it builds any of the catalogue's operating systems, chosen
+        // together, not only Debian (vm-image.js, IMAGES).
+        can: ['policy', 'edge', 'egress-any', 'edge-disk', ...(this.coordinatorUrl ? ['image', 'images'] : [])],
       },
     };
   }
@@ -730,11 +732,12 @@ export class XoSetups {
         // machine cloned from it will (vm-image.js).
         if (p.image) {
           const poolName = String((ctx.pools || []).find((/** @type {any} */ x) => x?.id === way.$pool)?.name_label || 'this pool').slice(0, 80);
-          const image = async () => {
+          const image = async (/** @type {string} */ key) => {
             rec.building = 'image';
             rec.part = null;
             rec.abort = new AbortController();
             return this.buildImage({
+              image: key,
               admin: ctx.admin,
               pool: way.$pool,
               poolName,
@@ -752,9 +755,9 @@ export class XoSetups {
               say,
             });
           };
-          if (!p.edge) return await image();
-          built.push(await this.#edge(ctx, p, way, uplink, say));
-          built.push(await image());
+          // ONE AFTER ANOTHER, router first: each image is built behind it.
+          if (p.edge) built.push(await this.#edge(ctx, p, way, uplink, say));
+          for (const key of p.images) built.push(await image(key));
           return built.join(' ');
         }
         return await this.#edge(ctx, p, way, uplink, say);
@@ -1030,6 +1033,7 @@ export function inventoryOf(ctx, set) {
   const images = (ctx.images || []).map((/** @type {any} */ t) => ({
     pool: t.$pool ? String(t.$pool) : null,
     name: String(t.name_label || VM_IMAGE.name).slice(0, 80),
+    key: imageKeyOf(t),
   }));
   return {
     v: 1,
@@ -1039,6 +1043,9 @@ export function inventoryOf(ctx, set) {
     networks,
     edges,
     images,
+    // WHICH OPERATING SYSTEMS AN IMAGE CAN BE MADE OF, from this machine's
+    // catalogue, so the phone offers each and never one it cannot build.
+    imageKinds: Object.values(IMAGES).map((/** @type {any} */ i) => ({ key: i.key, os: i.os })),
     capacity: {
       cpus: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.cpus?.cores) || 0), 0),
       memory: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.memory?.size) || 0), 0),
@@ -1061,6 +1068,7 @@ function choicesOf(inventory) {
     // a machine image is built behind one (checkPolicy).
     networkPools: new Map(inventory.networks.map((/** @type {any} */ x) => [x.id, x.pool])),
     edgePools: new Set((inventory.edges || []).map((/** @type {any} */ e) => e.pool)),
+    imageKeys: new Set((inventory.imageKinds || []).map((/** @type {any} */ k) => k.key)),
   };
 }
 
@@ -1098,7 +1106,7 @@ export function currentLimits(set) {
  * pool; it is built behind the edge router, so it needs one there or asked
  * for with it.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, image: boolean, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, image: boolean, images: string[], limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1120,7 +1128,13 @@ export function checkPolicy(p, choices) {
   // it is in the way out's pool and has room is checked where it is used.
   const edgeSr = p.edgeSr === null || p.edgeSr === undefined ? null : String(p.edgeSr);
   if (edgeSr !== null && !choices.srs.has(edgeSr)) return { ok: false, text: 'The edge router’s disk has to go on storage this pool listed. Nothing was changed.' };
-  const image = p.image === true;
+  // WHICH IMAGES: a list of the catalogue's keys, or `image: true` from a
+  // phone that predates the choice, which is Debian.
+  const asked = Array.isArray(p.images) ? [...new Set(p.images.map(String))] : p.image === true ? ['debian-13'] : [];
+  if (asked.some((k) => !(choices.imageKeys ?? new Set(Object.keys(IMAGES))).has(k))) {
+    return { ok: false, text: 'That names a machine image this machine cannot build. Nothing was changed.' };
+  }
+  const image = asked.length > 0;
   if (image && egress === null) return { ok: false, text: 'The machine image is built behind the edge router: choose the way out it leaves through.' };
   if (image && !edge && !choices.edgePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
     return { ok: false, text: 'The machine image is built behind the edge router, and that pool has none yet. Build the router with it. Nothing was changed.' };
@@ -1135,7 +1149,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image ? edgeSr : null, image, limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image ? edgeSr : null, image, images: asked, limits: { cpus, memory, disk } } };
 }
 
 /**

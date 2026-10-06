@@ -948,11 +948,31 @@ test('a machine on a hypervisor is made by this process for the person asking, a
   });
   const { sidecar, stub } = await setup(t, {}, { xoPools });
   const ticket = `fwt_${'1'.repeat(12)}_${'2'.repeat(48)}`;
-  const r = await sidecar.handle(intent({ verb: 'provision', actor: 'Eli@Example.com', params: { platform: 'vm', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30 } }));
+  const r = await sidecar.handle(intent({ verb: 'provision', actor: 'Eli@Example.com', params: { platform: 'vm', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30, network: '5d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c' } }));
   assert.equal(r.ok, true, r.text);
   assert.equal(r.vm, 'vm-uuid');
-  assert.deepEqual(asked, [{ owner: 'eli@example.com', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30, coordinatorUrl: 'https://coord.example.workers.dev' }]);
+  assert.deepEqual(asked, [{ owner: 'eli@example.com', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30, network: '5d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', coordinatorUrl: 'https://coord.example.workers.dev' }]);
   assert.equal(stub.commands.length, 0, 'the ticket never reached the hub');
+});
+
+test('working a machine on a hypervisor is this process’s too, for the person asking, and its answer goes back as given', async (t) => {
+  /** @type {any[]} */
+  const asked = [];
+  const xoPools = /** @type {any} */ ({
+    held: new Map([['eli@example.com xo.lan', {}]]),
+    report: () => [],
+    control: async (/** @type {any} */ ask) => {
+      asked.push(ask);
+      return { ok: false, notHere: true, text: 'vm-111111111111 is not on any of your pools this box holds.' };
+    },
+    refresh: async () => {},
+  });
+  const { sidecar, stub } = await setup(t, {}, { xoPools });
+  const r = await sidecar.handle(intent({ verb: 'vmctl', actor: 'Eli@Example.com', params: { name: 'vm-111111111111', action: 'resize', cpus: 4 } }));
+  assert.deepEqual(asked, [{ owner: 'eli@example.com', name: 'vm-111111111111', action: 'resize', minutes: null, cpus: 4, memory: null }]);
+  assert.equal(r.ok, false);
+  assert.equal(r.notHere, true, 'so the coordinator asks the next box');
+  assert.equal(stub.commands.length, 0);
 });
 
 test('a machine from a hypervisor hands its owner’s login to its hub once, then forgets the file', async (t) => {

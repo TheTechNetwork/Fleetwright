@@ -35,11 +35,18 @@
 // stand-in.
 
 import { spawn } from 'node:child_process';
+import { createReadStream, existsSync, statSync, rmSync, renameSync } from 'node:fs';
 
 import { fetchPinned, uploadDisk, srName } from './edge-router.js';
 
 /** Debian 13's cloud image, pinned. A newer build is a new entry here. */
 export const DEBIAN_IMAGE = Object.freeze({
+  key: 'debian-13',
+  os: 'Debian 13',
+  name: 'Fleetwright Debian 13',
+  format: 'tar-raw',
+  label: 'Debian',
+  algorithm: /** @type {'sha512'} */ ('sha512'),
   release: '13',
   build: '20261001-2618',
   url: 'https://cloud.debian.org/images/cloud/trixie/20261001-2618/debian-13-genericcloud-amd64-20261001-2618.tar.xz',
@@ -50,6 +57,73 @@ export const DEBIAN_IMAGE = Object.freeze({
   member: 'disk.raw',
   rawSize: 3221225472,
 });
+
+/**
+ * Ubuntu's cloud images, pinned the same way. Ubuntu publishes them as qcow2
+ * (its tarball holds a bare ext4 partition, which does not boot), so the box
+ * converts the download to a raw disk with `qemu-img` before it is written.
+ * `rawSize` is the virtual size in the qcow2 header.
+ */
+export const UBUNTU_2404_IMAGE = Object.freeze({
+  key: 'ubuntu-24.04',
+  os: 'Ubuntu 24.04 LTS',
+  name: 'Fleetwright Ubuntu 24.04',
+  format: 'qcow2',
+  label: 'Ubuntu',
+  algorithm: /** @type {'sha256'} */ ('sha256'),
+  build: 'release-20260926',
+  url: 'https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.img',
+  /** As published in that release's SHA256SUMS, and as downloaded. */
+  sha256: '6a81c37564db9b1ee84e141922625e1d7c5b389b99bb3c572e0243607d5bb4d2',
+  compressedSize: 625612288,
+  rawSize: 3758096384,
+});
+
+export const UBUNTU_2604_IMAGE = Object.freeze({
+  key: 'ubuntu-26.04',
+  os: 'Ubuntu 26.04 LTS',
+  name: 'Fleetwright Ubuntu 26.04',
+  format: 'qcow2',
+  label: 'Ubuntu',
+  algorithm: /** @type {'sha256'} */ ('sha256'),
+  build: 'release-20260927',
+  url: 'https://cloud-images.ubuntu.com/releases/resolute/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img',
+  sha256: '8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2',
+  compressedSize: 865115136,
+  rawSize: 3758096384,
+});
+
+/**
+ * WHICH OPERATING SYSTEMS A MACHINE CAN RUN: the ones Fleetwright's installer
+ * supports, each pinned. Asked for: "os selection not just Debian". A new one
+ * is an entry here and nothing else; the phone lists what the box offers.
+ *
+ * @typedef {typeof DEBIAN_IMAGE | typeof UBUNTU_2404_IMAGE} ImageSpec
+ */
+export const IMAGES = Object.freeze(/** @type {Record<string, any>} */ ({
+  [DEBIAN_IMAGE.key]: DEBIAN_IMAGE,
+  [UBUNTU_2404_IMAGE.key]: UBUNTU_2404_IMAGE,
+  [UBUNTU_2604_IMAGE.key]: UBUNTU_2604_IMAGE,
+}));
+
+/** The digest a spec is pinned to, by its algorithm. @param {any} spec */
+const digestOf = (spec) => (spec.algorithm === 'sha512' ? spec.sha512 : spec.sha256);
+
+/** The tag naming which image a template is, beside `fleetwright-image`. @param {string} key */
+export const imageTag = (key) => `fleetwright-image:${key}`;
+
+/**
+ * Which catalogue entry a template is: by its key tag, or, for an image
+ * built before there was more than one, Debian by its name.
+ *
+ * @param {any} t @returns {string|null}
+ */
+export function imageKeyOf(t) {
+  const tags = Array.isArray(t?.tags) ? t.tags : [];
+  const tagged = tags.find((/** @type {string} */ x) => x.startsWith('fleetwright-image:'));
+  if (tagged) return tagged.slice('fleetwright-image:'.length);
+  return tags.includes('fleetwright-image') ? DEBIAN_IMAGE.key : null;
+}
 
 /** Names and sizes in Xen Orchestra. */
 export const VM_IMAGE = Object.freeze({
@@ -119,7 +193,7 @@ export function buildCloudConfig({ coordinatorUrl }) {
     '  set -e',
     '  export DEBIAN_FRONTEND=noninteractive',
     '  apt-get update',
-    '  apt-get install -y curl ca-certificates',
+    '  apt-get install -y curl ca-certificates openssh-server',
     // The Xen guest agent, where Debian has it: it is what lets Xen
     // Orchestra see a clone's address and know it has booted.
     '  apt-get install -y xe-guest-utilities || true',
@@ -182,10 +256,43 @@ export const IMAGE_STAGES = 4;
 /** Thousandths of the bar the bytes take; the install has most of the rest. */
 const BYTES_SHARE = 450;
 const INSTALLED = 970;
-/** @param {number} downloaded @param {number} written */
-export function imageFill(downloaded, written) {
-  const bytes = DEBIAN_IMAGE.compressedSize + DEBIAN_IMAGE.rawSize;
-  return Math.min(BYTES_SHARE, Math.floor((BYTES_SHARE * (Math.min(downloaded, DEBIAN_IMAGE.compressedSize) + Math.min(written, DEBIAN_IMAGE.rawSize))) / bytes));
+/** @param {number} downloaded @param {number} written @param {any} [spec] */
+export function imageFill(downloaded, written, spec = DEBIAN_IMAGE) {
+  const bytes = spec.compressedSize + spec.rawSize;
+  return Math.min(BYTES_SHARE, Math.floor((BYTES_SHARE * (Math.min(downloaded, spec.compressedSize) + Math.min(written, spec.rawSize))) / bytes));
+}
+
+/**
+ * A qcow2 download as the raw disk Xen Orchestra imports, converted once with
+ * `qemu-img` beside it and kept while its size is right. A machine without
+ * qemu-img is told which package.
+ *
+ * @param {string} file @param {any} spec
+ * @param {{ spawnImpl?: typeof spawn, signal?: AbortSignal }} [opts]
+ * @returns {Promise<string>} the raw file
+ */
+export async function convertQcow2(file, spec, { spawnImpl = spawn, signal } = {}) {
+  const out = `${file}.raw`;
+  if (existsSync(out) && statSync(out).size === spec.rawSize) return out;
+  const part = `${out}.part`;
+  rmSync(part, { force: true });
+  await new Promise((resolve, reject) => {
+    const child = spawnImpl('qemu-img', ['convert', '-f', 'qcow2', '-O', 'raw', file, part], { stdio: ['ignore', 'ignore', 'pipe'] });
+    signal?.addEventListener('abort', () => child.kill(), { once: true });
+    let said = '';
+    child.stderr?.on('data', (d) => {
+      said = (said + d).slice(-400);
+    });
+    child.on('error', (/** @type {any} */ e) =>
+      reject(e?.code === 'ENOENT' ? new Error(`this machine has no qemu-img to convert the ${spec.os} image with. Install it (apt install qemu-utils) and apply again`) : e));
+    child.on('close', (code) => (code ? reject(new Error(`qemu-img could not convert the ${spec.os} image: ${said.trim() || `exit ${code}`}`)) : resolve(undefined)));
+  });
+  if (statSync(part).size !== spec.rawSize) {
+    rmSync(part, { force: true });
+    throw new Error(`the ${spec.os} image converted to ${statSync(part).size} bytes, not ${spec.rawSize}`);
+  }
+  renameSync(part, out);
+  return out;
 }
 /** How far through the install, by time against what it usually takes, never quite done. @param {number} elapsed */
 export function installFill(elapsed) {
@@ -214,8 +321,10 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   coordinatorUrl: string,
  *   say: (text: string, part?: { stage: number, stages: number, fill: number }) => void,
  *   signal?: AbortSignal,
+ *   image?: string,
  *   getImage?: typeof fetchPinned,
  *   unpackImpl?: typeof unpackDebian,
+ *   convert?: typeof convertQcow2,
  *   upload?: typeof uploadDisk,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
@@ -224,15 +333,18 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 export async function ensureImage({
   admin, pool, poolName = 'this pool', uplink, setId, srs, fleetSrs, sr: chosenSr = null, address, pin, plain, imageDir, coordinatorUrl, say, signal,
-  getImage = fetchPinned, unpackImpl = unpackDebian, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
+  image: key = DEBIAN_IMAGE.key,
+  getImage = fetchPinned, unpackImpl = unpackDebian, convert = convertQcow2, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
 }) {
+  const spec = IMAGES[key];
+  if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was built`);
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
-  const there = templates.find((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag));
+  const there = templates.find((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key);
   if (there) {
     // IN THE SET, whatever else: an image made before the set existed, or
     // taken out of it in Xen Orchestra, is one the fleet can see and not use.
     await admin.call('resourceSet.addObject', { id: setId, object: there.id }).catch(() => {});
-    return `The machine image was already there on ${poolName}: ${String(there.name_label || VM_IMAGE.name)}.`;
+    return `The ${spec.os} machine image was already there on ${poolName}: ${String(there.name_label || spec.name)}.`;
   }
 
   // A BUILD AN EARLIER TRY LEFT, failed or cut off, is removed first so two
@@ -249,24 +361,27 @@ export async function ensureImage({
   if (!base) throw new Error(`this pool has no "${VM_IMAGE.template}" template to make the machine image from. Nothing was built`);
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: IMAGE_STAGES, fill });
-  const debian = `Debian ${DEBIAN_IMAGE.release}`;
-  say(`Downloading ${debian} for the machine image.`, stage(1, 0));
+  const os = spec.os;
+  say(`Downloading ${os} for the machine image.`, stage(1, 0));
   let downloaded = 0;
   const file = await getImage({
     dir: imageDir,
-    url: DEBIAN_IMAGE.url,
-    size: DEBIAN_IMAGE.compressedSize,
-    algorithm: 'sha512',
-    digest: DEBIAN_IMAGE.sha512,
-    label: 'Debian',
+    url: spec.url,
+    size: spec.compressedSize,
+    algorithm: spec.algorithm,
+    digest: digestOf(spec),
+    label: spec.label,
     signal,
     onProgress: (d, t) => {
       downloaded = d;
-      say(`Downloading ${debian} for the machine image: ${mb(d)} of ${mb(t)} MB.`, stage(1, imageFill(d, 0)));
+      say(`Downloading ${os} for the machine image: ${mb(d)} of ${mb(t)} MB.`, stage(1, imageFill(d, 0, spec)));
     },
   });
   signal?.throwIfAborted();
-  if (!downloaded) say(`${debian} was already downloaded and checked.`, stage(1, imageFill(DEBIAN_IMAGE.compressedSize, 0)));
+  if (!downloaded) say(`${os} was already downloaded and checked.`, stage(1, imageFill(spec.compressedSize, 0, spec)));
+  // QCOW2 IS CONVERTED FIRST, once, and kept beside the download.
+  const raw = spec.format === 'qcow2' ? await convert(file, spec, { signal }) : null;
+  signal?.throwIfAborted();
 
   /** @type {string|null} */
   let vdi = null;
@@ -274,23 +389,23 @@ export async function ensureImage({
   let vm = null;
   let keep = false;
   try {
-    say(`Writing the machine image’s disk to ${on}.`, stage(2, imageFill(DEBIAN_IMAGE.compressedSize, 0)));
+    say(`Writing the machine image’s disk to ${on}.`, stage(2, imageFill(spec.compressedSize, 0, spec)));
     const { $sendTo } = await admin.call('disk.import', {
       sr: sr.id,
       type: 'iso',
       name: VM_IMAGE.buildName,
-      description: `${debian} (${DEBIAN_IMAGE.build}), becoming Fleetwright's machine image`,
+      description: `${os} (${spec.build}), becoming Fleetwright's machine image`,
     });
     vdi = await upload({
       address,
       pin,
       plain,
       sendTo: $sendTo,
-      body: unpackImpl(file, { signal }),
-      size: DEBIAN_IMAGE.rawSize,
-      filename: 'debian.raw',
+      body: raw ? createReadStream(raw) : unpackImpl(file, { signal }),
+      size: spec.rawSize,
+      filename: `${spec.key}.raw`,
       signal,
-      onProgress: (d, t) => say(`Writing the machine image’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, imageFill(DEBIAN_IMAGE.compressedSize, d))),
+      onProgress: (d, t) => say(`Writing the machine image’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, imageFill(spec.compressedSize, d, spec))),
     });
     signal?.throwIfAborted();
     // ROOM FOR A SESSION. cloud-init grows the partition to fill it on the
@@ -352,11 +467,12 @@ export async function ensureImage({
     // leaves nothing half-renamed: the VM is removed below either way.
     await admin.call('vm.set', {
       id: vm,
-      name_label: VM_IMAGE.name,
-      name_description: `${debian} with Fleetwright installed and not enrolled. Sessions' machines are cloned from this. Made by Fleetwright.`,
+      name_label: spec.name,
+      name_description: `${os} with Fleetwright installed and not enrolled. Sessions' machines are cloned from this. Made by Fleetwright.`,
     });
     await admin.call('tag.remove', { id: vm, tag: VM_IMAGE.buildTag }).catch(() => {});
     await admin.call('tag.add', { id: vm, tag: VM_IMAGE.tag });
+    await admin.call('tag.add', { id: vm, tag: imageTag(spec.key) });
     await admin.call('vm.convertToTemplate', { id: vm });
     await admin.call('resourceSet.addObject', { id: setId, object: vm });
   } catch (e) {
@@ -366,7 +482,7 @@ export async function ensureImage({
     throw e;
   }
   return (
-    `The machine image is ready on ${poolName}: ${VM_IMAGE.name}, ${debian} with Fleetwright installed, its disk on ${on}. ` +
+    `The machine image is ready on ${poolName}: ${spec.name}, ${os} with Fleetwright installed, its disk on ${on}. ` +
     'Start a session on a new machine from it under New session › Where.'
   );
 }
