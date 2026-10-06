@@ -3078,6 +3078,9 @@ export class CoordinatorCore {
     if (!email) return [];
     /** @type {Map<string, Record<string, any>>} */
     const found = new Map();
+    // A NUMBER OR CANNOT TELL: `Number(null)` is 0, which would say a machine
+    // that did not report its end ended at the epoch.
+    const num = (/** @type {unknown} */ v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
       for (const e of host.health.xo) {
@@ -3090,10 +3093,10 @@ export class CoordinatorCore {
             vm: XO_UUID_RE.test(String(m.vm)) ? String(m.vm) : null,
             state: typeof m.state === 'string' ? m.state.slice(0, 20) : null,
             ip: typeof m.ip === 'string' ? m.ip.slice(0, 45) : null,
-            until: Number.isFinite(Number(m.until)) ? Number(m.until) : null,
-            madeAt: Number.isFinite(Number(m.madeAt)) ? Number(m.madeAt) : null,
+            until: num(m.until),
+            madeAt: num(m.madeAt),
             cpus: Number.isInteger(m.cpus) ? m.cpus : null,
-            memory: Number.isFinite(Number(m.memory)) ? Number(m.memory) : null,
+            memory: num(m.memory),
             image: typeof m.image === 'string' ? m.image.slice(0, 80) : null,
             network: typeof m.network === 'string' ? m.network.slice(0, 80) : null,
             address: String(e.address || ''),
