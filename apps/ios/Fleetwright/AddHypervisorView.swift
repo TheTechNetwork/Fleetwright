@@ -163,6 +163,9 @@ struct AddHypervisorView: View {
         /// The machine builds the machine image sessions' machines are
         /// cloned from (`can` holds "image"); an older one cannot.
         var canImage = false
+        /// It builds any of its catalogue's images, chosen together
+        /// (`can` holds "images"); an older one Debian alone.
+        var canImages = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -814,7 +817,7 @@ struct AddHypervisorView: View {
             .disabled(busy)
             // No way out, no router and no image: the switches go off with it.
             .onChange(of: choice.egress) { _, way in
-                if way == nil { choice.edge = false; choice.image = false }
+                if way == nil { choice.edge = false; choice.image = false; choice.images = [] }
             }
             if canEdge, choice.egress != nil {
                 Toggle(isOn: $choice.edge) {
@@ -825,13 +828,15 @@ struct AddHypervisorView: View {
                 .disabled(busy)
                 // The image is built behind the router: no router, no image.
                 .onChange(of: choice.edge) { _, on in
-                    if !on, there == nil { choice.image = false }
+                    if !on, there == nil { choice.image = false; choice.images = [] }
                 }
             }
             // THE MACHINE IMAGE sessions' machines are cloned from, offered
             // only by a machine that builds one, and only where there is none.
             // Asked for: "Still can't run sessions on it".
-            if policyJob?.canImage == true, choice.egress != nil {
+            if policyJob?.canImage == true, choice.egress != nil, choice.imagesChoice, let kinds = inv.imageKinds {
+                imageRows(kinds, inv: inv, router: there)
+            } else if policyJob?.canImage == true, choice.egress != nil {
                 if let image = inv.image(on: choice.egress) {
                     policyRow("Machine image", "\(image.name) is there. New session › Where offers machines from it.")
                 } else {
@@ -872,6 +877,43 @@ struct AddHypervisorView: View {
             ? "It is there and running. Apply keeps its WAN on this network."
             : "It is there and stopped. Apply keeps its WAN on this network and starts it."
         return there.sr.map { "\(state) Its disk is on \($0)." } ?? state
+    }
+
+    /// ONE ROW PER OPERATING SYSTEM the machine can make an image of: said
+    /// as there when the pool has it, a switch when it does not. Asked for:
+    /// "os selection not just Debian". A method rather than more of the
+    /// section's body, for the reason healthLines gives in MachinesView.
+    @ViewBuilder
+    private func imageRows(_ kinds: [XOPolicy.Inventory.ImageKind], inv: XOPolicy.Inventory,
+                           router there: XOPolicy.Inventory.Edge?) -> some View {
+        let present = inv.imageKeys(on: choice.egress)
+        ForEach(kinds) { kind in
+            if present.contains(kind.key) {
+                policyRow("\(kind.os) machine image", "It is there. New session › Where offers machines from it.")
+            } else {
+                Toggle(isOn: Binding(
+                    get: { choice.images.contains(kind.key) },
+                    set: { on in
+                        if on { choice.images.insert(kind.key) } else { choice.images.remove(kind.key) }
+                        // Built behind the router, so asking for it asks for that too.
+                        if on, there == nil { choice.edge = true }
+                    })) {
+                    policyRow("Make the \(kind.os) machine image", imageLine(kind))
+                }
+                .tint(Design.Palette.accent)
+                .frame(minHeight: 44)
+                .disabled(busy)
+            }
+        }
+    }
+
+    /// What making one of the images costs. The same words as Android
+    /// (PolicyForm.kt).
+    private func imageLine(_ kind: XOPolicy.Inventory.ImageKind) -> String {
+        if kind.key == XOPolicy.debianKey { return imageLine }
+        return "\(kind.os) with Fleetwright installed, on a 20 GiB disk on the storage chosen. \(hostId) downloads its cloud "
+            + "image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can "
+            + "then start on a new machine from it."
     }
 
     /// What making the image costs, before it is asked for. The same words as
@@ -1418,7 +1460,7 @@ struct AddHypervisorView: View {
             }
             policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"),
                                   anyWayOut: begun.can.contains("egress-any"), edgeDisk: begun.can.contains("edge-disk"),
-                                  canImage: begun.can.contains("image"))
+                                  canImage: begun.can.contains("image"), canImages: begun.can.contains("images"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1444,6 +1486,7 @@ struct AddHypervisorView: View {
                     choice = XOPolicy.Choice.initial(for: opened, anyWayOut: policyJob.anyWayOut)
                     choice.edgeDiskChoice = policyJob.edgeDisk
                     choice.imageChoice = policyJob.canImage
+                    choice.imagesChoice = policyJob.canImages && opened.imageKinds != nil
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not

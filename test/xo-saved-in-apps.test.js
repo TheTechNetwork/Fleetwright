@@ -104,7 +104,7 @@ test('iOS: the way out names the router it is for, and offers to build it only w
   // Offered by a machine that said it can, and only with a way out (C-2).
   assert.match(SCREEN, /canEdge: begun\.can\.contains\("edge"\)/);
   assert.match(SCREEN, /if canEdge, choice\.egress != nil \{\s*Toggle\(isOn: \$choice\.edge\)/);
-  assert.match(SCREEN, /\.onChange\(of: choice\.egress\) \{ _, way in\s*if way == nil \{ choice\.edge = false; choice\.image = false \}/);
+  assert.match(SCREEN, /\.onChange\(of: choice\.egress\) \{ _, way in\s*if way == nil \{ choice\.edge = false; choice\.image = false; choice\.images = \[\] \}/);
   // Built where there is none, kept where there is, and the cost said first.
   assert.ok(SCREEN.includes('there == nil ? "Build the edge router on it" : "Keep the edge router on it"'));
   assert.ok(SCREEN.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));

@@ -48,6 +48,9 @@ struct StartRequest {
     /// from, and what to call it in a sentence.
     var template: String? = nil
     var imageLabel: String? = nil
+    /// And the network of your pool it goes on, or nil for behind the edge
+    /// router, where it reaches the internet and nothing private.
+    var network: String? = nil
 }
 
 /// The machines the New session sheet can ask for, by the operating system a
@@ -108,6 +111,9 @@ struct StartSheet: View {
     /// The machine images on your own pools a new machine can come from, from
     /// the snapshot. Drawn from this and only this (C-2).
     @State private var images: [Fleet.VMImage] = []
+    /// The network a machine from your hypervisor goes on; empty is behind
+    /// the edge router.
+    @State private var vmNetwork = ""
 
     /// The operating system when a new machine is chosen, else nil: "vm" for
     /// one from your hypervisor.
@@ -309,6 +315,17 @@ struct StartSheet: View {
                         // both rather than leaving a start that is refused.
                         .onChange(of: host) { _, now in
                             if now.hasPrefix(newMachineTag) || now.hasPrefix(vmImageTag) { profile = ""; secret = "" }
+                            vmNetwork = ""
+                        }
+                        // WHERE IT GOES ON YOUR POOL, offered only when the
+                        // pool has a network besides the uplink. Behind the
+                        // edge router is the default and the safe one: a
+                        // network of yours puts the machine beside your own.
+                        if let networks = chosenImage?.networks, !networks.isEmpty {
+                            Picker("Network", selection: $vmNetwork) {
+                                Text("Behind the edge router").tag("")
+                                ForEach(networks) { network in Text(network.name).tag(network.id) }
+                            }
                         }
                         if chosenPlatform != nil {
                             // Five-minute steps between the protocol's bounds.
@@ -502,7 +519,8 @@ struct StartSheet: View {
             platform: platform,
             minutes: platform == nil ? nil : machineMinutes,
             template: chosenImage?.template,
-            imageLabel: chosenImage?.label
+            imageLabel: chosenImage?.label,
+            network: chosenImage == nil || vmNetwork.isEmpty ? nil : vmNetwork
         ))
         dismiss()
     }

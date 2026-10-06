@@ -30,6 +30,8 @@ struct MachinesView: View {
     /// The pools this phone holds a token for (XOSetupHandoff), read when
     /// the list is, not on every redraw: each is a Keychain read.
     @State private var hypervisors: [XOSetupHandoff.Held] = []
+    /// The machines made on your pools, as the boxes holding them last saw.
+    @State private var poolMachines: [Fleet.VMMachine] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Enrolled, and not saying anything: membership with no report.
@@ -78,6 +80,13 @@ struct MachinesView: View {
                     .buttonStyle(.plain)
                     .accessibilityHint("Opens its page")
                     .fleetRow()
+            }
+
+            // THE MACHINES ON YOUR HYPERVISOR, each a way to its page: its
+            // console, SSH, a restart, longer, a new size. Asked for: "Vm
+            // console, settings, reboot, ssh". Drawn only when there is one.
+            if !poolMachines.isEmpty {
+                poolMachineRows
             }
 
             if settings.configured {
@@ -137,6 +146,43 @@ struct MachinesView: View {
         .navigationDestination(item: $showing) { id in hostPage(id) }
         // Back from adding one, the new pool is listed.
         .onAppear { hypervisors = XOSetupHandoff.heldPools() }
+    }
+
+    @ViewBuilder private var poolMachineRows: some View {
+        Text("On your hypervisor")
+            .fleetType(.section)
+            .foregroundStyle(Design.Palette.ink)
+            .accessibilityAddTraits(.isHeader)
+            .padding(.top, Design.Space.insideTight)
+            .fleetRow()
+        ForEach(poolMachines) { machine in
+            NavigationLink {
+                VMMachineView(settings: settings, name: machine.name)
+            } label: {
+                poolMachineCard(machine)
+            }
+            .fleetCard(radius: Design.Radius.cardSmall)
+            .fleetRow()
+        }
+    }
+
+    private func poolMachineCard(_ m: Fleet.VMMachine) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                Text(m.name)
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+                Spacer(minLength: 0)
+                Text(vmStateWords(m.state))
+                    .fleetType(.label)
+                    .foregroundStyle(m.state == "Running" ? Design.Palette.ok : Design.Palette.attention)
+            }
+            Text([m.image, m.ip, m.until.map { "ends \(relativeTime($0))" }].compactMap { $0 }.joined(separator: " · "))
+                .fleetType(.micro)
+                .foregroundStyle(Design.Palette.inkDim)
+        }
+        .frame(minHeight: 44, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private var hypervisorRows: some View {
@@ -325,6 +371,7 @@ struct MachinesView: View {
         let fleet = Fleet(settings: settings)
         async let reporting = fleet.fleetHosts()
         async let enrolled = fleet.enrolledHosts()
+        async let onPools = fleet.vmMachines()
         // A FAILED REQUEST IS NOT AN EMPTY FLEET. A list that was right ten
         // seconds ago is a better answer than nothing, and the next refresh
         // corrects it.
@@ -332,9 +379,11 @@ struct MachinesView: View {
         // one that joins arrives, rather than the list becoming another list.
         let gotReporting = try? await reporting
         let gotEnrolled = try? await enrolled
+        let gotPools = try? await onPools
         withAnimation(Design.Motion.settle(reduceMotion)) {
             if let got = gotReporting { fleetHosts = got }
             if let got = gotEnrolled { hosts = got }
+            if let got = gotPools { poolMachines = got }
         }
         loaded = true
         openAsked()
