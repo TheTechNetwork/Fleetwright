@@ -27,6 +27,18 @@ reachable for reads, listable, and addressable **by name** through the placement
 preference. A fleet whose only matching hosts are temporary refuses and says so,
 rather than quietly starting work that will disappear.
 
+**Naming one is its owner's.** Placing work by name used to skip the owner
+check that placement by capacity makes, so a member who read a runner's id off
+the host list could start a session on somebody else's machine. Now a named
+temporary host takes work only from the person it belongs to, and anybody else
+is told it is somebody else's (`scheduler.js`, `place`).
+
+**Not only runners.** A machine cloned from a person's own hypervisor is the
+same kind of host, admitted by a VM ticket rather than a GitHub job
+(`docs/hypervisors.md`, "Machines from your pool"). Its first health frame can
+arrive before it can take work, so a session held for it waits for the next
+frame instead of being dropped.
+
 **A disconnect retires it.** For a real box, `disconnect` keeps the entry: it may
 come back, and its last known sessions are the best guess about where a `resume`
 would land. A runner will not come back — the job ended and the machine was
