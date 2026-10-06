@@ -407,8 +407,13 @@ fun FleetScreen(
         // ON A MACHINE THAT DOES NOT EXIST YET. The coordinator holds the
         // session with the dispatch and starts it when the runner joins.
         request.platform?.let { platform ->
-            val label = newMachineChoices.firstOrNull { it.platform == platform }?.label ?: "New machine"
-            status = "Asking GitHub for a ${label.replaceFirstChar { it.lowercase() }}. The session starts on it when it joins."
+            val label = request.imageLabel ?: newMachineChoices.firstOrNull { it.platform == platform }?.label ?: "New machine"
+            val lowered = label.replaceFirstChar { it.lowercase() }
+            status = if (platform == "vm") {
+                "Asking your hypervisor for a $lowered. The session starts on it when it joins."
+            } else {
+                "Asking GitHub for a $lowered. The session starts on it when it joins."
+            }
             val start = buildMap {
                 request.title?.let { put("title", it) }
                 request.brief?.let { put("brief", it) }
@@ -416,7 +421,7 @@ fun FleetScreen(
                 request.task?.let { put("task", it) }
             }
             scope.launch {
-                val reply = fleet.provision(platform, minutes = request.minutes, start = start)
+                val reply = fleet.provision(platform, minutes = request.minutes, start = start, template = request.template)
                 val text = reply.text.ifBlank { "Asked for it." }
                 LocalNotice.post(context, if (reply.ok) "Machine on its way" else "Could not ask for a machine", text)
                 status = text

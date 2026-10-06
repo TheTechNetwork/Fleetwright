@@ -48,6 +48,7 @@ internal fun PolicyForm(
     canEdge: Boolean,
     machine: String,
     onChange: (XoPolicy.Choice) -> Unit,
+    canImage: Boolean = false,
 ) {
     // WHICH POOL, said only when there is more than one to confuse it with.
     val poolNames = inv.pools.associate { it.id to it.name }
@@ -110,8 +111,8 @@ internal fun PolicyForm(
         enabled = enabled,
         title = "None yet",
         line = if (!anyWayOut && choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
-        // No way out, no router: the switch goes off with it.
-        onClick = { onChange(choice.copy(egress = null, edge = false)) },
+        // No way out, no router and no image: the switches go off with it.
+        onClick = { onChange(choice.copy(egress = null, edge = false, image = false)) },
     )
     // THE EDGE ROUTER, offered only by a machine that can build it and only
     // with a way out (C-2): built when the pool has none, kept in step when
@@ -129,15 +130,45 @@ internal fun PolicyForm(
                 there.running -> "It is there and running. Apply keeps its WAN on this network." + (there.sr?.let { " Its disk is on $it." } ?: "")
                 else -> "It is there and stopped. Apply keeps its WAN on this network and starts it." + (there.sr?.let { " Its disk is on $it." } ?: "")
             },
-            onChange = { on -> onChange(choice.copy(edge = on)) },
+            // The image is built behind the router: no router, no image.
+            onChange = { on -> onChange(choice.copy(edge = on, image = choice.image && (on || there != null))) },
         )
-        // WHERE ITS DISK GOES, asked before it is built and said while it is:
-        // any storage in the way out's pool with room, the fleet's own first.
-        // Asked for: "which disk did it put it on?"
-        if (choice.edge && there == null && choice.edgeDiskChoice) {
-            SectionHead("Its disk goes on")
-            val fits = XoPolicy.edgeDisks(inv, choice.egress)
-            if (fits.isEmpty()) Hint("Nothing in the way out’s pool has 3 GiB free for its disk.")
+    }
+    // THE MACHINE IMAGE sessions' machines are cloned from, offered only by a
+    // machine that builds one, and only where there is none. Asked for:
+    // "Still can't run sessions on it".
+    if (canImage && choice.egress != null) {
+        val there = XoPolicy.edgeOn(inv, choice.egress)
+        val image = XoPolicy.imageOn(inv, choice.egress)
+        if (image != null) {
+            Hint("Machine image: ${image.name} is there. New session › Where offers machines from it.")
+        } else {
+            CheckRow(
+                checked = choice.image,
+                enabled = enabled,
+                title = "Make the machine image for sessions",
+                line = "Debian 13 with Fleetwright installed, on a 20 GiB disk on the storage chosen. $machine downloads Debian once, " +
+                    "about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new " +
+                    "machine from it.",
+                // Built behind the router, so asking for it asks for that too.
+                onChange = { on -> onChange(choice.copy(image = on, edge = choice.edge || (on && there == null))) },
+            )
+        }
+    }
+    // WHERE THE DISKS GO, asked before anything is built and said while it is:
+    // any storage in the way out's pool with room, the fleet's own first.
+    // Asked for: "which disk did it put it on?"
+    val (buildEdge, buildImage) = XoPolicy.building(inv, choice)
+    if (choice.edgeDiskChoice && (buildEdge || buildImage)) {
+        run {
+            SectionHead(if (buildEdge && buildImage) "Their disks go on" else if (buildImage) "The image’s disk goes on" else "Its disk goes on")
+            val fits = XoPolicy.edgeDisks(inv, choice.egress, XoPolicy.diskNeed(inv, choice))
+            if (fits.isEmpty()) {
+                Hint(
+                    if (buildImage) "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
+                    else "Nothing in the way out’s pool has 3 GiB free for its disk.",
+                )
+            }
             val picked = XoPolicy.edgeDisk(inv, choice)
             fits.forEach { s ->
                 RadioRow(

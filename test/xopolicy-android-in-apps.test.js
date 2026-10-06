@@ -162,7 +162,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   assert.match(form, /if \(canEdge && choice\.egress != null\) \{/);
   assert.ok(form.includes('title = if (there == null) "Build the edge router on it" else "Keep the edge router on it"'));
   assert.ok(form.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
-  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false)) }'));
+  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false)) }'));
   assert.match(sheet, /canEdge = "edge" in p\.setup\.can/);
   assert.match(policy, /\.put\("edge", c\.edge\)/);
   assert.ok(policy.includes('The edge router needs a way out: choose the network its WAN goes on.'));
@@ -206,7 +206,7 @@ test('Android: the form is the design’s tokens, 48dp, with nothing offered tha
   assert.ok(file('HypervisorSheet.kt').includes('anyWayOut = "egress-any" in p.setup.can'));
   // ASKED FOR: "this needs proper progress, also which disk did it put it on?"
   assert.ok(file('HypervisorSheet.kt').includes('edgeDisk = "edge-disk" in p.setup.can'));
-  assert.ok(form.includes('if (choice.edge && there == null && choice.edgeDiskChoice) {'));
+  assert.ok(form.includes('if (choice.edgeDiskChoice && (buildEdge || buildImage)) {'));
   assert.ok(form.includes('there.sr?.let { " Its disk is on $it." }'));
   assert.ok(file('HypervisorSheet.kt').includes('part != null -> part.fill / 1000f'));
   assert.ok(file('HypervisorSheet.kt').includes(' · building the edge router, part ${it.stage} of ${it.stages} · ${it.fill / 10}%'));

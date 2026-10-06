@@ -91,6 +91,45 @@ class XoPolicyTest {
         )
     }
 
+    /**
+     * Asked for: "Still can't run sessions on it". The machine image is
+     * offered by a machine that builds one, is built behind the edge router
+     * (asked for with it, or there already), needs 20 GiB for its disk, and is
+     * sent only to a machine that reads it. The same rules as iOS.
+     */
+    @Test
+    fun theMachineImageNeedsTheRouterAndRoomAndIsSentOnlyWhenItCanBeBuilt() {
+        val inv = inventory(inventoryJson().put("edges", JSONArray()))
+        val asked = XoPolicy.defaults(inv).copy(edgeDiskChoice = true, image = true)
+        assertFalse("an older machine is not sent it", XoPolicy.payload(inv, asked).has("image"))
+        val offered = asked.copy(imageChoice = true)
+        assertEquals(
+            "The machine image is built behind the edge router, and that pool has none yet. Build the router with it.",
+            XoPolicy.problem(inv, offered),
+        )
+        val withRouter = offered.copy(edge = true)
+        assertNull(XoPolicy.problem(inv, withRouter))
+        assertTrue(XoPolicy.payload(inv, withRouter).getBoolean("image"))
+        assertEquals(XoPolicy.IMAGE_DISK, XoPolicy.diskNeed(inv, withRouter))
+        assertEquals("sr-a", XoPolicy.payload(inv, withRouter).getString("edgeSr"))
+
+        // A pool with its router already: the image alone.
+        val routed = inventory(inventoryJson().put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true))))
+        val alone = XoPolicy.defaults(routed).copy(edge = false, imageChoice = true, edgeDiskChoice = true, image = true)
+        assertNull(XoPolicy.problem(routed, alone))
+        assertEquals(false to true, XoPolicy.building(routed, alone))
+
+        // One already there is not built again.
+        val imaged = inventory(
+            inventoryJson()
+                .put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true)))
+                .put("images", JSONArray().put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Debian 13"))),
+        )
+        assertEquals("Fleetwright Debian 13", XoPolicy.imageOn(imaged, "net-lab")?.name)
+        assertFalse(XoPolicy.building(imaged, XoPolicy.defaults(imaged).copy(imageChoice = true, image = true)).second)
+        assertNull("an older machine says nothing about images, which is not none", inventory().images)
+    }
+
     @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in

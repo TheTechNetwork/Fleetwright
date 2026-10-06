@@ -122,9 +122,9 @@ test('Android: the token comes back to this phone, to a key sent inside the seal
   assert.ok(file('Fleet.kt').includes('putString("secret.$name.enc", encrypt(value))'));
   assert.ok(handoff.includes('settings.putSecret(tokenName(entry.address), record)'));
   assert.match(file('MainActivity.kt'), /XoHandoff\.collectPending\(settings, fleet\)/);
-  assert.match(sheet, /XoHandoff\.collect\(settings, id, r\.xosetup\)\?\.let \{ handedBack = it \}/);
+  assert.match(sheet, /val \(outcome, inFleet\) = XoHandoff\.collectAndKeep\(settings, fleet, id, r\.xosetup\)\s*outcome\?\.let \{ handedBack = it \}/);
   // Said only once this phone knows (C-5).
-  assert.match(sheet, /XoHandoff\.Outcome\.Kept -> Hint\("The token is kept on this phone now, encrypted, and no machine in the fleet keeps a copy\."\)/);
+  assert.match(sheet, /XoHandoff\.Outcome\.Kept -> Hint\("The token is kept on this phone now, encrypted\. No machine in the fleet keeps it on disk\."\)/);
   assert.doesNotMatch(handoff, /Log\.[idwe]\(|println\(/);
 });
 

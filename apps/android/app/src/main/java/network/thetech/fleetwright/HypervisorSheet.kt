@@ -178,6 +178,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // The machine puts the router's disk where the person says (`can` holds
     // "edge-disk"); an older one picks it unasked.
     var edgeDisk by remember { mutableStateOf(false) }
+    // The machine builds the machine image sessions' machines are cloned
+    // from (`can` holds "image"); an older one cannot.
+    var canImage by remember { mutableStateOf(false) }
+    // What the fleet said when the token was kept there too, or what stood in
+    // the way (XoHandoff.keepInFleet).
+    var fleetNote by remember { mutableStateOf("") }
+    var keepingInFleet by remember { mutableStateOf(false) }
     var policyKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
     var inventory by remember { mutableStateOf<XoPolicy.Inventory?>(null) }
     var choice by remember { mutableStateOf<XoPolicy.Choice?>(null) }
@@ -384,6 +391,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canEdge = "edge" in p.setup.can
         anyWayOut = "egress-any" in p.setup.can
         edgeDisk = "edge-disk" in p.setup.can
+        canImage = "image" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -608,7 +616,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 progress = r.xosetup
                 r.hostId?.let { runningOn = it }
                 notePath(r.xosetup)
-                XoHandoff.collect(settings, id, r.xosetup)?.let { handedBack = it }
+                val (outcome, inFleet) = XoHandoff.collectAndKeep(settings, fleet, id, r.xosetup)
+                outcome?.let { handedBack = it }
+                inFleet?.let { fleetNote = it }
                 if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
                 // CHOOSING IS NOT AN END: the loop goes on asking, so this
                 // screen hears when the machine lets go. The pool is opened
@@ -619,7 +629,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     val opened = policyKey?.let { XoPolicy.openInventory(pool, id, address.trim(), it) }
                     if (opened != null) {
                         inventory = opened
-                        choice = XoPolicy.defaults(opened, anyWayOut).copy(edgeDiskChoice = edgeDisk)
+                        choice = XoPolicy.defaults(opened, anyWayOut).copy(edgeDiskChoice = edgeDisk, imageChoice = canImage)
                     } else {
                         unopened = true
                     }
@@ -655,11 +665,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     SetupProgress(setup, policy)
                 }
                 when (val outcome = handedBack) {
-                    XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted, and no machine in the fleet keeps a copy.")
+                    XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted. No machine in the fleet keeps it on disk.")
                     is XoHandoff.Outcome.Failed -> Hint(outcome.why, color = Design.Palette.bad.now)
                     null -> {}
                 }
                 if (keepNote.isNotBlank()) Hint(keepNote)
+                if (fleetNote.isNotBlank()) Hint(fleetNote)
                 when {
                     pollStopped -> {
                         Hint(
@@ -684,7 +695,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             cancelAccepted -> Hint("Cancelling. Nothing has been changed.", color = Design.Palette.ink.now)
                             applied -> Hint("Sent. $machine is applying it.", color = Design.Palette.ink.now)
                             inv != null && c != null -> {
-                                PolicyForm(inv, c, enabled = !applying && !cancelling, canEdge = canEdge, machine = machine, onChange = { choice = it })
+                                PolicyForm(inv, c, enabled = !applying && !cancelling, canEdge = canEdge, machine = machine, onChange = { choice = it }, canImage = canImage)
                                 val problem = XoPolicy.problem(inv, c)
                                 Hint("$machine waits ten minutes for your choice, then lets go without changing anything.")
                                 // WHY APPLY IS OFF, in the machine's words, so
@@ -778,6 +789,29 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 Hint("If they differ, cancel: the sign-in has not left this phone, and will not.")
             }
             else -> {
+                // MACHINES FROM THIS POOL: its token kept in the fleet, so the
+                // boxes this person approved can make them. Kept on every
+                // setup from now on; this is for a pool set up before that,
+                // and for keeping it again.
+                if (policy) {
+                    SectionHead("Machines from this pool")
+                    OutlinedButton(
+                        enabled = !keepingInFleet,
+                        onClick = {
+                            scope.launch {
+                                keepingInFleet = true
+                                fleetNote = XoHandoff.keepInFleet(settings, fleet, address.trim())
+                                keepingInFleet = false
+                            }
+                        },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text(if (keepingInFleet) "Keeping…" else "Keep its token in the fleet") }
+                    if (fleetNote.isNotBlank()) Hint(fleetNote, color = Design.Palette.ink.now)
+                    Hint(
+                        "The boxes you approved can then make machines on it for your sessions. They hold its token in memory only, " +
+                            "and stop being given it when you remove them from your vault.",
+                    )
+                }
                 SectionHead("Where Xen Orchestra answers")
                 if (policy) {
                     // FIXED: the pool this phone keeps a token for, as the

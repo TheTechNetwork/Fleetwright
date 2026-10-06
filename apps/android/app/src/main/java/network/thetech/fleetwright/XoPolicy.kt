@@ -103,7 +103,31 @@ internal object XoPolicy {
          * from one older than that, which is "cannot tell", never "none".
          */
         val edges: List<Edge>? = null,
+        /**
+         * Each pool's machine image, from a machine that can build one; null
+         * from one older than that, which is "cannot tell", never "none".
+         */
+        val images: List<Image>? = null,
     )
+
+    /** A pool's machine image: the template sessions' machines are cloned from. */
+    data class Image(val pool: String?, val name: String)
+
+    /** The machine image on the pool this network is in, if it has one. */
+    fun imageOn(inv: Inventory, network: String?): Image? {
+        val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return null
+        return inv.images?.firstOrNull { it.pool == pool }
+    }
+
+    /** The machine image's disk, VM_IMAGE.diskSize in vm-image.js. */
+    const val IMAGE_DISK = 20L * 1024 * 1024 * 1024
+
+    /** The router or the image is to be built now, on storage still to be picked. */
+    fun building(inv: Inventory, c: Choice): Pair<Boolean, Boolean> =
+        (c.edge && edgeOn(inv, c.egress) == null) to (c.imageChoice && c.image && imageOn(inv, c.egress) == null)
+
+    /** How much room the disks being built need: the image's when it is one of them, the router's otherwise. */
+    fun diskNeed(inv: Inventory, c: Choice): Long = if (building(inv, c).second) IMAGE_DISK else EDGE_DISK
 
     /** The edge router on a pool, and whether it is running. */
     data class Edge(val pool: String?, val running: Boolean, val sr: String? = null)
@@ -122,9 +146,9 @@ internal object XoPolicy {
      * for its 3 GiB raw disk. Any the pool listed, not only the fleet's,
      * because the router is not one of the fleet's VMs.
      */
-    fun edgeDisks(inv: Inventory, network: String?): List<Storage> {
+    fun edgeDisks(inv: Inventory, network: String?, need: Long = EDGE_DISK): List<Storage> {
         val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return emptyList()
-        return inv.srs.filter { it.pool == pool && it.free > EDGE_DISK }
+        return inv.srs.filter { it.pool == pool && it.free > need }
     }
 
     /**
@@ -134,7 +158,7 @@ internal object XoPolicy {
      * that pool has room. Asked for: "which disk did it put it on?"
      */
     fun edgeDisk(inv: Inventory, c: Choice): String? {
-        val fits = edgeDisks(inv, c.egress)
+        val fits = edgeDisks(inv, c.egress, diskNeed(inv, c))
         c.edgeSr?.let { pick -> if (fits.any { it.id == pick }) return pick }
         val fleet = fits.filter { it.id in c.srs }
         return (fleet.ifEmpty { fits }).maxByOrNull { it.free }?.id
@@ -170,6 +194,14 @@ internal object XoPolicy {
          * one ignores it, so it is neither offered nor sent.
          */
         val edgeDiskChoice: Boolean = false,
+        /**
+         * Make the machine image sessions' machines are cloned from, on the
+         * way out's pool, behind its router. Needs the router, there or
+         * built with it.
+         */
+        val image: Boolean = false,
+        /** The machine builds one (`image` in begin's `can`). An older one cannot, so it is neither offered nor sent. */
+        val imageChoice: Boolean = false,
     )
 
     /**
@@ -263,6 +295,11 @@ internal object XoPolicy {
                     a.optJSONObject(i)?.let { e -> Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr")) }
                 }
             },
+            images = json.optJSONArray("images")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    a.optJSONObject(i)?.let { m -> Image(text(m, "pool"), text(m, "name") ?: "Fleetwright Debian 13") }
+                }
+            },
         )
     }
 
@@ -343,8 +380,16 @@ internal object XoPolicy {
         if (c.egress != null && c.egress !in networkIds) return "The way out has to be a network this pool listed. Nothing was changed."
         if (!c.anyWayOut && c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
         if (c.edge && c.egress == null) return "The edge router needs a way out: choose the network its WAN goes on."
-        if (c.edgeDiskChoice && c.edge && edgeOn(inv, c.egress) == null && edgeDisk(inv, c) == null) {
-            return "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
+        if (c.imageChoice && c.image && c.egress == null) {
+            return "The machine image is built behind the edge router: choose the way out it leaves through."
+        }
+        if (c.imageChoice && c.image && !c.edge && edgeOn(inv, c.egress) == null) {
+            return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
+        }
+        val (buildEdge, buildImage) = building(inv, c)
+        if (c.edgeDiskChoice && (buildEdge || buildImage) && edgeDisk(inv, c) == null) {
+            return if (buildImage) "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
+            else "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
         }
         val maxCpus = maxCpus(inv)
         if (c.cpus < 1 || c.cpus > maxCpus) return "vCPUs are between 1 and $maxCpus, what the pool has."
@@ -369,8 +414,10 @@ internal object XoPolicy {
             .put("egress", c.egress ?: JSONObject.NULL)
             .put("edge", c.edge)
             .put("limits", JSONObject().put("cpus", c.cpus).put("memory", c.memoryGib * GIB).put("disk", c.diskGib * GIB))
-            // Only to a machine that reads it, and only with the router asked for.
-            .apply { if (c.edgeDiskChoice && c.edge) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
+            // Only to a machine that builds an image, and only when asked.
+            .apply { if (c.imageChoice && c.image) put("image", true) }
+            // Only to a machine that reads it, and only with something to build.
+            .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.image))) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
     fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice): String =
