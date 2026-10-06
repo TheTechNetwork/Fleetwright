@@ -169,8 +169,12 @@ is the instrument, not the wall.
 **Which network the edge router's WAN goes on is the person's choice**, made
 on the phone when they change the pool's policy (below, "The policy"), and
 recorded in Xen Orchestra as the `fleetwright-egress` tag on that
-network, so it can be seen and changed there too. It has to be one of the
-networks the fleet may use, or the fleet could not attach a router to it.
+network, so it can be seen and changed there too. It can be any network
+the pool lists, and one the fleet's VMs may not use is the better choice:
+the router is built with the admin sign-in, not as a fleet VM, and a lab
+attached straight to the WAN network would leave without passing through
+it. A machine that predates this (its `begin` does not say `egress-any`)
+still takes only the fleet's networks, and the phone offers it no others.
 The edge router is OPNsense, for the reasons in "Templates" below.
 
 **The policy screen builds it, so nobody configures a switch.** Under Way
@@ -432,13 +436,14 @@ its own resource set and must not be able to.
    because a network map is not the coordinator's to read. The password is
    gone from the machine's memory as soon as it has signed in; the job holds
    the signed-in session, for at most ten minutes.
-3. **The person chooses**: which storage and which networks, which of those
-   is the way out, and the limits. Sealed to the job's key under
+3. **The person chooses**: which storage and which networks, which of the
+   pool's networks is the way out, and the limits. Sealed to the job's key under
    `fleetwright-xosetup-policy/v1:<job>:<address>`, phase `policy`.
 4. **The machine checks the choice against what it showed**, because the
    phone's screen is not the bound: every id must be one the inventory
-   listed, at least one storage repository, the way out one of the chosen
-   networks, at least one vCPU, a GiB of memory and ten of disk, and at most
+   listed, at least one storage repository, the way out a network it
+   listed (one of the chosen networks, on a machine that predates
+   `egress-any`), at least one vCPU, a GiB of memory and ten of disk, and at most
    what the hosts have and the chosen storage holds. A choice that fails is
    refused and the job goes on waiting. One that passes becomes the resource
    set (`resourceSet.set`, its storage, networks and limits), and the egress
@@ -447,9 +452,18 @@ its own resource set and must not be able to.
 The key the inventory comes back to lives in the screen's memory and
 nowhere else, so a screen that is rebuilt while the machine waits (an
 Android phone turned, an app closed) can no longer open it, says so, and
-offers Cancel. Cancelled, or left for ten minutes, it changes nothing. A policy job sends
-no progress events: it is driven from a screen that is open, and its steps
-are not onboarding's.
+offers Cancel. Cancelled, or left for ten minutes, it changes nothing.
+
+**A policy job reports from Apply on.** Until then it is driven from a
+screen that is open and waiting on the person, and it sends nothing. From
+the apply step it may be building the edge router, minutes of download, so
+it sends its progress as onboarding does, with `purpose: policy` beside it.
+The coordinator holds those steps to `XOPOLICY_STEPS` and titles them as a
+change to what the fleet may use ("What the fleet may use is changed"), not
+a hypervisor added. The iPhone starts a Live Activity when the choice is
+sent, marked as a policy change so it ends in those words; Android's ongoing
+notification draws the same. A coordinator that predates `purpose` refuses
+the policy steps and draws nothing, which is how it was.
 
 Run against a real Xen Orchestra: the inventory opened with the phone's
 key, the choice became the resource set's limits, and a setup run again

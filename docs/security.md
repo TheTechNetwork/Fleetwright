@@ -301,7 +301,12 @@ machine of the fleet, through the coordinator.
   has no account anyone can sign in to (root's password is `*`) and no
   anti-lockout rule, so a lab, the only thing on its LAN side, cannot change
   the rules that keep it off the person's LAN. It is not tagged `fleetwright`,
-  so the fleet's limited token cannot stop, move or delete it.
+  so the fleet's limited token cannot stop, move or delete it. Its WAN may go
+  on any network the pool lists, including one outside the fleet's resource
+  set, and that is the safer place: a network the fleet's VMs cannot attach
+  to is one no lab can use to leave without passing through the router.
+  Putting the WAN on a network the fleet may also use is still allowed, and
+  leaves that way around the router open.
 - **A kept acceptance is the person's earlier word, for that certificate
   only.** With it the phone sends `trust: accepted` without asking again,
   but only for a probe or a remembered path carrying the same fingerprint.
