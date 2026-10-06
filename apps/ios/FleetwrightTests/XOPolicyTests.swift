@@ -173,6 +173,26 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(c.problem(in: inv), "The way out has to be a network this pool listed.")
     }
 
+    /// Asked for: "which disk did it put it on?" The router's disk goes on
+    /// the storage picked, any in the way out's pool with room; unpicked, the
+    /// fleet's there with the most room; and it is sent only to a machine
+    /// that reads it.
+    func testTheRoutersDiskGoesWhereItIsPickedAndIsSentOnlyToAMachineThatReadsIt() throws {
+        let inv = try inventory()
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.edge = true
+        XCTAssertEqual(inv.edgeDisks(for: "net-wan").map(\.id), ["sr-a", "sr-b"])
+        XCTAssertEqual(c.edgeDisk(in: inv), "sr-a", "the fleet's storage first, though sr-b has more room")
+        XCTAssertNil(c.payload(in: inv)["edgeSr"], "an older machine is not sent it")
+        c.edgeDiskChoice = true
+        XCTAssertEqual(c.payload(in: inv)["edgeSr"] as? String, "sr-a")
+        c.edgeSr = "sr-b"
+        XCTAssertEqual(c.payload(in: inv)["edgeSr"] as? String, "sr-b", "the pick, though the fleet may not use it")
+        c.edgeSr = "sr-gone"
+        XCTAssertEqual(c.edgeDisk(in: inv), "sr-a", "a pick that no longer fits falls back")
+        XCTAssertNil(c.problem(in: inv))
+    }
+
     func testEachLimitIsHeldToTheMachinesBounds() throws {
         let inv = try inventory()
         XCTAssertEqual(inv.cpuRange, 1...16)
@@ -268,5 +288,11 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(XOSetupWords.headline(done, purpose: "policy"), "What the fleet may use is changed")
         XCTAssertEqual(XOSetupWords.headline(applying, purpose: "policy"), "Applying what you chose")
         XCTAssertEqual(XOSetupWords.headline(done), "Hypervisor added")
+        // The bar is the build's own while it says how far it has got.
+        var building = applying
+        building.fill = 420
+        XCTAssertEqual(XOSetupWords.bar(building).0 / XOSetupWords.bar(building).1, 0.42, accuracy: 0.001)
+        XCTAssertEqual(XOSetupWords.ordinal(building), "42%")
+        XCTAssertEqual(XOSetupWords.bar(applying).0, 4, "the steps done, without it")
     }
 }

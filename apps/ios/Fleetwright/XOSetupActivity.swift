@@ -38,6 +38,10 @@ struct XOSetupAttributes: ActivityAttributes {
         /// pushed, which does not carry it. The Lock Screen names this time
         /// when the content has gone stale, so "no word" says since when.
         var since: Date? = nil
+        /// How far the step now running has got, in thousandths, when the
+        /// machine can tell (the edge router's build); pushed by the
+        /// coordinator beside the step, and nil when it is not known.
+        var fill: Int? = nil
     }
 
     /// The job `begin` answered with. Local; never pushed.
@@ -111,11 +115,21 @@ enum XOSetupWords {
     }
 
     /// "Step 3 of 8", for the line under the headline and the Island's
-    /// compact trailing slot. Nil once it is over: a finished job is not on a
-    /// step.
+    /// compact trailing slot, or "42%" while a step that says how far it has
+    /// got is running, because that is the number that is moving. Nil once
+    /// it is over: a finished job is not on a step.
     static func ordinal(_ s: XOSetupAttributes.ContentState) -> String? {
         guard s.state == "running" || s.state == "waiting" else { return nil }
+        if let fill = s.fill { return "\(fill / 10)%" }
         return "Step \(min(s.step + 1, max(s.of, 1))) of \(max(s.of, 1))"
+    }
+
+    /// The bar: how far the step has got when that is known, which is what
+    /// moves during the edge router's build, otherwise the steps done. As
+    /// (value, total) for a ProgressView.
+    static func bar(_ s: XOSetupAttributes.ContentState) -> (Double, Double) {
+        if let fill = s.fill { return (Double(min(max(fill, 0), 1000)), 1000) }
+        return (Double(min(s.step, s.of)), Double(max(s.of, 1)))
     }
 
     /// Still moving: an activity in this state is updated, not ended.

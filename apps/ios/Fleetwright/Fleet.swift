@@ -976,6 +976,16 @@ struct Fleet {
         /// capacity, sealed by the machine to the key this phone sent inside
         /// the policy sign-in, as epk.iv.ct (XOPolicy.open).
         var inventory: String?
+        /// While a step that can say how far it has got is running (the edge
+        /// router's build): which stage of how many, and how far through
+        /// the whole build in thousandths. Nil from an older machine.
+        var part: Part?
+
+        struct Part: Codable, Hashable {
+            let stage: Int
+            let stages: Int
+            let fill: Int
+        }
     }
 
     /// Ask every permanent machine whether it can reach a Xen Orchestra

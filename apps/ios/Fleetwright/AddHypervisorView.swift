@@ -153,6 +153,9 @@ struct AddHypervisorView: View {
         /// The machine takes any of the pool's networks as the way out
         /// (`can` holds "egress-any"); an older one only the fleet's.
         let anyWayOut: Bool
+        /// The machine puts the router's disk where the person says
+        /// (`can` holds "edge-disk"); an older one picks it unasked.
+        let edgeDisk: Bool
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -575,6 +578,14 @@ struct AddHypervisorView: View {
 
     // MARK: Progress
 
+    /// "Step 5 of 5", and while the edge router is building, which stage of
+    /// it and how far: "Step 5 of 5 · building the edge router, part 2 of 3 · 42%".
+    private func stepLine(_ state: XOSetupAttributes.ContentState) -> String {
+        let step = "Step \(min(state.step + 1, max(state.of, 1))) of \(max(state.of, 1))"
+        guard let part = progress?.part, state.state == "running" else { return step }
+        return "\(step) · building the edge router, part \(part.stage) of \(part.stages) · \(part.fill / 10)%"
+    }
+
     private func progressSection(_ job: String) -> some View {
         Section {
             VStack(alignment: .leading, spacing: Design.Space.insideTight) {
@@ -582,10 +593,15 @@ struct AddHypervisorView: View {
                     .fleetType(.bodyStrong)
                     .foregroundStyle(tone(progress?.state))
                     .contentTransition(.opacity)
-                if let state = liveState, let ordinal = XOSetupWords.ordinal(state) {
-                    ProgressView(value: Double(min(state.step, state.of)), total: Double(state.of))
+                if let state = liveState, XOSetupWords.ordinal(state) != nil {
+                    // THE BUILD'S OWN BAR while the machine says how far it
+                    // has got. Asked for: "this needs proper progress"; the
+                    // step alone held the bar at four fifths for minutes.
+                    let (value, total) = XOSetupWords.bar(state)
+                    ProgressView(value: value, total: total)
                         .tint(Design.Palette.active)
-                    Text(ordinal)
+                        .animation(Design.Motion.change, value: value)
+                    Text(stepLine(state))
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                         .contentTransition(.opacity)
@@ -765,6 +781,13 @@ struct AddHypervisorView: View {
                 .tint(Design.Palette.accent)
                 .frame(minHeight: 44)
                 .disabled(busy)
+                // WHERE ITS DISK GOES, asked before it is built and said
+                // while it is: any storage in the way out's pool with room,
+                // the fleet's own first. Asked for: "which disk did it put it
+                // on?"
+                if choice.edge, there == nil, choice.edgeDiskChoice {
+                    edgeDiskRow(inv)
+                }
             }
         } header: {
             sectionHead("Way out")
@@ -781,9 +804,35 @@ struct AddHypervisorView: View {
             return "An OPNsense VM with 2 vCPUs, 2 GiB of memory and a 3 GiB disk on the storage chosen. "
                 + "\(hostId) downloads OPNsense once, about 470 MB, and builds it while you wait."
         }
-        return there.running
+        let state = there.running
             ? "It is there and running. Apply keeps its WAN on this network."
             : "It is there and stopped. Apply keeps its WAN on this network and starts it."
+        return there.sr.map { "\(state) Its disk is on \($0)." } ?? state
+    }
+
+    /// The storage the router's disk goes on, with the room each has. Nothing
+    /// to pick from is said, and Apply waits (XOPolicy.Choice.problem).
+    @ViewBuilder
+    private func edgeDiskRow(_ inv: XOPolicy.Inventory) -> some View {
+        let fits = inv.edgeDisks(for: choice.egress)
+        if fits.isEmpty {
+            Text("Nothing in the way out’s pool has 3 GiB free for its disk.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.bad)
+        } else {
+            Picker(selection: Binding(get: { choice.edgeDisk(in: inv) }, set: { choice.edgeSr = $0 })) {
+                ForEach(fits) { sr in
+                    Text("\(XOPolicy.title(sr.name, id: sr.id)), \(XOPolicy.gibText(sr.free)) free").tag(String?.some(sr.id))
+                }
+            } label: {
+                Text("Its disk goes on")
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            .tint(Design.Palette.accent)
+            .frame(minHeight: 44)
+            .disabled(busy)
+        }
     }
 
     private func wayOutFooter(canEdge: Bool, anyWayOut: Bool) -> String {
@@ -1293,7 +1342,7 @@ struct AddHypervisorView: View {
                 return
             }
             policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"),
-                                  anyWayOut: begun.can.contains("egress-any"))
+                                  anyWayOut: begun.can.contains("egress-any"), edgeDisk: begun.can.contains("edge-disk"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1317,6 +1366,7 @@ struct AddHypervisorView: View {
                 withAnimation(Design.Motion.change) {
                     inventory = opened
                     choice = XOPolicy.Choice.initial(for: opened, anyWayOut: policyJob.anyWayOut)
+                    choice.edgeDiskChoice = policyJob.edgeDisk
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not

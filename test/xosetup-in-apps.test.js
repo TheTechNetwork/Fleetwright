@@ -253,7 +253,7 @@ test('iOS: the Live Activity decodes exactly what the coordinator pushes, and te
   // so a phone that predates it still decodes every push.
   assert.match(
     IOS,
-    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*\}/,
+    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var fill: Int\? = nil\s*\}/,
   );
   // `since` is the phone's own, never pushed: optional, so a pushed state
   // without it still decodes.
@@ -284,12 +284,23 @@ test('iOS: a policy job is on the Lock Screen from Apply, as a change and not a 
   assert.match(ACT, /guard !Activity<XOSetupAttributes>\.activities\.contains\(where: \{ \$0\.attributes\.job == job \}\)/);
 });
 
+test('iOS: the bar is the edge router’s build while it says how far, and the disk is picked and named', () => {
+  // ASKED FOR: "this needs proper progress, also which disk did it put it on?"
+  assert.match(SCREEN, /let \(value, total\) = XOSetupWords\.bar\(state\)\s*ProgressView\(value: value, total: total\)/);
+  assert.match(WIDGET, /let \(value, total\) = XOSetupWords\.bar\(state\)\s*ProgressView\(value: value, total: total\)/);
+  assert.ok(SCREEN.includes('building the edge router, part \\(part.stage) of \\(part.stages)'));
+  assert.ok(SCREEN.includes('if choice.edge, there == nil, choice.edgeDiskChoice {'));
+  assert.ok(SCREEN.includes('edgeDisk: begun.can.contains("edge-disk")'));
+  assert.ok(SCREEN.includes('Its disk is on \\($0).'));
+  assert.ok(WIDGET.includes('purpose == "policy" ? "What the fleet may use, on \\(hostId)" : "Hypervisor setup on \\(hostId)"'));
+});
+
 test('iOS: the extension draws the activity on the palette, with the words and a bar, in every Island size', () => {
   assert.match(WIDGET, /ActivityConfiguration\(for: XOSetupAttributes\.self\)/);
   for (const region of ['DynamicIslandExpandedRegion(.leading)', 'DynamicIslandExpandedRegion(.trailing)', 'DynamicIslandExpandedRegion(.bottom)', 'compactLeading:', 'compactTrailing:', 'minimal:']) {
     assert.ok(WIDGET.includes(region), `no ${region}`);
   }
-  assert.match(WIDGET, /ProgressView\(value: Double\(min\(state\.step, state\.of\)\), total: Double\(state\.of\)\)/);
+  assert.match(WIDGET, /ProgressView\(value: value, total: total\)/);
   assert.match(WIDGET, /Text\(XOSetupWords\.headline\(state, purpose: purpose\)\)/);
   // A change to what the fleet may use ends in its own words, not "Hypervisor
   // added", in every place the extension draws one.

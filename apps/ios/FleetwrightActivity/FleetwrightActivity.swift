@@ -129,10 +129,15 @@ struct XOSetupLines: View {
             // Only once the machine has said how many steps there are. A bar
             // with no length is a claim; no bar is not.
             if XOSetupWords.isLive(state.state), state.of > 0 {
-                ProgressView(value: Double(min(state.step, state.of)), total: Double(state.of))
+                // The build's own progress while it says how far it has got
+                // (XOSetupWords.bar), so the bar moves during the minutes the
+                // edge router takes instead of resting on a step.
+                let (value, total) = XOSetupWords.bar(state)
+                ProgressView(value: value, total: total)
                     .tint(Design.Palette.active)
             }
-            Text("Hypervisor setup on \(hostId)")
+            // A change to what the fleet may use is not a setup.
+            Text(purpose == "policy" ? "What the fleet may use, on \(hostId)" : "Hypervisor setup on \(hostId)")
                 .fleetType(.micro)
                 .foregroundStyle(Design.Palette.inkDim)
         }
@@ -189,6 +194,7 @@ enum XOSetupMarks {
     /// has been reported.
     static func compact(_ s: XOSetupAttributes.ContentState) -> String? {
         guard XOSetupWords.isLive(s.state), s.of > 0 else { return nil }
+        if let fill = s.fill { return "\(fill / 10)%" }
         return "\(min(s.step + 1, s.of))/\(s.of)"
     }
 }
