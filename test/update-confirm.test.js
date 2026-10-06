@@ -15,6 +15,8 @@ import {
   noteHealth,
   confirmPath,
   evidencePath,
+  proveHub,
+  canStartDirect,
 } from '../src/core/update-confirm.js';
 
 /** A config with a throwaway state directory. */
@@ -75,4 +77,47 @@ test('health is recorded only while a trial is open, and is fresh', (t) => {
   assert.ok(evAt >= trialAt - 5, 'evidence is stamped no earlier than the trial it answers');
 
   assert.equal(noteHealth(s.cfg, 'nonsense').noted, false, 'only the two known halves are accepted');
+});
+
+test('a box with no sandbox proves its half with tmux and the Claude CLI, and an update it took is kept', async (t) => {
+  // SEEN ON 3226-lxc: an unprivileged LXC box runs sessions directly, so the
+  // hub never wrote its half and every release it took was reverted ten
+  // minutes later. This is the half a direct box can write.
+  const s = box(t);
+  const cfg = { ...s.cfg, sandbox: false, claudeBin: 'claude' };
+  armConfirmation(cfg, { from: 'main-207', to: 'main-214', windowMs: 60_000 });
+  /** @type {string[]} */
+  const ran = [];
+  const run = /** @type {any} */ ((/** @type {string} */ bin) => {
+    ran.push(bin);
+    return { status: 0 };
+  });
+  const noted = await proveHub(cfg, {
+    sandboxed: async () => { throw new Error('a direct box runs no container'); },
+    direct: (c) => canStartDirect(c, { run }),
+  });
+  assert.equal(noted.noted, true);
+  assert.deepEqual(ran, ['tmux', 'claude']);
+  assert.ok(existsSync(evidencePath(s.stateDir, 'hub')));
+
+  // A Claude CLI that does not start leaves it unconfirmed, which reverts.
+  const t2 = box(t);
+  const cfg2 = { ...t2.cfg, sandbox: false, claudeBin: 'claude' };
+  armConfirmation(cfg2, { from: 'main-207', to: 'main-214', windowMs: 60_000 });
+  const broken = /** @type {any} */ ((/** @type {string} */ bin) => ({ status: bin === 'tmux' ? 0 : 127 }));
+  const r = await proveHub(cfg2, { sandboxed: async () => true, direct: (c) => canStartDirect(c, { run: broken }) });
+  assert.equal(r.noted, false);
+  assert.equal(existsSync(evidencePath(t2.stateDir, 'hub')), false);
+});
+
+test('a sandboxed box still proves its half by starting a container, and a settled box runs no probe', async (t) => {
+  const s = box(t);
+  const cfg = { ...s.cfg, sandbox: true, claudeBin: 'claude' };
+  let probed = 0;
+  const sandboxed = async () => { probed++; return true; };
+  assert.equal((await proveHub(cfg, { sandboxed })).why, 'nothing on trial');
+  assert.equal(probed, 0);
+  armConfirmation(cfg, { from: 'main-207', to: 'main-214', windowMs: 60_000 });
+  assert.equal((await proveHub(cfg, { sandboxed, direct: () => { throw new Error('not the direct probe'); } })).noted, true);
+  assert.equal(probed, 1);
 });

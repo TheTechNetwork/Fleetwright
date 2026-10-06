@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { requestRestart, readMarker, markerPath } from '../src/core/restart-watch.js';
+import { requestRestart, readMarker, markerPath, shouldFollowRevert } from '../src/core/restart-watch.js';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'restart-'));
 
@@ -38,4 +38,18 @@ test('an unreadable marker does not take a service down', () => {
   const d = dir();
   writeFileSync(markerPath(d), 'not json at all');
   assert.equal(readMarker(d), null);
+});
+
+test('the hub follows the watchdog back, once, and only when it is running the release that was reverted', () => {
+  // SEEN ON 3226-lxc: "this hub is still running main-214; main-207 is on
+  // disk". The watchdog put main-207 back, the sidecar followed its marker,
+  // and the hub, which only ever published the marker, kept running main-214.
+  const cfg = { stateDir: '/state', installDir: '/opt/fleetwright/current' };
+  const reverted = () => ({ at: 2000, head: 'main-207', actor: 'auto-rollback' });
+  const behind = () => ({ running: 'main-214', onDisk: 'main-207' });
+  assert.equal(shouldFollowRevert(cfg, 1000, { marker: reverted, drift: behind }), true);
+  assert.equal(shouldFollowRevert(cfg, 3000, { marker: reverted, drift: behind }), false, 'started after the revert: already on it');
+  assert.equal(shouldFollowRevert(cfg, 1000, { marker: reverted, drift: () => null }), false, 'already running what is on disk');
+  assert.equal(shouldFollowRevert(cfg, 1000, { marker: () => ({ at: 2000, actor: 'eli' }), drift: behind }), false, 'an update restarts the hub itself');
+  assert.equal(shouldFollowRevert(cfg, 1000, { marker: () => null, drift: behind }), false);
 });

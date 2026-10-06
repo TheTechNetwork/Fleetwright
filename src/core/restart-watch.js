@@ -79,3 +79,26 @@ export function readMarker(stateDir) {
     return null;
   }
 }
+
+/**
+ * Should the hub exit to follow a revert? Yes when the commit-confirm watchdog
+ * (install/fleetwright-confirm) put an earlier release back after this hub
+ * started, and the hub is still running the release it reverted.
+ *
+ * The watchdog's restart marker was meant to bounce all three services, and
+ * only the sidecar ever read it: the hub publishes the marker and never acts
+ * on it, so after a revert the box ran its hub on the reverted release and its
+ * sidecar on the other one until somebody restarted it by hand. Seen on
+ * 3226-lxc as "this hub is still running main-214; main-207 is on disk".
+ * Only the watchdog's marker: every other one is written by something that
+ * restarts the hub itself.
+ *
+ * @param {{ stateDir: string, installDir: string }} cfg
+ * @param {number} startedAt
+ * @param {{ marker?: (stateDir: string) => any, drift: (installDir: string) => any }} deps
+ */
+export function shouldFollowRevert(cfg, startedAt, { marker = readMarker, drift }) {
+  const m = marker(cfg.stateDir);
+  if (!m || m.actor !== 'auto-rollback' || !(m.at > startedAt)) return false;
+  return Boolean(drift(cfg.installDir));
+}

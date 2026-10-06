@@ -30,6 +30,7 @@
 // is POSIX shell and depends on nothing the update ships.
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, utimesSync, closeSync, openSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { log } from '../log.js';
@@ -143,4 +144,55 @@ export function noteHealth(cfg, which) {
   }
   log.info(`update: recorded ${which} health for the release on trial`);
   return { noted: true };
+}
+
+/**
+ * Can a session start here WITHOUT a container: tmux answers, and the Claude
+ * CLI a direct session runs starts and says its version. The direct box's
+ * equivalent of the sandbox's throwaway `podman run`.
+ *
+ * @param {{ claudeBin: string }} cfg
+ * @param {{ run?: typeof spawnSync }} [opts]
+ */
+export function canStartDirect(cfg, { run = spawnSync } = {}) {
+  const tmux = run('tmux', ['-V'], { encoding: 'utf8', timeout: 10_000 });
+  if (tmux.status !== 0) return false;
+  const claude = run(cfg.claudeBin, ['--version'], { encoding: 'utf8', timeout: 20_000 });
+  return claude.status === 0;
+}
+
+/**
+ * THE HUB'S HALF, for whichever way this box runs sessions.
+ *
+ * It used to be written only on a sandboxed box, after a throwaway container
+ * started. A box that runs sessions directly (FLEETWRIGHT_SANDBOX off, which
+ * is what an unprivileged LXC container has to do) never ran the probe, so it
+ * never wrote its half, so every release it took was reverted ten minutes
+ * later by the watchdog, however well it ran. Seen on 3226-lxc: the rolling
+ * channel landed main-214, the box worked, and `current` went back to main-207
+ * on its own, every time. Now a direct box proves the thing a direct session
+ * needs, tmux and the Claude CLI, and writes its half when that works.
+ *
+ * Never throws: a probe that fails or throws leaves the half unwritten, which
+ * is a revert, not a crash.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ sandboxed: (cfg: any) => Promise<boolean>, direct?: (cfg: any) => boolean }} probes
+ * @returns {Promise<{ noted: boolean, why?: string }>}
+ */
+export async function proveHub(cfg, { sandboxed, direct = canStartDirect }) {
+  if (!readConfirmation(cfg)) return { noted: false, why: 'nothing on trial' };
+  let works = false;
+  try {
+    works = cfg.sandbox ? await sandboxed(cfg) : direct(cfg);
+  } catch (e) {
+    log.warn(`update: could not run the session probe: ${/** @type {Error} */ (e).message}`);
+    return { noted: false, why: 'the probe failed' };
+  }
+  if (!works) {
+    const what = cfg.sandbox ? 'a session container did not start' : 'tmux or the Claude CLI did not start';
+    log.warn(`update: a release is on trial and ${what} here — leaving it unconfirmed`);
+    return { noted: false, why: what };
+  }
+  return noteHealth(cfg, 'hub');
 }
