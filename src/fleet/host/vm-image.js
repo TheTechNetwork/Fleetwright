@@ -197,6 +197,10 @@ export function buildCloudConfig({ coordinatorUrl }) {
     // The Xen guest agent, where Debian has it: it is what lets Xen
     // Orchestra see a clone's address and know it has booted.
     '  apt-get install -y xe-guest-utilities || true',
+    // What a clone fences itself with on the uplink and finds the others in
+    // its group by (install/fleetwright-net). A clone installs them itself
+    // when they are missing, at the cost of a minute.
+    '  apt-get install -y nftables avahi-daemon libnss-mdns || true',
     `  curl -fsSL '${origin}/install' | FLEETWRIGHT_COORDINATOR_URL='${origin}' FLEETWRIGHT_USER=${RUN_USER} sh -s -- --yes`,
     '  test -x /opt/fleetwright/current/install/fleetwright-vm-join',
     // Started by each clone once it has enrolled, never by the image.

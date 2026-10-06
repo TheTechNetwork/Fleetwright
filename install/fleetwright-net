@@ -1,0 +1,119 @@
+#!/bin/bash
+# fleetwright-net NET_FILE
+#
+# Run as root at every boot of a machine a pool made for a session
+# (src/fleet/host/xo-pools.js, machineCloudConfig, writes it and a unit that
+# runs it). NET_FILE says two things, either or both:
+#
+#   isolate  {subnet, gateway}: the machine is on the uplink, the network
+#            behind the edge router that every other session machine is on
+#            too. Nothing on that network may open a connection to this
+#            machine except the router. Out is untouched: the router decides
+#            where a machine may go, and replies come back in.
+#   group    {mac, address}: the machine is also on a group network, a
+#            private one with no way off the pool, for machines that are
+#            meant to reach each other. The interface with that MAC gets that
+#            address, and everything on it is let in.
+#
+# WHAT THIS IS AND IS NOT. A filter inside the machine, so it holds against
+# every other machine on the uplink, and not against this machine's own root:
+# a session that removes it exposes itself, and nothing else. The router's own
+# rules are the ones no session can touch (docs/hypervisors.md, "Machines that
+# work together", and docs/security.md).
+#
+# FAILS CLOSED ON THE UPLINK. If the filter cannot be put in place the
+# machine is powered off rather than left open beside everyone else's, and
+# the box that made it removes it (xo-pools.js, sweep).
+set -euo pipefail
+
+NET="${1:?usage: fleetwright-net NET_FILE}"
+# Where the interfaces are listed: the kernel's, or a stand-in under test.
+SYS_NET="${FLEETWRIGHT_SYS_NET:-/sys/class/net}"
+say() { printf 'fleetwright-net: %s\n' "$*"; }
+
+[ -f "$NET" ] || { say "no network file at $NET; nothing to do"; exit 0; }
+
+# One field of the file, or empty. python3 is on every image, because
+# cloud-init is written in it.
+field() {
+  python3 -I -c 'import json, sys
+v = json.load(open(sys.argv[1]))
+for k in sys.argv[2].split("."):
+    v = v.get(k) if isinstance(v, dict) else None
+print("" if v is None else v)' "$NET" "$1"
+}
+
+SUBNET="$(field isolate.subnet)"
+GATEWAY="$(field isolate.gateway)"
+GMAC="$(field group.mac)"
+GADDR="$(field group.address)"
+
+# Shapes, checked before anything is written into a ruleset or a command.
+v4='[0-9]{1,3}(\.[0-9]{1,3}){3}'
+if [ -n "$SUBNET$GATEWAY" ]; then
+  [[ "$SUBNET" =~ ^${v4}/[0-9]{1,2}$ && "$GATEWAY" =~ ^${v4}$ ]] || { say "isolate is not a subnet and a gateway"; exit 1; }
+fi
+if [ -n "$GMAC$GADDR" ]; then
+  [[ "$GMAC" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ && "$GADDR" =~ ^${v4}/[0-9]{1,2}$ ]] || { say "group is not a MAC and an address"; exit 1; }
+fi
+
+# Best effort: an image built before these were in it, on an apt system.
+want() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  command -v apt-get >/dev/null 2>&1 || return 1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "${@:2}" >/dev/null 2>&1 || {
+    apt-get update >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y "${@:2}" >/dev/null 2>&1
+  }
+  command -v "$1" >/dev/null 2>&1
+}
+
+# --- the group interface -------------------------------------------------------
+GIF=""
+if [ -n "$GMAC" ]; then
+  for dev in "$SYS_NET"/*; do
+    if [ "$(cat "$dev/address" 2>/dev/null)" = "$GMAC" ]; then GIF="${dev##*/}"; fi
+  done
+  if [ -z "$GIF" ]; then
+    say "no interface has $GMAC, so this machine is not on its group network"
+  else
+    ip link set "$GIF" up
+    ip addr replace "$GADDR" dev "$GIF"
+    say "on its group network as $GADDR ($GIF)"
+    # Names: each machine answers to its own on the group network, and asks
+    # there for the others' (vm-xxxxxxxxxxxx.local).
+    if want avahi-daemon avahi-daemon libnss-mdns; then
+      systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
+    else
+      say "no avahi here: the machines in the group reach each other by address, not by name"
+    fi
+  fi
+fi
+
+# --- the filter ----------------------------------------------------------------
+[ -n "$SUBNET" ] || exit 0
+fenced() {
+  want nft nftables || return 1
+  local group=''
+  if [ -n "$GIF" ]; then group="iifname \"$GIF\" accept"; fi
+  nft delete table inet fleetwright 2>/dev/null || true
+  nft -f - <<EOF
+table inet fleetwright {
+  chain input {
+    type filter hook input priority 0; policy accept;
+    ct state established,related accept
+    iifname "lo" accept
+    $group
+    ip saddr $GATEWAY accept
+    ip saddr $SUBNET drop
+    meta nfproto ipv6 drop
+  }
+}
+EOF
+}
+if fenced; then
+  say "only the router may open a connection to this machine from $SUBNET"
+else
+  say "could not put the filter in place; powering off rather than sitting open on the uplink"
+  systemctl poweroff
+  exit 1
+fi
