@@ -83,6 +83,9 @@ fun MachinesScreen(
     // The machines made on your pools, as the boxes holding them last saw.
     var poolMachines by remember { mutableStateOf(listOf<Fleet.VmMachine>()) }
     var showingPoolMachine by remember { mutableStateOf<String?>(null) }
+    // The images a machine can come from, for keeping some ready.
+    var poolImages by remember { mutableStateOf(listOf<Fleet.VmImage>()) }
+    var keepingReady by remember { mutableStateOf(false) }
     // HAS THE FIRST ANSWER ARRIVED? "No machines yet" before the fleet has
     // replied is a confident statement about a question nobody has asked.
     var loaded by remember { mutableStateOf(false) }
@@ -117,10 +120,12 @@ fun MachinesScreen(
             val reporting = async { runCatching { Fleet(settings).fleetHosts() } }
             val members = async { runCatching { Fleet(settings).enrolledHosts() } }
             val onPools = async { Fleet(settings).vmMachines() }
+            val images = async { Fleet(settings).vmImages() }
             // A FAILED REQUEST IS NOT AN EMPTY FLEET: keep what was there.
             reporting.await().onSuccess { fleetHosts = it }
             members.await().onSuccess { hosts = it }
             onPools.await().onSuccess { poolMachines = it }
+            images.await().onSuccess { poolImages = it }
         }
         loaded = true
     }
@@ -151,6 +156,7 @@ fun MachinesScreen(
     showingPoolMachine?.let { name ->
         VmMachinePage(settings, name, onDismiss = { showingPoolMachine = null; scope.launch { loadHosts() } })
     }
+    if (keepingReady) VmStandbyScreen(settings, poolImages, onDismiss = { keepingReady = false; scope.launch { loadHosts() } })
     if (adding) AddMachineSheet(settings, onDismiss = { adding = false })
     if (addingHypervisor) {
         // KEYED ON THE JOB: a second notification, tapped while the sheet is
@@ -223,6 +229,16 @@ fun MachinesScreen(
                     }
                 }
             }
+            // MACHINES KEPT READY, so a session starts in seconds. Asked for:
+            // "standby vms to speed up session starts". Offered wherever an
+            // image is, and only then.
+            if (poolImages.isNotEmpty()) {
+                item {
+                    Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                        OpenRow("Keep machines ready") { keepingReady = true }
+                    }
+                }
+            }
             // ADMINS ONLY, as Add a hypervisor is: changing a pool's policy
             // takes an admin sign-in and the verb refuses a member. Drawn only
             // when this phone holds a pool, because an empty section is a
@@ -282,7 +298,7 @@ private fun PoolMachineCard(m: Fleet.VmMachine, onClick: () -> Unit) {
             )
         }
         Text(
-            listOfNotNull(m.image, m.ip, m.until?.let { "ends ${relative(it)}" }).joinToString(" · "),
+            listOfNotNull(if (m.standby) "kept ready" else m.image, m.ip, m.until?.let { "ends ${relative(it)}" }).joinToString(" · "),
             style = Design.Style.micro,
             color = Design.Palette.inkDim.now,
         )

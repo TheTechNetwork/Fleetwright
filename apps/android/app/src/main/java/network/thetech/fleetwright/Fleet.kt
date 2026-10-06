@@ -1540,6 +1540,8 @@ class Fleet(
         val net: Traffic?,
         /** The Xen Orchestra it is on. */
         val address: String,
+        /** Kept ready, and not yet taken by a session. */
+        val standby: Boolean = false,
     ) {
         /**
          * Bytes a second through the machine's network interfaces, one point
@@ -1615,8 +1617,46 @@ class Fleet(
                     network = o.str("network"),
                     net = o.optJSONObject("net")?.let { traffic(it) },
                     address = o.optString("address"),
+                    standby = o.optBoolean("standby", false),
                 )
             }
+        }
+    }
+
+    /**
+     * What you keep ready on your hypervisor (docs/hypervisors.md, "Machines
+     * kept ready"): an image, how many, its network, and how many are ready
+     * now and being made.
+     */
+    data class VmStandby(val template: String, val count: Int, val network: String?, val ready: Int, val starting: Int)
+
+    /**
+     * What you keep ready: the `vmStandby` field of /api/hosts. Null is
+     * keeping none, and so is an older coordinator, which omits it.
+     */
+    suspend fun vmStandby(): Result<VmStandby?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val o = get("/api/hosts").optJSONObject("vmStandby") ?: return@runCatching null
+            VmStandby(
+                template = o.optString("template"),
+                count = o.optInt("count", 0),
+                network = o.optString("network").takeIf { o.has("network") && !o.isNull("network") && it.isNotBlank() },
+                ready = o.optInt("ready", 0),
+                starting = o.optInt("starting", 0),
+            )
+        }
+    }
+
+    /**
+     * Keep [count] machines from [template] ready on [network] (null is behind
+     * the edge router), or none with 0. The fleet ends the ones no longer wanted.
+     */
+    suspend fun setVmStandby(template: String?, count: Int, network: String?): Result<Reply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("count", count).put("network", network ?: JSONObject.NULL)
+            if (template != null) body.put("template", template)
+            val json = send("PUT", "/api/vm-standby", body)
+            Reply(ok = json.optBoolean("ok", false), text = json.optString("text", ""), sessions = emptyList())
         }
     }
 
