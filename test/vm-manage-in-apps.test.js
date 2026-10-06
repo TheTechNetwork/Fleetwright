@@ -113,7 +113,7 @@ test('Android: the machines on your pools are read from the snapshot, and worked
   assert.match(A_FLEET, /get\("\/api\/hosts"\)\.optJSONArray\("vmMachines"\)/);
   assert.match(A_FLEET, /"vmctl",[\s\S]{0,300}idempotencyKey = "app-" \+ java\.util\.UUID\.randomUUID\(\)\.toString\(\),/);
   assert.match(A_FLEET, /\(if \(network == null\) emptyMap\(\) else mapOf\("network" to network\)\)/);
-  assert.match(A_MAIN, /template = request\.template, network = request\.network\)/);
+  assert.match(A_MAIN, /template = request\.template, network = request\.network, group = request\.group\)/);
   assert.match(A_LIST, /val onPools = async \{ Fleet\(settings\)\.vmMachines\(\) \}/);
   assert.match(A_LIST, /if \(poolMachines\.isNotEmpty\(\)\) \{/);
   assert.match(A_LIST, /if \(hostId\.startsWith\("vm-"\)\) \{/);

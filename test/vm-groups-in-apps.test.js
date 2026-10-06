@@ -61,3 +61,38 @@ test('iOS says it in the shared words', () => {
   const ios = [I_POLICY, I_FORM, I_FLEET, I_SHEET, I_PAGE].join('\n');
   for (const words of SHARED) assert.ok(ios.includes(words), words);
 });
+
+// --- Android ------------------------------------------------------------------
+
+const ANDROID = (/** @type {string} */ f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`);
+const A_POLICY = ANDROID('XoPolicy.kt');
+const A_FORM = ANDROID('PolicyForm.kt');
+const A_SHEET_HV = ANDROID('HypervisorSheet.kt');
+const A_FLEET = ANDROID('Fleet.kt');
+const A_SHEET = ANDROID('StartSheet.kt');
+const A_PAGE = ANDROID('VmMachinePage.kt');
+const A_MAIN = ANDROID('MainActivity.kt');
+
+test('Android: the policy holds the host’s numbers and sends groups only to a machine that makes them', () => {
+  assert.ok(A_POLICY.includes(`const val GROUP_PREFIX = "${GROUP_PREFIX}"`));
+  assert.ok(A_POLICY.includes(`const val MAX_GROUPS = ${MAX_GROUPS}`));
+  assert.match(A_POLICY, /\.apply \{ if \(c\.groupsChoice && c\.egress != null\) put\("groups", c\.groups\) \}/);
+  assert.match(A_SHEET_HV, /canGroups = "groups" in p\.setup\.can/);
+  assert.match(A_SHEET_HV, /groupsChoice = canGroups && opened\.groups != null/);
+  assert.match(A_POLICY, /minOf\(groupCount\(inv, c\.egress\), MAX_GROUPS\)\.\.MAX_GROUPS/);
+  assert.match(A_FORM, /val choosable = XoPolicy\.choosable\(inv\)/);
+  assert.match(A_FORM, /choosable\.filter \{ anyWayOut \|\| it\.id in choice\.networks \}/);
+});
+
+test('Android: a machine is put in a group only where the pool has one, and the page says where the others reach it', () => {
+  assert.match(A_SHEET, /if \(!groups\.isNullOrEmpty\(\)\) \{/);
+  assert.match(A_FLEET, /\(if \(group == null\) emptyMap\(\) else mapOf\("group" to group\)\)/);
+  assert.match(A_SHEET, /group = vmGroup\.ifBlank \{ null \}\.takeIf \{ platform == "vm" \}/);
+  assert.match(A_MAIN, /network = request\.network, group = request\.group\)/);
+  assert.match(A_PAGE, /m\.group\?\.let \{ g -> Fact\("Group"/);
+});
+
+test('Android says it in the shared words', () => {
+  const android = [A_POLICY, A_FORM, A_SHEET_HV, A_FLEET, A_SHEET, A_PAGE].join('\n');
+  for (const words of SHARED) assert.ok(android.includes(words), words);
+});

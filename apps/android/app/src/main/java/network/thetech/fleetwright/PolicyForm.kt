@@ -70,8 +70,10 @@ internal fun PolicyForm(
     }
 
     SectionHead("Networks")
-    if (inv.networks.isEmpty()) Hint("The pool listed no networks.")
-    inv.networks.forEach { n ->
+    // Less the group networks, which are this policy's to make and not a choice.
+    val choosable = XoPolicy.choosable(inv)
+    if (choosable.isEmpty()) Hint("The pool listed no networks.")
+    choosable.forEach { n ->
         CheckRow(
             checked = n.id in choice.networks,
             enabled = enabled,
@@ -97,13 +99,14 @@ internal fun PolicyForm(
             "Only a network chosen above can be the way out."
         }
     Hint(if (canEdge) wayOut else "$wayOut $machine is too old to build the router; update it to have it built from here.")
-    inv.networks.filter { anyWayOut || it.id in choice.networks }.forEach { n ->
+    choosable.filter { anyWayOut || it.id in choice.networks }.forEach { n ->
         RadioRow(
             selected = choice.egress == n.id,
             enabled = enabled,
             title = n.name.ifBlank { n.id },
             line = XoPolicy.networkLine(n),
-            onClick = { onChange(choice.copy(egress = n.id)) },
+            // Another pool has its own group networks to start from.
+            onClick = { onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id))) },
         )
     }
     RadioRow(
@@ -112,7 +115,7 @@ internal fun PolicyForm(
         title = "None yet",
         line = if (!anyWayOut && choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
         // No way out, no router and no image: the switches go off with it.
-        onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), holder = false)) },
+        onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false)) },
     )
     // THE EDGE ROUTER, offered only by a machine that can build it and only
     // with a way out (C-2): built when the pool has none, kept in step when
@@ -245,6 +248,33 @@ internal fun PolicyForm(
                 )
             }
         }
+    }
+
+    // GROUP NETWORKS, in the way out's pool: how many to have, from the ones
+    // there (never fewer) to four. Asked for: "the 3 VMs need to reach each
+    // other". What a machine is fenced from by default is said here, because
+    // this is the one place it can be let through. iOS's words.
+    if (choice.groupsChoice && choice.egress != null) {
+        SectionHead("Machines that work together")
+        Hint(
+            "A machine behind the edge router is fenced from every other: only the router may open a connection to it. " +
+                "A group network has no way off the pool, and machines started in the same group reach each other on it. " +
+                "New session › Where puts a machine in one.",
+        )
+        val there = XoPolicy.groupCount(inv, choice.egress)
+        val range = XoPolicy.groupRange(inv, choice)
+        Stepper(
+            label = "Group networks",
+            value = choice.groups.toLong(),
+            min = range.first.toLong(),
+            max = range.last.toLong(),
+            shown = XoPolicy.groupsLine(choice.groups, there),
+            bound = "${range.first} to ${range.last}",
+            less = "Fewer group networks",
+            more = "More group networks",
+            enabled = enabled,
+            onValue = { onChange(choice.copy(groups = it.toInt())) },
+        )
     }
 
     SectionHead("Limits")

@@ -71,6 +71,8 @@ data class StartRequest(
      * router, where it reaches the internet and nothing private.
      */
     val network: String? = null,
+    /** And a group network beside it, to reach the other machines started in the same group; null for none. */
+    val group: String? = null,
 )
 
 /**
@@ -149,6 +151,8 @@ fun StartSheet(
     var template by remember { mutableStateOf("") }
     // The network a machine from your hypervisor goes on; empty is behind the edge router.
     var vmNetwork by remember { mutableStateOf("") }
+    // The group network it joins as well; empty is none.
+    var vmGroup by remember { mutableStateOf("") }
     // The machine images on your own pools a new machine can come from, from
     // the snapshot. Drawn from this and only this (C-2).
     var images by remember { mutableStateOf<List<Fleet.VmImage>>(emptyList()) }
@@ -369,6 +373,7 @@ fun StartSheet(
                             AssistChip(
                                 onClick = {
                                     vmNetwork = ""
+                                    vmGroup = ""
                                     if (template == image.template) {
                                         template = ""
                                         platform = ""
@@ -419,6 +424,24 @@ fun StartSheet(
                                 AssistChip(
                                     onClick = { vmNetwork = if (vmNetwork == n.id) "" else n.id },
                                     label = { Text(if (vmNetwork == n.id) "${n.name} \u2713" else n.name) },
+                                )
+                            }
+                        }
+                        // WITH THE OTHERS IN A GROUP, offered only when the
+                        // pool has a group network. Asked for: "the 3 VMs need
+                        // to reach each other". Start each of them here with
+                        // the same group, and they do.
+                        val groups = images.firstOrNull { it.template == template }?.groups.takeIf { platform == "vm" }
+                        if (!groups.isNullOrEmpty()) {
+                            Text("Work with others on", style = MaterialTheme.typography.labelMedium)
+                            AssistChip(
+                                onClick = { vmGroup = "" },
+                                label = { Text(if (vmGroup.isEmpty()) "No group \u2713" else "No group") },
+                            )
+                            groups.forEach { g ->
+                                AssistChip(
+                                    onClick = { vmGroup = if (vmGroup == g.id) "" else g.id },
+                                    label = { Text(if (vmGroup == g.id) "${g.name} \u2713" else g.name) },
                                 )
                             }
                         }
@@ -516,6 +539,7 @@ fun StartSheet(
                             template = template.ifBlank { null }.takeIf { platform == "vm" },
                             imageLabel = images.firstOrNull { it.template == template }?.label.takeIf { platform == "vm" },
                             network = vmNetwork.ifBlank { null }.takeIf { platform == "vm" },
+                            group = vmGroup.ifBlank { null }.takeIf { platform == "vm" },
                         ),
                     )
                     onDismiss()
