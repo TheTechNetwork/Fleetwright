@@ -71,7 +71,7 @@ import { XOSETUP_STEPS, XOPOLICY_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../p
 import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
-import { EDGE, ensureEdge, ensureUplink } from './edge-router.js';
+import { EDGE, ensureEdge, ensureUplink, srName } from './edge-router.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -315,11 +315,12 @@ export class XoSetups {
       text: 'Ready for the sign-in. Check the key is this machine’s, then send it sealed.',
       // WHAT ELSE A JOB HERE CAN BE, so a phone sends a policy change only to
       // a machine that will not take it for a whole setup, asks for the edge
-      // router only of one that can build it, and offers any of the pool's
+      // router only of one that can build it, offers any of the pool's
       // networks as the way out only to one that takes it (`egress-any`,
-      // checkPolicy). Not signed: a coordinator that strips it makes the
-      // phone refuse or not offer, which is safe.
-      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['policy', 'edge', 'egress-any'] },
+      // checkPolicy), and asks where the router's disk goes only of one that
+      // reads the answer (`edge-disk`). Not signed: a coordinator that strips
+      // it makes the phone refuse or not offer, which is safe.
+      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['policy', 'edge', 'egress-any', 'edge-disk'] },
     };
   }
 
@@ -438,8 +439,15 @@ export class XoSetups {
       this.#report(rec);
     } else if (rec.state === 'running') {
       // Between steps: a call already sent to Xen Orchestra is not unsent.
+      // The edge router's build is the exception, because it is minutes of
+      // bytes: its download and upload stop where they are (ensureEdge).
       rec.cancelled = true;
-      rec.text = 'Cancelling after this step.';
+      if (rec.abort) {
+        rec.abort.abort();
+        rec.text = 'Stopping the edge router’s build and removing what it made.';
+      } else {
+        rec.text = 'Cancelling after this step.';
+      }
     } else if (rec.state === 'choosing') {
       // Nothing has been changed yet, so this is the whole of it.
       rec.cancelled = true;
@@ -492,7 +500,17 @@ export class XoSetups {
     const policy = rec.purpose === 'policy';
     if (policy && rec.phase !== 'apply' && rec.phase !== 'done') return;
     try {
-      this.emit({ event: 'xosetup.progress', job: rec.job, step: rec.step, of: rec.of, phase: rec.phase, state: rec.state, text: rec.text, ...(policy ? { purpose: 'policy' } : {}) });
+      this.emit({
+        event: 'xosetup.progress',
+        job: rec.job,
+        step: rec.step,
+        of: rec.of,
+        phase: rec.phase,
+        state: rec.state,
+        text: rec.text,
+        ...(policy ? { purpose: 'policy' } : {}),
+        ...(rec.part && rec.state === 'running' ? { fill: rec.part.fill } : {}),
+      });
     } catch (e) {
       this.log.warn(`xosetup: could not report progress: ${/** @type {Error} */ (e).message}`);
     }
@@ -524,6 +542,7 @@ export class XoSetups {
         }
         rec.step = i;
         rec.phase = keys[i];
+        rec.part = null;
         rec.text = `${STEP_WORDS[rec.phase]}.`;
         this.#report(rec);
         const said = await steps[i](ctx);
@@ -535,13 +554,18 @@ export class XoSetups {
       rec.step = rec.of;
       rec.phase = 'done';
       rec.state = 'done';
+      rec.part = null;
       rec.text = [ctx.summary || (policy ? `${rec.address}: what the fleet may use is changed.` : `${rec.address} is in the fleet.`), ...ctx.notes].join(' ');
       this.#report(rec);
       this.log.info(`xosetup: ${rec.job} finished for ${rec.address}`);
     } catch (e) {
       if (policy && rec.cancelled) {
         rec.state = 'cancelled';
-        rec.text = 'Cancelled before anything was changed.';
+        // Cancelled during the build, the policy was already in force: say
+        // so, rather than that nothing changed.
+        rec.text = rec.phase === 'apply'
+          ? 'Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.'
+          : 'Cancelled before anything was changed.';
       } else {
         rec.state = 'failed';
         rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
@@ -555,6 +579,8 @@ export class XoSetups {
       rec.waiting = null;
       rec.choices = null;
       rec.inventory = null;
+      rec.part = null;
+      rec.abort = null;
       try {
         ctx.admin?.close();
       } catch {
@@ -593,6 +619,12 @@ export class XoSetups {
         // offer to build one only where there is none.
         const vms = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {});
         ctx.edges = vms.filter((/** @type {any} */ v) => Array.isArray(v?.tags) && v.tags.includes(EDGE.tag));
+        // AND WHICH STORAGE ITS DISK IS ON, by the disk's name, which the
+        // build gives it: "which disk did it put it on?" is answered on the
+        // phone, not only in Xen Orchestra.
+        ctx.edgeDisks = ctx.edges.length
+          ? Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VDI', name_label: EDGE.vm } })) || {})
+          : [];
         const inventory = inventoryOf(ctx, set);
         ctx.rec.choices = choicesOf(inventory);
         const box = await seal({ to: ctx.rec.reply, aad: xosetupInventoryAad(ctx.rec.job, ctx.rec.address), payload: inventory });
@@ -643,18 +675,31 @@ export class XoSetups {
           const way = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress);
           if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
           const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
+          const rec = ctx.rec;
+          rec.abort = new AbortController();
           return await ensureEdge({
             admin: ctx.admin,
             pool: way.$pool,
             egress: { id: p.egress, name: String(way.name_label || 'the way out').slice(0, 80) },
             uplink,
-            srs: (ctx.srs || []).filter((/** @type {any} */ s) => p.srs.includes(s?.id)),
-            address: ctx.rec.address,
-            pin: ctx.rec.pin,
-            plain: ctx.rec.plain === true,
+            srs: ctx.srs || [],
+            fleetSrs: p.srs,
+            sr: p.edgeSr,
+            address: rec.address,
+            pin: rec.pin,
+            plain: rec.plain === true,
             imageDir: path.join(this.stateDir || '.', 'edge'),
-            say: (/** @type {string} */ text) => {
-              ctx.rec.text = text;
+            signal: rec.abort.signal,
+            // The words every time, for the screen that asks; an event only
+            // when the stage changes or the bar has moved a twentieth, so a
+            // Lock Screen is not pushed to for every 16 MB.
+            say: (/** @type {string} */ text, /** @type {any} */ part) => {
+              if (rec.cancelled) return;
+              rec.text = text;
+              if (!part) return;
+              const before = rec.part;
+              rec.part = part;
+              if (!before || before.stage !== part.stage || Math.floor(before.fill / 50) !== Math.floor(part.fill / 50)) this.#report(rec);
             },
           });
         }
@@ -887,10 +932,16 @@ export function inventoryOf(ctx, set) {
   const objects = new Set(Array.isArray(set?.objects) ? set.objects.map(String) : []);
   // Each pool's edge router, by pool, and whether it is running: what the
   // phone needs to say "it is there" rather than offer to build another.
-  const edges = (ctx.edges || []).map((/** @type {any} */ v) => ({
-    pool: v.$pool ? String(v.$pool) : null,
-    running: v.power_state === 'Running',
-  }));
+  const edges = (ctx.edges || []).map((/** @type {any} */ v) => {
+    const disk = (ctx.edgeDisks || []).find((/** @type {any} */ d) => d?.$pool === v.$pool && Array.isArray(d?.$VBDs) && d.$VBDs.length);
+    const sr = disk ? (ctx.srs || []).find((/** @type {any} */ x) => x?.id === disk.$SR) : null;
+    return {
+      pool: v.$pool ? String(v.$pool) : null,
+      running: v.power_state === 'Running',
+      // The storage its disk is on, by name, or null when that cannot be told.
+      sr: sr ? srName(sr) : null,
+    };
+  });
   return {
     v: 1,
     address: ctx.rec.address,
@@ -950,7 +1001,7 @@ export function currentLimits(set) {
  * @param {any} p @param {ReturnType<typeof choicesOf>|null} choices
  * `edge` asks for the edge router on the way out; it needs one.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -968,6 +1019,10 @@ export function checkPolicy(p, choices) {
   }
   const edge = p.edge === true;
   if (edge && egress === null) return { ok: false, text: 'The edge router needs a way out: choose the network its WAN goes on.' };
+  // WHERE ITS DISK GOES, when the phone asked: storage the pool listed. That
+  // it is in the way out's pool and has room is checked where it is used.
+  const edgeSr = p.edgeSr === null || p.edgeSr === undefined ? null : String(p.edgeSr);
+  if (edgeSr !== null && !choices.srs.has(edgeSr)) return { ok: false, text: 'The edge router’s disk has to go on storage this pool listed. Nothing was changed.' };
   const cpus = Number(p.limits?.cpus);
   const memory = Number(p.limits?.memory);
   const disk = Number(p.limits?.disk);
@@ -978,7 +1033,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge ? edgeSr : null, limits: { cpus, memory, disk } } };
 }
 
 /**
@@ -1002,7 +1057,9 @@ export function limitsFrom(hosts, srs, pools) {
 
 /** @param {any} rec @returns {SetupStatus} */
 function status(rec) {
-  const s = { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text };
+  // `part` while a step that can say how far it has got is running: the edge
+  // router's build, its stage of three and how far through, in thousandths.
+  const s = { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text, ...(rec.part && rec.state === 'running' ? { part: rec.part } : {}) };
   // THE TOKEN, SEALED, to the person who began the job (`#mine` already
   // checked) and only once it is done. Asked for as often as the phone likes
   // until the job is forgotten, because a phone that was closed at the end
