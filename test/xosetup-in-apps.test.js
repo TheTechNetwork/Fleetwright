@@ -247,15 +247,17 @@ test('iOS: the Live Activity decodes exactly what the coordinator pushes, and te
   // coordinator's source rather than retyped: the object literal it hands to
   // push.activity is the contract.
   const core = read('src/fleet/coordinator/core.js');
-  const pushed = /state: \{ step: progress\.step, of: progress\.of, phase: progress\.phase, state: progress\.state \}/.exec(core);
-  assert.ok(pushed, 'the coordinator no longer pushes {step, of, phase, state}');
+  const pushed = /state: \{ step: progress\.step, of: progress\.of, phase: progress\.phase, state: progress\.state, \.\.\.\(progress\.fill === null \? \{\} : \{ fill: progress\.fill \}\) \}/.exec(core);
+  assert.ok(pushed, 'the coordinator no longer pushes {step, of, phase, state, fill?}');
+  // `fill` is optional and an older build ignores a key it has no field for,
+  // so a phone that predates it still decodes every push.
   assert.match(
     IOS,
     /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*\}/,
   );
   // `since` is the phone's own, never pushed: optional, so a pushed state
   // without it still decodes.
-  assert.match(read('src/fleet/coordinator/core.js'), /state: \{ step: progress\.step, of: progress\.of, phase: progress\.phase, state: progress\.state \}/, 'the coordinator pushes no `since`');
+  assert.match(read('src/fleet/coordinator/core.js'), /state: \{ step: progress\.step, of: progress\.of, phase: progress\.phase, state: progress\.state, \.\.\.\(progress\.fill === null \? \{\} : \{ fill: progress\.fill \}\) \}/, 'the coordinator pushes no `since`');
   // The static half is local only: it is in the attributes, not the state.
   assert.match(IOS, /struct XOSetupAttributes: ActivityAttributes \{[\s\S]*?let job: String\s*(?:\/\/\/[^\n]*\n\s*)*let hostId: String\s*(?:\/\/\/[^\n]*\n\s*)*let address: String/);
 
