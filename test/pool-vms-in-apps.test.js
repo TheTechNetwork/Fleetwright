@@ -71,3 +71,53 @@ test('iOS says it in the shared words', () => {
   const ios = [IOS_FLEET, IOS_SHEET, IOS_VIEW, IOS_HANDOFF, IOS_SCREEN, IOS_POLICY].join('\n');
   for (const words of SHARED) assert.ok(ios.includes(words), words);
 });
+
+// --- Android ------------------------------------------------------------------
+
+const ANDROID = (/** @type {string} */ f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`);
+const A_FLEET = ANDROID('Fleet.kt');
+const A_SHEET = ANDROID('StartSheet.kt');
+const A_MAIN = ANDROID('MainActivity.kt');
+const A_VAULT = ANDROID('PhoneVault.kt');
+const A_HANDOFF = ANDROID('XoHandoff.kt');
+const A_HYPER = ANDROID('HypervisorSheet.kt');
+const A_FORM = ANDROID('PolicyForm.kt');
+const A_POLICY = ANDROID('XoPolicy.kt');
+
+test('Android: a machine from your hypervisor is asked of the fleet, never of GitHub, with the image it is cloned from', () => {
+  assert.match(A_FLEET, /if \(platform != "vm" && phone\.signedIn\) \{/);
+  assert.match(A_FLEET, /if \(template == null\) mapOf\("platform" to platform\) else mapOf\("platform" to platform, "template" to template\)/);
+  assert.match(A_FLEET, /get\("\/api\/hosts"\)\.optJSONArray\("vmImages"\)/);
+  assert.match(A_MAIN, /fleet\.provision\(platform, minutes = request\.minutes, start = start, template = request\.template\)/);
+});
+
+test('Android: New session offers a machine from each of your images, drawn from the snapshot and nothing else', () => {
+  assert.match(A_SHEET, /images = Fleet\(settings\)\.vmImages\(\)\.getOrDefault\(emptyList\(\)\)/);
+  assert.match(A_SHEET, /if \(hosts\.size > 1 \|\| canStartMachine \|\| images\.isNotEmpty\(\)\) \{/);
+  assert.match(A_SHEET, /template = template\.ifBlank \{ null \}\.takeIf \{ platform == "vm" \},/);
+  assert.match(A_FLEET, /val label: String get\(\) = "New machine from \$name" \+ \(poolName\?\.let \{ " on \$it" \} \?: ""\)/);
+});
+
+test('Android: the pool’s token is kept in the fleet under its address, after setup and on asking', () => {
+  assert.match(A_VAULT, /JSONObject\(\)\.put\("name", "hypervisor:\$address"\)\.put\("value", record\)/);
+  assert.match(A_HANDOFF, /if \(outcome != Outcome\.Kept \|\| address == null\) return outcome to null/);
+  assert.match(A_HANDOFF, /setup\.state == "done" -> collectAndKeep\(settings, fleet, entry\.job, setup\)/);
+  assert.match(A_HYPER, /fleetNote = XoHandoff\.keepInFleet\(settings, fleet, address\.trim\(\)\)/);
+});
+
+test('Android: the machine image is offered only by a machine that builds one, where there is none, behind the router', () => {
+  assert.match(A_HYPER, /canImage = "image" in p\.setup\.can/);
+  assert.match(A_FORM, /if \(canImage && choice\.egress != null\) \{/);
+  assert.match(A_FORM, /onChange = \{ on -> onChange\(choice\.copy\(image = on, edge = choice\.edge \|\| \(on && there == null\)\)\) \}/);
+  assert.match(A_POLICY, /\.apply \{ if \(c\.imageChoice && c\.image\) put\("image", true\) \}/);
+  assert.match(A_POLICY, /const val IMAGE_DISK = 20L \* 1024 \* 1024 \* 1024/);
+});
+
+test('both phones say it in the same words', () => {
+  const ios = [IOS_FLEET, IOS_SHEET, IOS_VIEW, IOS_HANDOFF, IOS_SCREEN, IOS_POLICY].join('\n');
+  const android = [A_FLEET, A_SHEET, A_MAIN, A_HANDOFF, A_HYPER, A_FORM, A_POLICY].join('\n');
+  for (const words of SHARED) {
+    assert.ok(ios.includes(words), `iOS: ${words}`);
+    assert.ok(android.includes(words), `Android: ${words}`);
+  }
+});

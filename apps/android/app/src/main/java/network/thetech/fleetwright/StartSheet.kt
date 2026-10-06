@@ -60,6 +60,12 @@ data class StartRequest(
     val platform: String? = null,
     /** How long that machine stays, in minutes. Only with `platform`. */
     val minutes: Int? = null,
+    /**
+     * For platform "vm": the machine image on your hypervisor it is cloned
+     * from, and what to call it in a sentence.
+     */
+    val template: String? = null,
+    val imageLabel: String? = null,
 )
 
 /**
@@ -132,8 +138,13 @@ fun StartSheet(
      * refuses the session it was started for, so this sheet says so.
      */
     var claude by remember { mutableStateOf<ClaudeKept?>(null) }
-    // The operating system when a new machine is chosen, else empty.
+    // The operating system when a new machine is chosen, else empty: "vm"
+    // for one from your hypervisor, with the image in `template`.
     var platform by remember { mutableStateOf("") }
+    var template by remember { mutableStateOf("") }
+    // The machine images on your own pools a new machine can come from, from
+    // the snapshot. Drawn from this and only this (C-2).
+    var images by remember { mutableStateOf<List<Fleet.VmImage>>(emptyList()) }
     var machineMinutes by remember { mutableIntStateOf(60) }
 
     // Suggest once the typing stops, not on every keystroke. A suggestion that
@@ -170,7 +181,8 @@ fun StartSheet(
         // Whether a new machine can be offered. A failure offers none, which
         // is the safe way round for a control that spends money.
         canStartMachine = Fleet(settings).runners().getOrNull() != null
-        if (canStartMachine) claude = claudeKept(settings)
+        images = Fleet(settings).vmImages().getOrDefault(emptyList())
+        if (canStartMachine || images.isNotEmpty()) claude = claudeKept(settings)
     }
 
     AlertDialog(
@@ -327,23 +339,44 @@ fun StartSheet(
                 // Only when there is a choice. One host is not a decision,
                 // and a picker with one entry is furniture. A fleet that can
                 // start a machine always has a choice: here, or a new one.
-                if (hosts.size > 1 || canStartMachine) {
+                if (hosts.size > 1 || canStartMachine || images.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Where", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
-                            onClick = { host = ""; platform = "" },
+                            onClick = { host = ""; platform = ""; template = "" },
                             label = { Text(if (host.isEmpty() && platform.isEmpty()) "Wherever fits \u2713" else "Wherever fits") },
                         )
                         hosts.forEach { h ->
                             AssistChip(
-                                onClick = { host = if (host == h) "" else h; platform = "" },
+                                onClick = { host = if (host == h) "" else h; platform = ""; template = "" },
                                 label = { Text(if (host == h) "$h \u2713" else h) },
+                            )
+                        }
+                        // FROM YOUR OWN HYPERVISOR, first among the new
+                        // machines: up in a minute or two, and billed to
+                        // nobody. Asked for: "Still can't run sessions on it".
+                        images.forEach { image ->
+                            AssistChip(
+                                onClick = {
+                                    if (template == image.template) {
+                                        template = ""
+                                        platform = ""
+                                    } else {
+                                        template = image.template
+                                        platform = "vm"
+                                        host = ""
+                                        profile = ""
+                                        secret = ""
+                                    }
+                                },
+                                label = { Text(if (template == image.template) "${image.label} \u2713" else image.label) },
                             )
                         }
                         if (canStartMachine) {
                             newMachineChoices.forEach { choice ->
                                 AssistChip(
                                     onClick = {
+                                        template = ""
                                         platform = if (platform == choice.platform) "" else choice.platform
                                         // A machine that does not exist yet has
                                         // nothing to do a host, a profile or a
@@ -370,13 +403,23 @@ fun StartSheet(
                             // NO LINK PROMISED. A runner's credential cannot open
                             // Remote Control, so the notification that matters
                             // is the one when its task is done.
-                            Text(
-                                "It takes a few minutes to boot. The session starts on it when it joins" +
-                                    (if (task.isBlank()) ", idle, with nothing to do. Give it a task above to put it to work."
-                                    else " and works on your task. You get a notification when it is back at its prompt.") +
-                                    " Everything on it is gone when the time runs out.",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+                            if (platform == "vm") {
+                                Text(
+                                    "It is cloned from your machine image and joins in a minute or two. The session starts on it then" +
+                                        (if (task.isBlank()) ", idle, with nothing to do. Give it a task above to put it to work."
+                                        else " and works on your task. You get a notification when it is back at its prompt.") +
+                                        " It powers off when the time runs out and is removed, with everything on it.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else {
+                                Text(
+                                    "It takes a few minutes to boot. The session starts on it when it joins" +
+                                        (if (task.isBlank()) ", idle, with nothing to do. Give it a task above to put it to work."
+                                        else " and works on your task. You get a notification when it is back at its prompt.") +
+                                        " Everything on it is gone when the time runs out.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                             // SAID OUT LOUD, as docs/runner-central.md says it:
                             // the Windows runner is written and not yet proven.
                             if (platform == "windows") {
@@ -394,8 +437,13 @@ fun StartSheet(
                 if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
                     SectionHead("Claude")
                     Text(
-                        "No Claude login is kept for your runners, so this one runs on the runner repository's " +
-                            "API key if it has one, and cannot start the session if it does not.",
+                        if (platform == "vm") {
+                            "No Claude login is kept in your vault, so a machine from your hypervisor has nothing to run " +
+                                "its session on. Keep one here first."
+                        } else {
+                            "No Claude login is kept for your runners, so this one runs on the runner repository's " +
+                                "API key if it has one, and cannot start the session if it does not."
+                        },
                         style = Design.Style.bodySmall,
                         color = Design.Palette.attention.now,
                     )
@@ -432,6 +480,8 @@ fun StartSheet(
                             secret = secret.ifBlank { null }.takeIf { platform.isEmpty() },
                             platform = platform.ifBlank { null },
                             minutes = machineMinutes.takeIf { platform.isNotEmpty() },
+                            template = template.ifBlank { null }.takeIf { platform == "vm" },
+                            imageLabel = images.firstOrNull { it.template == template }?.label.takeIf { platform == "vm" },
                         ),
                     )
                     onDismiss()

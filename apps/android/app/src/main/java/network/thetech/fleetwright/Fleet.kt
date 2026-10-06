@@ -955,18 +955,21 @@ class Fleet(
         minutes: Int? = null,
         host: String? = null,
         start: Map<String, String>? = null,
+        template: String? = null,
     ): Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
         // Otherwise a box with your GitHub connection does, as it always did.
+        // A MACHINE FROM YOUR HYPERVISOR is never GitHub's: a box holding the
+        // pool's token makes it (protocol 8, `template`).
         val phone = PhoneGitHub(settings)
-        if (phone.signedIn) {
+        if (platform != "vm" && phone.signedIn) {
             return runCatching { phone.startRunner(this, platform, minutes, start) }
                 .getOrElse { Reply(false, it.message ?: "that did not work", emptyList()) }
         }
         return intent(
             "provision",
-            mapOf("platform" to platform),
+            if (template == null) mapOf("platform" to platform) else mapOf("platform" to platform, "template" to template),
             host,
             numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
             extra = if (start == null) emptyMap() else mapOf("start" to JSONObject(start.toMap())),
@@ -1452,6 +1455,48 @@ class Fleet(
     suspend fun runners(): Result<String?> = withContext(Dispatchers.IO) {
         runCatching {
             get("/api/hosts").optJSONObject("runners")?.optString("repo")?.takeIf { it.isNotBlank() && it != "null" }
+        }
+    }
+
+    /**
+     * A machine image on one of your pools: what a new machine from your own
+     * hypervisor is cloned from (docs/hypervisors.md, "Machines from your
+     * pool"). `template` is what `provision` takes.
+     */
+    data class VmImage(
+        val template: String,
+        val name: String,
+        val pool: String?,
+        val poolName: String?,
+        val address: String,
+        val hosts: List<String>,
+    ) {
+        /** "New machine from Fleetwright Debian 13 on rack", for a picker. */
+        val label: String get() = "New machine from $name" + (poolName?.let { " on $it" } ?: "")
+    }
+
+    /**
+     * The machine images you can start a machine from: the `vmImages` field of
+     * /api/hosts, one per image, from the boxes holding a pool token you kept
+     * in your vault. Empty is an answer (none of yours); an older coordinator
+     * omits the field, which reads the same.
+     */
+    suspend fun vmImages(): Result<List<VmImage>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val list = get("/api/hosts").optJSONArray("vmImages") ?: return@runCatching emptyList()
+            (0 until list.length()).mapNotNull { i ->
+                val o = list.optJSONObject(i) ?: return@mapNotNull null
+                val template = o.optString("template").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val hosts = o.optJSONArray("hosts")
+                VmImage(
+                    template = template,
+                    name = o.optString("name").ifBlank { "Machine image" },
+                    pool = o.optString("pool").takeIf { it.isNotBlank() && it != "null" },
+                    poolName = o.optString("poolName").takeIf { it.isNotBlank() && it != "null" },
+                    address = o.optString("address"),
+                    hosts = if (hosts == null) emptyList() else (0 until hosts.length()).map { hosts.optString(it) },
+                )
+            }
         }
     }
 

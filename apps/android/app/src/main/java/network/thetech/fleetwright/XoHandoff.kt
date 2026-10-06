@@ -160,6 +160,37 @@ internal object XoHandoff {
     }
 
     /**
+     * Collect a finished job's token and, once it is kept, keep it in the
+     * fleet as well, so the boxes this person approved can make machines on
+     * the pool. Answers what collecting came to, and what the fleet said, or
+     * null for the second when there was nothing to keep.
+     */
+    suspend fun collectAndKeep(settings: Settings, fleet: Fleet, job: String, setup: Fleet.Setup): Pair<Outcome?, String?> {
+        val address = pending(settings).firstOrNull { it.job == job }?.address
+        val outcome = collect(settings, job, setup)
+        if (outcome != Outcome.Kept || address == null) return outcome to null
+        return outcome to keepInFleet(settings, fleet, address)
+    }
+
+    /**
+     * KEEP IT IN THE FLEET: this phone's record for a pool, put in the
+     * person's vault as `hypervisor:<address>` (PhoneVault.keepHypervisor).
+     * Asked for: "Why not the coordinator hold the token". The fleet holds it,
+     * sealed, and the boxes the person approved are handed it, in memory
+     * only, to make machines on the pool. Answers the sentence to show: what
+     * the fleet said, or what stood in the way.
+     */
+    suspend fun keepInFleet(settings: Settings, fleet: Fleet, address: String): String {
+        val record = settings.secret(tokenName(address))
+        if (record.isNullOrBlank()) return "This phone holds no token for $address to keep in the fleet."
+        if (!PhoneGitHub(settings).signedIn) {
+            return "Sign in to GitHub under You › Credentials to keep its token in the fleet: your vault is kept under your GitHub account."
+        }
+        return PhoneVault(settings).keepHypervisor(fleet, address, record)
+            .getOrElse { "Its token was not kept in the fleet: ${it.message ?: "that did not work"}" }
+    }
+
+    /**
      * On sign-in and launch: every job this phone is still owed a token for
      * is asked about once. Done is collected, over is dropped, still running
      * is left for next time or the screen.
@@ -175,7 +206,7 @@ internal object XoHandoff {
             when {
                 // The fleet no longer knows the job, so nothing will come.
                 setup == null -> if (r.code == "unknown_job") forget(settings, entry.job)
-                setup.state == "done" -> collect(settings, entry.job, setup)
+                setup.state == "done" -> collectAndKeep(settings, fleet, entry.job, setup)
                 setup.state == "failed" || setup.state == "cancelled" -> forget(settings, entry.job)
             }
         }
