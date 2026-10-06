@@ -155,6 +155,24 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertNil(c.problem(in: inv))
     }
 
+    /// Asked for: a way out that is not one of the fleet's networks. A
+    /// machine that takes that keeps the way out when its network goes off,
+    /// starts with it where Xen Orchestra's tag is, and sends it.
+    func testOnAMachineThatTakesAnyNetworkTheWayOutNeedNotBeTheFleets() throws {
+        let inv = try inventory(inventoryJSON(networks: #"["net-lab"]"#))
+        XCTAssertNil(XOPolicy.Choice.initial(for: inv).egress, "an older machine would refuse the WAN, so it is not chosen")
+        var c = XOPolicy.Choice.initial(for: inv, anyWayOut: true)
+        XCTAssertEqual(c.egress, "net-wan", "the tagged network, though the fleet may not use it")
+        c.setNetwork("net-lab", on: false)
+        c.setNetwork("net-lab", on: true)
+        XCTAssertEqual(c.egress, "net-wan")
+        XCTAssertNil(c.problem(in: inv))
+        XCTAssertEqual(c.payload(in: inv)["egress"] as? String, "net-wan")
+        XCTAssertEqual(c.payload(in: inv)["networks"] as? [String], ["net-lab"])
+        c.egress = "net-elsewhere"
+        XCTAssertEqual(c.problem(in: inv), "The way out has to be a network this pool listed.")
+    }
+
     func testEachLimitIsHeldToTheMachinesBounds() throws {
         let inv = try inventory()
         XCTAssertEqual(inv.cpuRange, 1...16)
@@ -245,5 +263,10 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(XOPolicy.statusLine(done), "What the fleet may use is changed", "not \"Hypervisor added\"")
         let applying = XOSetupAttributes.ContentState(step: 4, of: 5, phase: "apply", state: "running")
         XCTAssertEqual(XOPolicy.statusLine(applying), "Applying what you chose")
+        // The Lock Screen says the same as the screen for a policy job, and
+        // onboarding's words for one that adds a pool.
+        XCTAssertEqual(XOSetupWords.headline(done, purpose: "policy"), "What the fleet may use is changed")
+        XCTAssertEqual(XOSetupWords.headline(applying, purpose: "policy"), "Applying what you chose")
+        XCTAssertEqual(XOSetupWords.headline(done), "Hypervisor added")
     }
 }

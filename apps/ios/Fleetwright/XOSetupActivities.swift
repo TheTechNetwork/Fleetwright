@@ -36,15 +36,26 @@ enum XOSetupActivities {
     /// turned off in Settings, and the system refuses one when it already
     /// has as many as it will show. The screen keeps polling either way, so
     /// nothing here throws and nothing is said.
+    ///
+    /// A POLICY JOB GETS ONE when its choice is sent (`purpose: "policy"`),
+    /// because that is when it may go on for minutes building the edge
+    /// router; until then the person is on the open screen choosing. Asked
+    /// for: the first version started one only for adding a pool, and the
+    /// router's download left nothing on the Lock Screen.
     @MainActor
-    static func start(fleet: Fleet, job: String, hostId: String, address: String, progress: Fleet.SetupState?) {
+    static func start(fleet: Fleet, job: String, hostId: String, address: String, progress: Fleet.SetupState?,
+                      purpose: String? = nil, otherwise: XOSetupAttributes.ContentState? = nil) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let attributes = XOSetupAttributes(job: job, hostId: hostId, address: address)
+        // One per job: a second Apply on the same job is the same change.
+        guard !Activity<XOSetupAttributes>.activities.contains(where: { $0.attributes.job == job }) else { return }
+        let attributes = XOSetupAttributes(job: job, hostId: hostId, address: address, purpose: purpose)
         // Before the first step is reported there is no count to show, so the
         // first content says what is happening and no number: `of` 0 draws no
         // bar and no ordinal (XOSetupWords.ordinal), rather than a bar that
-        // claims a length nobody has reported.
-        let first = contentState(progress)
+        // claims a length nobody has reported. A reply that is not live (a
+        // policy job still saying `choosing`) is not where the job is going.
+        let reported = contentState(progress).flatMap { XOSetupWords.isLive($0.state) ? $0 : nil }
+        let first = reported ?? otherwise
             ?? XOSetupAttributes.ContentState(step: 0, of: 0, phase: "connect", state: "running", since: Date())
         let activity: Activity<XOSetupAttributes>
         do {

@@ -109,6 +109,11 @@ test('iOS: the way out names the router it is for, and offers to build it only w
   assert.ok(SCREEN.includes('there == nil ? "Build the edge router on it" : "Keep the edge router on it"'));
   assert.ok(SCREEN.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
   assert.ok(SCREEN.includes('is too old to build the router; update it to have it built from here.'));
+  // Any of the pool's networks as the way out, from a machine that takes it,
+  // and only the fleet's from one that does not (checkPolicy).
+  assert.match(SCREEN, /anyWayOut: begun\.can\.contains\("egress-any"\)/);
+  assert.match(SCREEN, /ForEach\(inv\.networks\.filter \{ anyWayOut \|\| choice\.networks\.contains\(\$0\.id\) \}\)/);
+  assert.ok(SCREEN.includes('Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router.'));
   // What goes to the machine, which checkPolicy reads, and its one rule.
   const POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
   assert.match(POLICY, /"edge": edge,/);

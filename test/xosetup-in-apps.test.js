@@ -270,13 +270,28 @@ test('iOS: the Live Activity decodes exactly what the coordinator pushes, and te
   assert.match(IOS, /static func isLive\(_ state: String\) -> Bool \{ state == "running" \|\| state == "waiting" \}/);
 });
 
+test('iOS: a policy job is on the Lock Screen from Apply, as a change and not a setup', () => {
+  // ASKED FOR: "What happened to my live activities", during the edge
+  // router's download. Started when the choice is sent, with its purpose, at
+  // the apply step; fed by the screen's polling after that, but never by a
+  // `choosing` answer, which would end it as not live.
+  assert.match(SCREEN, /XOSetupActivities\.start\(fleet: fleet, job: job, hostId: hostId, address: policyJob\.address,\s*progress: answer\.xosetup, purpose: "policy", otherwise: applying\)/);
+  assert.match(SCREEN, /if state\.state != "choosing" \{ await XOSetupActivities\.apply\(job: job, progress: state\) \}/);
+  const ACT = read('apps/ios/Fleetwright/XOSetupActivities.swift');
+  assert.match(ACT, /XOSetupAttributes\(job: job, hostId: hostId, address: address, purpose: purpose\)/);
+  assert.match(ACT, /guard !Activity<XOSetupAttributes>\.activities\.contains\(where: \{ \$0\.attributes\.job == job \}\)/);
+});
+
 test('iOS: the extension draws the activity on the palette, with the words and a bar, in every Island size', () => {
   assert.match(WIDGET, /ActivityConfiguration\(for: XOSetupAttributes\.self\)/);
   for (const region of ['DynamicIslandExpandedRegion(.leading)', 'DynamicIslandExpandedRegion(.trailing)', 'DynamicIslandExpandedRegion(.bottom)', 'compactLeading:', 'compactTrailing:', 'minimal:']) {
     assert.ok(WIDGET.includes(region), `no ${region}`);
   }
   assert.match(WIDGET, /ProgressView\(value: Double\(min\(state\.step, state\.of\)\), total: Double\(state\.of\)\)/);
-  assert.match(WIDGET, /Text\(XOSetupWords\.headline\(state\)\)/);
+  assert.match(WIDGET, /Text\(XOSetupWords\.headline\(state, purpose: purpose\)\)/);
+  // A change to what the fleet may use ends in its own words, not "Hypervisor
+  // added", in every place the extension draws one.
+  assert.equal((WIDGET.match(/purpose: context\.attributes\.purpose/g) || []).length, 5);
   // The same palette check design-parity.test.js runs on the app, because the
   // widget directory is outside the one it reads.
   const bare = WIDGET.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
