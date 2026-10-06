@@ -51,7 +51,7 @@ function certificate() {
  * @param {import('node:test').TestContext} t
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[] }} [opts]
  */
-async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [] } = {}) {
+async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}) } = {}) {
   const { key, cert, pin } = certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -62,6 +62,7 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
   const passwords = new Map([['admin@admin.net', PASSWORD]]);
   const methods = Object.fromEntries(
     ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove']
+      .concat(more)
       .filter((m) => !drop.includes(m))
       .map((m) => [m, {}]),
   );
@@ -80,6 +81,7 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
       pif1: { id: 'pif1', type: 'PIF', $network: 'net-mgmt', vlan: -1 },
       pif2: { id: 'pif2', type: 'PIF', $network: 'net-dmz', vlan: 30 },
     },
+    VM: vms,
   };
   let conns = 0;
   /** @param {import('node:net').Socket} socket */
@@ -155,6 +157,7 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
             answer(true);
             break;
           }
+          case 'network.create': answer('net-uplink'); break;
           case 'tag.add': tags.set(p.id, [...(tags.get(p.id) ?? []), p.tag]); answer(true); break;
           case 'tag.remove': tags.set(p.id, (tags.get(p.id) ?? []).filter((x) => x !== p.tag)); answer(true); break;
           case 'token.create':
@@ -177,7 +180,7 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
 }
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine(/** @type {{ policyWaitMs?: number }} */ opts = {}) {
+async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -477,7 +480,11 @@ const chosenBefore = () => ({ id: 'rs-0', name: 'fleetwright', subjects: ['u-old
 /** Begin and run a policy job, and wait until it is waiting on the person. */
 async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, actor = 'eli@example.com') {
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
-  assert.deepEqual(begun.xosetup.can, ['policy', 'edge', 'egress-any', 'edge-disk'], 'a machine that can says so before any sign-in is sealed');
+  assert.deepEqual(
+    begun.xosetup.can,
+    ['policy', 'edge', 'egress-any', 'edge-disk', ...(setups.coordinatorUrl ? ['image'] : [])],
+    'a machine that can says so before any sign-in is sealed',
+  );
   const reply = await newSealKey();
   const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' });
   const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
@@ -570,6 +577,46 @@ test('a policy is chosen on the phone from the pool it was shown, sealed both wa
   assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, false);
 });
 
+test('the machine image is built after the policy, on the way out’s pool, behind its router, and said in the end', { skip }, async (t) => {
+  // ASKED FOR: "Still can't run sessions on it". The image sessions' machines
+  // are cloned from is built by the job that already holds the admin sign-in.
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate'],
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+  });
+  /** @type {any[]} */
+  const asked = [];
+  const { setups, events } = await machine({
+    coordinatorUrl: 'https://fleet.test',
+    buildImage: async (/** @type {any} */ o) => {
+      asked.push(o);
+      o.say('Installing Fleetwright on the machine image.', { stage: 3, stages: 4, fill: 600 });
+      return 'The machine image is ready on Home.';
+    },
+  });
+  const actor = 'eli@example.com';
+  const { begun, reply, state } = await choosing(xo, setups, actor);
+  const [epk, iv, ct] = state.inventory.split('.');
+  const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(inventory.images, [], 'no image yet, so the phone offers one');
+  const job = begun.xosetup.job;
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', image: true, edgeSr: 'sr2', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  const took = await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor });
+  assert.equal(took.ok, true, took.text);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.match(end.text, /The machine image is ready on Home\./);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].pool, 'p1');
+  assert.equal(asked[0].poolName, 'Home');
+  assert.equal(asked[0].uplink, 'net-uplink', 'on the uplink, behind the router');
+  assert.equal(asked[0].setId, 'rs-0');
+  assert.equal(asked[0].sr, 'sr2');
+  assert.equal(asked[0].coordinatorUrl, 'https://fleet.test');
+  assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy'), 'its bar reaches the Lock Screen');
+});
+
 test('a policy for a pool that was never added changes nothing', { skip }, async (t) => {
   const xo = await standIn(t);
   const { setups } = await machine();
@@ -631,5 +678,16 @@ test('a choice is held to what the pool has, and the way out to a network it lis
     assert.match(/** @type {any} */ (r).text, /** @type {RegExp} */ (words));
   }
   assert.equal(checkPolicy(ok, null).ok, false, 'nothing to check it against is a refusal');
+
+  // THE MACHINE IMAGE is built behind the edge router, on the way out's pool:
+  // with the router asked for, or where that pool already has one.
+  const pooled = { ...choices, networkPools: new Map([['n1', 'p1'], ['n2', 'p2']]), edgePools: new Set(['p2']) };
+  assert.equal(checkPolicy({ ...ok, image: true, edge: true }, pooled).ok, true);
+  assert.equal(checkPolicy({ ...ok, image: true, egress: 'n2' }, pooled).ok, true, 'that pool has its router');
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true }, pooled)).text, /has none yet/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true, egress: null }, pooled)).text, /choose the way out/);
+  const imaged = /** @type {any} */ (checkPolicy({ ...ok, image: true, edge: true, edgeSr: 'b' }, pooled));
+  assert.equal(imaged.policy.image, true);
+  assert.equal(imaged.policy.edgeSr, 'b', 'where the disks go');
   assert.deepEqual(currentLimits({ limits: { cpus: { total: 4 }, memory: 1024, disk: null } }), { cpus: 4, memory: 1024, disk: null });
 });

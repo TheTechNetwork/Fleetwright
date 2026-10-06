@@ -931,3 +931,43 @@ test('a machine needs nowhere to keep a hypervisor token, because it keeps none'
   const r = await sidecar.handle(intent({ verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', pin: 'a'.repeat(64) }, actor: 'eli@example.com' }));
   assert.equal(r.ok, true, r.text);
 });
+
+// --- machines from a hypervisor ----------------------------------------------
+
+test('a machine on a hypervisor is made by this process for the person asking, and never becomes a command line', async (t) => {
+  /** @type {any[]} */
+  const asked = [];
+  const xoPools = /** @type {any} */ ({
+    held: new Map([['eli@example.com xo.lan', {}]]),
+    report: () => [],
+    make: async (/** @type {any} */ ask) => {
+      asked.push(ask);
+      return { ok: true, vm: 'vm-uuid', text: 'Making vm-111111111111 from Fleetwright Debian 13.' };
+    },
+    refresh: async () => {},
+  });
+  const { sidecar, stub } = await setup(t, {}, { xoPools });
+  const ticket = `fwt_${'1'.repeat(12)}_${'2'.repeat(48)}`;
+  const r = await sidecar.handle(intent({ verb: 'provision', actor: 'Eli@Example.com', params: { platform: 'vm', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30 } }));
+  assert.equal(r.ok, true, r.text);
+  assert.equal(r.vm, 'vm-uuid');
+  assert.deepEqual(asked, [{ owner: 'eli@example.com', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30, coordinatorUrl: 'https://coord.example.workers.dev' }]);
+  assert.equal(stub.commands.length, 0, 'the ticket never reached the hub');
+});
+
+test('a machine from a hypervisor hands its owner’s login to its hub once, then forgets the file', async (t) => {
+  /** @type {any[]} */
+  const given = [];
+  let forgot = 0;
+  const { sidecar } = await setup(t, {}, {
+    vmLogin: { email: 'eli@example.com', token: `sk-ant-oat01-${'c'.repeat(40)}` },
+    onVmLoginHanded: () => { forgot++; },
+  });
+  sidecar.hub = /** @type {any} */ ({ ...sidecar.hub, runnerLogin: async (/** @type {any} */ g) => { given.push(g); return { ok: true, text: 'kept' }; } });
+  await sidecar.start();
+  t.after(() => sidecar.stop());
+  await sidecar.claudeLoginReady;
+  assert.deepEqual(given, [{ email: 'eli@example.com', login: null, token: `sk-ant-oat01-${'c'.repeat(40)}` }]);
+  assert.equal(forgot, 1);
+  assert.equal(sidecar.vmLogin, null);
+});

@@ -93,6 +93,10 @@ export function loadSidecarConfig(env = process.env) {
     // Constraint labels the scheduler filters on before it ranks by capacity
     // (§3) — e.g. "gpu", "debian13", "has-monorepo".
     labels: list(env, 'FLEETWRIGHT_LABELS'),
+    // ON A MACHINE FROM SOMEBODY'S HYPERVISOR: the file it was booted with,
+    // which the join script moved beside the key (install/fleetwright-vm-join,
+    // src/fleet/host/vm-join.js). Empty everywhere else.
+    vmJoin: str(env, 'FLEETWRIGHT_VM_JOIN', ''),
 
     // How far from now an intent's issuedAt may be. Bounds replay on top of the
     // idempotency key. Must stay below the replay cache TTL — see the check in

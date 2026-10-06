@@ -219,17 +219,40 @@ export class ConfigPatch extends Transform {
  * @param {{ dir: string, fetchImpl?: typeof fetch, onProgress?: (done: number, total: number) => void, signal?: AbortSignal }} opts
  * @returns {Promise<string>} the path of the checked file
  */
-export async function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}, signal }) {
+export function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}, signal }) {
+  return fetchPinned({
+    dir,
+    url: OPNSENSE_IMAGE.url,
+    size: OPNSENSE_IMAGE.compressedSize,
+    algorithm: 'sha256',
+    digest: OPNSENSE_IMAGE.sha256,
+    label: 'OPNsense',
+    fetchImpl,
+    onProgress,
+    signal,
+  });
+}
+
+/**
+ * A pinned download: kept in `dir` under its own name, used again only while
+ * its size and digest still match, and fetched again otherwise. Shared by the
+ * edge router's image and the machine image's (vm-image.js), which differ
+ * only in what they pin.
+ *
+ * @param {{ dir: string, url: string, size: number, algorithm: 'sha256'|'sha512', digest: string, label: string, fetchImpl?: typeof fetch, onProgress?: (done: number, total: number) => void, signal?: AbortSignal }} opts
+ * @returns {Promise<string>} the path of the checked file
+ */
+export async function fetchPinned({ dir, url, size, algorithm, digest, label, fetchImpl = fetch, onProgress = () => {}, signal }) {
   mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, path.basename(new URL(OPNSENSE_IMAGE.url).pathname));
-  if (existsSync(file) && statSync(file).size === OPNSENSE_IMAGE.compressedSize && (await sha256Of(file)) === OPNSENSE_IMAGE.sha256) {
+  const file = path.join(dir, path.basename(new URL(url).pathname));
+  if (existsSync(file) && statSync(file).size === size && (await digestOf(file, algorithm)) === digest) {
     return file;
   }
   const part = `${file}.part`;
   rmSync(part, { force: true });
-  const res = await fetchImpl(OPNSENSE_IMAGE.url, signal ? { signal } : undefined);
-  if (!res.ok || !res.body) throw new Error(`OPNsense's mirror answered ${res.status} for the image`);
-  const hash = createHash('sha256');
+  const res = await fetchImpl(url, signal ? { signal } : undefined);
+  if (!res.ok || !res.body) throw new Error(`${label}'s mirror answered ${res.status} for the image`);
+  const hash = createHash(algorithm);
   let got = 0;
   let told = 0;
   const count = new Transform({
@@ -238,7 +261,7 @@ export async function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}
       got += chunk.length;
       if (got - told >= 16 * 1024 * 1024) {
         told = got;
-        onProgress(got, OPNSENSE_IMAGE.compressedSize);
+        onProgress(got, size);
       }
       cb(null, chunk);
     },
@@ -250,17 +273,18 @@ export async function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}
     throw e;
   }
   const seen = hash.digest('hex');
-  if (seen !== OPNSENSE_IMAGE.sha256) {
+  if (seen !== digest) {
     rmSync(part, { force: true });
-    throw new Error(`the OPNsense image downloaded with SHA-256 ${seen.slice(0, 16)}…, not the published ${OPNSENSE_IMAGE.sha256.slice(0, 16)}…, so it was not used`);
+    const name = algorithm === 'sha512' ? 'SHA-512' : 'SHA-256';
+    throw new Error(`the ${label} image downloaded with ${name} ${seen.slice(0, 16)}…, not the published ${digest.slice(0, 16)}…, so it was not used`);
   }
   renameSync(part, file);
   return file;
 }
 
-/** @param {string} file */
-async function sha256Of(file) {
-  const hash = createHash('sha256');
+/** @param {string} file @param {'sha256'|'sha512'} algorithm */
+async function digestOf(file, algorithm) {
+  const hash = createHash(algorithm);
   await pipeline(createReadStream(file), hash);
   return hash.digest('hex');
 }
@@ -298,15 +322,15 @@ export function unpack(file, { spawnImpl = spawn, signal } = {}) {
  * pin as the API (or plain HTTP when the person accepted that). Answers the
  * new VDI's id.
  *
- * @param {{ address: string, pin: string|null, plain: boolean, sendTo: string, body: import('node:stream').Readable, size: number, onProgress?: (done: number, total: number) => void, connectTls?: typeof connectPinnedTls, signal?: AbortSignal }} opts
+ * @param {{ address: string, pin: string|null, plain: boolean, sendTo: string, body: import('node:stream').Readable, size: number, filename?: string, onProgress?: (done: number, total: number) => void, connectTls?: typeof connectPinnedTls, signal?: AbortSignal }} opts
  * @returns {Promise<string>}
  */
-export async function uploadDisk({ address, pin, plain, sendTo, body, size, onProgress = () => {}, connectTls = connectPinnedTls, signal }) {
+export async function uploadDisk({ address, pin, plain, sendTo, body, size, filename = 'opnsense.img', onProgress = () => {}, connectTls = connectPinnedTls, signal }) {
   const { host, port } = splitAddress(address, plain ? 80 : 443);
   const socket = plain ? await connectPlain(host, port) : await connectTls({ host, port, pin: /** @type {string} */ (pin) });
   const boundary = `fleetwright${Date.now().toString(36)}`;
   const head = Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="opnsense.img"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
   const hostHeader = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`;

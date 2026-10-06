@@ -1,0 +1,81 @@
+#!/bin/bash
+# fleetwright-vm-join JOIN_FILE
+#
+# Run once, as root, by cloud-init on a machine cloned from a Fleetwright
+# machine image (src/fleet/host/vm-image.js). JOIN_FILE is the one file the
+# box that made the machine put on its cloud-init drive
+# (src/fleet/host/xo-pools.js, machineCloudConfig): the coordinator, a
+# single-use ticket, whose machine this is, their Claude login, and how many
+# minutes it lives.
+#
+# WHAT IT DOES, in this order, and why the order:
+#
+#   1. Wipes the cloud-init drive. It holds the ticket and the Claude login,
+#      and Xen Orchestra is asked to destroy it once the machine has booted;
+#      this does not wait to find out whether it did.
+#   2. Moves the file beside the sidecar's key, readable by the sidecar only,
+#      and names it in the sidecar's environment. The sidecar enrols itself
+#      with the ticket on its first start and hands the login to the hub
+#      (src/fleet/host/vm-join.js), then deletes the file.
+#   3. Starts the services, which the image left off so that no machine ever
+#      dials the fleet before it has a name of its own.
+#   4. Powers the machine off at its end. The box that made it removes it
+#      once it is off (xo-pools.js, sweep), so the end needs nobody.
+set -euo pipefail
+
+JOIN="${1:?usage: fleetwright-vm-join JOIN_FILE}"
+STATE=/var/lib/fleetwright-sidecar
+ENV_FILE=/etc/fleetwright-sidecar.env
+UNIT=/etc/systemd/system/fleetwright-sidecar.service
+
+say() { printf 'fleetwright-vm-join: %s\n' "$*"; }
+
+[ -f "$JOIN" ] || { say "no join file at $JOIN"; exit 1; }
+
+# One field of the join file. python3 is on every Debian cloud image, because
+# cloud-init is written in it.
+field() {
+  python3 -I -c 'import json, sys
+v = json.load(open(sys.argv[1])).get(sys.argv[2])
+print("" if v is None else v)' "$JOIN" "$1"
+}
+
+COORDINATOR="$(field coordinator)"
+MINUTES="$(field minutes)"
+case "$MINUTES" in '' | *[!0-9]*) MINUTES=60 ;; esac
+case "$COORDINATOR" in https://*) ;; *) say "the join file names no https coordinator"; exit 1 ;; esac
+
+# --- 1. the drive ------------------------------------------------------------
+DRIVE="$(blkid -L cidata 2>/dev/null || blkid -L CIDATA 2>/dev/null || true)"
+if [ -n "$DRIVE" ] && [ -b "$DRIVE" ]; then
+  dd if=/dev/zero of="$DRIVE" bs=1M count=8 conv=fsync status=none 2>/dev/null || true
+  say "wiped the cloud-init drive"
+fi
+
+# --- 2. the file, for the sidecar ---------------------------------------------
+SIDECAR_USER="$(sed -n 's/^User=[[:space:]]*//p' "$UNIT" 2>/dev/null | head -1)"
+SIDECAR_USER="${SIDECAR_USER:-fleetwright-sidecar}"
+install -d -m 0700 -o "$SIDECAR_USER" "$STATE"
+install -m 0600 -o "$SIDECAR_USER" "$JOIN" "$STATE/vm-join.json"
+rm -f "$JOIN"
+
+# Replace a line or add it, leaving everything else in the file as it was.
+set_env() {
+  local key="$1" value="$2"
+  touch "$ENV_FILE"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
+  fi
+}
+set_env FLEETWRIGHT_COORDINATOR_URL "$COORDINATOR"
+set_env FLEETWRIGHT_VM_JOIN "$STATE/vm-join.json"
+
+# --- 3. the services ----------------------------------------------------------
+systemctl enable --now fleetwright.service fleetwright-sidecar.service
+say "started; this machine joins $COORDINATOR as its owner's temporary host"
+
+# --- 4. its end ---------------------------------------------------------------
+shutdown -P "+$MINUTES" "This temporary machine has reached the end it was made for."
+say "powers off in $MINUTES minutes"

@@ -59,6 +59,7 @@ import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } from '../seal.js';
 import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
+import { XoPools } from './xo-pools.js';
 import { runnerJobProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
@@ -189,6 +190,9 @@ export class Sidecar {
    *   vaultKey?: { publicJwk: { x: string, y: string }, sign: (message: string) => Promise<string> }|null,
    *   vaultIntervalMs?: number,
    *   xoStateDir?: string|null,
+   *   xoPools?: XoPools|null,
+   *   vmLogin?: { email: string, token: string|null }|null,
+   *   onVmLoginHanded?: (() => void)|null,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
@@ -222,6 +226,16 @@ export class Sidecar {
     // kept there now (src/fleet/host/xo-setup.js, hand-off); it is only where
     // a setup run again looks for that old file to remove it.
     xoStateDir = null,
+    // THE HYPERVISORS THIS BOX CAN MAKE MACHINES ON, from its people's
+    // vaults, in memory only (src/fleet/host/xo-pools.js). Made here for any
+    // box that asks the vault; a test hands its own.
+    xoPools = null,
+    // THIS BOX AS A MACHINE FROM SOMEBODY'S HYPERVISOR: whose it is and the
+    // Claude login it runs on, from the file it was booted with
+    // (src/fleet/host/vm-join.js), handed to the hub before the first health
+    // frame like a runner's. And what to do once the hub has it: forget it.
+    vmLogin = null,
+    onVmLoginHanded = null,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -358,6 +372,10 @@ export class Sidecar {
     this.claudeLoginReady = null;
     this.vaultKey = vaultKey;
     this.xoStateDir = xoStateDir;
+    /** @type {XoPools|null} */
+    this.pools = xoPools ?? (vaultKey ? new XoPools({ log: this.log }) : null);
+    this.vmLogin = vmLogin;
+    this.onVmLoginHanded = onVmLoginHanded;
     /** @type {XoSetups|null} made on first use */
     this.xoSetups = null;
     this.vaultIntervalMs = vaultIntervalMs;
@@ -381,6 +399,7 @@ export class Sidecar {
     // BEFORE THE FIRST HEALTH FRAME, because that frame is what tells the
     // coordinator to start a session it was holding for this runner.
     if (this.jobToken) this.claudeLoginReady = this.#takeClaudeLogin();
+    else if (this.vmLogin) this.claudeLoginReady = this.#handVmLogin();
     // THE VAULT, a few seconds in so the socket is up, then on its own clock.
     if (this.vaultKey && this.vaultIntervalMs > 0) this.#scheduleVault(5_000);
 
@@ -499,6 +518,9 @@ export class Sidecar {
         stateDir: this.xoStateDir,
         fingerprint,
         log: this.log,
+        // What a machine image installs from, and joins: this box's own
+        // fleet, as it pinned it (vm-image.js).
+        coordinatorUrl: this.transport?.origin ?? null,
       });
     }
     const actor = intent.actor ? String(intent.actor) : null;
@@ -659,6 +681,11 @@ export class Sidecar {
         return reply({ ok: true, text, xoprobe });
       }
       if (intent.verb === 'xosetup') return reply(await this.#xosetup(intent));
+
+      // A MACHINE FROM A HYPERVISOR IS THIS PROCESS'S TOO: the pool's token
+      // is in its memory and nowhere else (xo-pools.js), and the ticket the
+      // machine boots with must not become a command line.
+      if (intent.verb === 'provision' && intent.params?.platform === 'vm') return reply(await this.#makeVm(intent));
 
       // A session on a runner waits for the answer about its owner's Claude
       // login, which is bounded by the mint timeout and never throws.
@@ -1071,6 +1098,67 @@ export class Sidecar {
     else this.log.info(`sidecar: no Claude login for this runner's owner, so sessions use ANTHROPIC_API_KEY: ${said.text}`);
   }
 
+  /**
+   * On a machine from somebody's hypervisor: tell the hub whose machine this
+   * is and the Claude login it runs on, from the file it was booted with.
+   * The hub may still be starting, so this tries for two minutes; once it has
+   * the login the file is forgotten (vm-join.js). Never rejects.
+   */
+  async #handVmLogin() {
+    const given = /** @type {{ email: string, token: string|null }} */ (this.vmLogin);
+    for (let attempt = 0; attempt < 24; attempt++) {
+      try {
+        const r = await this.hub.runnerLogin({ email: given.email, login: null, token: given.token });
+        if (r.ok) {
+          this.vmLogin = null;
+          try {
+            this.onVmLoginHanded?.();
+          } catch { /* the file is gone or going; nothing reads it again */ }
+          this.log.info(given.token
+            ? `sidecar: sessions ${given.email} starts on this machine run on their Claude login`
+            : `sidecar: this machine came with no Claude login for ${given.email}; sessions here have nothing to run on until one is kept in their vault`);
+          return;
+        }
+        this.log.warn(`sidecar: the hub did not take this machine's Claude login: ${r.text}`);
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+      }
+    }
+    this.log.warn('sidecar: the hub never answered, so this machine has no Claude login for its sessions');
+  }
+
+  /**
+   * Make a machine on one of this box's people's pools, for the person
+   * asking. The coordinator chose this box because its health said it holds
+   * that person's pool with that image; xo-pools.js checks the same again.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   */
+  async #makeVm(intent) {
+    if (!this.pools) return { ok: false, text: 'This box asks no vault, so it holds no hypervisor to make a machine on.' };
+    const owner = intent.actor ? String(intent.actor).toLowerCase() : '';
+    if (!owner) return { ok: false, text: 'A machine is made for a signed-in person.' };
+    const origin = this.transport?.origin ? new URL(this.transport.origin).origin : '';
+    const ask = {
+      owner,
+      template: String(intent.params.template || ''),
+      ticket: String(intent.params.ticket || ''),
+      minutes: intent.params.minutes == null ? null : Number(intent.params.minutes),
+      coordinatorUrl: origin,
+    };
+    let r = await this.pools.make(ask);
+    // NOT SEEN YET is not "not there": a box that restarted has its tokens
+    // back from the vault before it has looked at the pools. Look, then ask
+    // once more.
+    if (!r.ok && !r.unreachable && /holds no pool/.test(r.text)) {
+      await this.pools.refresh();
+      r = await this.pools.make(ask);
+    }
+    if (r.ok) setImmediate(() => void this.#pushHealth());
+    return r;
+  }
+
   /** @param {number} ms */
   #scheduleVault(ms) {
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
@@ -1097,7 +1185,12 @@ export class Sidecar {
   async syncVault() {
     const said = await this.#askVault();
     if (said.ok) {
-      const r = await this.hub.vault({ accounts: said.accounts }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
+      // POOLS OUT, before the hub sees the answer: kept in this process and
+      // written nowhere (xo-pools.js). Then looked at, and the health frame
+      // that says what they have goes out when that is done.
+      const accounts = this.pools ? this.pools.adopt(said.accounts) : said.accounts;
+      if (this.pools?.held.size) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
+      const r = await this.hub.vault({ accounts }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
       if (r.ok) this.log.info(`sidecar: vault: ${r.text}`);
       else this.log.warn(`sidecar: fleetwright did not take the vault's answer: ${r.text}`);
       for (const a of said.accounts) for (const p of a.problems || []) this.log.warn(`sidecar: vault, ${a.email}: ${p}`);
@@ -1107,7 +1200,10 @@ export class Sidecar {
       const due = Number.isFinite(soonest) ? soonest - Date.now() - 10 * 60_000 : Infinity;
       return Math.max(60_000, Math.min(this.vaultIntervalMs, due));
     }
-    if (said.forget) await this.hub.vault({ accounts: [] }).catch(() => {});
+    if (said.forget) {
+      this.pools?.adopt([]);
+      await this.hub.vault({ accounts: [] }).catch(() => {});
+    }
     this.log.info(`sidecar: vault: ${said.text}`);
     return this.vaultIntervalMs;
   }
@@ -1337,6 +1433,13 @@ export class Sidecar {
       // match, exactly as before). See docs/protocol-negotiation.md.
       protocolMin: PROTOCOL_MIN,
       labels: this.labels,
+      // THE HYPERVISORS THIS BOX CAN MAKE MACHINES ON, and the machine images
+      // each pool has: how the coordinator knows to ask this box for one, and
+      // how a phone is offered one. Never the token. In every frame, the hub
+      // answering or not, because making a machine is this process's and not
+      // the hub's. Absent when it holds none, so an older coordinator sees
+      // nothing new.
+      ...(this.pools?.held.size ? { xo: this.pools.report().map(({ problem, ...seen }) => seen) } : {}),
       // WHICH OF THOSE CAN BE TAKEN OFF, so a screen offers Remove on exactly
       // the ones it works for. The flat list above cannot say: `arm64` and
       // `gpu` look identical in it, and one of them is a fact the host refuses
