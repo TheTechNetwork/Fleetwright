@@ -14,6 +14,9 @@ import SwiftUI
 /// THE ACTIONS ARE THE BOX'S: it holds the token and works the machine under
 /// your name, and only a machine tagged as made for you (xo-pools.js,
 /// `control`). Each that interrupts a session asks first.
+///
+/// WHAT IT DID ON THE NETWORK is the hypervisor's count at its interfaces,
+/// which a session on the machine cannot change: how much, not where to.
 struct VMMachineView: View {
     let settings: Settings
     let name: String
@@ -40,6 +43,7 @@ struct VMMachineView: View {
         Form {
             if let machine {
                 facts(machine)
+                traffic(machine)
                 reach(machine)
                 work(machine)
             } else if !loaded {
@@ -92,6 +96,55 @@ struct VMMachineView: View {
             fact("Ends", endWords(m))
         } header: {
             sectionHead("This machine")
+        }
+    }
+
+    // MARK: What it did on the network
+
+    @ViewBuilder
+    private func traffic(_ m: Fleet.VMMachine) -> some View {
+        Section {
+            if let net = m.net, !net.rx.isEmpty {
+                TrafficChart(traffic: net)
+                    .frame(height: 56)
+                    .padding(.vertical, Design.Space.insideTight)
+                Text("Received is the solid line, sent the dashed one.")
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
+                fact("Now", nowWords(net))
+                fact("Last \(net.minutes) minutes", totalWords(net))
+            } else {
+                Text(noTrafficWords(m))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+        } header: {
+            sectionHead("On the network")
+        } footer: {
+            Text("As the hypervisor counted it at this machine’s network interfaces, which nothing running on the machine can change. "
+                 + "It is how much went in and out, not where it went.")
+        }
+    }
+
+    private func nowWords(_ net: Fleet.VMMachine.Traffic) -> String {
+        guard let rx = net.rx.last ?? nil, let tx = net.tx.last ?? nil else { return "Not counted in the last minute" }
+        return "\(rateText(rx)) in, \(rateText(tx)) out"
+    }
+
+    private func totalWords(_ net: Fleet.VMMachine.Traffic) -> String {
+        let total = "\(bytesText(net.received)) in, \(bytesText(net.sent)) out"
+        guard net.gaps > 0 else { return total }
+        let gap = Int((Double(net.gaps) * net.interval / 60).rounded())
+        return "\(total), with \(gap) minute\(gap == 1 ? "" : "s") not counted"
+    }
+
+    /// Nothing reported is said for what it is: a stopped machine sends
+    /// nothing, a running one the pool did not answer for is cannot tell.
+    private func noTrafficWords(_ m: Fleet.VMMachine) -> String {
+        switch m.state {
+        case "Running"?: return "The pool has not said what it sent and received. The box holding it asks each time it looks."
+        case nil: return "Cannot tell."
+        default: return "It is not running, so there is nothing to count."
         }
     }
 
@@ -239,6 +292,57 @@ struct VMMachineView: View {
             message = error.localizedDescription
         }
         await load()
+    }
+}
+
+/// Bytes, the way a person reads them: 4.2 MB, and 0 bytes rather than
+/// the formatter's "Zero KB".
+func bytesText(_ bytes: Double) -> String {
+    let f = ByteCountFormatter()
+    f.countStyle = .decimal
+    f.allowsNonnumericFormatting = false
+    return f.string(fromByteCount: Int64(bytes.rounded()))
+}
+
+/// A rate, the same way: 12 kB/s.
+func rateText(_ perSecond: Double) -> String { "\(bytesText(perSecond))/s" }
+
+/// A machine's traffic as two lines on one scale: received solid, sent
+/// dashed, so the two never rest on colour alone. A sample nobody counted
+/// breaks the line rather than drawing it to zero. The palette's chart ramp,
+/// chart5 and chart4, both clear 3:1 against the row in either theme.
+struct TrafficChart: View {
+    let traffic: Fleet.VMMachine.Traffic
+
+    var body: some View {
+        GeometryReader { geo in
+            let top = max(1, (traffic.rx + traffic.tx).compactMap { $0 }.max() ?? 1)
+            ZStack {
+                line(traffic.tx, top: top, in: geo.size)
+                    .stroke(Design.Palette.chart4, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round, dash: [4, 3]))
+                line(traffic.rx, top: top, in: geo.size)
+                    .stroke(Design.Palette.chart5, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel(summary)
+    }
+
+    private var summary: String {
+        let most = { (a: [Double?]) in a.compactMap { $0 }.max().map(rateText) ?? "nothing counted" }
+        return "Over the last \(traffic.minutes) minutes, received at most \(most(traffic.rx)), sent at most \(most(traffic.tx))."
+    }
+
+    private func line(_ points: [Double?], top: Double, in size: CGSize) -> Path {
+        Path { p in
+            let step = points.count > 1 ? size.width / CGFloat(points.count - 1) : 0
+            var drawing = false
+            for (i, v) in points.enumerated() {
+                guard let v else { drawing = false; continue }
+                let at = CGPoint(x: CGFloat(i) * step, y: size.height * (1 - CGFloat(v / top)))
+                if drawing { p.addLine(to: at) } else { p.move(to: at); drawing = true }
+            }
+        }
     }
 }
 

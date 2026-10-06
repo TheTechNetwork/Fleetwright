@@ -1408,9 +1408,32 @@ struct Fleet {
         let memory: Double?
         let image: String?
         let network: String?
+        /// What it sent and received, as the hypervisor counted it; nil is
+        /// cannot tell, and a stopped machine has none.
+        let net: Traffic?
         /// The Xen Orchestra it is on.
         let address: String
         var id: String { name }
+
+        /// Bytes a second through the machine's network interfaces, one point
+        /// an interval, oldest first, as Xen Orchestra's `vm.stats` counted
+        /// them. A nil point is a sample nobody counted, never a zero.
+        struct Traffic: Codable, Hashable {
+            /// Seconds between points.
+            let interval: Double
+            /// When the newest point was counted, ms since the epoch.
+            let end: Double
+            let rx: [Double?]
+            let tx: [Double?]
+
+            /// The whole span the points cover, in minutes.
+            var minutes: Int { Int((Double(rx.count) * interval / 60).rounded()) }
+            /// Bytes over the span: each counted point times its interval.
+            var received: Double { rx.compactMap { $0 }.reduce(0, +) * interval }
+            var sent: Double { tx.compactMap { $0 }.reduce(0, +) * interval }
+            /// Points neither side counted.
+            var gaps: Int { zip(rx, tx).filter { $0.0 == nil && $0.1 == nil }.count }
+        }
 
         /// The console in Xen Orchestra's own web UI, which signs you in
         /// there: this phone never holds the pool's token.
