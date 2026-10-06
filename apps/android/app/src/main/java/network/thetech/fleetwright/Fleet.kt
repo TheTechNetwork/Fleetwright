@@ -1536,9 +1536,33 @@ class Fleet(
         val memory: Long?,
         val image: String?,
         val network: String?,
+        /** What it sent and received, as the hypervisor counted it; null is cannot tell, and a stopped machine has none. */
+        val net: Traffic?,
         /** The Xen Orchestra it is on. */
         val address: String,
     ) {
+        /**
+         * Bytes a second through the machine's network interfaces, one point
+         * an interval, oldest first, as Xen Orchestra's `vm.stats` counted
+         * them. A null point is a sample nobody counted, never a zero.
+         */
+        data class Traffic(
+            /** Seconds between points. */
+            val interval: Double,
+            /** When the newest point was counted, ms since the epoch. */
+            val end: Long,
+            val rx: List<Double?>,
+            val tx: List<Double?>,
+        ) {
+            /** The whole span the points cover, in minutes. */
+            val minutes: Int get() = Math.round(rx.size * interval / 60).toInt()
+            /** Bytes over the span: each counted point times its interval. */
+            val received: Double get() = rx.filterNotNull().sum() * interval
+            val sent: Double get() = tx.filterNotNull().sum() * interval
+            /** Points neither side counted. */
+            val gaps: Int get() = rx.zip(tx).count { (r, t) -> r == null && t == null }
+        }
+
         /**
          * The console in Xen Orchestra's own web UI, which signs you in there:
          * this phone never holds the pool's token.
@@ -1552,6 +1576,19 @@ class Fleet(
             /** The longest a machine lives, from when it was made (xo-pools.js). */
             const val MAX_MINUTES = 350
         }
+    }
+
+    /** A machine's `net`, or null for anything that is not a whole one: the same rule the coordinator keeps. */
+    private fun traffic(o: JSONObject): VmMachine.Traffic? {
+        val interval = o.optDouble("interval").takeIf { it > 0 } ?: return null
+        val end = o.optDouble("end").takeIf { it > 0 }?.toLong() ?: return null
+        fun points(k: String): List<Double?>? {
+            val a = o.optJSONArray(k) ?: return null
+            return (0 until a.length()).map { i -> if (a.isNull(i)) null else a.optDouble(i).takeIf { !it.isNaN() && it >= 0 } }
+        }
+        val rx = points("rx") ?: return null
+        val tx = points("tx") ?: return null
+        return if (rx.size == tx.size) VmMachine.Traffic(interval, end, rx, tx) else null
     }
 
     /**
@@ -1576,6 +1613,7 @@ class Fleet(
                     memory = o.num("memory")?.toLong(),
                     image = o.str("image"),
                     network = o.str("network"),
+                    net = o.optJSONObject("net")?.let { traffic(it) },
                     address = o.optString("address"),
                 )
             }
