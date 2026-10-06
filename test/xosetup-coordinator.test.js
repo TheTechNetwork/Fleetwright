@@ -15,7 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CoordinatorCore, narrowProgress, narrowCertificate } from '../src/fleet/coordinator/core.js';
-import { XOSETUP_STEPS } from '../src/fleet/protocol/intents.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS } from '../src/fleet/protocol/intents.js';
 
 const JOB = 'a1b2c3d4e5f6';
 const admin = { email: 'eli@example.com', admin: true };
@@ -195,6 +195,31 @@ test('progress becomes a Live Activity update with numbers only, and an Android 
   assert.equal(sent[1].message.title, 'Hypervisor added');
   // And a phone that opens later is told where it got to.
   assert.equal(core.registerSetupActivity(admin, { job: JOB, token }).progress.state, 'done');
+});
+
+test('a policy job building the edge router reaches the Lock Screen as a change, not a hypervisor added', async () => {
+  // ASKED FOR: the Live Activity during "Applying what you chose", where the
+  // OPNsense download takes minutes. The first version dropped every policy
+  // report, because `apply` is not one of onboarding's steps.
+  const { core, sent, activities } = fleet(['deb14'], machine);
+  await core.registerDevice({ platform: 'ios', token: 'i'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.dispatch(begin(admin));
+  core.registerSetupActivity(admin, { job: JOB, token: 'c0ffee'.repeat(12) });
+  const apply = XOPOLICY_STEPS.indexOf('apply');
+
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', purpose: 'policy', text: 'Downloading OPNsense 26.7: 128 of 468 MB.' });
+  assert.deepEqual(activities[0].update.state, { step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running' });
+  assert.equal(sent[0].message.title, 'Changing what the fleet may use');
+  assert.equal(sent[0].message.data.purpose, 'policy', 'Android draws its own words, so it is told which');
+
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: XOPOLICY_STEPS.length, of: XOPOLICY_STEPS.length, phase: 'done', state: 'done', purpose: 'policy', text: 'The edge router is up.' });
+  assert.equal(activities[1].update.event, 'end');
+  assert.equal(sent[1].message.title, 'What the fleet may use is changed');
+
+  // A policy step from a host that did not say it is one is refused, as any
+  // phase onboarding does not have is.
+  assert.equal(narrowProgress({ step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running' }), null);
 });
 
 test('only the machine running a job can report on it, and only in its known shape', async () => {
