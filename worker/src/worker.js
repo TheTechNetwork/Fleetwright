@@ -1576,7 +1576,38 @@ const OPENAPI = JSON.stringify({
                             "items": {
                               "type": "string"
                             }
+                          },
+                          "standby": {
+                            "type": "boolean",
+                            "description": "kept ready and not yet taken by a session"
                           }
+                        }
+                      }
+                    },
+                    "vmStandby": {
+                      "description": "What you keep ready on your hypervisor and how many are, or null when you keep none. Set with PUT /api/vm-standby.",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "template": {
+                          "type": "string"
+                        },
+                        "count": {
+                          "type": "integer"
+                        },
+                        "network": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "ready": {
+                          "type": "integer"
+                        },
+                        "starting": {
+                          "type": "integer"
                         }
                       }
                     }
@@ -2405,6 +2436,80 @@ const OPENAPI = JSON.stringify({
           },
           "403": {
             "description": "not signed in as a person"
+          }
+        }
+      }
+    },
+    "/api/vm-standby": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Machines you keep ready on your hypervisor",
+        "description": "What you keep ready and how many are: `vmStandby` is `{ template, count, network, ready, starting }`, or null when you keep none. See docs/hypervisors.md, \u201cMachines kept ready\u201d.",
+        "responses": {
+          "200": {
+            "description": "`vmStandby`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Keep machines ready, or stop",
+        "description": "Keep `count` machines (0 to 3) from `template` booted and joined, on `network` or behind the edge router, so a session on that image starts on one at once. 0 keeps none; machines kept beyond the new count are ended.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "count"
+                ],
+                "properties": {
+                  "template": {
+                    "type": "string",
+                    "description": "a machine image, as `vmImages` lists it"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                  },
+                  "network": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "a network of the pool, as the image lists it; null is behind the edge router"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`vmStandby` as it now is"
+          },
+          "400": {
+            "description": "a count, image or network that is not one"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "422": {
+            "description": "no box offers that image now, or the fleet keeps as many as it can store"
           }
         }
       }

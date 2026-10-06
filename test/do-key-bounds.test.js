@@ -71,6 +71,9 @@ const BOUNDED = {
   devices: 'src/fleet/coordinator/core.js',
   // Hypervisor setups: a day's window and a count, both in core.js.
   xosetups: 'src/fleet/coordinator/core.js',
+  // Machines kept ready: a refusal past MAX_PEOPLE, a count per person, and a
+  // window on the ones being made.
+  vmStandby: 'src/fleet/coordinator/vm-standby.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */
@@ -195,4 +198,22 @@ test('a full hypervisor setup store still fits in one Durable Object value', asy
   assert.ok(kept.length < FILL_CAP, 'the setup store took every row it was given, so it has no ceiling');
   const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full setup store is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full store of machines kept ready still fits in one Durable Object value', async () => {
+  // Every address as long as one can be, every person at the most they may
+  // keep, and every machine with a network: the widest the rows get.
+  const { VmStandby, MAX_PEOPLE, MAX_READY } = await import('../src/fleet/coordinator/vm-standby.js');
+  const kept = new VmStandby({});
+  const uuid = '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c';
+  let refused = false;
+  for (let i = 0; i < FILL_CAP && !refused; i++) {
+    const owner = `${String(i).padStart(64, 'e')}@${'d'.repeat(185)}.com`;
+    refused = !kept.set(owner, { template: uuid, count: MAX_READY, network: uuid }).ok;
+    for (let n = 0; n < MAX_READY * 3; n++) kept.noteMade(`vm-${i.toString(16).padStart(6, '0')}${n.toString(16).padStart(6, '0')}`, { owner, template: uuid, network: uuid });
+  }
+  assert.ok(refused, 'the store took every person it was given, so it has no ceiling');
+  assert.equal(kept.wishes.size, MAX_PEOPLE);
+  const bytes = new TextEncoder().encode(JSON.stringify(kept.serialise())).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full store of machines kept ready is ${bytes} bytes, which does not fit in a DO value`);
 });

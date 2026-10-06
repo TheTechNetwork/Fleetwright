@@ -565,7 +565,7 @@ test('both coordinators answer /api/hosts in the same shape', async (t) => {
   const body = await (await fetch(`http://127.0.0.1:${port}/api/hosts`)).json();
   assert.deepEqual(
     Object.keys(body).sort(),
-    ['devices', 'events', 'hosts', 'ok', 'protocol', 'runners', 'vmImages', 'vmMachines'],
+    ['devices', 'events', 'hosts', 'ok', 'protocol', 'runners', 'vmImages', 'vmMachines', 'vmStandby'],
     'same keys the Worker sends',
   );
   // Present and null, not absent: this coordinator KNOWS it has nowhere to
