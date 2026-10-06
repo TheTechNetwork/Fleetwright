@@ -112,6 +112,37 @@ enum XOSetupHandoff {
         return String(data: json, encoding: .utf8)
     }
 
+    /// Collect a finished job's token and, once it is kept, keep it in the
+    /// fleet as well, so the boxes this person approved can make machines on
+    /// the pool. Answers what collecting came to, and what the fleet said,
+    /// or nil for the second when there was nothing to keep.
+    static func collectAndKeep(job: String, state: Fleet.SetupState, settings: Settings) async -> (Outcome?, String?) {
+        let address = pending().first { $0.job == job }?.address
+        let outcome = collect(job: job, state: state)
+        guard outcome == .kept, let address else { return (outcome, nil) }
+        return (outcome, await keepInFleet(settings: settings, address: address))
+    }
+
+    /// KEEP IT IN THE FLEET: this phone's record for a pool, put in the
+    /// person's vault as `hypervisor:<address>` (PhoneVault.keepHypervisor).
+    /// Asked for: "Why not the coordinator hold the token". The fleet holds
+    /// it, sealed, and the boxes the person approved are handed it, in
+    /// memory only, to make machines on the pool. Answers the sentence to
+    /// show: what the fleet said, or what stood in the way.
+    static func keepInFleet(settings: Settings, address: String) async -> String {
+        guard let record = Keychain.get(tokenAccount(address)), !record.isEmpty else {
+            return "This phone holds no token for \(address) to keep in the fleet."
+        }
+        guard PhoneGitHub(settings: settings).signedIn else {
+            return "Sign in to GitHub under You › Credentials to keep its token in the fleet: your vault is kept under your GitHub account."
+        }
+        do {
+            return try await PhoneVault(settings: settings).keepHypervisor(Fleet(settings: settings), address: address, record: record)
+        } catch {
+            return "Its token was not kept in the fleet: \(error.localizedDescription)"
+        }
+    }
+
     /// At launch: every job this phone is still owed a token for is asked
     /// about once. Done is collected, over is dropped, still running is left
     /// for the next launch or the screen.
@@ -128,7 +159,7 @@ enum XOSetupHandoff {
                 continue
             }
             if state.state == "done" {
-                _ = collect(job: entry.job, state: state)
+                _ = await collectAndKeep(job: entry.job, state: state, settings: fleet.settings)
             } else if state.state == "failed" || state.state == "cancelled" {
                 forget(job: entry.job)
             }

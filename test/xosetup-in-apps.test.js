@@ -201,8 +201,8 @@ test('iOS: the token comes back to this phone, to a key sent inside the seal, an
   assert.match(IOS, /XOSetupActivities\.resume\(fleet: Fleet\(settings: settings\)\)[\s\S]{0,300}XOSetupHandoff\.collectPending\(fleet: Fleet\(settings: settings\)\)/);
   // The screen collects when it sees done, and says where the token is only
   // once it knows (C-5).
-  assert.match(SCREEN, /if let outcome = XOSetupHandoff\.collect\(job: job, state: state\) \{ handedBack = outcome \}/);
-  assert.match(SCREEN, /case \.kept:\s*Text\("The token is in this phone’s Keychain now, and no machine in the fleet keeps a copy\."\)/);
+  assert.match(SCREEN, /let \(outcome, inFleet\) = await XOSetupHandoff\.collectAndKeep\(job: job, state: state, settings: settings\)\s*if let outcome \{ handedBack = outcome \}/);
+  assert.match(SCREEN, /case \.kept:\s*Text\("The token is in this phone’s Keychain now\. No machine in the fleet keeps it on disk\."\)/);
   // Kept in the Keychain, this device only, and never anywhere else.
   assert.match(HANDOFF, /Keychain\.set\(text, for: tokenAccount\(entry\.address\)\)/);
   assert.match(IOS, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
@@ -289,7 +289,7 @@ test('iOS: the bar is the edge router’s build while it says how far, and the d
   assert.match(SCREEN, /let \(value, total\) = XOSetupWords\.bar\(state\)\s*ProgressView\(value: value, total: total\)/);
   assert.match(WIDGET, /let \(value, total\) = XOSetupWords\.bar\(state\)\s*ProgressView\(value: value, total: total\)/);
   assert.ok(SCREEN.includes('building the edge router, part \\(part.stage) of \\(part.stages)'));
-  assert.ok(SCREEN.includes('if choice.edge, there == nil, choice.edgeDiskChoice {'));
+  assert.ok(SCREEN.includes('if choice.edgeDiskChoice, choice.building(in: inv).edge || choice.building(in: inv).image {'));
   assert.ok(SCREEN.includes('edgeDisk: begun.can.contains("edge-disk")'));
   assert.ok(SCREEN.includes('Its disk is on \\($0).'));
   assert.ok(WIDGET.includes('purpose == "policy" ? "What the fleet may use, on \\(hostId)" : "Hypervisor setup on \\(hostId)"'));

@@ -27,6 +27,8 @@ enum XOPolicy {
     static let gib: Int64 = 1024 * 1024 * 1024
     /// The edge router's raw disk, OPNSENSE_IMAGE.rawSize in edge-router.js.
     static let edgeDiskBytes: Int64 = 3 * 1024 * 1024 * 1024
+    /// The machine image's disk, VM_IMAGE.diskSize in vm-image.js.
+    static let imageDiskBytes: Int64 = 20 * 1024 * 1024 * 1024
     /// The smallest limits the machine takes: a GiB of memory, ten of disk
     /// (MIN_MEMORY and MIN_DISK in xo-setup.js). One vCPU is the floor of
     /// `cpuRange`.
@@ -45,6 +47,9 @@ enum XOPolicy {
         /// Each pool's edge router, from a machine that can build one; nil
         /// from one older than that, which is "cannot tell", never "none".
         let edges: [Edge]?
+        /// Each pool's machine image, from a machine that can build one; nil
+        /// from one older than that, which is "cannot tell", never "none".
+        var images: [Image]? = nil
 
         struct Pool: Decodable, Equatable, Identifiable {
             let id: String
@@ -93,6 +98,18 @@ enum XOPolicy {
             var sr: String? = nil
         }
 
+        /// A pool's machine image: the template sessions' machines are cloned from.
+        struct Image: Decodable, Equatable {
+            let pool: String?
+            let name: String
+        }
+
+        /// The machine image on the pool this network is in, if it has one.
+        func image(on network: String?) -> Image? {
+            guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return nil }
+            return images?.first { $0.pool == pool }
+        }
+
         /// The edge router on the pool this network is in, if it has one.
         func edge(on network: String?) -> Edge? {
             guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return nil }
@@ -102,9 +119,9 @@ enum XOPolicy {
         /// Storage the router's disk can go on: in the way out's pool, with
         /// room for its 3 GiB raw disk. Any the pool listed, not only the
         /// fleet's, because the router is not one of the fleet's VMs.
-        func edgeDisks(for network: String?) -> [Storage] {
+        func edgeDisks(for network: String?, need: Int64 = XOPolicy.edgeDiskBytes) -> [Storage] {
             guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return [] }
-            return srs.filter { $0.pool == pool && $0.free > XOPolicy.edgeDiskBytes }
+            return srs.filter { $0.pool == pool && $0.free > need }
         }
 
         struct Capacity: Decodable, Equatable {
@@ -187,13 +204,32 @@ enum XOPolicy {
         /// The machine reads `edgeSr` (`edge-disk` in begin's `can`). An
         /// older one ignores it, so it is neither offered nor sent.
         var edgeDiskChoice = false
+        /// Make the machine image sessions' machines are cloned from, on the
+        /// way out's pool, behind its router. Needs the router, there or
+        /// built with it.
+        var image = false
+        /// The machine builds one (`image` in begin's `can`). An older one
+        /// cannot, so it is neither offered nor sent.
+        var imageChoice = false
 
-        /// The storage the router's disk will go on: the person's pick while
-        /// it is still one that fits on the way out's pool, otherwise the
-        /// fleet's chosen storage there with the most room, otherwise the
+        /// The router or the image is to be built now, on storage still to
+        /// be picked.
+        func building(in inv: Inventory) -> (edge: Bool, image: Bool) {
+            (edge && inv.edge(on: egress) == nil, imageChoice && image && inv.image(on: egress) == nil)
+        }
+
+        /// How much room the disks being built need on the storage picked:
+        /// the image's when it is one of them, the router's otherwise.
+        func diskNeed(in inv: Inventory) -> Int64 {
+            building(in: inv).image ? XOPolicy.imageDiskBytes : XOPolicy.edgeDiskBytes
+        }
+
+        /// The storage the disks being built will go on: the person's pick
+        /// while it is still one that fits on the way out's pool, otherwise
+        /// the fleet's chosen storage there with the most room, otherwise the
         /// pool's. Nil when nothing in that pool has room.
         func edgeDisk(in inv: Inventory) -> String? {
-            let fits = inv.edgeDisks(for: egress)
+            let fits = inv.edgeDisks(for: egress, need: diskNeed(in: inv))
             if let edgeSr, fits.contains(where: { $0.id == edgeSr }) { return edgeSr }
             let fleet = fits.filter { srs.contains($0.id) }
             return (fleet.isEmpty ? fits : fleet).max { $0.free < $1.free }?.id
@@ -255,8 +291,17 @@ enum XOPolicy {
             }
             if !anyWayOut, let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
             if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
-            if edgeDiskChoice, edge, inv.edge(on: egress) == nil, edgeDisk(in: inv) == nil {
-                return "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
+            if imageChoice, image, egress == nil {
+                return "The machine image is built behind the edge router: choose the way out it leaves through."
+            }
+            if imageChoice, image, !edge, inv.edge(on: egress) == nil {
+                return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
+            }
+            let build = building(in: inv)
+            if edgeDiskChoice, build.image || build.edge, edgeDisk(in: inv) == nil {
+                return build.image
+                    ? "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
+                    : "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
             }
             if !inv.cpuRange.contains(cpus) { return "vCPUs are between 1 and \(inv.cpuRange.upperBound), what the pool has." }
             if !inv.memoryRange.contains(memoryGiB) {
@@ -284,8 +329,10 @@ enum XOPolicy {
                 "edge": edge,
                 "limits": limits,
             ]
-            // Only to a machine that reads it, and only with the router asked for.
-            if edgeDiskChoice, edge { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
+            // Only to a machine that builds an image, and only when asked.
+            if imageChoice, image { out["image"] = true }
+            // Only to a machine that reads it, and only with something to build.
+            if edgeDiskChoice, edge || (imageChoice && image) { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
             return out
         }
     }

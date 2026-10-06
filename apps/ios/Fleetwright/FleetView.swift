@@ -458,9 +458,11 @@ struct FleetView: View {
         if let platform = request.platform {
             // "New macOS machine" reads as "a new macOS machine" in a
             // sentence: only the first letter changes case.
-            let label = newMachineChoices.first { $0.platform == platform }?.label ?? "New machine"
-            status = "Asking GitHub for a \(label.prefix(1).lowercased() + label.dropFirst()). "
-                + "The session starts on it when it joins."
+            let label = request.imageLabel ?? newMachineChoices.first { $0.platform == platform }?.label ?? "New machine"
+            let lowered = label.prefix(1).lowercased() + label.dropFirst()
+            status = platform == "vm"
+                ? "Asking your hypervisor for a \(lowered). The session starts on it when it joins."
+                : "Asking GitHub for a \(lowered). The session starts on it when it joins."
             var start: [String: String] = [:]
             if let title = request.title { start["title"] = title }
             if let brief = request.brief { start["brief"] = brief }
@@ -469,7 +471,7 @@ struct FleetView: View {
             Task {
                 do {
                     let reply = try await Fleet(settings: settings)
-                        .provision(platform: platform, minutes: request.minutes, start: start)
+                        .provision(platform: platform, minutes: request.minutes, start: start, template: request.template)
                     let text = reply.text ?? "Asked for it."
                     await MainActor.run { status = text }
                     LocalNotice.post(title: reply.ok == false ? "Could not ask for a machine" : "Machine on its way", body: text)
