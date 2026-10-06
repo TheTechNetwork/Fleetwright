@@ -96,8 +96,13 @@ const tagValue = (vm, prefix) => {
   return t ? t.slice(prefix.length) : null;
 };
 
-/** The first IPv4 address Xen Orchestra's guest tools reported, or null. @param {any} vm */
+/**
+ * The address Xen Orchestra's guest tools reported: its own pick
+ * (`mainIpAddress`), else the first IPv4 one, or null.
+ * @param {any} vm
+ */
 function ipOf(vm) {
+  if (typeof vm?.mainIpAddress === 'string' && vm.mainIpAddress) return vm.mainIpAddress.slice(0, 45);
   const addresses = vm?.addresses && typeof vm.addresses === 'object' ? vm.addresses : {};
   const keys = Object.keys(addresses).sort();
   const v4 = keys.find((k) => /ipv4/.test(k)) ?? keys[0];
@@ -436,6 +441,28 @@ export class XoPools {
     return { ok: false, notHere: true, text: `${name} is not on any of your pools this box holds.` };
   }
 
+  /**
+   * A clean restart or stop where the machine can take one, a hard one
+   * otherwise. CLEAN NEEDS THE GUEST AGENT: Xen Orchestra's own API says so
+   * (`clean_reboot`: "Requires guest tools to be installed"), and the image
+   * installs it only where the distribution has it. A machine that never
+   * said it has the agent, or refuses the clean one, gets the hard one: it
+   * is disposable, and the session on it ends either way.
+   *
+   * @param {any} rpc @param {'vm.restart'|'vm.stop'} method @param {any} vm
+   */
+  async #cleanOrHard(rpc, method, vm) {
+    const agent = vm?.managementAgentDetected === true || vm?.pvDriversDetected === true;
+    if (agent) {
+      try {
+        return await rpc.call(method, { id: vm.id, force: false });
+      } catch (e) {
+        this.log.warn(`sidecar: ${vm.name_label} refused a clean ${method === 'vm.stop' ? 'stop' : 'restart'} (${/** @type {Error} */ (e).message}), so a hard one`);
+      }
+    }
+    return rpc.call(method, { id: vm.id, force: true });
+  }
+
   /** Whether the last look saw that machine on that pool. @param {string} k @param {string} name */
   #saw(k, name) {
     return Boolean(this.seen.get(k)?.machines?.some((m) => m.name === name));
@@ -450,7 +477,7 @@ export class XoPools {
     const name = String(vm.name_label);
     if (action === 'reboot') {
       if (vm.power_state !== 'Running') return { ok: false, text: `${name} is not running, so there is nothing to restart.` };
-      await rpc.call('vm.restart', { id: vm.id, force: false });
+      await this.#cleanOrHard(rpc, 'vm.restart', vm);
       this.log.info(`sidecar: restarted ${name}`);
       return { ok: true, text: `Restarting ${name}. A session that was running on it ends with the restart; the machine is back in the fleet in a minute or so.` };
     }
@@ -490,7 +517,7 @@ export class XoPools {
       /** @type {Error|null} */
       let refused = null;
       try {
-        if (vm.power_state !== 'Halted') await rpc.call('vm.stop', { id: vm.id, force: false });
+        if (vm.power_state !== 'Halted') await this.#cleanOrHard(rpc, 'vm.stop', vm);
         try {
           await rpc.call('vm.set', { id: vm.id, ...size });
         } catch (e) {
