@@ -184,3 +184,68 @@ test('a phone cannot be handed a GitHub dispatch for a VM', async () => {
   assert.equal(r.ok, false);
   assert.equal(r.error.code, 'bad_params');
 });
+
+// --- working a machine (protocol 9) -------------------------------------------
+
+const NET = '2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a';
+/** A pool entry that also lists a network and a machine on it. @param {string} owner */
+const withMachine = (owner) => [{
+  ...holding(owner)[0],
+  networks: [{ id: NET, name: 'LAN', pool: 'pool-1' }],
+  machines: [{ name: 'vm-aaaaaaaaaaaa', vm: '3e4f5a6b-7c8d-4e9f-8a1b-2c3d4e5f6a7b', state: 'Running', ip: '10.254.0.120', until: 1_800_000_000_000, madeAt: 1_799_990_000_000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'fleetwright-uplink' }],
+}];
+
+test('a person sees their machines and the networks a new one can go on, and nobody else’s', () => {
+  const { core } = fleet({ deb14: { xo: [...withMachine(ELI), ...holding(SAM)], protocol: 9 } });
+  const mine = core.snapshot(eli);
+  assert.deepEqual(mine.vmMachines.map((/** @type {any} */ m) => [m.name, m.ip, m.state, m.address]), [['vm-aaaaaaaaaaaa', '10.254.0.120', 'Running', 'xo.lan']]);
+  assert.deepEqual(mine.vmImages[0].networks, [{ id: NET, name: 'LAN' }]);
+  assert.deepEqual(core.snapshot(sam).vmMachines, []);
+  assert.equal(mine.vmMachines[0].until, 1_800_000_000_000);
+});
+
+test('a machine that did not report its end or size is cannot tell, not the epoch or nothing', () => {
+  const [entry] = withMachine(ELI);
+  const quiet = [{ ...entry, machines: [{ name: 'vm-aaaaaaaaaaaa', vm: null, state: null, ip: null, until: null, madeAt: null, cpus: null, memory: null, image: null, network: null }] }];
+  const { core } = fleet({ deb14: { xo: quiet, protocol: 9 } });
+  const [m] = core.snapshot(eli).vmMachines;
+  assert.deepEqual([m.until, m.madeAt, m.memory, m.cpus, m.state], [null, null, null, null, null]);
+});
+
+test('a machine can go on a network the person chose, and a box too old to carry that is not asked', async () => {
+  const { core, asked } = fleet({ old: { xo: holding(ELI), protocol: 8 }, deb14: { xo: holding(ELI), protocol: 9 } });
+  const r = await core.dispatch(ask(eli, { network: NET }));
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(asked.map((x) => x.hostId), ['deb14']);
+  assert.equal(asked[0].spec.params.network, NET);
+});
+
+test('a machine is worked by its owner, through the box that last saw it first', async () => {
+  const { core, asked } = fleet(
+    { a: { xo: holding(ELI), protocol: 9 }, b: { xo: withMachine(ELI), protocol: 9 } },
+    () => ({ ok: true, text: 'Restarting vm-aaaaaaaaaaaa.' }),
+  );
+  const r = await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'reboot' }, actor: `fleet:${ELI}`, requester: eli });
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(asked.map((x) => x.hostId), ['b'], 'the box that saw it, first');
+  assert.equal(asked[0].spec.params.action, 'reboot');
+
+  // Not found on one box's pools moves on; the pool's own refusal does not.
+  const moved = fleet(
+    { a: { xo: holding(ELI), protocol: 9 }, b: { xo: holding(ELI), protocol: 9 } },
+    (hostId) => (hostId === 'a' ? { ok: false, notHere: true, text: 'not on these pools' } : { ok: true, text: 'Stopped.' }),
+  );
+  assert.equal((await moved.core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'stop' }, requester: eli })).ok, true);
+  assert.deepEqual(moved.asked.map((x) => x.hostId), ['a', 'b']);
+});
+
+test('somebody else’s machine, an unsigned caller, or an action without its numbers is refused before any box is asked', async () => {
+  const { core, asked } = fleet({ b: { xo: withMachine(ELI), protocol: 9 } });
+  const key = await generateKeyPair();
+  await core.hostIds.enrol({ hostId: 'vm-aaaaaaaaaaaa', publicJwk: key.publicJwk, owner: ELI, ephemeral: true });
+  assert.equal((await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'stop' }, requester: sam })).error.code, 'not_yours');
+  assert.equal((await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'stop' } })).error.code, 'not_signed_in');
+  assert.equal((await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'extend' }, requester: eli })).error.code, 'bad_params');
+  assert.equal((await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'resize' }, requester: eli })).error.code, 'bad_params');
+  assert.equal(asked.length, 0);
+});

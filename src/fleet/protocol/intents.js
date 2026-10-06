@@ -176,8 +176,16 @@ export const XOPOLICY_STEPS = Object.freeze([
 // that reports a pool (health `xo`) is a holder, and it speaks 8 to say so;
 // the coordinator also refuses outright rather than have `template` dropped.
 // See docs/hypervisors.md, "Machines from your pool".
+//
+// v9, 6 Oct 2026: a machine from your hypervisor can be WORKED, not only
+// started. `vmctl` reboots, extends, resizes or removes one, asked of a box
+// that holds its pool; and `provision` can put a new one on a network of the
+// person's choosing (`network`) instead of behind the edge router. An older
+// box is never sent either: only a box that reports a pool speaks 9, and the
+// coordinator refuses rather than drop `network`, which would put the machine
+// somewhere the person did not choose.
 /** @type {number} */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -1076,6 +1084,19 @@ export const VERBS = Object.freeze({
         since: 8,
         describe: 'For platform `vm`: which machine image to clone, by its id. Ignored for the others.',
       },
+      // WHICH NETWORK, for platform `vm`: one the person's pool lists and the
+      // fleet may use, by its id, instead of the uplink behind the edge
+      // router. Absent is the uplink. The box checks it is one it reported
+      // for that pool, so a coordinator cannot name another.
+      network: {
+        type: 'text',
+        required: false,
+        max: 36,
+        pattern: XO_UUID_RE,
+        shapeName: 'a Xen Orchestra network id',
+        since: 9,
+        describe: 'For platform `vm`: which of your pool’s networks it goes on, by its id. Absent is behind the edge router.',
+      },
       // HOW LONG TO PAY FOR. The job ends itself after this and the disconnect
       // retires the host — there is no cleanup step to forget. GitHub kills a
       // job at 360 minutes regardless, so the ceiling here is below that rather
@@ -1133,6 +1154,30 @@ export const VERBS = Object.freeze({
       'are lost when it goes, so collect what you need before then. A runner spends GitHub Actions minutes and bills ' +
       'any session it runs to the runner repository’s API key; a VM is counted against the pool’s limits and its ' +
       'sessions run on your own Claude login from your vault.',
+  },
+
+  // WORKING A MACHINE FROM YOUR HYPERVISOR once it exists: reboot it, give it
+  // longer, change its size, or remove it. Sent to a box that holds the pool
+  // it is on, which finds it there by name among the machines this fleet
+  // made; only its owner may ask, which the coordinator checks and the box
+  // checks again against its own pools. See docs/hypervisors.md.
+  vmctl: {
+    params: {
+      name: { type: 'text', required: true, max: 40, pattern: NAME_RE, shapeName: 'a machine name', describe: 'The machine, as status names it (vm-…).' },
+      action: {
+        type: 'enum',
+        required: true,
+        values: ['reboot', 'extend', 'resize', 'stop'],
+        describe: '`reboot` restarts it; `extend` gives it `minutes` longer, up to six hours from when it was made; `resize` gives it `cpus` and `memory` (GiB), which restarts it; `stop` removes it with everything on it.',
+      },
+      minutes: { type: 'int', required: false, min: 5, max: 350, describe: 'For `extend`: how many minutes longer.' },
+      cpus: { type: 'int', required: false, min: 1, max: 64, describe: 'For `resize`: vCPUs.' },
+      memory: { type: 'int', required: false, min: 1, max: 512, describe: 'For `resize`: memory, in GiB.' },
+    },
+    mutating: true,
+    summary:
+      'Work a machine from your own hypervisor: reboot it, extend it (up to six hours from when it was made), resize ' +
+      'it (vCPUs and memory, which restarts it), or stop it, which removes it and everything on it. Yours only.',
   },
 
   // CHECKING A RUNNER REPOSITORY BEFORE ANYBODY RELIES ON IT, with the asking
