@@ -199,6 +199,34 @@ Nothing the box or the coordinator does can approve it.
 token, both to make your machines and to work them, after the box that last
 saw the machine. The other boxes are the fallback.
 
+### What a machine did on the network
+
+**Its page has a section, On the network**, on both phones. It shows the last
+half hour of what the machine sent and received, drawn as two lines on one
+scale: received solid, sent dashed, so they do not depend on colour alone.
+Beside the chart are the rate now and the total over that half hour.
+
+**The counts are the hypervisor's, not the machine's.** On every look at a
+pool, the box asks Xen Orchestra for `vm.stats` on each running machine it
+made. That is the pool's own count at the machine's network interfaces. The
+box adds the interfaces together and reports the last 30 one-minute samples
+as `net`: bytes a second in and out, oldest first. A session is root inside
+its machine and could make anything it reports itself say anything, but it
+cannot reach these counters. The coordinator passes on at most 60 points and
+drops a series that is uneven or has no end.
+
+**A sample nobody counted is a gap, never a zero.** It breaks the line, and
+the total says how many minutes were not counted. When the page has no
+report, it says why in the machine's own terms:
+
+- a stopped machine has nothing to count;
+- for a running one, the pool has not said;
+- with no state at all, it cannot tell.
+
+**It is how much, not where.** A destination, a DNS name, or an alert from the
+edge router's intrusion detection would need the fleet to read the edge
+router, which it cannot. Those are not here.
+
 ## The credential, which is the whole design again
 
 A Xen Orchestra user that can create and delete VMs is root on the pool in
@@ -443,8 +471,8 @@ the pool holder, the clone, the sweep, the join and the machine image; both
 phones; these docs; the pool's own machine (A machine of its own). **Next:** a network per machine and a group network for
 tests that need several machines to reach each other; machines kept booted
 and waiting so a session starts in seconds; DNS filtering and intrusion
-detection on the edge router; and what each machine did on the network, on
-the phone. Labs (a router of their own in front of a machine) after that.
+detection on the edge router. What each machine did on the network is built
+(What a machine did on the network). Labs (a router of their own in front of a machine) after that.
 
 ## Onboarding: nothing made by hand
 
@@ -765,4 +793,6 @@ did, and keeps nothing it did not make.
   anything the VM's networks allow; the bound is the uplink and the resource
   set, not anything inside the guest.
 - **It does not inspect traffic for you.** It gives a session a router to
-  inspect traffic with. What it looks for is the task.
+  inspect traffic with. What it looks for is the task. A machine's page shows
+  how much it sent and received, as the hypervisor counted it, and not what
+  or where.
