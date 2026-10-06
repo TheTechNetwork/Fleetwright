@@ -47,12 +47,15 @@ What happens, from the phone to a session on a VM:
    that holds your pool with that image; one that cannot reach the pool hands
    on to the next, and a refusal from the pool itself (no room in its limits)
    is the answer.
-5. **The box clones the image** onto the uplink, behind the edge router,
-   counted against the resource set, tagged `fleetwright-session` and with
-   the time it must be gone by, booted with a cloud-init drive holding one
-   file: the coordinator, the ticket, whose machine it is, your Claude login
-   from your vault, and its minutes. Xen Orchestra is asked to destroy the
-   drive once the machine has booted.
+5. **The box clones the image** onto the uplink, behind the edge router, or
+   onto a network of the pool you chose (protocol 9, below), counted against
+   the resource set, tagged `fleetwright-session`, with the time it must be
+   gone by, when it was made, the image, the network and whose it is, and
+   booted with a cloud-init drive holding one file: the coordinator, the
+   ticket, whose machine it is, your Claude login from your vault, and a
+   backstop for its end. Your SSH public keys go on the same drive, when you
+   keep some. Xen Orchestra is asked to destroy the drive once the machine
+   has booted.
 6. **The machine joins by itself.** `install/fleetwright-vm-join` wipes the
    drive first, moves the file beside the sidecar's key and starts the
    services, which the image left off. The sidecar enrols itself once at
@@ -63,10 +66,13 @@ What happens, from the phone to a session on a VM:
 7. **The session starts on it**, from the first health frame that says it
    can take one; a frame from before its login has arrived holds the start
    for the next.
-8. **It ends by itself.** The join script schedules a power-off at its end.
-   On its next pass the box removes, disks and all, every machine tagged
-   `fleetwright-session` that has stopped, and any still running fifteen
-   minutes past its end. Nothing else on the pool is touched.
+8. **It ends on time.** The box holding the pool looks every two minutes,
+   and removes, disks and all, every machine tagged `fleetwright-session`
+   that has stopped, and any still running a minute past the end in its tag.
+   The end is the box's to keep because a person can move it (Give it
+   longer, below); the machine's own power-off is a backstop thirty minutes
+   past the longest a machine can live, for a pool no box reaches any more.
+   Nothing else on the pool is touched.
 
 **What a session there runs on** is your own Claude login from your vault. A
 setup-token cannot open Remote Control, so, as on a runner, the
@@ -85,6 +91,65 @@ policy job".
 internet (one machine per network, and a group network for tests that need
 several, are the next round); a pool has to be added and approved boxes
 have to reach it; the first clone has not been run on a real XCP-ng pool.
+
+## Working a machine
+
+> Vm console, settings, reboot, ssh os selection not just Debian.
+
+**Each machine on your pools has a page**, under Machines › On your
+hypervisor on both phones, and from a `vm-` host's own page. It says what the
+box holding the pool last saw: the state, the image it was made from, the
+Xen Orchestra it is on, its network, its size and when it ends. Each is
+*cannot tell* when Xen Orchestra had not said, never a blank or a zero. The
+box reports them in its health (`xo[].machines`), and the coordinator hands
+each person their own as `vmMachines`.
+
+**What you can do with it**, through the `vmctl` verb (protocol 9). The
+coordinator asks the boxes holding your pools in turn, the one that last saw
+the machine first, and the box signs in with your pool's token and works only
+a machine tagged as made for you (`fleetwright-for:`), since two people can
+hold the same Xen Orchestra.
+
+| Action | What the box does |
+|---|---|
+| **Restart** | `vm.restart`, clean. A session running on it ends; the machine is back in the fleet in a minute or so. |
+| **Give it longer** | Moves the end in its tag, never past 350 minutes from when it was made, so asking again and again does not keep a machine alive for ever. |
+| **Restart with this size** | Marks it busy so the sweep does not take the stop for done, stops it, sets vCPUs and memory, and starts it again whatever the pool said. Xen Orchestra holds the size to the resource set; a refusal restarts it at its old size and says why. |
+| **End it now** | Force-stops it and removes it with its disk. |
+
+Each that interrupts a session asks first. None is held on the phone to be
+sent later: a restart replayed hours after it was asked for is not what
+anybody asked for.
+
+**The console is Xen Orchestra's own**, opened in the browser at
+`https://<address>/#/vms/<id>/console`, where you sign in to Xen Orchestra.
+The phone never holds the pool's token, and a console streamed through the
+fleet would make it hold one.
+
+**SSH.** Keep your public keys under You › Credentials › SSH keys. They are
+one secret in your vault, `SSH_AUTHORIZED_KEYS`, one key a line, checked on
+the phone and again on the box to be public keys and nothing else. A machine
+made after that takes them on its `fleetwright` account, which may then use
+sudo: the machine is yours alone and exists for one job (Inside the VM). Its
+page gives the command, `ssh fleetwright@<address>`, once its guest agent has
+said the address. A machine on the uplink is reachable only from behind the
+edge router; for SSH from your own network, start it on one of yours.
+
+**The network.** New session › Where offers the pool's networks the fleet may
+use besides the default, *Behind the edge router*. A network of yours puts the
+machine beside your own machines, which is what SSH from your laptop needs and
+exactly what the uplink exists to prevent, so it is a choice and never the
+default. The box takes only a network it saw on that pool
+(`provision.network`, protocol 9).
+
+**The operating system.** The policy offers one switch per image the machine
+can build: Debian 13, Ubuntu 24.04 LTS and Ubuntu 26.04 LTS, each from its
+publisher's own cloud image, pinned by its published checksum (Ubuntu's by
+SHA-256 from its release's `SHA256SUMS`). Ubuntu's is a qcow2, which the box
+converts to a raw disk with `qemu-img` before it is written (`apt install
+qemu-utils` on a box without it, and it says so). Each image is its own
+template, tagged `fleetwright-image:<key>`, and New session lists every image
+on your pools. A machine older than the choice is offered Debian alone.
 
 ## The credential, which is the whole design again
 
@@ -113,17 +178,24 @@ our side has failed.
 ## What `provision` may express
 
 ```
-provision { platform: "vm", template: <Xen Orchestra template id>, minutes?: 5..350 }
+provision { platform: "vm", template: <Xen Orchestra template id>, minutes?: 5..350, network?: <Xen Orchestra network id> }
+vmctl     { name: vm-<12 hex>, action: reboot|extend|resize|stop, minutes?: 5..350, cpus?: 1..64, memory?: 1..512 GiB }
 ```
 
-`template` is new on an existing verb, so it is `since: 8`, and only a box
+`template` is new on an existing verb, so it is `since: 8`, and `network`
+and `vmctl` are `since: 9`, and only a box
 that reports a pool (and so speaks 8) is ever asked; the coordinator refuses
 rather than let it be dropped. **The id must be an image the box itself saw
 on your pool**, tagged `fleetwright-image`: the box checks its own report,
-not the coordinator's word. No network, size or cloud-init crosses the
-protocol. A compromised coordinator can ask for one of your images for a few
-hours, attributed to you; it cannot ask for a VM on the management network or
-one built from an image of its choosing. A task rides along the way it does
+not the coordinator's word, and so must a network: one the box saw on that
+pool, which the resource set already bounds to the networks the fleet may use.
+No disk, address or cloud-init crosses the protocol. A compromised coordinator
+can ask for one of your images for a few hours, attributed to you, on a
+network the policy allows; it cannot ask for a VM on a network the policy
+does not name, or one built from an image of its choosing. With `vmctl` it can
+restart, resize within the resource set, extend to 350 minutes or end a
+machine of yours, which is what you could do yourself; it cannot reach a
+machine the box did not make for you. A task rides along the way it does
 on a held runner start (protocol 7).
 
 ## How a clone joins
@@ -141,9 +213,10 @@ and a VM's cannot be spent at `/api/enroll/actions`.
 ## Ending
 
 See "Machines from your pool", step 8. **The clock is on the VM**, in its
-`fleetwright-until` tag, and in a power-off it scheduled itself, so a box
-that was down cannot leave a machine running past its end for long: any box
-holding the pool sweeps it on its next pass.
+`fleetwright-until` tag, which any box holding the pool reads, so a box that
+was down cannot leave a machine running past its end for long: the next one
+to look sweeps it. The power-off the machine scheduled for itself is the
+backstop when none does.
 
 ## Inside the VM
 
