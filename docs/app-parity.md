@@ -249,6 +249,7 @@ says on health which journals a box has so the buttons are only ever live.)
 | **SSH keys for those machines** | You → Credentials → SSH keys: public keys only, kept as `SSH_AUTHORIZED_KEYS` | the same, under You → Credentials | — |
 | **which operating systems the image is made of** (`xosetup` `policy` `images`) | a switch per image the machine can build, under Way out | the same | — |
 | **the network a new machine goes on** (`provision` `network`) | New session → Where → Network, when the pool has one besides Behind the edge router | the same chips | — |
+| **machines that work together** (`provision { group }`, policy `groups`) | the policy's Machines that work together: group networks from the ones there to 4, and what a machine is fenced from by default; New session › Where: Work with others on; a machine's page names its group, its address there and its .local name | the same: a stepper, chips, the same facts | — |
 | **machines kept ready** (`/api/vm-standby`) | Machines → Keep machines ready: an image, a network, 0 to 3, how many are ready now and being made, and what it costs; New session marks the image with one ready | the same, full screen | — |
 | **the pool's token, once set up** | handed back sealed to a key sent inside the sign-in, kept in the Keychain (this device only); collected at launch if the app was closed; the setup screen says it is kept only once it is | the same, kept encrypted under the Keystore key; collected at sign-in and launch | — |
 
