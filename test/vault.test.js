@@ -432,3 +432,32 @@ test('a box keeps what it holds through a blip, and forgets it on an answer that
   await told.syncVault();
   assert.deepEqual(handed, [{ accounts: [] }]);
 });
+
+test('a hypervisor’s token is kept as its own kind, checked against its address, and handed only to approved boxes', async (t) => {
+  // ASKED FOR: "Why not the coordinator hold the token". The fleet keeps it,
+  // in the vault, and the boxes the person approved make machines with it.
+  const m = await minter();
+  t.after(m.restore);
+  const office = await generateKeyPair();
+  const record = JSON.stringify({ v: 1, address: 'xo.lan', pin: 'a'.repeat(64), user: 'fleetwright', resourceSet: 'set-1', token: 'xo-limited-token', plain: false });
+
+  // FILED UNDER THE ADDRESS IT NAMES, or refused.
+  const wrong = await m.phone({ op: 'put', name: 'hypervisor:other.lan', value: record });
+  assert.equal(wrong.error?.code, 'bad_value');
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan', value: 'not json' })).error?.code, 'bad_value');
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:bad name', value: record })).error?.code, 'bad_name');
+  const kept = await m.phone({ op: 'put', name: 'hypervisor:xo.lan', value: record });
+  assert.equal(kept.ok, true, kept.text);
+  assert.match(kept.text, /memory only/);
+  assert.ok(![...m.rows.values()].some((v) => JSON.stringify(v).includes('xo-limited-token')), 'sealed at rest');
+
+  assert.deepEqual((await m.box(office)).answer.accounts, [], 'a box nobody approved is given nothing');
+  assert.equal((await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office-box' })).ok, true);
+  const given = await m.box(office);
+  const item = given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'hypervisor:xo.lan');
+  assert.equal(JSON.parse(item.value).token, 'xo-limited-token');
+
+  // FORGOTTEN, it stops being handed out.
+  assert.equal((await m.phone({ op: 'forget', name: 'hypervisor:xo.lan' })).ok, true);
+  assert.ok(!(await m.box(office)).answer.accounts[0]?.items.some((/** @type {any} */ i) => i.name === 'hypervisor:xo.lan'));
+});

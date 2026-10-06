@@ -1,0 +1,186 @@
+// Machines from the person's own hypervisor, as the coordinator sees them:
+// which images a person is offered, which box is asked to make one, the
+// ticket it boots with, and the machine enrolling itself and being started
+// the session it was asked for with.
+//
+//   node --test test/pool-vms-coordinator.test.js
+//
+// ASKED FOR: "Still can't run sessions on it". docs/hypervisors.md,
+// "Machines from your pool". The boxes are played by a transport that answers
+// from a function, as in xosetup-coordinator.test.js; the box's half has its
+// own tests (test/xo-pools.test.js).
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { place } from '../src/fleet/coordinator/scheduler.js';
+import { generateKeyPair } from '../src/fleet/crypto.js';
+
+const ELI = 'eli@example.com';
+const SAM = 'sam@example.com';
+const eli = { email: ELI, admin: true };
+const sam = { email: SAM, admin: false };
+const DEBIAN = '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c';
+const OTHER = '1c2f9d3b-4a5e-4f6b-8c7d-8e9f0a1b2c3d';
+
+/** @param {string} owner @param {string[]} [images] */
+const holding = (owner, images = [DEBIAN]) => [{
+  address: 'xo.lan',
+  owner,
+  reachable: true,
+  pools: [{ id: 'pool-1', name: 'rack' }],
+  images: images.map((id) => ({ id, name: id === DEBIAN ? 'Debian 13' : 'Other', pool: 'pool-1', poolName: 'rack' })),
+}];
+
+/**
+ * Boxes, each with what it holds, and a transport that records what each was
+ * sent and answers from a function.
+ * @param {Record<string, { xo?: any[], protocol?: number }>} boxes
+ * @param {(hostId: string, spec: any) => any} [reply]
+ */
+function fleet(boxes, reply = () => ({ ok: true, text: 'Cloning Debian 13 on rack.' })) {
+  const core = new CoordinatorCore({});
+  for (const [hostId, b] of Object.entries(boxes)) {
+    core.registry.connect(hostId, () => {});
+    core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol: b.protocol ?? 8, maxSessions: 5, running: 0, free: 5, labels: [], ...(b.xo ? { xo: b.xo } : {}) });
+  }
+  /** @type {Array<{ hostId: string, spec: any }>} */
+  const asked = [];
+  core.send = /** @type {any} */ (async (/** @type {any} */ host, /** @type {any} */ spec) => {
+    asked.push({ hostId: host.hostId, spec });
+    return reply(host.hostId, spec);
+  });
+  return { core, asked };
+}
+
+const ask = (/** @type {any} */ requester, /** @type {Record<string, any>} */ params = {}, /** @type {any} */ startAfter = undefined) => ({
+  verb: 'provision',
+  params: { platform: 'vm', template: DEBIAN, ...params },
+  actor: `fleet:${requester.email}`,
+  requester,
+  ...(startAfter ? { startAfter } : {}),
+});
+
+test('a person is offered the images their own pools have, once each, with the boxes that can make them', () => {
+  const { core } = fleet({ deb14: { xo: [...holding(ELI, [DEBIAN, OTHER]), ...holding(SAM)] }, rpi: { xo: holding(ELI) }, plain: {} });
+  const mine = core.snapshot(eli).vmImages;
+  assert.deepEqual(mine.map((/** @type {any} */ i) => [i.template, i.name, i.poolName, i.hosts]), [
+    [DEBIAN, 'Debian 13', 'rack', ['deb14', 'rpi']],
+    [OTHER, 'Other', 'rack', ['deb14']],
+  ]);
+  assert.deepEqual(core.snapshot(sam).vmImages.map((/** @type {any} */ i) => i.hosts), [['deb14']]);
+  assert.deepEqual(core.snapshot({ email: 'nobody@example.com', admin: false }).vmImages, []);
+  assert.deepEqual(core.snapshot(null).vmImages, [], 'no person, no pool');
+});
+
+test('a member sees which pools a box holds only for themselves', () => {
+  const { core } = fleet({ deb14: { xo: [...holding(ELI), ...holding(SAM)] } });
+  const seen = core.snapshot(sam).hosts.find((/** @type {any} */ h) => h.hostId === 'deb14');
+  assert.deepEqual(seen.health.xo.map((/** @type {any} */ e) => e.owner), [SAM]);
+});
+
+test('asking for a machine mints a VM ticket and asks a box that holds the pool, never a runner repository', async () => {
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI) }, other: {} });
+  const r = await core.dispatch(ask(eli, { minutes: 30, repo: 'mallory/evil' }));
+  assert.equal(r.ok, true, r.text);
+  assert.equal(r.hostId, 'deb14');
+  assert.match(r.vm, /^vm-[0-9a-f]{12}$/);
+  assert.equal(asked.length, 1);
+  const sent = asked[0].spec.params;
+  assert.equal(sent.platform, 'vm');
+  assert.equal(sent.template, DEBIAN);
+  assert.equal(sent.minutes, 30);
+  assert.match(sent.ticket, /^fwt_[0-9a-f]{12}_[0-9a-f]{48}$/);
+  assert.equal(sent.repo, undefined, 'a caller’s repo goes nowhere');
+  assert.equal(r.vm, `vm-${sent.ticket.split('_')[1]}`, 'the name is the ticket’s');
+});
+
+test('nobody holding the pool, an unsigned caller or no image is a refusal that says what to do', async () => {
+  const { core, asked } = fleet({ deb14: { xo: holding(SAM) } });
+  const none = await core.dispatch(ask(eli));
+  assert.equal(none.error.code, 'no_hosts');
+  assert.match(none.text, /Keep the pool in your vault/);
+  const anon = await core.dispatch({ verb: 'provision', params: { platform: 'vm', template: DEBIAN } });
+  assert.equal(anon.error.code, 'not_signed_in');
+  const noImage = await core.dispatch({ ...ask(sam), params: { platform: 'vm' } });
+  assert.equal(noImage.error.code, 'bad_params');
+  assert.equal(asked.length, 0);
+});
+
+test('a box that cannot reach the pool hands on to the next, and one too old is not asked', async () => {
+  const { core, asked } = fleet(
+    { a: { xo: holding(ELI) }, b: { xo: holding(ELI), protocol: 7 }, c: { xo: holding(ELI) } },
+    (hostId) => (hostId === 'a' ? { ok: false, unreachable: true, text: 'xo.lan did not answer' } : { ok: true, text: 'Cloning.' }),
+  );
+  const r = await core.dispatch(ask(eli));
+  assert.equal(r.ok, true);
+  assert.equal(r.hostId, 'c');
+  assert.deepEqual(asked.map((x) => x.hostId), ['a', 'c']);
+});
+
+test('a refusal from the pool itself is the answer, not a reason to try another box', async () => {
+  const { core, asked } = fleet({ a: { xo: holding(ELI) }, c: { xo: holding(ELI) } }, () => ({ ok: false, text: 'The pool’s limits have no room for another machine.' }));
+  const r = await core.dispatch(ask(eli));
+  assert.equal(r.ok, false);
+  assert.equal(r.vm, null);
+  assert.deepEqual(asked.map((x) => x.hostId), ['a']);
+});
+
+test('the machine enrols with its ticket once, as its owner’s temporary host, and is started the session asked for', async () => {
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI) } });
+  const r = await core.dispatch(ask(eli, {}, { title: 'Try the build', task: 'Run the tests' }));
+  const ticket = asked[0].spec.params.ticket;
+  const key = await generateKeyPair();
+
+  // NOT A RUNNER'S: a GitHub job cannot spend it, and a runner's cannot enrol a VM.
+  assert.equal(CoordinatorCore.ticketFitsJob(await core.runnerTickets.peek(ticket), { repository: 'eli/runners' }), false);
+  const runnerTicket = await core.runnerTickets.mint({ owner: ELI, platform: 'linux', repository: 'eli/runners' });
+  assert.equal((await core.enrolVm({ ticket: runnerTicket.token, publicJwk: key.publicJwk })).status, 403);
+
+  const enrolled = await core.enrolVm({ ticket, publicJwk: key.publicJwk });
+  assert.equal(enrolled.status, 200, JSON.stringify(enrolled.body));
+  assert.equal(enrolled.body.hostId, r.vm);
+  assert.equal(enrolled.body.ephemeral, true);
+  const host = core.hostIds.get(r.vm);
+  assert.equal(host.owner, ELI);
+  assert.equal(host.ephemeral, true);
+  assert.equal((await core.enrolVm({ ticket, publicJwk: key.publicJwk })).status, 403, 'single use');
+
+  // ITS FIRST FRAME, before it can take work: the start is held, not lost.
+  core.registry.connect(r.vm, () => {}, { ephemeral: true, owner: ELI });
+  asked.length = 0;
+  await core.onHostMessage(r.vm, { kind: 'health', health: { hub: { reachable: true }, protocol: 8, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth: null, labels: [] } });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(asked.length, 0, 'nothing placed on a machine that cannot take it yet');
+  assert.ok(core.runnerStarts.has(r.vm), 'still held for the next frame');
+
+  // READY: started as its owner, by name.
+  await core.onHostMessage(r.vm, { kind: 'health', health: { hub: { reachable: true }, protocol: 8, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth: 'owner', labels: [] } });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const start = asked.find((x) => x.spec.verb === 'start');
+  assert.ok(start, 'the held session was started');
+  assert.equal(start.hostId, r.vm);
+  assert.equal(start.spec.params.task, 'Run the tests');
+  assert.equal(start.spec.actor, ELI);
+  assert.ok(!core.runnerStarts.has(r.vm));
+});
+
+test('naming somebody else’s temporary machine does not put work on it', () => {
+  const { core } = fleet({});
+  core.registry.connect('vm-aaaaaaaaaaaa', () => {}, { ephemeral: true, owner: ELI });
+  core.registry.recordHealth('vm-aaaaaaaaaaaa', { hub: { reachable: true }, protocol: 8, maxSessions: 1, running: 0, free: 1, claudeAccounts: 1, labels: [] });
+  const theirs = place(core.registry, { verb: 'start', params: {} }, { preferHost: 'vm-aaaaaaaaaaaa', requester: sam });
+  assert.equal(theirs.kind, 'refused');
+  assert.equal(/** @type {any} */ (theirs).code, 'host_unavailable');
+  const mine = place(core.registry, { verb: 'start', params: {} }, { preferHost: 'vm-aaaaaaaaaaaa', requester: eli });
+  assert.equal(mine.kind, 'host');
+});
+
+test('a phone cannot be handed a GitHub dispatch for a VM', async () => {
+  const { core } = fleet({});
+  core.runnerRepo = 'eli/runners';
+  const r = await core.prepareRunnerDispatch(eli, { platform: 'vm' }, 'https://fleet.test');
+  assert.equal(r.ok, false);
+  assert.equal(r.error.code, 'bad_params');
+});

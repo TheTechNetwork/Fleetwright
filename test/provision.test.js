@@ -104,7 +104,14 @@ test('provision names a platform, and a repository only as a repository', () => 
   // now per person, and bounded the same two ways: GitHub refuses a dispatch
   // into anything that person cannot already run workflows in, and what runs
   // there is one of four fixed workflow files on the default branch.
-  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['minutes', 'platform', 'repo', 'ticket']);
+  //
+  // A MACHINE IMAGE since v8, for platform `vm`: an id a box looks up in the
+  // person's own pool, shaped as XAPI shapes one and nothing looser.
+  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['minutes', 'platform', 'repo', 'template', 'ticket']);
+  assert.equal(checkParams('provision', { platform: 'vm', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c' }).ok, true);
+  for (const image of ['Debian 13', '../x', '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c; rm']) {
+    assert.equal(checkParams('provision', { platform: 'vm', template: image }).ok, false, image);
+  }
   assert.equal(checkParams('provision', { platform: 'macos' }).ok, true);
   assert.equal(checkParams('provision', { platform: 'freebsd' }).ok, false);
   assert.equal(checkParams('provision', { repo: 'me/mine', platform: 'macos' }).ok, true);
@@ -124,11 +131,14 @@ test('minutes stop below the length GitHub kills a job at', () => {
 
 test('the platform list and the workflow map agree', () => {
   // Two lists that must not drift: the protocol refuses anything that is not
-  // one of four words, and this map is what those words mean in a repository.
+  // one of its words, and this map is what those words mean in a repository.
+  // Every word but `vm` names a workflow file; `vm` names none, so a ticket
+  // for a machine on somebody's pool can never admit a GitHub job.
   assert.deepEqual(
-    [...(VERBS.provision.params.platform.values || [])].sort(),
+    [...(VERBS.provision.params.platform.values || [])].filter((p) => p !== 'vm').sort(),
     Object.keys(RUNNER_WORKFLOWS).sort(),
   );
+  assert.equal(Object.hasOwn(RUNNER_WORKFLOWS, 'vm'), false);
 });
 
 // --- the command line ------------------------------------------------------

@@ -558,6 +558,14 @@ export class Coordinator {
     // ALWAYS EPHEMERAL, never negotiable. A host admitted this way is a job and
     // will be destroyed with it; letting the request ask for anything else
     // would put "clean me up" back in the hands of the thing being cleaned up.
+    // A machine from somebody's hypervisor, enrolling with its ticket. The
+    // Worker asks the same function. See CoordinatorCore#enrolVm.
+    if (p === '/api/enroll/vm' && req.method === 'POST') {
+      const answer = await this.core.enrolVm(await readJson(req));
+      this.saveState();
+      return json(res, answer.status, answer.body);
+    }
+
     if (p === '/api/enroll/actions' && req.method === 'POST') {
       const body = await readJson(req);
       const audiences = splitList(process.env.FLEETWRIGHT_ACTIONS_AUDIENCE);

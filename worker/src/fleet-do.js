@@ -557,6 +557,20 @@ export class Fleet {
       return json({ ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true }, 200);
     }
 
+    // A MACHINE FROM SOMEBODY'S HYPERVISOR ENROLLING ITSELF, with the ticket
+    // the box that cloned it booted it with. Before the client check for the
+    // reason the Actions route is: a VM has no fleet credential, and the
+    // ticket is what admits it. See CoordinatorCore#enrolVm.
+    if (url.pathname === '/api/enroll/vm' && request.method === 'POST') {
+      const body = await readJson(request);
+      const answer = await this.core.enrolVm(body);
+      // Both halves or neither, as for a runner: the spent ticket and the new
+      // host are written together, and a refusal still persists the spend.
+      await this.#saveEnrollment();
+      await this.#saveClients();
+      return json(answer.body, answer.status);
+    }
+
     if (url.pathname === '/api/enroll/host' && request.method === 'POST') {
       const body = await readJson(request);
       const wanted = String(body?.hostId || '');

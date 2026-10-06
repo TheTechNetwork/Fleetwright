@@ -46,6 +46,10 @@ import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
  *   repository's API key, or nothing. Null off a runner and from older hosts.
  *   here. Zero is the fault; null is an older host and is not.
  * @property {{reachable: boolean, reason?: string}} [hub]
+ * @property {Array<{ address: string, owner: string, reachable: boolean|null, pools?: Array<{ id: string, name: string }>, images?: Array<{ id: string, name: string, pool?: string|null, poolName?: string|null }> }>} [xo]
+ *   the hypervisors this box holds a token for, from its people's vaults, and
+ *   the machine images each pool has (src/fleet/host/xo-pools.js). Absent
+ *   from a box that holds none, and from an older one.
  * @property {Array<{name: string, title?: string|null, createdBy?: string|null, deletedAt?: number|null, expiresAt?: number|null}>} [bin]
  * @property {{ state: 'fresh'|'expired'|'unknown', expiresAt: number|null, refreshable: boolean, account: string|null, plan: string|null, summary: string }|null} [credential]
  */

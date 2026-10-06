@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, CERT_PIN_RE, XO_UUID_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
@@ -1500,6 +1500,7 @@ export class CoordinatorCore {
     // knows who asked before the job exists, and the job proves which dispatch
     // it is by presenting a single-use value it could not have invented. See
     // src/fleet/coordinator/runner-tickets.js.
+    if (spec.verb === 'provision' && shaped.params.platform === 'vm') return this.#provisionVm(spec, shaped.params);
     if (spec.verb === 'provision') {
       const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null);
       if (minted.ok === false) return minted;
@@ -2350,9 +2351,14 @@ export class CoordinatorCore {
    * minted for? A ticket that names one and arrives from another is refused —
    * it was dispatched somewhere else, and whoever holds it is not that run.
    *
-   * @param {{ repository?: string|null }|null} ticket @param {{ repository: string }} job
+   * @param {{ repository?: string|null, platform?: string|null }|null} ticket @param {{ repository: string }} job
    */
   static ticketFitsJob(ticket, job) {
+    // A VM'S TICKET IS FOR A VM. It names no repository, which read as "binds
+    // nothing" here and would have let any allowlisted workflow spend one and
+    // be attributed to the person who asked for a machine on their pool. It is
+    // spent at /api/enroll/vm and nowhere else.
+    if (isVmTicket(ticket)) return false;
     if (!ticket?.repository) return true;
     return ticket.repository.toLowerCase() === String(job?.repository || '').toLowerCase();
   }
@@ -2421,6 +2427,18 @@ export class CoordinatorCore {
       preferHost: hostId,
       requester: { email: pending.owner, admin: false },
     }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
+    // NOT PLACEABLE YET IS NOT A FAILED START. A machine's first health frame
+    // can arrive before it can take work: a runner still fetching its owner's
+    // Claude login reports `unknown`, which the scheduler does not place on,
+    // and the start was taken out of the map above and lost — the machine
+    // came up and the session asked for with it never did. Held again, until
+    // its deadline, for the next frame.
+    const notYet = reply?.ok === false && ['host_unavailable', 'no_hosts'].includes(String(reply?.error?.code || ''));
+    if (notYet && this.registry.hosts.has(hostId) && pending.until > this.now()) {
+      this.runnerStarts.set(hostId, pending);
+      this.onStateChanged?.();
+      return;
+    }
     this.record({
       hostId,
       event: reply?.ok === false ? 'runner.start-failed' : 'runner.started',
@@ -2454,6 +2472,17 @@ export class CoordinatorCore {
           `${host?.hostId} is too old to be handed a task — it speaks protocol ` +
           `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs 7. Update it, or start the ` +
           'session there with a profile.',
+      };
+    }
+    if (spec.verb === 'provision' && spec.params?.platform === 'vm') {
+      const speaks = Number(host?.health?.protocol);
+      if (Number.isInteger(speaks) && speaks >= 8) return null;
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text:
+          `${host?.hostId} is too old to make a machine on your hypervisor — it speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs 8. Update it and ask again.`,
       };
     }
     if (spec.verb !== 'provision' || !spec.params?.repo) return null;
@@ -2642,6 +2671,13 @@ export class CoordinatorCore {
     if (body?.minutes !== undefined && body?.minutes !== null) wanted.minutes = body.minutes;
     const shaped = checkParams('provision', wanted);
     if (shaped.ok === false) return { ok: false, error: { code: 'bad_params' }, text: shaped.error };
+    if (!Object.hasOwn(RUNNER_WORKFLOWS, String(shaped.params.platform))) {
+      return {
+        ok: false,
+        error: { code: 'bad_params' },
+        text: 'A machine from your hypervisor is not started from GitHub. Ask the fleet for it with provision instead.',
+      };
+    }
     const platform = /** @type {keyof typeof RUNNER_WORKFLOWS} */ (String(shaped.params.platform));
     const minted = await this.#mintRunnerTicket(requester, platform, body?.start, requester?.email ? `app:${requester.email}` : null);
     if (minted.ok === false) return minted;
@@ -3014,8 +3050,233 @@ export class CoordinatorCore {
       // everybody else the fleet's. `own` tells a screen which it is, so the
       // setting shows what is in effect rather than what is typed.
       runners: this.#runnersFor(requester),
+      // THE MACHINE IMAGES THIS PERSON CAN START A VM FROM, one per image,
+      // with the boxes that can make it. Only theirs: an image is offered by
+      // a box holding a pool token from somebody's vault, and it is that
+      // somebody's pool. Empty is an answer (no box holds one of yours);
+      // a coordinator too old to send it omits it, which reads the same.
+      vmImages: this.vmImagesFor(requester),
     };
   }
+
+  /**
+   * The machine images a person can start a VM from, by what the boxes
+   * holding their pools' tokens reported (health `xo`, src/fleet/host/xo-pools.js).
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[] }>}
+   */
+  vmImagesFor(requester) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return [];
+    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[] }>} */
+    const found = new Map();
+    for (const h of this.#vmHolders(email, null)) {
+      for (const entry of h.entries) {
+        for (const image of entry.images) {
+          const have = found.get(image.id);
+          if (have) {
+            if (!have.hosts.includes(h.host.hostId)) have.hosts.push(h.host.hostId);
+            continue;
+          }
+          found.set(image.id, {
+            template: image.id,
+            name: image.name,
+            pool: image.pool,
+            poolName: image.poolName,
+            address: entry.address,
+            hosts: [h.host.hostId],
+          });
+        }
+      }
+    }
+    return [...found.values()].sort((a, b) => a.name.localeCompare(b.name) || a.template.localeCompare(b.template));
+  }
+
+  /**
+   * The permanent boxes that hold one of this person's pool tokens, and what
+   * each said its pools have — narrowed to one image when `template` is
+   * given. In hostId order, so the same request goes to the same box.
+   *
+   * @param {string} email @param {string|null} template
+   * @returns {Array<{ host: any, entries: Array<{ address: string, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
+   */
+  #vmHolders(email, template) {
+    /** @type {Array<{ host: any, entries: any[] }>} */
+    const out = [];
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      const entries = host.health.xo
+        .filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === email && e?.reachable !== false)
+        .map((/** @type {any} */ e) => ({
+          address: String(e.address || ''),
+          images: (Array.isArray(e.images) ? e.images : [])
+            .filter((/** @type {any} */ i) => XO_UUID_RE.test(String(i?.id)) && (!template || i.id === template))
+            .map((/** @type {any} */ i) => ({
+              id: String(i.id),
+              name: String(i.name || 'Machine image').slice(0, 80),
+              pool: typeof i.pool === 'string' ? i.pool : null,
+              poolName: typeof i.poolName === 'string' ? i.poolName.slice(0, 80) : null,
+            })),
+        }))
+        .filter((/** @type {any} */ e) => e.images.length);
+      if (entries.length) out.push({ host, entries });
+    }
+    return out.sort((a, b) => a.host.hostId.localeCompare(b.host.hostId));
+  }
+
+  /**
+   * A machine from the person's own hypervisor: a ticket for it, the session
+   * to start on it when it joins, and the clone asked of a box that holds the
+   * pool's token — each such box in turn until one has made it.
+   *
+   * WHAT DIFFERS FROM A RUNNER is only where the machine comes from. The
+   * ticket, the held start and the temporary host it becomes are the same:
+   * it enrols itself with the ticket at /api/enroll/vm, under a name derived
+   * here from the ticket (`vm-<id>`), owned by the person who asked.
+   *
+   * @param {any} spec @param {Record<string, any>} params
+   */
+  async #provisionVm(spec, params) {
+    const owner = String(spec.requester?.email || '').toLowerCase();
+    if (!owner) {
+      return {
+        ok: false,
+        error: { code: 'not_signed_in' },
+        text: 'A machine belongs to the person who asked for it, so this needs a signed-in identity rather than the fleet-wide admin token.',
+      };
+    }
+    const template = typeof params.template === 'string' ? params.template : '';
+    if (!template) return { ok: false, error: { code: 'bad_params' }, text: 'Say which machine image to start: `template`, as status lists it.' };
+    const holders = this.#vmHolders(owner, template);
+    if (!holders.length) {
+      return {
+        ok: false,
+        error: { code: 'no_hosts' },
+        text:
+          'No connected box holds a token for a pool with that machine image. Keep the pool in your vault from the ' +
+          'app (Machines › the hypervisor › Keep in the fleet) and approve a box that can reach it.',
+      };
+    }
+    /** @type {Record<string, any>|null} */
+    let start = null;
+    if (spec.startAfter && typeof spec.startAfter === 'object') {
+      /** @type {Record<string, any>} */
+      const wanted = {};
+      for (const k of ['title', 'brief', 'mode', 'task']) {
+        if (spec.startAfter[k] !== undefined && spec.startAfter[k] !== null) wanted[k] = spec.startAfter[k];
+      }
+      const checked = checkParams('start', wanted);
+      if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      start = /** @type {any} */ (checked.params);
+    }
+    const image = holders[0].entries[0].images[0];
+    const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start });
+    const vmHost = `vm-${ticket.id}`;
+    this.onStateChanged?.();
+    this.record({
+      event: 'vm.requested',
+      actor: spec.actor ?? null,
+      text: `${owner} asked for a machine from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}, as ${vmHost}`,
+    });
+    /** @type {Record<string, any>} */
+    const vmParams = { platform: 'vm', template, ticket: ticket.token };
+    if (params.minutes !== undefined) vmParams.minutes = params.minutes;
+    const vmSpec = { ...spec, params: vmParams };
+    /** @type {string[]} */
+    const skipped = [];
+    for (const { host } of holders) {
+      const outdated = this.#cannotCarry(host, vmSpec);
+      if (outdated) {
+        skipped.push(`${host.hostId} (needs updating)`);
+        continue;
+      }
+      let answer;
+      try {
+        answer = explainUnknownVerb(await this.send(host, vmSpec), host);
+      } catch (e) {
+        skipped.push(`${host.hostId} (${/** @type {Error} */ (e).message})`);
+        continue;
+      }
+      // ONLY "COULD NOT REACH THE POOL" moves on. Anything else is the answer:
+      // a clone that was made, or a refusal from the pool itself (no room in
+      // its limits), which another box would be given too.
+      if (answer?.ok === false && answer.unreachable === true) {
+        skipped.push(`${host.hostId} (${answer.text || 'could not reach the pool'})`);
+        continue;
+      }
+      return { ...answer, hostId: host.hostId, vm: answer?.ok === false ? null : vmHost };
+    }
+    return {
+      ok: false,
+      error: { code: 'unreachable' },
+      text: `None of the boxes holding that pool could make the machine: ${skipped.join(', ')}.`,
+    };
+  }
+
+  /**
+   * A machine from somebody's hypervisor enrolling itself, with the ticket it
+   * was booted with. The ticket is the whole of what admits it — there is no
+   * GitHub token here — so it is a VM ticket, spent once, minutes old and
+   * bound to the person who asked, and the name is derived from it.
+   *
+   * WHAT A LEAKED ONE COSTS, which is more than a runner's: it admits a
+   * machine. Somebody holding it before the VM spends it could enrol a
+   * machine of their own as that person's temporary host, which is placed
+   * only for them and named by them, and be started the session they asked
+   * for with it. It travels only in the VM's cloud-init drive, which the box
+   * asks Xen Orchestra to destroy once the VM has booted, and it is single
+   * use: the VM spends it within a minute or two of being made. Said in
+   * docs/security.md.
+   *
+   * @param {any} body  `{ ticket, publicJwk }`
+   * @returns {Promise<{ status: number, body: Record<string, any> }>}
+   */
+  async enrolVm(body) {
+    const presented = String(body?.ticket || '');
+    const refuse = () => ({
+      status: 403,
+      body: {
+        ok: false,
+        error: { code: 'unclaimed' },
+        text: 'That ticket is not one this fleet issued for a machine, or it has already been spent or has expired. Ask for the machine again.',
+      },
+    });
+    const peeked = RunnerTickets.looksLikeTicket(presented) ? await this.runnerTickets.peek(presented) : null;
+    if (!peeked || !isVmTicket(peeked)) return refuse();
+    const ticket = await this.runnerTickets.redeem(presented);
+    if (!ticket) return refuse();
+    const hostId = `vm-${ticket.id}`;
+    const result = await this.hostIds.enrol({
+      hostId,
+      publicJwk: body?.publicJwk,
+      enrolledBy: `vm:${ticket.platform.slice(3)}`,
+      owner: ticket.owner,
+      ephemeral: true,
+    });
+    if (!result.ok || !result.host) {
+      const full = 'code' in result && result.code === 'hosts_full';
+      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error } };
+    }
+    this.noteRunnerEnrolled(hostId, ticket);
+    this.record({
+      event: 'host.enrolled',
+      hostId,
+      fingerprint: result.host.fingerprint,
+      text: `a machine from ${ticket.owner}’s hypervisor enrolled itself`,
+    });
+    return { status: 200, body: { ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true } };
+  }
+}
+
+/**
+ * A ticket minted for a machine on somebody's hypervisor rather than a GitHub
+ * run: its platform names the image.
+ *
+ * @param {{ platform?: string|null, repository?: string|null }|null|undefined} ticket
+ */
+function isVmTicket(ticket) {
+  return String(ticket?.platform || '').startsWith('vm:');
 }
 
 /**
@@ -3280,6 +3541,12 @@ function visibleHost(host, requester) {
     health: {
       ...host.health,
       sessions,
+      // WHICH POOLS A BOX HOLDS TOKENS FOR is the people's who kept them: an
+      // address on somebody's network and the names of their pools. A
+      // member sees their own.
+      ...(Array.isArray(host.health.xo)
+        ? { xo: host.health.xo.filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === String(requester.email || '').toLowerCase()) }
+        : {}),
       resumable: Array.isArray(host.health.resumable)
         ? host.health.resumable.filter((/** @type {any} */ n) => mine.has(n))
         : host.health.resumable,

@@ -66,6 +66,20 @@ export const SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 /** The prefix a named secret's item carries, so it cannot be mistaken for a provider. */
 export const SECRET_PREFIX = 'secret:';
 
+/**
+ * The prefix a hypervisor's item carries: `hypervisor:<address>`, the limited
+ * Xen Orchestra token onboarding made for that address, as the record the
+ * phone was handed (src/fleet/host/xo-setup.js, hand-off). Its own kind and
+ * not a named secret, because a named secret is handed to SESSIONS by name
+ * (`fleet-secret`), and a pool's token is for the box that makes machines on
+ * it and nothing it runs. A box keeps it in memory only
+ * (src/fleet/host/xo-pools.js).
+ */
+export const HYPERVISOR_PREFIX = 'hypervisor:';
+
+/** A Xen Orchestra address as onboarding takes one: a host name or address, and a port. */
+export const HYPERVISOR_ADDRESS_RE = /^(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9][A-Za-z0-9.-]{0,252})(?::\d{1,5})?$/;
+
 /** How large a named secret may be. A key file, not a database. */
 const MAX_SECRET = 8192;
 
@@ -102,13 +116,33 @@ const refuse = (code, text) => ({ ok: false, error: { code }, text });
  * What a vault item is, from its name. Null for a name a vault does not keep.
  *
  * @param {string} name
- * @returns {'claude'|'oauth'|'secret'|null}
+ * @returns {'claude'|'oauth'|'secret'|'hypervisor'|null}
  */
 export function itemKind(name) {
   if (name === 'claude') return 'claude';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return 'oauth';
   if (name.startsWith(SECRET_PREFIX) && SECRET_NAME_RE.test(name.slice(SECRET_PREFIX.length))) return 'secret';
+  if (name.startsWith(HYPERVISOR_PREFIX) && HYPERVISOR_ADDRESS_RE.test(name.slice(HYPERVISOR_PREFIX.length))) return 'hypervisor';
   return null;
+}
+
+/**
+ * Is this the record onboarding hands a phone, for the address it is kept
+ * under? Checked when it is put, so a vault never hands a box something
+ * that names one pool and is filed under another.
+ *
+ * @param {string} name @param {string} value
+ */
+function isHypervisorRecord(name, value) {
+  /** @type {any} */
+  let record;
+  try {
+    record = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  return Boolean(record) && typeof record === 'object' && typeof record.token === 'string' && record.token.length > 0 &&
+    record.address === name.slice(HYPERVISOR_PREFIX.length);
 }
 
 /**
@@ -260,8 +294,8 @@ async function runDeviceOp(inside, config, key, who, email, at) {
   if (inside.op === 'put' || inside.op === 'forget') {
     const kind = itemKind(name);
     if (kind === 'claude') return putClaude(store, key, who, at, inside.op === 'forget' ? null : String(inside.value ?? ''));
-    if (inside.op === 'put' && kind !== 'secret') {
-      return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME) or a Claude token. GitHub and Cloudflare are kept by signing in.');
+    if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor') {
+      return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
     }
     if (!kind) return refuse('bad_name', `${name.slice(0, 80) || 'That'} is not something a vault keeps.`);
     const prior = row.items[name];
@@ -275,9 +309,17 @@ async function runDeviceOp(inside, config, key, who, email, at) {
     }
     const value = String(inside.value ?? '');
     if (!value || value.length > MAX_SECRET) return refuse('bad_value', `A named secret is between 1 and ${MAX_SECRET} characters.`);
+    if (kind === 'hypervisor' && !isHypervisorRecord(name, value)) {
+      return refuse('bad_value', 'That is not the token record a hypervisor’s setup hands back, for that address.');
+    }
     row.items[name] = { at, sealed: await seal({ to: key.publicKey, aad: vaultAtRestAad(who.userId, name), payload: { value } }) };
     await save();
-    return { ok: true, text: `Kept ${label(name)}. Sessions you start on a box you approved can be given it by name.` };
+    return {
+      ok: true,
+      text: kind === 'hypervisor'
+        ? `Kept ${label(name)}. The boxes you approved can make machines on it, and hold its token in memory only.`
+        : `Kept ${label(name)}. Sessions you start on a box you approved can be given it by name.`,
+    };
   }
 
   if (inside.op === 'connect') {
@@ -364,6 +406,7 @@ async function runDeviceOp(inside, config, key, who, email, at) {
 function label(name) {
   if (name === 'claude') return 'your Claude login';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return OAUTH_PROVIDERS[/** @type {keyof typeof OAUTH_PROVIDERS} */ (name)].label;
+  if (name.startsWith(HYPERVISOR_PREFIX)) return `the hypervisor at ${name.slice(HYPERVISOR_PREFIX.length)}`;
   return name.startsWith(SECRET_PREFIX) ? `the secret ${name.slice(SECRET_PREFIX.length)}` : name;
 }
 
@@ -481,7 +524,7 @@ async function itemsFor(userId, hash, jwk, store, key, config) {
       problems.push(`${label(name)} does not open with this minter’s key; it was kept under a key that has since changed.`);
       continue;
     }
-    if (kind === 'secret') {
+    if (kind === 'secret' || kind === 'hypervisor') {
       items.push({ name, value: String(inside.value), expiresAt: null });
       continue;
     }
