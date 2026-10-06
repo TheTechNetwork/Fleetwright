@@ -285,13 +285,26 @@ async function joinReady(core, vm, /** @type {string} */ ticket) {
   core.registry.recordHealth(vm, { hub: { reachable: true }, protocol: 9, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth: 'owner', labels: [] });
 }
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+/**
+ * Until `done()` holds. A top-up or an ending runs behind the call that set
+ * it going and finishes when it finishes, so a test waits for what it does,
+ * never for a fixed time: ten milliseconds was enough alone and not enough
+ * with the whole suite running beside it.
+ *
+ * @param {() => boolean} done @param {string} what
+ */
+async function until(done, what) {
+  for (let i = 0; i < 1000 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.ok(done(), `waited two seconds for ${what}`);
+}
+/** Until the box has been asked for a kept machine and said yes. @param {any} core */
+const madeOne = (core) => until(() => core.vmStandby.machines.size > 0, 'a kept machine to be asked for');
 
 test('keeping a machine ready makes one with its whole life and no session, for its owner, and says so', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
   const set = await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
   assert.equal(set.ok, true, set.text);
-  await tick();
+  await madeOne(core);
   assert.equal(asked.length, 1);
   assert.equal(asked[0].spec.verb, 'provision');
   assert.equal(asked[0].spec.params.minutes, 350, 'the longest a machine lives, so it is ready for longer');
@@ -306,7 +319,7 @@ test('keeping a machine ready makes one with its whole life and no session, for 
 test('a session takes the ready machine at once, as its owner, and another is made behind it', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
   await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
-  await tick();
+  await madeOne(core);
   const ticket = asked[0].spec.params.ticket;
   const kept = `vm-${ticket.split('_')[1]}`;
   await joinReady(core, kept, ticket);
@@ -315,7 +328,7 @@ test('a session takes the ready machine at once, as its owner, and another is ma
 
   asked.length = 0;
   const r = await core.dispatch(ask(eli, {}, { title: 'Try the build', task: 'Run the tests' }));
-  await tick();
+  await until(() => asked.some((x) => x.spec.verb === 'provision'), 'another to be made behind it');
   assert.equal(r.standby, true);
   assert.equal(r.vm, kept);
   const start = asked.find((x) => x.spec.verb === 'start');
@@ -335,7 +348,7 @@ test('a machine is taken only for the image and network it was kept for, with th
   const NET = '2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a';
   const { core, asked } = fleet({ deb14: { xo: [{ ...holding(ELI, [DEBIAN, OTHER])[0], networks: [{ id: NET, name: 'LAN', pool: 'pool-1' }] }], protocol: 9 } });
   await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
-  await tick();
+  await madeOne(core);
   const ticket = asked[0].spec.params.ticket;
   const kept = `vm-${ticket.split('_')[1]}`;
   await joinReady(core, kept, ticket);
@@ -359,12 +372,12 @@ test('a machine is taken only for the image and network it was kept for, with th
 test('keeping fewer ends the machines no longer wanted, and what may be kept is bounded and checked', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
   await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
-  await tick();
+  await madeOne(core);
   const kept = `vm-${asked[0].spec.params.ticket.split('_')[1]}`;
   asked.length = 0;
   const stop = await core.setVmStandby(eli, { count: 0 });
   assert.equal(stop.ok, true);
-  await tick();
+  await until(() => asked.some((x) => x.spec.verb === 'vmctl'), 'the kept machine to be ended');
   const ended = asked.find((x) => x.spec.verb === 'vmctl');
   assert.ok(ended, 'the kept machine is ended');
   assert.deepEqual(ended.spec.params, { name: kept, action: 'stop' });
@@ -379,7 +392,7 @@ test('keeping fewer ends the machines no longer wanted, and what may be kept is 
 test('what is kept ready survives a restart, and a machine that never joined is forgotten in time', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
   await core.setVmStandby(eli, { template: DEBIAN, count: 2 });
-  await tick();
+  await madeOne(core);
   const saved = JSON.parse(JSON.stringify(core.serialiseStandby()));
   const again = new CoordinatorCore({ now: () => Date.now() + 16 * 60_000 });
   again.restoreStandby(saved);
