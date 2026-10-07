@@ -101,7 +101,17 @@ internal object XoSetupNotice {
         // (POLICY_TITLES in core.js), and one that predates that only ever
         // sent setups.
         val policy = data["purpose"] == "policy"
-        val title = if (policy) {
+        // AN INSTALL installs Xen Orchestra and then adds the pool, so its
+        // end says both (DEPLOY_TITLES in core.js).
+        val deploy = data["purpose"] == "deploy"
+        val title = if (deploy) {
+            when (state) {
+                "done" -> "Xen Orchestra installed and added"
+                "failed" -> "Installing Xen Orchestra stopped"
+                "cancelled" -> "Installing Xen Orchestra cancelled"
+                else -> "Installing Xen Orchestra"
+            }
+        } else if (policy) {
             when (state) {
                 "done" -> "What the fleet may use is changed"
                 "failed" -> "The change stopped"
@@ -124,7 +134,7 @@ internal object XoSetupNotice {
             }
             "failed" -> if (hostId.isBlank()) "Open to see what stopped it." else "Open to see what stopped it on $hostId."
             "cancelled" -> "Stopped between steps, as asked."
-            "waiting" -> "Waiting for the sign-in"
+            "waiting" -> if (deploy) "Waiting for the passwords" else "Waiting for the sign-in"
             else -> listOfNotNull(
                 if (policy) XoPolicy.stepWords(data["phase"], step, of) else XoSetup.stepWords(data["phase"], step, of),
                 detail,

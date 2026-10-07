@@ -63,6 +63,8 @@ internal object XoSetup {
     fun stepWords(phase: String?, step: Int, of: Int): String {
         if (phase == "done") return "Done"
         STEPS.firstOrNull { it.first == phase }?.let { return it.second }
+        // An install's own steps, before onboarding's (XoDeploy.STEPS).
+        XoDeploy.words(phase)?.let { return it }
         val n = (step + 1).coerceIn(1, maxOf(of, 1))
         return "Step $n of ${maxOf(of, 1)}"
     }

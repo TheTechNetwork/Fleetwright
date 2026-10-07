@@ -78,33 +78,59 @@ internal object XoHandoff {
         require(parts.size == 3)
         val sealed = JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2])
         val record = Seal.open(key, aad(job, address), sealed)
-        require(record.optString("token").isNotEmpty() && record.optString("address") == address)
+        val at = record.optString("address")
+        // A setup's record names the address the job began with. An install's
+        // names the Xen Orchestra it made, and the pool master the job began
+        // with beside it.
+        require(record.optString("token").isNotEmpty() && (at == address || (record.optString("poolMaster") == address && XoSetup.ADDRESS_RE.matches(at))))
         record.toString()
     }.getOrNull()
+
+    /** The address a kept record names: where its Xen Orchestra answers. */
+    private fun recordAddress(record: String): String? =
+        runCatching { JSONObject(record).optString("address") }.getOrNull()?.takeIf { XoSetup.ADDRESS_RE.matches(it) }
+
+    /**
+     * Where the Xen Orchestra an install put on this pool master's pool
+     * answers, from the record this phone keeps for it, or null when it keeps
+     * none: the screen says where only once the record says so.
+     */
+    fun installedFrom(settings: Settings, poolMaster: String): String? =
+        heldAddresses(settings).firstOrNull { address ->
+            settings.secret(tokenName(address))?.let { runCatching { JSONObject(it).optString("poolMaster") == poolMaster }.getOrDefault(false) } == true
+        }
 
     /**
      * Open the token a finished job handed back and keep it. Null when there
      * is nothing to collect: not this phone's job, or not done yet.
      */
-    fun collect(settings: Settings, job: String, setup: Fleet.Setup): Outcome? {
-        if (setup.state != "done") return null
-        val entry = pending(settings).firstOrNull { it.job == job } ?: return null
+    fun collect(settings: Settings, job: String, setup: Fleet.Setup): Outcome? = collectRecord(settings, job, setup).first
+
+    /**
+     * What collecting came to, and the address the record was kept under:
+     * the job's own for a setup, and for an install the address of the Xen
+     * Orchestra the machine installed, which the record names.
+     */
+    private fun collectRecord(settings: Settings, job: String, setup: Fleet.Setup): Pair<Outcome?, String?> {
+        if (setup.state != "done") return null to null
+        val entry = pending(settings).firstOrNull { it.job == job } ?: return null to null
         val handoff = setup.handoff
         if (handoff == null) {
             // DONE AND NOTHING HANDED BACK is a machine older than the
             // hand-off, which kept the token where the first version did.
             forget(settings, job)
-            return Outcome.Failed("The machine finished but handed no token back; it is older than this app and kept the token itself. Update it and run the setup again.")
+            return Outcome.Failed("The machine finished but handed no token back; it is older than this app and kept the token itself. Update it and run the setup again.") to null
         }
         val key = settings.secret(replyName(job))?.let { restore(it) }
         val record = key?.let { open(handoff, job, entry.address, it) }
         forget(settings, job)
         if (record == null) {
-            return Outcome.Failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one.")
+            return Outcome.Failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one.") to null
         }
-        settings.putSecret(tokenName(entry.address), record)
-        hold(settings, entry.address)
-        return Outcome.Kept
+        val at = recordAddress(record) ?: entry.address
+        settings.putSecret(tokenName(at), record)
+        hold(settings, at)
+        return Outcome.Kept to at
     }
 
     /**
@@ -166,8 +192,7 @@ internal object XoHandoff {
      * null for the second when there was nothing to keep.
      */
     suspend fun collectAndKeep(settings: Settings, fleet: Fleet, job: String, setup: Fleet.Setup): Pair<Outcome?, String?> {
-        val address = pending(settings).firstOrNull { it.job == job }?.address
-        val outcome = collect(settings, job, setup)
+        val (outcome, address) = collectRecord(settings, job, setup)
         if (outcome != Outcome.Kept || address == null) return outcome to null
         return outcome to keepInFleet(settings, fleet, address)
     }

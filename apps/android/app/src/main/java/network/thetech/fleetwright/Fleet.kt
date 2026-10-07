@@ -829,7 +829,28 @@ class Fleet(
         val cert: String?,
         val version: String?,
         val certificate: Certificate? = null,
+        /**
+         * What the machine found over SSH at the address, said when Xen
+         * Orchestra did not answer there: what a pool with no Xen Orchestra is
+         * added from. NULL IS A MACHINE THAT DID NOT SAY, too old to look or
+         * one that found Xen Orchestra: never one that found nothing
+         * (`narrowSsh` in src/fleet/coordinator/core.js).
+         */
+        val ssh: SshProbe? = null,
     )
+
+    /**
+     * `narrowSsh` is the shape. [reachable] and [deploy] keep null as cannot
+     * tell: a machine without ssh-keyscan has not found the address
+     * unreachable. [missing] is what it lacks to install with, by name.
+     */
+    data class SshProbe(val reachable: Boolean?, val keys: List<SshKey>, val deploy: Boolean?, val missing: List<String>)
+
+    /**
+     * One host key, as OpenSSH names its type and prints its fingerprint, and
+     * the same digest in hex ([sha256]), which is the pin an install is begun with.
+     */
+    data class SshKey(val type: String, val fingerprint: String, val sha256: String)
 
     /**
      * A certificate as a probe describes it. `trusted` is true only when the
@@ -2412,6 +2433,26 @@ class Fleet(
                                     cert = p.optString("cert").takeIf { XoSetup.PIN_RE.matches(it) },
                                     version = p.optString("version").takeIf { it.isNotBlank() && it != "null" },
                                     certificate = XoSetup.certificate(p.optJSONObject("certificate")),
+                                    ssh = p.optJSONObject("ssh")?.let { s ->
+                                        // `has` and `isNull` first, for the reason `xo` gives.
+                                        fun maybe(key: String): Boolean? = s.takeIf { it.has(key) && !it.isNull(key) }?.optBoolean(key)
+                                        SshProbe(
+                                            reachable = maybe("reachable"),
+                                            keys = s.optJSONArray("keys")?.let { a ->
+                                                (0 until a.length()).mapNotNull { i ->
+                                                    a.optJSONObject(i)?.let { k ->
+                                                        val fp = k.optString("fingerprint")
+                                                        val hex = k.optString("sha256")
+                                                        if (XoDeploy.SSH_KEY_RE.matches(fp) && XoSetup.PIN_RE.matches(hex)) SshKey(k.optString("type"), fp, hex) else null
+                                                    }
+                                                }
+                                            } ?: emptyList(),
+                                            deploy = maybe("deploy"),
+                                            missing = s.optJSONArray("missing")?.let { a ->
+                                                (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { it.isNotBlank() && !a.isNull(i) } }
+                                            } ?: emptyList(),
+                                        )
+                                    },
                                 )
                             }
                         }

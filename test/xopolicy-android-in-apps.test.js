@@ -142,7 +142,9 @@ test('Android: Hypervisors on Machines lists the pools this phone holds, for adm
   // The list is what collect records when it keeps a token, and only the
   // addresses whose token is still here are shown.
   const handoff = file('XoHandoff.kt');
-  assert.match(handoff, /settings\.putSecret\(tokenName\(entry\.address\), record\)\s*hold\(settings, entry\.address\)/);
+  // Under the address the record names: the job's own for a setup, the Xen
+  // Orchestra it installed for an install.
+  assert.match(handoff, /val at = recordAddress\(record\) \?: entry\.address\s*settings\.putSecret\(tokenName\(at\), record\)\s*hold\(settings, at\)/);
   assert.match(handoff, /settings\.secret\(tokenName\(address\)\)\?\.let \{ Held\(address, poolNames\(it\)\) \}/);
   // Not a secret: an address list, beside the pending list.
   assert.match(file('Fleet.kt'), /var xoHeld: String\s*get\(\) = prefs\.getString\("xoHeld", ""\)/);

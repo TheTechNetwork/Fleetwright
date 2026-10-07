@@ -13,14 +13,15 @@
 // XODEPLOY_STEPS (xo-setup.js STEP_WORDS), and the shortest admin password
 // the machine takes. The machine's half is xo-deploy.test.js.
 //
-// THE ANDROID HALF lands on its own branch, stacked on this one
-// (CONTRIBUTING.md), with the "both phones say" assertions.
+// The Android half is below the iOS one, and the sentences both phones say
+// are checked against both.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 import { XODEPLOY_STEPS, XOSETUP_STEPS } from '../src/fleet/protocol/intents.js';
 import { STEP_WORDS } from '../src/fleet/host/xo-setup.js';
 import { MIN_ADMIN_PASSWORD } from '../src/fleet/host/xo-deploy.js';
@@ -123,4 +124,62 @@ test('iOS: every step of an install has the host’s words, and its end says it 
 
 test('iOS: the install screen says each sentence the phones share', () => {
   for (const s of DEPLOY_SENTENCES) assert.ok(IOS.includes(s), s);
+});
+
+// THE ANDROID HALF, and what both phones say.
+
+const ANDROID = androidSources();
+const SHEET = read('apps/android/app/src/main/java/network/thetech/fleetwright/XoDeploySheet.kt');
+const ADD = read('apps/android/app/src/main/java/network/thetech/fleetwright/HypervisorSheet.kt');
+const NOTICE = read('apps/android/app/src/main/java/network/thetech/fleetwright/XoSetupNotice.kt');
+
+test('Android: installing is offered only when every machine that answered found no Xen Orchestra', () => {
+  assert.match(ADD, /if \(!policy && found\.isNotEmpty\(\) && found\.all \{ !it\.reachable \|\| it\.xo == false \}\) \{/);
+  assert.match(ADD, /if \(deploying\) \{\s*XoDeploySheet\(/);
+});
+
+test('Android: the probe asks over SSH, and only a machine that reached it and can install is offered', () => {
+  // What Add a hypervisor's probe found is handed over, and another address
+  // is asked about with the same probe.
+  assert.match(ADD, /XoDeploySheet\(settings, address\.trim\(\), probes, onDismiss = \{ deploying = false \}\)/);
+  assert.match(SHEET, /val r = fleet\.xoprobe\(address\.trim\(\)\)/);
+  assert.match(ANDROID, /val ssh = probe\.ssh \?: return false\s*return ssh\.reachable == true && ssh\.deploy == true && hostKey\(probe\) != null/);
+  assert.match(SHEET, /if \(XoDeploy\.canInstall\(p\)\) \{\s*Row\(/);
+  // Null stays cannot tell all the way from the wire.
+  assert.match(ANDROID, /fun maybe\(key: String\): Boolean\? = s\.takeIf \{ it\.has\(key\) && !it\.isNull\(key\) \}\?\.optBoolean\(key\)/);
+});
+
+test('Android: Install waits for the host key and both passwords, and the key is checked before the seal', () => {
+  assert.match(SHEET, /enabled = !beginning && matched && rootPassword\.isNotEmpty\(\) && XoDeploy\.adminPasswordOk\(adminPassword\)/);
+  assert.match(ANDROID, new RegExp(`const val MIN_ADMIN_PASSWORD = ${MIN_ADMIN_PASSWORD}\\b`));
+  assert.match(SHEET, /val pin = XoDeploy\.hostKey\(p\)\?\.sha256 \?: return/);
+  assert.match(SHEET, /fleet\.xosetup\("deploy", address = where, pin = pin, host = p\.hostId\)/);
+  const [prefix] = signingInput('xodeploy-key', { address: 'a', job: 'b', key: 'c', pin: 'd' }).split('\n');
+  assert.ok(ANDROID.includes(`"${prefix}\\n{\\"address\\":\\"$address\\",\\"job\\":\\"$job\\",\\"key\\":\\"$key\\",\\"pin\\":\\"$pin\\"}"`));
+  const check = SHEET.indexOf('XoDeploy.signingInput(');
+  const sealed = SHEET.indexOf('XoDeploy.sealPasswords(');
+  assert.ok(check > 0 && sealed > 0, 'both are on the screen');
+  assert.ok(ANDROID.includes(`"${xodeployAad('$job', '$address')}"`), 'the same binding as seal.js');
+  assert.match(ANDROID, /\.put\("purpose", "deploy"\)\s*\.put\("root", JSONObject\(\)\.put\("password", rootPassword\)\)\s*\.put\("xo", JSONObject\(\)\.put\("password", adminPassword\)\)\s*\.put\("reply", reply\)/);
+  // Cleared the moment they are sealed.
+  assert.match(SHEET, /val sealed = XoDeploy\.sealPasswords\([^\n]*\)\s*rootPassword = ""\s*adminPassword = ""/);
+  // Kept under the address the record names.
+  assert.match(ANDROID, /at == address \|\| \(record\.optString\("poolMaster"\) == address && XoSetup\.ADDRESS_RE\.matches\(at\)\)/);
+});
+
+test('Android: every step of an install has the host’s words, and the notification ends saying it installed and added', () => {
+  for (const key of XODEPLOY_STEPS.filter((k) => !XOSETUP_STEPS.includes(/** @type {any} */ (k)))) {
+    assert.ok(ANDROID.includes(`"${key}" to "${STEP_WORDS[key]}"`), `no words for ${key}`);
+  }
+  for (const end of ['Xen Orchestra installed and added', 'Installing Xen Orchestra stopped', 'Installing Xen Orchestra cancelled', 'Installing Xen Orchestra']) {
+    assert.ok(NOTICE.includes(`-> "${end}"`), end);
+  }
+  assert.match(NOTICE, /val deploy = data\["purpose"\] == "deploy"/);
+});
+
+test('both phones say each sentence of an install the same way', () => {
+  for (const s of DEPLOY_SENTENCES) {
+    assert.ok(IOS.includes(s), `iOS: ${s}`);
+    assert.ok(ANDROID.includes(s), `Android: ${s}`);
+  }
 });
