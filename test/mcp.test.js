@@ -316,7 +316,15 @@ test('the binary speaks the protocol on stdio, against a real socket', async () 
   send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'fleet_list', arguments: {} } });
-  await new Promise((r) => setTimeout(r, 700));
+  // UNTIL THE THIRD REPLY, not for a fixed while. A 700 ms sleep was right on
+  // an idle machine and wrong on a loaded one: the gate runs this beside the
+  // rest of the suite, the binary took longer than that to start, and closing
+  // stdin early ended it before it answered. The cap is only so a binary that
+  // never answers fails here rather than hanging the run.
+  const deadline = Date.now() + 20_000;
+  while (out.split('\n').filter(Boolean).length < 3 && Date.now() < deadline && mcp.exitCode === null) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
   mcp.stdin.end();
   await new Promise((r) => mcp.on('close', () => r(null)));
   fleet.close();
