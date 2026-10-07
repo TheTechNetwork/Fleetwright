@@ -484,7 +484,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', 'groups', ...(setups.coordinatorUrl ? ['image', 'images'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(setups.coordinatorUrl ? ['image', 'images'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();

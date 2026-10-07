@@ -232,6 +232,31 @@ function edgeArgs(/** @type {any} */ admin, /** @type {any} */ extra = {}) {
   };
 }
 
+test('an edge that blocks hands what leaves to Suricata and drops what the four rule files match; one that watches does neither', () => {
+  // The regression this guards: a blocking edge that only logs, because the
+  // way out never reached Suricata or no policy turned an alert into a drop.
+  const block = edgeConfig({ block: true }).toString('utf8');
+  const watch = edgeConfig().toString('utf8');
+  assert.equal(block.length, OPNSENSE_IMAGE.config.length, 'blocking no longer fits the file it replaces');
+  assert.ok(balanced(block.trimEnd()));
+  // Only the rule that lets labs out is diverted: DNS and private space are
+  // decided before Suricata would see them.
+  const rules = [...block.matchAll(/<rule>.*?<\/rule>/g)].map((m) => m[0]);
+  assert.deepEqual(rules.map((r) => r.includes(`<divert-to>${EDGE_FILTER.divertPort}</divert-to>`)), [false, false, false, true]);
+  assert.match(rules[3], /<action>pass<\/action>[\s\S]*Labs reach the internet/);
+  assert.match(block, /<IDS version="1\.1\.1"><general><enabled>1<\/enabled><mode>divert<\/mode>/);
+  // One policy, from alert to drop, over exactly the rule files it loads.
+  const fileIds = [...block.matchAll(/<file uuid="([0-9a-f-]{36})">/g)].map((m) => m[1]);
+  const policy = /<policy uuid="[0-9a-f-]{36}"><enabled>1<\/enabled><action>alert<\/action><rulesets>([^<]+)<\/rulesets><new_action>drop<\/new_action><\/policy>/.exec(block);
+  assert.ok(policy, 'no policy that turns an alert into a drop');
+  assert.deepEqual(policy[1].split(','), fileIds);
+  assert.equal(fileIds.length, EDGE_FILTER.rules.length);
+  const ids = [...block.matchAll(/uuid="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(ids).size, ids.length);
+  // Watching: no divert, no mode, no policy.
+  for (const part of ['<divert-to>', '<mode>divert', '<policies>']) assert.ok(!watch.includes(part), `a watching edge has ${part}`);
+});
+
 test('the edge router is made in the order that boots: disk in, WAN first, checksum offload off, started', async () => {
   const admin = xo(
     { VM: [], 'VM-template': [TEMPLATE], VIF: [{ id: 'vif-a', $VM: 'vm-1', device: '0' }, { id: 'vif-b', $VM: 'vm-1', device: '1' }] },
@@ -335,6 +360,44 @@ test('an edge router already there is not built again: its WAN follows the way o
   assert.match(done, /already there[\s\S]*WAN moved to eth0\.10[\s\S]*was started/);
 });
 
+test('an edge built the other way is rebuilt: the old one stopped, the new one built and tagged, and only then the old one removed', async () => {
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag], power_state: 'Running' };
+  const admin = xo(
+    { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
+    { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' },
+  );
+  let told = 0;
+  const { args } = edgeArgs(admin, { block: true, rebuilding: () => told++ });
+  const done = await ensureEdge(args);
+  assert.equal(told, 1, 'the job is not told it is rebuilding');
+  const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects' && m !== 'vif.set');
+  assert.deepEqual(methods, ['vm.stop', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.delete']);
+  const params = Object.fromEntries(admin.calls);
+  assert.deepEqual(params['vm.stop'], { id: 'vm-old', force: true });
+  assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.blocksTag]);
+  assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
+  assert.match(done, /dropped[\s\S]*replaced the one that was there/);
+});
+
+test('a rebuild that fails leaves the old edge running as it was, and an edge asked nothing of is left alone', async () => {
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.blocksTag], power_state: 'Running' };
+  const admin = xo(
+    { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
+    { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } },
+  );
+  await assert.rejects(ensureEdge(edgeArgs(admin, { block: false }).args), /no memory left on the host\. The edge router it was replacing was started again/);
+  assert.deepEqual(admin.calls.filter(([m]) => m === 'vm.start').map(([, p]) => p), [{ id: 'vm-old' }]);
+  assert.ok(!admin.calls.some(([m, p]) => m === 'vm.delete' && p.id === 'vm-old'), 'the old edge was removed though nothing replaced it');
+  // A phone that predates the choice sends none: the edge is not touched,
+  // whichever way it was built; nor is one already built the way asked.
+  for (const block of [null, true]) {
+    const there = xo({ VM: [old], VIF: [] });
+    const said = await ensureEdge(edgeArgs(there, { block }).args);
+    assert.deepEqual(there.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects'), [], String(block));
+    assert.match(said, /already there[\s\S]*dropping what its threat rules match/);
+  }
+});
+
 test('a build that fails leaves nothing half-made behind', async () => {
   const admin = xo(
     { VM: [], 'VM-template': [TEMPLATE], VIF: [] },
@@ -428,5 +491,14 @@ test('the edge router is asked for only with a way out for its WAN', () => {
   const nowhere = checkPolicy({ ...base, egress: 'n2', edge: true, edgeSr: 'sr-x' }, choices);
   assert.equal(nowhere.ok, false);
   assert.match(/** @type {any} */ (nowhere).text, /storage this pool listed/);
+  // Block or watch: yes, no, or not said, which leaves an edge that is there
+  // as it is; and nothing at all without an edge to say it of.
+  for (const [edgeBlock, want] of /** @type {Array<[any, any]>} */ ([[true, true], [false, false], [undefined, null]])) {
+    const r = checkPolicy({ ...base, egress: 'n2', edge: true, edgeBlock }, choices);
+    assert.equal(r.ok && r.policy.edgeBlock, want, String(edgeBlock));
+  }
+  const noEdge = checkPolicy({ ...base, egress: 'n2', edgeBlock: true }, choices);
+  assert.equal(noEdge.ok && noEdge.policy.edgeBlock, null);
+  assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n2', edge: true, edgeBlock: 'yes' }, choices)).text, /yes or no/);
   assert.ok(!existsSync('/nowhere'));
 });

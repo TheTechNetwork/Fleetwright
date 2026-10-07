@@ -67,6 +67,8 @@ export const OPNSENSE_IMAGE = Object.freeze({
 export const EDGE = Object.freeze({
   vm: 'fleetwright-edge',
   tag: 'fleetwright-edge',
+  /** On an edge built to drop what its threat rules match, so a policy can tell what it has without logging in, which it cannot. */
+  blocksTag: 'fleetwright-edge-blocks',
   uplink: 'fleetwright-uplink',
   template: 'Other install media',
   /** The edge's LAN, which is the uplink: a range a home or office LAN rarely uses. */
@@ -85,11 +87,21 @@ export const EDGE = Object.freeze({
 export const EDGE_FILTER = Object.freeze({
   /** abuse.ch ThreatFox's indicators and Hagezi's threat intelligence feeds: malware, phishing, command and control. */
   blocklists: Object.freeze(['atf', 'hgz011']),
-  /** Malware traffic, known botnet controllers, known-bad hosts, Cobalt Strike servers. Detected and logged, not dropped. */
+  /** Malware traffic, known botnet controllers, known-bad hosts, Cobalt Strike servers. Logged, and dropped when the policy says block. */
   rules: Object.freeze(['emerging-malware.rules', 'botcc.rules', 'compromised.rules', 'threatview_CS_c2.rules']),
   /** Neither is downloaded at boot (OPNsense fetches them on an apply or from cron), and /var is in memory, so both are fetched on a cron, every half hour. */
   every: '*/30',
+  /**
+   * Where Suricata takes traffic when it blocks: OPNsense's one divert
+   * socket (scripts/filter/list_divert_sockets.php). Divert, not netmap,
+   * because divert needs nothing of the network driver, and netmap's support
+   * for Xen's netfront is the thing nobody could promise.
+   */
+  divertPort: 8000,
 });
+
+/** The rule files' ids, less their last digit, which is each one's place in EDGE_FILTER.rules. */
+const RULE_FILE_UUID = '5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1';
 
 /** What a lab may not reach: private, shared, link-local and multicast space. */
 export const NOT_FROM_LABS = Object.freeze(['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16', '224.0.0.0/4']);
@@ -112,6 +124,24 @@ export const NOT_FROM_LABS = Object.freeze(['10.0.0.0/8', '172.16.0.0/12', '192.
  * threat blocklists, and Suricata watches the LAN for known-bad traffic and
  * logs it, by the machine's own address.
  *
+ * WHEN IT BLOCKS (`block`), Suricata runs inline: the rule that lets labs out
+ * hands their traffic to its divert socket first, and one policy turns every
+ * alert in the four rule files into a drop. FAIL CLOSED, on purpose: with
+ * Suricata stopped, a divert socket with nobody reading it passes nothing, so
+ * an edge that blocks and cannot inspect lets nothing out rather than
+ * everything. The DNS and private rules above it are not diverted: they
+ * decide before Suricata would see the packet.
+ *
+ * ROOM. It has to fit in the 5,234 bytes of the file it replaces, and blocking
+ * all but filled them. What was cut to make room is what OPNsense does
+ * anyway: the web interface's theme (nobody can log in to see it), pf's
+ * `normal` optimization (its default when unset), sticky load balancing (it
+ * does nothing without source tracking, which is off), and the policy's
+ * `prio` and description, which OPNsense reads as 0 and none when absent.
+ * NOT its `enabled`: booted without it, the policy came up disabled and an
+ * alert installed as an alert, because a model default is not written into an
+ * item that came from the file. A test keeps both modes inside the file.
+ *
  * VERSIONS STAMPED ONE BELOW CURRENT, on purpose. OPNsense's templates read
  * the configuration as written, not the model with its defaults, and the
  * defaults are written in only when a migration runs and saves the model.
@@ -122,19 +152,19 @@ export const NOT_FROM_LABS = Object.freeze(['10.0.0.0/8', '172.16.0.0/12', '192.
  * these sections as an older format. That is also why Unbound's legacy
  * `<unbound>` section is gone: it is what an older migration would fold in.
  *
- * @param {{ length?: number, wanIf?: string, lanIf?: string }} [opts]
+ * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0', lanIf = 'xn1' } = {}) {
+export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0', lanIf = 'xn1', block = false } = {}) {
   const { address, prefix, from, to } = EDGE.lan;
   /** @param {number} seq @param {string} action @param {string} body @param {string} descr */
   const rule = (seq, action, body, descr) =>
     `<rule><enabled>1</enabled><sequence>${seq}</sequence><action>${action}</action><quick>1</quick><interface>lan</interface>` +
     `<direction>in</direction><ipprotocol>inet</ipprotocol>${body}<description>${descr}</description></rule>`;
   const xml =
-    '<?xml version="1.0"?>\n<opnsense>\n<theme>opnsense</theme>\n<system>\n' +
+    '<?xml version="1.0"?>\n<opnsense>\n<system>\n' +
     '<use_mfs_tmp/><use_mfs_var/><serialspeed>115200</serialspeed><primaryconsole>serial</primaryconsole><secondaryconsole>video</secondaryconsole>\n' +
-    '<optimization>normal</optimization><hostname>fleetwright-edge</hostname><domain>internal</domain>\n' +
+    '<hostname>fleetwright-edge</hostname><domain>internal</domain>\n' +
     '<group><name>admins</name><description>System Administrators</description><scope>system</scope><gid>1999</gid><member>0</member><priv>page-all</priv></group>\n' +
     // `*` is a locked account to FreeBSD and a hash PHP never verifies: no
     // login on the console, over SSH or in the web interface.
@@ -143,7 +173,7 @@ export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0
     '<webgui><protocol>https</protocol><noantilockout>1</noantilockout></webgui>\n' +
     '<disablenatreflection>yes</disablenatreflection><usevirtualterminal>1</usevirtualterminal><disableconsolemenu/>\n' +
     '<disablechecksumoffloading>1</disablechecksumoffloading><disablesegmentationoffloading>1</disablesegmentationoffloading><disablelargereceiveoffloading>1</disablelargereceiveoffloading>\n' +
-    '<pf_share_forward>1</pf_share_forward><lb_use_sticky>1</lb_use_sticky>\n' +
+    '<pf_share_forward>1</pf_share_forward>\n' +
     '</system>\n<interfaces>\n' +
     `<wan><enable>1</enable><if>${wanIf}</if><descr>WAN</descr><ipaddr>dhcp</ipaddr><blockpriv>0</blockpriv><blockbogons>0</blockbogons></wan>\n` +
     `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${address}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
@@ -161,15 +191,22 @@ export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0
     '\n' +
     rule(3, 'block', '<protocol>any</protocol><source_net>lan</source_net><destination_net>fleetwright_private</destination_net>', 'Nothing private from a lab') +
     '\n' +
-    rule(4, 'pass', '<protocol>any</protocol><source_net>lan</source_net><destination_net>any</destination_net>', 'Labs reach the internet') +
+    rule(4, 'pass', `<protocol>any</protocol><source_net>lan</source_net><destination_net>any</destination_net>${block ? `<divert-to>${EDGE_FILTER.divertPort}</divert-to>` : ''}`, 'Labs reach the internet') +
     '\n</rules><snatrules/><npt/><onetoone/></Filter>\n</Firewall>\n' +
     // Fixed ids, so the same edge is the same bytes, and the IDS can name its cron job.
     '<unboundplus version="1.0.14"><general><enabled>1</enabled></general><dnsbl><blocklist uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e01">' +
     `<enabled>1</enabled><type>${EDGE_FILTER.blocklists.join(',')}</type><description>Threats</description></blocklist></dnsbl></unboundplus>\n` +
-    `<IDS version="1.1.1"><general><enabled>1</enabled><interfaces>lan</interfaces><homenet>${EDGE.lan.address.replace(/\.\d+$/, '.0')}/${prefix}</homenet>` +
+    `<IDS version="1.1.1"><general><enabled>1</enabled>${block ? '<mode>divert</mode>' : ''}<interfaces>lan</interfaces><homenet>${EDGE.lan.address.replace(/\.\d+$/, '.0')}/${prefix}</homenet>` +
     '<UpdateCron>5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03</UpdateCron></general><files>' +
-    EDGE_FILTER.rules.map((f, i) => `<file uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1${i}"><filename>${f}</filename><enabled>1</enabled></file>`).join('') +
-    '</files></IDS>\n<cron version="1.0.3"><jobs>' +
+    EDGE_FILTER.rules.map((f, i) => `<file uuid="${RULE_FILE_UUID}${i}"><filename>${f}</filename><enabled>1</enabled></file>`).join('') +
+    '</files>' +
+    // Every rule in those files whose action is alert becomes drop: OPNsense
+    // applies it as it installs each download (installRules.py).
+    (block
+      ? '<policies><policy uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e04"><enabled>1</enabled><action>alert</action>' +
+        `<rulesets>${EDGE_FILTER.rules.map((_, i) => `${RULE_FILE_UUID}${i}`).join(',')}</rulesets><new_action>drop</new_action></policy></policies>`
+      : '') +
+    '</IDS>\n<cron version="1.0.3"><jobs>' +
     `<job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e02"><enabled>1</enabled><command>unbound dnsbl</command><minutes>${EDGE_FILTER.every}</minutes><hours>*</hours><description>Blocklists</description></job>` +
     `<job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03"><origin>IDS</origin><enabled>1</enabled><command>ids update</command><minutes>${EDGE_FILTER.every}</minutes><hours>*</hours><description>Rules</description></job>` +
     '</jobs></cron>\n</OPNsense>\n</opnsense>\n';
@@ -570,6 +607,17 @@ export function buildFill(downloaded, written) {
  * was cut off (unattached, named for the router, on the storage it was going
  * to). The first version's Cancel waited for the build to finish.
  *
+ * BLOCK OR WATCH (`block`): true builds an edge that drops what its threat
+ * rules match, false one that only logs it, and null leaves an edge that is
+ * there as it is (a phone that predates the choice sends nothing, and must
+ * not cost anybody their edge). The edge cannot be changed in place, since
+ * it has no login, so an edge built the other way is REBUILT: stopped, a new
+ * one built beside it, and only then removed. If the new one fails or is
+ * cancelled, it is removed and the old one started again, so the pool is
+ * never left with neither. What the machines behind it notice is the way out
+ * gone for as long as the build takes. `rebuilding` is told first, so the job
+ * can say "rebuilding" rather than "building" if it is cancelled.
+ *
  * @param {{
  *   admin: any,
  *   pool: string,
@@ -578,6 +626,8 @@ export function buildFill(downloaded, written) {
  *   srs: any[],
  *   fleetSrs: string[],
  *   sr?: string|null,
+ *   block?: boolean|null,
+ *   rebuilding?: () => void,
  *   address: string, pin: string|null, plain: boolean,
  *   imageDir: string,
  *   say: (text: string, part?: BuildPart) => void,
@@ -587,9 +637,27 @@ export function buildFill(downloaded, written) {
  *   upload?: typeof uploadDisk,
  * }} opts
  */
-export async function ensureEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
+export async function ensureEdge(opts) {
+  const { admin, pool, egress, block = null, rebuilding, say } = opts;
   const vms = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {});
   const edge = /** @type {any} */ (vms.find((v) => /** @type {any} */ (v)?.$pool === pool && /** @type {any} */ (v)?.tags?.includes?.(EDGE.tag)));
+  const blocks = edge?.tags?.includes?.(EDGE.blocksTag) === true;
+  if (edge && block !== null && block !== blocks) {
+    rebuilding?.();
+    say(block ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.' : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.');
+    if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
+    let said;
+    try {
+      said = await buildEdge({ ...opts, block });
+    } catch (e) {
+      // Never neither: the one that was there comes back as it was.
+      await admin.call('vm.start', { id: edge.id }).catch(() => {});
+      /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. The edge router it was replacing was started again, as it was`;
+      throw e;
+    }
+    await admin.call('vm.delete', { id: edge.id, deleteDisks: true });
+    return `${said} It replaced the one that was there, which was removed.`;
+  }
   if (edge) {
     const vifs = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: edge.id } })) || {});
     const wan = /** @type {any} */ (vifs.find((v) => String(/** @type {any} */ (v)?.device) === '0'));
@@ -602,9 +670,17 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, fleetSrs, s
       await admin.call('vm.start', { id: edge.id });
       said.push('It was stopped, and was started.');
     }
-    return [`The edge router was already there, on ${egress.name}.`, ...said].join(' ');
+    return [`The edge router was already there, on ${egress.name}, ${blocks ? 'dropping' : 'logging'} what its threat rules match.`, ...said].join(' ');
   }
+  return buildEdge({ ...opts, block: block === true });
+}
 
+/**
+ * A new edge router, built, tagged with how it filters, and started.
+ *
+ * @param {Parameters<typeof ensureEdge>[0] & { block: boolean }} opts
+ */
+async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, block, address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
   const sr = edgeStorage({ pool, srs, fleetSrs, sr: chosenSr });
   const on = srName(sr);
 
@@ -638,7 +714,7 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, fleetSrs, s
       name: EDGE.vm,
       description: `OPNsense ${OPNSENSE_IMAGE.release}, configured by Fleetwright as the edge router`,
     });
-    const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ offset: OPNSENSE_IMAGE.config.offset, replacement: edgeConfig(), total: OPNSENSE_IMAGE.rawSize }));
+    const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ offset: OPNSENSE_IMAGE.config.offset, replacement: edgeConfig({ block }), total: OPNSENSE_IMAGE.rawSize }));
     vdi = await upload({
       address,
       pin,
@@ -660,7 +736,7 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, fleetSrs, s
       VDIs: [],
       CPUs: EDGE.cpus,
       memory: EDGE.memory,
-      tags: [EDGE.tag],
+      tags: block ? [EDGE.tag, EDGE.blocksTag] : [EDGE.tag],
       bootAfterCreate: false,
     });
     await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
@@ -678,7 +754,7 @@ export async function ensureEdge({ admin, pool, egress, uplink, srs, fleetSrs, s
   const { address: lan, prefix } = EDGE.lan;
   return (
     `The edge router is up: OPNsense ${OPNSENSE_IMAGE.release}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}, its disk on ${on}. ` +
-    'Labs on the uplink reach the internet and nothing private. It has no login; its rules are fixed.'
+    `Labs on the uplink reach the internet and nothing private, and what its threat rules match is ${block ? 'dropped' : 'logged'}. It has no login; its rules are fixed.`
   );
 }
 
