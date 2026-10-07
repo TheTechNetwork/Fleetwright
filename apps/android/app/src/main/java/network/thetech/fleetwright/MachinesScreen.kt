@@ -99,10 +99,13 @@ fun MachinesScreen(
     // A pool whose policy is being changed, by address. Saveable for the same
     // reason; the job itself starts over after a rotation (HypervisorSheet).
     var policyFor by rememberSaveable { mutableStateOf<String?>(null) }
+    // A pool whose page is open, by address (PoolPage, docs/manage.md).
+    // Saveable for the same reason; its connection opens again after a turn.
+    var managing by rememberSaveable { mutableStateOf<String?>(null) }
     // THE POOLS THIS PHONE KEEPS A TOKEN FOR, read again whenever a sheet that
     // could have added one closes. On this phone and nowhere else, so this is
     // the one place that can list them.
-    val held = remember(addingHypervisor, policyFor) { XoHandoff.held(settings) }
+    val held = remember(addingHypervisor, policyFor, managing) { XoHandoff.held(settings) }
 
     LaunchedEffect(resumingSetup) {
         if (resumingSetup != null) {
@@ -164,6 +167,13 @@ fun MachinesScreen(
         // first job's state in a sheet whose argument quietly changed.
         key(hypervisorJob) {
             HypervisorSheet(settings, resumeJob = hypervisorJob, onDismiss = { addingHypervisor = false; hypervisorJob = null })
+        }
+    }
+    managing?.let { address ->
+        held.firstOrNull { it.address == address }?.let { pool ->
+            key(address) {
+                PoolPage(settings, pool, admin, onChangePolicy = { policyFor = address }, onDismiss = { managing = null })
+            }
         }
     }
     policyFor?.let { pool ->
@@ -239,17 +249,20 @@ fun MachinesScreen(
                     }
                 }
             }
-            // ADMINS ONLY, as Add a hypervisor is: changing a pool's policy
-            // takes an admin sign-in and the verb refuses a member. Drawn only
-            // when this phone holds a pool, because an empty section is a
-            // heading that promises something and lists nothing.
+            // ADMINS ONLY, as Add a hypervisor is: the pools here are the ones
+            // an admin set up from this phone. Each opens its page: what is
+            // on it and what can be done there, phone-direct with the token
+            // setup handed back (PoolPage), and the change to what the fleet
+            // may use. Drawn only when this phone holds a pool, because an
+            // empty section is a heading that promises something and lists
+            // nothing.
             if (settings.configured && admin == true && held.isNotEmpty()) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                         SectionHead("Hypervisors")
-                        Hint("Pools whose token this phone keeps. Open one to change what the fleet may use on it.")
+                        Hint("Pools whose token this phone keeps. Open one to see what is on it and manage it from here.")
                         Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                            held.forEach { h -> HeldRow(h, onClick = { policyFor = h.address }) }
+                            held.forEach { h -> HeldRow(h, Manage.lastLooked(settings, h.address), onClick = { managing = h.address }) }
                         }
                     }
                 }
@@ -306,18 +319,21 @@ private fun PoolMachineCard(m: Fleet.VmMachine, onClick: () -> Unit) {
 }
 
 /**
- * A pool this phone keeps a token for: its address, and the pools the machine
- * named when it handed the token over, or that it named none this phone can
- * read. The row is the way in, to change what the fleet may use on it; that
- * is said to TalkBack as the action, and in the hint above for the eye.
+ * A pool this phone keeps a token for: its address, the pools the machine
+ * named when it handed the token over (or that it named none this phone can
+ * read), and when this phone last looked at it. The row is the way to its
+ * page; that is said to TalkBack as the action, and in the hint above for the
+ * eye. HOW CURRENT ITS PAGE WILL BE is the last line: nothing watches a pool
+ * while the app is closed, so the row says when, rather than letting the
+ * page's first frame pass for now.
  */
 @Composable
-private fun HeldRow(held: XoHandoff.Held, onClick: () -> Unit) {
+private fun HeldRow(held: XoHandoff.Held, looked: Long?, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clickable(onClickLabel = "Change what it may use", role = Role.Button, onClick = onClick)
+            .clickable(onClickLabel = "Opens its page", role = Role.Button, onClick = onClick)
             .padding(vertical = Design.Space.insideTight),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -329,6 +345,11 @@ private fun HeldRow(held: XoHandoff.Held, onClick: () -> Unit) {
                     held.pools.isEmpty() -> "Its pools have no names."
                     else -> held.pools.joinToString(", ")
                 },
+                style = Design.Style.label,
+                color = Design.Palette.inkDim.now,
+            )
+            Text(
+                looked?.let { Manage.Words.rowLooked(relative(it).toString()) } ?: Manage.Words.never,
                 style = Design.Style.label,
                 color = Design.Palette.inkDim.now,
             )

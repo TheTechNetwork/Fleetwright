@@ -2992,6 +2992,15 @@ class Settings(context: Context) {
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoVia") else putString("xoVia", value) }.apply()
 
     /**
+     * When this phone last looked at each pool it manages directly, as Manage
+     * writes it: a JSON object of address to epoch milliseconds. Not a secret;
+     * it is what the screen says in place of a picture nobody is watching.
+     */
+    var xoLooked: String
+        get() = prefs.getString("xoLooked", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoLooked") else putString("xoLooked", value) }.apply()
+
+    /**
      * A Xen Orchestra sign-in the person chose to keep, as XoSaved sealed it
      * under its own fingerprint-bound key: ciphertext here, and nothing this
      * class can open. An empty value removes it.
