@@ -22,8 +22,9 @@
  * @property {import('../core/login.js').LoginFlow} login
  * @property {import('../config.js').Config} cfg
  * @property {string} actor        stable id of who is asking, e.g. "fleet:<email>"
- *   from the sidecar, or "web"/"cli" on the box (older records also hold
- *   "telegram:<id>"; see core/accounts.js for how each is read)
+ *   from the sidecar, or "web" from the console and the CLI on the box, which
+ *   send none (older records also hold "cli" and "telegram:<id>"; see
+ *   core/accounts.js for how each is read)
  * @property {string} [actorLabel] human name for logs/records
  * @property {string} [title]      prose a person wrote, carried as a FIELD rather
  *   than parsed out of the command line — see adapters/http.js
@@ -2283,7 +2284,9 @@ export const COMMANDS = {
   whoami: {
     usage: '/whoami',
     short: 'Show the id the hub sees you as',
-    help: 'Show the id this hub sees you as — what goes in the allowlist.',
+    help:
+      'Show the id this hub sees you as — the actor it records on sessions you start: ' +
+      '`web` from the console or `fleetwright` on the box, `fleet:<email>` through the fleet.',
     run: (ctx) => ({ ok: true, text: `You are: ${ctx.actor}` }),
   },
 };
