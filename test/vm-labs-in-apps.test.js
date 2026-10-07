@@ -45,6 +45,16 @@ const SHARED = [
   ' It costs no extra machine: the lab is an interface on the router you already have.',
   'open: it reaches the internet and nothing private',
   'closed: it reaches the fleet and Claude and nothing else',
+  // When a lab is free again, which is when its machine ends and not its
+  // session, and labs per person.
+  'Every lab on this pool is in use. One is free again when its machine ends.',
+  ' When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.',
+  'Labs per person',
+  '"No limit"',
+  '"At most one at once"',
+  ' Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free.',
+  'With no labs, labs per person is no limit. Nothing was changed.',
+  ', the labs there are. Nothing was changed.',
 ];
 
 test('iOS: the policy holds the host’s numbers, starts from the edge’s labs, and sends labs only where there is a router', () => {
@@ -69,25 +79,10 @@ test('iOS: a lab is offered only by kind while one is free, rides in `network`, 
   assert.match(I_SHEET, /return vmLab\.isEmpty \? "vm" : "lab"/);
   assert.match(I_PAGE, /if let lab = m\.lab \{/);
 });
-/**
- * IN iOS FIRST, and in SHARED once Android says them too: when a lab is free
- * again, which is when its machine ends and not its session, and labs per
- * person.
- */
-const IOS_FIRST = [
-  'Every lab on this pool is in use. One is free again when its machine ends.',
-  ' When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.',
-  'Labs per person',
-  '"No limit"',
-  '"At most one at once"',
-  ' Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free.',
-  'With no labs, labs per person is no limit. Nothing was changed.',
-  ', the labs there are. Nothing was changed.',
-];
 
 test('iOS says it in the shared words', () => {
   const ios = [I_POLICY, I_FORM, I_FLEET, I_SHEET, I_PAGE].join('\n');
-  for (const words of [...SHARED, ...IOS_FIRST]) assert.ok(ios.includes(words), words);
+  for (const words of SHARED) assert.ok(ios.includes(words), words);
   // A lab is free again when its machine ends: nothing ends one with its session.
   assert.ok(!/free again when its session ends|When the session ends/.test(ios), 'a lab still said to end with its session');
 });
@@ -141,4 +136,17 @@ test('Android: a lab is offered only by kind while one is free, rides in `networ
 test('Android says it in the shared words', () => {
   const android = [A_POLICY, A_FORM, A_SHEET_HV, A_FLEET, A_SHEET, A_PAGE].join('\n');
   for (const words of SHARED) assert.ok(android.includes(words), words);
+  // A lab is free again when its machine ends: nothing ends one with its session.
+  assert.ok(!/free again when its session ends|When the session ends/.test(android), 'a lab still said to end with its session');
+});
+
+test('Android: labs per person is offered only by a machine that keeps it, starts from the pool’s, and No limit is sent as null, never 0', () => {
+  // C-2: offered only where the machine says it keeps the number, and only with labs to limit.
+  assert.match(A_SHEET_HV, /canLabsEach = "labs-each" in p\.setup\.can/);
+  assert.match(A_SHEET_HV, /labsEachChoice = canLabs && opened\.labMax != null && canLabsEach,/);
+  assert.match(A_FORM, /if \(choice\.labsEachChoice && allLabs > 0\) \{\s*Stepper\(\s*label = "Labs per person",\s*value = choice\.labsEach\.toLong\(\),\s*min = 0,\s*max = allLabs\.toLong\(\),/);
+  // C-5: a pool that says nothing is No limit, and No limit goes as null.
+  assert.match(A_POLICY, /labsEach = edgeOn\(inv, egress\)\?\.labsEach \?: 0,/);
+  assert.match(A_POLICY, /0 -> "No limit"/);
+  assert.match(A_POLICY, /if \(c\.labsEachChoice\) put\("labsEach", if \(c\.labsEach > 0\) c\.labsEach else JSONObject\.NULL\)/);
 });

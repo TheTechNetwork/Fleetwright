@@ -190,6 +190,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canEdgeBlock by remember { mutableStateOf(false) }
     // It makes labs on the edge (`can` holds "labs"); an older one cannot.
     var canLabs by remember { mutableStateOf(false) }
+    // It keeps how many labs one person may hold (`labs-each` in `can`).
+    var canLabsEach by remember { mutableStateOf(false) }
     // What the fleet said when the token was kept there too, or what stood in
     // the way (XoHandoff.keepInFleet).
     var fleetNote by remember { mutableStateOf("") }
@@ -413,6 +415,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canHolder = "holder" in p.setup.can
         canEdgeBlock = "edge-block" in p.setup.can
         canLabs = "labs" in p.setup.can
+        canLabsEach = "labs-each" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -673,6 +676,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             holderChoice = canHolder && opened.holders != null,
                             edgeBlockChoice = canEdgeBlock,
                             labsChoice = canLabs && opened.labMax != null,
+                            labsEachChoice = canLabs && opened.labMax != null && canLabsEach,
                         )
                     } else {
                         unopened = true

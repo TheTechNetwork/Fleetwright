@@ -136,6 +136,13 @@ internal object XoPolicy {
     /** The labs an edge was built with, by kind. */
     data class Labs(val open: Int, val closed: Int)
 
+    /** Labs per person, as the stepper says it. The same words as iOS (XOPolicy.labsEachLine). */
+    fun labsEachLine(each: Int): String = when (each) {
+        0 -> "No limit"
+        1 -> "At most one at once"
+        else -> "At most $each at once"
+    }
+
     /** Whether Apply would rebuild the edge that is there to change its labs. */
     fun labsChanged(inv: Inventory, c: Choice): Boolean {
         if (!c.labsChoice) return false
@@ -232,7 +239,12 @@ internal object XoPolicy {
      * what its threat rules match (null from a machine that predates saying,
      * which built none that did).
      */
-    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null, val blocks: Boolean? = null, val labs: Labs? = null)
+    /**
+     * `labsEach` is how many of its labs one person may hold at once; null is
+     * no limit, which is also what a policy from before the setting has, and
+     * never 0.
+     */
+    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null, val blocks: Boolean? = null, val labs: Labs? = null, val labsEach: Int? = null)
 
     /** The edge router on the pool this network is in, if it has one. */
     fun edgeOn(inv: Inventory, network: String?): Edge? {
@@ -325,6 +337,14 @@ internal object XoPolicy {
         val labsClosed: Int = 0,
         /** The machine makes them (`labs` in begin's `can`). An older one cannot, so they are neither offered nor sent. */
         val labsChoice: Boolean = false,
+        /**
+         * How many labs one person may hold at once. 0 is the stepper's "No
+         * limit", sent as null and never as 0, which is no number of labs
+         * anybody could hold.
+         */
+        val labsEach: Int = 0,
+        /** The machine keeps it (`labs-each` in begin's `can`). An older one would drop it without a word, so it is neither offered nor sent. */
+        val labsEachChoice: Boolean = false,
         /**
          * Make the pool a machine of its own on the way out, or keep the one
          * there running (xo-holder.js). Needs the pool's machine image, there
@@ -428,7 +448,8 @@ internal object XoPolicy {
                 (0 until a.length()).mapNotNull { i ->
                     a.optJSONObject(i)?.let { e ->
                         val labs = e.optJSONObject("labs")?.let { l -> Labs(l.optInt("open", 0), l.optInt("closed", 0)) }
-                        Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr"), if (e.has("blocks")) e.optBoolean("blocks", false) else null, labs)
+                        val each = if (e.isNull("labsEach")) null else e.optInt("labsEach", 0).takeIf { it >= 1 }
+                        Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr"), if (e.has("blocks")) e.optBoolean("blocks", false) else null, labs, each)
                     }
                 }
             },
@@ -499,6 +520,7 @@ internal object XoPolicy {
             // The labs the edge has: Apply rebuilds nothing nobody changed.
             labsOpen = edgeOn(inv, egress)?.labs?.open ?: 0,
             labsClosed = edgeOn(inv, egress)?.labs?.closed ?: 0,
+            labsEach = edgeOn(inv, egress)?.labsEach ?: 0,
         )
     }
 
@@ -560,6 +582,13 @@ internal object XoPolicy {
         if (c.labsChoice && c.labsOpen + c.labsClosed > 0 && !c.edge && edgeOn(inv, c.egress) == null) {
             return "Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed."
         }
+        if (c.labsChoice && c.labsEachChoice && c.labsEach > c.labsOpen + c.labsClosed) {
+            return if (c.labsOpen + c.labsClosed == 0) {
+                "With no labs, labs per person is no limit. Nothing was changed."
+            } else {
+                "Labs per person is no limit, or 1 to ${c.labsOpen + c.labsClosed}, the labs there are. Nothing was changed."
+            }
+        }
         if (c.imageChoice && c.wantsImage && c.egress == null) {
             return "The machine image is built behind the edge router: choose the way out it leaves through."
         }
@@ -614,6 +643,8 @@ internal object XoPolicy {
             .apply {
                 if (c.labsChoice && c.egress != null && (c.edge || edgeOn(inv, c.egress) != null)) {
                     put("labs", JSONObject().put("open", c.labsOpen).put("closed", c.labsClosed))
+                    // And how many one person may hold, with them: null is no limit.
+                    if (c.labsEachChoice) put("labsEach", if (c.labsEach > 0) c.labsEach else JSONObject.NULL)
                 }
             }
             // Only to a machine that makes one, and only when asked.

@@ -89,6 +89,35 @@ class XoPolicyTest {
         assertFalse("sent with no router asked for", XoPolicy.payload(older, c.copy(edgeBlockChoice = true, edge = false)).has("edgeBlock"))
     }
 
+    /**
+     * LABS PER PERSON (docs/hypervisors.md, "Labs"): a pool that says
+     * nothing has no limit and is never read as 0, No limit is sent as null,
+     * and the number goes only with the labs, only to a machine that keeps
+     * it. The same rules as iOS.
+     */
+    @Test
+    fun labsPerPersonIsNoLimitUnlessSetAndNoLimitIsSentAsNull() {
+        val edge = { each: Any? -> JSONObject().put("pool", "pool-1").put("running", true).put("labs", JSONObject().put("open", 1).put("closed", 1)).apply { if (each != null) put("labsEach", each) } }
+        for (said in listOf<Any?>(null, JSONObject.NULL, 0)) {
+            val inv = inventory(inventoryJson().put("edges", JSONArray().put(edge(said))))
+            assertEquals("$said", null, XoPolicy.edgeOn(inv, "net-lab")?.labsEach)
+            assertEquals(0, XoPolicy.defaults(inv).labsEach)
+        }
+        val limited = inventory(inventoryJson().put("edges", JSONArray().put(edge(2))))
+        val c = XoPolicy.defaults(limited).copy(labsChoice = true)
+        assertEquals(2, c.labsEach)
+        assertFalse("an older machine is sent it", XoPolicy.payload(limited, c).has("labsEach"))
+        assertEquals(2, XoPolicy.payload(limited, c.copy(labsEachChoice = true)).getInt("labsEach"))
+        val none = XoPolicy.payload(limited, c.copy(labsEachChoice = true, labsEach = 0))
+        assertTrue("No limit was not sent as null", none.has("labsEach") && none.isNull("labsEach"))
+        assertEquals("No limit", XoPolicy.labsEachLine(0))
+        assertEquals("At most one at once", XoPolicy.labsEachLine(1))
+        assertEquals(
+            "Labs per person is no limit, or 1 to 2, the labs there are. Nothing was changed.",
+            XoPolicy.problem(limited, c.copy(labsEachChoice = true, labsEach = 3)),
+        )
+    }
+
     @Test
     fun theEdgeRouterGoesWithItsWayOut() {
         val inv = inventory(inventoryJson().put("edges", JSONArray()))
