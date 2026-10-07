@@ -39,12 +39,10 @@ const SHARED = [
   'No lab',
   'Open: reaches the internet',
   'Closed: only the fleet and Claude',
-  'Every lab on this pool is in use. One is free again when its session ends.',
   'A lab is a network of its own on your edge router, and this machine is alone on it. ',
   'It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab.',
   'It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.',
   ' It costs no extra machine: the lab is an interface on the router you already have.',
-  ' When the session ends, or the time runs out, the machine is removed and the lab is free for the next one.',
   'open: it reaches the internet and nothing private',
   'closed: it reaches the fleet and Claude and nothing else',
 ];
@@ -52,7 +50,7 @@ const SHARED = [
 test('iOS: the policy holds the host’s numbers, starts from the edge’s labs, and sends labs only where there is a router', () => {
   assert.ok(I_POLICY.includes(`static let labPrefix = "${LAB.prefix}"`));
   assert.ok(I_POLICY.includes(`static let maxLabs = ${LAB.max}`));
-  assert.match(I_POLICY, /if labsChoice, egress != nil, edge \|\| inv\.edge\(on: egress\) != nil \{ out\["labs"\] = \["open": labsOpen, "closed": labsClosed\] \}/);
+  assert.match(I_POLICY, /if labsChoice, egress != nil, edge \|\| inv\.edge\(on: egress\) != nil \{\s*out\["labs"\] = \["open": labsOpen, "closed": labsClosed\]/);
   assert.match(I_POLICY, /c\.labsOpen = inv\.edge\(on: c\.egress\)\?\.labs\?\.open \?\? 0/);
   assert.match(I_FORM, /canLabs: begun\.can\.contains\("labs"\)/);
   assert.match(I_FORM, /choice\.labsChoice = policyJob\.canLabs && opened\.labMax != nil/);
@@ -71,10 +69,38 @@ test('iOS: a lab is offered only by kind while one is free, rides in `network`, 
   assert.match(I_SHEET, /return vmLab\.isEmpty \? "vm" : "lab"/);
   assert.match(I_PAGE, /if let lab = m\.lab \{/);
 });
+/**
+ * IN iOS FIRST, and in SHARED once Android says them too: when a lab is free
+ * again, which is when its machine ends and not its session, and labs per
+ * person.
+ */
+const IOS_FIRST = [
+  'Every lab on this pool is in use. One is free again when its machine ends.',
+  ' When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.',
+  'Labs per person',
+  '"No limit"',
+  '"At most one at once"',
+  ' Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free.',
+  'With no labs, labs per person is no limit. Nothing was changed.',
+  ', the labs there are. Nothing was changed.',
+];
 
 test('iOS says it in the shared words', () => {
   const ios = [I_POLICY, I_FORM, I_FLEET, I_SHEET, I_PAGE].join('\n');
-  for (const words of SHARED) assert.ok(ios.includes(words), words);
+  for (const words of [...SHARED, ...IOS_FIRST]) assert.ok(ios.includes(words), words);
+  // A lab is free again when its machine ends: nothing ends one with its session.
+  assert.ok(!/free again when its session ends|When the session ends/.test(ios), 'a lab still said to end with its session');
+});
+
+test('iOS: labs per person is offered only by a machine that keeps it, starts from the pool’s, and No limit is sent as null, never 0', () => {
+  // C-2: offered only where the machine says it keeps the number, and only with labs to limit.
+  assert.match(I_FORM, /canLabsEach: begun\.can\.contains\("labs-each"\)/);
+  assert.match(I_FORM, /choice\.labsEachChoice = choice\.labsChoice && policyJob\.canLabsEach/);
+  assert.match(I_FORM, /if choice\.labsEachChoice, choice\.labsOpen \+ choice\.labsClosed > 0 \{\s*Stepper\(value: \$choice\.labsEach, in: 0\.\.\.\(choice\.labsOpen \+ choice\.labsClosed\)\)/);
+  // C-5: a pool that says nothing is No limit, and No limit goes as null.
+  assert.match(I_POLICY, /c\.labsEach = inv\.edge\(on: c\.egress\)\?\.labsEach \?\? 0/);
+  assert.match(I_POLICY, /each == 0 \? "No limit"/);
+  assert.match(I_POLICY, /if labsEachChoice \{ out\["labsEach"\] = labsEach > 0 \? \(labsEach as Any\) : \(NSNull\(\) as Any\) \}/);
 });
 
 // --- Android ------------------------------------------------------------------

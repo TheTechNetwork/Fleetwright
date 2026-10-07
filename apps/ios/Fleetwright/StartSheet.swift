@@ -366,7 +366,7 @@ struct StartSheet: View {
                                     if !now.isEmpty { vmNetwork = ""; vmGroup = "" }
                                 }
                             } else {
-                                Text("Every lab on this pool is in use. One is free again when its session ends.")
+                                Text("Every lab on this pool is in use. One is free again when its machine ends.")
                                     .fleetType(.label)
                                     .foregroundStyle(Design.Palette.inkDim)
                             }
@@ -386,7 +386,7 @@ struct StartSheet: View {
                                     ? "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab."
                                     : "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.")
                                  + " It costs no extra machine: the lab is an interface on the router you already have."
-                                 + " When the session ends, or the time runs out, the machine is removed and the lab is free for the next one.")
+                                 + " When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.")
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                         } else if chosenPlatform == "vm" {

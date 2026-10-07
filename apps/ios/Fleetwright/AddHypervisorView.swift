@@ -180,6 +180,8 @@ struct AddHypervisorView: View {
         var canEdgeBlock = false
         /// It makes labs on the edge (`can` holds "labs"); an older one cannot.
         var canLabs = false
+        /// It keeps how many labs one person may hold (`can` holds "labs-each").
+        var canLabsEach = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -870,6 +872,7 @@ struct AddHypervisorView: View {
                 // And its own labs.
                 choice.labsOpen = inv.edge(on: way)?.labs?.open ?? 0
                 choice.labsClosed = inv.edge(on: way)?.labs?.closed ?? 0
+                choice.labsEach = inv.edge(on: way)?.labsEach ?? 0
             }
             if canEdge, choice.egress != nil {
                 Toggle(isOn: $choice.edge) {
@@ -1110,6 +1113,20 @@ struct AddHypervisorView: View {
             }
             .frame(minHeight: 44)
             .disabled(busy)
+            // FEWER LABS, A LIMIT NO HIGHER: one past the labs there are is
+            // a number nobody could reach, and the machine refuses it.
+            .onChange(of: choice.labsOpen + choice.labsClosed) { _, all in
+                choice.labsEach = min(choice.labsEach, all)
+            }
+            // LABS PER PERSON, offered only by a machine that keeps it and
+            // only with labs to limit. Its lowest step is No limit.
+            if choice.labsEachChoice, choice.labsOpen + choice.labsClosed > 0 {
+                Stepper(value: $choice.labsEach, in: 0...(choice.labsOpen + choice.labsClosed)) {
+                    policyRow("Labs per person", XOPolicy.labsEachLine(choice.labsEach))
+                }
+                .frame(minHeight: 44)
+                .disabled(busy)
+            }
             if choice.labsChanged(in: inv) {
                 Text("Apply rebuilds the edge router to change the labs: machines behind it have no way out until the new one is up.")
                     .fleetType(.label)
@@ -1119,7 +1136,8 @@ struct AddHypervisorView: View {
             sectionHead("Labs")
         } footer: {
             Text("A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. "
-                 + "It costs no extra machine, only an interface on the router. Up to four in all.")
+                 + "It costs no extra machine, only an interface on the router. Up to four in all."
+                 + (choice.labsEachChoice ? " Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free." : ""))
         }
     }
 
@@ -1660,7 +1678,8 @@ struct AddHypervisorView: View {
                                   canGroups: begun.can.contains("groups"),
                                   canHolder: begun.can.contains("holder"),
                                   canEdgeBlock: begun.can.contains("edge-block"),
-                                  canLabs: begun.can.contains("labs"))
+                                  canLabs: begun.can.contains("labs"),
+                                  canLabsEach: begun.can.contains("labs-each"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1691,6 +1710,7 @@ struct AddHypervisorView: View {
                     choice.holderChoice = policyJob.canHolder && opened.holders != nil
                     choice.edgeBlockChoice = policyJob.canEdgeBlock
                     choice.labsChoice = policyJob.canLabs && opened.labMax != nil
+                    choice.labsEachChoice = choice.labsChoice && policyJob.canLabsEach
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
