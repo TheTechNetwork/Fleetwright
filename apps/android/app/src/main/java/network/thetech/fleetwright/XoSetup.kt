@@ -67,6 +67,29 @@ internal object XoSetup {
         return "Step $n of ${maxOf(of, 1)}"
     }
 
+    /**
+     * What a build is making, from the fixed key the host sends (`edge`,
+     * `image` or `holder`), or null for a key this build has never met.
+     */
+    fun building(key: String?): String? = when (key) {
+        "edge" -> "building the edge router"
+        "image" -> "building the machine image"
+        "holder" -> "making the pool’s own machine"
+        else -> null
+    }
+
+    /**
+     * "building the machine image, part 2 of 4" while a build in parts runs,
+     * so the ongoing notification says what the minutes are going on and not
+     * only a percentage. A key never met still says its part, with no name
+     * made up for it; nothing known is null.
+     */
+    fun buildDetail(build: String?, stage: Int?, stages: Int?): String? {
+        val what = building(build)
+        val part = if (stage != null && stages != null && stage in 1..stages) "part $stage of $stages" else null
+        return listOfNotNull(what, part).joinToString(", ").ifEmpty { null }
+    }
+
     /** A Xen Orchestra address: the same shape XO_ADDRESS_RE accepts, so a refusal is said here rather than by the fleet. */
     val ADDRESS_RE = Regex(
         "^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]{2,45}\\])(?::[0-9]{1,5})?$",
