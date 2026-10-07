@@ -83,7 +83,8 @@ test('iOS: the machine that got through last time is tried first, and every mach
   // Refused at begin (gone, switched off): every machine is asked.
   assert.match(bare(fn(SCREEN, 'begin')), /if viaMemory \{\s*await self\.probe\(\)\s*refuse\("\\\(why\) Your other machines were asked instead\."\)/);
   // Stopped at connect: said, and Try again asks every machine.
-  assert.match(SCREEN, /let askAll = viaMemory && progress\?\.phase == "connect"\s*reset\(\)\s*if askAll \{ Task \{ await probe\(\) \} \}/);
+  // And a try through this phone, whose relay was for the job that ended.
+  assert.match(SCREEN, /let askAll = \(viaMemory && progress\?\.phase == "connect"\) \|\| chosen\?\.throughPhone == true\s*reset\(\)\s*if askAll \{ Task \{ await probe\(\) \} \}/);
   // Asked of all, the one that got through last time is chosen among them.
   assert.match(bare(fn(SCREEN, 'probe')), /else if let via = XOSaved\.machine\(for: trimmedAddress\) \{\s*chosen = offered\.first \{ \$0\.hostId == via \}/);
   // Remembered only once it got through.

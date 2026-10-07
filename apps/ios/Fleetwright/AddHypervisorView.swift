@@ -32,6 +32,19 @@ import SwiftUI
 ///   4. Progress, polled while this screen is open, and on the Lock Screen
 ///      and the Dynamic Island when it is not (XOSetupActivities).
 ///
+/// WHEN NO MACHINE REACHES IT, THIS PHONE MAY. The fleet then names a machine
+/// that can work through a phone, and only then is "Try through this phone"
+/// offered (C-2). This phone reads the certificate at the address itself
+/// (PhoneRelay.ownLook), opens a relay, and asks that machine to probe
+/// through it; the machine is offered only when it saw the same certificate
+/// this phone did, because over a relay the fleet is on the probe's path and
+/// could otherwise put a certificate of its own in front of the person. The
+/// job then runs through the relay: the machine opens TLS over it and holds
+/// it to the pin, so this phone carries ciphertext. A relay lives as long as
+/// this screen is open, and the screen says so while it runs. Adding a pool
+/// only; a policy change runs from a machine that reaches the pool, which
+/// the pool's own machine is once it has joined.
+///
 /// A `Form`, restyled in place like Add a machine (docs/design-system.md §4):
 /// it is a run of fields and buttons, and the platform's list is a good list
 /// of controls. The one thing on it that moves is the step line, because a
@@ -138,6 +151,17 @@ struct AddHypervisorView: View {
     /// One sentence about what was kept or forgotten, or why the remembered
     /// machine was not enough, under the progress.
     @State private var keepNote = ""
+    /// A machine the fleet named that can reach the address through this
+    /// phone, when no machine reached it over its own network (`relay` in
+    /// the probe's answer). Nil offers nothing: the fleet did not say one
+    /// can, or an older fleet said nothing.
+    @State private var throughOffer: String?
+    /// The relay this phone is carrying to the address, and its id, while it
+    /// does. Closed when the job ends, when the screen goes, or on Try again.
+    @State private var relay: PhoneRelay?
+    @State private var relayId: String?
+    /// Why the relay closed while the job still needed it, under the progress.
+    @State private var relayNote = ""
     private let biometry = XOSaved.biometryName()
 
     private struct Begun {
@@ -237,6 +261,8 @@ struct AddHypervisorView: View {
         .navigationTitle(isPolicy ? "What the fleet may use" : "Add a hypervisor")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: job) { await follow() }
+        // A relay is carried by this screen: gone, it carries nothing.
+        .onDisappear { endRelay() }
         // The address is already known, so the first question is asked for
         // the person, starting from the machine that got through last time.
         .task {
@@ -295,6 +321,8 @@ struct AddHypervisorView: View {
                     acknowledged = false
                     plainAccepted = false
                     toCompare = nil
+                    throughOffer = nil
+                    endRelay()
                 }
             Button(probing ? "Asking your machines…" : "Find a machine that can reach it") { Task { await probe() } }
                 .disabled(probing || busy || job != nil || !XOSetupKey.isAddress(trimmedAddress))
@@ -326,6 +354,16 @@ struct AddHypervisorView: View {
                 Text(nobodyReached)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
+                // THE WAY ROUND IT, offered only when the fleet named a
+                // machine that can take it (C-2).
+                if let via = throughOffer, job == nil {
+                    Text(throughLine(via))
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                    Button(probing ? "Asking through this phone…" : "Try through this phone") { Task { await probeThroughPhone(via) } }
+                        .disabled(probing || busy)
+                        .frame(minHeight: 44)
+                }
             } else {
                 ForEach(offered) { probe in
                     Button { choose(probe) } label: { probeRow(probe) }
@@ -367,6 +405,11 @@ struct AddHypervisorView: View {
         if viaMemory, chosen?.hostId == probe.hostId {
             return "Got through last time, so it is tried first"
         }
+        if probe.throughPhone {
+            if probe.xo == true { return "Reached Xen Orchestra through this phone" }
+            if probe.xo == false { return "Reached something through this phone, and it does not look like Xen Orchestra" }
+            return "Reached something through this phone; cannot tell whether it is Xen Orchestra"
+        }
         if probe.plainHTTP {
             if probe.xo == true { return "Reached Xen Orchestra over plain HTTP" }
             if probe.xo == false { return "Reached something over plain HTTP, and it does not look like Xen Orchestra" }
@@ -397,9 +440,11 @@ struct AddHypervisorView: View {
     /// or reached something that is not it. Then, and only then, installing
     /// one is offered (C-2). A machine that could not tell (`xo` nil) has not
     /// said there is none, so it keeps the offer away; adding a pool is never
-    /// the place to install a second Xen Orchestra beside the first.
+    /// the place to install a second Xen Orchestra beside the first. Nor is
+    /// an answer through this phone: installing needs a machine that reaches
+    /// the pool, and the fleet refuses one through a relay.
     private var noXenOrchestra: Bool {
-        guard !isPolicy, job == nil, let all = probes, !all.isEmpty else { return false }
+        guard !isPolicy, job == nil, let all = probes, !all.isEmpty, !all.contains(where: \.throughPhone) else { return false }
         return all.allSatisfy { $0.reachable == false || $0.xo == false }
     }
 
@@ -419,6 +464,13 @@ struct AddHypervisorView: View {
         }
     }
 
+    /// What working through this phone is, before it is asked for. The same
+    /// words as Android (XoRelay.kt).
+    private func throughLine(_ via: String) -> String {
+        "This phone may be on a network that reaches it. \(via) can work through this phone: it opens HTTPS to Xen Orchestra "
+            + "itself, and this phone and the fleet carry only that encrypted connection. Keep this screen open while it runs."
+    }
+
     // MARK: Sign in
 
     private func signInSection(_ chosen: Fleet.Probe) -> some View {
@@ -434,6 +486,8 @@ struct AddHypervisorView: View {
                 }
                 Text(viaMemory
                      ? "SHA-256, as it was last time. The sign-in goes only to a server that answers with this certificate."
+                     : chosen.throughPhone
+                     ? "SHA-256, as \(chosen.hostId) saw it through this phone and this phone sees it itself. The sign-in goes only to a server that answers with this certificate."
                      : "SHA-256, as \(chosen.hostId) saw it. The sign-in goes only to a server that answers with this certificate.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
@@ -516,12 +570,16 @@ struct AddHypervisorView: View {
     private func signInFooter(_ chosen: Fleet.Probe) -> String {
         let use = isPolicy ? "to read the pool and apply what you choose" : "to make a limited fleetwright user and its token"
         let sealed = "It is sealed on this phone to a key only that machine holds, so the fleet relays it and cannot read it"
+        // THROUGH THIS PHONE, where it crosses as well as what it crosses as.
+        let path = chosen.throughPhone
+            ? " It then crosses this phone inside the HTTPS connection \(chosen.hostId) opens to Xen Orchestra, which neither this phone nor the fleet can read."
+            : ""
         if keep, let biometry {
             let word = chosen.certificateTrusted ? "" : ", and your word for the certificate,"
             return "Used by \(chosen.hostId) \(use). \(sealed). This phone keeps it\(word) in its "
-                + "Keychain behind \(biometry), once \(chosen.hostId) has signed in with it; the fleet never keeps it."
+                + "Keychain behind \(biometry), once \(chosen.hostId) has signed in with it; the fleet never keeps it." + path
         }
-        return "Used once, by \(chosen.hostId), \(use), and not kept. \(sealed), and neither this phone nor the fleet keeps it."
+        return "Used once, by \(chosen.hostId), \(use), and not kept. \(sealed), and neither this phone nor the fleet keeps it." + path
     }
 
     /// The person's earlier word, said in place of the question it answers.
@@ -718,6 +776,18 @@ struct AddHypervisorView: View {
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
+                // THROUGH THIS PHONE: what it is doing while the job runs,
+                // and why it stopped if it stopped first.
+                if relay != nil, running {
+                    Text("This phone is carrying \(hostId)’s connection to Xen Orchestra. Keep this screen open until it is done.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                }
+                if !relayNote.isBlank {
+                    Text(relayNote)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.attention)
+                }
                 if !fleetNote.isBlank {
                     Text(fleetNote)
                         .fleetType(.label)
@@ -741,8 +811,10 @@ struct AddHypervisorView: View {
                 // the job that ended; the machine picks up where it got to.
                 // A remembered machine that did not get through is not tried
                 // twice: every machine is asked.
+                // A relay was for the job that ended, so a try through this
+                // phone starts again from asking.
                 Button("Try again") {
-                    let askAll = viaMemory && progress?.phase == "connect"
+                    let askAll = (viaMemory && progress?.phase == "connect") || chosen?.throughPhone == true
                     reset()
                     if askAll { Task { await probe() } }
                 }
@@ -1251,6 +1323,8 @@ struct AddHypervisorView: View {
         plainAccepted = false
         result = ""
         failed = false
+        throughOffer = nil
+        endRelay()
         do {
             let reply = try await fleet.xoprobe(address: trimmedAddress)
             guard reply.ok != false else {
@@ -1262,6 +1336,9 @@ struct AddHypervisorView: View {
                 return
             }
             probes = found
+            // Adding a pool only: a policy change needs a machine that
+            // reaches the pool, which its own machine does once it has joined.
+            throughOffer = isPolicy ? nil : reply.relay?.hostId
             // One machine that can is not a choice, so it is chosen. Over
             // plain HTTP too: choosing shows the warning, and sends nothing.
             // Among several, the one that got through last time is chosen,
@@ -1278,6 +1355,69 @@ struct AddHypervisorView: View {
         } catch {
             probeText = error.localizedDescription
         }
+    }
+
+    /// THROUGH THIS PHONE: its own look at the certificate first, then a
+    /// relay, then the named machine's probe through it. The machine is
+    /// offered only when what it saw through the relay is what this phone
+    /// sees itself, and nothing is asked of the person before that.
+    @MainActor
+    private func probeThroughPhone(_ via: String) async {
+        probing = true
+        defer { probing = false }
+        probeText = ""
+        endRelay()
+        let target = trimmedAddress
+        guard let carrier = PhoneRelay(address: target) else {
+            probeText = "\(target) is not an address this phone can connect to."
+            return
+        }
+        // CANNOT TELL IS SAID AS THAT (C-5): no certificate seen here is no
+        // reason to take the machine's word for one.
+        guard let own = await PhoneRelay.ownLook(address: target) else {
+            probeText = "This phone could not reach \(target) over HTTPS itself, so nothing can reach it through this phone either. "
+                + "Check that this phone is on the pool’s network."
+            return
+        }
+        carrier.onClose = { text in Task { @MainActor in relayClosed(text) } }
+        do {
+            let ready = try await carrier.open(settings: settings, host: via)
+            let reply = try await fleet.xoprobeThrough(address: target, relay: ready.relay)
+            guard reply.ok != false, let seen = reply.probes?.first, seen.canRunSetup else {
+                carrier.close()
+                probeText = reply.text ?? "\(via) did not reach \(target) through this phone."
+                return
+            }
+            guard seen.cert == own else {
+                carrier.close()
+                probeText = "The certificate \(seen.hostId) saw through this phone is not the one this phone sees at \(target), "
+                    + "so something between them answered in Xen Orchestra’s place. Nothing was sent."
+                return
+            }
+            relay = carrier
+            relayId = ready.relay
+            relayNote = ""
+            probes = [seen]
+            chosen = seen
+            acknowledged = false
+        } catch {
+            carrier.close()
+            probeText = error.localizedDescription
+        }
+    }
+
+    /// The relay closed for a reason this phone did not choose.
+    @MainActor
+    private func relayClosed(_ text: String) {
+        relay = nil
+        relayId = nil
+        if running { relayNote = text }
+    }
+
+    private func endRelay() {
+        relay?.close()
+        relay = nil
+        relayId = nil
     }
 
     /// FIRST, WHERE IT WORKED LAST TIME. What was kept is opened (Face ID),
@@ -1448,6 +1588,12 @@ struct AddHypervisorView: View {
         } else {
             return
         }
+        // A MACHINE THAT REACHED IT THROUGH THIS PHONE begins only while this
+        // phone still carries the relay it reached it through.
+        if probe.throughPhone, relayId == nil {
+            refuse("This phone is no longer carrying the connection \(probe.hostId) reached Xen Orchestra through. Try through this phone again.")
+            return
+        }
         busy = true
         defer { busy = false }
         result = ""
@@ -1460,7 +1606,8 @@ struct AddHypervisorView: View {
             begun = nil
         }
         do {
-            let reply = try await fleet.beginSetup(address: target, pin: pin, host: probe.hostId, trust: trust, plain: plain)
+            let reply = try await fleet.beginSetup(address: target, pin: pin, host: probe.hostId, trust: trust, plain: plain,
+                                                   relay: probe.throughPhone ? relayId : nil)
             guard reply.ok != false, let setup = reply.xosetup, let begunJob = setup.job,
                   let key = setup.key, let keySig = setup.keySig, let hostKey = setup.hostKey
             else {
@@ -1808,10 +1955,18 @@ struct AddHypervisorView: View {
         if let outcome { handedBack = outcome }
         if let inFleet { fleetNote = inFleet }
         if state.state == "failed" || state.state == "cancelled" { XOSetupHandoff.forget(job: job) }
+        // The fleet closes a relay when its job ends; this phone lets go too,
+        // and a job that finished needs no word about the relay closing.
+        if let now = state.state, !XOSetupWords.isLive(now) {
+            endRelay()
+            if now == "done" { relayNote = "" }
+        }
         await XOSetupActivities.apply(job: job, progress: state)
     }
 
     private func reset() {
+        endRelay()
+        relayNote = ""
         job = nil
         progress = nil
         begun = nil

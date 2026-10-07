@@ -424,8 +424,15 @@ struct Fleet {
         /// (`xoprobe`), one entry per machine, so the screen offers only the
         /// ones that reached it.
         var probes: [Probe]?
+        /// When no machine reached the address: one that can reach it through
+        /// this phone instead, named by the fleet only when one can (C-2).
+        var relay: RelayOffer?
         /// Where a hypervisor setup has got to, or what `begin` handed back.
         var xosetup: SetupState?
+
+        struct RelayOffer: Codable, Hashable {
+            let hostId: String
+        }
 
         struct RebootCost: Codable, Hashable {
             let sessions: Int
@@ -1138,7 +1145,14 @@ struct Fleet {
         /// or one that found Xen Orchestra: never one that found nothing
         /// (`narrowSsh` in src/fleet/coordinator/core.js).
         var ssh: SSH? = nil
+        /// "phone" when this machine reached the address through this phone's
+        /// own network (a relay, PhoneRelay) rather than its own. Absent is
+        /// its own network, which is every probe from a fleet before relays.
+        var through: String? = nil
         var id: String { hostId }
+
+        /// It reached the address over this phone's network, not its own.
+        var throughPhone: Bool { through == "phone" }
 
         /// `narrowSsh` is the shape. `reachable` and `deploy` keep nil as
         /// cannot tell: a machine without ssh-keyscan has not found the
@@ -1250,12 +1264,20 @@ struct Fleet {
         try await intent("xoprobe", params: ["address": address], idempotencyKey: "app-\(UUID().uuidString)")
     }
 
+    /// The same question asked of ONE machine, through the relay this phone
+    /// holds open to the address (PhoneRelay): the fleet sends it to the
+    /// relay's machine alone, and its answer is marked as through the phone.
+    func xoprobeThrough(address: String, relay: String) async throws -> Reply {
+        try await intent("xoprobe", params: ["address": address, "relay": relay], idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
     /// Begin installing Xen Orchestra on ONE chosen machine (`deploy`),
     /// pinned to the SHA-256 of the pool master's SSH host key the person
     /// compared, in hex. The reply carries the key to seal both passwords to,
     /// signed by the machine under the install's own context
     /// (XOSetupKey.isSignedForDeploy). Every later phase is a setup's:
-    /// `runSetup`, `setupStatus`, `cancelSetup`.
+    /// `runSetup`, `setupStatus`, `cancelSetup`. Never through a relay: an
+    /// install needs a machine that reaches the pool.
     func beginDeploy(address: String, pin: String, host: String) async throws -> Reply {
         try await intent("xosetup", params: ["phase": "deploy", "address": address, "pin": pin], host: host,
                          idempotencyKey: "app-\(UUID().uuidString)")
@@ -1277,11 +1299,16 @@ struct Fleet {
     /// (XOSetupKey). A begin with neither a pin nor `plain` is refused by the
     /// fleet, and the screen never sends one: either there is a certificate,
     /// or the person said to go without.
-    func beginSetup(address: String, pin: String?, host: String, trust: String? = nil, plain: Bool = false) async throws -> Reply {
+    ///
+    /// `relay` is the relay this phone carries for a machine that reached the
+    /// address only through it: the job then runs on that machine and every
+    /// connection it makes goes through this phone, as TLS it opens itself.
+    func beginSetup(address: String, pin: String?, host: String, trust: String? = nil, plain: Bool = false, relay: String? = nil) async throws -> Reply {
         var params = ["phase": "begin", "address": address]
         if let pin { params["pin"] = pin }
         if let trust { params["trust"] = trust }
         if plain { params["plain"] = "accepted" }
+        if let relay { params["relay"] = relay }
         return try await intent("xosetup", params: params, host: host, idempotencyKey: "app-\(UUID().uuidString)")
     }
 

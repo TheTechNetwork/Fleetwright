@@ -60,7 +60,9 @@ test('iOS: installing is offered only when every machine that answered found no 
   // C-2: the action exists only where it is the answer. A machine that could
   // not tell (`xo` nil) has not said there is none, so it keeps the offer away.
   assert.match(ENTRY, /return all\.allSatisfy \{ \$0\.reachable == false \|\| \$0\.xo == false \}/);
-  assert.match(ENTRY, /guard !isPolicy, job == nil, let all = probes, !all\.isEmpty else \{ return false \}/);
+  // Nor an answer through this phone, since the machine refuses an install
+  // through a relay (test/relay-in-apps.test.js has the rest of that path).
+  assert.match(ENTRY, /guard !isPolicy, job == nil, let all = probes, !all\.isEmpty, !all\.contains\(where: \\\.throughPhone\) else \{ return false \}/);
   assert.match(ENTRY, /if noXenOrchestra \{ installSection \}/);
   // What the probe already found is handed over, so nothing is asked twice.
   assert.match(ENTRY, /DeployXOView\(settings: settings, address: trimmedAddress, probes: probes\)/);

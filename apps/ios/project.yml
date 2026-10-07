@@ -116,11 +116,16 @@ targets:
         # A pool's page talks to Xen Orchestra from this phone directly
         # (docs/manage.md, ManageView.swift), and Xen Orchestra is usually on
         # the person's own network: iOS asks before an app connects to an
-        # address there, and this is the sentence under that question.
+        # address there, and this is the sentence under that question. Add a
+        # hypervisor does too, for a pool no machine in the fleet can reach
+        # (PhoneRelay): it connects to the one address the person typed, and
+        # the sentence says that as well, so the question is not answered for
+        # one reason and used for another.
         NSLocalNetworkUsageDescription: >-
           Talking to your Xen Orchestra directly from this phone, when it is
-          on your network, to show and manage the pools, hosts and VMs you
-          added under Machines.
+          on your network: to show and manage the pools, hosts and VMs you
+          added under Machines, and to reach one you are adding when none of
+          your machines can, at the address you typed and nowhere else.
         # THE DSN, READ AT LAUNCH. Not a secret — it identifies a project and
         # grants only the ability to post events to it. Empty means no
         # reporting, which is what a fork or a fresh clone gets; FleetwrightApp
