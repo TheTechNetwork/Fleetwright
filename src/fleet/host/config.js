@@ -97,6 +97,9 @@ export function loadSidecarConfig(env = process.env) {
     // which the join script moved beside the key (install/fleetwright-vm-join,
     // src/fleet/host/vm-join.js). Empty everywhere else.
     vmJoin: str(env, 'FLEETWRIGHT_VM_JOIN', ''),
+    // ON A POOL'S OWN MACHINE: the Xen Orchestra it was made to hold, which
+    // the join script wrote (src/fleet/host/xo-holder.js). Empty elsewhere.
+    holderFor: str(env, 'FLEETWRIGHT_HOLDER_FOR', ''),
 
     // How far from now an intent's issuedAt may be. Bounds replay on top of the
     // idempotency key. Must stay below the replay cache TTL — see the check in

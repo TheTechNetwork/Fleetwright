@@ -192,6 +192,7 @@ export class Sidecar {
    *   vaultIntervalMs?: number,
    *   xoStateDir?: string|null,
    *   xoPools?: XoPools|null,
+   *   holderFor?: string,
    *   vmLogin?: { email: string, token: string|null }|null,
    *   onVmLoginHanded?: (() => void)|null,
    * }} opts
@@ -235,6 +236,7 @@ export class Sidecar {
     // vaults, in memory only (src/fleet/host/xo-pools.js). Made here for any
     // box that asks the vault; a test hands its own.
     xoPools = null,
+    holderFor = '',
     // THIS BOX AS A MACHINE FROM SOMEBODY'S HYPERVISOR: whose it is and the
     // Claude login it runs on, from the file it was booted with
     // (src/fleet/host/vm-join.js), handed to the hub before the first health
@@ -381,7 +383,9 @@ export class Sidecar {
     this.vaultKey = vaultKey;
     this.xoStateDir = xoStateDir;
     /** @type {XoPools|null} */
-    this.pools = xoPools ?? (vaultKey ? new XoPools({ log: this.log }) : null);
+    // ON A POOL'S OWN MACHINE, the Xen Orchestra it was made to hold
+    // (xo-holder.js): its health says so, and the coordinator asks it first.
+    this.pools = xoPools ?? (vaultKey ? new XoPools({ log: this.log, holderFor }) : null);
     this.vmLogin = vmLogin;
     this.onVmLoginHanded = onVmLoginHanded;
     /** @type {XoSetups|null} made on first use */
@@ -539,6 +543,9 @@ export class Sidecar {
         // What a machine image installs from, and joins: this box's own
         // fleet, as it pinned it (vm-image.js).
         coordinatorUrl: this.transport?.origin ?? null,
+        // And how it asks the fleet for the pin a pool's own machine joins
+        // with, for the job it is running (xo-holder.js).
+        holderPin: (/** @type {string} */ job) => this.#askHolderPin(job),
       });
     }
     const actor = intent.actor ? String(intent.actor) : null;
@@ -1251,6 +1258,38 @@ export class Sidecar {
     }
     this.log.info(`sidecar: vault: ${said.text}`);
     return this.vaultIntervalMs;
+  }
+
+  /**
+   * The pin a pool's own machine joins with, for the policy job `job` this
+   * box is running. The coordinator gives one only to the box running that
+   * job, bound to a name it chose (core.js, #onHolderPin). Never rejects:
+   * no answer is null.
+   *
+   * @param {string} job
+   * @returns {Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>}
+   */
+  async #askHolderPin(job) {
+    const id = `holder-${crypto.randomUUID()}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.mintWaiters.delete(id);
+        resolve(null);
+      }, this.mintTimeoutMs);
+      timer.unref?.();
+      this.mintWaiters.set(id, { resolve, timer });
+      let sent;
+      try {
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'holder-pin', id, hostId: this.hostId, job });
+      } catch {
+        sent = false;
+      }
+      if (sent === false) {
+        this.mintWaiters.delete(id);
+        clearTimeout(timer);
+        resolve({ ok: false, text: 'this box was not connected to the fleet when it asked' });
+      }
+    });
   }
 
   /**

@@ -72,7 +72,7 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
  * @typedef {{ id: string, name: string, pool: string|null }} Network
  * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null }} Machine
- * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string }} Seen
+ * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string, holder?: boolean }} Seen
  */
 
 /**
@@ -142,9 +142,16 @@ export class XoPools {
    *   connectPlain?: typeof connectXoPlain,
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
+   *   holderFor?: string,
    * }} [opts]
    */
-  constructor({ connect = connectXo, connectPlain = connectXoPlain, now = () => Date.now(), log } = {}) {
+  constructor({ connect = connectXo, connectPlain = connectXoPlain, now = () => Date.now(), log, holderFor = '' } = {}) {
+    /**
+     * THE XEN ORCHESTRA THIS BOX WAS MADE TO HOLD, when it is a pool's own
+     * machine (xo-holder.js), from FLEETWRIGHT_HOLDER_FOR. Its pool entry says
+     * `holder`, and the coordinator asks it first. Empty everywhere else.
+     */
+    this.holderFor = String(holderFor || '');
     this.connect = connect;
     this.connectPlain = connectPlain;
     this.now = now;
@@ -199,9 +206,10 @@ export class XoPools {
 
   /** For the health frame: what each held pool was last seen to have. Empty is "holds none". @returns {Seen[]} */
   report() {
-    return [...this.held.keys()].map(
-      (k) => this.seen.get(k) ?? { address: /** @type {any} */ (this.held.get(k)).record.address, owner: /** @type {any} */ (this.held.get(k)).owner, reachable: null, pools: [], images: [], networks: [], machines: [] },
-    );
+    return [...this.held.keys()].map((k) => {
+      const seen = this.seen.get(k) ?? { address: /** @type {any} */ (this.held.get(k)).record.address, owner: /** @type {any} */ (this.held.get(k)).owner, reachable: null, pools: [], images: [], networks: [], machines: [] };
+      return this.holderFor && seen.address === this.holderFor ? { ...seen, holder: true } : seen;
+    });
   }
 
   /** @param {PoolRecord} record */
