@@ -111,6 +111,8 @@ struct StartSheet: View {
     /// The machine images on your own pools a new machine can come from, from
     /// the snapshot. Drawn from this and only this (C-2).
     @State private var images: [Fleet.VMImage] = []
+    /// What is kept ready, so the image with one says so.
+    @State private var standby: Fleet.VMStandby?
     /// The network a machine from your hypervisor goes on; empty is behind
     /// the edge router.
     @State private var vmNetwork = ""
@@ -302,7 +304,9 @@ struct StartSheet: View {
                             // machines: up in a minute or two, and billed to
                             // nobody. Asked for: "Still can't run sessions on it".
                             ForEach(images) { image in
-                                Text(image.label).tag(vmImageTag + image.template)
+                                Text(standby?.template == image.template && (standby?.ready ?? 0) > 0
+                                     ? "\(image.label), ready now" : image.label)
+                                    .tag(vmImageTag + image.template)
                             }
                             if canStartMachine {
                                 ForEach(newMachineChoices, id: \.platform) { choice in
@@ -423,6 +427,7 @@ struct StartSheet: View {
                 // which is the safe way round for a control that spends money.
                 canStartMachine = (try? await fleet.runners()) != nil
                 images = (try? await fleet.vmImages()) ?? []
+                standby = try? await fleet.vmStandby()
                 if canStartMachine || !images.isEmpty { claude = await claudeKept(settings) }
             }
             .navigationTitle("New session")

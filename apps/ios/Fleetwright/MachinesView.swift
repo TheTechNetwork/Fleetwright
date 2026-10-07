@@ -32,6 +32,8 @@ struct MachinesView: View {
     @State private var hypervisors: [XOSetupHandoff.Held] = []
     /// The machines made on your pools, as the boxes holding them last saw.
     @State private var poolMachines: [Fleet.VMMachine] = []
+    /// The images a machine can come from, for keeping some ready.
+    @State private var poolImages: [Fleet.VMImage] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Enrolled, and not saying anything: membership with no report.
@@ -87,6 +89,20 @@ struct MachinesView: View {
             // console, settings, reboot, ssh". Drawn only when there is one.
             if !poolMachines.isEmpty {
                 poolMachineRows
+            }
+            // MACHINES KEPT READY, so a session starts in seconds. Asked for:
+            // "standby vms to speed up session starts". Offered wherever an
+            // image is, and only then.
+            if !poolImages.isEmpty {
+                NavigationLink {
+                    VMStandbyView(settings: settings, images: poolImages)
+                } label: {
+                    Label("Keep machines ready", systemImage: "bolt.horizontal")
+                        .fleetType(.body)
+                        .frame(minHeight: 44)
+                }
+                .fleetCard(radius: Design.Radius.cardSmall)
+                .fleetRow()
             }
 
             if settings.configured {
@@ -177,7 +193,7 @@ struct MachinesView: View {
                     .fleetType(.label)
                     .foregroundStyle(m.state == "Running" ? Design.Palette.ok : Design.Palette.attention)
             }
-            Text([m.image, m.ip, m.until.map { "ends \(relativeTime($0))" }].compactMap { $0 }.joined(separator: " · "))
+            Text([m.standby == true ? "kept ready" : m.image, m.ip, m.until.map { "ends \(relativeTime($0))" }].compactMap { $0 }.joined(separator: " · "))
                 .fleetType(.micro)
                 .foregroundStyle(Design.Palette.inkDim)
         }
@@ -372,6 +388,7 @@ struct MachinesView: View {
         async let reporting = fleet.fleetHosts()
         async let enrolled = fleet.enrolledHosts()
         async let onPools = fleet.vmMachines()
+        async let images = fleet.vmImages()
         // A FAILED REQUEST IS NOT AN EMPTY FLEET. A list that was right ten
         // seconds ago is a better answer than nothing, and the next refresh
         // corrects it.
@@ -380,10 +397,12 @@ struct MachinesView: View {
         let gotReporting = try? await reporting
         let gotEnrolled = try? await enrolled
         let gotPools = try? await onPools
+        let gotImages = try? await images
         withAnimation(Design.Motion.settle(reduceMotion)) {
             if let got = gotReporting { fleetHosts = got }
             if let got = gotEnrolled { hosts = got }
             if let got = gotPools { poolMachines = got }
+            if let got = gotImages { poolImages = got }
         }
         loaded = true
         openAsked()

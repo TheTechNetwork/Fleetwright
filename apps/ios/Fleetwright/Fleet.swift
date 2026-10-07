@@ -1413,6 +1413,8 @@ struct Fleet {
         let net: Traffic?
         /// The Xen Orchestra it is on.
         let address: String
+        /// Kept ready, and not yet taken by a session; nil from an older coordinator.
+        var standby: Bool? = nil
         var id: String { name }
 
         /// Bytes a second through the machine's network interfaces, one point
@@ -1447,6 +1449,35 @@ struct Fleet {
 
         /// The longest a machine lives, from when it was made (xo-pools.js).
         static let maxMinutes = 350
+    }
+
+    /// What you keep ready on your hypervisor (docs/hypervisors.md, "Machines
+    /// kept ready"): an image, how many, its network, and how many are ready
+    /// now and being made.
+    struct VMStandby: Codable, Hashable {
+        let template: String
+        let count: Int
+        let network: String?
+        let ready: Int
+        let starting: Int
+    }
+
+    /// What you keep ready: the `vmStandby` field of /api/hosts. Nil is
+    /// keeping none, and so is an older coordinator, which omits it.
+    func vmStandby() async throws -> VMStandby? {
+        let data = try await get("/api/hosts")
+        struct Reply: Codable { let vmStandby: VMStandby? }
+        return try JSONDecoder().decode(Reply.self, from: data).vmStandby
+    }
+
+    /// Keep `count` machines from `template` ready on `network` (nil is
+    /// behind the edge router), or none with 0. The fleet ends the ones no
+    /// longer wanted.
+    func setVMStandby(template: String?, count: Int, network: String?) async throws -> Reply {
+        var body: [String: Any] = ["count": count]
+        if let template { body["template"] = template }
+        body["network"] = network.map { $0 as Any } ?? NSNull()
+        return try JSONDecoder().decode(Reply.self, from: try await send("PUT", "/api/vm-standby", body: body))
     }
 
     /// The machines on your pools: the `vmMachines` field of /api/hosts.
