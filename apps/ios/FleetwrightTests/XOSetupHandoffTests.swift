@@ -55,6 +55,22 @@ final class XOSetupHandoffTests: XCTestCase {
         XCTAssertNil(XOSetupHandoff.open(try sealed(empty, to: key, aad: aad), job: job, address: address, key: key))
     }
 
+    /// AN INSTALL'S RECORD names the Xen Orchestra it made, with the pool
+    /// master the job began with beside it, and opens under the pool master.
+    /// Naming some other pool master is not this job's.
+    func testAnInstallsRecordNamesItsXenOrchestraAndThePoolMaster() throws {
+        let key = Seal.newKey()
+        let aad = Seal.xosetupHandoffAAD(job: job, address: "xcp1.lan")
+        var installed = record
+        installed["address"] = "192.168.1.50"
+        installed["poolMaster"] = "xcp1.lan"
+        let kept = try XCTUnwrap(XOSetupHandoff.open(try sealed(installed, to: key, aad: aad), job: job, address: "xcp1.lan", key: key))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(kept.utf8)) as? [String: Any])
+        XCTAssertEqual(object["address"] as? String, "192.168.1.50")
+        installed["poolMaster"] = "xcp2.lan"
+        XCTAssertNil(XOSetupHandoff.open(try sealed(installed, to: key, aad: aad), job: job, address: "xcp1.lan", key: key))
+    }
+
     /// What Machines lists under Hypervisors: the names the record carries,
     /// and nil, never an empty list, for a record that does not say.
     func testTheRecordsPoolNamesAreReadAndAMissingListIsNotNone() {

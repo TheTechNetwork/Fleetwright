@@ -61,7 +61,8 @@ struct XOSetupAttributes: ActivityAttributes {
     /// draw it, for the same reason the push does not carry it.
     let address: String
     /// `policy` for a change to what the fleet may use, whose end is not a
-    /// hypervisor added; nil for adding one. Optional, so an activity a build
+    /// hypervisor added; `deploy` for installing Xen Orchestra first; nil for
+    /// adding one. Optional, so an activity a build
     /// before it left on the Lock Screen still decodes, as the adding it was.
     var purpose: String? = nil
 }
@@ -91,6 +92,17 @@ enum XOSetupWords {
         // are onboarding's, above.
         case "choose": return "Waiting for your choice"
         case "apply": return "Applying what you chose"
+        // An install's own steps (XODEPLOY_STEPS), before onboarding's, in
+        // the words the host leaves on the job (STEP_WORDS in xo-setup.js).
+        case "reach": return "Reaching the pool master"
+        case "installer": return "Fetching the installer"
+        case "network": return "Setting up its network"
+        case "image": return "Getting Debian 13"
+        case "vm": return "Making its VM"
+        case "boot": return "Booting it"
+        case "packages": return "Installing packages"
+        case "build": return "Building Xen Orchestra"
+        case "admin": return "Replacing the default admin password"
         case "done": return "Hypervisor added"
         default: return "Step \(min(step + 1, max(of, 1))) of \(max(of, 1))"
         }
@@ -135,6 +147,7 @@ enum XOSetupWords {
     /// person who reads the banner and then the activity reads one sentence.
     static func headline(_ s: XOSetupAttributes.ContentState, purpose: String? = nil) -> String {
         if purpose == "policy", let end = policyEnd(s.state) { return end }
+        if purpose == "deploy", let end = deployEnd(s.state) { return end }
         switch s.state {
         case "done": return "Hypervisor added"
         case "failed": return "Hypervisor setup stopped"
@@ -151,6 +164,19 @@ enum XOSetupWords {
         case "done": return "What the fleet may use is changed"
         case "failed": return "The change stopped"
         case "cancelled": return "The change was cancelled"
+        default: return nil
+        }
+    }
+
+    /// How an install ended, in the words the coordinator's banner uses for
+    /// it (DEPLOY_TITLES in core.js): it installed Xen Orchestra and then
+    /// added the pool, so its end says both. Nil while it has not ended.
+    static func deployEnd(_ state: String) -> String? {
+        switch state {
+        case "done": return "Xen Orchestra installed and added"
+        case "failed": return "Installing Xen Orchestra stopped"
+        case "cancelled": return "Installing Xen Orchestra cancelled"
+        case "waiting": return "Waiting for the passwords"
         default: return nil
         }
     }

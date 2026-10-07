@@ -60,4 +60,21 @@ final class XOSetupKeyTests: XCTestCase {
         // Only a fingerprint or nothing: anything else is malformed, and false.
         XCTAssertFalse(XOSetupKey.isSigned(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: "abc"))
     }
+
+    /// AN INSTALL'S KEY is signed under its own context, over the SHA-256 of
+    /// the pool master's SSH host key (`signingInput('xodeploy-key',
+    /// {address, job, key, pin})` in xo-setup.js). It passes for that host key
+    /// only, and a setup's signature over the same pin does not pass for it.
+    func testAnInstallsKeyIsSignedOverTheHostKeyUnderItsOwnContext() throws {
+        let machine = Machine()
+        let signed = XOSetupKey.deploySigningPrefix + "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(jobKey)\",\"pin\":\"\(somePin)\"}"
+        let sig = try machine.sign(signed)
+        XCTAssertTrue(XOSetupKey.isSignedForDeploy(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+        let other = String(repeating: "cd", count: 32)
+        XCTAssertFalse(XOSetupKey.isSignedForDeploy(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: other))
+        let asSetup = try machine.sign(input(pin: somePin))
+        XCTAssertFalse(XOSetupKey.isSignedForDeploy(key: jobKey, keySig: asSetup, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+        XCTAssertTrue(XOSetupKey.isSSHKey("SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"))
+        XCTAssertFalse(XOSetupKey.isSSHKey("MD5:aa:bb"))
+    }
 }

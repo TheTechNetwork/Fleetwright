@@ -77,24 +77,54 @@ enum XOSetupHandoff {
     /// Open the token a finished job handed back and keep it. Nil when there
     /// is nothing to collect: not this phone's job, or not done yet.
     static func collect(job: String, state: Fleet.SetupState) -> Outcome? {
-        guard state.state == "done", let entry = pending().first(where: { $0.job == job }) else { return nil }
+        collectRecord(job: job, state: state).0
+    }
+
+    /// What collecting came to, and the address the record was kept under:
+    /// the job's own for a setup, and for an install the address of the Xen
+    /// Orchestra the machine installed, which the record names.
+    private static func collectRecord(job: String, state: Fleet.SetupState) -> (Outcome?, String?) {
+        guard state.state == "done", let entry = pending().first(where: { $0.job == job }) else { return (nil, nil) }
         guard let handoff = state.handoff else {
             // DONE AND NOTHING HANDED BACK is a machine older than the
             // hand-off, which kept the token where the first version did.
             forget(job: job)
-            return .failed("The machine finished but handed no token back; it is older than this app and kept the token itself. Update it and run the setup again.")
+            return (.failed("The machine finished but handed no token back; it is older than this app and kept the token itself. Update it and run the setup again."), nil)
         }
         guard let raw = Keychain.get(replyAccount(job)).flatMap({ Data(base64Encoded: $0) }),
               let privateKey = try? P256.KeyAgreement.PrivateKey(rawRepresentation: raw),
               let text = open(handoff, job: job, address: entry.address, key: Seal.OneUseKey(privateKey: privateKey))
         else {
             forget(job: job)
-            return .failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one.")
+            return (.failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one."), nil)
         }
-        Keychain.set(text, for: tokenAccount(entry.address))
-        remember(entry.address)
+        let at = recordAddress(text) ?? entry.address
+        Keychain.set(text, for: tokenAccount(at))
+        remember(at)
         forget(job: job)
-        return .kept
+        return (.kept, at)
+    }
+
+    /// The address a kept record names: where its Xen Orchestra answers.
+    private static func recordAddress(_ record: String) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(record.utf8)) as? [String: Any],
+              let address = object["address"] as? String, XOSetupKey.isAddress(address)
+        else { return nil }
+        return address
+    }
+
+    /// Where the Xen Orchestra an install put on this pool master's pool
+    /// answers, from the record this phone keeps for it, or nil when it keeps
+    /// none: the screen says where only once the record says so.
+    static func installedFrom(_ poolMaster: String) -> String? {
+        for address in held() {
+            guard let record = Keychain.get(tokenAccount(address)),
+                  let object = try? JSONSerialization.jsonObject(with: Data(record.utf8)) as? [String: Any],
+                  object["poolMaster"] as? String == poolMaster
+            else { continue }
+            return address
+        }
+        return nil
     }
 
     /// The record a machine sealed, as the JSON kept in the Keychain, or nil
@@ -106,7 +136,11 @@ enum XOSetupHandoff {
               let record = try? Seal.open(key, aad: Seal.xosetupHandoffAAD(job: job, address: address),
                                           sealed: ["epk": parts[0], "iv": parts[1], "ct": parts[2]]),
               (record["token"] as? String)?.isEmpty == false,
-              record["address"] as? String == address,
+              let at = record["address"] as? String,
+              // A setup's record names the address the job began with. An
+              // install's names the Xen Orchestra it made, and the pool
+              // master the job began with beside it.
+              at == address || (record["poolMaster"] as? String == address && XOSetupKey.isAddress(at)),
               let json = try? JSONSerialization.data(withJSONObject: record)
         else { return nil }
         return String(data: json, encoding: .utf8)
@@ -117,8 +151,7 @@ enum XOSetupHandoff {
     /// the pool. Answers what collecting came to, and what the fleet said,
     /// or nil for the second when there was nothing to keep.
     static func collectAndKeep(job: String, state: Fleet.SetupState, settings: Settings) async -> (Outcome?, String?) {
-        let address = pending().first { $0.job == job }?.address
-        let outcome = collect(job: job, state: state)
+        let (outcome, address) = collectRecord(job: job, state: state)
         guard outcome == .kept, let address else { return (outcome, nil) }
         return (outcome, await keepInFleet(settings: settings, address: address))
     }

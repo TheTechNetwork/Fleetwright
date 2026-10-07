@@ -57,6 +57,11 @@ enum Seal {
     /// (xosetupPolicyAad in src/fleet/seal.js).
     static func xosetupPolicyAAD(job: String, address: String) -> String { "fleetwright-xosetup-policy/v1:\(job):\(address)" }
 
+    /// What an install's two passwords are sealed under: the job and the pool
+    /// master's address, under a name of its own, so a sealed root password is
+    /// never opened as a setup's sign-in (xodeployAad in src/fleet/seal.js).
+    static func xodeployAAD(job: String, address: String) -> String { "fleetwright-xodeploy/v1:\(job):\(address)" }
+
     enum Failure: LocalizedError {
         case notAKey, notSealed
         var errorDescription: String? {

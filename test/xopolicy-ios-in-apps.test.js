@@ -111,7 +111,9 @@ test('iOS: the pools this phone holds are listed on Machines for a known admin o
   assert.match(IOS, /AddHypervisorView\(settings: settings, policyFor: pool\.address\)/);
   // The list is written where the token is kept, and nowhere else.
   const handoff = read('apps/ios/Fleetwright/XOSetupHandoff.swift');
-  assert.match(handoff, /Keychain\.set\(text, for: tokenAccount\(entry\.address\)\)\s*remember\(entry\.address\)/);
+  // Under the address the record names: the job's own for a setup, the Xen
+  // Orchestra it installed for an install.
+  assert.match(handoff, /let at = recordAddress\(text\) \?\? entry\.address\s*Keychain\.set\(text, for: tokenAccount\(at\)\)\s*remember\(at\)/);
   assert.equal((bare(IOS).match(/remember\(/g) ?? []).length, 2, 'the held list is written from somewhere other than collect');
   // In policy mode the address is the one held, not one typed.
   assert.match(SCREEN, /\.disabled\(job != nil \|\| busy \|\| isPolicy\)/);

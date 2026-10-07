@@ -209,6 +209,7 @@ struct AddHypervisorView: View {
             if let pool = policyFor, job == nil { fleetSection(pool) }
             whereSection
             if probes != nil { machinesSection }
+            if noXenOrchestra { installSection }
             if let chosen, job == nil { signInSection(chosen) }
             if let job {
                 if choosing, let inventory {
@@ -386,6 +387,32 @@ struct AddHypervisorView: View {
         }
         return "No machine reached \(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one "
             + "of these is on a network that can reach it: \(all.map(\.hostId).sorted().joined(separator: ", "))."
+    }
+
+    /// EVERY MACHINE THAT ANSWERED FOUND NO XEN ORCHESTRA: reached nothing,
+    /// or reached something that is not it. Then, and only then, installing
+    /// one is offered (C-2). A machine that could not tell (`xo` nil) has not
+    /// said there is none, so it keeps the offer away; adding a pool is never
+    /// the place to install a second Xen Orchestra beside the first.
+    private var noXenOrchestra: Bool {
+        guard !isPolicy, job == nil, let all = probes, !all.isEmpty else { return false }
+        return all.allSatisfy { $0.reachable == false || $0.xo == false }
+    }
+
+    private var installSection: some View {
+        Section {
+            NavigationLink {
+                DeployXOView(settings: settings, address: trimmedAddress, probes: probes)
+            } label: {
+                Text("This pool has no Xen Orchestra yet")
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+                    .frame(minHeight: 44, alignment: .leading)
+            }
+        } footer: {
+            Text("None of your machines found Xen Orchestra at \(trimmedAddress). One of them can install it on the pool, from the pool "
+                 + "master’s root password, and then add it.")
+        }
     }
 
     // MARK: Sign in
