@@ -75,6 +75,22 @@ export const EDGE = Object.freeze({
   memory: 2 * 1024 ** 3,
 });
 
+/**
+ * What the edge filters for every machine behind it (docs/hypervisors.md,
+ * "What the edge filters"). Names in OPNsense 26.7's own models, read from
+ * its source: Unbound's built-in blocklists by key, Suricata's ET Open rule
+ * files by name. Threat feeds only: nothing a session doing ordinary work
+ * would trip over.
+ */
+export const EDGE_FILTER = Object.freeze({
+  /** abuse.ch ThreatFox's indicators and Hagezi's threat intelligence feeds: malware, phishing, command and control. */
+  blocklists: Object.freeze(['atf', 'hgz011']),
+  /** Malware traffic, known botnet controllers, known-bad hosts, Cobalt Strike servers. Detected and logged, not dropped. */
+  rules: Object.freeze(['emerging-malware.rules', 'botcc.rules', 'compromised.rules', 'threatview_CS_c2.rules']),
+  /** Neither is downloaded at boot (OPNsense fetches them on an apply or from cron), and /var is in memory, so both are fetched on a cron, every half hour. */
+  every: '*/30',
+});
+
 /** What a lab may not reach: private, shared, link-local and multicast space. */
 export const NOT_FROM_LABS = Object.freeze(['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16', '224.0.0.0/4']);
 
@@ -88,8 +104,23 @@ export const NOT_FROM_LABS = Object.freeze(['10.0.0.0/8', '172.16.0.0/12', '192.
  * dnsmasq handing out addresses. What changes: the interfaces, no IPv6, the
  * WAN allowed to sit on a private LAN (it does: it is the person's), no
  * anti-lockout rule and no login, the offloads XCP-ng asks to be off, and
- * three LAN rules in order: DNS to the edge itself, nothing private, then
- * anything else.
+ * four LAN rules in order: DNS to the edge itself, no DNS anywhere else (so
+ * the filtering below cannot be stepped around by naming another resolver),
+ * nothing private, then anything else.
+ *
+ * WHAT IT FILTERS (EDGE_FILTER): Unbound answers 0.0.0.0 for anything on its
+ * threat blocklists, and Suricata watches the LAN for known-bad traffic and
+ * logs it, by the machine's own address.
+ *
+ * VERSIONS STAMPED ONE BELOW CURRENT, on purpose. OPNsense's templates read
+ * the configuration as written, not the model with its defaults, and the
+ * defaults are written in only when a migration runs and saves the model.
+ * Stamped at the current version, nothing runs, and the edge booted with
+ * Unbound's templates failing on a missing `acls`. Stamped one below, only
+ * the newest migration runs (each harmless here, read from 26.7's source),
+ * then the whole model is saved: never the older ones, which would read
+ * these sections as an older format. That is also why Unbound's legacy
+ * `<unbound>` section is gone: it is what an older migration would fold in.
  *
  * @param {{ length?: number, wanIf?: string, lanIf?: string }} [opts]
  * @returns {Buffer}
@@ -118,18 +149,30 @@ export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0
     `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${address}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
     '</interfaces>\n' +
     `<dnsmasq><enable>1</enable><port>53053</port><interface>lan</interface><dhcp_ranges><interface>lan</interface><start_addr>${from}</start_addr><end_addr>${to}</end_addr></dhcp_ranges></dnsmasq>\n` +
-    '<unbound><enable>1</enable></unbound>\n' +
     '<nat><outbound><mode>automatic</mode></outbound></nat>\n<filter/>\n' +
     '<OPNsense><Firewall>\n' +
     '<Alias><aliases><alias><enabled>1</enabled><name>fleetwright_private</name><type>network</type>' +
-    `<content>${NOT_FROM_LABS.join('\n')}</content><description>What labs may not reach</description></alias></aliases></Alias>\n` +
+    `<content>${NOT_FROM_LABS.join('\n')}</content><description>What labs may not reach</description></alias>` +
+    '<alias><enabled>1</enabled><name>fleetwright_dns</name><type>port</type><content>53\n853</content><description>DNS and DNS over TLS</description></alias></aliases></Alias>\n' +
     '<Filter><rules>\n' +
     rule(1, 'pass', '<protocol>TCP/UDP</protocol><source_net>lan</source_net><destination_net>lanip</destination_net><destination_port>53</destination_port>', 'Labs ask the edge for names') +
     '\n' +
-    rule(2, 'block', '<protocol>any</protocol><source_net>lan</source_net><destination_net>fleetwright_private</destination_net>', 'Nothing private from a lab') +
+    rule(2, 'block', '<protocol>TCP/UDP</protocol><source_net>lan</source_net><destination_net>any</destination_net><destination_port>fleetwright_dns</destination_port>', 'No other resolver') +
     '\n' +
-    rule(3, 'pass', '<protocol>any</protocol><source_net>lan</source_net><destination_net>any</destination_net>', 'Labs reach the internet') +
-    '\n</rules><snatrules/><npt/><onetoone/></Filter>\n</Firewall></OPNsense>\n</opnsense>\n';
+    rule(3, 'block', '<protocol>any</protocol><source_net>lan</source_net><destination_net>fleetwright_private</destination_net>', 'Nothing private from a lab') +
+    '\n' +
+    rule(4, 'pass', '<protocol>any</protocol><source_net>lan</source_net><destination_net>any</destination_net>', 'Labs reach the internet') +
+    '\n</rules><snatrules/><npt/><onetoone/></Filter>\n</Firewall>\n' +
+    // Fixed ids, so the same edge is the same bytes, and the IDS can name its cron job.
+    '<unboundplus version="1.0.14"><general><enabled>1</enabled></general><dnsbl><blocklist uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e01">' +
+    `<enabled>1</enabled><type>${EDGE_FILTER.blocklists.join(',')}</type><description>Threats</description></blocklist></dnsbl></unboundplus>\n` +
+    `<IDS version="1.1.1"><general><enabled>1</enabled><interfaces>lan</interfaces><homenet>${EDGE.lan.address.replace(/\.\d+$/, '.0')}/${prefix}</homenet>` +
+    '<UpdateCron>5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03</UpdateCron></general><files>' +
+    EDGE_FILTER.rules.map((f, i) => `<file uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1${i}"><filename>${f}</filename><enabled>1</enabled></file>`).join('') +
+    '</files></IDS>\n<cron version="1.0.3"><jobs>' +
+    `<job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e02"><enabled>1</enabled><command>unbound dnsbl</command><minutes>${EDGE_FILTER.every}</minutes><hours>*</hours><description>Blocklists</description></job>` +
+    `<job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03"><origin>IDS</origin><enabled>1</enabled><command>ids update</command><minutes>${EDGE_FILTER.every}</minutes><hours>*</hours><description>Rules</description></job>` +
+    '</jobs></cron>\n</OPNsense>\n</opnsense>\n';
   const body = Buffer.from(xml, 'utf8');
   if (body.length > length) {
     throw new Error(`the edge configuration is ${body.length} bytes and the file it replaces is ${length}`);

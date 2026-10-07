@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 
-import { ConfigPatch, EDGE, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureUplink, fetchImage, isDefaultConfig } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, EDGE, EDGE_FILTER, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureUplink, fetchImage, isDefaultConfig } from '../src/fleet/host/edge-router.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 
 const DEFAULT = readFileSync(new URL('./fixtures/opnsense-26.7-config.xml', import.meta.url));
@@ -53,13 +53,49 @@ test('the edge configuration fits exactly where the default was, and says what t
   // No login anywhere, and no rule that lets a lab at the web interface.
   assert.match(xml, /<user><name>root<\/name>[\s\S]*?<password>\*<\/password>/);
   assert.match(xml, /<noantilockout>1<\/noantilockout>/);
-  // Labs: DNS from the edge, nothing private, then the internet, in that order.
-  const rules = [...xml.matchAll(/<rule>[\s\S]*?<sequence>(\d+)<\/sequence><action>(\w+)<\/action>[\s\S]*?<destination_net>([^<]+)<\/destination_net>/g)].map((m) => [Number(m[1]), m[2], m[3]]);
-  assert.deepEqual(rules, [[1, 'pass', 'lanip'], [2, 'block', 'fleetwright_private'], [3, 'pass', 'any']]);
+  // Labs: DNS from the edge, no other resolver, nothing private, then the
+  // internet, in that order.
+  const rules = [...xml.matchAll(/<rule>[\s\S]*?<sequence>(\d+)<\/sequence><action>(\w+)<\/action>[\s\S]*?<destination_net>([^<]+)<\/destination_net>(?:<destination_port>([^<]+)<\/destination_port>)?/g)]
+    .map((m) => [Number(m[1]), m[2], m[3], m[4] ?? null]);
+  assert.deepEqual(rules, [
+    [1, 'pass', 'lanip', '53'],
+    [2, 'block', 'any', 'fleetwright_dns'],
+    [3, 'block', 'fleetwright_private', null],
+    [4, 'pass', 'any', null],
+  ]);
+  assert.match(xml, /<name>fleetwright_dns<\/name><type>port<\/type><content>53\n853<\/content>/, 'plain DNS and DNS over TLS');
   const alias = /<name>fleetwright_private<\/name><type>network<\/type><content>([^<]*)<\/content>/.exec(xml);
   assert.ok(alias, 'no alias for what labs may not reach');
   assert.deepEqual(alias[1].split('\n'), [...NOT_FROM_LABS]);
   for (const range of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16']) assert.ok(NOT_FROM_LABS.includes(range), range);
+});
+
+test('the edge filters names against threat blocklists and watches the LAN, and fetches both on a cron since nothing does at boot', () => {
+  const xml = edgeConfig().toString('utf8');
+  // Each model one version below 26.7's, so only its newest migration runs
+  // and the model is saved with its defaults (booted: stamped at the current
+  // version, Unbound's templates failed on a missing node). Unbound's legacy
+  // section is gone, so no older migration folds it in.
+  assert.ok(!xml.includes('<unbound>'), 'the legacy section would be migrated over the new one');
+  assert.match(xml, /<unboundplus version="1\.0\.14"><general><enabled>1<\/enabled><\/general>/);
+  const bl = /<blocklist uuid="[0-9a-f-]{36}"><enabled>1<\/enabled><type>([^<]+)<\/type><description>[^<]+<\/description><\/blocklist>/.exec(xml);
+  assert.ok(bl, 'no blocklist, or one without the description OPNsense requires');
+  assert.deepEqual(bl[1].split(','), [...EDGE_FILTER.blocklists]);
+  // Suricata on the LAN, so what it logs carries each machine's own address.
+  assert.match(xml, /<IDS version="1\.1\.1"><general><enabled>1<\/enabled><interfaces>lan<\/interfaces><homenet>10\.254\.0\.0\/24<\/homenet>/);
+  const files = [...xml.matchAll(/<file uuid="[0-9a-f-]{36}"><filename>([^<]+)<\/filename><enabled>1<\/enabled><\/file>/g)].map((m) => m[1]);
+  assert.deepEqual(files, [...EDGE_FILTER.rules]);
+  // The cron jobs, and the IDS pointing at its own by id.
+  // Enabled in so many words: cron's template reads it as written, and a
+  // job without it never reached the crontab when booted.
+  assert.match(xml, /<cron version="1\.0\.3">/);
+  const jobs = [...xml.matchAll(/<job uuid="([0-9a-f-]{36})">(?:<origin>(\w+)<\/origin>)?<enabled>1<\/enabled><command>([^<]+)<\/command><minutes>([^<]+)<\/minutes><hours>\*<\/hours>/g)]
+    .map((m) => ({ id: m[1], command: m[3], minutes: m[4] }));
+  assert.deepEqual(jobs.map((j) => [j.command, j.minutes]), [['unbound dnsbl', EDGE_FILTER.every], ['ids update', EDGE_FILTER.every]]);
+  assert.ok(xml.includes(`<UpdateCron>${jobs[1].id}</UpdateCron>`), 'the IDS names a cron job that is not its update');
+  // Every uuid once: two items with one id would be one item to OPNsense.
+  const ids = [...xml.matchAll(/uuid="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(ids).size, ids.length);
 });
 
 test('a configuration that does not fit is refused rather than truncated', () => {
