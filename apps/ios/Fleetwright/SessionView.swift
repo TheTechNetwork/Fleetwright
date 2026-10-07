@@ -78,7 +78,7 @@ struct SessionView: View {
                 VStack(alignment: .leading, spacing: Design.Space.hair) {
                     Text(session.stateSentence)
                         .fleetType(.title)
-                        .foregroundStyle(session.prompt != nil ? Design.Palette.attention : Design.Palette.ink)
+                        .foregroundStyle(session.isWaitingOnYou ? Design.Palette.attention : Design.Palette.ink)
                     if session.label != session.name {
                         Text(session.name).fleetType(.microMono).foregroundStyle(Design.Palette.inkDim)
                     }
@@ -91,6 +91,17 @@ struct SessionView: View {
                     }
                     .fleetType(.micro)
                     .foregroundStyle(Design.Palette.inkDim)
+                    // WORKING VERSUS WAITING, AND WHAT IT COST, under the
+                    // facts above and in the same quiet type: they answer
+                    // "how is it going" for somebody who opened this page,
+                    // and the list's rows stay one shape. Each line is absent
+                    // when the host could not say, never drawn as zero.
+                    if let time = session.timeLine() {
+                        Text(time).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
+                    }
+                    if let spent = session.spentLine() {
+                        Text(spent).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
+                    }
                 }
                 .padding(.vertical, Design.Space.hair)
             }

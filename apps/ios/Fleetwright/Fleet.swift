@@ -59,6 +59,29 @@ struct Fleet {
         /// running, no turn yet, an older host. Drawn as nothing, never as
         /// empty.
         let context: Context?
+        /// Since when it has been blocked on a person, as epoch milliseconds
+        /// on the host's clock, or nil when it is not.
+        ///
+        /// THE "SINCE WHEN" THE STATE SENTENCE NEVER HAD. "Waiting for you"
+        /// said the same thing about a dialog that went up a moment ago and
+        /// one that has sat there since last night, and those are different
+        /// errands. A floor rather than a stopwatch: where only the pane
+        /// showed it, the host stamps the first look that saw it.
+        ///
+        /// Set even when the host could not read the question, so a session
+        /// waiting on something with no `prompt` still reads as waiting.
+        let awaitingSince: Double?
+        /// How this run has spent its time — working, waiting on a person,
+        /// at its own prompt — from the session's own hooks. Closed totals
+        /// and when the open stretch began; the phone adds the open part, for
+        /// the same reason `startedAt` is a timestamp. Nil is CANNOT TELL: an
+        /// image older than the hooks, a run that has said nothing yet.
+        let phases: Phases?
+        /// What the conversation has cost, as Claude Code itself counted it.
+        /// The host reads the figure Claude Code writes into its transcript
+        /// and never prices anything; neither does this app. Nil is CANNOT
+        /// TELL and is drawn as nothing, never as $0.00.
+        let spent: Spent?
 
         struct Prompt: Codable, Hashable {
             let id: String?
@@ -74,6 +97,114 @@ struct Fleet {
         struct Context: Codable, Hashable {
             let tokens: Int?
             let model: String?
+        }
+
+        /// Every field optional, though the host always sends all six: a
+        /// field the decoder insisted on would fail the whole list reply over
+        /// one line on one page.
+        struct Phases: Codable, Hashable {
+            let since: Double?
+            let current: String?
+            let currentSince: Double?
+            let workingMs: Double?
+            let awaitingMs: Double?
+            let readyMs: Double?
+        }
+
+        /// The parts of Claude Code's figure this app draws. `complete` is
+        /// false when it said some model had no known price, which makes the
+        /// dollars a floor.
+        struct Spent: Codable, Hashable {
+            let usd: Double?
+            let complete: Bool?
+            let outputTokens: Int?
+            let asOf: Double?
+        }
+
+        /// Blocked on a person: a question the host could read, or the host
+        /// saying it is waiting on one it could not.
+        var isWaitingOnYou: Bool { prompt != nil || awaitingSince != nil || status == "awaiting-input" }
+
+        /// "12m": how long it has waited on a person, or nil under a minute
+        /// and when it is not waiting. Coarse, like `age`, because the
+        /// question is "a moment or an hour", and the figure is a floor.
+        func waitedFor(now: Date = Date()) -> String? {
+            guard let awaitingSince, awaitingSince > 0 else { return nil }
+            let seconds = now.timeIntervalSince1970 - awaitingSince / 1000
+            guard seconds >= 60 else { return nil }
+            return Self.coarse(seconds)
+        }
+
+        /// "Worked 42m · waited on you 3m · at its prompt 1h 10m", or nil.
+        ///
+        /// WORKING VERSUS WAITING, which is the question the stillness clock
+        /// cannot answer: forty minutes of work and two hours on a dialog
+        /// look the same on a pane. A stretch under a minute is left out
+        /// rather than drawn as noise, except the working one, which is the
+        /// line's subject. And when the host began counting well after the
+        /// session started (a restart of the box's hub), it says so instead
+        /// of letting the missing hours read as none. Same words as Android,
+        /// held equal by test/telemetry-in-apps.test.js.
+        func timeLine(now: Date = Date()) -> String? {
+            guard isRunning, let p = phases, let since = p.since, let current = p.current,
+                  let currentSince = p.currentSince, var working = p.workingMs,
+                  var waiting = p.awaitingMs, var ready = p.readyMs else { return nil }
+            let nowMs = now.timeIntervalSince1970 * 1000
+            let open = current == "ended" ? 0 : max(0, nowMs - currentSince)
+            switch current {
+            case "working": working += open
+            case "awaiting": waiting += open
+            case "ready": ready += open
+            default: break
+            }
+            var parts = ["Worked \(Self.span(working))"]
+            if waiting >= 60_000 { parts.append("waited on you \(Self.span(waiting))") }
+            if ready >= 60_000 { parts.append("at its prompt \(Self.span(ready))") }
+            if let startedAt, since - startedAt >= 300_000 { parts.append("counted for the last \(Self.span(nowMs - since))") }
+            return parts.joined(separator: " · ")
+        }
+
+        /// "$12.40 at API prices · 48k tokens out", or nil.
+        ///
+        /// "AT API PRICES" because that is what the figure is: Claude Code
+        /// prices its own tokens at the API's list price, and on a Pro or Max
+        /// sign-in that is not what anybody is billed. A bare dollar sign
+        /// would read as a bill. "At least" when Claude Code said it could
+        /// not price everything, and "as of" when a running session's figure
+        /// is from its last pause — it is written when a turn ends, not
+        /// during one. Same words as Android.
+        func spentLine(now: Date = Date()) -> String? {
+            guard let spent else { return nil }
+            var parts: [String] = []
+            if let usd = spent.usd, usd >= 0 {
+                parts.append("\(spent.complete == true ? "" : "at least ")$\(String(format: "%.2f", usd)) at API prices")
+            }
+            if let out = spent.outputTokens, out >= 0 {
+                parts.append("\(Self.compactTokens(out))\(out < 1000 ? "" : " tokens") out")
+            }
+            guard !parts.isEmpty else { return nil }
+            if isRunning, let asOf = spent.asOf, asOf > 0 {
+                let age = now.timeIntervalSince1970 - asOf / 1000
+                if age >= 300 { parts.append("as of \(Self.coarse(age)) ago") }
+            }
+            return parts.joined(separator: " · ")
+        }
+
+        /// 42 minutes → "42m", 70 → "1h 10m", 120 → "2h". Finer than `age`,
+        /// because "worked 1h" for seventy minutes hides most of an hour.
+        static func span(_ ms: Double) -> String {
+            let minutes = Int(ms / 60_000)
+            if minutes < 1 { return "under 1m" }
+            if minutes < 60 { return "\(minutes)m" }
+            let rest = minutes % 60
+            return rest == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(rest)m"
+        }
+
+        /// The same coarse units as `age`: "9m", "3h", "2d".
+        static func coarse(_ seconds: Double) -> String {
+            seconds < 3600 ? "\(Int(seconds / 60))m"
+                : seconds < 86_400 ? "\(Int(seconds / 3600))h"
+                : "\(Int(seconds / 86_400))d"
         }
 
         /// "248k in context", or nil when the host did not say. Same words
@@ -157,7 +288,9 @@ struct Fleet {
         /// prompt is "quiet", not "stuck", for the same reason. `ended` is
         /// the one word the host itself uses for a session that concluded.
         var stateSentence: String {
-            if prompt != nil || status == "awaiting-input" { return "Waiting for you" }
+            // HOW LONG, once it is long enough to say: the difference between
+            // a question to answer now and a person who is not coming.
+            if isWaitingOnYou { return waitedFor().map { "Waiting for you · \($0)" } ?? "Waiting for you" }
             if isRunning {
                 if atRest == true { return idleFor.map { "At its prompt · idle \($0)" } ?? "At its prompt" }
                 if let idle = idleFor { return "Quiet for \(idle)" }
