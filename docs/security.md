@@ -385,6 +385,13 @@ machine of the fleet, through the coordinator.
   that person could, and nothing to anybody else's. The console is Xen
   Orchestra's own page, signed in to there; the phone never holds the pool's
   token for it.
+- **Machines kept ready** (`/api/vm-standby`) are made exactly as one asked
+  for by hand: a single-use ticket bound to the person, a box holding their
+  pool, inside the resource set's limits. What changes is time: a kept
+  machine holds the person's Claude login, and its cloud-init drive's ticket
+  is spent, for up to 350 minutes before any session uses it. A machine a
+  session has used is never handed to another. Keeping none, or fewer, ends
+  the rest.
 - **SSH keys** are public keys, kept as the named secret
   `SSH_AUTHORIZED_KEYS` and checked on the phone and on the box to be public
   keys and nothing else. They go on the machine's cloud-init drive beside

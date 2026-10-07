@@ -93,6 +93,42 @@ internet (one machine per network, and a group network for tests that need
 several, are the next round); a pool has to be added and approved boxes
 have to reach it; the first clone has not been run on a real XCP-ng pool.
 
+## Machines kept ready
+
+> Standby VMs to speed up session starts.
+
+A session on a new machine waits for a clone, a boot and an enrolment: a
+minute or two. **Kept ready**, it does not. Under Machines › Keep machines
+ready a person keeps up to three machines from one image booted and joined,
+on a network of the pool or behind the edge router (`PUT /api/vm-standby
+{ template, count, network }`).
+
+- **Taking one.** A session asking for that image on that network starts on
+  a ready machine at once, as its owner, by name, and the coordinator makes
+  another behind it. A machine is taken only while it is connected and
+  healthy and has the time the session asked for still left on it, by the
+  pool's last look; otherwise a fresh one is made as before.
+- **Never given back.** A machine a session has used is that session's. The
+  next session gets one nobody has used, so no session inherits another's
+  files, processes or history.
+- **Made like any other.** A ticket bound to the person, a box holding their
+  pool, the image, its whole 350 minutes and no session. It is replaced when
+  its life runs out, and swept by the box like every machine.
+- **Topped up** from a holding box's health frame, at most once a minute and
+  one machine per person at a time, so a burst cannot ask for a pool's worth.
+  Asking for fewer, or none, ends the ones no longer wanted, as End it now
+  would.
+- **What it costs** is said on the setting before it is asked for: each kept
+  machine is a machine's worth of the pool, all the time, inside the resource
+  set's limits like any other.
+
+The phones show how many are ready and being made, mark the image with one
+ready in New session › Where as "ready now", and name a kept machine in the
+list as kept ready. The coordinator keeps the wish and the machines made for
+it as `vmStandby` (`src/fleet/coordinator/vm-standby.js`): a refusal past 32
+people, at most six machines each, and a machine that never enrolled
+forgotten after fifteen minutes.
+
 ## Working a machine
 
 > Vm console, settings, reboot, ssh os selection not just Debian.
