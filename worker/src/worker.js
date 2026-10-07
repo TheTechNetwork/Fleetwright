@@ -2095,6 +2095,7 @@ const OPENAPI = JSON.stringify({
                       "restore",
                       "resume",
                       "runnerrepo",
+                      "linkrepo",
                       "sandbox",
                       "secrets",
                       "setuptoken",
@@ -2577,6 +2578,123 @@ const OPENAPI = JSON.stringify({
           },
           "404": {
             "description": "no such token, or not yours \u2014 the two are not distinguished on purpose"
+          }
+        }
+      }
+    },
+    "/api/linked-repos": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Your linked repositories, one per role",
+        "description": "One list with a role on each link, because the three roles want different visibility, credentials and warnings: `links` holds `{ role, repo, setAt }` for each role you have linked, and `fleet.runners` is the fleet\u2019s runner repository, which is what you get without one of your own. See docs/linked-repos.md.",
+        "responses": {
+          "200": {
+            "description": "`links` and `fleet`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          }
+        }
+      }
+    },
+    "/api/linked-repos/{role}": {
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Link a repository for one role, once it passes that role\u2019s check",
+        "description": "Checked as the Fleetwright GitHub App by the minting Worker, or on a permanent box with YOUR GitHub connection (`linkrepo`): an `archive` has to be private and writable, `runners` public with the runner workflows and Actions write, `templates` either and readable. Saved, as GitHub spells it, only if it passes; the check comes back either way, as `linkedRepo`. Linking an archive means the sessions you start from then on are pushed to it, each on a branch of its own, before they stop.",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "archive",
+                "runners",
+                "templates"
+              ]
+            },
+            "description": "`archive` (private: where your sessions are pushed before they stop), `runners` (public: where your temporary machines start, the runner repository by another route) or `templates` (either: skills, presets, configs and workflows a session may read)"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "repo"
+                ],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "description": "owner/repo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "linked: `role`, `repo`, `linkedRepo` (the check) and `text`"
+          },
+          "400": {
+            "description": "not a role, or not an owner/repo"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "422": {
+            "description": "the check did not pass, so nothing was linked: `linkedRepo` says which answer, `text` what to fix, and `needsConnection` when no box holds your GitHub connection"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Unlink the repository for one role",
+        "description": "Sessions you start afterwards are not pushed to an archive; ones already running keep the archive they started with. Unlinking `runners` is clearing your runner repository.",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "archive",
+                "runners",
+                "templates"
+              ]
+            },
+            "description": "`archive` (private: where your sessions are pushed before they stop), `runners` (public: where your temporary machines start, the runner repository by another route) or `templates` (either: skills, presets, configs and workflows a session may read)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "unlinked, or there was nothing to unlink"
+          },
+          "400": {
+            "description": "not a role"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
           }
         }
       }

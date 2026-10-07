@@ -204,6 +204,7 @@ export class Coordinator {
     this.core.runnerTokens.restore(state.runnerTokens || []);
     this.core.runnerTickets.restore(state.runnerTickets || []);
     this.core.runnerRepos.restore(state.runnerRepos);
+    this.core.linkedRepos.restore(state.linkedRepos);
     this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.restoreStandby(state.vmStandby);
     this.core.invites.load(state.invites || []);
@@ -306,6 +307,7 @@ export class Coordinator {
         // Each person's own runner repository, and sessions waiting for a
         // runner to join — see the Worker's copy.
         runnerRepos: this.core.runnerRepos.serialise(),
+        linkedRepos: this.core.linkedRepos.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
         vmStandby: this.core.serialiseStandby(),
         invites: this.core.invites.toJSON(),
@@ -1123,6 +1125,24 @@ export class Coordinator {
         const body = await readJson(req);
         const r = await this.core.setVmStandby(requesterFor(client), body);
         return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+      }
+    }
+
+    // Each person's linked repositories — see the Worker's copy.
+    if (p === '/api/linked-repos' || p.startsWith('/api/linked-repos/')) {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a linked repository belongs to a person.' });
+      }
+      const role = p === '/api/linked-repos' ? null : decodeURIComponent(p.slice('/api/linked-repos/'.length));
+      if (role === null && req.method === 'GET') return json(res, 200, this.core.linkedReposFor(requesterFor(client)));
+      if (role !== null && req.method === 'PUT') {
+        const body = await readJson(req);
+        const r = await this.core.setLinkedRepo(requesterFor(client), role, body?.repo);
+        return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+      }
+      if (role !== null && req.method === 'DELETE') {
+        const r = this.core.clearLinkedRepo(requesterFor(client), role);
+        return json(res, r.ok ? 200 : 400, r);
       }
     }
 

@@ -44,8 +44,9 @@
 // sidecar forwards it to the runner and the coordinator's record.
 
 import { SignJWT } from 'jose';
-import { REPO_RE } from '../fleet/protocol/intents.js';
+import { REPO_RE, LINK_ROLES } from '../fleet/protocol/intents.js';
 import { RUNNER_WORKFLOWS, checkRunnerRepoAsApp } from './runners.js';
+import { checkLinkedRepoAsApp, runnersCheck } from './linked-repo-check.js';
 
 /** Same bound and reasoning as runners.js: two API calls on a bad day. */
 const GITHUB_TIMEOUT_MS = 15_000;
@@ -439,3 +440,59 @@ export async function checkRunnerRepoForApp({ repo, clientId, key, fetchImpl = f
   }
 }
 
+
+/**
+ * Is this repository fit for a linked role, asked by the GitHub App itself —
+ * so a fleet with no permanent box can link an archive or a templates
+ * repository (checkLinkedRepoAsApp in ./linked-repo-check.js has the
+ * questions). `runners` is the runner check above, with the role on it.
+ *
+ * HELD TO FLEETWRIGHT_GITHUB_MINT_OWNERS for the other two, unlike the runner
+ * check, and the difference is visibility. A runner repository is public, so
+ * reading it tells nobody anything; an archive is private by definition, and a
+ * templates repository may be. Answering "does this private repository exist,
+ * and does the App reach it" for any account at all would make the App's key
+ * an oracle over every installation of an App anybody may install. Inside the
+ * owners list it is the fleet's own accounts, which this key already mints
+ * into — and outside it a runner could never be minted a token to push there
+ * anyway. So outside it this answers NULL, "not mine to say", and the
+ * coordinator asks a box with the person's own connection instead.
+ *
+ * @param {{ role: string, repo: string, clientId: string, key: AppKey, owners: string[],
+ *   fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
+ * @returns {Promise<import('./linked-repo-check.js').LinkedRepoCheck|null>}
+ */
+export async function checkLinkedRepoForApp({ role, repo, clientId, key, owners, fetchImpl = fetch, now = () => Date.now() }) {
+  const name = String(repo || '');
+  if (role === 'runners') {
+    return runnersCheck(await checkRunnerRepoForApp({ repo: name, clientId, key, fetchImpl, now }));
+  }
+  /** @param {string} message @param {Partial<import('./linked-repo-check.js').LinkedRepoCheck>} [extra] */
+  const no = (message, extra = {}) => ({
+    role: /** @type {any} */ (role), repo: name, public: null, installed: null, contents: null, push: null, carries: null,
+    ok: false, message, ...extra,
+  });
+  if (!LINK_ROLES.includes(String(role))) return no(`A linked repository is one of ${LINK_ROLES.join(', ')}.`);
+  if (!REPO_RE.test(name)) return no('That is not a repository name. Write it as owner/repo.');
+  if (!ownerAllowed(name, owners)) return null;
+  try {
+    const jwt = await appJwt({ clientId, key, now });
+    const inst = await installationFor({ repo: name, jwt, fetchImpl });
+    if (!inst.ok) {
+      return inst.notInstalled
+        ? no(`The Fleetwright GitHub App is not installed on ${name}. Install it there and pick ${name}, then check again.`, { installed: false })
+        : no(inst.message);
+    }
+    const read = await mintInstallationToken({
+      installationId: inst.id,
+      repo: name,
+      permissions: { metadata: 'read', contents: 'read' },
+      jwt,
+      fetchImpl,
+    });
+    if (!read.ok) return no(read.message, { installed: true });
+    return await checkLinkedRepoAsApp({ role, repo: name, installation: inst, token: read.token, fetchImpl });
+  } catch (e) {
+    return no(`Could not reach GitHub: ${/** @type {Error} */ (e).message}`);
+  }
+}

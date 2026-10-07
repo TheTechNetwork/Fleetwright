@@ -246,7 +246,9 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   //
   // `runnerrepo` is the same question asked before the dispatch rather than
   // during it — is this a repository my GitHub can start machines from — so it
-  // goes where `provision` goes, for every reason above.
+  // goes where `provision` goes, for every reason above. And `linkrepo` is
+  // that question for any role of a linked repository, asked with the same
+  // connection, so it goes there too.
   // A CLAUDE TOKEN IS MADE ON THE MACHINE YOU PICKED, and both halves go there.
   //
   // `setuptoken` starts `claude setup-token` in a pane and then types the code
@@ -318,15 +320,18 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     };
   }
 
-  if (verb === 'provision' || verb === 'runnerrepo') {
+  if (verb === 'provision' || verb === 'runnerrepo' || verb === 'linkrepo') {
     const durable = registry.reachable().filter((h) => !h.ephemeral);
     if (!durable.length) {
       return {
         kind: 'refused',
         code: 'no_hosts',
         reason:
-          `${describeWhyNoHosts(registry)} A runner is dispatched BY a permanent host, using the GitHub ` +
-          'connection stored there — so a fleet with no permanent host has nothing to ask.',
+          verb === 'linkrepo'
+            ? `${describeWhyNoHosts(registry)} A repository is checked with your GitHub connection on a permanent ` +
+              'host, and this fleet has none to ask.'
+            : `${describeWhyNoHosts(registry)} A runner is dispatched BY a permanent host, using the GitHub ` +
+              'connection stored there — so a fleet with no permanent host has nothing to ask.',
       };
     }
     if (preferHost) {

@@ -64,6 +64,10 @@ test('the verb set is exactly what is documented', () => {
     'health',
     'labels',
     'link',
+    // v11: checks a repository for one role of a linked repository — archive,
+    // runners or templates. A new verb, so an older host answers
+    // `unknown_verb`; the version was spent on `start { archive }` beside it.
+    'linkrepo',
     'list',
     'logs',
     // A repository token for a runner, sent by the coordinator and by nobody

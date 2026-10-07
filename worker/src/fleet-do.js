@@ -134,6 +134,8 @@ export class Fleet {
             // Whether a runner can be started from a repository, asked as the
             // App, so setting your own runner repository needs no box.
             runnerRepo: async (ask) => minterCall(env.MINTER, '/runner-repo', ask),
+            // The same for any role of a linked repository (#346).
+            linkedRepo: async (ask) => minterCall(env.MINTER, '/linked-repo', ask),
             // A device's GitHub sign-in, finished where the client secret is.
             github: async (ask) => minterCall(env.MINTER, '/github/token', ask),
             // Each person's vault, and a box asking for what it was approved
@@ -154,6 +156,8 @@ export class Fleet {
       const write = Promise.all([
         this.state.storage.put('runnerTickets', this.core.runnerTickets.serialise()),
         this.state.storage.put('runnerRepos', this.core.runnerRepos.serialise()),
+        // Each person's archive and templates repositories (linked-repos.js).
+        this.state.storage.put('linkedRepos', this.core.linkedRepos.serialise()),
         this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts()),
         // Machines kept ready, and which were made for it.
         this.state.storage.put('vmStandby', this.core.serialiseStandby()),
@@ -224,6 +228,7 @@ export class Fleet {
       this.core.runnerTickets.restore(/** @type {any[]} */ ((await this.state.storage.get('runnerTickets')) || []));
       // Each person's own runner repository, and sessions waiting for a runner.
       this.core.runnerRepos.restore(await this.state.storage.get('runnerRepos'));
+      this.core.linkedRepos.restore(await this.state.storage.get('linkedRepos'));
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.restoreStandby(await this.state.storage.get('vmStandby'));
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
@@ -840,6 +845,27 @@ export class Fleet {
         const body = await readJson(request);
         const r = await this.core.setVmStandby(requesterFor(client), body);
         return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
+      }
+    }
+
+    // EACH PERSON'S LINKED REPOSITORIES, three roles and one list (#346).
+    // GET lists them; PUT /{role} links one once it passes that role's check;
+    // DELETE /{role} unlinks it. `runners` is the runner repository above,
+    // reached a second way. See src/fleet/coordinator/linked-repos.js.
+    if (url.pathname === '/api/linked-repos' || url.pathname.startsWith('/api/linked-repos/')) {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a linked repository belongs to a person.' }, 403);
+      }
+      const role = url.pathname === '/api/linked-repos' ? null : decodeURIComponent(url.pathname.slice('/api/linked-repos/'.length));
+      if (role === null && request.method === 'GET') return json(this.core.linkedReposFor(requesterFor(client)));
+      if (role !== null && request.method === 'PUT') {
+        const body = await readJson(request);
+        const r = await this.core.setLinkedRepo(requesterFor(client), role, body?.repo);
+        return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
+      }
+      if (role !== null && request.method === 'DELETE') {
+        const r = this.core.clearLinkedRepo(requesterFor(client), role);
+        return json(r, r.ok ? 200 : 400);
       }
     }
 
