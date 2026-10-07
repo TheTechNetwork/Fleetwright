@@ -20,6 +20,7 @@
 
 import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
+import { relayFromEnv as relayEnv } from '../../src/fleet/relay/client.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
@@ -99,6 +100,13 @@ export class Fleet {
         clientId: env.FLEETWRIGHT_GITHUB_CLIENT_ID,
         clientSecret: env.FLEETWRIGHT_GITHUB_CLIENT_SECRET,
       },
+      // THE OAUTH RELAY, for a coordinator that is not ours: the App's id and
+      // not its secret, and a relay registration (scripts/relay-register.mjs
+      // prints these). Absent, or any part missing, is no relay.
+      oauthRelay: (() => {
+        const relay = relayEnv(env);
+        return relay?.privateJwk ? relay : null;
+      })(),
       // The Cloudflare OAuth client, same rule: absent means the paste route.
       // `scopes` is the client's registered scope list (dot-form names, plus
       // offline_access for a refresh token) and is required for the offer —
@@ -1062,6 +1070,22 @@ export class Fleet {
       return new Response(callbackPage(result), {
         status: result.ok ? 200 : 400,
         headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
+
+    // A GITHUB SIGN-IN THAT WENT THROUGH THE OAUTH RELAY, back with the token
+    // sealed to this coordinator's key (src/fleet/relay/relay.js). Secured by
+    // the same single-use state as the callback above, and by the state found
+    // again inside what was sealed.
+    if (url.pathname === '/oauth/github/relayed') {
+      const result = await this.core.finishRelayedGithubAuthorization({
+        state: url.searchParams.get('state'),
+        sealed: url.searchParams.get('sealed'),
+        error: url.searchParams.get('error'),
+      });
+      return new Response(callbackPage(result), {
+        status: result.ok ? 200 : 400,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
       });
     }
 

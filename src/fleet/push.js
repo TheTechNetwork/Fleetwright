@@ -30,6 +30,7 @@
  */
 
 import { sealTo } from './push-crypto.js';
+import { relayFromEnv } from './relay/client.js';
 
 /**
  * @typedef {object} Pusher
@@ -578,6 +579,69 @@ export function routingPusher({ ios, other, logger }) {
 }
 
 /**
+ * Through the push relay, for a coordinator that is not ours
+ * (src/fleet/relay/relay.js, docs/relay-terms.md).
+ *
+ * THE ENVELOPES ARE MADE HERE, before anything leaves: a phone that
+ * registered a key gets its notification sealed by this coordinator, and the
+ * relay forwards ciphertext. What the relay is sent for a phone without a key
+ * is what Apple or Google would be sent anyway.
+ *
+ * A FLEET OVER THE RELAY'S CAP IS TOLD, and this says so in the log with the
+ * cap and when it resets: a refusal that looked like a delivery failure is
+ * one nobody could act on.
+ *
+ * @param {{ url: string, fleet: string, secret: string }} relay
+ * @param {{ logger?: { info: Function, warn: Function }, fetchImpl?: typeof fetch, now?: () => number }} [opts]
+ * @returns {Pusher}
+ */
+export function relayPusher(relay, { logger, fetchImpl, now = () => Date.now() } = {}) {
+  const log = logger || { info() {}, warn() {} };
+  const doFetch = fetchImpl || globalThis.fetch;
+  /** @param {string} path @param {any} body */
+  async function post(path, body) {
+    const res = await doFetch(`${relay.url}/relay/v1${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${relay.fleet}.${relay.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const answer = /** @type {any} */ (await res.json().catch(() => null));
+    if (res.ok && answer?.ok) return { sent: Number(answer.sent) || 0, dead: Array.isArray(answer.dead) ? answer.dead.map(String) : [] };
+    if (res.status === 429) {
+      log.warn(`push: the relay is limiting this fleet to ${answer?.limit ?? 'its cap'} an hour, until ${answer?.resetAt ? new Date(answer.resetAt).toISOString() : 'the hour turns'}`);
+    } else {
+      log.warn(`push: the relay refused (${res.status}): ${String(answer?.text ?? '').slice(0, 200)}`);
+    }
+    return { sent: 0, dead: [] };
+  }
+  return {
+    async send(devices, message) {
+      if (!devices.length) return { sent: 0, dead: [] };
+      /** @type {any[]} */
+      const items = [];
+      for (const device of devices) {
+        // One device's bad key costs that device, as in the senders above.
+        try {
+          items.push({ token: device.token, platform: device.platform, wire: await envelopeFor(device, message, { now }) });
+        } catch (err) {
+          log.warn(`push: a ${device.platform} device was skipped — ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (!items.length) return { sent: 0, dead: [] };
+      return post('/push', {
+        items,
+        ...(message.category ? { category: message.category } : {}),
+        ...(message.drawnByApp ? { drawnByApp: true } : {}),
+      });
+    },
+    async activity(tokens, update) {
+      if (!tokens.length) return { sent: 0, dead: [] };
+      return post('/activity', { tokens, update });
+    },
+  };
+}
+
+/**
  * Build whichever sender the environment is configured for.
  *
  * @param {Record<string, string|undefined>} env
@@ -624,6 +688,15 @@ export function pusherFromEnv(env, logger, opts = {}) {
   if (apns) return routingPusher({ ios: apns, other: logPusher(logger), logger });
   if (fcm) return routingPusher({ ios: logPusher(logger), other: fcm, logger });
 
+  // THROUGH THE RELAY, for a coordinator with no credentials of its own,
+  // which is every one that is not ours (relay/client.js says what to set).
+  // Own credentials first, so ours never routes through a relay it runs.
+  const relay = relayFromEnv(env);
+  if (relay) {
+    logger.info(`push: through the relay at ${relay.url}`);
+    return relayPusher(relay, { logger });
+  }
+
   // SWITCHED ON AND UNABLE TO SEND, which is the one combination that used to
   // reach this line saying nothing at all.
   //
@@ -640,7 +713,8 @@ export function pusherFromEnv(env, logger, opts = {}) {
   // failure app-parity.md exists to name.
   logger.warn(
     'push: FLEETWRIGHT_PUSH is set but no provider is configured — notifications are logged, not sent. ' +
-      'APNs needs FLEETWRIGHT_APNS_KEY, _KEY_ID and _TEAM_ID; FCM needs FLEETWRIGHT_FCM_SERVICE_ACCOUNT. ' +
+      'APNs needs FLEETWRIGHT_APNS_KEY, _KEY_ID and _TEAM_ID; FCM needs FLEETWRIGHT_FCM_SERVICE_ACCOUNT; ' +
+      'the relay needs FLEETWRIGHT_RELAY_URL, _FLEET and _SECRET (docs/relay-terms.md). ' +
       'Unset FLEETWRIGHT_PUSH if that is deliberate.',
   );
   return logPusher(logger);

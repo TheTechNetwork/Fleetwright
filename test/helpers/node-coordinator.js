@@ -851,6 +851,19 @@ export class Coordinator {
       return undefined;
     }
 
+    // A GITHUB SIGN-IN THAT WENT THROUGH THE OAUTH RELAY: the same as the
+    // Worker's, because openapi.json holds both coordinators to it.
+    if (p === '/oauth/github/relayed' && req.method === 'GET') {
+      const result = await this.core.finishRelayedGithubAuthorization({
+        state: url.searchParams.get('state'),
+        sealed: url.searchParams.get('sealed'),
+        error: url.searchParams.get('error'),
+      });
+      res.writeHead(result.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+      res.end(callbackPage(result));
+      return undefined;
+    }
+
     // THE CLOUDFLARE CALLBACK — the same flow, the second provider. Secured by
     // the same single-use state, checked against its own pending store so a
     // GitHub state cannot finish a Cloudflare flow or the reverse.
