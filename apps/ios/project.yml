@@ -111,6 +111,16 @@ targets:
           Confirming a reboot, which ends every session running on that
           machine, and opening a Xen Orchestra sign-in you chose to keep on
           this phone.
+        # WHY THE APP ASKS TO USE THE LOCAL NETWORK, in the words iOS shows.
+        #
+        # A pool's page talks to Xen Orchestra from this phone directly
+        # (docs/manage.md, ManageView.swift), and Xen Orchestra is usually on
+        # the person's own network: iOS asks before an app connects to an
+        # address there, and this is the sentence under that question.
+        NSLocalNetworkUsageDescription: >-
+          Talking to your Xen Orchestra directly from this phone, when it is
+          on your network, to show and manage the pools, hosts and VMs you
+          added under Machines.
         # THE DSN, READ AT LAUNCH. Not a secret — it identifies a project and
         # grants only the ability to post events to it. Empty means no
         # reporting, which is what a fork or a fresh clone gets; FleetwrightApp
