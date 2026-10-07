@@ -105,8 +105,8 @@ internal fun PolicyForm(
             enabled = enabled,
             title = n.name.ifBlank { n.id },
             line = XoPolicy.networkLine(n),
-            // Another pool has its own group networks to start from.
-            onClick = { onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id))) },
+            // Another pool has its own group networks to start from, and its router filters its own way.
+            onClick = { onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id), edgeBlock = XoPolicy.edgeOn(inv, n.id)?.blocks ?: false)) },
         )
     }
     RadioRow(
@@ -138,6 +138,29 @@ internal fun PolicyForm(
                 val kept = on || there != null
                 onChange(choice.copy(edge = on, image = choice.image && kept, images = if (kept) choice.images else emptySet()))
             },
+        )
+    }
+    // WHAT THE ROUTER DOES WITH WHAT ITS THREAT RULES MATCH, offered only by
+    // a machine that builds either kind, and only with the router asked for.
+    // Asked for: blocking mode for the edge's intrusion detection, which only
+    // ever logged. The same words as iOS.
+    if (canEdge && choice.edgeBlockChoice && choice.edge && choice.egress != null) {
+        val there = XoPolicy.edgeOn(inv, choice.egress)
+        val what = if (choice.edgeBlock) {
+            "On: Suricata drops it, and while it cannot inspect, nothing leaves."
+        } else {
+            "Off: Suricata logs it by machine and lets it through."
+        }
+        CheckRow(
+            checked = choice.edgeBlock,
+            enabled = enabled,
+            title = "Drop what the threat rules match",
+            line = if (there != null && (there.blocks ?: false) != choice.edgeBlock) {
+                "$what Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up."
+            } else {
+                what
+            },
+            onChange = { on -> onChange(choice.copy(edgeBlock = on)) },
         )
     }
     // THE MACHINE IMAGE sessions' machines are cloned from, offered only by a

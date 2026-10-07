@@ -77,6 +77,19 @@ class XoPolicyTest {
     }
 
     @Test
+    fun blockingStartsAsTheRouterIsAndIsSentOnlyToAMachineThatBuildsEitherKind() {
+        // As it is, so Apply rebuilds nothing the person did not change.
+        val blocking = inventory(inventoryJson().put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true).put("blocks", true))))
+        assertTrue(XoPolicy.defaults(blocking).edgeBlock)
+        val older = inventory(inventoryJson().put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true))))
+        assertEquals(null, XoPolicy.edgeOn(older, "net-lab")?.blocks)
+        val c = XoPolicy.defaults(older).copy(edgeBlock = true)
+        assertFalse("an older machine is not sent it", XoPolicy.payload(older, c).has("edgeBlock"))
+        assertTrue(XoPolicy.payload(older, c.copy(edgeBlockChoice = true)).getBoolean("edgeBlock"))
+        assertFalse("sent with no router asked for", XoPolicy.payload(older, c.copy(edgeBlockChoice = true, edge = false)).has("edgeBlock"))
+    }
+
+    @Test
     fun theEdgeRouterGoesWithItsWayOut() {
         val inv = inventory(inventoryJson().put("edges", JSONArray()))
         val asked = XoPolicy.defaults(inv).copy(edge = true)
