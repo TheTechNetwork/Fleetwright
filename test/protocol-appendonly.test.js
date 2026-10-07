@@ -64,8 +64,8 @@ const BASELINE = Object.freeze({
   linkrepo: { role: 11, repo: 11 },
   mint: { repo: 1, job: 1, key: 1 },
   setuptoken: { code: 1, reply: 1 },
-  xoprobe: { address: 1 },
-  xosetup: { phase: 1, job: 1, address: 1, pin: 1, sealed: 1, trust: 1, plain: 1 },
+  xoprobe: { address: 1, relay: 12 },
+  xosetup: { phase: 1, job: 1, address: 1, pin: 1, sealed: 1, trust: 1, plain: 1, relay: 12 },
 });
 
 /** @param {import('../src/fleet/protocol/intents.js').ParamSpec} ps */

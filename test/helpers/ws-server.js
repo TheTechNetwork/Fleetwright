@@ -209,13 +209,16 @@ export class WsConnection extends EventEmitter {
  *
  * @param {import('node:http').Server} server
  * @param {{
- *   path?: string,
+ *   path?: string|string[],
  *   authorise?: (req: import('node:http').IncomingMessage) => boolean | string | Promise<boolean|string>,
  *   onConnection: (conn: WsConnection, req: import('node:http').IncomingMessage) => void,
  *   maxMessageBytes?: number,
  * }} opts
  */
 export function attachWebSocketServer(server, { path = '/', authorise, onConnection, maxMessageBytes }) {
+  // One path or several: the Node coordinator takes a host's socket and a
+  // phone's relay on the one listener, and `authorise` tells them apart.
+  const paths = Array.isArray(path) ? path : [path];
   /**
    * @param {import('node:http').IncomingMessage} req
    * @param {import('node:stream').Duplex} socket
@@ -229,7 +232,7 @@ export function attachWebSocketServer(server, { path = '/', authorise, onConnect
     };
 
     const url = new URL(req.url || '/', 'http://placeholder');
-    if (url.pathname !== path) return refuse(404, 'Not Found');
+    if (!paths.includes(url.pathname)) return refuse(404, 'Not Found');
 
     const key = req.headers['sec-websocket-key'];
     if (

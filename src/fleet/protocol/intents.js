@@ -85,6 +85,14 @@ export const CERT_PIN_RE = /^[0-9a-f]{64}$/;
 export const SSH_HOST_KEY_RE = /^SHA256:[A-Za-z0-9+/]{43}$/;
 
 /**
+ * A relay through somebody's phone: twenty-four lowercase hex digits, made by
+ * the coordinator when the phone opens it (coordinator/relays.js). Unguessable
+ * so a relay cannot be named by anyone it was not handed to, and checked
+ * against its owner and its phone besides, because unguessable is not owned.
+ */
+export const RELAY_ID_RE = /^[0-9a-f]{24}$/;
+
+/**
  * What onboarding does, in order, by key. The host reports progress as an
  * index into this list and each app words each key itself, so a progress
  * update says nothing a lock screen should not show and every surface agrees
@@ -229,8 +237,18 @@ export const XODEPLOY_STEPS = Object.freeze([
 // the session starts anyway, with the reply saying it will not be archived:
 // dropping it loses a copy, not the session, which is the difference from
 // `task`. See docs/linked-repos.md.
+//
+// v12, 7 Oct 2026: a pool NO MACHINE CAN REACH is reached through the phone
+// that is adding it. `xoprobe` and `xosetup` gained `relay`: the id of a byte
+// relay the person's phone holds open to the address on its own network, and
+// the machine opens TLS over it itself, held to the pin, so the phone and the
+// coordinator carry ciphertext (docs/hypervisors.md, "Through the phone").
+// An older host is never handed one: dropped, the probe would answer for the
+// machine's own network and `begin` would make a job that cannot connect, so
+// the coordinator refuses instead, and places a relay only on a host that
+// speaks 12.
 /** @type {number} */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -1435,6 +1453,18 @@ export const VERBS = Object.freeze({
         shapeName: 'a host name or IP address, with an optional port',
         describe: 'Where Xen Orchestra answers: a host name or address, optionally with a port. No scheme, no path.',
       },
+      // THROUGH THE PHONE: ask one machine, the relay's, to reach the address
+      // over the relay the asking phone holds open, rather than every machine
+      // over its own network. The coordinator sends it to that machine only.
+      relay: {
+        type: 'text',
+        required: false,
+        max: 24,
+        pattern: RELAY_ID_RE,
+        shapeName: 'a relay id',
+        since: 12,
+        describe: 'The relay your phone opened to the address (GET /api/xosetup/relay): the probe goes through it, on the machine it was opened for.',
+      },
     },
     mutating: false,
     summary:
@@ -1545,6 +1575,20 @@ export const VERBS = Object.freeze({
         describe:
           'For `begin`, with no `pin`: `accepted` when the person was told the sign-in and the fleet\'s token would ' +
           'cross the network unencrypted and chose to go on. The key is then signed over an empty pin.',
+      },
+      // THROUGH THE PHONE, for `begin`: the job reaches Xen Orchestra over the
+      // relay the asking phone holds open, and only over it. The machine opens
+      // TLS over the relay itself and holds it to `pin`, so the phone and the
+      // coordinator carry ciphertext; plain HTTP is refused over a relay,
+      // because there the sign-in would be theirs to read.
+      relay: {
+        type: 'text',
+        required: false,
+        max: 24,
+        pattern: RELAY_ID_RE,
+        shapeName: 'a relay id',
+        since: 12,
+        describe: 'For `begin`: the relay your phone opened to the address. The job runs on that relay\'s machine and reaches Xen Orchestra through the phone.',
       },
     },
     mutating: true,

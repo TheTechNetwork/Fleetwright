@@ -18,7 +18,8 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE } from '../protocol/intents.js';
+import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
 import { checkPublicKey, openWith } from '../push-crypto.js';
@@ -69,6 +70,16 @@ const LAB_HOLD_MS = 15 * 60_000;
 const isLabName = (/** @type {unknown} */ name) => /^fleetwright-lab-\d+$/.test(String(name || ''));
 /** @typedef {{ id: string, name: string, open: boolean, free: boolean }} LabOffer */
 const SETUP_TTL_MS = 24 * 60 * 60_000;
+/** The states a setup job does not leave. */
+const ENDED_SETUP = new Set(['done', 'failed', 'cancelled']);
+/** The protocol a machine must speak to be handed a relay through a phone (intents.js, v12). */
+const RELAY_PROTOCOL = 12;
+/**
+ * How long a probe through a phone may take. Longer than the fan-out's ten
+ * seconds: every round trip of the TLS handshake crosses the coordinator twice
+ * and the phone's own network, which may be a mobile one.
+ */
+const RELAY_PROBE_TIMEOUT_MS = 25_000;
 
 /**
  * How many repository tokens one runner may ask for in MINT_WINDOW_MS. A runner
@@ -277,6 +288,21 @@ export class CoordinatorCore {
      * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, activityNews?: string, activityAt?: number }>}
      */
     this.setups = new Map();
+    /**
+     * Relays through a phone, for a pool no machine can reach (relays.js):
+     * the phone's socket joined to frames to one machine. Memory only — a
+     * relay is a live socket and nothing without it.
+     */
+    this.relays = new Relays({
+      now,
+      setTimer,
+      clearTimer,
+      log: this.log,
+      toHost: (hostId, frame) => {
+        const host = this.registry.hosts.get(hostId);
+        if (host?.connected && typeof host.send === 'function') host.send({ v: PROTOCOL_VERSION, kind: 'relay', ...frame });
+      },
+    });
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
     // runner-repos.js for why a member may, and what bounds it.
     this.runnerRepos = new RunnerRepos({ now });
@@ -438,6 +464,9 @@ export class CoordinatorCore {
 
   /** @param {string} hostId @param {string} reason */
   hostDisconnected(hostId, reason) {
+    // A RELAY TO A MACHINE THAT HAS GONE carries nothing, and the phone is
+    // told so rather than left pumping bytes at a socket nobody reads.
+    this.relays.closeForHost(hostId, `${hostId} left the fleet's socket, so nothing reaches it through this phone now.`);
     this.registry.disconnect(hostId, reason);
     this.log.warn(`coordinator: ${hostId} disconnected (${reason})`);
   }
@@ -516,6 +545,9 @@ export class CoordinatorCore {
     // AND THE BOX RUNNING A POLICY JOB, for the pin its pool's own machine
     // enrols with.
     if (msg.kind === 'holder-pin') return this.#onHolderPin(hostId, msg);
+    // AND THE BOX RUNNING A SETUP THROUGH SOMEBODY'S PHONE, for its bytes:
+    // TLS it opened itself, which only it and Xen Orchestra can read.
+    if (msg.kind === 'relay') return this.relays.fromHost(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -819,8 +851,28 @@ export class CoordinatorCore {
       if (!params.address) {
         return { ok: false, error: { code: 'bad_params' }, text: `Say where Xen Orchestra answers: xosetup ${phase} needs an address.` };
       }
-      const placement = place(this.registry, spec, { preferHost: typeof spec.preferHost === 'string' ? spec.preferHost : '', requester: spec.requester ?? null });
+      // THROUGH THE PHONE: the job runs on the relay's machine, whatever the
+      // caller asked for, and the relay is its for as long as it lives. Never
+      // over plain HTTP, where the sign-in would cross the phone and this
+      // coordinator readable; the machine refuses it too.
+      /** @type {import('./relays.js').Relay|null} */
+      let relay = null;
+      if (params.relay) {
+        if (params.plain) {
+          return {
+            ok: false,
+            error: { code: 'relay_plain' },
+            text: 'A phone carries only HTTPS: over plain HTTP the sign-in would cross the phone and the fleet readable. Give Xen Orchestra HTTPS first.',
+          };
+        }
+        const claimed = this.relays.claim(params.relay, { owner, device: spec.device ?? null, address: String(params.address), use: 'begin' });
+        if (!claimed.ok) return claimed;
+        relay = claimed.relay;
+      }
+      const prefer = relay ? relay.hostId : typeof spec.preferHost === 'string' ? spec.preferHost : '';
+      const placement = place(this.registry, { ...spec, preferHost: prefer }, { preferHost: prefer, requester: spec.requester ?? null });
       if (placement.kind !== 'host' || !placement.host) {
+        if (relay) this.relays.close(relay.id, 'The machine this relay was for is not connected now, so setup did not begin.');
         return { ok: false, error: { code: placement.code || 'no_hosts' }, text: placement.reason || 'No machine can run the setup.' };
       }
       const hostId = placement.host.hostId;
@@ -840,7 +892,10 @@ export class CoordinatorCore {
       if (answer?.ok !== false && typeof job === 'string' && XOSETUP_JOB_RE.test(job)) {
         this.#pruneSetups();
         this.setups.set(job, { hostId, owner, startedAt: this.now(), last: null, activities: [] });
+        if (relay) this.relays.bind(relay.id, job);
         this.onStateChanged?.();
+      } else if (relay) {
+        this.relays.close(relay.id, 'Setup did not begin, so this phone is carrying nothing for it.');
       }
       return answer ? { ...answer, hostId } : answer;
     }
@@ -855,7 +910,138 @@ export class CoordinatorCore {
     }
     /** @type {any} */
     const answer = await this.dispatch({ ...spec, preferHost: rec.hostId, setupRouted: true });
+    // A JOB THAT HAS ENDED needs no relay, whichever phase said so: a policy
+    // job reports no progress until it applies, so its status is often the
+    // first this coordinator hears of the end.
+    if (ENDED_SETUP.has(answer?.xosetup?.state)) this.relays.closeForJob(job, 'The job using this relay ended, so it was closed.');
     return answer ? { ...answer, hostId: rec.hostId } : answer;
+  }
+
+  /**
+   * A machine that can reach an address through a phone: connected,
+   * permanent, and new enough to speak relays. The one asked for when it is
+   * one of those; otherwise a healthy one first, then by name, so the same
+   * fleet offers the same machine.
+   *
+   * @param {string|null} prefer
+   */
+  #relayHost(prefer) {
+    const able = this.registry.reachable().filter((h) => !h.ephemeral && Number(h.health?.protocol) >= RELAY_PROTOCOL);
+    if (prefer) return able.find((h) => h.hostId === prefer) ?? null;
+    able.sort((a, b) => Number(b.state === 'healthy') - Number(a.state === 'healthy') || a.hostId.localeCompare(b.hostId));
+    return able[0] ?? null;
+  }
+
+  /**
+   * A phone opening a relay to an address on its own network, for a pool no
+   * machine in the fleet reached. docs/hypervisors.md, "Through the phone".
+   *
+   * WHO MAY is who may add a hypervisor, an admin, and only from a phone
+   * signed in as a person: the break-glass token has no phone to carry it
+   * and no name to own it. The relay is this phone's socket; `send` and
+   * `close` are that socket's, and the answer is sent down it as well as
+   * returned, so both coordinators say the same thing in the same place.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {string|null} device  the verified credential's id
+   * @param {{ address?: unknown, host?: unknown }} ask
+   * @param {{ send: (msg: Record<string, unknown>) => void, close: (code: number, reason: string) => void }} phone
+   * @returns {{ ok: true, relay: string, hostId: string, address: string, expiresAt: number } | { ok: false, error: { code: string }, text: string }}
+   */
+  openRelay(requester, device, ask, phone) {
+    /** @param {{ ok: false, error: { code: string }, text: string }} r */
+    const refuse = (r) => {
+      try {
+        phone.send({ op: 'closed', error: r.error, text: r.text });
+        phone.close(1008, r.error.code);
+      } catch { /* the socket is already going */ }
+      return r;
+    };
+    const owner = requester?.email ? String(requester.email).toLowerCase() : null;
+    if (!owner || !device) {
+      return refuse({ ok: false, error: { code: 'not_signed_in' }, text: 'A relay is carried by the phone of a signed-in person. Sign in on this phone first.' });
+    }
+    if (!requester?.admin) return refuse({ ok: false, error: { code: 'not_admin' }, text: 'Only this fleet’s admin can add a hypervisor.' });
+    const address = typeof ask?.address === 'string' ? ask.address : '';
+    if (address.length > 260 || !XO_ADDRESS_RE.test(address)) {
+      return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say where Xen Orchestra answers: a host name or address, with an optional port.' });
+    }
+    const prefer = typeof ask?.host === 'string' && ask.host ? ask.host : null;
+    const host = this.#relayHost(prefer);
+    if (!host) {
+      return refuse({
+        ok: false,
+        error: { code: 'no_hosts' },
+        text: prefer
+          ? `${prefer} cannot work through a phone now: it is offline, or older than protocol ${RELAY_PROTOCOL}. Update it and try again.`
+          : `No machine in the fleet can work through a phone yet: each is offline, or older than protocol ${RELAY_PROTOCOL}. Update one and try again.`,
+      });
+    }
+    const started = this.relays.start({ owner, device, hostId: host.hostId, address, toPhone: phone.send, closePhone: phone.close });
+    if (!started.ok) return refuse(started);
+    // ON THE RECORD, because it is a connection from inside somebody's network
+    // that this coordinator now carries. Who and which machine, not where.
+    this.record({ event: 'relay.opened', actor: owner, hostId: host.hostId, text: `${owner}'s phone opened a relay for ${host.hostId}` });
+    /** @type {{ ok: true, relay: string, hostId: string, address: string, expiresAt: number }} */
+    const ready = { ok: true, relay: started.relay.id, hostId: host.hostId, address, expiresAt: started.relay.expiresAt };
+    try {
+      phone.send({ op: 'ready', ...ready, maxBytes: RELAY_MAX_BYTES });
+    } catch { /* the socket is going; its close ends the relay */ }
+    return ready;
+  }
+
+  /** A message on a phone's relay socket. @param {string} relay @param {unknown} raw */
+  relayFromPhone(relay, raw) {
+    this.relays.fromPhone(relay, raw);
+  }
+
+  /** A phone's relay socket closed. @param {string} relay */
+  relayPhoneGone(relay) {
+    this.relays.phoneGone(relay);
+  }
+
+  /**
+   * `xoprobe` through a phone: the relay's machine, and only it, reaches the
+   * address over the relay. The relay's one probe, whatever the answer, so a
+   * relay cannot be turned into a scanner of the phone's network one probe
+   * at a time; it may then carry one `begin`.
+   *
+   * @param {any} spec @param {Record<string, any>} params
+   */
+  async #probeThrough(spec, params) {
+    const owner = spec.requester?.email ? String(spec.requester.email).toLowerCase() : null;
+    const claimed = this.relays.claim(params.relay, { owner, device: spec.device ?? null, address: String(params.address), use: 'probe' });
+    if (!claimed.ok) return claimed;
+    const relay = claimed.relay;
+    const host = this.registry.get(relay.hostId);
+    if (!host?.connected) {
+      const text = `${relay.hostId} is not connected now, so nothing can reach the address through this phone.`;
+      this.relays.close(relay.id, text);
+      return { ok: false, error: { code: 'host_unavailable' }, text };
+    }
+    const outdated = this.#cannotCarry(host, spec);
+    if (outdated) {
+      this.relays.close(relay.id, outdated.text);
+      return outdated;
+    }
+    /** @type {any} */
+    let r;
+    try {
+      r = await this.send(host, spec, RELAY_PROBE_TIMEOUT_MS);
+    } catch (e) {
+      r = { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
+    } finally {
+      this.relays.probed(relay.id);
+    }
+    const probe = r?.xoprobe && typeof r.xoprobe === 'object' ? { hostId: host.hostId, ...narrowProbe(r.xoprobe), through: 'phone' } : null;
+    const text = typeof r?.text === 'string' ? r.text.slice(0, 500) : '';
+    return {
+      ok: r?.ok !== false,
+      hostId: host.hostId,
+      ...(probe ? { probes: [probe] } : {}),
+      hosts: [{ hostId: host.hostId, ok: r?.ok !== false, text, error: r?.error }],
+      text,
+    };
   }
 
   /** Forget jobs a day old, and keep the map bounded whatever happens. */
@@ -916,6 +1102,7 @@ export class CoordinatorCore {
     if (!progress) return;
     rec.last = progress;
     this.onStateChanged?.();
+    if (ENDED_SETUP.has(progress.state)) this.relays.closeForJob(job, 'The job using this relay ended, so it was closed.');
     if (!this.push) return;
 
     const ended = progress.state !== 'running';
@@ -1470,9 +1657,12 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean, device?: string|null }} spec
    *   `internal`, for `mint` only: set by the coordinator itself, never by a route
    *   `setupRouted`, for `xosetup` only: set by #setup once it has placed the job, never by a route
+   *   `device`, the credential id of the phone asking, set by a route from the
+   *   verified credential and read only for a relay through a phone, which
+   *   only the phone carrying it may name
    * @returns {Promise<any>}
    *   `startAfter`, for `provision` only: a session to start on the runner once
    *   it joins — title, brief and mode, checked by `start`'s own rules
@@ -1584,6 +1774,10 @@ export class CoordinatorCore {
         text: 'Only this fleet\u2019s admin can add a hypervisor.',
       };
     }
+    // A PROBE THROUGH THE PHONE goes to the relay's machine alone: every other
+    // machine's own network has already answered, and the question now is
+    // whether this one reaches the address over the phone's.
+    if (spec.verb === 'xoprobe' && shaped.params.relay) return this.#probeThrough(spec, shaped.params);
     if (spec.verb === 'xosetup' && spec.setupRouted !== true) return this.#setup(spec, shaped.params);
 
     // ASKING FOR A MACHINE THAT DOES NOT EXIST YET.
@@ -1804,6 +1998,12 @@ export class CoordinatorCore {
       // nobody made. Its sentence is in `hosts`.
       const probing = results.filter((r) => r?.xoprobe && typeof r.xoprobe === 'object');
       const probes = probing.length ? probing.map((r) => ({ hostId: r.hostId, ...narrowProbe(r.xoprobe) })) : undefined;
+      // AND THE WAY ROUND IT when none did: a machine that can reach the
+      // address through the asking phone instead (relays.js). Named only when
+      // there is one that speaks it, so a phone offers it only when it can be
+      // done; a coordinator before this never names one, and a phone then
+      // offers nothing new.
+      const through = spec.verb === 'xoprobe' && !(probes ?? []).some((p) => p.reachable) ? this.#relayHost(null) : null;
 
       const checked = results.filter((r) => r?.check && typeof r.check === 'object');
       const answered = checked.find((r) => r.check.ok) ?? checked[0];
@@ -1817,6 +2017,7 @@ export class CoordinatorCore {
         ...(profiles ? { profiles } : {}),
         ...(secrets ? { secrets } : {}),
         ...(probes ? { probes } : {}),
+        ...(through ? { relay: { hostId: through.hostId } } : {}),
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.
@@ -2755,6 +2956,19 @@ export class CoordinatorCore {
    * @returns {{ ok: false, error: { code: string }, text: string }|null}
    */
   #cannotCarry(host, spec) {
+    // A RELAY, which dropped would answer for the machine's own network, or
+    // begin a job that has no way to Xen Orchestra.
+    if ((spec.verb === 'xoprobe' || spec.verb === 'xosetup') && spec.params?.relay) {
+      const speaks = Number(host?.health?.protocol);
+      if (Number.isInteger(speaks) && speaks >= RELAY_PROTOCOL) return null;
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text:
+          `${host?.hostId} is too old to work through a phone — it speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${RELAY_PROTOCOL}. Update it and ask again.`,
+      };
+    }
     // A TASK, for the same reason: dropped, the session starts idle — the thing
     // `task` exists to end — and the reply says it started.
     if (spec.verb === 'start' && typeof spec.params?.task === 'string' && spec.params.task) {
