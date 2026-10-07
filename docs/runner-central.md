@@ -664,9 +664,12 @@ Private GitHub code is reachable, one repository at a time
 for the reason at the start of this section.
 
 **The session cannot outlive the host.** `resume` is pinned to the box holding
-the volume, so when a runner goes, its sessions go. Collect what you need before
-the clock runs out — [`ROADMAP`](../ROADMAP.md)'s linked-repositories item is the
-exit that does not need somebody watching.
+the volume, so when a runner goes, its sessions go. What leaves with nobody
+watching is the **archive**: link a private repository for it and every session
+you start, on a runner as anywhere, is pushed there on a branch of its own
+before it stops and every ten minutes while it runs, so a runner killed at the
+end of its job takes at most ten minutes with it. See
+[linked-repos.md](./linked-repos.md#the-archive).
 
 **Actions minutes are somebody's.** Free on standard runners for a public
 repository, metered otherwise, and macOS is the one to check before promising

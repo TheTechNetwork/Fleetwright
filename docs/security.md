@@ -409,6 +409,20 @@ machine of the fleet, through the coordinator.
   them puts in group 1 reach each other. A compromised coordinator can put a
   person's new machine in one of their pool's groups, and so beside whatever
   else is in that group.
+- **A session's archive** (`start.archive`, `docs/linked-repos.md`) is a
+  repository name the coordinator sets from the starter's link, so a
+  compromised coordinator can change where a session's work is pushed. Two
+  things bound it, both on the host. The push is made with the **starter's
+  own** GitHub credential (their connection, or on a runner a token minted
+  for them), so it lands only where they could already push. And the host
+  asks GitHub, with that credential, whether the repository is **private**
+  immediately before every push and refuses a public one, so a session's work
+  cannot be aimed at a world-readable repository from here. What it can still
+  do is send a session's work to a different private repository the starter
+  can push to, or name none, which loses a copy and nothing else. The
+  minting Worker's role check answers for a private repository only inside
+  `FLEETWRIGHT_GITHUB_MINT_OWNERS`, so the App's key is not an oracle over
+  which private repositories exist elsewhere.
 - **SSH keys** are public keys, kept as the named secret
   `SSH_AUTHORIZED_KEYS` and checked on the phone and on the box to be public
   keys and nothing else. They go on the machine's cloud-init drive beside

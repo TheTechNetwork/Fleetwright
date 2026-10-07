@@ -112,7 +112,7 @@ and "dead host" is the one it retries.
 | `status` | `name?` | | `/status [name]` |
 | `peek` | `name`, `lines?` (1–500) | | sidecar-local — `GET /api/peek` |
 | `health` | — | | sidecar-local — `GET /api/state` + `os` |
-| `start` | `name?`, `mode?` (`safe`\|`dangerous`), `title?`, `brief?` (stored, never delivered), `profile?` | ✅ | `/new [name] [--safe\|--dangerous] [--profile=<name>]` |
+| `start` | `name?`, `mode?` (`safe`\|`dangerous`), `title?`, `brief?` (stored, never delivered), `profile?`, `archive?` (`owner/repo`, v11, set by the coordinator) | ✅ | `/new [name] [--safe\|--dangerous] [--profile=<name>] [--archive=<owner/repo>]` |
 | `profiles` | — | | `/profiles` |
 | `resume` | `name`, `choice?` (`summary`\|`full`) | ✅ | `/resume <name> [summary\|full]` |
 | `stop` | `name` | ✅ | `/stop <name>` |
@@ -157,6 +157,18 @@ before a repository is saved — public, reached by the Fleetwright GitHub App
 with Actions write, and which runner workflows it carries — asked with the
 person's own GitHub connection and changing nothing. See
 [runner-central.md](./runner-central.md#your-own-runner-repository).
+
+`linkrepo` is `runnerrepo` for any role of a linked repository: `archive`
+(private and writable), `runners` (the runner check itself) or `templates`
+(readable), asked with the person's own GitHub connection on a permanent box and
+changing nothing. A new verb rather than a `role` on `runnerrepo`, because an
+older host would drop the role and refuse a private archive for being private.
+Beside it, protocol 11 gave `start` an `archive`: the starter's own linked
+archive, set by the coordinator and removed from anything a caller sent, as
+`provision.repo` is. It reaches the hub as one `--archive=owner/repo` token and
+is kept on the session's record. A host older than 11 is not handed it, and the
+start goes ahead with a reply saying the session will not be archived. See
+[linked-repos.md](./linked-repos.md).
 
 `mint` is the one verb nobody calls. A runner sends a `mint` **frame** up its
 own socket when one of its sessions' git asks for a repository; the coordinator
