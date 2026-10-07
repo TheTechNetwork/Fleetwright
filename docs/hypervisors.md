@@ -589,6 +589,19 @@ percentage under it; before, it was the step, which sat at four fifths for
 the minutes the build takes. Events go when the part changes or the bar
 moves a twentieth, so a Lock Screen is not pushed to for every 16 MB.
 
+**It says what is being built.** Asked for, about a Lock Screen that sat at
+5% while the app called a machine image's disk the edge router: *"Why no
+actual updates in the live activity?"* Two things were wrong. The words were
+one sentence for every build, written when the router was the only thing
+built in parts; the host now says which build it is (`edge`, `image` or
+`holder`) beside the part, and both phones name it from that key, on the
+screen and on the Lock Screen or the ongoing notification alike: "building
+the machine image, part 2 of 4". And the activity stopped moving because
+every update went at APNs priority 10, which Apple budgets and then quietly
+throttles. Now news (a new step, part, build or state, and the end) goes at
+once at 10, and the bar moving goes at 5, no more than every thirty seconds,
+which is what priority 5 is for.
+
 **Cancel stops it where it is.** The download, the unpack and the upload are
 torn down, and what was made is removed: the VM with its disk, the disk on
 its own, or a partial disk an upload left (attached to nothing, named for
