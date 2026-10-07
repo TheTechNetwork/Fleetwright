@@ -35,6 +35,9 @@ platform/coordinator:
           # The minting Worker's logic: it runs in its own Worker, beside the
           # coordinator's, and holds the GitHub App key.
           - 'src/fleet/minter/**'
+          # The relays: their own Worker, for coordinators that are not ours,
+          # and the client a coordinator uses to reach them.
+          - 'src/fleet/relay/**'
           - 'src/fleet/push.js'
           - 'src/fleet/push-crypto.js'
           - 'src/fleet/crypto.js'

@@ -167,7 +167,7 @@ test('a GitHub sign-in is exchanged here with the secret and goes back to its co
   const sealed = /** @type {string} */ (back.searchParams.get('sealed'));
   assert.ok(!back.toString().includes('ghu_'), 'the token travelled in the clear');
   const opened = await openWith(privateKey, publicKey, sealed);
-  assert.deepEqual(opened, { accessToken: 'ghu_the-token', expiresIn: 28800, scope: '' });
+  assert.deepEqual(opened, { state: 'inner-state-1', accessToken: 'ghu_the-token', expiresIn: 28800, scope: '' });
   // Nothing kept: no code, no token, no state.
   const kept = JSON.stringify([...store.rows.entries()]);
   for (const word of ['c0de', 'ghu_', 'ghr_', 'inner-state-1']) assert.ok(!kept.includes(word), word);

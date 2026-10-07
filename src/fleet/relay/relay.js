@@ -293,7 +293,12 @@ async function githubCallback(url, deps) {
   });
   const tokens = /** @type {any} */ (res.ok ? await res.json().catch(() => null) : null);
   if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return redirect(back, { error: 'exchange' });
+  // THE STATE GOES INSIDE TOO. The fleet's key is public, so anybody can seal
+  // something to it; what they cannot do is seal it for a state they never
+  // saw, and the coordinator takes a sealed token only for the state it came
+  // back with (core.js, finishRelayedGithubAuthorization).
   const sealed = await sealTo(record.key, {
+    state: inner,
     accessToken: tokens.access_token,
     expiresIn: Number.isFinite(tokens.expires_in) ? tokens.expires_in : null,
     scope: typeof tokens.scope === 'string' ? tokens.scope : null,
