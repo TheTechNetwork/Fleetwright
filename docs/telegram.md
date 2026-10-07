@@ -57,7 +57,10 @@ bot that refuses to tell you your own id is a bot you cannot configure.
 carried `buttons: [{ label, command }]` and the adapter rendered them as
 an inline keyboard, dropping any whose command exceeded Telegram's
 64-byte callback limit rather than truncating it into a different
-command. Both apps take the same field today, for the same reason.
+command. The hub's web UI draws the same field today, for the same
+reason. The sidecar relays it to the coordinator, but neither app reads
+it there, and its `command` is a line for one box's registry rather than
+an intent, so a fleet-wide client cannot run it as it stands.
 
 **Backoff only on failure.** A successful long poll returns and goes
 straight back in, so a command is picked up the moment it is sent.

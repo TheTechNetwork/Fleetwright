@@ -200,9 +200,9 @@ any id. The bot name is likewise payload data, not a signal.
 - **Webhook mode (preferred):** set a `secret_token` at `setWebhook`; Telegram returns it on every
   request as `X-Telegram-Bot-Api-Secret-Token`. *That* authenticates the request. Then the user-id
   allowlist does its actual job — authorization. Order: authenticate, then authorize.
-- **Long-poll mode:** dial legram reoutbound, no inbound surface, forgery question doesn't exist.
+- **Long-poll mode:** dial Telegram outbound, no inbound surface, forgery question doesn't exist.
   But Workers are request-scoped and can't hold a long poll cheaply — needs a DO with alarms, or
-  legram repolling stays on a host that speaks to the Worker as an agent.
+  the polling stays on a host that speaks to the Worker as an agent.
 
 ### Two credential classes, two mechanisms
 

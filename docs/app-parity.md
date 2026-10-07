@@ -345,10 +345,11 @@ the failure named a thing rather than a remedy.
 
 The remedy is the awkward part, and saying it out loud is the point: **the verb
 that fixes this is often the one that is unknown.** `update` over the fleet
-cannot update a box too old to have `update`. What works is that box's own
-Telegram bot or a shell on it, both of which reach fleetwright directly rather
-than through this protocol. A pull that did not restart looks identical from
-the coordinator, and is at least as common — so both routes say `--restart`.
+cannot update a box too old to have `update`. What works is a shell on that
+box, which reaches fleetwright directly rather than through this protocol (its
+own Telegram bot did too, before that adapter was archived). A pull that did
+not restart looks identical from the coordinator, and is at least as common —
+so the shell line says `--restart`.
 
 ## The round after: one tap, a bin with a home, and a credential that expires
 
