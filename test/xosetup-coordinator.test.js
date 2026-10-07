@@ -15,7 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ACTIVITY_FILL_EVERY_MS, CoordinatorCore, narrowProgress, narrowCertificate } from '../src/fleet/coordinator/core.js';
-import { XOSETUP_STEPS, XOPOLICY_STEPS } from '../src/fleet/protocol/intents.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS } from '../src/fleet/protocol/intents.js';
 
 const JOB = 'a1b2c3d4e5f6';
 const admin = { email: 'eli@example.com', admin: true };
@@ -334,4 +334,101 @@ test('a plain-HTTP setup reaches its machine with the person’s acceptance and 
   // Only the one word: anything else is not an acceptance.
   const odd = await core.dispatch({ verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', plain: 'yes' }, actor: `fleet:${admin.email}`, requester: admin });
   assert.equal(odd.ok, false);
+});
+
+// A POOL WITH NO XEN ORCHESTRA. The machine installs it with the installer's
+// own xo-remote-deploy.sh and goes on into onboarding against it, in one job,
+// so the coordinator's part is the same three: the probe, the routing, and
+// what reaches the phone.
+
+// A key's fingerprint twice, as narrowSsh wants it: OpenSSH's form and hex,
+// the same digest. GitHub's published ed25519 host key's.
+const KEY = 'SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU';
+const KEY_HEX = Buffer.from('+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU', 'base64').toString('hex');
+
+test('the probe says over SSH a key and a yes or no, and cannot tell stays cannot tell', async () => {
+  const { core } = fleet(['deb14', 'rpi-7550', 'old'], (hostId) => {
+    if (hostId === 'old') return { ok: true, text: 'Nothing answered.', xoprobe: { reachable: false, xo: null, tls: false, cert: null } };
+    return {
+      ok: true,
+      text: 'The pool master answered.',
+      xoprobe: {
+        reachable: true,
+        xo: false,
+        tls: true,
+        cert: null,
+        ssh:
+          hostId === 'deb14'
+            ? {
+                reachable: true,
+                keys: [
+                  { type: 'ssh-ed25519', fingerprint: KEY, sha256: KEY_HEX },
+                  { type: 'ssh-dss', fingerprint: KEY, sha256: KEY_HEX },
+                  // The person would compare one digest and the machine be pinned to another.
+                  { type: 'ssh-rsa', fingerprint: KEY, sha256: 'b'.repeat(64) },
+                ],
+                deploy: true,
+                missing: [],
+                banner: 'SSH-2.0-OpenSSH_9.6 not forwarded',
+              }
+            : { reachable: 'maybe', keys: 'none', deploy: 'no', missing: ['getopt', 'rm -rf'] },
+      },
+    };
+  });
+  const r = await core.dispatch({ verb: 'xoprobe', params: { address: 'xcp1.lan' }, actor: `fleet:${admin.email}`, requester: admin });
+  const by = Object.fromEntries(r.probes.map((/** @type {any} */ p) => [p.hostId, p]));
+  assert.deepEqual(by.deb14.ssh, { reachable: true, keys: [{ type: 'ssh-ed25519', fingerprint: KEY, sha256: KEY_HEX }], deploy: true, missing: [] });
+  assert.deepEqual(by['rpi-7550'].ssh, { reachable: null, keys: [], deploy: null, missing: ['getopt'] });
+  // A host too old to look over SSH has said nothing about it, and is not
+  // listed as finding no key.
+  assert.equal('ssh' in by.old, false);
+});
+
+test('an install is begun like a setup, and a machine too old for it is said to be', async () => {
+  const install = { verb: 'xosetup', params: { phase: 'deploy', address: 'xcp1.lan', pin: KEY_HEX }, actor: `fleet:${admin.email}`, requester: admin };
+  const { core, asked } = fleet(['deb14', 'rpi-7550'], (_hostId, spec) =>
+    spec.params.phase === 'deploy'
+      ? { ok: true, text: 'Ready for the passwords.', xosetup: { job: JOB, state: 'waiting', key: 'k', keySig: 's', hostKey: 'h', can: ['deploy'] } }
+      : machine(_hostId, spec));
+  // Placed as a begin is: two machines are a choice.
+  assert.equal((await core.dispatch(install)).error.code, 'ambiguous_host');
+  const begun = await core.dispatch({ ...install, preferHost: 'rpi-7550' });
+  assert.equal(begun.ok, true, begun.text);
+  assert.equal(begun.hostId, 'rpi-7550');
+  // And its job is recorded, so every later phase goes back to that machine.
+  const run = await core.dispatch({ verb: 'xosetup', params: { phase: 'run', job: JOB, sealed: 'a.b.c' }, actor: `fleet:${admin.email}`, requester: admin, preferHost: 'deb14' });
+  assert.equal(run.ok, true, run.text);
+  assert.deepEqual(asked.map((a) => a.hostId), ['rpi-7550', 'rpi-7550']);
+
+  // AN OLDER MACHINE refuses the phase as a value it does not know, in words
+  // about a parameter; the person is told what it means.
+  const old = fleet(['deb14'], () => ({ ok: false, error: { code: 'bad_params' }, text: 'xosetup.phase must be one of begin, run, status, cancel, policy' }));
+  const refused = await old.core.dispatch(install);
+  assert.equal(refused.error.code, 'host_outdated');
+  assert.match(refused.text, /deb14 is too old to install Xen Orchestra/);
+  assert.equal(old.core.setups.size, 0, 'no job recorded for an install that never began');
+});
+
+test('an install reaches the Lock Screen as one, through its own steps and onboarding’s', async () => {
+  const { core, sent, activities } = fleet(['deb14'], machine);
+  await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.dispatch({ verb: 'xosetup', params: { phase: 'deploy', address: 'xcp1.lan', pin: KEY_HEX }, actor: `fleet:${admin.email}`, requester: admin });
+  core.registerSetupActivity(admin, { job: JOB, token: 'c0ffee'.repeat(12) });
+  const of = XODEPLOY_STEPS.length;
+  const image = XODEPLOY_STEPS.indexOf('image');
+
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: image, of, phase: 'image', state: 'running', purpose: 'deploy', fill: 300, text: 'Downloading Debian 13: 30%.' });
+  assert.deepEqual(activities[0].update.state, { step: image, of, phase: 'image', state: 'running', fill: 300 });
+  assert.equal(sent[0].message.title, 'Installing Xen Orchestra');
+  assert.equal(sent[0].message.data.purpose, 'deploy');
+
+  // Onboarding's steps are an install's too, once its Xen Orchestra is up.
+  const user = XODEPLOY_STEPS.indexOf('user');
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: user, of, phase: 'user', state: 'running', purpose: 'deploy' });
+  assert.equal(activities[1].update.state.phase, 'user');
+
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: of, of, phase: 'done', state: 'done', purpose: 'deploy' });
+  assert.equal(sent.at(-1)?.message.title, 'Xen Orchestra installed and added');
+  // An install's own step from a host that did not say it is one is refused.
+  assert.equal(narrowProgress({ step: image, of, phase: 'image', state: 'running' }), null);
 });

@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, CERT_PIN_RE, XO_UUID_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
 import { checkPublicKey, openWith } from '../push-crypto.js';
@@ -800,9 +800,11 @@ export class CoordinatorCore {
   async #setup(spec, params) {
     const phase = String(params.phase);
     const owner = spec.requester?.email ? String(spec.requester.email).toLowerCase() : null;
-    if (phase === 'begin') {
+    // `deploy` is a `begin` too, for a pool with no Xen Orchestra: placed the
+    // same way, and its job recorded the same way.
+    if (phase === 'begin' || phase === 'deploy') {
       if (!params.address) {
-        return { ok: false, error: { code: 'bad_params' }, text: 'Say where Xen Orchestra answers: xosetup begin needs an address.' };
+        return { ok: false, error: { code: 'bad_params' }, text: `Say where Xen Orchestra answers: xosetup ${phase} needs an address.` };
       }
       const placement = place(this.registry, spec, { preferHost: typeof spec.preferHost === 'string' ? spec.preferHost : '', requester: spec.requester ?? null });
       if (placement.kind !== 'host' || !placement.host) {
@@ -811,6 +813,16 @@ export class CoordinatorCore {
       const hostId = placement.host.hostId;
       /** @type {any} */
       const answer = await this.dispatch({ ...spec, preferHost: hostId, setupRouted: true });
+      // A MACHINE OLDER THAN INSTALLING refuses the phase as a value it does
+      // not know, in words about a parameter. Said instead as what it is.
+      if (phase === 'deploy' && answer?.ok === false && answer?.error?.code === 'bad_params') {
+        return {
+          ok: false,
+          error: { code: 'host_outdated' },
+          text: `${hostId} is too old to install Xen Orchestra. Update it and ask again.`,
+          hostId,
+        };
+      }
       const job = answer?.xosetup?.job;
       if (answer?.ok !== false && typeof job === 'string' && XOSETUP_JOB_RE.test(job)) {
         this.#pruneSetups();
@@ -932,7 +944,7 @@ export class CoordinatorCore {
     // hears only the end, as an ordinary notification.
     const targets = ended ? devices : devices.filter((d) => d.platform !== 'ios');
     if (!targets.length) return;
-    const title = (progress.purpose === 'policy' ? POLICY_TITLES : SETUP_TITLES)[progress.state];
+    const title = (progress.purpose === 'policy' ? POLICY_TITLES : progress.purpose === 'deploy' ? DEPLOY_TITLES : SETUP_TITLES)[progress.state];
     const body = progress.text || `Step ${Math.min(progress.step + 1, progress.of)} of ${progress.of}`;
     try {
       await this.push.send(targets, {
@@ -4312,6 +4324,11 @@ export const PROMPT_CATEGORY = 'fleet.prompt';
  */
 const SETUP_TITLES = Object.freeze({ running: 'Adding a hypervisor', done: 'Hypervisor added', failed: 'Hypervisor setup stopped', cancelled: 'Hypervisor setup cancelled' });
 const POLICY_TITLES = Object.freeze({ running: 'Changing what the fleet may use', done: 'What the fleet may use is changed', failed: 'The change stopped', cancelled: 'The change was cancelled' });
+/**
+ * An install's: a pool with no Xen Orchestra, which the job installs and then
+ * adds. Its end is both, so "done" says both rather than only the second.
+ */
+const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done: 'Xen Orchestra installed and added', failed: 'Installing Xen Orchestra stopped', cancelled: 'Installing Xen Orchestra cancelled' });
 
 /**
  * Where an onboarding job has got to, as a host may report it.
@@ -4321,7 +4338,8 @@ const POLICY_TITLES = Object.freeze({ running: 'Changing what the fleet may use'
  * @property {number} of     how many steps there are
  * @property {string} phase  the step's key, or `done`
  * @property {'running'|'done'|'failed'|'cancelled'} state
- * @property {'setup'|'policy'} purpose  adding a pool, or changing what the fleet may use on one
+ * @property {'setup'|'policy'|'deploy'} purpose  adding a pool, changing what the fleet may use on one,
+ *   or installing Xen Orchestra on a pool that has none and then adding it
  * @property {number|null} fill  how far the step now running has got, in thousandths, when the host can
  *   tell (the edge router's download and disk), or null
  * @property {'edge'|'image'|'holder'|null} build  what the step is building, from a fixed list, or null
@@ -4348,9 +4366,12 @@ export function narrowProgress(msg) {
   // A POLICY JOB REPORTS TOO, once it is building something that takes
   // minutes (the edge router's download), and its last two steps are its own.
   // A host that predates `purpose` sends none, and only adds pools.
-  const purpose = msg?.purpose === 'policy' ? 'policy' : 'setup';
+  // AN INSTALL REPORTS from its first step, and its steps are its own and
+  // then onboarding's, so a deploy phase from a host that did not say it is
+  // one is refused like any phase onboarding does not have.
+  const purpose = msg?.purpose === 'policy' ? 'policy' : msg?.purpose === 'deploy' ? 'deploy' : 'setup';
   const phase = String(msg?.phase || '');
-  const steps = purpose === 'policy' ? XOPOLICY_STEPS : XOSETUP_STEPS;
+  const steps = purpose === 'policy' ? XOPOLICY_STEPS : purpose === 'deploy' ? XODEPLOY_STEPS : XOSETUP_STEPS;
   if (!steps.includes(phase) && phase !== 'done') return null;
   return {
     step,
@@ -4411,6 +4432,65 @@ export function narrowProbe(p) {
     cert,
     certificate: cert ? narrowCertificate(p.certificate) : null,
     version: typeof p.version === 'string' ? p.version.slice(0, 40) : null,
+    // ONLY WHEN THE HOST ANSWERED THE SSH QUESTION. A host too old to know
+    // it probed for Xen Orchestra instead and said nothing about SSH, and an
+    // `ssh` entry built here for it would be a claim nobody made.
+    ...(p.ssh && typeof p.ssh === 'object' ? { ssh: narrowSsh(p.ssh) } : {}),
+  };
+}
+
+/**
+ * Hex as unpadded base64, OpenSSH's form for a digest. btoa rather than
+ * Buffer, because this runs in the Worker too.
+ *
+ * @param {string} hex
+ */
+function hexToBase64(hex) {
+  return btoa(String.fromCharCode(...(hex.match(/../g) ?? []).map((h) => parseInt(h, 16)))).replace(/=+$/, '');
+}
+
+/** The host key types a pool master may answer with, as OpenSSH names them. */
+export const SSH_KEY_TYPES = Object.freeze(['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'ssh-rsa']);
+/** What installing Xen Orchestra needs on the machine, by the names a probe may report missing. */
+export const DEPLOY_TOOLS = Object.freeze(['bash', 'ssh', 'ssh-keyscan', 'python3', 'getopt', 'sed', 'mktemp']);
+
+/**
+ * What a machine found over SSH at the pool master's address, narrowed to a
+ * key and a yes or no. Each key carries its fingerprint twice: as OpenSSH
+ * prints it, for the person to compare with the pool master's console, and
+ * as hex, the `pin` a `deploy` is begun with.
+ *
+ * `reachable` and `deploy` keep null as cannot tell: a machine without
+ * `ssh-keyscan` has not found the address unreachable, and one that could
+ * not look for its tools has not said it lacks them. Keys are each a type
+ * from the list and a fingerprint of the one shape, and nothing else the pool
+ * master sent travels.
+ *
+ * @param {any} s
+ */
+export function narrowSsh(s) {
+  const keys = Array.isArray(s?.keys)
+    ? s.keys
+        .filter(
+          (/** @type {any} */ k) =>
+            k &&
+            SSH_KEY_TYPES.includes(k.type) &&
+            typeof k.fingerprint === 'string' &&
+            SSH_HOST_KEY_RE.test(k.fingerprint) &&
+            typeof k.sha256 === 'string' &&
+            CERT_PIN_RE.test(k.sha256) &&
+            // The two must be the same digest, or the person would compare
+            // one key and the machine be pinned to another.
+            hexToBase64(k.sha256) === k.fingerprint.slice('SHA256:'.length),
+        )
+        .slice(0, SSH_KEY_TYPES.length)
+        .map((/** @type {any} */ k) => ({ type: String(k.type), fingerprint: String(k.fingerprint), sha256: String(k.sha256) }))
+    : [];
+  return {
+    reachable: s?.reachable === true ? true : s?.reachable === false ? false : null,
+    keys,
+    deploy: s?.deploy === true ? true : s?.deploy === false ? false : null,
+    missing: Array.isArray(s?.missing) ? DEPLOY_TOOLS.filter((t) => s.missing.includes(t)) : [],
   };
 }
 
