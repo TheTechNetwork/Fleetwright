@@ -205,6 +205,7 @@ export class Coordinator {
     this.core.runnerTickets.restore(state.runnerTickets || []);
     this.core.runnerRepos.restore(state.runnerRepos);
     this.core.restoreRunnerStarts(state.runnerStarts);
+    this.core.restoreStandby(state.vmStandby);
     this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
     // MCP clients that registered themselves. Codes are not persisted and
@@ -306,6 +307,7 @@ export class Coordinator {
         // runner to join — see the Worker's copy.
         runnerRepos: this.core.runnerRepos.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
+        vmStandby: this.core.serialiseStandby(),
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         mcpClients: this.core.mcpAuthorizations.serialise(),
@@ -1098,6 +1100,19 @@ export class Coordinator {
     // environment) secret lets different repositories belong to different
     // people. The fleet cannot tell the difference and does not need to.
     // Each person's own runner repository — see the Worker's copy.
+    // Machines kept ready \u2014 see the Worker's copy.
+    if (p === '/api/vm-standby') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first \u2014 machines are kept ready for a person.' });
+      }
+      if (req.method === 'GET') return json(res, 200, { ok: true, vmStandby: this.core.vmStandbyFor(requesterFor(client)) });
+      if (req.method === 'PUT') {
+        const body = await readJson(req);
+        const r = await this.core.setVmStandby(requesterFor(client), body);
+        return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+      }
+    }
+
     if (p === '/api/runner-repo') {
       if (!client?.email) {
         return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a runner repository belongs to a person.' });

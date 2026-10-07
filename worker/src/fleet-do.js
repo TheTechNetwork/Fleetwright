@@ -147,6 +147,8 @@ export class Fleet {
         this.state.storage.put('runnerTickets', this.core.runnerTickets.serialise()),
         this.state.storage.put('runnerRepos', this.core.runnerRepos.serialise()),
         this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts()),
+        // Machines kept ready, and which were made for it.
+        this.state.storage.put('vmStandby', this.core.serialiseStandby()),
         // Hypervisor setups: begun, then run a minute later, then reporting
         // for several more — every gap one this object is evicted across.
         this.state.storage.put('xosetups', this.core.serialiseSetups()),
@@ -215,6 +217,7 @@ export class Fleet {
       // Each person's own runner repository, and sessions waiting for a runner.
       this.core.runnerRepos.restore(await this.state.storage.get('runnerRepos'));
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
+      this.core.restoreStandby(await this.state.storage.get('vmStandby'));
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
@@ -817,6 +820,21 @@ export class Fleet {
     // box has checked it with their GitHub connection — and cleared. See
     // src/fleet/coordinator/runner-repos.js for what it admits and why a
     // member may set one.
+    // MACHINES KEPT READY on your own hypervisor: what you keep and how many
+    // are ready (GET), or keep some, or none (PUT `{ template, count, network }`).
+    // See src/fleet/coordinator/vm-standby.js.
+    if (url.pathname === '/api/vm-standby') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first \u2014 machines are kept ready for a person.' }, 403);
+      }
+      if (request.method === 'GET') return json({ ok: true, vmStandby: this.core.vmStandbyFor(requesterFor(client)) });
+      if (request.method === 'PUT') {
+        const body = await readJson(request);
+        const r = await this.core.setVmStandby(requesterFor(client), body);
+        return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
+      }
+    }
+
     if (url.pathname === '/api/runner-repo') {
       if (!client?.email) {
         return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a runner repository belongs to a person.' }, 403);

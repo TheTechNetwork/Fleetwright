@@ -86,6 +86,8 @@ const NOT_A_CLIENT_ROUTE = {
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
   '/api/enroll/actions':
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
+  '/api/vm-standby':
+    'the phone layers of the standby round call it, stacked on this one: both phones set and read what is kept ready. Remove this line in those layers.',
   '/api/enroll/vm':
     'a MACHINE FROM A HYPERVISOR spends the ticket it was booted with here, through `fleetwright-sidecar enrol-vm` run by its cloud-init. Neither phone is that machine.',
 };

@@ -27,6 +27,7 @@ import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
 import { RunnerTickets } from './runner-tickets.js';
 import { RunnerRepos } from './runner-repos.js';
+import { VmStandby, MAX_READY } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
 
@@ -228,6 +229,14 @@ export class CoordinatorCore {
     // one is separate from `clients`: a credential that cannot be confused for
     // another cannot be accepted in its place by a check somebody forgot.
     this.runnerTickets = new RunnerTickets({ now });
+    /**
+     * Machines kept ready on people's own hypervisors (vm-standby.js): what
+     * each asked to keep, and which machines were made for it until a session
+     * takes one. Stored on the Worker as `vmStandby`.
+     */
+    this.vmStandby = new VmStandby({ now });
+    /** When ready machines were last topped up, so a health frame every fifteen seconds does not do it each time. */
+    this.standbyCheckedAt = 0;
     /**
      * Hypervisor onboarding jobs, by the id the host made: which machine runs
      * each, whose it is, where it has got to, and the Live Activity tokens its
@@ -454,6 +463,13 @@ export class CoordinatorCore {
       // the start and have it refused.
       if (this.runnerStarts.has(hostId) && msg.health?.hub?.reachable !== false) {
         void this.#startOnRunner(hostId);
+      }
+      // MACHINES KEPT READY are topped up from a box that holds a pool, at
+      // most once a minute: that box's frames are what say a pool can be
+      // reached, and a new one is asked of it there and then.
+      if (Array.isArray(msg.health?.xo) && msg.health.xo.length && this.vmStandby.wishes.size && this.now() - this.standbyCheckedAt > 60_000) {
+        this.standbyCheckedAt = this.now();
+        void this.topUpStandby().catch((e) => this.log.warn(`coordinator: could not top up ready machines: ${e?.message || e}`));
       }
       return;
     }
@@ -3149,6 +3165,8 @@ export class CoordinatorCore {
       // when it ends, so a machine's page can show it and offer what can be
       // done to it (`vmctl`). Only the person's own.
       vmMachines: this.vmMachinesFor(requester),
+      // WHAT THIS PERSON KEEPS READY, and how many are: null is keeping none.
+      vmStandby: this.vmStandbyFor(requester),
     };
   }
 
@@ -3200,6 +3218,8 @@ export class CoordinatorCore {
             net: netOf(m.net),
             address: String(e.address || ''),
             hosts: [host.hostId],
+            // Kept ready and not yet taken by a session.
+            standby: this.vmStandby.isKept(name),
           });
         }
       }
@@ -3364,6 +3384,15 @@ export class CoordinatorCore {
     }
     const template = typeof params.template === 'string' ? params.template : '';
     if (!template) return { ok: false, error: { code: 'bad_params' }, text: 'Say which machine image to start: `template`, as status lists it.' };
+    // A MACHINE KEPT READY, when this person keeps one from that image on
+    // that network: the session starts on it now, and another is made behind
+    // it. A machine is taken only with the time asked for still left on it.
+    if (!spec.standby) {
+      const network = typeof params.network === 'string' && params.network ? params.network : null;
+      const minutes = Number(params.minutes) || 60;
+      const taken = this.vmStandby.claim(owner, template, network, this.#standbyReady(owner, minutes));
+      if (taken) return this.#startOnKept(spec, owner, taken);
+    }
     const holders = this.#vmHolders(owner, template);
     if (!holders.length) {
       return {
@@ -3422,6 +3451,12 @@ export class CoordinatorCore {
         skipped.push(`${host.hostId} (${answer.text || 'could not reach the pool'})`);
         continue;
       }
+      if (spec.standby && answer?.ok !== false) {
+        this.vmStandby.noteMade(vmHost, { owner, template, network: typeof params.network === 'string' && params.network ? params.network : null });
+        this.onStateChanged?.();
+      }
+      // AND ONE MADE FOR A SESSION is replaced in the ready set, if this
+      // person keeps some, the next time the pool is looked at.
       return { ...answer, hostId: host.hostId, vm: answer?.ok === false ? null : vmHost };
     }
     return {
@@ -3429,6 +3464,153 @@ export class CoordinatorCore {
       error: { code: 'unreachable' },
       text: `None of the boxes holding that pool could make the machine: ${skipped.join(', ')}.`,
     };
+  }
+
+  /**
+   * Whether a kept machine can take a session that wants `minutes`: enrolled
+   * under its owner and not revoked, connected and healthy, and with that
+   * long still to run by its pool's last look (a machine whose end was not
+   * reported is taken; the box sweeps it at its end either way).
+   *
+   * @param {string} owner @param {number} [minutes]
+   * @returns {(hostId: string) => boolean}
+   */
+  #standbyReady(owner, minutes = 30) {
+    const ends = new Map(this.vmMachinesFor({ email: owner }).map((m) => [m.name, m.until]));
+    return (hostId) => {
+      const enrolled = this.hostIds.get(hostId);
+      if (!enrolled || enrolled.revokedAt || String(enrolled.owner || '').toLowerCase() !== owner) return false;
+      const live = this.registry.get(hostId);
+      if (!live?.connected || live.state !== 'healthy') return false;
+      const until = ends.get(hostId);
+      return typeof until !== 'number' || until - this.now() >= minutes * 60_000;
+    };
+  }
+
+  /**
+   * Start the session asked for on a kept machine, as its owner, by name:
+   * the same start a held one gets when its machine joins. A machine asked
+   * for without a session is simply handed over.
+   *
+   * @param {any} spec @param {string} owner @param {string} hostId
+   */
+  async #startOnKept(spec, owner, hostId) {
+    this.onStateChanged?.();
+    this.record({ event: 'vm.taken', hostId, actor: spec.actor ?? null, text: `${owner} took ${hostId}, which was kept ready` });
+    void this.topUpStandby(owner).catch((e) => this.log.warn(`coordinator: could not top up ready machines: ${e?.message || e}`));
+    if (!spec.startAfter || typeof spec.startAfter !== 'object') {
+      return { ok: true, vm: hostId, hostId, standby: true, text: `${hostId} was ready and is yours. Another is being made to keep one ready.` };
+    }
+    /** @type {Record<string, any>} */
+    const wanted = {};
+    for (const k of ['title', 'brief', 'mode', 'task']) {
+      if (spec.startAfter[k] !== undefined && spec.startAfter[k] !== null) wanted[k] = spec.startAfter[k];
+    }
+    const checked = checkParams('start', wanted);
+    if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+    const reply = await this.dispatch({
+      verb: 'start',
+      params: /** @type {any} */ (checked.params),
+      actor: owner,
+      preferHost: hostId,
+      requester: { email: owner, admin: false },
+    }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
+    return {
+      ...reply,
+      vm: hostId,
+      hostId,
+      standby: true,
+      text: reply?.ok === false
+        ? `${hostId} was ready, but the session would not start on it: ${reply?.text || 'no reason given'}`
+        : `Starting your session on ${hostId}, which was ready. Another is being made to keep one ready.`,
+    };
+  }
+
+  /**
+   * What this person keeps ready, and how many are, for the snapshot. Null
+   * is keeping none.
+   *
+   * @param {{ email?: string|null }|null} requester
+   */
+  vmStandbyFor(requester) {
+    const owner = String(requester?.email || '').toLowerCase();
+    const wish = owner ? this.vmStandby.wishFor(owner) : null;
+    if (!wish) return null;
+    const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+    return { template: wish.template, count: wish.count, network: wish.network, ready, starting };
+  }
+
+  /**
+   * Keep machines ready, or stop: `{ template, count: 0..3, network? }`. The
+   * image has to be one this person can start a machine from now; machines
+   * kept beyond the new count are ended.
+   *
+   * @param {{ email?: string|null }|null} requester @param {any} body
+   */
+  async setVmStandby(requester, body) {
+    const owner = String(requester?.email || '').toLowerCase();
+    if (!owner) return { ok: false, error: { code: 'not_signed_in' }, text: 'Machines are kept ready for a person, so this needs a signed-in identity.' };
+    const count = Number(body?.count);
+    const template = String(body?.template || '');
+    const network = body?.network === undefined || body?.network === null || body?.network === '' ? null : String(body.network);
+    if (!Number.isInteger(count) || count < 0 || count > MAX_READY) {
+      return { ok: false, error: { code: 'bad_params' }, text: `Keep between 0 and ${MAX_READY} machines ready.` };
+    }
+    if (count > 0 && !XO_UUID_RE.test(template)) return { ok: false, error: { code: 'bad_params' }, text: 'Say which machine image: `template`, as status lists it.' };
+    if (network !== null && !XO_UUID_RE.test(network)) return { ok: false, error: { code: 'bad_params' }, text: 'That is not a network id.' };
+    if (count > 0) {
+      const offered = this.vmImagesFor(requester).find((i) => i.template === template);
+      if (!offered) return { ok: false, error: { code: 'no_hosts' }, text: 'No connected box holding your pools offers that machine image now.' };
+      if (network !== null && !offered.networks.some((n) => n.id === network)) {
+        return { ok: false, error: { code: 'bad_params' }, text: 'That network is not one your pool offers for that image.' };
+      }
+    }
+    const set = this.vmStandby.set(owner, { template, count, network });
+    if (!set.ok) return { ok: false, error: { code: 'full' }, text: set.text };
+    this.onStateChanged?.();
+    this.record({ event: 'vm.standby', actor: owner, text: count ? `${owner} keeps ${count} machine${count === 1 ? '' : 's'} ready` : `${owner} stopped keeping machines ready` });
+    // THE ONES NO LONGER WANTED are ended, through the boxes holding the
+    // pool, as End it now would end them.
+    for (const name of set.extra) {
+      void this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: owner, requester: { email: owner, admin: false } }).catch(() => {});
+    }
+    if (count > 0) void this.topUpStandby(owner).catch((e) => this.log.warn(`coordinator: could not top up ready machines: ${e?.message || e}`));
+    return { ok: true, vmStandby: this.vmStandbyFor(requester), text: count ? `Keeping ${count} ready. The first is being made now.` : 'No machines are kept ready now.' };
+  }
+
+  /**
+   * Ask for one more machine for each person short of what they keep ready,
+   * one at a time per person, so a burst of frames cannot ask for a pool's
+   * worth. Made like any other: a ticket, a box holding the pool, its full
+   * life, and no session until one takes it.
+   *
+   * @param {string} [only]  one person, or everybody who keeps some
+   */
+  async topUpStandby(only) {
+    const owners = only ? [only] : [...this.vmStandby.wishes.keys()];
+    for (const owner of owners) {
+      const wish = this.vmStandby.wishFor(owner);
+      if (!wish) continue;
+      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+      if (ready + starting >= wish.count) continue;
+      /** @type {Record<string, any>} */
+      const params = { platform: 'vm', template: wish.template, minutes: 350 };
+      if (wish.network) params.network = wish.network;
+      // THE ACTOR IS THE OWNER: the box makes the machine for whoever the
+      // intent's actor is (sidecar.js, #makeVm), as it does for a person's own.
+      const r = await this.#provisionVm({ verb: 'provision', params, actor: owner, requester: { email: owner, admin: false }, standby: true }, params);
+      if (r?.ok === false) this.log.warn(`coordinator: could not make a machine to keep ready for ${owner}: ${r.text}`);
+    }
+  }
+
+  /** What is kept ready, for storage. */
+  serialiseStandby() {
+    return this.vmStandby.serialise();
+  }
+
+  /** @param {unknown} saved */
+  restoreStandby(saved) {
+    this.vmStandby.restore(saved);
   }
 
   /**
@@ -3476,11 +3658,17 @@ export class CoordinatorCore {
       return { status: full ? 507 : 400, body: { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error } };
     }
     this.noteRunnerEnrolled(hostId, ticket);
+    if (this.vmStandby.isKept(hostId)) {
+      this.vmStandby.noteEnrolled(hostId);
+      this.onStateChanged?.();
+    }
     this.record({
       event: 'host.enrolled',
       hostId,
       fingerprint: result.host.fingerprint,
-      text: `a machine from ${ticket.owner}’s hypervisor enrolled itself`,
+      text: this.vmStandby.isKept(hostId)
+        ? `a machine kept ready on ${ticket.owner}’s hypervisor enrolled itself`
+        : `a machine from ${ticket.owner}’s hypervisor enrolled itself`,
     });
     return { status: 200, body: { ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true } };
   }
