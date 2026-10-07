@@ -74,7 +74,7 @@ test('iOS: nothing is kept until the machine has signed in with it, and a passwo
 
 test('iOS: the machine that got through last time is tried first, and every machine is asked when it does not', () => {
   const open = bare(fn(SCREEN, 'openRemembered'));
-  assert.match(open, /if let via = XOSaved\.machine\(for: trimmedAddress\), let path = directPath\(via\) \{[\s\S]*?viaMemory = true\s*return\s*\}\s*await probe\(\)/);
+  assert.match(open, /if let via = XOSaved\.machine\(for: trimmedAddress\), let path = directPath\(via\) \{[\s\S]*?viaMemory = true\s*(?:await beginWithKept\(\)\s*)?return\s*\}\s*await probe\(\)/);
   // Only with a certificate that needs nobody's word, or the person's kept
   // word for it; anything else is asked of every machine.
   const direct = bare(fn(SCREEN, 'directPath'));
