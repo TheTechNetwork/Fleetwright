@@ -384,9 +384,18 @@ minutes later, and the ordinary notification beside it says how it ended.
 is opened by the app's extension before it is shown; a Live Activity's
 `content-state` is handed straight to the widget, and ActivityKit runs nothing
 of ours first. So the payload is `{ step, of, phase, state }`, where `phase` is
-a key from `XOSETUP_STEPS` and the app has the words. The address and the
-machine's name are attributes the phone set when it started the activity, and
-never cross a push.
+a key from `XOSETUP_STEPS` and the app has the words. While a build runs it
+also carries `fill` (thousandths), `stage` and `stages` (which part of how
+many) and `build`, a key from a fixed list (`edge`, `image`, `holder`), so the
+Lock Screen can say what is being built without being told in words. The
+address and the machine's name are attributes the phone set when it started
+the activity, and never cross a push.
+
+**Two priorities.** Apple budgets priority-10 updates to an activity and
+throttles one that spends too many, after which the Lock Screen simply stops
+moving. So an update that is news (a step, part, build or state that changed,
+and the end) goes at 10, and one that only moves the bar goes at 5, at most
+every thirty seconds (`ACTIVITY_FILL_EVERY_MS` in `core.js`).
 
 Android has no Live Activity; the same steps arrive as data pushes, sealed as
 usual, and the app keeps one ongoing notification up to date with them.

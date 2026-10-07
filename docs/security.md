@@ -273,7 +273,8 @@ machine of the fleet, through the coordinator.
   not respect; the reach is "does this address answer HTTPS from that box".
 - **Progress on a Lock Screen is not sealed.** A Live Activity's content goes
   to the widget with no hook that could decrypt it first, so it carries step
-  numbers and a key from a fixed list, never an address or a name. The words
+  and part numbers and keys from fixed lists (the step, and what is being
+  built), never an address or a name. The words
   travel in the ordinary notification, which is sealed.
 - **Changing what the fleet may use needs the admin sign-in again**, sealed
   the same way. The pool's inventory goes back sealed to the phone, the
