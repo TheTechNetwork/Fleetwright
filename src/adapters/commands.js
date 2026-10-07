@@ -655,7 +655,7 @@ function addressNote(cfg, channel) {
  */
 export const COMMANDS = {
   help: {
-    aliases: ['start_help', 'commands', '?'],
+    aliases: ['commands', '?'],
     usage: '/help',
     short: 'List every command',
     help: 'Show this list.',
