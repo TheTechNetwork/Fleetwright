@@ -53,9 +53,10 @@ test('iOS: the screen asks every machine first, then runs one job on one machine
   // NEVER HELD: each carries an idempotency key, which keeps a send that could
   // not reach the fleet out of the outbox and off the disk.
   const sends = IOS.match(/intent\("(?:xoprobe|xosetup)"[^\n]*\n?[^\n]*idempotencyKey: "app-\\\(UUID\(\)\.uuidString\)"/g) ?? [];
-  // Six: the probe, and begin, run, status, cancel and policy
-  // (test/xopolicy-ios-in-apps.test.js has the last).
-  assert.equal(sends.length, 6, 'every probe and phase is sent with an idempotency key');
+  // Seven: the probe, and begin, run, status, cancel and policy
+  // (test/xopolicy-ios-in-apps.test.js has the last), and an install's
+  // deploy (test/xodeploy-in-apps.test.js).
+  assert.equal(sends.length, 7, 'every probe and phase is sent with an idempotency key');
 });
 
 test('iOS: a machine that reached the address is offered, HTTPS with a certificate first, and the alternatives are said plainly', () => {
@@ -204,7 +205,7 @@ test('iOS: the token comes back to this phone, to a key sent inside the seal, an
   assert.match(SCREEN, /let \(outcome, inFleet\) = await XOSetupHandoff\.collectAndKeep\(job: job, state: state, settings: settings\)\s*if let outcome \{ handedBack = outcome \}/);
   assert.match(SCREEN, /case \.kept:\s*Text\("The token is in this phone’s Keychain now\. No machine in the fleet keeps it on disk\."\)/);
   // Kept in the Keychain, this device only, and never anywhere else.
-  assert.match(HANDOFF, /Keychain\.set\(text, for: tokenAccount\(entry\.address\)\)/);
+  assert.match(HANDOFF, /Keychain\.set\(text, for: tokenAccount\(at\)\)/);
   assert.match(IOS, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   const code = HANDOFF.replace(/\/\/[^\n]*/g, '');
   assert.doesNotMatch(code, /UserDefaults[^\n]*token|FileManager|Outbox|print\(/);

@@ -1131,7 +1131,34 @@ struct Fleet {
         /// not check out: the doubtful case lands on the side that asks.
         let certificate: Certificate?
         let version: String?
+        /// What the machine found over SSH at the address, said when Xen
+        /// Orchestra did not answer there: what a pool with no Xen Orchestra
+        /// is added from. NIL IS A MACHINE THAT DID NOT SAY, too old to look
+        /// or one that found Xen Orchestra: never one that found nothing
+        /// (`narrowSsh` in src/fleet/coordinator/core.js).
+        var ssh: SSH? = nil
         var id: String { hostId }
+
+        /// `narrowSsh` is the shape. `reachable` and `deploy` keep nil as
+        /// cannot tell: a machine without ssh-keyscan has not found the
+        /// address unreachable.
+        struct SSH: Codable, Hashable {
+            let reachable: Bool?
+            let keys: [Key]?
+            /// It has everything installing needs.
+            let deploy: Bool?
+            /// What it lacks to install with, by name.
+            let missing: [String]?
+
+            /// One host key, as OpenSSH names its type and prints its
+            /// fingerprint (`SHA256:` and unpadded base64), and the same
+            /// digest in hex, which is the pin an install is begun with.
+            struct Key: Codable, Hashable {
+                let type: String
+                let fingerprint: String
+                let sha256: String
+            }
+        }
 
         /// Setup can be run from this machine with a certificate pinned: it
         /// reached the address over HTTPS and saw one.
@@ -1220,6 +1247,17 @@ struct Fleet {
     /// question nobody is still asking.
     func xoprobe(address: String) async throws -> Reply {
         try await intent("xoprobe", params: ["address": address], idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// Begin installing Xen Orchestra on ONE chosen machine (`deploy`),
+    /// pinned to the SHA-256 of the pool master's SSH host key the person
+    /// compared, in hex. The reply carries the key to seal both passwords to,
+    /// signed by the machine under the install's own context
+    /// (XOSetupKey.isSignedForDeploy). Every later phase is a setup's:
+    /// `runSetup`, `setupStatus`, `cancelSetup`.
+    func beginDeploy(address: String, pin: String, host: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "deploy", "address": address, "pin": pin], host: host,
+                         idempotencyKey: "app-\(UUID().uuidString)")
     }
 
     /// Begin onboarding a hypervisor on ONE chosen machine, pinning the

@@ -46,6 +46,34 @@ enum XOSetupKey {
         return publicKey.isValidSignature(signature, for: Data(signed.utf8))
     }
 
+    static let deploySigningPrefix = "agent-fleet/v1/xodeploy-key\n"
+
+    /// The same question for an install: the machine signs the job's key
+    /// under the install's own context, over the SHA-256 of the pool
+    /// master's SSH host key in place of a certificate's: canonical JSON of
+    /// {address, job, key, pin}. A setup's signature does not pass for it,
+    /// nor one over another pool master's key.
+    static func isSignedForDeploy(key: String, keySig: String, hostKey: Fleet.Host.PublicKey, address: String, job: String, pin: String) -> Bool {
+        guard isJob(job), isPin(pin), Seal.isKey(key), isAddress(address),
+              hostKey.kty == "EC", hostKey.crv == "P-256",
+              let x = Seal.unb64(hostKey.x), x.count == 32,
+              let y = Seal.unb64(hostKey.y), y.count == 32,
+              let raw = Seal.unb64(keySig), raw.count == 64,
+              let publicKey = try? P256.Signing.PublicKey(x963Representation: Data([0x04]) + x + y),
+              let signature = try? P256.Signing.ECDSASignature(rawRepresentation: raw)
+        else { return false }
+        let signed = deploySigningPrefix + "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(key)\",\"pin\":\"\(pin)\"}"
+        return publicKey.isValidSignature(signature, for: Data(signed.utf8))
+    }
+
+    /// An SSH host key fingerprint as OpenSSH prints it (SSH_HOST_KEY_RE):
+    /// `SHA256:` and 43 characters of base64, none of which JSON escapes.
+    static func isSSHKey(_ s: String) -> Bool {
+        guard s.hasPrefix("SHA256:") else { return false }
+        let digest = s.dropFirst(7)
+        return digest.count == 43 && digest.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "+" || $0 == "/") }
+    }
+
     /// Twelve lowercase hex digits, made by the host (XOSETUP_JOB_RE).
     static func isJob(_ s: String) -> Bool { s.count == 12 && isHex(s) }
 
