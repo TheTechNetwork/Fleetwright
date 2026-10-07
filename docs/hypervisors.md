@@ -6,10 +6,12 @@ none gets one first ("A pool without Xen Orchestra"); the policy job
 builds its edge router and its **machine image**; and a session starts on a
 **new machine from that image** from New session › Where on either phone
 ("Machines from your pool", next). The policy job also makes the pool **a
-machine of its own** that holds it ("A machine of its own"). **Not yet run:**
-a real XCP-ng pool behind Xen Orchestra, and the install on one. Labs are
-designed and not built. XCP-ng first, through Xen Orchestra; Proxmox second,
-behind the same interface.
+machine of its own** that holds it ("A machine of its own"), and **labs**: networks of their
+own on the edge router, open or closed, a session's machine alone on one
+("Labs"). **Not yet run:** a real XCP-ng pool behind Xen Orchestra, and the
+install on one. Seeing inside a lab is designed and not built ("Seeing what
+crossed a lab"). XCP-ng first, through Xen Orchestra; Proxmox second, behind
+the same interface.
 
 A session today runs in a container on a box, or on a GitHub Actions runner
 that is gone in six hours. Neither is a real machine on a network you own:
@@ -187,8 +189,8 @@ against every other machine on the uplink, and not against the machine's own
 root: a session that removes it exposes itself and nothing else. It does not
 stop a machine with root sending forged frames on the uplink (ARP or spoofed
 sources); the router's own rules are the boundary no session can touch, and
-a lab with its own router (below) is the shape for work that must not share
-a segment at all. A group network, like the uplink, is local to one host of a
+a lab (below), a network of its own on the router, is the shape for work that
+must not share a segment at all. A group network, like the uplink, is local to one host of a
 pool without Xen Orchestra's SDN controller, so the machines of a group must
 land on one host to reach each other. The script and its unit travel on the
 cloud-init drive, so machines from images built before them are fenced too;
@@ -327,7 +329,8 @@ report, it says why in the machine's own terms:
 
 **It is how much, not where.** A destination, a DNS name, or an alert from the
 edge router's intrusion detection would need the fleet to read the edge
-router, which it cannot. Those are not here.
+router, which it cannot. Those are not here; "Seeing what crossed a lab",
+under Labs, is the design for reading them.
 
 ## The credential, which is the whole design again
 
@@ -357,13 +360,18 @@ our side has failed.
 
 ```
 provision { platform: "vm", template: <Xen Orchestra template id>, minutes?: 5..350, network?: <Xen Orchestra network id>, group?: <Xen Orchestra network id> }
+provision { platform: "lab", template: <Xen Orchestra template id>, network: <a lab's network id>, minutes?: 5..350 }
 vmctl     { name: vm-<12 hex>, action: reboot|extend|resize|stop, minutes?: 5..350, cpus?: 1..64, memory?: 1..512 GiB }
 ```
 
 `template` is new on an existing verb, so it is `since: 8`, `network`
 and `vmctl` are `since: 9`, and `group` is `since: 10`, and only a box
 that reports a pool (and so speaks 8) is ever asked; the coordinator refuses
-rather than let it be dropped. **The id must be an image the box itself saw
+rather than let it be dropped. **`lab` is a new value, not a new version**:
+a box from before labs validates the enum and refuses it by name, the way
+`xosetup`'s `policy` phase was added, and only a box that reported a lab is
+asked. The lab rides in `network`, which the box checks is a lab it saw on
+that pool and saw empty. **The id must be an image the box itself saw
 on your pool**, tagged `fleetwright-image`: the box checks its own report,
 not the coordinator's word, and so must a network: one the box saw on that
 pool, which the resource set already bounds to the networks the fleet may use.
@@ -404,47 +412,168 @@ and kernel work need. The machine exists for one job and is destroyed after
 it. That makes the uplink the decision that matters most, which is the next
 section.
 
-## Labs: a router in front of the machine
+## Labs
 
-The reason for this page. A **lab** is a topology file on the hypervisor host,
-named like a template:
+> VMs from your own hypervisor ... a private network per lab with an OPNsense
+> VM in front of the session VM, so every packet crosses a router the session
+> can inspect. The VM is the sandbox: no container, real kernel and
+> interfaces.
 
-```json
-// /var/lib/fleetwright/labs/opnsense.json
-{
-  "network": "private",
-  "router": { "template": "opnsense", "wan": "fleetwright-uplink", "lan": "lab" },
-  "machines": [{ "template": "debian", "networks": ["lab"] }]
-}
-```
+That was the design, and it is not what was built. Asked instead: *"why
+per-lab OPNsense when we can do one with proper routing and rules"*. The edge
+router already exists, already stands between every machine and everything
+private, and is already configured unattended from the source. A router per
+lab would cost each lab a second VM (2 GiB, and minutes of FreeBSD booting
+before the session's machine had a network at all), a template of its own,
+and a bootstrap API key that some machine on the lab's network has to be
+trusted with. One router with an interface per lab gives the same isolation
+for nothing.
 
-`provision { lab: "opnsense" }` makes, in order:
+**A lab is a network of its own on the edge router, with one machine on it.**
 
-1. a private network for this lab alone (Xen Orchestra creates one without a
-   VLAN; it exists only inside the pool), named for the lab;
-2. the OPNsense VM, its WAN on the uplink and its LAN on the lab network;
-3. the session VM, on the lab network only.
+- **The networks are the policy's.** Under Labs, a person asks for up to four,
+  each **open** or **closed**. The policy job makes them with the admin
+  sign-in (`fleetwright-lab-1` on, private networks with no interface off the
+  pool, like group networks), tags each with its kind
+  (`fleetwright-lab:open` or `:closed`) and puts them in the resource set. The
+  fleet's limited user cannot make or tag a network, which is the reason the
+  box does not make one per session. Four because Xen gives an HVM guest
+  seven interfaces, and the edge has two of its own.
+- **Each is an interface on the edge** (`xn2` for the first), with the edge at
+  `10.250.<n>.1/24` and its DHCP handing out `.100` to `.250`. The rules are
+  written into the edge's configuration with the uplink's, so nothing in the
+  fleet can change them, and changing the labs rebuilds the edge the way
+  blocking mode does: stopped, a new one built beside it, the old one removed
+  only once the new one is up, and how it filters kept as it was. The phone
+  says that before Apply.
+- **What every lab gets**, the same three rules as the uplink: names from the
+  edge and from no other resolver, so the threat blocklists apply; and nothing
+  private, so not the uplink and its machines, not your LAN, not the pool's
+  API, not another lab. Suricata watches each lab's interface as it watches
+  the uplink, and drops as it does when the edge blocks.
+- **An open lab** then reaches the internet, out through the edge's NAT like
+  any machine behind it.
+- **A closed lab** reaches the fleet and Claude and nothing else: HTTPS to
+  the coordinator's host and to the hosts Claude cannot work without
+  (`api.anthropic.com`, `platform.claude.com`, `claude.ai`, `claude.com`, the
+  sandbox egress allowlist's required list in `src/core/egress.js`, reused
+  rather than written again). Without them the machine could not enrol, its
+  sidecar could not stay connected and the session could not run. Everything
+  else it sends is blocked and logged on the edge. The hosts are an OPNsense
+  host alias, which the edge resolves with its own Unbound and keeps
+  resolved. Names asked of the edge still answer, so a closed lab is closed
+  to connections, not to DNS: a session determined to signal out through
+  lookups could.
 
-So every packet the session machine sends crosses the router, which is the
-vantage point packet inspection needs: captures, the firewall log, Suricata's
-alerts. The session drives OPNsense through its API.
+**A session in a lab.** New session › Where offers *In a lab* under a
+machine image whose pool has labs: *Open: reaches the internet* or *Closed:
+only the fleet and Claude*, each only while one of that kind is free. The
+phone takes the first free one of that kind and sends `provision { platform:
+"lab", template, network: <the lab's id> }`. The coordinator holds that lab
+for this machine from the ask until the box sees the machine on it, so two
+asks cannot land on one network, and asks only a box that saw the lab. The
+box takes only a lab it saw empty, clones the image onto that network alone
+(no uplink, so nothing reaches it but the edge; no fence, since nothing else
+is on it; no group) and, because another box may have done the same in the
+same moment, looks again and removes its machine if it was the second. The
+machine joins, and the session starts on it, exactly as on the uplink.
 
-**The API key is per lab, and only the lab has it.** OPNsense does not take
-cloud-init, so the template is built with a bootstrap key that only the
-hypervisor host knows. When the router is up, the host uses it once to make
-a key for this lab and delete the bootstrap one, then hands the new key to the
-session machine in its cloud-init as a **named secret** (`opnsense`). The
-session fetches it through the credential broker like any other secret, and
-it dies with the lab.
+**What a lab costs**: no machine of its own. The session's machine is
+counted against the pool's resource set like any other, and **a person may
+hold two labs at once** (`MAX_LABS_EACH`), because a pool has four at most,
+shared by everybody who keeps its token, and a lab is one of them for as long
+as its machine lives.
 
-**Teardown is the whole lab**: both VMs, their disks, then the network.
+**A lab ends with its session.** Once its machine has run a session and has
+run none for five minutes (a restart or a resume stops one for a moment), the
+coordinator ends the machine through `vmctl stop`, as its owner, and the lab
+is free again. A machine whose session never started lives to the end in its
+tag like any other, and the box sweeps it then; a lab is free the moment no
+machine of the fleet's has an interface on it, so a machine swept, ended or
+removed by hand frees it alike. A coordinator restarted mid-session forgets
+that the session ran, and the lab then lasts to the machine's end.
+
+**What the phones show.** The policy screen asks how many of each, four in
+all, starting from what the edge has, and says what a lab is and that it
+costs no extra machine. New session says what the chosen kind reaches. A
+machine's page names its lab and what it reaches. A pool whose labs are all
+taken says so instead of offering one.
+
+**Booted in QEMU**, from the pinned 26.7 image patched this way with four
+labs, two of them closed, and blocking on: the whole configuration was read
+(the file is 8,192 bytes, below), each lab's interface came up at its
+address, dnsmasq had a range on each, Suricata's home network was the uplink
+and the four labs, and `pfctl -sr` showed, per interface and in this order,
+DNS to the edge, no other resolver, nothing private, the way out (the uplink
+and the open labs, diverted to Suricata), the closed labs' HTTPS to the fleet
+alias, also diverted, and the closed labs' logged block of everything else.
+The fleet alias was there and empty, because this sandbox has no outbound DNS
+to resolve it. **Not run here:** a machine on a lab network, a real pool, and
+the alias resolving.
+
+**It did not fit, so the file grew.** The edge's configuration with labs is
+up to 7,360 bytes, and the file it replaces is 5,234. The image's file
+system has 4 KiB fragments, so `config.xml` already owns 8,192 bytes on the
+disk (its inode counts 16 sectors) and the 2,958 after its end are zeros. The
+build changes one more field: the file's size in its inode, from 5,234 to
+8,192. Nothing is allocated, moved or freed, and the file system keeps no
+check-hashes (its superblock's `fs_metackhash` is 0). It is pinned and
+checked like the configuration: the field must read 5,234 and the slack must
+be zeros, or nothing is written. An edge without labs is byte for byte what
+was booted before.
+
+### Seeing what crossed a lab: designed, not built
+
+What a lab adds over a group network was meant to be inspection as well as
+rules: the edge's firewall log and Suricata's alerts for that lab's interface,
+handed to its session. **That needs a way into the edge, and there is none.**
+The edge has no API and no login on purpose (root's password is `*`), its
+WAN takes an address from DHCP on your network that Xen Orchestra cannot see
+(OPNsense's nano image has no Xen guest agent), and no box is behind it. A
+key to the edge would control every lab and the edge itself, so the session
+must never hold one; that is the line not to cross.
+
+The shape that holds that line:
+
+1. **A network for the edge's management alone**, `fleetwright-edge-admin`,
+   made by the policy job, with no interface off the pool and **not** in the
+   resource set, so no fleet machine can be attached to it. The edge gets an
+   interface on it, and its web interface and API listen there and nowhere
+   else.
+2. **The pool's own machine** (A machine of its own) gets a second interface
+   on it. It is the one Fleetwright box that the same admin job makes and
+   that sits outside the resource set.
+3. **An API key for the edge**, made by the policy job and written into the
+   edge's configuration (OPNsense keeps a key as its secret's SHA-512 crypt),
+   and handed to the pool's own machine on its cloud-init drive. A rebuilt
+   edge must be given the same key, so the job keeps it where only the admin
+   sign-in can read it (on the edge VM in Xen Orchestra), or makes the pool's
+   own machine again.
+4. **The pool's own machine reads** the filter log and Suricata's alerts,
+   keeps the lines whose interface is a lab's, and the coordinator relays
+   each lab's lines to that lab's machine, where the session reads them as a
+   file. No key leaves the pool's own machine.
+
+**What it costs:** seeing inside a lab needs a pool's own machine; the edge
+gains an API it does not have today; an edge rebuilt for any reason has to
+keep its key; and the coordinator gains a relay of log lines. Until that is
+decided, what a session can see of its lab is what any machine's page shows:
+the hypervisor's own count of what it sent and received ("What a machine did
+on the network"), which nothing inside it can change.
+
+**So a lab is, as built, a group network with rules and its own way out**,
+on the router that was already there, rather than a parallel mechanism.
+
+## The edge router
+
+The uplink, the router on it, and what it filters: the boundary every
+machine and every lab is behind.
 
 ### The uplink
 
 **`fleetwright-uplink` must not be the management network**, the one Xen
 Orchestra, the pool masters and everything else on your LAN sit on. Everything
-a lab does leaves through it, so it is the boundary; the router inside the lab
-is the instrument, not the wall.
+a machine behind the edge does leaves through it, so it is the boundary.
 
 **Which network the edge router's WAN goes on is the person's choice**, made
 on the phone when they change the pool's policy (below, "The policy"), and
@@ -650,8 +779,9 @@ admin sign-in for as long as it runs:
   published image patched this way: no key press, the console banner showed
   `fleetwright-edge.internal` with the LAN at 10.254.0.1/24 and the WAN on
   DHCP, and `pfctl` showed the LAN rules above in order, with automatic
-  NAT. Labs' own routers will use the same technique with their own
-  configuration.
+  NAT. Labs are interfaces on this same router, written into the same
+  configuration, which with them outgrows the file and is grown into its
+  own blocks ("Labs").
 
 Rebuilding is the same script with the newest image, so a template is
 replaced rather than patched, and the old one is deleted once nothing was
@@ -681,7 +811,7 @@ phones; these docs; the pool's own machine (A machine of its own). **Next:** a n
 tests that need several machines to reach each other; machines kept booted
 and waiting so a session starts in seconds; DNS filtering and intrusion
 detection on the edge router. What each machine did on the network is built
-(What a machine did on the network). Labs (a router of their own in front of a machine) after that.
+(What a machine did on the network). Labs are built ("Labs"); seeing what crossed one is designed and not built.
 
 ## Onboarding: nothing made by hand
 
