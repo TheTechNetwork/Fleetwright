@@ -56,6 +56,7 @@ import { sealTo } from './push-crypto.js';
  *   as the widget's ContentState decodes it
  * @property {number} [dismissAt]  ms epoch: when an ended activity leaves the
  *   Lock Screen
+ * @property {5|10} [priority]  10, the default, for news; 5 for the bar moving
  */
 
 /**
@@ -437,9 +438,10 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
     //
     // A different push type and a different topic, both required: Apple
     // rejects a `liveactivity` push sent to the bare bundle id, and silently
-    // never delivers an `alert` to an activity token. Priority 10 because each
-    // of these is a step finishing, which is the news; Apple budgets them, and
-    // onboarding sends fewer than a dozen.
+    // never delivers an `alert` to an activity token. Priority 10 for news, a
+    // step or a part finishing; 5 for the bar moving, which the caller asks
+    // for (`priority`). Apple budgets priority 10 and throttles an app past
+    // it, which is how a build that sent every 5% at 10 froze the Lock Screen.
     async activity(tokens, update) {
       if (!tokens.length) return { sent: 0, dead: [] };
       const authorization = `bearer ${await bearer()}`;
@@ -461,7 +463,7 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
             authorization,
             'apns-topic': `${config.bundleId}.push-type.liveactivity`,
             'apns-push-type': 'liveactivity',
-            'apns-priority': '10',
+            'apns-priority': update.priority === 5 ? '5' : '10',
             'apns-expiration': String(nowS + PUSH_TTL_S),
           });
           if (res.status === 200) {
