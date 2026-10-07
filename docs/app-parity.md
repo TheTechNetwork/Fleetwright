@@ -104,7 +104,10 @@ they are the ones asked for most often.
   parameter, not new routing.
 - **Show the workspace directory.** Already known host-side. Needs to travel in
   the `list`/`status` payload, which is additive and does not change the verb.
-- **Telegram setup and removal from the app.** Configuration, not an intent.
+- ~~Telegram setup and removal from the app.~~ Off this list: the per-box
+  adapter it would have configured is archived (`telegram.md`). The bot's
+  settings belong with the coordinator-level bot on the roadmap, if that is
+  built.
 
 **2. Reporting, which is additive to existing verbs.** No new verbs, so no
 version bump — a field an old client ignores costs nothing.
