@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 
-import { ConfigPatch, EDGE, EDGE_FILTER, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureUplink, fetchImage, isDefaultConfig } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, EDGE, EDGE_FILTER, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureUplink, fetchImage, isDefaultConfig } from '../src/fleet/host/edge-router.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 
 const DEFAULT = readFileSync(new URL('./fixtures/opnsense-26.7-config.xml', import.meta.url));
@@ -389,6 +389,25 @@ test('the uplink is made once per pool and the fleet may use it', async () => {
   const again = await ensureUplink({ admin: there, pool: 'p1', networks: [{ id: 'net-up', name_label: 'fleetwright-uplink', $pool: 'p1' }], setId: 'rs-1', inSet: ['net-up'] });
   assert.equal(again, 'net-up');
   assert.deepEqual(there.calls, []);
+});
+
+test('group networks are made up to the number asked, once each, never removed, and the fleet may use them', async () => {
+  let n = 0;
+  const admin = xo({}, { 'network.create': () => `net-g${++n}` });
+  const there = [{ id: 'net-g0', name_label: 'fleetwright-group-1', $pool: 'p1' }, { id: 'net-far', name_label: 'fleetwright-group-2', $pool: 'p2' }];
+  const made = await ensureGroups({ admin, pool: 'p1', networks: there, setId: 'rs-1', inSet: ['net-g0'], count: 9 });
+  assert.deepEqual(made, ['fleetwright-group-2', 'fleetwright-group-3', 'fleetwright-group-4'], 'at most four, and one in another pool is not this pool’s');
+  assert.deepEqual(admin.calls.map(([m, p]) => [m, p.name ?? p.object]), [
+    ['network.create', 'fleetwright-group-2'],
+    ['resourceSet.addObject', 'net-g1'],
+    ['network.create', 'fleetwright-group-3'],
+    ['resourceSet.addObject', 'net-g2'],
+    ['network.create', 'fleetwright-group-4'],
+    ['resourceSet.addObject', 'net-g3'],
+  ]);
+  const fewer = xo({});
+  assert.deepEqual(await ensureGroups({ admin: fewer, pool: 'p1', networks: there, setId: 'rs-1', inSet: ['net-g0'], count: 0 }), []);
+  assert.deepEqual(fewer.calls, [], 'asking for fewer removes nothing: a machine may be on one');
 });
 
 test('the edge router is asked for only with a way out for its WAN', () => {

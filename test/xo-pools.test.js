@@ -15,7 +15,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { XoPools, poolRecord, machineCloudConfig, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
+import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
 import { VM_IMAGE, buildCloudConfig, ensureImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
@@ -166,6 +166,12 @@ test('a machine is made from the person’s own image, on the uplink, with its t
   // extension needs nothing from inside the machine.
   assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: CLAUDE, minutes: 380 });
   assert.match(made.cloudConfig, /fleetwright-vm-join, \/run\/fleetwright\/join.json/);
+  // ON THE UPLINK, FENCED: the network file, the script and its unit, and
+  // the unit started before the join script starts anything that listens.
+  const net = JSON.parse(/** @type {string} */ (made.cloudConfig.split('\n').find((/** @type {string} */ l) => l.trim().startsWith('{"v":1,"isolate"'))).trim());
+  assert.deepEqual(net, { v: 1, isolate: { subnet: '10.254.0.0/24', gateway: '10.254.0.1' } });
+  const lines = made.cloudConfig.split('\n');
+  assert.ok(lines.indexOf('  - [systemctl, enable, --now, fleetwright-net.service]') < lines.findIndex((/** @type {string} */ l) => l.includes('fleetwright-vm-join')));
 
   // A refusal from the pool itself is not "unreachable": another box would hear the same.
   const full = holder(xo({ objects: [pool, image, uplink], fail: { 'vm.create': 'resource set limit exceeded' } }));
@@ -183,7 +189,7 @@ test('a machine can go on a network of the pool the person chose, and on no othe
   const pools = holder(stand);
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
   await pools.refresh();
-  assert.deepEqual(pools.report()[0].networks, [{ id: 'net-lan', name: 'LAN', pool: 'pool-1' }], 'the uplink is the default, not a choice');
+  assert.deepEqual(pools.report()[0].networks, [{ id: 'net-lan', name: 'LAN', pool: 'pool-1', group: false }], 'the uplink is the default, not a choice');
   const refused = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, network: 'net-elsewhere', coordinatorUrl: 'https://fleet.test' });
   assert.equal(refused.ok, false, 'not a network this box saw');
   assert.ok(!stand.calls.some((c) => c.method === 'vm.create'));
@@ -193,6 +199,52 @@ test('a machine can go on a network of the pool the person chose, and on no othe
   assert.deepEqual(made.VIFs, [{ network: 'net-lan' }]);
   assert.ok(made.tags.includes('fleetwright-on:LAN'));
   assert.match(r.text, /on LAN/);
+  // A network of the person's own is left as that network has it: no fence.
+  assert.ok(!made.cloudConfig.includes('/etc/fleetwright-net.json'));
+});
+
+test('a machine in a group is also on the group network, with a MAC and an address of its own there', async () => {
+  const group = { type: 'network', id: 'net-group', name_label: 'fleetwright-group-1', $pool: 'pool-1' };
+  const lan = { type: 'network', id: 'net-lan', name_label: 'LAN', $pool: 'pool-1' };
+  // Another machine in that group already has the address this ticket starts at.
+  const other = { type: 'VM', id: 'vm-other', name_label: 'vm-222222222222', power_state: 'Running', tags: [VM_IMAGE.sessionTag, 'fleetwright-grp:fleetwright-group-1', 'fleetwright-gip:10.200.17.52'] };
+  const stand = xo({ objects: [pool, image, uplink, lan, group, other] });
+  const pools = holder(stand);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  assert.deepEqual(
+    pools.report()[0].networks.map((n) => [n.name, n.group]),
+    [['LAN', false], ['fleetwright-group-1', true]],
+  );
+
+  assert.equal((await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, group: 'net-lan', coordinatorUrl: 'https://fleet.test' })).ok, false, 'a group is a group network');
+  assert.equal((await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, network: 'net-group', coordinatorUrl: 'https://fleet.test' })).ok, false, 'and is never a machine’s own network');
+  assert.ok(!stand.calls.some((c) => c.method === 'vm.create'));
+
+  const r = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, group: 'net-group', coordinatorUrl: 'https://fleet.test' });
+  assert.equal(r.ok, true, r.text);
+  const made = /** @type {any} */ (stand.calls.find((c) => c.method === 'vm.create')).params;
+  assert.deepEqual(made.VIFs, [{ network: 'net-uplink' }, { network: 'net-group', mac: '02:11:11:11:11:11' }], 'its own network first, then the group');
+  assert.ok(made.tags.includes('fleetwright-grp:fleetwright-group-1'));
+  assert.ok(made.tags.includes('fleetwright-gip:10.200.17.53'), 'moved past the address taken');
+  const net = JSON.parse(/** @type {string} */ (made.cloudConfig.split('\n').find((/** @type {string} */ l) => l.trim().startsWith('{"v":1,"isolate"'))).trim());
+  assert.deepEqual(net.group, { mac: '02:11:11:11:11:11', address: '10.200.17.53/16' });
+  assert.ok(net.isolate, 'on the uplink, still fenced from everyone not in its group');
+  assert.match(r.text, /with the others on fleetwright-group-1 at 10\.200\.17\.53/);
+});
+
+test('a place on a group network comes from the ticket’s id and never repeats an address in use', () => {
+  const id = 'abcdef012345';
+  const first = groupPlace(id, new Set());
+  assert.equal(first.mac, '02:ab:cd:ef:01:23', 'locally administered, unicast');
+  assert.match(first.address, /^10\.200\.\d{1,3}\.\d{1,3}$/);
+  assert.notEqual(groupPlace(id, new Set([first.address])).address, first.address);
+  // Never the network's own address or its broadcast.
+  for (const n of ['000000000000', '0000000000fd', '0000000000fe', '00000000ffff']) {
+    const { address } = groupPlace(n, new Set());
+    const last = Number(address.split('.')[3]);
+    assert.ok(last >= 1 && last <= 254, address);
+  }
 });
 
 test('a look reports the machines made there, what each is and where, for the phone’s page of it', async () => {
@@ -210,8 +262,8 @@ test('a look reports the machines made there, what each is and where, for the ph
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
   await pools.refresh();
   assert.deepEqual(pools.report()[0].machines, [
-    { name: 'vm-111111111111', vm: 'vm-uuid', state: 'Running', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', net: { interval: 60, end: s * 1000, rx: [100, 200], tx: [5, 6] } },
-    { name: 'vm-222222222222', vm: 'vm-stopped', state: 'Paused', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', net: null },
+    { name: 'vm-111111111111', vm: 'vm-uuid', state: 'Running', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', group: null, groupIp: null, net: { interval: 60, end: s * 1000, rx: [100, 200], tx: [5, 6] } },
+    { name: 'vm-222222222222', vm: 'vm-stopped', state: 'Paused', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', group: null, groupIp: null, net: null },
   ]);
   assert.deepEqual(stand.calls.filter((c) => c.method === 'vm.stats').map((c) => c.params), [{ id: 'vm-uuid', granularity: 'minutes' }], 'only a running machine is asked what it did');
 });

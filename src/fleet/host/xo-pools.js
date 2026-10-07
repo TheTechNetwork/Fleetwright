@@ -30,8 +30,10 @@
 // its limits. Xen Orchestra enforces that, which is the bound that holds when
 // everything on our side has failed.
 
+import { readFileSync } from 'node:fs';
+import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain } from './xo-ws.js';
-import { EDGE } from './edge-router.js';
+import { EDGE, GROUP_PREFIX } from './edge-router.js';
 import { VM_IMAGE } from './vm-image.js';
 
 /** The prefix a pool's item carries in a vault answer. */
@@ -63,6 +65,43 @@ const ON_PREFIX = 'fleetwright-on:';
  * Orchestra; a machine is worked only for the person it was made for.
  */
 const FOR_PREFIX = 'fleetwright-for:';
+/** The group network a machine is also on, and its address there. */
+const GROUP_TAG = 'fleetwright-grp:';
+const GROUP_IP_TAG = 'fleetwright-gip:';
+/**
+ * The uplink's range, which every session machine on it shares. Only the
+ * router may open a connection from it to a machine (install/fleetwright-net).
+ */
+export const UPLINK_SUBNET = `${EDGE.lan.address.split('.').slice(0, 3).join('.')}.0/${EDGE.lan.prefix}`;
+/** The range machines take on a group network: no DHCP there, so each is given one. */
+export const GROUP_RANGE = '10.200.0.0/16';
+/** @type {string|null} */
+let netScript = null;
+/**
+ * The boot-time script that fences a machine on the uplink and puts it on its
+ * group network. Carried on the cloud-init drive rather than taken from the
+ * image, so a machine cloned from an image built before it has it too. Found
+ * from the install's root, not from this file, which a release bundles
+ * somewhere else (core/resources.js).
+ */
+const NET_SCRIPT = () => (netScript ??= readFileSync(resource('install', 'fleetwright-net'), 'utf8'));
+/** Runs it at every boot, before anything on the machine listens. */
+const NET_UNIT = [
+  '[Unit]',
+  'Description=Fleetwright: fence this machine on the uplink, join its group network',
+  'Wants=network-online.target',
+  'After=network-online.target',
+  'Before=fleetwright.service fleetwright-sidecar.service ssh.service',
+  '',
+  '[Service]',
+  'Type=oneshot',
+  'RemainAfterExit=yes',
+  'ExecStart=/usr/local/sbin/fleetwright-net /etc/fleetwright-net.json',
+  '',
+  '[Install]',
+  'WantedBy=multi-user.target',
+  '',
+].join('\n');
 /** The vault item a person's SSH public keys are kept in, one per line. */
 export const SSH_KEYS_ITEM = 'secret:SSH_AUTHORIZED_KEYS';
 const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]{16,8192}(?: [^\n]{0,200})?$/;
@@ -70,9 +109,9 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
 /**
  * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
- * @typedef {{ id: string, name: string, pool: string|null }} Network
+ * @typedef {{ id: string, name: string, pool: string|null, group: boolean }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
- * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null, net: Traffic|null }} Machine
+ * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null, group: string|null, groupIp: string|null, net: Traffic|null }} Machine
  * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string, holder?: boolean }} Seen
  */
 
@@ -283,11 +322,17 @@ export class XoPools {
         await this.#sweep(rpc);
         // THE NETWORKS A MACHINE CAN GO ON besides the uplink: the pool's that
         // the fleet may use (what the limited user sees), for a machine that
-        // should be reachable from the person's own network.
+        // should be reachable from the person's own network; and the group
+        // networks, marked, which a machine joins as well as its own.
         const nets = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'network' } })) || {}));
         const networks = nets
           .filter((n) => typeof n?.id === 'string' && n.name_label !== EDGE.uplink)
-          .map((n) => ({ id: String(n.id), name: String(n.name_label || n.id).slice(0, 80), pool: n.$pool ?? null }));
+          .map((n) => ({
+            id: String(n.id),
+            name: String(n.name_label || n.id).slice(0, 80),
+            pool: n.$pool ?? null,
+            group: String(n.name_label || '').startsWith(GROUP_PREFIX),
+          }));
         // AND THE MACHINES MADE THERE, what each is and where it is, for the
         // phone's page of it. Read after the sweep, so a removed one is gone.
         const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
@@ -309,6 +354,8 @@ export class XoPools {
               memory: Number.isFinite(Number(v?.memory?.size)) ? Number(v.memory.size) : null,
               image: from ? imageNames.get(from) ?? null : null,
               network: tagValue(v, ON_PREFIX),
+              group: tagValue(v, GROUP_TAG),
+              groupIp: tagValue(v, GROUP_IP_TAG),
               net: /** @type {Traffic|null} */ (null),
             };
           });
@@ -363,10 +410,10 @@ export class XoPools {
    * the reply the coordinator relays: `unreachable` when the pool could not
    * be reached, which is the one refusal another box might not have.
    *
-   * @param {{ owner: string, template: string, ticket: string, minutes?: number|null, network?: string|null, coordinatorUrl: string }} ask
+   * @param {{ owner: string, template: string, ticket: string, minutes?: number|null, network?: string|null, group?: string|null, coordinatorUrl: string }} ask
    * @returns {Promise<{ ok: boolean, text: string, unreachable?: boolean, vm?: string }>}
    */
-  async make({ owner, template, ticket, minutes = null, network = null, coordinatorUrl }) {
+  async make({ owner, template, ticket, minutes = null, network = null, group = null, coordinatorUrl }) {
     const who = String(owner || '').toLowerCase();
     const m = TICKET_RE.exec(String(ticket || ''));
     if (!m) return { ok: false, text: 'That machine came without the ticket it enrols with, so it was not made.' };
@@ -379,8 +426,12 @@ export class XoPools {
     const [k, { record }] = found;
     const image = /** @type {Image} */ (this.seen.get(k)?.images.find((i) => i.id === template));
     // A NETWORK OF THE PERSON'S CHOOSING, only one this box saw for that pool.
-    const chosenNet = network ? this.seen.get(k)?.networks.find((n) => n.id === network && (!image.pool || !n.pool || n.pool === image.pool)) : null;
+    const samePool = (/** @type {Network} */ n) => !image.pool || !n.pool || n.pool === image.pool;
+    const chosenNet = network ? this.seen.get(k)?.networks.find((n) => n.id === network && !n.group && samePool(n)) : null;
     if (network && !chosenNet) return { ok: false, text: 'That network is not one this box saw on your pool, so the machine was not made.' };
+    // A GROUP NETWORK, as well as its own: only one of the pool's group networks.
+    const groupNet = group ? this.seen.get(k)?.networks.find((n) => n.id === group && n.group && samePool(n)) : null;
+    if (group && !groupNet) return { ok: false, text: 'That is not a group network this box saw on your pool, so the machine was not made.' };
     const life = Math.max(5, Math.min(MAX_MINUTES, Number(minutes) || DEFAULT_MINUTES));
     const made = Math.floor(this.now() / 1000);
     const until = made + life * 60;
@@ -400,12 +451,21 @@ export class XoPools {
       const networks = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'network' } })) || {}));
       const uplink = networks.find((n) => n?.name_label === EDGE.uplink && (!image.pool || n.$pool === image.pool));
       const on = chosenNet ?? (uplink ? { id: String(uplink.id), name: EDGE.uplink } : null);
+      // ITS PLACE ON THE GROUP NETWORK: a MAC and an address from its ticket's
+      // id, the address moved along past any a machine in that group has.
+      /** @type {{ mac: string, address: string }|null} */
+      let joined = null;
+      if (groupNet) {
+        const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+        const taken = new Set(vms.filter((v) => tagValue(v, GROUP_TAG) === groupNet.name).map((v) => tagValue(v, GROUP_IP_TAG)));
+        joined = groupPlace(m[1], taken);
+      }
       const vm = await rpc.call('vm.create', {
         template,
         name_label: name,
         name_description: `A temporary machine for ${who}, made by Fleetwright. It powers off by itself at its end and is then removed.`,
         ...(record.resourceSet ? { resourceSet: record.resourceSet } : {}),
-        ...(on ? { VIFs: [{ network: on.id }] } : {}),
+        ...(on || joined ? { VIFs: [...(on ? [{ network: on.id }] : []), ...(joined && groupNet ? [{ network: groupNet.id, mac: joined.mac }] : [])] } : {}),
         tags: [
           VM_IMAGE.sessionTag,
           `${VM_IMAGE.untilPrefix}${until}`,
@@ -413,8 +473,21 @@ export class XoPools {
           `${FROM_PREFIX}${template}`,
           `${FOR_PREFIX}${who}`,
           ...(on ? [`${ON_PREFIX}${on.name}`] : []),
+          ...(joined && groupNet ? [`${GROUP_TAG}${groupNet.name}`, `${GROUP_IP_TAG}${joined.address}`] : []),
         ],
-        cloudConfig: machineCloudConfig({ name, coordinatorUrl, ticket, owner: who, claude, minutes: BACKSTOP_MINUTES, sshKeys: keys }),
+        cloudConfig: machineCloudConfig({
+          name,
+          coordinatorUrl,
+          ticket,
+          owner: who,
+          claude,
+          minutes: BACKSTOP_MINUTES,
+          sshKeys: keys,
+          // ON THE UPLINK, fenced from the machines beside it; on a network
+          // of the person's choosing, left as that network has it.
+          isolate: !chosenNet && on ? { subnet: UPLINK_SUBNET, gateway: EDGE.lan.address } : null,
+          group: joined ? { mac: joined.mac, address: `${joined.address}/16` } : null,
+        }),
         // The drive holds the ticket and the Claude login: gone once the
         // machine has booted, and wiped from inside before that (the join
         // script), whichever comes first.
@@ -426,7 +499,8 @@ export class XoPools {
         ok: true,
         vm: String(vm),
         text:
-          `Making ${name} from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}${chosenNet ? `, on ${chosenNet.name}` : ''}. ` +
+          `Making ${name} from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}${chosenNet ? `, on ${chosenNet.name}` : ''}` +
+          `${joined && groupNet ? `, with the others on ${groupNet.name} at ${joined.address}` : ''}. ` +
           `It joins the fleet as your temporary machine in a minute or two, for ${life} minutes` +
           `${claude ? '' : ', and has no Claude login of yours to run on: keep one in your vault'}.`,
       };
@@ -593,6 +667,28 @@ export class XoPools {
 }
 
 /**
+ * A machine's place on a group network, from its ticket's id: a locally
+ * administered MAC from the first five bytes, and an address in GROUP_RANGE
+ * from the last two, moved along past any in `taken`. The id is random, so
+ * two machines rarely start at the same address; when they do, the second
+ * moves on.
+ *
+ * @param {string} id 12 hex characters @param {Set<string|null>} taken
+ * @returns {{ mac: string, address: string }}
+ */
+export function groupPlace(id, taken) {
+  const mac = ['02', ...(id.slice(0, 10).match(/../g) || [])].join(':');
+  const slots = 256 * 254;
+  const start = parseInt(id.slice(8, 12), 16) % slots;
+  for (let n = 0; n < slots; n++) {
+    const i = (start + n) % slots;
+    const address = `10.200.${Math.floor(i / 254)}.${(i % 254) + 1}`;
+    if (!taken.has(address)) return { mac, address };
+  }
+  throw new Error('that group network has no address left');
+}
+
+/**
  * The cloud-init a machine boots with: one file the join script reads, and
  * the join script, which enrols the machine with the ticket, hands its
  * owner's Claude login to the hub, starts the services, and powers the
@@ -603,10 +699,19 @@ export class XoPools {
  * alone and exists for one job (docs/hypervisors.md, "Inside the VM"); a
  * person who keeps no keys gets the account as the image made it.
  *
- * @param {{ name: string, coordinatorUrl: string, ticket: string, owner: string, claude: string|null, minutes: number, sshKeys?: string[] }} opts
+ * ITS NETWORK, when it is on the uplink or in a group: install/fleetwright-net
+ * and the file it reads, run at every boot by a unit of its own and first at
+ * this one, before the join script starts anything that listens.
+ *
+ * @param {{
+ *   name: string, coordinatorUrl: string, ticket: string, owner: string, claude: string|null, minutes: number, sshKeys?: string[],
+ *   isolate?: { subnet: string, gateway: string }|null, group?: { mac: string, address: string }|null,
+ * }} opts
  */
-export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, claude, minutes, sshKeys: keys = [] }) {
+export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, claude, minutes, sshKeys: keys = [], isolate = null, group = null }) {
   const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, ticket, owner, claude, minutes });
+  const net = isolate || group ? JSON.stringify({ v: 1, ...(isolate ? { isolate } : {}), ...(group ? { group } : {}) }) : null;
+  const block = (/** @type {string} */ text) => text.replace(/\n$/, '').split('\n').map((l) => (l ? `      ${l}` : ''));
   return [
     '#cloud-config',
     `hostname: ${name}`,
@@ -626,7 +731,27 @@ export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, claude
     '    owner: root:root',
     '    content: |',
     `      ${join}`,
+    ...(net
+      ? [
+          '  - path: /etc/fleetwright-net.json',
+          "    permissions: '0644'",
+          '    owner: root:root',
+          '    content: |',
+          `      ${net}`,
+          '  - path: /usr/local/sbin/fleetwright-net',
+          "    permissions: '0755'",
+          '    owner: root:root',
+          '    content: |',
+          ...block(NET_SCRIPT()),
+          '  - path: /etc/systemd/system/fleetwright-net.service',
+          "    permissions: '0644'",
+          '    owner: root:root',
+          '    content: |',
+          ...block(NET_UNIT),
+        ]
+      : []),
     'runcmd:',
+    ...(net ? ['  - [systemctl, daemon-reload]', '  - [systemctl, enable, --now, fleetwright-net.service]'] : []),
     '  - [/opt/fleetwright/current/install/fleetwright-vm-join, /run/fleetwright/join.json]',
     '',
   ].join('\n');

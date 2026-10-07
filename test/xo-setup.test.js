@@ -51,7 +51,7 @@ function certificate() {
  * @param {import('node:test').TestContext} t
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[] }} [opts]
  */
-async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}) } = {}) {
+async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}) } = {}) {
   const { key, cert, pin } = certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -75,7 +75,8 @@ async function standIn(t, { admin = true, drop = [], plugin = { id: 'installer-u
       iso: { id: 'iso', type: 'SR', name_label: 'ISOs', $pool: 'p1', size: 50 * 1024 ** 3, physical_usage: 10 * 1024 ** 3, content_type: 'iso', shared: true },
     },
     get network() {
-      return Object.fromEntries(['net-mgmt', 'net-lab', 'net-dmz'].map((id, i) => [id, { id, type: 'network', name_label: ['Pool-wide network associated with eth0', 'lab', 'dmz'][i], $pool: 'p1', tags: [...(tags.get(id) ?? [])] }]));
+      const named = { 'net-mgmt': 'Pool-wide network associated with eth0', 'net-lab': 'lab', 'net-dmz': 'dmz', ...nets };
+      return Object.fromEntries(Object.entries(named).map(([id, name]) => [id, { id, type: 'network', name_label: name, $pool: 'p1', tags: [...(tags.get(id) ?? [])] }]));
     },
     PIF: {
       pif1: { id: 'pif1', type: 'PIF', $network: 'net-mgmt', vlan: -1 },
@@ -483,7 +484,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', ...(setups.coordinatorUrl ? ['image', 'images'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', 'groups', ...(setups.coordinatorUrl ? ['image', 'images'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -686,6 +687,51 @@ test('a Xen Orchestra without disk.resize builds the image through vdi.set, and 
   }
 });
 
+test('group networks are made by the policy job in the way out’s pool, put in the set, and nothing is built', { skip }, async (t) => {
+  // ASKED FOR: "the 3 VMs need to reach each other". A network with no way
+  // off the pool, made with the admin sign-in the fleet's user does not have.
+  const xo = await standIn(t, { sets: [chosenBefore()], more: ['network.create', 'resourceSet.addObject'] });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const { begun, reply, state } = await choosing(xo, setups, actor);
+  const [epk, iv, ct] = state.inventory.split('.');
+  const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(inventory.groups, [], 'none yet, so the phone starts at none');
+  const job = begun.xosetup.job;
+  const good = { v: 1, srs: ['sr1'], networks: ['net-lab'], egress: 'net-dmz', groups: 2, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  const took = await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor });
+  assert.equal(took.ok, true, took.text);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.deepEqual(
+    xo.calls.filter((c) => c.method === 'network.create').map((c) => [c.params.pool, c.params.name]),
+    [['p1', 'fleetwright-group-1'], ['p1', 'fleetwright-group-2']],
+    'and no uplink, which is the router’s',
+  );
+  assert.ok(xo.calls.some((c) => c.method === 'resourceSet.addObject' && c.params.id === 'rs-0'), 'the fleet may use them');
+  assert.ok(!xo.calls.some((c) => /^(vm|disk)\./.test(c.method)), 'no router and no image were asked for');
+  assert.match(end.text, /Made 2 group networks for machines that work together\./);
+});
+
+test('the uplink and the group networks stay in the set whatever the phone left out', { skip }, async (t) => {
+  const xo = await standIn(t, {
+    sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'net-up', 'net-g1'] }],
+    nets: { 'net-up': 'fleetwright-uplink', 'net-g1': 'fleetwright-group-1', 'net-other': 'fleetwright-group-2' },
+  });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const { begun } = await choosing(xo, setups, actor);
+  const good = { v: 1, srs: ['sr2'], networks: ['net-lab'], egress: null, limits: { cpus: 2, memory: 4 * 1024 ** 3, disk: 50 * 1024 ** 3 } };
+  const took = await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor });
+  assert.equal(took.ok, true, took.text);
+  assert.equal((await finished(setups, begun.xosetup.job, actor)).state, 'done');
+  assert.deepEqual(
+    xo.calls.filter((c) => c.method === 'resourceSet.set').map((c) => c.params.objects),
+    [['sr2', 'net-lab', 'net-up', 'net-g1']],
+    'kept because they were in the set; a group network the set never had is not added by this',
+  );
+});
+
 test('a policy for a pool that was never added changes nothing', { skip }, async (t) => {
   const xo = await standIn(t);
   const { setups } = await machine();
@@ -763,4 +809,15 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   assert.equal(imaged.policy.image, true);
   assert.equal(imaged.policy.edgeSr, 'b', 'where the disks go');
   assert.deepEqual(currentLimits({ limits: { cpus: { total: 4 }, memory: 1024, disk: null } }), { cpus: 4, memory: 1024, disk: null });
+});
+
+test('group networks are 0 to 4, in the way out’s pool, and a phone that says nothing asks for none', () => {
+  const choices = { srs: new Map([['a', 100 * 1024 ** 3]]), networks: new Set(['n1']), capacity: { cpus: 8, memory: 32 * 1024 ** 3 } };
+  const ok = { v: 1, srs: ['a'], networks: ['n1'], egress: 'n1', limits: { cpus: 2, memory: 4 * 1024 ** 3, disk: 50 * 1024 ** 3 } };
+  assert.equal(/** @type {any} */ (checkPolicy(ok, choices)).policy.groups, 0);
+  assert.equal(/** @type {any} */ (checkPolicy({ ...ok, groups: 4 }, choices)).policy.groups, 4);
+  for (const groups of [5, -1, 1.5, '2', true]) {
+    assert.match(/** @type {any} */ (checkPolicy({ ...ok, groups }, choices)).text ?? '', /Between 0 and 4/, String(groups));
+  }
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, groups: 1, egress: null }, choices)).text, /choose the way out/);
 });

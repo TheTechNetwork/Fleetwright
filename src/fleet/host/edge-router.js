@@ -476,6 +476,42 @@ export async function ensureUplink({ admin, pool, networks, setId, inSet }) {
   return /** @type {string} */ (uplink);
 }
 
+/** What a group network is called in Xen Orchestra, numbered from 1. */
+export const GROUP_PREFIX = 'fleetwright-group-';
+/** The most group networks a policy makes on one pool. */
+export const MAX_GROUPS = 4;
+
+/**
+ * Group networks: private networks in the pool with no physical interface,
+ * so nothing reaches them but the machines on them. A machine joins one as
+ * well as its own network to reach the others in its group (docs/
+ * hypervisors.md, "Machines that work together"). Made by the policy job,
+ * which holds the admin sign-in, because the fleet's limited user cannot
+ * make networks; then put in the resource set, so it can use them. Never
+ * removed here: a machine may be on one.
+ *
+ * @param {{ admin: any, pool: string, networks: any[], setId: string, inSet: string[], count: number }} opts
+ * @returns {Promise<string[]>} the names made now
+ */
+export async function ensureGroups({ admin, pool, networks, setId, inSet, count }) {
+  /** @type {string[]} */
+  const made = [];
+  for (let i = 1; i <= Math.min(count, MAX_GROUPS); i++) {
+    const name = `${GROUP_PREFIX}${i}`;
+    let id = networks.find((n) => n?.name_label === name && n?.$pool === pool)?.id;
+    if (!id) {
+      id = await admin.call('network.create', {
+        pool,
+        name,
+        description: 'Machines in a group reach each other here, and nothing else does. Made by Fleetwright.',
+      });
+      made.push(name);
+    }
+    if (!inSet.includes(id)) await admin.call('resourceSet.addObject', { id: setId, object: id });
+  }
+  return made;
+}
+
 /**
  * Where the router's disk goes: the storage the person chose for it, or,
  * when they chose none (a phone that predates the choice), the storage the

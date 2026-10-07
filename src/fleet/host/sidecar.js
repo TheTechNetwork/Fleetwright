@@ -1172,6 +1172,7 @@ export class Sidecar {
       ticket: String(intent.params.ticket || ''),
       minutes: intent.params.minutes == null ? null : Number(intent.params.minutes),
       network: intent.params.network ? String(intent.params.network) : null,
+      group: intent.params.group ? String(intent.params.group) : null,
       coordinatorUrl: origin,
     };
     let r = await this.pools.make(ask);

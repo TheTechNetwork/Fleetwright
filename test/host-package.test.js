@@ -32,6 +32,7 @@ test('the release carries every file the code reaches for at runtime', () => {
     'openapi.json',        // served at /openapi.json by the coordinator
     'src/web/index.html',  // the local web UI
     'install/install.sh',  // so a release can install and migrate itself
+    'install/fleetwright-net', // put on every pool machine's cloud-init drive (xo-pools.js)
     'sandbox/entrypoint.sh',
     'lib/fleetwright.mjs',
     'lib/fleetwright-sidecar.mjs',
