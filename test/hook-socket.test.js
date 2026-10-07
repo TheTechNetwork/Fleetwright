@@ -442,20 +442,24 @@ test('a lifecycle event records against the socket it arrived on, with a bounded
   assert.equal(typeof events[0].at, 'number');
 });
 
-test('an event may carry how full the window is, bounded to a count and a model', async (t) => {
+test('an event may carry how full the window is and what it cost, bounded to numbers a screen can draw', async (t) => {
   // The hook reads the transcript's last assistant turn — the only process
   // that can, in a sandbox — and the number rides on the event. Junk is null
   // rather than a refusal: the event itself is still news.
   const { server, events } = eventHarness(t);
   const sock = await server.open('bigjob');
 
-  await rawPost(sock, JSON.stringify({ event: 'Stop', context: { tokens: 248717, model: 'claude-fable-5-1' } }), { path: SESSION_EVENT_PATH });
-  await rawPost(sock, JSON.stringify({ event: 'Stop', context: { tokens: '248717' } }), { path: SESSION_EVENT_PATH });
+  const spent = { usd: 12.4, complete: true, inputTokens: 5, outputTokens: 48_211, cacheReadTokens: 900, cacheWriteTokens: 90, asOf: 1_790_000_000_000 };
+  await rawPost(sock, JSON.stringify({ event: 'Stop', context: { tokens: 248717, model: 'claude-fable-5-1' }, spent }), { path: SESSION_EVENT_PATH });
+  await rawPost(sock, JSON.stringify({ event: 'Stop', context: { tokens: '248717' }, spent: { usd: '12.40' } }), { path: SESSION_EVENT_PATH });
   await rawPost(sock, JSON.stringify({ event: 'Stop' }), { path: SESSION_EVENT_PATH });
 
   assert.deepEqual(events[0].context, { tokens: 248717, model: 'claude-fable-5-1' });
   assert.equal(events[1].context, null, 'a string is not a count');
   assert.equal(events[2].context, null, 'absent is absent');
+  assert.deepEqual(events[0].spent, spent);
+  assert.equal(events[1].spent, null, 'a string is not a price');
+  assert.equal(events[2].spent, null);
 });
 
 test('an event this host does not know is refused, and records nothing', async (t) => {

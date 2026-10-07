@@ -29,9 +29,10 @@ import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from
 import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
 import { readSessionLogs } from './logs.js';
-import { phaseFor } from './activity.js';
+import { phaseFor, advancePhases } from './activity.js';
 import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
+import { SpentReader } from './spent.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -72,6 +73,18 @@ export class SessionManager {
     // sandboxed session's transcript is in a volume this process cannot read;
     // its hook reads it and the answer rides on `activity` above instead.
     this.contexts = new ContextReader();
+    // How this run of each session has spent its time — working, blocked on a
+    // person, at its own prompt — moved on by every hook that changes the
+    // phase (activity.js advancePhases). Runtime state, like `activity`, and
+    // cleared at the same moments: a clock from a container's previous life
+    // must not add hours to this one. NOT cleared by SessionStart, which
+    // fires again on /clear and /compact inside one life.
+    /** @type {Map<string, import('./activity.js').Phases>} */
+    this.phases = new Map();
+    // What an UNSANDBOXED session has cost, read off the transcript the
+    // SessionStart hook named (src/core/spent.js). A sandboxed session's hook
+    // reads its own and posts the figure, which is kept on the record instead.
+    this.spentReader = new SpentReader();
     // The task profiles this box has. Read from disk on every call rather than
     // cached: editing a profile should take effect on the next session, not on
     // the next restart of the hub, and the whole store is a handful of small
@@ -214,8 +227,50 @@ export class SessionManager {
         // box. Null is CANNOT TELL — not running, no assistant turn yet, no
         // transcript this box can read — and the sidecar carries it as null.
         context: rec.status === 'running' ? (activity?.context ?? this.contexts.for(rec.transcriptPath)) : null,
+        ...this.#telemetry(rec),
       };
     });
+  }
+
+  /**
+   * One session as list() would describe it — the live facts beside the
+   * record — or undefined. For the `/status <name>` reply, which a phone, an
+   * MCP agent and a Telegram chat all read, and which used to answer with the
+   * bare record and so could say nothing about time or cost.
+   * @param {string} name
+   */
+  view(name) {
+    return this.list().find((s) => s.name === name);
+  }
+
+  /**
+   * What this session has cost and how its run has spent its time. Both null
+   * when nothing has said: CANNOT TELL, which a screen draws as nothing.
+   *
+   * Phases only while it runs, like `activity`. The cost on any record that
+   * has one, because what a session cost is still true once it has stopped —
+   * read off the transcript when this box can see it, and otherwise the last
+   * figure a hook carried, which outlives this process on the record.
+   *
+   * @param {import('./registry.js').SessionRecord} rec
+   */
+  #telemetry(rec) {
+    return {
+      phases: rec.status === 'running' ? (this.phases.get(rec.name) ?? null) : null,
+      spent: (rec.transcriptPath ? this.spentReader.for(rec.transcriptPath) : null) ?? rec.spent ?? null,
+    };
+  }
+
+  /**
+   * A new life of the container, or the end of one: whatever the CLI said in
+   * the last belongs to the last, and the pane is the only witness until it
+   * speaks again. The cost is NOT forgotten — it is the conversation's, and a
+   * resumed conversation carries it on.
+   * @param {string} name
+   */
+  #newLife(name) {
+    this.activity.delete(name);
+    this.phases.delete(name);
   }
 
   /** @param {string} name */
@@ -542,7 +597,7 @@ export class SessionManager {
       });
       // A new life of the container: whatever the CLI last said belongs to the
       // old one, and the pane is the only witness until it speaks again.
-      this.activity.delete(name);
+      this.#newLife(name);
       const spawned = newSession({ name, cwd, command });
       if (spawned.status !== 0) {
         const detail = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 300);
@@ -880,7 +935,7 @@ export class SessionManager {
       const detail = (killed.stderr || 'tmux kill-session failed').trim().slice(0, 300);
       return { ok: false, message: `Could not stop "${name}": ${detail}` };
     }
-    this.activity.delete(name);
+    this.#newLife(name);
     const updated = this.registry.upsert(name, {
       status: 'stopped',
       // Someone asked for this. It must NOT come back by itself at the next
@@ -929,7 +984,7 @@ export class SessionManager {
     // put the record back on top of them.
     if (this.cfg.binTtlMs > 0) {
       if (hasSession(name)) killSession(name);
-      this.activity.delete(name);
+      this.#newLife(name);
       if (this.cfg.sandbox) {
         void this.hooks?.close(name);
         // The CONTAINER stops; the VOLUMES stay. That is the whole
@@ -1126,12 +1181,22 @@ export class SessionManager {
    * last event that carried one: a Notification that says nothing about the
    * window must not erase what the Stop before it said.
    *
+   * The cost rides along the same way (src/core/spent.js), and is written to
+   * the record when it changes — which is once per pause, not once per tool
+   * call — so it is still there after the container and this process are
+   * both gone.
+   *
    * @param {{ name: string, event: string, detail?: string|null, at?: number,
-   *   context?: import('./context-usage.js').ContextUsage|null }} e
+   *   context?: import('./context-usage.js').ContextUsage|null,
+   *   spent?: import('./spent.js').Spent|null }} e
    * @returns {{ ok: boolean, message?: string, phase?: string|null }}
    */
-  recordEvent({ name, event, detail = null, at = Date.now(), context = null }) {
+  recordEvent({ name, event, detail = null, at = Date.now(), context = null, spent = null }) {
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
+    if (spent) {
+      const rec = this.registry.get(name);
+      if (rec && JSON.stringify(rec.spent ?? null) !== JSON.stringify(spent)) this.registry.upsert(name, { spent });
+    }
     if (event === 'SessionStart') {
       this.activity.delete(name);
       return { ok: true, phase: null };
@@ -1143,6 +1208,7 @@ export class SessionManager {
       return { ok: true, phase: null };
     }
     this.activity.set(name, { phase, event, detail, at, context: context ?? prev?.context ?? null });
+    this.phases.set(name, advancePhases(this.phases.get(name), phase, at));
     // Working is every tool call; the two that change what a person does
     // are the ones worth a line.
     if (phase !== 'working') log.info(`hook: ${name} ${event}${detail ? ` ${detail}` : ''} → ${phase}`);
@@ -1170,7 +1236,10 @@ export class SessionManager {
     const clean = cleanTitle(title);
     const existing = this.registry.get(name);
     const transcript = cleanTranscriptPath(transcriptPath);
-    if (existing?.transcriptPath && existing.transcriptPath !== transcript) this.contexts.forget(existing.transcriptPath);
+    if (existing?.transcriptPath && existing.transcriptPath !== transcript) {
+      this.contexts.forget(existing.transcriptPath);
+      this.spentReader.forget(existing.transcriptPath);
+    }
     const rec = this.registry.upsert(name, {
       uuid,
       status: hasSession(name) ? 'running' : 'stopped',
@@ -1252,7 +1321,7 @@ export class SessionManager {
           owner: rec.createdBy ?? null,
           remoteControl: onRunner(this.cfg) || this.noRemoteControl.has(rec.name) ? false : null,
         });
-        this.activity.delete(rec.name);
+        this.#newLife(rec.name);
         const spawned = newSession({ name: rec.name, cwd: rec.cwd || this.cfg.workdir, command });
         if (spawned.status !== 0 || !hasSession(rec.name)) {
           const why = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 200);

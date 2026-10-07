@@ -699,3 +699,38 @@ test('the resume dialog still comes off the pane, because it fires before any ho
   await watcher.tick();
   assert.equal(events.filter((e) => e.event === 'session.awaiting-input').length, 1);
 });
+
+// --- since when it has needed a person ----------------------------------------
+
+test('since when it has waited: the hook\'s moment when it said one, the first tick that saw it otherwise', async (t) => {
+  // "Waiting for you" without "for how long" was all a phone could say, and
+  // fleet_await read a key nothing sent. The moment is kept while it waits
+  // and dropped when it stops, so an answered question does not lend its
+  // start to the next one.
+  const { stub, watcher } = await watcherFor(t, {
+    sessions: [sessionRecord('job', { status: 'running' })],
+    panes: { job: WORKING },
+  });
+  await watcher.tick({ quiet: true });
+  assert.equal(watcher.awaitingSince('job'), null, 'working is not waiting');
+
+  // Off the pane alone: the first tick that saw it, carried, not re-stamped.
+  const before = Date.now();
+  stub.panes.job = RESUME_DIALOG;
+  await watcher.tick();
+  const seen = watcher.awaitingSince('job');
+  assert.ok(seen !== null && seen >= before, 'stamped by the tick that saw it');
+  await watcher.tick();
+  assert.equal(watcher.awaitingSince('job'), seen, 'carried while it goes on waiting');
+
+  // Answered: gone.
+  stub.panes.job = WORKING;
+  await watcher.tick();
+  assert.equal(watcher.awaitingSince('job'), null);
+
+  // The hook said when, and it was before this tick could have seen it.
+  stub.sessions[0].activity = { phase: 'awaiting', event: 'PermissionRequest', detail: 'Bash', at: 5000 };
+  stub.sessions[0].phases = { since: 1000, current: 'awaiting', currentSince: 5000, workingMs: 4000, awaitingMs: 0, readyMs: 0 };
+  await watcher.tick();
+  assert.equal(watcher.awaitingSince('job'), 5000);
+});
