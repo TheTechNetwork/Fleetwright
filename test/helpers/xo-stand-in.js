@@ -1,9 +1,12 @@
 // A stand-in Xen Orchestra for the hypervisor tests: HTML on `/signin`, a
 // real WebSocket on `/api/` speaking Xen Orchestra's JSON-RPC, over TLS with
 // a certificate made for the run, or over plain HTTP. Shared by
-// test/xo-setup.test.js, which onboards a pool against it, and
+// test/xo-setup.test.js, which onboards a pool against it,
 // test/xo-deploy.test.js, which installs Xen Orchestra first and then does
-// the same against it with a certificate the machine made.
+// the same against it with a certificate the machine made, and
+// test/relay-end-to-end.test.js, which reaches it only through a phone. It
+// counts its connections (`connections`), so a test can hold every one of
+// them to having gone the way it should.
 //
 // THE STAND-IN IS REAL WHERE IT MATTERS. A TLS server with a certificate made
 // for this run, a real WebSocket upgrade, and frames parsed the way the client
@@ -177,5 +180,5 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => server.close());
   const address = `127.0.0.1:${/** @type {import('node:net').AddressInfo} */ (server.address()).port}`;
-  return { address, pin, calls, users, sets, tags, passwords };
+  return { address, pin, calls, users, sets, tags, passwords, connections: () => conns };
 }

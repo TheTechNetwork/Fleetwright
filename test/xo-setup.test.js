@@ -16,6 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -27,7 +28,7 @@ import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src
 import { standIn, PASSWORD, skip } from './helpers/xo-stand-in.js';
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, holderPin?: any }} */ opts = {}) {
+async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, holderPin?: any, relay?: any }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -741,4 +742,97 @@ test('group networks are 0 to 4, in the way out’s pool, and a phone that says 
     assert.match(/** @type {any} */ (checkPolicy({ ...ok, groups }, choices)).text ?? '', /Between 0 and 4/, String(groups));
   }
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, groups: 1, egress: null }, choices)).text, /choose the way out/);
+});
+
+/**
+ * A relay as a length of wire: each connection "through the phone" is a TCP
+ * socket to the stand-in, which is what the phone makes, and the box is told
+ * when a job has finished with it. The coordinator's half is
+ * xo-relay-coordinator.test.js, and the whole path relay-end-to-end.test.js.
+ *
+ * @param {string} address
+ */
+function wire(address) {
+  /** @type {string[]} */
+  const opened = [];
+  /** @type {string[]} */
+  const done = [];
+  const [host, port] = address.split(':');
+  return {
+    opened,
+    done,
+    open: async (/** @type {string} */ relay) => (opened.push(relay), net.connect(Number(port), host)),
+    gone: (/** @type {string} */ relay) => done.push(relay),
+  };
+}
+
+test('through a phone, the probe is HTTPS or nothing, and plain HTTP is refused before a job begins', { skip }, async (t) => {
+  // NEVER OFFERED IN THE CLEAR: something answering without TLS through a
+  // phone is said as that and is not reachable, so no screen offers to send
+  // a password the phone and the fleet could read.
+  const plainXo = await standIn(t, { plain: true });
+  const through = await probe(plainXo.address, { through: wire(plainXo.address).open, timeoutMs: 4000 });
+  assert.equal(through.reachable, false);
+  assert.match(through.text, /through your phone, but not over HTTPS/);
+  const xo = await standIn(t);
+  const seen = await probe(xo.address, { through: wire(xo.address).open });
+  assert.deepEqual([seen.reachable, seen.tls, seen.xo, seen.cert], [true, true, true, xo.pin]);
+  assert.match(seen.text, /through your phone/);
+
+  const relay = wire(xo.address);
+  const { setups } = await machine({ relay: { open: relay.open, done: relay.gone } });
+  const plain = await setups.begin({ address: xo.address, plain: 'accepted', relay: 'a'.repeat(24), actor: 'eli@example.com' });
+  assert.equal(plain.ok, false);
+  assert.match(plain.text, /carries only HTTPS/);
+  // A box with no way to a phone says so rather than reaching on its own.
+  const { setups: older } = await machine();
+  assert.match((await older.begin({ address: xo.address, pin: xo.pin, relay: 'a'.repeat(24), actor: 'eli@example.com' })).text, /cannot work through a phone/);
+  assert.equal(relay.opened.length, 0, 'nothing went through the phone for either');
+});
+
+test('through a phone, a policy makes the pool its own machine, and gigabyte builds are refused while it waits', { skip }, async (t) => {
+  // THE FIRST MINUTE: the pool's own machine is made over the relay, and from
+  // then on it reaches Xen Orchestra itself. The router and the image are
+  // uploads of their own the relay does not carry, so they are refused and
+  // the job keeps waiting for a choice without them.
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start', 'disk.import', 'vm.attachDisk', 'vif.set'],
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
+  });
+  const relay = wire(xo.address);
+  const R = 'b'.repeat(24);
+  const { setups } = await machine({
+    relay: { open: relay.open, done: relay.gone },
+    coordinatorUrl: 'https://fleet.test',
+    holderPin: async () => ({ ok: true, pin: '123456', hostId: 'holder-0a1b2c' }),
+  });
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', relay: R, actor });
+  assert.equal(begun.ok, true, begun.text);
+  const job = begun.xosetup.job;
+  const reply = await newSealKey();
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' });
+  assert.equal((await setups.run({ job, sealed, actor })).ok, true);
+  for (let i = 0; i < 400 && setups.status({ job, actor }).xosetup?.state === 'running'; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(setups.status({ job, actor }).xosetup?.state, 'choosing');
+
+  const choice = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  // Labs too: they are interfaces on the edge router, which is built again.
+  for (const big of [{ edge: true }, { images: ['debian-13'] }, { labs: { open: 1, closed: 0 } }]) {
+    const refused = await setups.policy({ job, sealed: await choose(begun, xo.address, { ...choice, ...big }), actor });
+    assert.equal(refused.ok, false, JSON.stringify(big));
+    assert.match(refused.text, /gigabytes/);
+    assert.equal(setups.status({ job, actor }).xosetup?.state, 'choosing', 'it goes on waiting');
+  }
+  const took = await setups.policy({ job, sealed: await choose(begun, xo.address, { ...choice, holder: true }), actor });
+  assert.equal(took.ok, true, took.text);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.match(end.text, /holder-0a1b2c is starting on dmz/);
+  assert.ok(!xo.calls.some((c) => c.method === 'disk.import'), 'nothing was uploaded');
+  // EVERY CONNECTION WENT THROUGH THE PHONE, and the relay was given up once.
+  assert.equal(relay.opened.length, xo.connections());
+  assert.deepEqual(relay.done, [R]);
 });

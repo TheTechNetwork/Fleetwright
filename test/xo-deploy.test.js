@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash, generateKeyPairSync, X509Certificate } from 'node:crypto';
 import tls from 'node:tls';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -411,4 +412,21 @@ test('the probe of an address with no Xen Orchestra reports its SSH host key, an
   const none = await sshProbe(POOL_MASTER);
   assert.equal(none.ssh.reachable, false);
   assert.deepEqual(none.ssh.keys, []);
+});
+
+test('through a phone the probe makes one attempt over HTTPS, and takes no look over SSH', async () => {
+  // A pool master whose SSH server answers this machine. Through a phone the
+  // question is what the PHONE's network reaches, and it carries HTTPS only,
+  // so this machine's own ssh-keyscan answering would be a wrong answer.
+  const pool = poolMaster();
+  let attempts = 0;
+  const through = async () => {
+    attempts += 1;
+    return net.connect(1, '127.0.0.1');
+  };
+  const found = /** @type {any} */ (await probe('127.0.0.1:1', { through, timeoutMs: 1000 }));
+  assert.equal(found.reachable, false);
+  assert.equal(found.ssh, undefined);
+  assert.equal(attempts, 1, 'one connection through the phone, and no plain HTTP after it');
+  assert.deepEqual(pool.log(), [], 'ssh-keyscan was not run');
 });

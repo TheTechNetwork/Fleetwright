@@ -49,6 +49,23 @@
 // itself, so the person's phone gets a token back exactly as from a setup.
 // One job, so the phone can close at the first step.
 //
+// THROUGH THE PHONE, for a pool no machine in the fleet can reach. The probe
+// and the job are the same; what carries them is not. Every connection is a
+// stream through the relay the phone holds open (xo-relay.js), and TLS is
+// opened over it here and held to the pin, so the phone and the coordinator
+// carry ciphertext. The probe through a phone makes one attempt, over HTTPS,
+// and takes no look over SSH: the phone carries HTTPS to Xen Orchestra and
+// nothing else, and it is this machine's own network that cannot reach the
+// pool. Three things are refused over a relay, each before it can start:
+// plain HTTP, where the sign-in would be theirs to read; installing Xen
+// Orchestra, which is SSH to the pool master and the installer's downloads,
+// so it needs a machine that reaches the pool; and building the edge router
+// or a machine image, which moves gigabytes over separate HTTP uploads a
+// relay does not carry and somebody's mobile data should not. What fits is
+// the setup, and a policy change, which can make the pool its own machine
+// (xo-holder.js) where the pool has an image: that machine then reaches Xen
+// Orchestra itself, and the phone is not needed again.
+//
 // THIS MACHINE KEEPS NOTHING. It is the one that could reach Xen Orchestra
 // when somebody wanted to add it, and that is all it is: the pool must not
 // stop being manageable because this machine was retired, rebuilt or offline.
@@ -155,14 +172,22 @@ const TOKEN_LIFETIME_MS = 180 * 24 * 60 * 60_000;
  * Orchestra, not the suite's stand-in, which had served its title at `/`.
  *
  * @param {string} address
- * @param {{ timeoutMs?: number }} [opts]
+ * @param {{ timeoutMs?: number, through?: (() => Promise<import('node:stream').Duplex>)|null }} [opts]
  * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, certificate: ReturnType<typeof describeCertificate>, version: string|null, text: string, ssh?: any }>}
  */
 // FOUR SECONDS AN ATTEMPT, and at most two attempts (HTTPS, then plain HTTP
 // on 80, or on the address's own port), so a probe answers inside the
 // coordinator's ten-second fan-out deadline even for an address that drops
 // packets.
-export async function probe(address, { timeoutMs = 4_000 } = {}) {
+//
+// THROUGH A PHONE (`through`, a connection through its relay): one attempt,
+// over HTTPS only, because a phone carries nothing else, and no look over
+// SSH, which would be this machine's own network answering for an address
+// it already could not reach. Something that answered without TLS is said as
+// that and not offered, so a person is never asked to send a password a phone
+// and the fleet could read.
+export async function probe(address, { timeoutMs = 4_000, through = null } = {}) {
+  if (through) return probeThrough(address, { timeoutMs, through });
   // OVER SSH TOO, AT THE SAME TIME, for an address with no Xen Orchestra:
   // what a pool is added from when it has none (xo-deploy.js). Started now
   // so it costs no time of its own, stopped as soon as Xen Orchestra answers,
@@ -223,16 +248,67 @@ async function probeXo(address, { timeoutMs }) {
   return { reachable: false, xo: null, tls: false, cert: null, certificate: null, version: null, text: `Nothing answered at ${address} from here (${secure.error}).` };
 }
 
+/**
+ * The probe through a phone: one TLS handshake and one GET of `/signin`,
+ * over a connection through its relay.
+ *
+ * @param {string} address
+ * @param {{ timeoutMs: number, through: () => Promise<import('node:stream').Duplex> }} opts
+ */
+async function probeThrough(address, { timeoutMs, through }) {
+  const { host, port } = splitAddress(address);
+  const secure = await getRoot({ host, port, secure: true, timeoutMs, through });
+  if (secure.ok) {
+    const xo = looksLikeXo(secure.body);
+    return {
+      reachable: true,
+      xo,
+      tls: true,
+      cert: secure.cert,
+      certificate: secure.certificate,
+      version: null,
+      text: xo
+        ? `Xen Orchestra answered at ${address} through your phone.`
+        : `Something answered at ${address} through your phone, and it does not look like Xen Orchestra.`,
+    };
+  }
+  return {
+    reachable: false,
+    xo: null,
+    tls: false,
+    cert: null,
+    certificate: null,
+    version: null,
+    // REACHED, BUT NO TLS: the phone connected, and what answered did not
+    // finish a TLS handshake, because it speaks something else or nothing.
+    text: secure.reached
+      ? `Something answered at ${address} through your phone, but not over HTTPS${secure.error === 'no answer in time' ? ' in time' : ''}. A phone carries only HTTPS, so that the sign-in stays between this machine and Xen Orchestra.`
+      : `Nothing answered at ${address} through your phone (${secure.error}).`,
+  };
+}
+
 /** @param {string} body */
 function looksLikeXo(body) {
   return /<title>[^<]*Xen Orchestra/i.test(body) || /xo-web|xo-server|xen-orchestra/i.test(body);
 }
 
 /**
- * @param {{ host: string, port: number, secure: boolean, timeoutMs: number }} opts
- * @returns {Promise<{ ok: true, body: string, cert: string|null, certificate: ReturnType<typeof describeCertificate> } | { ok: false, error: string }>}
+ * @param {{ host: string, port: number, secure: boolean, timeoutMs: number, through?: (() => Promise<import('node:stream').Duplex>)|null }} opts
+ * @returns {Promise<{ ok: true, body: string, cert: string|null, certificate: ReturnType<typeof describeCertificate> } | { ok: false, error: string, reached?: boolean }>}
  */
-function getRoot({ host, port, secure, timeoutMs }) {
+async function getRoot({ host, port, secure, timeoutMs, through = null }) {
+  // THROUGH A PHONE, the connection is the phone's to make first: one that
+  // could not be made is "nothing answered", and one that was made and then
+  // failed TLS is "something answered, not over HTTPS".
+  /** @type {import('node:stream').Duplex|null} */
+  let via = null;
+  if (through) {
+    try {
+      via = await through();
+    } catch (e) {
+      return { ok: false, error: /** @type {Error} */ (e).message, reached: false };
+    }
+  }
   return new Promise((resolve) => {
     let body = '';
     let cert = /** @type {string|null} */ (null);
@@ -245,9 +321,17 @@ function getRoot({ host, port, secure, timeoutMs }) {
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      resolve(r);
+      // Through a phone, a failure from here on came after the phone had
+      // connected: something answered, and did not finish what was asked.
+      resolve(via && !r.ok ? { ...r, reached: true } : r);
     };
-    const socket = secure
+    // THROUGH A PHONE the handshake runs over the stream the phone carries,
+    // and the certificate is read the same way: for the person to compare and
+    // accept, not judged here. The line for this machine's own network is
+    // left as it was.
+    const socket = secure && via
+      ? tls.connect({ socket: via, ...(net.isIP(host) ? {} : { servername: host }), rejectUnauthorized: false })
+      : secure
       ? tls.connect({ host, port, ...(net.isIP(host) ? {} : { servername: host }), rejectUnauthorized: false })
       : net.connect({ host, port });
     const timer = setTimeout(() => done({ ok: false, error: 'no answer in time' }), timeoutMs);
@@ -306,9 +390,10 @@ export class XoSetups {
    *   installer?: typeof INSTALLER,
    *   fetch?: typeof globalThis.fetch,
    *   xoRetryMs?: number,
+   *   relay?: { open: (relay: string) => Promise<import('node:stream').Duplex>, done: (relay: string) => void }|null,
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000 }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000, relay = null }) {
     this.policyWaitMs = policyWaitMs;
     // THE INSTALLER AN INSTALL RUNS, pinned (xo-deploy.js), where its files
     // come from, and how long to wait between tries at a Xen Orchestra that
@@ -316,6 +401,10 @@ export class XoSetups {
     this.installer = installer;
     this.fetch = fetch;
     this.xoRetryMs = xoRetryMs;
+    // HOW THIS BOX REACHES AN ADDRESS THROUGH SOMEBODY'S PHONE (xo-relay.js):
+    // a connection through a relay, and the word that it is finished with
+    // one. Without it a job through a phone is refused at `begin`.
+    this.relay = relay;
     // HOW THIS BOX ASKS THE FLEET FOR THE PIN a pool's own machine joins with
     // (xo-holder.js), for one job. Without it this box does not offer to make
     // one (`can`).
@@ -339,9 +428,9 @@ export class XoSetups {
   }
 
   /**
-   * @param {{ address: string, pin?: string|null, trust?: string|null, plain?: string|null, actor: string|null }} args
+   * @param {{ address: string, pin?: string|null, trust?: string|null, plain?: string|null, relay?: string|null, actor: string|null }} args
    */
-  async begin({ address, pin, trust = null, plain = null, actor }) {
+  async begin({ address, pin, trust = null, plain = null, relay = null, actor }) {
     this.#prune();
     // A JOB IS SOMEBODY'S: status, run and cancel are refused to anyone else,
     // and a job begun with no name on it would be everybody's who also had none.
@@ -358,6 +447,11 @@ export class XoSetups {
     if (!overHttp && (!pin || !CERT_PIN_RE.test(pin))) {
       return { ok: false, text: 'Setup needs the certificate you accepted, or your acceptance of plain HTTP. Check the address from the app first.' };
     }
+    // THROUGH A PHONE: only on a box that can, and never in the clear.
+    if (relay !== null) {
+      if (!this.relay) return { ok: false, text: 'This machine cannot work through a phone. Update it, or choose one that reaches Xen Orchestra itself.' };
+      if (overHttp) return { ok: false, text: 'A phone carries only HTTPS: over plain HTTP the sign-in would cross the phone and the fleet readable. Give Xen Orchestra HTTPS first.' };
+    }
     if ([...this.jobs.values()].filter((j) => j.state === 'waiting' || j.state === 'running' || j.state === 'choosing').length >= 3) {
       return { ok: false, text: 'This machine is already running three setups. Wait for one to finish.' };
     }
@@ -373,6 +467,9 @@ export class XoSetups {
       pin: overHttp ? null : pin,
       plain: overHttp,
       trust: trust === 'accepted' ? 'accepted' : null,
+      // The relay every connection of this job goes through, or null for this
+      // machine's own network.
+      relay,
       actor,
       key,
       state: 'waiting',
@@ -429,15 +526,26 @@ export class XoSetups {
    * this machine's for THIS pool master, and a deploy key can never pass for
    * a setup's.
    *
-   * @param {{ address: string, pin?: string|null, actor: string|null }} args
+   * @param {{ address: string, pin?: string|null, relay?: string|null, actor: string|null }} args
    */
-  async beginDeploy({ address, pin, actor }) {
+  async beginDeploy({ address, pin, relay = null, actor }) {
     this.#prune();
     if (!actor) return { ok: false, text: 'Installing Xen Orchestra has to be asked for by a signed-in person.' };
     if (!this.signer) {
       return {
         ok: false,
         text: 'This machine has no enrolment key to sign a job key with, so a phone could not tell the key was this machine’s. Enrol it with a pin first.',
+      };
+    }
+    // NOT THROUGH A PHONE, refused before anything is made, the way building
+    // the edge router is: the install is SSH to the pool master and the
+    // installer's own downloads, and a relay carries HTTPS to Xen Orchestra
+    // and nothing else. Said before the pin, which a probe through a phone
+    // never finds, so the person is told the real reason.
+    if (relay !== null) {
+      return {
+        ok: false,
+        text: 'Installing Xen Orchestra needs a machine that reaches the pool: it connects to the pool master over SSH, which this machine does not do through your phone. Install it from a machine on the pool’s network.',
       };
     }
     if (!pin || !CERT_PIN_RE.test(pin)) return { ok: false, text: 'An install needs the pool master’s SSH host key you compared. Find a machine that can reach it from the app first.' };
@@ -508,6 +616,7 @@ export class XoSetups {
     if (!SEAL_KEY_RE.test(String(inside?.reply || ''))) {
       rec.state = 'failed';
       rec.text = 'The app gave no key to hand the token back to, so nothing was started. Update the app and try again.';
+      this.#ended(rec);
       return { ok: false, text: rec.text, xosetup: status(rec) };
     }
     rec.reply = String(inside.reply);
@@ -547,6 +656,7 @@ export class XoSetups {
     if (!creds) {
       rec.state = 'failed';
       rec.text = 'The sealed sign-in was not an email and password, or a token.';
+      this.#ended(rec);
       return { ok: false, text: rec.text, xosetup: status(rec) };
     }
     rec.state = 'running';
@@ -586,6 +696,18 @@ export class XoSetups {
     }
     const checked = checkPolicy(inside, rec.choices);
     if (!checked.ok) return { ok: false, text: checked.text, xosetup: status(rec) };
+    // GIGABYTES ARE NOT SENT THROUGH A PHONE. The router's and the image's
+    // disks go to Xen Orchestra as HTTP uploads of their own, which a relay
+    // does not carry; refused while the job still waits, so the person can
+    // choose again without them. Labs are among them: they live on the edge
+    // router, which is built again with an interface on each.
+    if (rec.relay && (checked.policy.edge || checked.policy.image || checked.policy.labs)) {
+      return {
+        ok: false,
+        text: 'Building the edge router, its labs or a machine image moves gigabytes, which this machine does not send through your phone. Choose them from a machine that reaches the pool, such as the pool’s own once it has joined.',
+        xosetup: status(rec),
+      };
+    }
     rec.policyKey = null;
     rec.state = 'running';
     rec.text = 'Applying what you chose.';
@@ -609,6 +731,7 @@ export class XoSetups {
       rec.state = 'cancelled';
       rec.text = 'Cancelled before it started.';
       this.#report(rec);
+      this.#ended(rec);
     } else if (rec.state === 'running') {
       // Between steps: a call already sent to Xen Orchestra is not unsent.
       // The edge router's build is the exception, because it is minutes of
@@ -642,10 +765,29 @@ export class XoSetups {
    *
    * @param {any} rec
    */
-  #open(rec) {
+  async #open(rec) {
+    // THROUGH THE PHONE: a new connection through its relay for each, and
+    // the same pinned TLS over it as over this machine's own network.
+    if (rec.relay && this.relay) return this.connect({ address: rec.address, pin: rec.pin, via: await this.relay.open(rec.relay) });
     // An install's Xen Orchestra is not at the address the job began with,
     // which is the pool master's, but where the installer said it is.
     return rec.plain ? this.connectPlain({ address: rec.address }) : this.connect({ address: rec.xoAddress ?? rec.address, pin: rec.pin });
+  }
+
+  /**
+   * A job that is over gives up the relay it ran through, once: the
+   * coordinator closes it at both ends, so the phone stops carrying it.
+   *
+   * @param {any} rec
+   */
+  #ended(rec) {
+    if (!rec.relay || rec.relayGiven) return;
+    rec.relayGiven = true;
+    try {
+      this.relay?.done(rec.relay);
+    } catch {
+      /* the coordinator closes it on its own clock too */
+    }
   }
 
   /** @param {string} job @param {string|null} actor */
@@ -661,6 +803,7 @@ export class XoSetups {
       const age = now - rec.at;
       const live = rec.state === 'running' || rec.state === 'choosing';
       if ((rec.state === 'waiting' && age > WAITING_TTL_MS) || (!live && age > FINISHED_TTL_MS)) {
+        this.#ended(rec);
         this.jobs.delete(job);
       }
     }
@@ -786,6 +929,7 @@ export class XoSetups {
         /* closing */
       }
       if (ctx.dir) rmSync(ctx.dir, { recursive: true, force: true });
+      this.#ended(rec);
       try {
         ctx.admin?.close();
       } catch {
