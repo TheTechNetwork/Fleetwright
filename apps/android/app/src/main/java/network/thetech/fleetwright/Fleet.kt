@@ -87,10 +87,137 @@ class Fleet(
          * older host. Drawn as nothing, never as empty.
          */
         val context: ContextUsage? = null,
+        /**
+         * Since when it has been blocked on a person, epoch millis on the host's
+         * clock, or null when it is not.
+         *
+         * THE "SINCE WHEN" THE STATE SENTENCE NEVER HAD. "Waiting for you" said
+         * the same thing about a dialog that went up a moment ago and one that
+         * has sat there since last night, and those are different errands. A
+         * floor rather than a stopwatch: where only the pane showed it, the
+         * host stamps the first look that saw it.
+         *
+         * Set even when the host could not read the question, so a session
+         * waiting on something with no [prompt] still reads as waiting.
+         */
+        val awaitingSince: Long? = null,
+        /**
+         * How this run has spent its time — working, waiting on a person, at
+         * its own prompt — from the session's own hooks. Closed totals and when
+         * the open stretch began; the phone adds the open part, for the same
+         * reason [startedAt] is a timestamp. Null is CANNOT TELL: an image older
+         * than the hooks, a run that has said nothing yet.
+         */
+        val phases: Phases? = null,
+        /**
+         * What the conversation has cost, as Claude Code itself counted it. The
+         * host reads the figure Claude Code writes into its transcript and never
+         * prices anything; neither does this app. Null is CANNOT TELL and is
+         * drawn as nothing, never as $0.00.
+         */
+        val spent: Spent? = null,
     ) {
         // Not `Context`: android.content.Context is imported in this file, and a
         // nested class of the same name is a reading trap for whoever is next.
         data class ContextUsage(val tokens: Long?, val model: String?)
+
+        /** Every field nullable, though the host always sends all six. */
+        data class Phases(
+            val since: Long?,
+            val current: String?,
+            val currentSince: Long?,
+            val workingMs: Long?,
+            val awaitingMs: Long?,
+            val readyMs: Long?,
+        )
+
+        /**
+         * The parts of Claude Code's figure this app draws. [complete] is false
+         * when it said some model had no known price, which makes the dollars a
+         * floor.
+         */
+        data class Spent(val usd: Double?, val complete: Boolean, val outputTokens: Long?, val asOf: Long?)
+
+        /**
+         * Blocked on a person: a question the host could read, or the host
+         * saying it is waiting on one it could not.
+         */
+        val isWaitingOnYou: Boolean get() = prompt != null || awaitingSince != null || status == "awaiting-input"
+
+        /**
+         * "12m": how long it has waited on a person, or null under a minute and
+         * when it is not waiting. Coarse, like [age], because the question is "a
+         * moment or an hour", and the figure is a floor.
+         */
+        fun waitedFor(now: Long = System.currentTimeMillis()): String? {
+            val since = awaitingSince?.takeIf { it > 0 } ?: return null
+            val seconds = (now - since) / 1000
+            if (seconds < 60) return null
+            return coarse(seconds)
+        }
+
+        /**
+         * "Worked 42m · waited on you 3m · at its prompt 1h 10m", or null.
+         *
+         * WORKING VERSUS WAITING, which is the question the stillness clock
+         * cannot answer: forty minutes of work and two hours on a dialog look
+         * the same on a pane. A stretch under a minute is left out rather than
+         * drawn as noise, except the working one, which is the line's subject.
+         * And when the host began counting well after the session started (a
+         * restart of the box's hub), it says so instead of letting the missing
+         * hours read as none. Same words as iOS, held equal by
+         * test/telemetry-in-apps.test.js.
+         */
+        fun timeLine(now: Long = System.currentTimeMillis()): String? {
+            if (!isRunning) return null
+            val p = phases ?: return null
+            val since = p.since ?: return null
+            val current = p.current ?: return null
+            val currentSince = p.currentSince ?: return null
+            var working = p.workingMs ?: return null
+            var waiting = p.awaitingMs ?: return null
+            var ready = p.readyMs ?: return null
+            val open = if (current == "ended") 0L else maxOf(0L, now - currentSince)
+            when (current) {
+                "working" -> working += open
+                "awaiting" -> waiting += open
+                "ready" -> ready += open
+            }
+            val parts = mutableListOf("Worked ${span(working)}")
+            if (waiting >= 60_000) parts += "waited on you ${span(waiting)}"
+            if (ready >= 60_000) parts += "at its prompt ${span(ready)}"
+            val started = startedAt
+            if (started != null && since - started >= 300_000) parts += "counted for the last ${span(now - since)}"
+            return parts.joinToString(" · ")
+        }
+
+        /**
+         * "$12.40 at API prices · 48k tokens out", or null.
+         *
+         * "AT API PRICES" because that is what the figure is: Claude Code prices
+         * its own tokens at the API's list price, and on a Pro or Max sign-in
+         * that is not what anybody is billed. A bare dollar sign would read as a
+         * bill. "At least" when Claude Code said it could not price everything,
+         * and "as of" when a running session's figure is from its last pause —
+         * it is written when a turn ends, not during one. Same words as iOS.
+         */
+        fun spentLine(now: Long = System.currentTimeMillis()): String? {
+            val s = spent ?: return null
+            val parts = mutableListOf<String>()
+            s.usd?.takeIf { it >= 0 }?.let { usd ->
+                parts += "${if (s.complete) "" else "at least "}\$${String.format(java.util.Locale.ROOT, "%.2f", usd)} at API prices"
+            }
+            s.outputTokens?.takeIf { it >= 0 }?.let { out ->
+                parts += "${compactTokens(out)}${if (out < 1000) "" else " tokens"} out"
+            }
+            if (parts.isEmpty()) return null
+            val asOf = s.asOf
+            if (isRunning && asOf != null && asOf > 0) {
+                val age = (now - asOf) / 1000
+                if (age >= 300) parts += "as of ${coarse(age)} ago"
+            }
+            return parts.joinToString(" · ")
+        }
 
         /** What to show. The name is the identity; the title is for people. */
         val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
@@ -114,6 +241,25 @@ class Fleet(
                 tokens < 1000 -> "$tokens tokens"
                 tokens < 1_000_000 -> "${tokens / 1000}k"
                 else -> String.format(java.util.Locale.ROOT, "%.1fM", tokens / 1_000_000.0)
+            }
+
+            /**
+             * 42 minutes → "42m", 70 → "1h 10m", 120 → "2h". Finer than [age],
+             * because "worked 1h" for seventy minutes hides most of an hour.
+             */
+            fun span(ms: Long): String {
+                val minutes = ms / 60_000
+                if (minutes < 1) return "under 1m"
+                if (minutes < 60) return "${minutes}m"
+                val rest = minutes % 60
+                return if (rest == 0L) "${minutes / 60}h" else "${minutes / 60}h ${rest}m"
+            }
+
+            /** The same coarse units as [age]: "9m", "3h", "2d". */
+            fun coarse(seconds: Long): String = when {
+                seconds < 3600 -> "${seconds / 60}m"
+                seconds < 86_400 -> "${seconds / 3600}h"
+                else -> "${seconds / 86_400}d"
             }
         }
 
@@ -174,7 +320,9 @@ class Fleet(
          * itself uses for a session that concluded.
          */
         val stateSentence: String get() {
-            if (prompt != null || status == "awaiting-input") return "Waiting for you"
+            // HOW LONG, once it is long enough to say: the difference between a
+            // question to answer now and a person who is not coming.
+            if (isWaitingOnYou) return waitedFor()?.let { "Waiting for you · $it" } ?: "Waiting for you"
             if (isRunning) {
                 if (atRest) return idleFor?.let { "At its prompt · idle $it" } ?: "At its prompt"
                 idleFor?.let { return "Quiet for $it" }
@@ -2392,6 +2540,10 @@ class Fleet(
         )
     }
 
+    /** A number the host sent, or null when it sent none — never optLong's 0. */
+    private fun longOrNull(o: JSONObject, key: String): Long? =
+        if (o.has(key) && !o.isNull(key)) o.optLong(key) else null
+
     private fun parseSessions(array: JSONArray?): List<Session> {
         if (array == null) return emptyList()
         return (0 until array.length()).mapNotNull { i ->
@@ -2425,6 +2577,28 @@ class Fleet(
                     Session.ContextUsage(
                         tokens = c.takeIf { it.has("tokens") && !it.isNull("tokens") }?.optLong("tokens"),
                         model = c.optString("model").takeIf { it.isNotBlank() && it != "null" },
+                    )
+                },
+                // Each number null when absent, never optLong's 0: a session
+                // that "worked 0m" or "cost $0.00" is a claim the host did not
+                // make.
+                awaitingSince = longOrNull(o, "awaitingSince")?.takeIf { it > 0 },
+                phases = o.optJSONObject("phases")?.let { p ->
+                    Session.Phases(
+                        since = longOrNull(p, "since"),
+                        current = p.optString("current").takeIf { it.isNotBlank() && it != "null" },
+                        currentSince = longOrNull(p, "currentSince"),
+                        workingMs = longOrNull(p, "workingMs"),
+                        awaitingMs = longOrNull(p, "awaitingMs"),
+                        readyMs = longOrNull(p, "readyMs"),
+                    )
+                },
+                spent = o.optJSONObject("spent")?.let { s ->
+                    Session.Spent(
+                        usd = s.takeIf { it.has("usd") && !it.isNull("usd") }?.optDouble("usd")?.takeIf { !it.isNaN() },
+                        complete = s.optBoolean("complete", false),
+                        outputTokens = longOrNull(s, "outputTokens"),
+                        asOf = longOrNull(s, "asOf"),
                     )
                 },
             )

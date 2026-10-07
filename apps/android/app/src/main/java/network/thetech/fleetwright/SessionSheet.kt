@@ -153,7 +153,7 @@ fun SessionSheet(
                 Text(
                     session.stateSentence,
                     style = Design.Style.title,
-                    color = if (session.prompt != null) Design.Palette.attention.now else Design.Palette.ink.now,
+                    color = if (session.isWaitingOnYou) Design.Palette.attention.now else Design.Palette.ink.now,
                 )
                 if (session.label != session.name) {
                     Text(session.name, style = Design.Style.micro, fontFamily = FontFamily.Monospace, color = Design.Palette.inkDim.now)
@@ -169,6 +169,13 @@ fun SessionSheet(
                     style = Design.Style.micro,
                     color = Design.Palette.inkDim.now,
                 )
+                // WORKING VERSUS WAITING, AND WHAT IT COST, under the facts
+                // above and in the same quiet type: they answer "how is it
+                // going" for somebody who opened this sheet, and the list's rows
+                // stay one shape. Each line is absent when the host could not
+                // say, never drawn as zero.
+                session.timeLine()?.let { Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now) }
+                session.spentLine()?.let { Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now) }
 
                 val prompt = session.prompt
                 // Read once into a local: `session` is delegated state, so the
