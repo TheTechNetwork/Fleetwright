@@ -627,12 +627,14 @@ struct AddHypervisorView: View {
 
     // MARK: Progress
 
-    /// "Step 5 of 5", and while the edge router is building, which stage of
-    /// it and how far: "Step 5 of 5 · building the edge router, part 2 of 3 · 42%".
+    /// "Step 5 of 5", and while something is building in parts, what and
+    /// how far: "Step 5 of 5 · building the machine image, part 2 of 4 · 42%".
+    /// The words are XOSetupWords.detail, which the Lock Screen uses too.
     private func stepLine(_ state: XOSetupAttributes.ContentState) -> String {
         let step = "Step \(min(state.step + 1, max(state.of, 1))) of \(max(state.of, 1))"
         guard let part = progress?.part, state.state == "running" else { return step }
-        return "\(step) · building the edge router, part \(part.stage) of \(part.stages) · \(part.fill / 10)%"
+        let detail = XOSetupWords.detail(build: part.build, stage: part.stage, stages: part.stages)
+        return [step, detail, "\(part.fill / 10)%"].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func progressSection(_ job: String) -> some View {

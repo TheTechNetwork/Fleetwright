@@ -1126,6 +1126,8 @@ struct Fleet {
             let stage: Int
             let stages: Int
             let fill: Int
+            /// `edge`, `image` or `holder`; absent from a host before it said.
+            var build: String?
         }
     }
 
