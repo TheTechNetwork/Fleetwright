@@ -37,6 +37,10 @@ enum XOPolicy {
     /// `cpuRange`.
     static let minMemoryGiB = 1
     static let minDiskGiB = 10
+    /// What a group network is called, and the most a policy makes on one
+    /// pool (GROUP_PREFIX and MAX_GROUPS in edge-router.js).
+    static let groupPrefix = "fleetwright-group-"
+    static let maxGroups = 4
 
     /// What the machine read, in `inventoryOf`'s shape. Sizes are bytes.
     struct Inventory: Decodable, Equatable {
@@ -57,6 +61,9 @@ enum XOPolicy {
         /// machine's catalogue (vm-image.js, IMAGES); nil from one older than
         /// the choice, which builds Debian alone.
         var imageKinds: [ImageKind]? = nil
+        /// Each pool's group networks, from a machine that makes them; nil
+        /// from one older than that, which is "cannot tell", never "none".
+        var groups: [GroupNetwork]? = nil
         /// Each pool's own machine, from a machine that can make one
         /// (xo-holder.js); nil from one older than that, which is "cannot
         /// tell", never "none".
@@ -124,6 +131,23 @@ enum XOPolicy {
             let pool: String?
             let name: String
             let running: Bool
+        }
+
+        /// A network for machines that work together: no way off the pool.
+        struct GroupNetwork: Decodable, Equatable, Identifiable {
+            let id: String
+            let name: String
+            let pool: String?
+        }
+
+        /// The networks a person chooses among: the pool's, less its group
+        /// networks, which are this policy's to make and not a choice.
+        var choosable: [Network] { networks.filter { !$0.name.hasPrefix(XOPolicy.groupPrefix) } }
+
+        /// How many group networks the pool this network is in has.
+        func groupCount(on network: String?) -> Int {
+            guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return 0 }
+            return (groups ?? []).filter { $0.pool == pool }.count
         }
 
         /// One operating system an image can be made of.
@@ -259,6 +283,18 @@ enum XOPolicy {
         /// The machine takes `images`. An older one is sent `image` alone,
         /// and offered Debian alone.
         var imagesChoice = false
+        /// How many group networks the way out's pool is to have. Asked for:
+        /// "the 3 VMs need to reach each other".
+        var groups = 0
+        /// The machine makes them (`groups` in begin's `can`). An older one
+        /// cannot, so they are neither offered nor sent.
+        var groupsChoice = false
+
+        /// The fewest group networks there can be: the ones there now, which
+        /// are never removed, because a machine may be on one.
+        func groupRange(in inv: Inventory) -> ClosedRange<Int> {
+            min(inv.groupCount(on: egress), XOPolicy.maxGroups)...XOPolicy.maxGroups
+        }
 
         /// Make the pool a machine of its own on the way out, or keep the one
         /// there running (xo-holder.js). Needs the pool's machine image, there
@@ -319,6 +355,8 @@ enum XOPolicy {
             c.edge = inv.edge(on: c.egress) != nil
             // The same for the pool's own machine: Apply keeps it, or starts it.
             c.holder = inv.holder(on: c.egress) != nil
+            // As many as there are: Apply asks for none it does not show.
+            c.groups = inv.groupCount(on: c.egress)
             c.cpus = XOPolicy.clamp(inv.current.limits.cpus ?? inv.capacity.cpus / 2, inv.cpuRange)
             let memory = inv.current.limits.memory.map(XOPolicy.nearestGiB) ?? Int(clamping: inv.capacity.memory / 2 / XOPolicy.gib)
             c.memoryGiB = XOPolicy.clamp(memory, inv.memoryRange)
@@ -359,6 +397,9 @@ enum XOPolicy {
             }
             if !anyWayOut, let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
             if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
+            if groupsChoice, groups > 0, egress == nil {
+                return "Group networks are made in the way out’s pool: choose the way out. Nothing was changed."
+            }
             if imageChoice, wantsImage, egress == nil {
                 return "The machine image is built behind the edge router: choose the way out it leaves through."
             }
@@ -411,6 +452,8 @@ enum XOPolicy {
             }
             // Only to a machine that makes one, and only when asked.
             if holderChoice, holder { out["holder"] = true }
+            // Only to a machine that makes them, and only with a way out.
+            if groupsChoice, egress != nil { out["groups"] = groups }
             // Only to a machine that reads it, and only with something to build.
             if edgeDiskChoice, edge || (imageChoice && wantsImage) { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
             return out

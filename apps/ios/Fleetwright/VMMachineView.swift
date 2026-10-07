@@ -92,6 +92,10 @@ struct VMMachineView: View {
             fact("Made from", m.image ?? "Not reported")
             fact("On", m.address)
             fact("Network", m.network ?? "Not reported")
+            // IN A GROUP: where the others reach it, by address and by name.
+            if let group = m.group {
+                fact("Group", "\(group), at \(m.groupIp ?? "an address not reported") or \(m.name).local")
+            }
             fact("Size", sizeWords(m))
             fact("Ends", endWords(m))
         } header: {

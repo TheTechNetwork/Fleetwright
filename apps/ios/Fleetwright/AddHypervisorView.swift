@@ -166,6 +166,9 @@ struct AddHypervisorView: View {
         /// It builds any of its catalogue's images, chosen together
         /// (`can` holds "images"); an older one Debian alone.
         var canImages = false
+        /// It makes group networks for machines that work together
+        /// (`can` holds "groups"); an older one cannot.
+        var canGroups = false
         /// It makes the pool a machine of its own (`can` holds "holder");
         /// an older one cannot.
         var canHolder = false
@@ -739,6 +742,7 @@ struct AddHypervisorView: View {
         storageSection(inv)
         networksSection(inv)
         wayOutSection(inv)
+        if choice.groupsChoice, choice.egress != nil { groupsSection(inv) }
         limitsSection(inv)
         applySection(inv, job: job)
     }
@@ -770,12 +774,12 @@ struct AddHypervisorView: View {
 
     private func networksSection(_ inv: XOPolicy.Inventory) -> some View {
         Section {
-            if inv.networks.isEmpty {
+            if inv.choosable.isEmpty {
                 Text("This pool listed no networks to choose from.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
             } else {
-                ForEach(inv.networks) { network in
+                ForEach(inv.choosable) { network in
                     Toggle(isOn: networkBinding(network.id)) {
                         policyRow(XOPolicy.title(network.name, id: network.id), networkLine(network, inv))
                     }
@@ -807,7 +811,7 @@ struct AddHypervisorView: View {
         return Section {
             Picker(selection: $choice.egress) {
                 Text("None yet").tag(String?.none)
-                ForEach(inv.networks.filter { anyWayOut || choice.networks.contains($0.id) }) { network in
+                ForEach(inv.choosable.filter { anyWayOut || choice.networks.contains($0.id) }) { network in
                     Text(XOPolicy.title(network.name, id: network.id)).tag(String?.some(network.id))
                 }
             } label: {
@@ -821,6 +825,8 @@ struct AddHypervisorView: View {
             // No way out, no router and no image: the switches go off with it.
             .onChange(of: choice.egress) { _, way in
                 if way == nil { choice.edge = false; choice.image = false; choice.images = []; choice.holder = false }
+                // Another pool has its own group networks to start from.
+                choice.groups = XOPolicy.clamp(inv.groupCount(on: way), choice.groupRange(in: inv))
             }
             if canEdge, choice.egress != nil {
                 Toggle(isOn: $choice.edge) {
@@ -999,6 +1005,34 @@ struct AddHypervisorView: View {
                 ? "Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router."
                 : "Only a network chosen above can be the way out.")
         return canEdge ? what : what + " \(hostId) is too old to build the router; update it to have it built from here."
+    }
+
+    /// GROUP NETWORKS, in the way out's pool: how many to have, from the
+    /// ones there (never fewer) to four. Asked for: "the 3 VMs need to reach
+    /// each other". What a machine is fenced from by default is said here,
+    /// because this is the one place it can be let through.
+    private func groupsSection(_ inv: XOPolicy.Inventory) -> some View {
+        let there = inv.groupCount(on: choice.egress)
+        return Section {
+            Stepper(value: $choice.groups, in: choice.groupRange(in: inv)) {
+                policyRow("Group networks", groupsLine(there))
+            }
+            .frame(minHeight: 44)
+            .disabled(busy)
+        } header: {
+            sectionHead("Machines that work together")
+        } footer: {
+            Text("A machine behind the edge router is fenced from every other: only the router may open a connection to it. "
+                 + "A group network has no way off the pool, and machines started in the same group reach each other on it. "
+                 + "New session › Where puts a machine in one.")
+        }
+    }
+
+    /// The same words as Android (PolicyForm.kt).
+    private func groupsLine(_ there: Int) -> String {
+        let more = choice.groups - there
+        if more <= 0 { return there == 0 ? "None" : "\(there), there now" }
+        return "\(choice.groups): " + (there == 0 ? "" : "\(there) there now, ") + "\(more) made when you apply"
     }
 
     private func limitsSection(_ inv: XOPolicy.Inventory) -> some View {
@@ -1501,6 +1535,7 @@ struct AddHypervisorView: View {
             policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"),
                                   anyWayOut: begun.can.contains("egress-any"), edgeDisk: begun.can.contains("edge-disk"),
                                   canImage: begun.can.contains("image"), canImages: begun.can.contains("images"),
+                                  canGroups: begun.can.contains("groups"),
                                   canHolder: begun.can.contains("holder"))
             hostId = begun.hostId
             progress = answer.xosetup
@@ -1528,6 +1563,7 @@ struct AddHypervisorView: View {
                     choice.edgeDiskChoice = policyJob.edgeDisk
                     choice.imageChoice = policyJob.canImage
                     choice.imagesChoice = policyJob.canImages && opened.imageKinds != nil
+                    choice.groupsChoice = policyJob.canGroups && opened.groups != nil
                     choice.holderChoice = policyJob.canHolder && opened.holders != nil
                 }
             } else {

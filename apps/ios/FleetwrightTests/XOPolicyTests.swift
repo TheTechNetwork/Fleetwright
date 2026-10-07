@@ -23,9 +23,11 @@ final class XOPolicyTests: XCTestCase {
                                address: String = "xo.lan",
                                edges: String? = nil,
                                images: String? = nil,
-                               imageKinds: String? = nil) -> Data {
+                               imageKinds: String? = nil,
+                               groups: String? = nil,
+                               extraNetworks: String = "") -> Data {
         let tail = (edges.map { ",\"edges\":" + $0 } ?? "") + (images.map { ",\"images\":" + $0 } ?? "")
-            + (imageKinds.map { ",\"imageKinds\":" + $0 } ?? "")
+            + (imageKinds.map { ",\"imageKinds\":" + $0 } ?? "") + (groups.map { ",\"groups\":" + $0 } ?? "")
         return Data("""
         {"v":1,"address":"\(address)",
          "pools":[{"id":"pool-1","name":"rack"}],
@@ -35,7 +37,7 @@ final class XOPolicyTests: XCTestCase {
          ],
          "networks":[
            {"id":"net-wan","name":"WAN","pool":"pool-1","vlan":20,"egress":true},
-           {"id":"net-lab","name":"lab","pool":"pool-1","vlan":null,"egress":false}
+           {"id":"net-lab","name":"lab","pool":"pool-1","vlan":null,"egress":false}\(extraNetworks)
          ],
          "capacity":{"cpus":16,"memory":\(64 * gib)},
          "current":{"srs":\(srs),"networks":\(networks),"limits":\(limits)}\(tail)}
@@ -363,5 +365,39 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(XOSetupWords.bar(building).0 / XOSetupWords.bar(building).1, 0.42, accuracy: 0.001)
         XCTAssertEqual(XOSetupWords.ordinal(building), "42%")
         XCTAssertEqual(XOSetupWords.bar(applying).0, 4, "the steps done, without it")
+    }
+
+    // MARK: Group networks
+
+    func testAnOlderMachineSaysNothingAboutGroupNetworksAndNothingIsSent() throws {
+        let inv = try inventory()
+        XCTAssertNil(inv.groups, "an inventory without groups is cannot tell, not none")
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.groups = 2
+        XCTAssertNil(c.payload(in: inv)["groups"], "not to a machine that does not make them")
+    }
+
+    func testGroupNetworksStartAtTheOnesThereAndAreNeverFewer() throws {
+        let group = #",{"id":"net-g1","name":"fleetwright-group-1","pool":"pool-1","vlan":null,"egress":false}"#
+        let inv = try inventory(inventoryJSON(groups: #"[{"id":"net-g1","name":"fleetwright-group-1","pool":"pool-1"}]"#,
+                                              extraNetworks: group))
+        XCTAssertEqual(inv.choosable.map(\.id), ["net-wan", "net-lab"], "a group network is this policy's, not a choice")
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.groupsChoice = true
+        XCTAssertEqual(c.groups, 1, "as many as there are")
+        XCTAssertEqual(c.groupRange(in: inv), 1...XOPolicy.maxGroups, "one there is never asked away")
+        c.groups = 3
+        XCTAssertNil(c.problem(in: inv))
+        XCTAssertEqual(c.payload(in: inv)["groups"] as? Int, 3)
+    }
+
+    func testGroupNetworksNeedAWayOutToBeMadeIn() throws {
+        let inv = try inventory(inventoryJSON(groups: "[]"))
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.groupsChoice = true
+        c.groups = 2
+        c.egress = nil
+        XCTAssertEqual(c.problem(in: inv), "Group networks are made in the way out’s pool: choose the way out. Nothing was changed.")
+        XCTAssertNil(c.payload(in: inv)["groups"])
     }
 }
