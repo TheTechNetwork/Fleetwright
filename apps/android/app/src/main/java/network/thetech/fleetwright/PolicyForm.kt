@@ -108,7 +108,7 @@ internal fun PolicyForm(
             // Another pool has its own group networks to start from, and its router filters its own way.
             onClick = {
                 val edge = XoPolicy.edgeOn(inv, n.id)
-                onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id), edgeBlock = edge?.blocks ?: false, labsOpen = edge?.labs?.open ?: 0, labsClosed = edge?.labs?.closed ?: 0))
+                onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id), edgeBlock = edge?.blocks ?: false, labsOpen = edge?.labs?.open ?: 0, labsClosed = edge?.labs?.closed ?: 0, labsEach = edge?.labsEach ?: 0))
             },
         )
     }
@@ -312,7 +312,8 @@ internal fun PolicyForm(
         SectionHead("Labs")
         Hint(
             "A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. " +
-                "It costs no extra machine, only an interface on the router. Up to four in all.",
+                "It costs no extra machine, only an interface on the router. Up to four in all." +
+                if (choice.labsEachChoice) " Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free." else "",
         )
         Stepper(
             label = "Open labs",
@@ -324,7 +325,8 @@ internal fun PolicyForm(
             less = "Fewer open labs",
             more = "More open labs",
             enabled = enabled,
-            onValue = { onChange(choice.copy(labsOpen = it.toInt())) },
+            // Fewer labs, a limit no higher: one past the labs there are is a number nobody could reach.
+            onValue = { onChange(choice.copy(labsOpen = it.toInt(), labsEach = minOf(choice.labsEach, it.toInt() + choice.labsClosed))) },
         )
         Stepper(
             label = "Closed labs",
@@ -336,8 +338,25 @@ internal fun PolicyForm(
             less = "Fewer closed labs",
             more = "More closed labs",
             enabled = enabled,
-            onValue = { onChange(choice.copy(labsClosed = it.toInt())) },
+            onValue = { onChange(choice.copy(labsClosed = it.toInt(), labsEach = minOf(choice.labsEach, choice.labsOpen + it.toInt()))) },
         )
+        // LABS PER PERSON, offered only by a machine that keeps it and only
+        // with labs to limit. Its lowest step is No limit.
+        val allLabs = choice.labsOpen + choice.labsClosed
+        if (choice.labsEachChoice && allLabs > 0) {
+            Stepper(
+                label = "Labs per person",
+                value = choice.labsEach.toLong(),
+                min = 0,
+                max = allLabs.toLong(),
+                shown = XoPolicy.labsEachLine(choice.labsEach),
+                bound = "No limit, or 1 to $allLabs",
+                less = "Fewer labs per person",
+                more = "More labs per person",
+                enabled = enabled,
+                onValue = { onChange(choice.copy(labsEach = it.toInt())) },
+            )
+        }
         if (XoPolicy.labsChanged(inv, choice)) {
             Text(
                 "Apply rebuilds the edge router to change the labs: machines behind it have no way out until the new one is up.",
