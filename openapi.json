@@ -131,6 +131,135 @@
               "null"
             ],
             "description": "The conversation. Present means resumable."
+          },
+          "startedAt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "When this run of it started, epoch ms on the host's clock. A timestamp rather than a duration, because a duration is stale the moment it is serialised and the client doing the arithmetic is the only place it stays right."
+          },
+          "prompt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Prompt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it is asking, when the host recognised the question on its pane. Null when it is asking nothing, and also when it is waiting on something the host cannot read: `awaitingSince` says whether a person is needed, this says what for."
+          },
+          "awaitingSince": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Since when it has been blocked on a person, epoch ms on the host's clock, or null when it is not. The earlier of the session's own hook saying a dialog went up and the host's watcher first seeing one on the pane, so it is a lower bound on how long it has waited: the watcher looks every twenty seconds, and one that restarted begins counting again."
+          },
+          "phases": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "How this run of the session has spent its time, from its own lifecycle hooks. Null is CANNOT TELL (not running, a session image older than the hooks, nothing reported yet in this run) and never zero. The totals are CLOSED time, up to `currentSince`; the client adds the open stretch from its own clock.",
+            "required": [
+              "since",
+              "current",
+              "currentSince",
+              "workingMs",
+              "awaitingMs",
+              "readyMs"
+            ],
+            "properties": {
+              "since": {
+                "type": "number",
+                "description": "When the host started counting: the first hook of this run. Nothing before it is in any total."
+              },
+              "current": {
+                "type": "string",
+                "enum": [
+                  "working",
+                  "awaiting",
+                  "ready",
+                  "ended"
+                ]
+              },
+              "currentSince": {
+                "type": "number",
+                "description": "When it entered `current`."
+              },
+              "workingMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "awaitingMs": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Blocked on a person: a dialog that needs an answer."
+              },
+              "readyMs": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "At its own prompt, waiting for the next instruction."
+              }
+            }
+          },
+          "spent": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "What the conversation has cost, as Claude Code counted it in the `cost-state` line it writes into its own transcript. Never estimated by the fleet: there is no price table here. Null is CANNOT TELL (no such line yet, a CLI that does not write one, a transcript the host cannot read).",
+            "required": [
+              "usd",
+              "complete",
+              "asOf"
+            ],
+            "properties": {
+              "usd": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "Claude Code's own figure, at API prices. On a Pro or Max sign-in that is not what anybody is billed."
+              },
+              "complete": {
+                "type": "boolean",
+                "description": "False unless Claude Code said every model it used had a known price; when false, `usd` is a floor."
+              },
+              "inputTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "outputTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cacheReadTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "cacheWriteTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "asOf": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "When Claude Code wrote the figure, epoch ms. It writes one when a turn ends with nothing queued behind it, so a session in the middle of a turn is reported as of its last pause."
+              }
+            }
           }
         }
       },

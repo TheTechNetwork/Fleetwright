@@ -208,9 +208,15 @@ results.push(
         // THIS IS A THIRD WAY THIS HARNESS HAS LIED, and the worst of the
         // three, because the other two failed loudly. A fake that answers in a
         // shape the real thing does not use is a test that certifies the bug.
+        //
+        // AND A FOURTH, found by the telemetry round: this answered
+        // `awaiting: true`, a key no host has ever sent, so the watcher's
+        // "needs a person" branch was proven here and unreachable everywhere
+        // else. `awaitingSince` and `prompt.question` are what the sidecar
+        // attaches; `detail` is a lifecycle string and is never quoted.
         return {
           ok: true,
-          sessions: [{ name: 'probe', status: 'running', awaiting: true, detail: 'MARKER-BANANA-9' }],
+          sessions: [{ name: 'probe', status: 'running', awaitingSince: Date.now(), prompt: { question: 'MARKER-BANANA-9' } }],
         };
       }
       if (body.verb === 'peek') return { ok: true, text: 'still compiling, nothing to report' };

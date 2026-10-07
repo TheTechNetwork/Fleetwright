@@ -578,7 +578,7 @@ test('the watcher notifies from the same shape', async () => {
           status: 200,
           json: async () => ({
             ok: true,
-            sessions: [{ name: 'probe', status: 'running', awaiting: true, detail: 'needs an answer' }],
+            sessions: [{ name: 'probe', status: 'running', awaitingSince: 1, prompt: { question: 'needs an answer' } }],
           }),
         };
       }
