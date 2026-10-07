@@ -277,12 +277,58 @@ function describeStillness(session) {
   if (!session || typeof session !== 'object') return '';
   const since = Number(session.idleSince);
   if (!Number.isFinite(since) || since <= 0) return '';
-  const mins = Math.max(0, Math.round((Date.now() - since) / 60_000));
-  const how = mins < 1 ? 'less than a minute' : mins < 90 ? `${mins} minutes` : `${Math.round(mins / 60)} hours`;
+  const how = howLong(Date.now() - since);
   return session.atRest
     ? `The pane has been unchanged for ${how}, sitting at a ready prompt — which usually means it finished, ` +
         'and can also mean it is wedged. Reading it is the only way to tell.'
     : `The pane has been unchanged for ${how}, and is not at a prompt.`;
+}
+
+/** @param {number} ms */
+function howLong(ms) {
+  const mins = Math.max(0, Math.round(ms / 60_000));
+  return mins < 1 ? 'less than a minute' : mins === 1 ? 'a minute' : mins < 90 ? `${mins} minutes` : `${Math.round(mins / 60)} hours`;
+}
+
+/**
+ * Since when this session has been blocked on a person, or null when it is not.
+ *
+ * THE FIELD THIS USED TO READ WAS NEVER SENT. Both the watcher below and
+ * fleet_await asked `session.awaiting`, and no layer of the fleet has ever
+ * put that key on a reply: the host's watcher knew, raised an event, and
+ * kept the answer to itself. So "returns when the session needs a person",
+ * the second of the four things fleet_await promises, was a branch no live
+ * fleet could reach — and the tests reached it only because their fake fleet
+ * invented the key, which is the fourth way that fake has certified a bug
+ * (scripts/check-mcp-client.mjs records the other three).
+ *
+ * `awaitingSince` is what the host sends now, on every reply that carries
+ * sessions: a timestamp from its own clock, the earlier of the session's hook
+ * reporting a dialog and the watcher first seeing one. A host older than that
+ * sends nothing, and this answers null, which is what every host did before.
+ *
+ * @param {any} session
+ * @returns {number|null}
+ */
+function awaitingSince(session) {
+  const since = Number(session?.awaitingSince);
+  return Number.isFinite(since) && since > 0 ? since : null;
+}
+
+/**
+ * What it is asking, in the host's words — or '' when the host could not read
+ * the question.
+ *
+ * Only `prompt.question`, which prompt.js writes from a fixed vocabulary. The
+ * `detail` this used to fall back to is the registry's last lifecycle string,
+ * so a session waiting on a trust dialog was announced as saying "resumed
+ * (summary)" — the same bug watcher.js records fixing for the phone.
+ *
+ * @param {any} session
+ */
+function askingFrom(session) {
+  const q = session?.prompt?.question;
+  return typeof q === 'string' ? q.trim() : '';
 }
 
 export class McpServer {
@@ -404,21 +450,22 @@ export class McpServer {
           continue;
         }
         const status = String(session?.status ?? '');
-        const now = session?.awaiting ? 'awaiting' : status;
+        const since = awaitingSince(session);
+        const now = since !== null ? 'awaiting' : status;
         if (now && now !== this.seen.get(name)) {
           this.seen.set(name, now);
-          if (session?.awaiting) {
+          if (since !== null) {
             // CARRIES WHAT IT IS WAITING FOR. "probe is waiting" tells an agent
             // to go and look; the question itself may be answerable without
             // looking. It also makes the notification distinguishable from the
             // tool result in a conformance run — the first attempt at measuring
             // whether these arrive was confounded because both channels said
             // the same words.
-            const asking = String(session.detail ?? session.text ?? '').trim();
+            const asking = askingFrom(session);
             this.#notify(
               'warning',
               `${name} is waiting for an answer and will not go further without one.${asking ? ` It says: ${asking}` : ''}`,
-              { session: name, state: 'awaiting', ...(asking ? { asking } : {}) },
+              { session: name, state: 'awaiting', since, ...(asking ? { asking } : {}) },
             );
           } else if (status === 'error') {
             this.#notify('error', `${name} failed. Its output is still readable with fleet_read_log.`, { session: name, state: 'error' });
@@ -488,9 +535,20 @@ export class McpServer {
       const status = String(session?.status ?? '');
       // NEEDS A PERSON. The one state where waiting longer changes nothing:
       // something is blocking on an answer, and nobody is going to give it.
-      if (session?.awaiting) {
+      //
+      // SINCE WHEN, because it changes what to do next: a dialog that went up
+      // a moment ago is somebody's to answer, and one that has sat for an hour
+      // is a person who is not coming. "At least", because the host's figure
+      // is a lower bound — see awaitingSince.
+      const since = awaitingSince(session);
+      if (since !== null) {
+        const asking = askingFrom(session);
+        const waited = this.now() - since;
         return this.#text(
-          `${name} is waiting for an answer:\n${String(session.detail ?? session.text ?? '').trim()}\n\n` +
+          (waited < 60_000
+            ? `${name} is waiting for an answer`
+            : `${name} has been waiting for an answer for at least ${howLong(waited)}`) +
+            `${asking ? `:\n${asking}` : ', and the host could not read the question off its pane.'}\n\n` +
             'It will not go further until somebody answers. Read it with fleet_read_log if you need the whole story.',
         );
       }

@@ -419,9 +419,9 @@ test('the tools carry the reminder, not only the preamble', () => {
 // --- being told, rather than polling ----------------------------------------
 
 /** A server with a fake clock, so a blocking tool can be tested without waiting. */
-function awaitServer(replies) {
+function awaitServer(replies, { start = 0 } = {}) {
   const written = [];
-  let clock = 0;
+  let clock = start;
   let i = 0;
   const server = new McpServer({
     coordinator: 'https://fleet.example',
@@ -442,24 +442,48 @@ test('waiting returns the moment a session needs a person', async () => {
   // notification arrives on the transport, and whether it reaches the model
   // depends on the client — one not in a turn is not listening. A tool that
   // BLOCKS needs no waking. The return value is the notification.
+  //
+  // IN THE SHAPE A HOST SENDS. This fixture used to say `awaiting: true`, a
+  // key no host has ever put on a reply, so the branch passed here and was
+  // unreachable on every real fleet. `awaitingSince` and `prompt` are what the
+  // sidecar's #enrich attaches; `detail` is the registry's lifecycle string and
+  // is deliberately not what gets quoted.
   const { server, written, calls } = awaitServer([
-    { ok: true, session: { status: 'running', awaiting: false } },
-    { ok: true, session: { status: 'running', awaiting: false } },
-    { ok: true, session: { status: 'running', awaiting: true, detail: 'Do you trust this project?' } },
+    { ok: true, sessions: [{ name: 'mine', status: 'running', awaitingSince: null, prompt: null }] },
+    { ok: true, sessions: [{ name: 'mine', status: 'running', awaitingSince: null, prompt: null }] },
+    {
+      ok: true,
+      sessions: [{ name: 'mine', status: 'running', detail: 'resumed (summary)', awaitingSince: 1, prompt: { question: 'Do you trust this project?' } }],
+    },
   ]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 300 } }));
 
   assert.match(written[0].result.content[0].text, /waiting for an answer/);
   assert.match(written[0].result.content[0].text, /Do you trust this project\?/);
+  assert.doesNotMatch(written[0].result.content[0].text, /resumed \(summary\)/, 'the lifecycle string is not the question');
   assert.equal(calls() >= 3, true, 'it should have kept asking until something changed');
   // Not an error: needing a person is an outcome, not a failure.
   assert.equal(written[0].result.isError, undefined);
 });
 
+test('a wait on a session already blocked says for how long, as a floor', async () => {
+  // Thirty minutes on a dialog is a person who is not coming, and an agent
+  // decides differently on that than on one that went up a moment ago. The
+  // host's figure is a lower bound, so the sentence says "at least".
+  const { server, written } = awaitServer(
+    [{ ok: true, sessions: [{ name: 'mine', status: 'running', awaitingSince: 1, prompt: null }] }],
+    { start: 30 * 60_000 + 1 },
+  );
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine' } }));
+  const text = written[0].result.content[0].text;
+  assert.match(text, /waiting for an answer for at least 30 minutes/);
+  assert.match(text, /could not read the question/, 'no question is said as such, not left blank');
+});
+
 test('waiting returns when the session ends, and points at the output', async () => {
   const { server, written } = awaitServer([
-    { ok: true, session: { status: 'running', awaiting: false } },
-    { ok: true, session: { status: 'stopped', awaiting: false } },
+    { ok: true, session: { status: 'running' } },
+    { ok: true, session: { status: 'stopped' } },
   ]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine' } }));
   assert.match(written[0].result.content[0].text, /has ended/);
@@ -469,7 +493,7 @@ test('waiting returns when the session ends, and points at the output', async ()
 
 test('a session still running at the deadline is not a failure', async () => {
   // Calling it one would push an agent into stopping work that is going fine.
-  const { server, written } = awaitServer([{ ok: true, session: { status: 'running', awaiting: false } }]);
+  const { server, written } = awaitServer([{ ok: true, session: { status: 'running' } }]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 10 } }));
   assert.equal(written[0].result.isError, undefined);
   assert.match(written[0].result.content[0].text, /still running after 10s/);
@@ -477,7 +501,7 @@ test('a session still running at the deadline is not a failure', async () => {
 });
 
 test('an errored session is reported as an error', async () => {
-  const { server, written } = awaitServer([{ ok: true, session: { status: 'error', awaiting: false } }]);
+  const { server, written } = awaitServer([{ ok: true, session: { status: 'error' } }]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine' } }));
   assert.equal(written[0].result.isError, true);
   assert.match(written[0].result.content[0].text, /has failed/);
@@ -544,7 +568,7 @@ test('a session that needs help is announced without being asked', async () => {
   // reaches a client which is not currently in a tool call.
   const { server, written, tick } = watchedServer([
     { ok: true, text: 'started' },
-    { ok: true, session: { status: 'running', awaiting: true } },
+    { ok: true, sessions: [{ name: 'mine', status: 'running', awaitingSince: 1, prompt: null }] },
   ]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_start', arguments: { name: 'mine' } }));
   await tick();
@@ -578,7 +602,7 @@ test('a finished session is announced once, and then stops being watched', async
 test('nothing is announced about sessions this conversation did not start', async () => {
   // Watching the fleet would mean narrating somebody else's work to an agent
   // with no business in it — the same scope `stop` is held to.
-  const { server, written, tick } = watchedServer([{ ok: true, session: { status: 'running', awaiting: true } }]);
+  const { server, written, tick } = watchedServer([{ ok: true, sessions: [{ name: 'mine', status: 'running', awaitingSince: 1 }] }]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_list', arguments: {} }));
   await tick();
   assert.equal(written.filter((m) => m.method === 'notifications/message').length, 0);
@@ -777,8 +801,8 @@ test('waiting returns when the session comes back to its prompt after working, a
   // await, read the log: a finished session does not END, so the wait ran out
   // the clock and said "still running" about a job done twenty minutes ago.
   const { server, written, calls } = awaitServer([
-    { ok: true, session: { status: 'running', awaiting: false, atRest: false, readyAt: null, createdAt: 1000 } },
-    { ok: true, session: { status: 'running', awaiting: false, atRest: true, readyAt: 5000, createdAt: 1000 } },
+    { ok: true, session: { status: 'running', atRest: false, readyAt: null, createdAt: 1000 } },
+    { ok: true, session: { status: 'running', atRest: true, readyAt: 5000, createdAt: 1000 } },
   ]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 300 } }));
   const text = written[0].result.content[0].text;
@@ -806,7 +830,7 @@ test('a session sitting at its prompt that never worked is not done, and neither
   assert.equal(backAtPrompt({ status: 'running', atRest: true, readyAt: 5000, createdAt: 1000 }), true);
   // Finished before the first poll: readyAt after createdAt, and it returns at once.
   const { server, written, calls } = awaitServer([
-    { ok: true, session: { status: 'running', awaiting: false, atRest: true, readyAt: 5000, createdAt: 1000 } },
+    { ok: true, session: { status: 'running', atRest: true, readyAt: 5000, createdAt: 1000 } },
   ]);
   await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 300 } }));
   assert.match(written[0].result.content[0].text, /back at its prompt/);
