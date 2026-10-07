@@ -140,7 +140,7 @@ export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObj
 /** What making labs asks of the server, beside rebuilding the edge with them. */
 export const LAB_METHODS = Object.freeze(['network.create', 'tag.add', 'tag.remove', 'resourceSet.addObject']);
 /** What building the machine image asks of the server, checked before anything is made. */
-export const IMAGE_METHODS = Object.freeze(['disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'tag.add', 'resourceSet.addObject']);
+export const IMAGE_METHODS = Object.freeze(['disk.import', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'tag.add', 'resourceSet.addObject']);
 /**
  * How the image's disk is grown, whichever of these the server offers, in
  * this order. `disk.resize` is the long-standing name; a Xen Orchestra that

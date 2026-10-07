@@ -430,7 +430,7 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   // are cloned from is built by the job that already holds the admin sign-in.
   const xo = await standIn(t, {
     sets: [chosenBefore()],
-    more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate'],
+    more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate'],
     vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
   });
   /** @type {any[]} */
@@ -507,7 +507,7 @@ test('a Xen Orchestra without disk.resize builds the image through vdi.set, and 
   for (const [grow, expect] of [[['vdi.set'], 'vdi.set'], [[], null]]) {
     const xo = await standIn(t, {
       sets: [chosenBefore()],
-      more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate', ...grow],
+      more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', ...grow],
       vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
     });
     /** @type {any[]} */
