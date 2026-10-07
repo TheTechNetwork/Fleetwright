@@ -41,6 +41,10 @@ enum XOPolicy {
     /// pool (GROUP_PREFIX and MAX_GROUPS in edge-router.js).
     static let groupPrefix = "fleetwright-group-"
     static let maxGroups = 4
+    /// What a lab network is called, and the most labs an edge has room for
+    /// (LAB.prefix and LAB.max in edge-router.js).
+    static let labPrefix = "fleetwright-lab-"
+    static let maxLabs = 4
 
     /// What the machine read, in `inventoryOf`'s shape. Sizes are bytes.
     struct Inventory: Decodable, Equatable {
@@ -68,6 +72,9 @@ enum XOPolicy {
         /// (xo-holder.js); nil from one older than that, which is "cannot
         /// tell", never "none".
         var holders: [Holder]? = nil
+        /// The most labs an edge has room for, from a machine that makes
+        /// them; nil from one older than that, which makes none.
+        var labMax: Int? = nil
 
         struct Pool: Decodable, Equatable, Identifiable {
             let id: String
@@ -117,6 +124,14 @@ enum XOPolicy {
             /// It drops what its threat rules match, rather than only logging
             /// it; nil from a machine that predates saying, which built none.
             var blocks: Bool? = nil
+            /// The labs it was built with, by kind; nil from a machine that
+            /// predates labs, whose edge has none.
+            var labs: Labs? = nil
+        }
+
+        struct Labs: Decodable, Equatable {
+            let open: Int
+            let closed: Int
         }
 
         /// A pool's machine image: the template sessions' machines are cloned from.
@@ -145,7 +160,9 @@ enum XOPolicy {
 
         /// The networks a person chooses among: the pool's, less its group
         /// networks, which are this policy's to make and not a choice.
-        var choosable: [Network] { networks.filter { !$0.name.hasPrefix(XOPolicy.groupPrefix) } }
+        var choosable: [Network] {
+            networks.filter { !$0.name.hasPrefix(XOPolicy.groupPrefix) && !$0.name.hasPrefix(XOPolicy.labPrefix) }
+        }
 
         /// How many group networks the pool this network is in has.
         func groupCount(on network: String?) -> Int {
@@ -298,6 +315,19 @@ enum XOPolicy {
         /// The machine makes them (`groups` in begin's `can`). An older one
         /// cannot, so they are neither offered nor sent.
         var groupsChoice = false
+        /// How many labs the edge is to have, of each kind (docs/hypervisors.md,
+        /// "Labs"). Changing either rebuilds the edge.
+        var labsOpen = 0
+        var labsClosed = 0
+        /// The machine makes them (`labs` in begin's `can`). An older one
+        /// cannot, so they are neither offered nor sent.
+        var labsChoice = false
+
+        /// Whether Apply would rebuild the edge that is there to change its labs.
+        func labsChanged(in inv: Inventory) -> Bool {
+            guard labsChoice, let there = inv.edge(on: egress) else { return false }
+            return (there.labs?.open ?? 0) != labsOpen || (there.labs?.closed ?? 0) != labsClosed
+        }
 
         /// The fewest group networks there can be: the ones there now, which
         /// are never removed, because a machine may be on one.
@@ -368,6 +398,9 @@ enum XOPolicy {
             c.holder = inv.holder(on: c.egress) != nil
             // As many as there are: Apply asks for none it does not show.
             c.groups = inv.groupCount(on: c.egress)
+            // The labs the edge has: Apply rebuilds nothing nobody changed.
+            c.labsOpen = inv.edge(on: c.egress)?.labs?.open ?? 0
+            c.labsClosed = inv.edge(on: c.egress)?.labs?.closed ?? 0
             c.cpus = XOPolicy.clamp(inv.current.limits.cpus ?? inv.capacity.cpus / 2, inv.cpuRange)
             let memory = inv.current.limits.memory.map(XOPolicy.nearestGiB) ?? Int(clamping: inv.capacity.memory / 2 / XOPolicy.gib)
             c.memoryGiB = XOPolicy.clamp(memory, inv.memoryRange)
@@ -410,6 +443,15 @@ enum XOPolicy {
             if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
             if groupsChoice, groups > 0, egress == nil {
                 return "Group networks are made in the way out’s pool: choose the way out. Nothing was changed."
+            }
+            if labsChoice, labsOpen + labsClosed > XOPolicy.maxLabs {
+                return "Between 0 and \(XOPolicy.maxLabs) labs in all. Nothing was changed."
+            }
+            if labsChoice, labsOpen + labsClosed > 0, egress == nil {
+                return "Labs are on the edge router: choose the way out it is on. Nothing was changed."
+            }
+            if labsChoice, labsOpen + labsClosed > 0, !edge, inv.edge(on: egress) == nil {
+                return "Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed."
             }
             if imageChoice, wantsImage, egress == nil {
                 return "The machine image is built behind the edge router: choose the way out it leaves through."
@@ -465,6 +507,8 @@ enum XOPolicy {
             if holderChoice, holder { out["holder"] = true }
             // Only to a machine that makes them, and only with a way out.
             if groupsChoice, egress != nil { out["groups"] = groups }
+            // Only to a machine that makes them, and only where there is a router, there or asked for.
+            if labsChoice, egress != nil, edge || inv.edge(on: egress) != nil { out["labs"] = ["open": labsOpen, "closed": labsClosed] }
             // Only to a machine that builds either kind, and only with the router.
             if edgeBlockChoice, edge { out["edgeBlock"] = edgeBlock }
             // Only to a machine that reads it, and only with something to build.

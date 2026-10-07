@@ -178,6 +178,8 @@ struct AddHypervisorView: View {
         /// It builds an edge that drops what its threat rules match
         /// (`can` holds "edge-block"); an older one only one that logs.
         var canEdgeBlock = false
+        /// It makes labs on the edge (`can` holds "labs"); an older one cannot.
+        var canLabs = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -778,6 +780,7 @@ struct AddHypervisorView: View {
         networksSection(inv)
         wayOutSection(inv)
         if choice.groupsChoice, choice.egress != nil { groupsSection(inv) }
+        if choice.labsChoice, choice.egress != nil, choice.edge || inv.edge(on: choice.egress) != nil { labsSection(inv) }
         limitsSection(inv)
         applySection(inv, job: job)
     }
@@ -864,6 +867,9 @@ struct AddHypervisorView: View {
                 choice.edgeBlock = inv.edge(on: way)?.blocks ?? false
                 // Another pool has its own group networks to start from.
                 choice.groups = XOPolicy.clamp(inv.groupCount(on: way), choice.groupRange(in: inv))
+                // And its own labs.
+                choice.labsOpen = inv.edge(on: way)?.labs?.open ?? 0
+                choice.labsClosed = inv.edge(on: way)?.labs?.closed ?? 0
             }
             if canEdge, choice.egress != nil {
                 Toggle(isOn: $choice.edge) {
@@ -1085,6 +1091,35 @@ struct AddHypervisorView: View {
                  + "A group is for machines that need to talk to each other, like the nodes of a cluster you are testing. "
                  + "Machines in the same group share a private network and keep their way to the internet. "
                  + "You choose the group when you start a session, under Where. A group stays once it is made, because a machine may be on it.")
+        }
+    }
+
+    /// LABS, on the edge router: how many of each kind, four in all at
+    /// most. Each is a network of its own with one machine at a time, and
+    /// costs no machine of its own, which is the first thing said. Changing
+    /// them rebuilds the router, said before Apply as blocking mode says it.
+    private func labsSection(_ inv: XOPolicy.Inventory) -> some View {
+        Section {
+            Stepper(value: $choice.labsOpen, in: 0...(XOPolicy.maxLabs - choice.labsClosed)) {
+                policyRow("Open labs", "\(choice.labsOpen): each reaches the internet and nothing private")
+            }
+            .frame(minHeight: 44)
+            .disabled(busy)
+            Stepper(value: $choice.labsClosed, in: 0...(XOPolicy.maxLabs - choice.labsOpen)) {
+                policyRow("Closed labs", "\(choice.labsClosed): each reaches the fleet and Claude and nothing else")
+            }
+            .frame(minHeight: 44)
+            .disabled(busy)
+            if choice.labsChanged(in: inv) {
+                Text("Apply rebuilds the edge router to change the labs: machines behind it have no way out until the new one is up.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            }
+        } header: {
+            sectionHead("Labs")
+        } footer: {
+            Text("A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. "
+                 + "It costs no extra machine, only an interface on the router. Up to four in all.")
         }
     }
 
@@ -1624,7 +1659,8 @@ struct AddHypervisorView: View {
                                   canImage: begun.can.contains("image"), canImages: begun.can.contains("images"),
                                   canGroups: begun.can.contains("groups"),
                                   canHolder: begun.can.contains("holder"),
-                                  canEdgeBlock: begun.can.contains("edge-block"))
+                                  canEdgeBlock: begun.can.contains("edge-block"),
+                                  canLabs: begun.can.contains("labs"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1654,6 +1690,7 @@ struct AddHypervisorView: View {
                     choice.groupsChoice = policyJob.canGroups && opened.groups != nil
                     choice.holderChoice = policyJob.canHolder && opened.holders != nil
                     choice.edgeBlockChoice = policyJob.canEdgeBlock
+                    choice.labsChoice = policyJob.canLabs && opened.labMax != nil
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not

@@ -695,7 +695,8 @@ struct Fleet {
         // A MACHINE FROM YOUR HYPERVISOR is never GitHub's: a box holding the
         // pool's token makes it (protocol 8, `template`).
         let phone = PhoneGitHub(settings: settings)
-        if platform != "vm", phone.signedIn {
+        // NOR IS A LAB, which is a machine from your hypervisor in a lab.
+        if platform != "vm", platform != "lab", phone.signedIn {
             do {
                 return try await phone.startRunner(self, platform: platform, minutes: minutes, start: start)
             } catch {
@@ -1630,12 +1631,29 @@ struct Fleet {
         /// The pool's group networks, for machines that work together; nil
         /// from a coordinator older than them.
         var groups: [Network]? = nil
+        /// The pool's labs (docs/hypervisors.md, "Labs"): networks of their
+        /// own on its edge router, open or closed; nil from a coordinator
+        /// older than labs, and empty when the pool has none.
+        var labs: [Lab]? = nil
         var id: String { template }
 
         struct Network: Codable, Hashable, Identifiable {
             let id: String
             let name: String
         }
+
+        struct Lab: Codable, Hashable, Identifiable {
+            let id: String
+            let name: String
+            /// It reaches the internet; closed, only the fleet and Claude.
+            let open: Bool
+            /// No machine on it at the box's last look, and none just asked
+            /// for: free is what the box saw, never assumed.
+            let free: Bool
+        }
+
+        /// The first free lab of that kind, or nil when none is.
+        func freeLab(open: Bool) -> Lab? { labs?.first { $0.open == open && $0.free } }
 
         /// "New machine from Fleetwright Debian 13 on rack", for a picker.
         var label: String { "New machine from \(name)" + (poolName.map { " on \($0)" } ?? "") }
@@ -1677,11 +1695,19 @@ struct Fleet {
         /// nil when it is in none, or from an older coordinator.
         var group: String? = nil
         var groupIp: String? = nil
+        /// The lab it is in, and whether that lab is open; nil when it is in
+        /// none, or from an older coordinator.
+        var lab: InLab? = nil
         /// The Xen Orchestra it is on.
         let address: String
         /// Kept ready, and not yet taken by a session; nil from an older coordinator.
         var standby: Bool? = nil
         var id: String { name }
+
+        struct InLab: Codable, Hashable {
+            let name: String
+            let open: Bool
+        }
 
         /// Bytes a second through the machine's network interfaces, one point
         /// an interval, oldest first, as Xen Orchestra's `vm.stats` counted
@@ -2259,6 +2285,7 @@ struct Fleet {
         case "purge": return "Purging \(name)"
         case "answer": return "Answering \(name)"
         case "provision":
+            if params["platform"] == "lab" { return "Asking your hypervisor for a machine in a lab" }
             return params["platform"] == "vm" ? "Asking your hypervisor for a machine" : "Asking for a \(params["platform"] ?? "temporary") machine"
         case "writefile": return "Writing \(params["path"] ?? "a file") in \(name)"
         case "copyfile": return "Copying \(params["path"] ?? "a file") in \(name)"
