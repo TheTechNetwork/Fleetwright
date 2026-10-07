@@ -1268,8 +1268,14 @@ private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false) {
             Text(w, style = Design.Style.bodyStrong, color = if (ended) tone else Design.Palette.ink.now)
         }
         if (!ended && setup.state == "running") {
-            val line = "Step ${(step + 1).coerceAtMost(of)} of $of" +
-                (part?.let { " · building the edge router, part ${it.stage} of ${it.stages} · ${it.fill / 10}%" } ?: "")
+            // What is building, from the host's key, in the words the ongoing
+            // notification uses (XoSetup.buildDetail): the first version
+            // called every build the edge router's.
+            val line = listOfNotNull(
+                "Step ${(step + 1).coerceAtMost(of)} of $of",
+                part?.let { XoSetup.buildDetail(it.build, it.stage, it.stages) },
+                part?.let { "${it.fill / 10}%" },
+            ).joinToString(" · ")
             Text(line, style = Design.Style.label, color = Design.Palette.inkDim.now)
         }
         // While it waits on the person, the machine's sentence only says so

@@ -832,8 +832,12 @@ class Fleet(
      * the step the machine is on, out of how many, by its key, and the
      * sentence the machine wrote about it.
      */
-    /** How far the edge router's build has got: stage of stages, and thousandths of the whole. */
-    data class BuildPart(val stage: Int, val stages: Int, val fill: Int)
+    /**
+     * How far a build has got: stage of stages, and thousandths of the whole.
+     * [build] is what it is a build of (`edge`, `image` or `holder`), null
+     * from a machine before it said.
+     */
+    data class BuildPart(val stage: Int, val stages: Int, val fill: Int, val build: String? = null)
 
     data class Setup(
         val job: String,
@@ -2333,7 +2337,8 @@ class Fleet(
                                 val stage = p.optInt("stage", -1)
                                 val stages = p.optInt("stages", -1)
                                 val fill = p.optInt("fill", -1)
-                                if (stage in 1..stages && fill in 0..1000) BuildPart(stage, stages, fill) else null
+                                val build = p.optString("build").takeIf { it.isNotBlank() && !p.isNull("build") }
+                                if (stage in 1..stages && fill in 0..1000) BuildPart(stage, stages, fill, build) else null
                             },
                         )
                     },

@@ -210,5 +210,14 @@ test('Android: the form is the design’s tokens, 48dp, with nothing offered tha
   assert.ok(form.includes('if (choice.edgeDiskChoice && (buildEdge || buildImage)) {'));
   assert.ok(form.includes('there.sr?.let { " Its disk is on $it." }'));
   assert.ok(file('HypervisorSheet.kt').includes('part != null -> part.fill / 1000f'));
-  assert.ok(file('HypervisorSheet.kt').includes(' · building the edge router, part ${it.stage} of ${it.stages} · ${it.fill / 10}%'));
+  // ASKED FOR: "Why no actual updates in the live activity?", while a machine
+  // image built and the screen called it the edge router. Named from the
+  // host's key, in one place, for the sheet and the ongoing notification.
+  for (const [key, words] of [['edge', 'building the edge router'], ['image', 'building the machine image'], ['holder', 'making the pool’s own machine']]) {
+    assert.ok(file('XoSetup.kt').includes(`"${key}" -> "${words}"`), `no words for a ${key} build`);
+  }
+  assert.ok(file('HypervisorSheet.kt').includes('part?.let { XoSetup.buildDetail(it.build, it.stage, it.stages) }'));
+  assert.ok(!file('HypervisorSheet.kt').includes('building the edge router'), 'the sheet names one build for every build again');
+  assert.ok(file('XoSetupNotice.kt').includes('XoSetup.buildDetail(data["build"], data["stage"]?.toIntOrNull(), data["stages"]?.toIntOrNull())'));
+  assert.ok(file('Fleet.kt').includes('BuildPart(stage, stages, fill, build)'));
 });

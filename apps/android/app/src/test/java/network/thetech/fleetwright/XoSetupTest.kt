@@ -207,6 +207,16 @@ class XoSetupTest {
     }
 
     @Test
+    fun aBuildIsNamedFromItsKeyAndItsPartIsSaidEitherWay() {
+        assertEquals("building the machine image, part 2 of 4", XoSetup.buildDetail("image", 2, 4))
+        assertEquals("building the edge router", XoSetup.buildDetail("edge", null, null))
+        // A key this app has never met: the part is known, the name is not made up.
+        assertEquals("part 2 of 4", XoSetup.buildDetail("something-newer", 2, 4))
+        assertEquals(null, XoSetup.buildDetail(null, null, null))
+        assertEquals(null, XoSetup.buildDetail(null, 5, 4))
+    }
+
+    @Test
     fun aCertificateIsReadTolerantly() {
         assertEquals(null, XoSetup.certificate(null))
         val full = XoSetup.certificate(

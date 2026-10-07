@@ -74,6 +74,11 @@ internal object XoSetupNotice {
         // How far the step has got, in thousandths, while the edge router
         // builds: the bar is that, because it is what moves.
         val fill = data["fill"]?.toIntOrNull()?.takeIf { it in 0..1000 }
+        // What is being built, and which part, said under the step: without
+        // it the step's name sits still for minutes and only the bar moves.
+        val detail = if (state == "running") {
+            XoSetup.buildDetail(data["build"], data["stage"]?.toIntOrNull(), data["stages"]?.toIntOrNull())
+        } else null
         val hostId = data["hostId"].orEmpty()
         val id = ("xosetup-$job").hashCode()
 
@@ -120,8 +125,11 @@ internal object XoSetupNotice {
             "failed" -> if (hostId.isBlank()) "Open to see what stopped it." else "Open to see what stopped it on $hostId."
             "cancelled" -> "Stopped between steps, as asked."
             "waiting" -> "Waiting for the sign-in"
-            else -> (if (policy) XoPolicy.stepWords(data["phase"], step, of) else XoSetup.stepWords(data["phase"], step, of)) +
-                if (hostId.isBlank()) "" else " · on $hostId"
+            else -> listOfNotNull(
+                if (policy) XoPolicy.stepWords(data["phase"], step, of) else XoSetup.stepWords(data["phase"], step, of),
+                detail,
+                hostId.takeIf { it.isNotBlank() }?.let { "on $it" },
+            ).joinToString(" · ")
         }
 
         val tap = openIntent(context, job, id)
