@@ -12,8 +12,9 @@
 // coordinator's half is xo-relay-coordinator.test.js, the whole path
 // relay-end-to-end.test.js.
 //
-// THE ANDROID HALF lands on its own branch, stacked on this one
-// (CONTRIBUTING.md); the marked block at the bottom is its place.
+// Both phones are read here, iOS first, and the sentences a person reads are
+// held to be the same on both (SAID), with the apostrophe each platform's
+// strings already use.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,6 +27,13 @@ const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import
 const SCREEN = read('apps/ios/Fleetwright/AddHypervisorView.swift');
 const RELAY = read('apps/ios/Fleetwright/XORelay.swift');
 const FLEET = read('apps/ios/Fleetwright/Fleet.swift');
+const KT = 'apps/android/app/src/main/java/network/thetech/fleetwright';
+const SHEET = read(`${KT}/HypervisorSheet.kt`);
+const KRELAY = read(`${KT}/XoRelay.kt`);
+const KFLEET = read(`${KT}/Fleet.kt`);
+const KSETUP = read(`${KT}/XoSetup.kt`);
+/** The same sentence, whichever apostrophe a platform's strings use. */
+const plain = (/** @type {string} */ s) => s.replace(/\u2019/g, "'");
 
 /** The sentences both phones say, word for word. */
 const SAID = [
@@ -95,3 +103,50 @@ test('iOS: the job goes through the relay only for a machine that reached it tha
 });
 
 // --- Android ---------------------------------------------------------------
+
+test('Android: through this phone is offered only when the fleet named a machine that can take it, in the iPhone’s words', () => {
+  assert.match(SHEET, /throughOffer = if \(policy\) null else r\.relayHost/);
+  assert.match(KFLEET, /relayHost = json\.optJSONObject\("relay"\)\?\.optString\("hostId"\)/);
+  // Under "no machine reached it", and only there.
+  assert.match(SHEET, /reachable\.isEmpty\(\) -> \{[\s\S]{0,900}?throughOffer\?\.let \{ via ->[\s\S]{0,500}?Text\(if \(probing\) "Asking through this phone…" else "Try through this phone"\)/);
+  // A new address takes the offer and any relay away.
+  assert.match(SHEET, /A NEW ADDRESS IS A NEW QUESTION[\s\S]{0,500}?throughOffer = null\s*endRelay\(\)/);
+  const android = plain(SHEET + KSETUP);
+  for (const words of SAID) assert.ok(android.includes(plain(words)), words);
+});
+
+test('Android: the machine is offered only when it saw the certificate this phone sees itself, and cannot tell stops it', () => {
+  const flow = SHEET.slice(SHEET.indexOf('fun probeThroughPhone('), SHEET.indexOf('The remembered machine as a probe nobody ran'));
+  const at = (/** @type {string} */ s) => flow.indexOf(s);
+  assert.ok(at('PhoneRelay.ownLook(target)') > 0);
+  assert.ok(at('PhoneRelay.ownLook(target)') < at('carrier.open(settings, via)'));
+  assert.ok(at('carrier.open(settings, via)') < at('fleet.xoprobeThrough(target, ready.relay)'));
+  assert.match(flow, /own == null -> probeText = "This phone could not reach \$target over HTTPS itself/);
+  assert.match(flow, /\} else if \(seen\.cert != own\) \{\s*carrier\.close\(\)/);
+  // The pin is the SHA-256 of the certificate's DER, in the machine's hex,
+  // and the trust manager only looks: it refuses every certificate it reads.
+  assert.match(KRELAY, /MessageDigest\.getInstance\("SHA-256"\)\.digest\(der\)\.joinToString\(""\) \{ "%02x"\.format\(it\) \}/);
+  assert.match(KRELAY, /leaf = chain\?\.firstOrNull\(\)\?\.encoded\s*throw CertificateException/);
+});
+
+test('Android: the phone connects only to the address the person typed, and carries the frames the fleet speaks', () => {
+  assert.match(KRELAY, /connection\.connect\(InetSocketAddress\(target\.host, target\.port\), 10_000\)/);
+  assert.ok(!/frame\.opt(String|Int)\("(address|host|port)"\)/.test(KRELAY), 'a frame never names where the phone connects');
+  for (const op of ['opened', 'refused', 'data', 'end']) assert.ok(KRELAY.includes(`put("op", "${op}")`), op);
+  for (const op of ['ready', 'closed', 'open', 'data', 'end']) assert.ok(KRELAY.includes(`"${op}" ->`), op);
+  assert.match(KRELAY, new RegExp(`const val CHUNK = ${RELAY_MAX_CHUNK / 1024} \\* 1024`));
+  assert.match(KRELAY, /if \(!uri\.scheme\.equals\("https", ignoreCase = true\) && uri\.host !in LOCAL\) \{/);
+  // OkHttp's WebSocket, pinned like every other dependency.
+  assert.match(read('apps/android/app/build.gradle.kts'), /implementation\("com\.squareup\.okhttp3:okhttp:\d+\.\d+\.\d+"\)/);
+});
+
+test('Android: the job goes through the relay only for a machine that reached it that way, and the relay ends with it', () => {
+  assert.match(SHEET, /relay = if \(through\) relayId else null\)/);
+  assert.match(KFLEET, /if \(relay != null\) put\("relay", relay\)/);
+  assert.match(SHEET, /if \(through && relayId == null\) \{\s*refusal = "This phone is no longer carrying the connection/);
+  // Ended with the job, with the screen (a rotation included), and on Start again.
+  assert.match(SHEET, /if \(state == "done" \|\| state == "failed" \|\| state == "cancelled"\) \{[\s\S]{0,200}?endRelay\(\)/);
+  assert.match(SHEET, /DisposableEffect\(Unit\) \{ onDispose \{ relay\?\.close\(\) \} \}/);
+  assert.match(SHEET, /fun startAgain\(\) \{[\s\S]{0,400}?endRelay\(\)/);
+  assert.ok(SHEET.includes('It then crosses this phone inside the HTTPS connection $hostId opens to Xen Orchestra, which neither this phone nor the fleet can read.'));
+});

@@ -122,7 +122,7 @@ test('Android: the poll carries on through choosing and opens the pool once', ()
   const poll = sheet.slice(sheet.indexOf('LaunchedEffect(job, asks)'), sheet.indexOf('FullScreen('));
   // Only the three ends stop it; choosing is not one of them, and every
   // pass waits before it asks.
-  assert.match(poll, /if \(state == "done" \|\| state == "failed" \|\| state == "cancelled"\) break/);
+  assert.match(poll, /if \(state == "done" \|\| state == "failed" \|\| state == "cancelled"\) \{[\s\S]{0,300}?break\s*\}/);
   assert.ok(!/state == "choosing"\)? break/.test(poll), 'choosing does not end the poll');
   assert.ok(poll.includes('delay(2_000)'));
   assert.match(poll, /r\.xosetup\.state == "choosing" && pool != null && inventory == null && !applied && !unopened/);

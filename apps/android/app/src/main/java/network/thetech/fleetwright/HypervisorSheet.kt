@@ -25,6 +25,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -95,6 +96,19 @@ import kotlinx.coroutines.launch
  * phone mid-setup comes back to the same progress rather than an empty form.
  * The probes are not: they are an answer from the fleet, and asking again is
  * one tap.
+ *
+ * WHEN NO MACHINE REACHES IT, THIS PHONE MAY. The fleet then names a machine
+ * that can work through a phone, and only then is Try through this phone
+ * offered (C-2). This phone reads the certificate at the address itself
+ * (PhoneRelay.ownLook), opens a relay, and asks that machine to probe through
+ * it; the machine is offered only when it saw the same certificate this phone
+ * did, because over a relay the fleet is on the probe's path and could
+ * otherwise put a certificate of its own in front of the person. The job then
+ * runs through the relay: the machine opens TLS over it and holds it to the
+ * pin, so this phone carries ciphertext. The relay is this screen's, closed
+ * with it, which the screen says while the setup runs. Adding a pool only; a
+ * policy change runs from a machine that reaches the pool, which the pool's
+ * own machine is once it has joined. The same as iOS (AddHypervisorView).
  *
  * CHANGING WHAT THE FLEET MAY USE is this screen again, for a pool this
  * phone already keeps a token for ([policyFor]): the same probe, machine,
@@ -230,6 +244,23 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var keepNote by remember { mutableStateOf("") }
     var openedOnce by rememberSaveable { mutableStateOf(false) }
 
+    // THROUGH THIS PHONE. The machine the fleet named that can reach the
+    // address through this phone, when no machine reached it over its own
+    // network; null offers nothing. The relay this screen carries, and its
+    // id, while it does: in memory only, closed when the screen goes. Why it
+    // closed while the job still needed it.
+    var throughOffer by remember { mutableStateOf<String?>(null) }
+    var relay by remember { mutableStateOf<PhoneRelay?>(null) }
+    var relayId by remember { mutableStateOf<String?>(null) }
+    var relayNote by remember { mutableStateOf("") }
+    DisposableEffect(Unit) { onDispose { relay?.close() } }
+
+    fun endRelay() {
+        relay?.close()
+        relay = null
+        relayId = null
+    }
+
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     // WHO CAN RUN IT: the machines that reached it over HTTPS and saw a
     // certificate, then the ones answered in plain HTTP. The pinned ones
@@ -265,9 +296,14 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             chosen = null
             acknowledged = false
             plainAccepted = false
+            throughOffer = null
+            endRelay()
             val r = fleet.xoprobe(address.trim())
             if (r.ok && r.probes != null) {
                 probes = r.probes
+                // Adding a pool only: a policy change needs a machine that
+                // reaches the pool, which its own machine does once it has joined.
+                throughOffer = if (policy) null else r.relayHost
                 // One machine that can is chosen for them; two is a decision,
                 // unless one of them got through last time, which is chosen
                 // and the others stay a tap away. A lone plain-HTTP machine is
@@ -281,6 +317,63 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 if (remembered == null) unlockRemembered()
             } else {
                 probeText = r.text.ifBlank { "The fleet did not answer the probe." }
+            }
+            probing = false
+        }
+    }
+
+    /**
+     * THROUGH THIS PHONE: its own look at the certificate first, then a
+     * relay, then the named machine's probe through it. The machine is
+     * offered only when what it saw through the relay is what this phone sees
+     * itself, and nothing is asked of the person before that.
+     */
+    fun probeThroughPhone(via: String) {
+        scope.launch {
+            probing = true
+            probeText = ""
+            endRelay()
+            val target = address.trim()
+            val carrier = PhoneRelay.of(target)
+            // CANNOT TELL IS SAID AS THAT (C-5): no certificate seen here is
+            // no reason to take the machine's word for one.
+            val own = if (carrier == null) null else PhoneRelay.ownLook(target)
+            when {
+                carrier == null -> probeText = "$target is not an address this phone can connect to."
+                own == null -> probeText = "This phone could not reach $target over HTTPS itself, so nothing can reach it through this phone either. " +
+                    "Check that this phone is on the pool's network."
+                else -> {
+                    carrier.onClose = { text ->
+                        scope.launch {
+                            relay = null
+                            relayId = null
+                            if (job != null) relayNote = text
+                        }
+                    }
+                    val opened = runCatching { carrier.open(settings, via) }
+                    val ready = opened.getOrNull()
+                    if (ready == null) {
+                        probeText = opened.exceptionOrNull()?.message ?: "The fleet did not open the relay."
+                    } else {
+                        val r = fleet.xoprobeThrough(target, ready.relay)
+                        val seen = r.probes?.firstOrNull()
+                        if (!r.ok || seen == null || !XoSetup.pinned(seen)) {
+                            carrier.close()
+                            probeText = r.text.ifBlank { "$via did not reach $target through this phone." }
+                        } else if (seen.cert != own) {
+                            carrier.close()
+                            probeText = "The certificate ${seen.hostId} saw through this phone is not the one this phone sees at $target, " +
+                                "so something between them answered in Xen Orchestra's place. Nothing was sent."
+                        } else {
+                            relay = carrier
+                            relayId = ready.relay
+                            relayNote = ""
+                            probes = listOf(seen)
+                            chosen = seen.hostId
+                            acknowledged = false
+                        }
+                    }
+                }
             }
             probing = false
         }
@@ -469,12 +562,19 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         if (plain && !plainAccepted && !kept) return
         val trust = if (plain) null else XoSetup.trustFor(p.certificate, acknowledged || kept)
         if (!plain && p.certificate?.trusted != true && trust == null) return
+        // A MACHINE THAT REACHED IT THROUGH THIS PHONE begins only while this
+        // phone still carries the relay it reached it through.
+        val through = p.through == "phone"
+        if (through && relayId == null) {
+            refusal = "This phone is no longer carrying the connection ${p.hostId} reached Xen Orchestra through. Try through this phone again."
+            return
+        }
         scope.launch {
             beginning = true
             refusal = ""
             val where = address.trim()
             val who = email.trim()
-            val r = fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust, plain = if (plain) "accepted" else null)
+            val r = fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust, plain = if (plain) "accepted" else null, relay = if (through) relayId else null)
             val setup = r.xosetup
             val hostId = r.hostId ?: p.hostId
             when {
@@ -555,8 +655,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     }
 
     fun startAgain() {
-        // A remembered machine that did not get through is not tried twice.
-        val askAll = viaMemory && progress?.state == "failed" && progress?.phase == "connect"
+        // A remembered machine that did not get through is not tried twice,
+        // and a relay was for the job that ended, so a try through this phone
+        // starts again from asking.
+        val askAll = (viaMemory && progress?.state == "failed" && progress?.phase == "connect") || pick?.through == "phone"
+        endRelay()
+        relayNote = ""
         job = null
         progress = null
         handedBack = null
@@ -648,7 +752,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         var unanswered = 0
         while (isActive) {
             val state = progress?.state
-            if (state == "done" || state == "failed" || state == "cancelled") break
+            if (state == "done" || state == "failed" || state == "cancelled") {
+                // The fleet closes a relay when its job ends; this phone lets
+                // go too, and a job that finished needs no word about it.
+                endRelay()
+                if (state == "done") relayNote = ""
+                break
+            }
             if (progress != null || unanswered > 0) delay(2_000)
             val r = fleet.xosetup("status", job = id)
             if (r.ok && r.xosetup != null) {
@@ -723,6 +833,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     null -> {}
                 }
                 if (keepNote.isNotBlank()) Hint(keepNote)
+                // THROUGH THIS PHONE: what it is doing while the job runs,
+                // and why it stopped if it stopped first.
+                if (relay != null && setup != null && (setup.state == "running" || setup.state == "waiting")) {
+                    Hint("This phone is carrying $runningOn's connection to Xen Orchestra. Keep this screen open until it is done.", color = Design.Palette.ink.now)
+                }
+                if (relayNote.isNotBlank()) Hint(relayNote, color = Design.Palette.attention.now)
                 if (fleetNote.isNotBlank()) Hint(fleetNote)
                 when {
                     pollStopped -> {
@@ -877,13 +993,16 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                         val next = typed.trim()
                         if (next != address) {
                             // A NEW ADDRESS IS A NEW QUESTION: the probes, the
-                            // machine and the certificate were about the old one.
+                            // machine and the certificate were about the old one,
+                            // and so was a relay.
                             address = next
                             probes = null
                             probeText = ""
                             chosen = null
                             acknowledged = false
                             plainAccepted = false
+                            throughOffer = null
+                            endRelay()
                         }
                     },
                     label = { Text("Address") },
@@ -917,6 +1036,16 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                                 color = Design.Palette.attention.now,
                             )
                             found.forEach { p -> ProbeLine(p) }
+                            // THE WAY ROUND IT, offered only when the fleet named
+                            // a machine that can take it (C-2).
+                            throughOffer?.let { via ->
+                                Hint(XoRelayWords.throughLine(via))
+                                OutlinedButton(
+                                    enabled = !probing && !beginning,
+                                    onClick = { probeThroughPhone(via) },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) { Text(if (probing) "Asking through this phone…" else "Try through this phone") }
+                            }
                         }
                         else -> {
                             Hint(
@@ -967,7 +1096,10 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     // reached nothing, or reached something that is not it.
                     // Then, and only then, installing one is offered (C-2). A
                     // machine that could not tell has not said there is none.
-                    if (!policy && found.isNotEmpty() && found.all { !it.reachable || it.xo == false }) {
+                    // Nor an answer through this phone: installing needs a
+                    // machine that reaches the pool, and the fleet refuses one
+                    // through a relay.
+                    if (!policy && found.isNotEmpty() && found.none { it.through == "phone" } && found.all { !it.reachable || it.xo == false }) {
                         OutlinedButton(enabled = !beginning, onClick = { password = ""; deploying = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text("This pool has no Xen Orchestra yet")
                         }
@@ -997,7 +1129,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             // still shows, because it is what the machine holds
                             // the sign-in to.
                             Hint(XoSetup.trustedLine(certificate), color = Design.Palette.ink.now)
-                            PinLines(cert, pick.hostId, address)
+                            PinLines(cert, pick.hostId, address, throughPhone = pick.through == "phone")
                         }
                         // A path from memory has no details to show, and is
                         // taken only for a certificate the person accepted.
@@ -1070,7 +1202,10 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                         }
                     }
                     // WHO KEEPS IT, for the box as it stands. The fleet never does.
+                    // And through this phone, where it crosses as well as what
+                    // it crosses as.
                     val word = if (trusted) "" else ", and your word for the certificate,"
+                    val path = if (pick.through == "phone") XoRelayWords.crosses(pick.hostId) else ""
                     Hint(
                         when {
                             keep && canKeep && policy ->
@@ -1087,7 +1222,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             else ->
                                 "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
                                     "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
-                        },
+                        } + path,
                     )
                     // OFF UNTIL THE CERTIFICATE IS EITHER FINE OR ACKNOWLEDGED,
                     // or plain HTTP has been accepted: the host would refuse
@@ -1113,6 +1248,18 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     }
 }
 
+/** The words for working through this phone, which are iOS's (AddHypervisorView). */
+internal object XoRelayWords {
+    /** What it is, before it is asked for. */
+    fun throughLine(via: String) =
+        "This phone may be on a network that reaches it. $via can work through this phone: it opens HTTPS to Xen Orchestra " +
+            "itself, and this phone and the fleet carry only that encrypted connection. Keep this screen open while it runs."
+
+    /** Where the sign-in crosses, said after who keeps it. */
+    fun crosses(hostId: String) =
+        " It then crosses this phone inside the HTTPS connection $hostId opens to Xen Orchestra, which neither this phone nor the fleet can read."
+}
+
 /** A `begin` answer with the inputs it was sent for, which `run` seals under and not the fields' current text. */
 private class Pending(val setup: Fleet.Setup, val hostId: String, val where: String, val email: String)
 
@@ -1128,7 +1275,7 @@ private fun ProbeLine(p: Fleet.Probe) {
  * a browser before going on.
  */
 @Composable
-private fun PinLines(cert: String, hostId: String, address: String, fromMemory: Boolean = false) {
+private fun PinLines(cert: String, hostId: String, address: String, fromMemory: Boolean = false, throughPhone: Boolean = false) {
     Text("Certificate SHA-256", style = Design.Style.label, color = Design.Palette.inkDim.now)
     SelectionContainer {
         Text(
@@ -1139,8 +1286,11 @@ private fun PinLines(cert: String, hostId: String, address: String, fromMemory: 
         )
     }
     Hint(
-        if (fromMemory) "The certificate at $address as it was last time. The machine refuses to send the sign-in to any other."
-        else "The certificate $hostId saw at $address. Compare it with the one your browser shows for Xen Orchestra; the machine refuses to send the sign-in to any other.",
+        when {
+            fromMemory -> "The certificate at $address as it was last time. The machine refuses to send the sign-in to any other."
+            throughPhone -> "The certificate $hostId saw at $address through this phone, and this phone sees it itself. The machine refuses to send the sign-in to any other."
+            else -> "The certificate $hostId saw at $address. Compare it with the one your browser shows for Xen Orchestra; the machine refuses to send the sign-in to any other."
+        },
     )
 }
 
@@ -1177,7 +1327,7 @@ private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Bo
             Detail("Valid until", c.notAfter?.let { XoSetup.mediumDate(it) })
             Detail("Names", c.names.takeIf { it.isNotEmpty() }?.joinToString(", "))
         }
-        probe.cert?.let { PinLines(it, probe.hostId, address) }
+        probe.cert?.let { PinLines(it, probe.hostId, address, throughPhone = probe.through == "phone") }
         // THE PERSON'S EARLIER WORD for this same fingerprint, said in place
         // of the box it answers. A different certificate gets the box.
         if (kept) {

@@ -174,7 +174,8 @@ test('Android: the machine that got through last time is tried first, and every 
   assert.match(kfn('openRemembered'), /val path = XoSaved\.machine\(settings, address\.trim\(\)\)\?\.let \{ directPath\(it\) \}\s*if \(path != null\) \{[\s\S]*?viaMemory = true\s*return\s*\}\s*probe\(\)/);
   assert.match(kfn('directPath'), /XoHandoff\.pinnedCertificate\(settings, address\.trim\(\)\)/);
   assert.match(kfn('begin'), /\(!r\.ok \|\| setup == null\) && viaMemory -> \{[\s\S]*?probe\(\)\s*refusal = "\$why Your other machines were asked instead\."/);
-  assert.match(kfn('startAgain'), /val askAll = viaMemory && progress\?\.state == "failed" && progress\?\.phase == "connect"[\s\S]*?if \(askAll\) probe\(\)/);
+  // And a try through this phone, whose relay was for the job that ended.
+  assert.match(kfn('startAgain'), /val askAll = \(viaMemory && progress\?\.state == "failed" && progress\?\.phase == "connect"\) \|\| pick\?\.through == "phone"[\s\S]*?if \(askAll\) probe\(\)/);
   assert.match(kfn('probe'), /chosen = able\.singleOrNull\(\)\?\.hostId \?: able\.firstOrNull \{ it\.hostId == via \}\?\.hostId/);
   assert.match(kfn('notePath'), /if \(past\) \{\s*if \(runningOn\.isNotBlank\(\)\) XoSaved\.rememberMachine\(settings, where, runningOn\)/);
 });

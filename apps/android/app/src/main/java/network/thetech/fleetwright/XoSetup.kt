@@ -217,6 +217,12 @@ internal object XoSetup {
      */
     fun describe(probe: Fleet.Probe): String = when {
         !probe.reachable -> "Could not reach it"
+        // THROUGH THIS PHONE, in iOS's words for it.
+        probe.through == "phone" -> when (probe.xo) {
+            true -> "Reached Xen Orchestra through this phone"
+            false -> "Reached something through this phone, and it does not look like Xen Orchestra"
+            null -> "Reached something through this phone; cannot tell whether it is Xen Orchestra"
+        }
         !probe.tls -> when (probe.xo) {
             true -> "Reached Xen Orchestra over plain HTTP"
             false -> "Reached something over plain HTTP, and it does not look like Xen Orchestra"
