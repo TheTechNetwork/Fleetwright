@@ -502,64 +502,38 @@ test('a machine in a lab is asked of a box that saw the lab, on that network and
   assert.equal(asked.length, 1);
 });
 
-test('a lab is refused when it is not named, not a lab, joined to a group, not known to be free, or past the two a person may hold', async () => {
+test('a lab is refused when it is not named, not a lab, joined to a group, or not known to be free', async () => {
   const { core, asked } = fleet({ deb14: { xo: withLabs(ELI), protocol: 10 } });
   assert.equal((await core.dispatch(inLab(eli, {}))).error.code, 'bad_params', 'no lab named');
   assert.equal((await core.dispatch(inLab(eli, { network: NET }))).error.code, 'bad_params', 'not a lab');
   assert.equal((await core.dispatch(inLab(eli, { network: LAB1, group: GROUP }))).error.code, 'bad_params', 'a lab machine joined a group');
   assert.equal((await core.dispatch(inLab(eli, { network: LAB3 }))).error.code, 'lab_taken', 'a lab the box could not say was empty was handed out');
   assert.equal(asked.length, 0);
-
-  // Two held, one seen and one asked for: the third is refused.
-  const seen = [{ ...withLabs(ELI)[0], machines: [{ name: 'vm-aaaaaaaaaaaa', state: 'Running', lab: { name: 'fleetwright-lab-3', open: true } }] }];
-  const two = fleet({ deb14: { xo: seen, protocol: 10 } });
-  assert.equal((await two.core.dispatch(inLab(eli, { network: LAB1 }))).ok, true);
-  const third = await two.core.dispatch(inLab(eli, { network: LAB2 }));
-  assert.equal(third.error.code, 'too_many_labs');
-  assert.match(third.text, /2 labs already/);
-  assert.equal(two.asked.length, 1);
 });
 
-test('a lab ends with its session: after the grace with none running it is stopped as its owner, and a session again cancels that', async () => {
-  let clock = 1_800_000_000_000;
-  const core = new CoordinatorCore({ now: () => clock });
-  const vm = 'vm-aaaaaaaaaaaa';
-  const holder = [{ ...withLabs(ELI)[0], machines: [{ name: vm, state: 'Running', lab: { name: 'fleetwright-lab-1', open: true } }] }];
-  core.registry.connect('deb14', () => {});
-  core.registry.recordHealth('deb14', { hub: { reachable: true }, protocol: 10, maxSessions: 5, running: 0, free: 5, labels: [], xo: holder });
-  /** @type {any[]} */
-  const asked = [];
-  core.send = /** @type {any} */ (async (/** @type {any} */ host, /** @type {any} */ spec) => {
-    asked.push({ hostId: host.hostId, spec });
-    return { ok: true, text: `${vm} is stopped and removed with its disk.` };
-  });
-  // Enrolled as Eli's, as a VM with a ticket would be.
-  const ticket = await core.runnerTickets.mint({ owner: ELI, platform: `vm:${DEBIAN}`, repository: null, start: null });
-  const key = await generateKeyPair();
-  const enrolled = await core.enrolVm({ ticket: ticket.token, publicJwk: key.publicJwk });
-  const name = enrolled.body.hostId;
-  holder[0].machines[0].name = name;
-  core.registry.connect(name, () => {}, { ephemeral: true, owner: ELI });
-  const frame = (/** @type {number} */ running) => core.onHostMessage(name, { kind: 'health', health: { hub: { reachable: true }, protocol: 10, maxSessions: 1, running, free: 1 - running, labels: [] } });
+// LABS PER PERSON is the admin's, in the pool's policy, which the box reports
+// on each lab network (`perPerson`). None set is no limit: an older policy or
+// an older box says nothing, and nothing is never read as 0.
+const seenIn = (/** @type {number|undefined} */ perPerson) => [{
+  ...withLabs(ELI)[0],
+  networks: withLabs(ELI)[0].networks.map((n) => (perPerson === undefined ? n : { ...n, perPerson })),
+  machines: [{ name: 'vm-aaaaaaaaaaaa', state: 'Running', lab: { name: 'fleetwright-lab-3', open: true } }],
+}];
 
-  await frame(0);
-  clock += 60 * 60_000;
-  await frame(0);
-  assert.equal(asked.length, 0, 'a lab that never ran a session was ended');
-  await frame(1);
-  await frame(0);
-  clock += 4 * 60_000;
-  await frame(1);
-  await frame(0);
-  clock += 4 * 60_000;
-  await frame(0);
-  assert.equal(asked.length, 0, 'a session that came back did not restart the grace');
-  clock += 2 * 60_000;
-  await frame(0);
-  await until(() => asked.length === 1, 'the lab to be ended');
-  assert.equal(asked[0].hostId, 'deb14');
-  assert.deepEqual([asked[0].spec.verb, asked[0].spec.params], ['vmctl', { name, action: 'stop' }]);
-  assert.equal(asked[0].spec.requester.email, ELI, 'ended as somebody other than its owner');
+test('labs per person: no limit unless the policy sets one, and past one that is set, a refusal that names it', async () => {
+  // One held and two asked for: with no limit, each is asked of the box.
+  const free = fleet({ deb14: { xo: seenIn(undefined), protocol: 10 } });
+  assert.equal((await free.core.dispatch(inLab(eli, { network: LAB1 }))).ok, true);
+  assert.equal((await free.core.dispatch(inLab(eli, { network: LAB2 }))).ok, true, 'a policy that sets no limit held a person to two');
+  assert.equal(free.asked.length, 2);
+
+  // Limited to two: one held and one asked for is two, and the third is refused.
+  const capped = fleet({ deb14: { xo: seenIn(2), protocol: 10 } });
+  assert.equal((await capped.core.dispatch(inLab(eli, { network: LAB1 }))).ok, true);
+  const third = await capped.core.dispatch(inLab(eli, { network: LAB2 }));
+  assert.equal(third.error.code, 'too_many_labs');
+  assert.match(third.text, /lets one person hold 2 labs at once, and you hold 2\./);
+  assert.equal(capped.asked.length, 1);
 });
 
 test('a machine says which lab it is in and whether it is open, and anything else is no lab', () => {
