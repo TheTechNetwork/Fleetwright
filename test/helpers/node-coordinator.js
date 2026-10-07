@@ -339,7 +339,10 @@ export class Coordinator {
     });
 
     attachWebSocketServer(this.server, {
-      path: '/host/connect',
+      // A host's socket, and a phone's relay (see the Worker's copy of the
+      // relay route): two sockets of different parties, each authorised its
+      // own way before the upgrade completes.
+      path: ['/host/connect', '/api/xosetup/relay'],
       // The same handshake the Worker makes, for the same reason: a host proves
       // it holds the enrolled private key by signing a nonce issued moments
       // ago. There is no shared host token to fall back to, not even on
@@ -347,6 +350,15 @@ export class Coordinator {
       // production, and the sidecar generates its key without being asked.
       authorise: async (req) => {
         const url = new URL(req.url || '/', 'http://placeholder');
+        // A PHONE'S RELAY: its own device credential, as a person. Kept on the
+        // request for onConnection, which opens the relay as that phone.
+        if (url.pathname === '/api/xosetup/relay') {
+          const presented = credentialFrom(req.headers.authorization, url);
+          const client = isClientCredential(presented) ? await this.core.clients.verify(presented) : null;
+          if (!client?.email) return 'A relay is carried by the phone of a signed-in person.';
+          /** @type {any} */ (req).fleetClient = viewsAsMember(String(req.headers['x-fleetwright-view'] ?? '')) ? { ...client, admin: false } : client;
+          return true;
+        }
         const hostId = url.searchParams.get('hostId') || '';
         const proof = String(req.headers['x-fleet-proof'] || '');
         const nonce = String(req.headers['x-fleet-nonce'] || '');
@@ -355,7 +367,11 @@ export class Coordinator {
         this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
         return outcome.reason;
       },
-      onConnection: (conn, req) => this.#onHost(conn, req),
+      onConnection: (conn, req) => {
+        const url = new URL(req.url || '/', 'http://placeholder');
+        if (url.pathname === '/api/xosetup/relay') return this.#onRelay(conn, req, url);
+        return this.#onHost(conn, req);
+      },
     });
 
     await new Promise((resolve, reject) => {
@@ -446,6 +462,32 @@ export class Coordinator {
   }
 
 
+  /**
+   * A phone's relay socket, joined to the core — the Worker's route does the
+   * same with its own socket type.
+   *
+   * @param {import('./ws-server.js').WsConnection} conn
+   * @param {import('node:http').IncomingMessage} req
+   * @param {URL} url
+   */
+  #onRelay(conn, req, url) {
+    const client = /** @type {any} */ (req).fleetClient;
+    const opened = this.core.openRelay(
+      requesterFor(client),
+      client?.id ?? null,
+      { address: url.searchParams.get('address'), host: url.searchParams.get('host') },
+      {
+        send: (msg) => conn.send(JSON.stringify(msg)),
+        close: (code, reason) => conn.close(code, reason),
+      },
+    );
+    if (!opened.ok) return;
+    const relay = opened.relay;
+    conn.on('message', (text) => this.core.relayFromPhone(relay, text));
+    conn.on('close', () => this.core.relayPhoneGone(relay));
+    conn.on('error', () => this.core.relayPhoneGone(relay));
+  }
+
   /** @param {string} hostId */
   async #askHealth(hostId) {
     const host = this.registry.hosts.get(hostId);
@@ -466,7 +508,7 @@ export class Coordinator {
    * fan-out and correlation are decisions, and a decision implemented twice is
    * a decision that will eventually be made two different ways.
    *
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, device?: string|null }} spec
    * @returns {Promise<any>}
    */
   async dispatch(spec) {
@@ -1215,6 +1257,15 @@ export class Coordinator {
       }
     }
 
+    // A relay through the phone is a WebSocket, answered by the upgrade
+    // handler above; a plain GET is told so, in the Worker's words.
+    if (p === '/api/xosetup/relay' && req.method === 'GET') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'A relay is carried by the phone of a signed-in person.' });
+      }
+      return json(res, 426, { ok: false, error: { code: 'upgrade_required' }, text: 'A relay is a WebSocket: ask for an upgrade.' });
+    }
+
     // A Live Activity for a hypervisor setup — see the Worker's copy.
     if (p === '/api/xosetup/activity' && req.method === 'POST') {
       if (!client?.email) {
@@ -1423,6 +1474,8 @@ export class Coordinator {
         // The VERIFIED caller, for visibility. Null for the break-glass token,
         // which sees everything — it is what you hold when identity is broken.
         requester: requesterFor(client),
+        // Which phone, from its credential, for a relay through it.
+        device: client?.id ?? null,
         // `provision` only: a session to start on the runner once it joins.
         startAfter: body.start && typeof body.start === 'object' && !Array.isArray(body.start) ? body.start : null,
       });

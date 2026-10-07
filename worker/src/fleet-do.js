@@ -966,6 +966,42 @@ export class Fleet {
       return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
     }
 
+    // A RELAY THROUGH THE PHONE, for a pool no machine reaches: this phone's
+    // socket, joined to frames to one machine (relays.js). Only the phone's
+    // own device credential, which is what owns and carries the relay.
+    //
+    // ACCEPTED WITHOUT HIBERNATION, unlike a host's socket, and on purpose: a
+    // relay lives minutes and is busy while it does, and an open socket of
+    // this kind keeps the object in memory, which is where the relay is. A
+    // hibernated one would wake to a relay this object had forgotten.
+    if (url.pathname === '/api/xosetup/relay' && request.method === 'GET') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'A relay is carried by the phone of a signed-in person.' }, 403);
+      }
+      if (request.headers.get('upgrade') !== 'websocket') {
+        return json({ ok: false, error: { code: 'upgrade_required' }, text: 'A relay is a WebSocket: ask for an upgrade.' }, 426);
+      }
+      const pair = new WebSocketPair();
+      const [phoneEnd, server] = Object.values(pair);
+      server.accept();
+      const opened = this.core.openRelay(
+        requesterFor(client),
+        client.id ?? null,
+        { address: url.searchParams.get('address'), host: url.searchParams.get('host') },
+        {
+          send: (msg) => server.send(JSON.stringify(msg)),
+          close: (code, reason) => server.close(code, reason),
+        },
+      );
+      if (opened.ok) {
+        const relay = opened.relay;
+        server.addEventListener('message', (ev) => this.core.relayFromPhone(relay, typeof ev.data === 'string' ? ev.data : ''));
+        server.addEventListener('close', () => this.core.relayPhoneGone(relay));
+        server.addEventListener('error', () => this.core.relayPhoneGone(relay));
+      }
+      return new Response(null, { status: 101, webSocket: phoneEnd });
+    }
+
     if (url.pathname === '/api/runner-tokens' && request.method === 'POST') {
       if (!client?.email) {
         return json({ ok: false, text: 'Sign in first — a runner token belongs to a person.' }, 403);
@@ -1226,6 +1262,9 @@ export class Fleet {
           // The VERIFIED caller, for visibility. Null for the break-glass token,
           // which sees everything — it is what you hold when identity is broken.
           requester: requesterFor(client),
+          // Which phone, from its credential: a relay through a phone may be
+          // named only by the phone carrying it (relays.js).
+          device: client?.id ?? null,
           // `provision` only: a session to start on the runner once it joins.
           // Beside the params like `host`, because the box that dispatches the
           // run never sees it — the coordinator holds it with the ticket.

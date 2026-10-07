@@ -2672,6 +2672,44 @@
           }
         }
       }
+    },
+    "/api/xosetup/relay": {
+      "get": {
+        "summary": "Carry a relay through this phone, for a pool no machine reaches",
+        "description": "A WebSocket. When no machine in the fleet reaches a Xen Orchestra address (the `xoprobe` answer names a machine in `relay`), the phone that is adding it opens this, and the coordinator joins it to frames to that one machine. The machine opens TLS over it itself and holds it to the pin, so the phone and the coordinator carry ciphertext; the phone connects to `address` on its own network and nowhere else. The first message is `{op: \"ready\", relay, hostId, address, expiresAt, maxBytes}`; then `open`, `data` (base64) and `end` for each connection the machine makes, and `closed` with a sentence when it ends. The phone answers `opened` or `refused`, then `data` and `end`. Name the relay in `xoprobe` and `xosetup begin` as `relay`. An admin's device credential only, and only that device may name the relay. One probe, then one job; fifteen minutes and 64 MiB at most; closed when the job ends. See docs/hypervisors.md, \"Through the phone\".",
+        "operationId": "openRelay",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "required": true,
+            "description": "Where Xen Orchestra answers, as the person typed it: a host name or address, with an optional port.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "host",
+            "in": "query",
+            "required": false,
+            "description": "The machine to carry it for, as `xoprobe` named it in `relay.hostId`. Absent, the coordinator chooses.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "The relay is open; the first message says which it is, or why it was closed."
+          },
+          "403": {
+            "description": "Not a signed-in person\u2019s device."
+          },
+          "426": {
+            "description": "Not a WebSocket upgrade."
+          }
+        }
+      }
     }
   }
 }
