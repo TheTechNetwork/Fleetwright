@@ -715,7 +715,8 @@ export class Sidecar {
       // A MACHINE FROM A HYPERVISOR IS THIS PROCESS'S TOO: the pool's token
       // is in its memory and nowhere else (xo-pools.js), and the ticket the
       // machine boots with must not become a command line.
-      if (intent.verb === 'provision' && intent.params?.platform === 'vm') return reply(await this.#makeVm(intent));
+      // A LAB IS A VM in a lab of its own (xo-pools.js, make), never a runner.
+      if (intent.verb === 'provision' && (intent.params?.platform === 'vm' || intent.params?.platform === 'lab')) return reply(await this.#makeVm(intent));
       if (intent.verb === 'vmctl') return reply(await this.#vmctl(intent));
 
       // A session on a runner waits for the answer about its owner's Claude
@@ -1178,6 +1179,7 @@ export class Sidecar {
       minutes: intent.params.minutes == null ? null : Number(intent.params.minutes),
       network: intent.params.network ? String(intent.params.network) : null,
       group: intent.params.group ? String(intent.params.group) : null,
+      lab: intent.params.platform === 'lab',
       coordinatorUrl: origin,
     };
     let r = await this.pools.make(ask);

@@ -2,13 +2,15 @@
 // docs/hypervisors.md, "The uplink" and "The edge router".
 //
 // WHAT IT IS. A private network inside the pool, `fleetwright-uplink`, that
-// labs put their own router's WAN on, and one OPNsense VM, `fleetwright-edge`,
-// with its WAN on the network the person chose as the way out and its LAN on
-// the uplink. Its rules are written once, here, and nothing in the fleet can
-// change them: labs reach the internet, and nothing private, link-local or
-// multicast, so a lab cannot reach the person's LAN, the pool's API or
-// another lab. It has no login at all (root's password is `*`), because the
-// one thing that could log into it is a lab on its LAN side.
+// the fleet's machines are on, and one OPNsense VM, `fleetwright-edge`, with
+// its WAN on the network the person chose as the way out, its LAN on the
+// uplink, and an interface on each lab the policy asked for (LAB, below).
+// Its rules are written once, here, and nothing in the fleet can change
+// them: machines reach the internet, and nothing private, link-local or
+// multicast, so none can reach the person's LAN, the pool's API or a lab; a
+// lab reaches the same, or, closed, only the fleet and Claude. It has no
+// login at all (root's password is `*`), because the one thing that could
+// log into it is a machine on one of its inside networks.
 //
 // HOW IT IS BUILT WITHOUT ANYBODY AT A CONSOLE, which is the part that was
 // open. OPNsense takes no cloud-init, and its configuration importer waits for
@@ -45,6 +47,7 @@ import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
+import { REQUIRED_HOSTS } from '../../core/egress.js';
 import { connectPinnedTls, splitAddress } from './xo-ws.js';
 
 /**
@@ -61,6 +64,22 @@ export const OPNSENSE_IMAGE = Object.freeze({
   rawSize: 3221225472,
   /** /usr/local/etc/config.xml, as the nano build left it, and its SHA-256. */
   config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
+  /**
+   * MORE ROOM, IN THE FILE'S OWN BLOCKS, for an edge with labs, whose
+   * configuration does not fit in 5,234 bytes. The file system's fragments
+   * are 4 KiB, so the file already owns 8,192 bytes on the disk (its inode
+   * counts 16 sectors), and the 2,958 after its end are zeros. Growing it is
+   * one field: the size in its inode (number 6523), an 8-byte little-endian
+   * integer at this offset, from 5,234 to 8,192. Nothing is allocated, moved
+   * or freed, and the file system keeps no check-hashes (its superblock's
+   * `fs_metackhash` is 0), so nothing else records the size. Both are
+   * checked before they are written, like the configuration itself: the
+   * field must say 5,234 and the slack must be zeros. Read from the 26.7
+   * image pinned above, with the file system's own superblock and inode
+   * table.
+   */
+  room: 8192,
+  sizeField: Object.freeze({ offset: 1833744, was: 5234 }),
 });
 
 /** Names in Xen Orchestra. The edge is not tagged `fleetwright`, so the fleet's token cannot touch it. */
@@ -105,6 +124,57 @@ const RULE_FILE_UUID = '5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1';
 
 /** What a lab may not reach: private, shared, link-local and multicast space. */
 export const NOT_FROM_LABS = Object.freeze(['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16', '224.0.0.0/4']);
+
+/**
+ * LABS: networks of their own on the edge (docs/hypervisors.md, "Labs").
+ * Each is a private network in the pool with no interface of its own, made by
+ * the policy job, attached to the edge as one more interface (xn2 for the
+ * first), with the edge's address on it and its DHCP. Machines in a lab are
+ * on that network only, so they reach each other directly and everything else
+ * through the edge, by the lab's rules: names from the edge, nothing private
+ * (not another lab, not the uplink, not the person's LAN), and then either
+ * the internet (an open lab) or the fleet's own paths and nothing else (a
+ * closed lab). Up to four: Xen gives an HVM guest seven interfaces, and the
+ * edge has two of its own.
+ */
+export const LAB = Object.freeze({
+  max: 4,
+  /** The network's name in Xen Orchestra, numbered from 1, and the tag that says which kind it is. */
+  prefix: 'fleetwright-lab-',
+  openTag: 'fleetwright-lab:open',
+  closedTag: 'fleetwright-lab:closed',
+  /** On the edge, which labs it was built with, in order: `o` open, `c` closed. */
+  edgeTag: 'fleetwright-edge-labs:',
+  /** Lab n is 10.250.n.0/24, the edge at .1, machines given .100 to .250. */
+  address: (/** @type {number} */ n) => `10.250.${n}.1`,
+  cidr: 24,
+});
+
+/**
+ * Which labs an edge was built with, from its tag: `o` and `c` in order, ''
+ * for none (an edge built before labs has no tag, and has none).
+ *
+ * @param {any} vm @returns {string}
+ */
+export function edgeLabsOf(vm) {
+  const t = (Array.isArray(vm?.tags) ? vm.tags : []).find((/** @type {string} */ x) => x.startsWith(LAB.edgeTag));
+  return t && /^[oc]{0,4}$/.test(t.slice(LAB.edgeTag.length)) ? t.slice(LAB.edgeTag.length) : '';
+}
+
+/**
+ * Where a closed lab may still go: the fleet's coordinator, so its machine
+ * can enrol and its sidecar stay connected, and the hosts Claude cannot work
+ * without, which are the sandbox's own required list (src/core/egress.js)
+ * rather than a second one. HTTPS only, by name: an OPNsense host alias,
+ * which the edge resolves with its own Unbound and keeps resolved.
+ *
+ * @param {string|null} coordinatorUrl
+ * @returns {string[]}
+ */
+export function fleetHosts(coordinatorUrl) {
+  const host = coordinatorUrl ? new URL(coordinatorUrl).hostname.toLowerCase() : null;
+  return [...new Set([...(host ? [host] : []), ...REQUIRED_HOSTS])];
+}
 
 /**
  * The edge's whole configuration, padded with spaces to exactly the length
@@ -152,15 +222,54 @@ export const NOT_FROM_LABS = Object.freeze(['10.0.0.0/8', '172.16.0.0/12', '192.
  * these sections as an older format. That is also why Unbound's legacy
  * `<unbound>` section is gone: it is what an older migration would fold in.
  *
- * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean }} [opts]
+ * WITH LABS (`labs`, one entry a lab, true for open), each lab is interface
+ * `opt<n>` on `xn<n+1>`, in the order the VM's interfaces are made, with the
+ * edge at LAB.address(n) and DHCP there. Their rules, after the uplink's and
+ * written once over every lab interface (OPNsense makes one pf rule per
+ * interface of a rule that names several): names from the edge, no other
+ * resolver, nothing private, then an open lab's way out (diverted like the
+ * uplink's when the edge blocks), a closed lab's HTTPS to the fleet's hosts
+ * (`fleet`, fleetHosts), and everything else a closed lab sends blocked and
+ * logged. Suricata watches the labs as it watches the uplink. Labs do not fit
+ * in the 5,234 bytes, so a configuration with any is the room the file's own
+ * blocks give it (OPNSENSE_IMAGE.room), and the build grows the file to it.
+ * BOOTED IN QEMU that way, four labs, two of them closed, blocking: the file
+ * was read whole, each lab's interface came up at its address with its DHCP
+ * range, Suricata watched all five inside networks, and `pfctl -sr` showed
+ * the rules above, one per interface, in this order. The fleet's alias was
+ * there and empty: this sandbox has no outbound DNS to resolve it with.
+ *
+ * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[] }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0', lanIf = 'xn1', block = false } = {}) {
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], length = labs.length ? OPNSENSE_IMAGE.room : OPNSENSE_IMAGE.config.length } = {}) {
   const { address, prefix, from, to } = EDGE.lan;
-  /** @param {number} seq @param {string} action @param {string} body @param {string} descr */
-  const rule = (seq, action, body, descr) =>
-    `<rule><enabled>1</enabled><sequence>${seq}</sequence><action>${action}</action><quick>1</quick><interface>lan</interface>` +
+  if (labs.length > LAB.max) throw new Error(`an edge has room for ${LAB.max} labs, not ${labs.length}`);
+  if (labs.includes(false) && !fleet.length) throw new Error('a closed lab needs the fleet’s hosts to let through');
+  const labIf = labs.map((_, i) => `opt${i + 1}`);
+  const openIf = labIf.filter((_, i) => labs[i]);
+  const closedIf = labIf.filter((_, i) => !labs[i]);
+  /** @param {number} seq @param {string} action @param {string} body @param {string} descr @param {string} [on] */
+  const rule = (seq, action, body, descr, on = 'lan') =>
+    `<rule><enabled>1</enabled><sequence>${seq}</sequence><action>${action}</action><quick>1</quick><interface>${on}</interface>` +
     `<direction>in</direction><ipprotocol>inet</ipprotocol>${body}<description>${descr}</description></rule>`;
+  const divert = block ? `<divert-to>${EDGE_FILTER.divertPort}</divert-to>` : '';
+  // THE SAME FIRST THREE RULES FOR EVERY INSIDE INTERFACE. Without labs they
+  // are the uplink's alone, exactly as booted before labs existed; with them,
+  // each rule names the uplink and every lab, from anything on them, and
+  // names come from the edge's own address on whichever it arrived on.
+  const inside = ['lan', ...labIf].join(',');
+  const src = labs.length ? 'any' : 'lan';
+  const self = labs.length ? '(self)' : 'lanip';
+  const out = ['lan', ...openIf].join(',');
+  const closed = closedIf.join(',');
+  const labRules = closedIf.length
+    ? rule(9, 'pass', `<protocol>TCP</protocol><source_net>any</source_net><destination_net>fleetwright_fleet</destination_net><destination_port>443</destination_port>${divert}`, 'Closed labs reach the fleet and Claude', closed) +
+      '\n' +
+      rule(10, 'block', '<protocol>any</protocol><source_net>any</source_net><destination_net>any</destination_net><log>1</log>', 'Nothing else leaves a closed lab', closed) +
+      '\n'
+    : '';
+  const labNets = labs.map((_, i) => `${LAB.address(i + 1).replace(/\.1$/, '.0')}/${LAB.cidr}`);
   const xml =
     '<?xml version="1.0"?>\n<opnsense>\n<system>\n' +
     '<use_mfs_tmp/><use_mfs_var/><serialspeed>115200</serialspeed><primaryconsole>serial</primaryconsole><secondaryconsole>video</secondaryconsole>\n' +
@@ -177,26 +286,33 @@ export function edgeConfig({ length = OPNSENSE_IMAGE.config.length, wanIf = 'xn0
     '</system>\n<interfaces>\n' +
     `<wan><enable>1</enable><if>${wanIf}</if><descr>WAN</descr><ipaddr>dhcp</ipaddr><blockpriv>0</blockpriv><blockbogons>0</blockbogons></wan>\n` +
     `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${address}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
+    labs.map((_, i) => `<opt${i + 1}><enable>1</enable><if>xn${i + 2}</if><descr>LAB${i + 1}</descr><ipaddr>${LAB.address(i + 1)}</ipaddr><subnet>${LAB.cidr}</subnet></opt${i + 1}>\n`).join('') +
     '</interfaces>\n' +
-    `<dnsmasq><enable>1</enable><port>53053</port><interface>lan</interface><dhcp_ranges><interface>lan</interface><start_addr>${from}</start_addr><end_addr>${to}</end_addr></dhcp_ranges></dnsmasq>\n` +
+    `<dnsmasq><enable>1</enable><port>53053</port><interface>${['lan', ...labIf].join(',')}</interface><dhcp_ranges><interface>lan</interface><start_addr>${from}</start_addr><end_addr>${to}</end_addr></dhcp_ranges>` +
+    labIf.map((on, i) => `<dhcp_ranges><interface>${on}</interface><start_addr>${LAB.address(i + 1).replace(/\.1$/, '.100')}</start_addr><end_addr>${LAB.address(i + 1).replace(/\.1$/, '.250')}</end_addr></dhcp_ranges>`).join('') +
+    '</dnsmasq>\n' +
     '<nat><outbound><mode>automatic</mode></outbound></nat>\n<filter/>\n' +
     '<OPNsense><Firewall>\n' +
     '<Alias><aliases><alias><enabled>1</enabled><name>fleetwright_private</name><type>network</type>' +
     `<content>${NOT_FROM_LABS.join('\n')}</content><description>What labs may not reach</description></alias>` +
-    '<alias><enabled>1</enabled><name>fleetwright_dns</name><type>port</type><content>53\n853</content><description>DNS and DNS over TLS</description></alias></aliases></Alias>\n' +
+    '<alias><enabled>1</enabled><name>fleetwright_dns</name><type>port</type><content>53\n853</content><description>DNS and DNS over TLS</description></alias>' +
+    (closedIf.length ? `<alias><enabled>1</enabled><name>fleetwright_fleet</name><type>host</type><content>${fleet.join('\n')}</content><description>The fleet and Claude</description></alias>` : '') +
+    '</aliases></Alias>\n' +
     '<Filter><rules>\n' +
-    rule(1, 'pass', '<protocol>TCP/UDP</protocol><source_net>lan</source_net><destination_net>lanip</destination_net><destination_port>53</destination_port>', 'Labs ask the edge for names') +
+    rule(1, 'pass', `<protocol>TCP/UDP</protocol><source_net>${src}</source_net><destination_net>${self}</destination_net><destination_port>53</destination_port>`, 'Labs ask the edge for names', inside) +
     '\n' +
-    rule(2, 'block', '<protocol>TCP/UDP</protocol><source_net>lan</source_net><destination_net>any</destination_net><destination_port>fleetwright_dns</destination_port>', 'No other resolver') +
+    rule(2, 'block', `<protocol>TCP/UDP</protocol><source_net>${src}</source_net><destination_net>any</destination_net><destination_port>fleetwright_dns</destination_port>`, 'No other resolver', inside) +
     '\n' +
-    rule(3, 'block', '<protocol>any</protocol><source_net>lan</source_net><destination_net>fleetwright_private</destination_net>', 'Nothing private from a lab') +
+    rule(3, 'block', `<protocol>any</protocol><source_net>${src}</source_net><destination_net>fleetwright_private</destination_net>`, 'Nothing private from a lab', inside) +
     '\n' +
-    rule(4, 'pass', `<protocol>any</protocol><source_net>lan</source_net><destination_net>any</destination_net>${block ? `<divert-to>${EDGE_FILTER.divertPort}</divert-to>` : ''}`, 'Labs reach the internet') +
-    '\n</rules><snatrules/><npt/><onetoone/></Filter>\n</Firewall>\n' +
+    rule(4, 'pass', `<protocol>any</protocol><source_net>${src}</source_net><destination_net>any</destination_net>${divert}`, 'Labs reach the internet', out) +
+    '\n' +
+    labRules +
+    '</rules><snatrules/><npt/><onetoone/></Filter>\n</Firewall>\n' +
     // Fixed ids, so the same edge is the same bytes, and the IDS can name its cron job.
     '<unboundplus version="1.0.14"><general><enabled>1</enabled></general><dnsbl><blocklist uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e01">' +
     `<enabled>1</enabled><type>${EDGE_FILTER.blocklists.join(',')}</type><description>Threats</description></blocklist></dnsbl></unboundplus>\n` +
-    `<IDS version="1.1.1"><general><enabled>1</enabled>${block ? '<mode>divert</mode>' : ''}<interfaces>lan</interfaces><homenet>${EDGE.lan.address.replace(/\.\d+$/, '.0')}/${prefix}</homenet>` +
+    `<IDS version="1.1.1"><general><enabled>1</enabled>${block ? '<mode>divert</mode>' : ''}<interfaces>${['lan', ...labIf].join(',')}</interfaces><homenet>${[`${EDGE.lan.address.replace(/\.\d+$/, '.0')}/${prefix}`, ...labNets].join(',')}</homenet>` +
     '<UpdateCron>5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03</UpdateCron></general><files>' +
     EDGE_FILTER.rules.map((f, i) => `<file uuid="${RULE_FILE_UUID}${i}"><filename>${f}</filename><enabled>1</enabled></file>`).join('') +
     '</files>' +
@@ -229,57 +345,98 @@ export function isDefaultConfig(original) {
 }
 
 /**
+ * Is this the default configuration followed by nothing but the zeros of the
+ * file's last fragment? What growing the file into its own blocks replaces.
+ *
+ * @param {Buffer} original
+ */
+export function isDefaultConfigWithSlack(original) {
+  const { length } = OPNSENSE_IMAGE.config;
+  return original.length === OPNSENSE_IMAGE.room && isDefaultConfig(original.subarray(0, length)) && original.subarray(length).every((b) => b === 0);
+}
+
+/** A size as the inode keeps it: 8 bytes, little-endian. @param {number} n */
+const sizeBytes = (n) => {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(BigInt(n));
+  return b;
+};
+
+/**
+ * What the build writes into the image: the configuration over the default
+ * one, and, when it needs the room (labs), the file's size in its inode, each
+ * checked against what must be there before it is replaced.
+ *
+ * @param {Buffer} replacement  edgeConfig's answer
+ * @returns {Array<{ offset: number, replacement: Buffer, check: (original: Buffer) => boolean, what: string }>}
+ */
+export function imagePatches(replacement) {
+  const { config, room, sizeField } = OPNSENSE_IMAGE;
+  if (replacement.length === config.length) return [{ offset: config.offset, replacement, check: isDefaultConfig, what: 'the default configuration' }];
+  if (replacement.length !== room) throw new Error(`a configuration is ${config.length} or ${room} bytes, not ${replacement.length}`);
+  return [
+    { offset: sizeField.offset, replacement: sizeBytes(room), check: (b) => b.equals(sizeBytes(sizeField.was)), what: 'the configuration’s size' },
+    { offset: config.offset, replacement, check: isDefaultConfigWithSlack, what: 'the default configuration' },
+  ];
+}
+
+/**
  * The image as it streams by, with the configuration's bytes replaced and
- * every other byte passed through untouched. The replaced region is held
+ * every other byte passed through untouched. Each replaced region is held
  * until it has all arrived and been checked, then let go in one piece; the
  * total is checked at the end, so a short or long image is an error rather
- * than a disk that is quietly wrong.
+ * than a disk that is quietly wrong. Several regions, in order, when the file
+ * is grown as well (imagePatches); one, given as `offset` and `replacement`,
+ * otherwise.
  */
 export class ConfigPatch extends Transform {
   /**
-   * @param {{ offset: number, replacement: Buffer, total: number, check?: (original: Buffer) => boolean }} opts
+   * @param {{ offset?: number, replacement?: Buffer, total: number, check?: (original: Buffer) => boolean,
+   *   regions?: Array<{ offset: number, replacement: Buffer, check: (original: Buffer) => boolean, what?: string }> }} opts
    */
-  constructor({ offset, replacement, total, check = isDefaultConfig }) {
+  constructor({ offset = 0, replacement = Buffer.alloc(0), total, check = isDefaultConfig, regions }) {
     super();
-    this.offset = offset;
-    this.regionEnd = offset + replacement.length;
-    this.replacement = replacement;
+    this.regions = [...(regions ?? [{ offset, replacement, check, what: 'the default configuration' }])].sort((a, b) => a.offset - b.offset);
     this.total = total;
-    this.check = check;
     this.at = 0;
     /** @type {Buffer[]} */
     this.held = [];
-    /** @type {Buffer[]} */
-    this.original = [];
   }
 
   /** @param {Buffer} chunk @param {BufferEncoding} _enc @param {(e?: Error|null) => void} done */
   _transform(chunk, _enc, done) {
-    const start = this.at;
-    const stop = start + chunk.length;
-    this.at = stop;
-    // Wholly before or after the region, or after it has been let go.
-    if (stop <= this.offset || start >= this.regionEnd) {
-      if (this.held.length) this.held.push(chunk);
-      else this.push(chunk);
-      return done();
+    let pos = this.at;
+    this.at += chunk.length;
+    let rest = chunk;
+    while (rest.length) {
+      const region = this.regions[0];
+      if (!region) {
+        this.push(rest);
+        break;
+      }
+      const end = region.offset + region.replacement.length;
+      // Before the next region: let it go now.
+      if (pos < region.offset) {
+        const n = Math.min(rest.length, region.offset - pos);
+        this.push(rest.subarray(0, n));
+        rest = rest.subarray(n);
+        pos += n;
+        continue;
+      }
+      // Inside it: held until all of it is in.
+      const n = Math.min(rest.length, end - pos);
+      this.held.push(rest.subarray(0, n));
+      rest = rest.subarray(n);
+      pos += n;
+      if (pos < end) break;
+      const original = Buffer.concat(this.held);
+      this.held = [];
+      if (!region.check(original)) {
+        return done(new Error(`the OPNsense image does not have ${region.what || 'the default configuration'} where it should, so it was not written`));
+      }
+      this.push(Buffer.from(region.replacement));
+      this.regions.shift();
     }
-    // Overlapping: what precedes the region goes now; the rest is held.
-    const from = Math.max(0, this.offset - start);
-    const to = Math.min(chunk.length, this.regionEnd - start);
-    if (from > 0 && !this.held.length) this.push(chunk.subarray(0, from));
-    this.original.push(chunk.subarray(from, to));
-    this.held.push(chunk.subarray(this.held.length ? 0 : from));
-    if (stop < this.regionEnd) return done();
-    // The whole region is in: check it, then replace it.
-    const original = Buffer.concat(this.original);
-    if (!this.check(original)) {
-      return done(new Error('the OPNsense image does not have the default configuration where it should, so it was not written'));
-    }
-    const held = Buffer.concat(this.held);
-    this.held = [];
-    this.original = [];
-    this.push(Buffer.concat([this.replacement, held.subarray(this.replacement.length)]));
     done();
   }
 
@@ -550,6 +707,58 @@ export async function ensureGroups({ admin, pool, networks, setId, inSet, count 
 }
 
 /**
+ * LAB NETWORKS, for the labs on the edge (LAB): private networks in the pool
+ * with no interface of their own, `fleetwright-lab-1` on, as many as asked,
+ * each tagged open or closed, and put in the resource set so the fleet's
+ * machines can go on them. Made by the policy job, which holds the admin
+ * sign-in, because the fleet's limited user cannot make networks or tag one.
+ *
+ * NEVER REMOVED, like a group network: a machine may be on one. One past the
+ * number asked loses its kind's tag, and with it the box stops offering it
+ * (xo-pools.js reads the tag), and the edge built without it has no
+ * interface there, so a machine left on it reaches nothing.
+ *
+ * @param {{ admin: any, pool: string, networks: any[], setId: string, inSet: string[], open: number, closed: number }} opts
+ * @returns {Promise<{ labs: Array<{ id: string, name: string, open: boolean }>, made: string[] }>}
+ */
+export async function ensureLabs({ admin, pool, networks, setId, inSet, open, closed }) {
+  const count = Math.min(LAB.max, open + closed);
+  /** @type {Array<{ id: string, name: string, open: boolean }>} */
+  const labs = [];
+  /** @type {string[]} */
+  const made = [];
+  const there = (/** @type {string} */ name) => networks.find((n) => n?.name_label === name && n?.$pool === pool);
+  for (let i = 1; i <= count; i++) {
+    const name = `${LAB.prefix}${i}`;
+    const isOpen = i <= open;
+    const found = there(name);
+    let id = found?.id;
+    if (!id) {
+      id = await admin.call('network.create', {
+        pool,
+        name,
+        description: 'A lab: machines on it reach each other, and the rest only through the edge router, by the lab’s rules. Made by Fleetwright.',
+      });
+      made.push(name);
+    }
+    const tags = Array.isArray(found?.tags) ? found.tags : [];
+    const want = isOpen ? LAB.openTag : LAB.closedTag;
+    const other = isOpen ? LAB.closedTag : LAB.openTag;
+    if (tags.includes(other)) await admin.call('tag.remove', { id, tag: other });
+    if (!tags.includes(want)) await admin.call('tag.add', { id, tag: want });
+    if (!inSet.includes(id)) await admin.call('resourceSet.addObject', { id: setId, object: id });
+    labs.push({ id: String(id), name, open: isOpen });
+  }
+  // ONE NO LONGER ASKED FOR is no longer a lab: its kind goes.
+  for (const n of networks) {
+    const m = new RegExp(`^${LAB.prefix}(\\d+)$`).exec(String(n?.name_label || ''));
+    if (!m || n?.$pool !== pool || Number(m[1]) <= count) continue;
+    for (const tag of [LAB.openTag, LAB.closedTag]) if (Array.isArray(n.tags) && n.tags.includes(tag)) await admin.call('tag.remove', { id: n.id, tag });
+  }
+  return { labs, made };
+}
+
+/**
  * Where the router's disk goes: the storage the person chose for it, or,
  * when they chose none (a phone that predates the choice), the storage the
  * fleet may use in this pool with the most room. Either must be in the pool
@@ -618,6 +827,14 @@ export function buildFill(downloaded, written) {
  * gone for as long as the build takes. `rebuilding` is told first, so the job
  * can say "rebuilding" rather than "building" if it is cancelled.
  *
+ * LABS (`labs`): the lab networks the edge is to have an interface on, in
+ * order, each open or closed (ensureLabs makes them), and `fleet`, the hosts
+ * a closed lab may still reach (fleetHosts). Null leaves an edge that is
+ * there with whatever labs it has, as `block` does. An edge built with other
+ * labs is rebuilt the same way, keeping how it filters unless `block` says
+ * otherwise: an interface cannot be given to a VM with no login and have
+ * rules written for it, so the configuration is built again with it.
+ *
  * @param {{
  *   admin: any,
  *   pool: string,
@@ -627,6 +844,8 @@ export function buildFill(downloaded, written) {
  *   fleetSrs: string[],
  *   sr?: string|null,
  *   block?: boolean|null,
+ *   labs?: Array<{ id: string, open: boolean }>|null,
+ *   fleet?: string[],
  *   rebuilding?: () => void,
  *   address: string, pin: string|null, plain: boolean,
  *   imageDir: string,
@@ -638,17 +857,31 @@ export function buildFill(downloaded, written) {
  * }} opts
  */
 export async function ensureEdge(opts) {
-  const { admin, pool, egress, block = null, rebuilding, say } = opts;
+  const { admin, pool, egress, block = null, labs = null, rebuilding, say } = opts;
   const vms = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {});
   const edge = /** @type {any} */ (vms.find((v) => /** @type {any} */ (v)?.$pool === pool && /** @type {any} */ (v)?.tags?.includes?.(EDGE.tag)));
   const blocks = edge?.tags?.includes?.(EDGE.blocksTag) === true;
-  if (edge && block !== null && block !== blocks) {
+  const hasLabs = edge ? edgeLabsOf(edge) : '';
+  const wantLabs = labs === null ? hasLabs : labsKey(labs);
+  const filterChanged = block !== null && block !== blocks;
+  // ON THE LABS' OWN NETWORKS, not only as many of each kind: a lab network
+  // made again in Xen Orchestra is a new network the old edge is not on.
+  const vifs = edge ? /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: edge.id } })) || {})) : [];
+  const onLabs = labs === null || labs.every((l, i) => vifs.some((v) => String(v?.device) === String(i + 2) && v?.$network === l.id));
+  if (edge && (filterChanged || wantLabs !== hasLabs || !onLabs)) {
+    const keep = block ?? blocks;
     rebuilding?.();
-    say(block ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.' : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.');
+    say(
+      filterChanged
+        ? keep
+          ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.'
+          : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.'
+        : `Rebuilding the edge router with ${labsSaid(wantLabs)}. Machines behind it have no way out until it is up.`,
+    );
     if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
     let said;
     try {
-      said = await buildEdge({ ...opts, block });
+      said = await buildEdge({ ...opts, block: keep, labs: labs ?? [] });
     } catch (e) {
       // Never neither: the one that was there comes back as it was.
       await admin.call('vm.start', { id: edge.id }).catch(() => {});
@@ -659,8 +892,7 @@ export async function ensureEdge(opts) {
     return `${said} It replaced the one that was there, which was removed.`;
   }
   if (edge) {
-    const vifs = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: edge.id } })) || {});
-    const wan = /** @type {any} */ (vifs.find((v) => String(/** @type {any} */ (v)?.device) === '0'));
+    const wan = vifs.find((v) => String(v?.device) === '0');
     const said = [];
     if (wan && wan.$network !== egress.id) {
       await admin.call('vif.set', { id: wan.id, network: egress.id });
@@ -670,17 +902,32 @@ export async function ensureEdge(opts) {
       await admin.call('vm.start', { id: edge.id });
       said.push('It was stopped, and was started.');
     }
-    return [`The edge router was already there, on ${egress.name}, ${blocks ? 'dropping' : 'logging'} what its threat rules match.`, ...said].join(' ');
+    return [`The edge router was already there, on ${egress.name}, ${blocks ? 'dropping' : 'logging'} what its threat rules match${hasLabs ? `, with ${labsSaid(hasLabs)}` : ''}.`, ...said].join(' ');
   }
-  return buildEdge({ ...opts, block: block === true });
+  return buildEdge({ ...opts, block: block === true, labs: labs ?? [] });
+}
+
+/** Labs as the edge's tag keeps them: `o` open, `c` closed, in order. @param {Array<{ open: boolean }>} labs */
+const labsKey = (labs) => labs.map((l) => (l.open ? 'o' : 'c')).join('');
+
+/** How many labs of each kind, as a person says it. @param {string} key */
+function labsSaid(key) {
+  const open = [...key].filter((c) => c === 'o').length;
+  const closed = key.length - open;
+  if (!key) return 'no labs';
+  const n = (/** @type {number} */ x, /** @type {string} */ kind) => `${x === 1 ? 'one' : x} ${kind} lab${x === 1 ? '' : 's'}`;
+  return [open ? n(open, 'open') : null, closed ? n(closed, 'closed') : null].filter(Boolean).join(' and ');
 }
 
 /**
  * A new edge router, built, tagged with how it filters, and started.
  *
- * @param {Parameters<typeof ensureEdge>[0] & { block: boolean }} opts
+ * @param {Parameters<typeof ensureEdge>[0] & { block: boolean, labs: Array<{ id: string, open: boolean }> }} opts
  */
-async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, block, address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
+async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, block, labs, fleet = [], address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
+  // Checked before anything is downloaded: a closed lab with nowhere to let
+  // the fleet through would be a machine that never joins.
+  const config = edgeConfig({ block, labs: labs.map((l) => l.open), fleet });
   const sr = edgeStorage({ pool, srs, fleetSrs, sr: chosenSr });
   const on = srName(sr);
 
@@ -714,7 +961,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
       name: EDGE.vm,
       description: `OPNsense ${OPNSENSE_IMAGE.release}, configured by Fleetwright as the edge router`,
     });
-    const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ offset: OPNSENSE_IMAGE.config.offset, replacement: edgeConfig({ block }), total: OPNSENSE_IMAGE.rawSize }));
+    const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ regions: imagePatches(config), total: OPNSENSE_IMAGE.rawSize }));
     vdi = await upload({
       address,
       pin,
@@ -732,11 +979,13 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
       template: template.id,
       name_label: EDGE.vm,
       name_description: 'The only way out of every lab. Made by Fleetwright; its rules are fixed and it has no login.',
-      VIFs: [{ network: egress.id }, { network: uplink }],
+      // WAN, uplink, then each lab, in order: xn0, xn1, xn2 and on, as the
+      // configuration names them.
+      VIFs: [{ network: egress.id }, { network: uplink }, ...labs.map((l) => ({ network: l.id }))],
       VDIs: [],
       CPUs: EDGE.cpus,
       memory: EDGE.memory,
-      tags: block ? [EDGE.tag, EDGE.blocksTag] : [EDGE.tag],
+      tags: [EDGE.tag, ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : [])],
       bootAfterCreate: false,
     });
     await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
@@ -754,7 +1003,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const { address: lan, prefix } = EDGE.lan;
   return (
     `The edge router is up: OPNsense ${OPNSENSE_IMAGE.release}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}, its disk on ${on}. ` +
-    `Labs on the uplink reach the internet and nothing private, and what its threat rules match is ${block ? 'dropped' : 'logged'}. It has no login; its rules are fixed.`
+    `Labs on the uplink reach the internet and nothing private, and what its threat rules match is ${block ? 'dropped' : 'logged'}.${labs.length ? ` It has ${labsSaid(labsKey(labs))} of their own.` : ''} It has no login; its rules are fixed.`
   );
 }
 

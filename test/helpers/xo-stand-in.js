@@ -49,7 +49,7 @@ export function certificate() {
  * @param {import('node:test').TestContext} t
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string> }} [opts]
  */
-export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}) } = {}) {
+export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}) } = {}) {
   const { key, cert, pin } = givenTls ?? certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -82,6 +82,7 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
     },
     VM: vms,
     'VM-template': templates,
+    VIF: vifs,
   };
   let conns = 0;
   /** @param {import('node:net').Socket} socket */
