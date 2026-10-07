@@ -121,6 +121,15 @@ struct XOSetupLines: View {
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.ink)
                 .contentTransition(.opacity)
+            // What the minutes are going on, while a build in parts runs:
+            // without it the step's name sits still for ten minutes and only
+            // the percentage moves, and a percentage of what is not said.
+            if !stale, let detail = XOSetupWords.detail(state) {
+                Text(detail)
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .contentTransition(.opacity)
+            }
             if stale, XOSetupWords.isLive(state.state) {
                 Text(XOSetupWords.silence(state))
                     .fleetType(.micro)

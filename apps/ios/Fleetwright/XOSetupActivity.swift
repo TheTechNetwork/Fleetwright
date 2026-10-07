@@ -42,6 +42,14 @@ struct XOSetupAttributes: ActivityAttributes {
         /// machine can tell (the edge router's build); pushed by the
         /// coordinator beside the step, and nil when it is not known.
         var fill: Int? = nil
+        /// What the step now running is building, from a fixed list: `edge`,
+        /// `image` or `holder`; nil when it is not building or the host did
+        /// not say. A key, never a name, for the reason above.
+        var build: String? = nil
+        /// Which part of that build is running, from 1, and of how many; nil
+        /// together when the build is not in parts or the host did not say.
+        var stage: Int? = nil
+        var stages: Int? = nil
     }
 
     /// The job `begin` answered with. Local; never pushed.
@@ -86,6 +94,39 @@ enum XOSetupWords {
         case "done": return "Hypervisor added"
         default: return "Step \(min(step + 1, max(of, 1))) of \(max(of, 1))"
         }
+    }
+
+    /// What a build is making, in a few words, or nil for a key this build
+    /// has never met: the part number is still said, without a name made up.
+    static func building(_ key: String?) -> String? {
+        switch key {
+        case "edge": return "building the edge router"
+        case "image": return "building the machine image"
+        case "holder": return "making the pool’s own machine"
+        default: return nil
+        }
+    }
+
+    /// "Building the machine image, part 2 of 4" while a build in parts is
+    /// running, so the Lock Screen says what the minutes are being spent on
+    /// and not only a percentage. Nil when nothing is being built in parts.
+    static func detail(build: String?, stage: Int?, stages: Int?) -> String? {
+        let what = building(build)
+        let part: String? = {
+            guard let stage, let stages, stages > 0 else { return nil }
+            return "part \(stage) of \(stages)"
+        }()
+        switch (what, part) {
+        case let (what?, part?): return "\(what), \(part)"
+        case let (what?, nil): return what
+        case let (nil, part?): return part
+        default: return nil
+        }
+    }
+
+    static func detail(_ s: XOSetupAttributes.ContentState) -> String? {
+        guard s.state == "running" else { return nil }
+        return detail(build: s.build, stage: s.stage, stages: s.stages)
     }
 
     /// The one line for the state, once the state is not "running".

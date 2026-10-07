@@ -253,7 +253,7 @@ test('iOS: the Live Activity decodes exactly what the coordinator pushes, and te
   // so a phone that predates it still decodes every push.
   assert.match(
     IOS,
-    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var fill: Int\? = nil\s*\}/,
+    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var fill: Int\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var build: String\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var stage: Int\? = nil\s*var stages: Int\? = nil\s*\}/,
   );
   // `since` is the phone's own, never pushed: optional, so a pushed state
   // without it still decodes.
@@ -288,7 +288,17 @@ test('iOS: the bar is the edge router’s build while it says how far, and the d
   // ASKED FOR: "this needs proper progress, also which disk did it put it on?"
   assert.match(SCREEN, /let \(value, total\) = XOSetupWords\.bar\(state\)\s*ProgressView\(value: value, total: total\)/);
   assert.match(WIDGET, /let \(value, total\) = XOSetupWords\.bar\(state\)\s*ProgressView\(value: value, total: total\)/);
-  assert.ok(SCREEN.includes('building the edge router, part \\(part.stage) of \\(part.stages)'));
+  // ASKED FOR: "Why no actual updates in the live activity?", while a machine
+  // image was building and the app called it the edge router. What is being
+  // built is named from the key the host sends, in one place, and the screen
+  // and the Lock Screen both say it.
+  for (const [key, words] of [['edge', 'building the edge router'], ['image', 'building the machine image'], ['holder', 'making the pool’s own machine']]) {
+    assert.ok(IOS.includes(`case "${key}": return "${words}"`), `no words for a ${key} build`);
+  }
+  assert.ok(IOS.includes('case let (what?, part?): return "\\(what), \\(part)"'));
+  assert.ok(SCREEN.includes('XOSetupWords.detail(build: part.build, stage: part.stage, stages: part.stages)'));
+  assert.ok(!SCREEN.includes('building the edge router'), 'the screen names one build for every build again');
+  assert.match(WIDGET, /if !stale, let detail = XOSetupWords\.detail\(state\) \{\s*Text\(detail\)/);
   assert.ok(SCREEN.includes('if choice.edgeDiskChoice, choice.building(in: inv).edge || choice.building(in: inv).image {'));
   assert.ok(SCREEN.includes('edgeDisk: begun.can.contains("edge-disk")'));
   assert.ok(SCREEN.includes('Its disk is on \\($0).'));

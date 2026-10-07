@@ -380,6 +380,21 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(XOSetupWords.bar(building).0 / XOSetupWords.bar(building).1, 0.42, accuracy: 0.001)
         XCTAssertEqual(XOSetupWords.ordinal(building), "42%")
         XCTAssertEqual(XOSetupWords.bar(applying).0, 4, "the steps done, without it")
+        // What is being built is said beside the percentage, from the key.
+        XCTAssertNil(XOSetupWords.detail(building), "nothing named when the host did not say")
+        building.build = "image"
+        building.stage = 2
+        building.stages = 4
+        XCTAssertEqual(XOSetupWords.detail(building), "building the machine image, part 2 of 4")
+        building.build = "something-newer"
+        XCTAssertEqual(XOSetupWords.detail(building), "part 2 of 4", "the part is still known; the name is not made up")
+        building.state = "done"
+        XCTAssertNil(XOSetupWords.detail(building), "a finished job is not building anything")
+        // A push from a coordinator before these keys still decodes.
+        let older = try JSONDecoder().decode(XOSetupAttributes.ContentState.self,
+                                             from: Data(#"{"step":4,"of":5,"phase":"apply","state":"running","fill":420}"#.utf8))
+        XCTAssertNil(older.build)
+        XCTAssertNil(older.stage)
     }
 
     // MARK: Group networks
