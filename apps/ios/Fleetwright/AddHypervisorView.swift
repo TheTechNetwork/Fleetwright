@@ -129,6 +129,9 @@ struct AddHypervisorView: View {
     /// The machine chosen is the one that got through last time, chosen
     /// without asking the others, and nothing has gone wrong with it yet.
     @State private var viaMemory = false
+    /// Face ID has just opened a kept sign-in: Begin runs once, as soon as a
+    /// machine is chosen (beginWithKept).
+    @State private var autoBegin = false
     /// What to keep, held in memory from the send until the machine has
     /// signed in with it (`notePath`), and only when `keep` is on.
     @State private var pendingSave: XOSaved.Entry?
@@ -1186,6 +1189,7 @@ struct AddHypervisorView: View {
             // An address typed on Add a hypervisor that this phone kept a
             // sign-in for: opened now, once there is something to send it to.
             if remembered == nil, XOSaved.has(trimmedAddress) { await unlockRemembered() }
+            await beginWithKept()
         } catch {
             probeText = error.localizedDescription
         }
@@ -1206,9 +1210,27 @@ struct AddHypervisorView: View {
             probes = [path]
             chosen = path
             viaMemory = true
+            await beginWithKept()
             return
         }
         await probe()
+    }
+
+    /// FACE ID WAS THE TAP. Asked for: "After FaceID it should auto connect."
+    /// Opening what this phone kept is the person saying go, so Begin runs
+    /// once, without a second tap, as soon as a machine is chosen: at once
+    /// for the one that got through last time, or when the person taps one
+    /// of several. Begin itself still sends only what was accepted: a
+    /// certificate that needs somebody's word and does not have it stops
+    /// there and asks, as it always did. Only a sign-in Face ID just opened
+    /// does this, never one typed, and a job already running is left alone.
+    /// The same on Android (HypervisorSheet.kt, autoBegin).
+    @MainActor
+    private func beginWithKept() async {
+        guard autoBegin, let chosen else { return }
+        autoBegin = false
+        guard !busy, job == nil else { return }
+        await begin(chosen)
     }
 
     @MainActor
@@ -1220,6 +1242,7 @@ struct AddHypervisorView: View {
         if let login = entry.login {
             email = login.email
             password = login.password
+            autoBegin = !login.email.isEmpty && !login.password.isEmpty
         }
         keep = true
         keepLoaded = true
@@ -1308,6 +1331,9 @@ struct AddHypervisorView: View {
         begun = nil
         result = ""
         failed = false
+        // A machine tapped after Face ID opened the sign-in: that was the
+        // last thing to decide, so Begin runs (beginWithKept).
+        if autoBegin { Task { await beginWithKept() } }
     }
 
     @MainActor
