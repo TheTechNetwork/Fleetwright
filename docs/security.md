@@ -312,7 +312,9 @@ machine of the fleet, through the coordinator.
   0.0.0.0, and DNS to any resolver but the edge is blocked; DNS over HTTPS
   to a resolver by address is not, so this stops malware that uses the
   network's resolver, not a session determined to get around it. Suricata
-  detects and logs; it does not block. Both are in the edge's own
+  detects and logs, and drops what its rules match when the policy says so,
+  failing closed: an edge set to drop whose Suricata has stopped lets nothing
+  out. Both are in the edge's own
   configuration, which no fleet credential can change, and both are fetched
   by the edge itself from their publishers over HTTPS: a compromised
   blocklist publisher could make names fail to resolve, not reach anything.

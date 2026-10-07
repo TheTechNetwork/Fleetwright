@@ -499,10 +499,9 @@ so nothing in the fleet can switch them off.
   are blocked. DNS over HTTPS to a resolver by its address is not.
 - **Traffic.** Suricata watches the LAN side with four Emerging Threats Open
   rule files: malware traffic, known botnet controllers, known-compromised
-  hosts and Cobalt Strike servers. It **detects and logs**, by each machine's
-  own address on the uplink. It does not drop: blocking mode on Xen's network
-  driver is a risk to every machine's connection, and the name filter is the
-  part that stops things.
+  hosts and Cobalt Strike servers. By default it **detects and logs**, by
+  each machine's own address on the uplink, and drops nothing. **It can
+  drop instead**, chosen on the policy screen (below).
 - **Kept fresh.** OPNsense fetches neither the lists nor the rules at boot,
   only when a person applies a change in its web interface, which nobody
   does here, or from cron. The edge keeps `/var` in memory, so both are gone
@@ -510,6 +509,55 @@ so nothing in the fleet can switch them off.
   hour: the lists are cached for 20 hours, and rules are downloaded only when
   their version changes. After an edge restart, filtering is back within
   half an hour.
+
+#### Dropping what the rules match
+
+> Blocking mode for the edge's intrusion detection.
+
+The policy screen has a switch under the edge router, **Drop what the threat
+rules match**, offered only by a machine whose `can` says `edge-block`. On,
+Suricata runs **inline**: the rule that lets machines out hands their traffic
+to Suricata's divert socket before it leaves, and one Suricata policy turns
+every alert in the four rule files into a drop. The DNS rule and the
+private-ranges rule are not diverted, because they decide before Suricata
+would see the packet.
+
+- **Divert, not netmap.** OPNsense 26.7 has two inline modes. Netmap sits on
+  the network driver, and whether it works on Xen's netfront (`xn`) is the
+  thing nobody could promise. Divert hands packets over through pf and needs
+  nothing of the driver, which is the reason blocking was deferred until now.
+- **It fails closed.** A divert socket nobody is reading passes nothing, so an
+  edge that blocks and whose Suricata has stopped lets nothing out, rather
+  than everything. That is the trade the switch asks for, and the screen says
+  so: *"while it cannot inspect, nothing leaves."*
+- **Changing it rebuilds the edge.** The edge has no login, so its
+  configuration cannot be changed in place. An edge built the other way is
+  stopped, a new one is built beside it, and only then is the old one removed.
+  If the new one fails or is cancelled, it is removed and the old one is
+  started again, so the pool is never left with neither. The machines behind
+  it have no way out while that runs, and the screen says that before Apply.
+  The edge is tagged `fleetwright-edge-blocks` when it drops, which is how the
+  next policy knows which kind it has.
+- **A phone that predates the switch sends nothing**, and its edge is left as
+  it is, whichever kind it is.
+
+**Booted in QEMU** with the blocking configuration: Suricata ran with
+`-d 8000` on the divert socket, `pfctl -sr` showed the rule that lets machines
+out ending `divert-to 8000`, the policy was in Suricata's own
+`rule-policies.config` as enabled, alert to drop, over the four files, and a
+sample ET-style rule put where a download lands was installed by OPNsense's own
+`installRules.py` as `drop`. The first boot found the policy written but
+**disabled**, because a model default is not written into an item that came
+from the file; it now says `enabled` in so many words, and a test holds it to
+that. **Not run here:** a packet actually dropped, since QEMU's network here has
+no machine on the LAN side, and the netfront driver on a real pool, which divert
+does not depend on.
+
+It all but filled the 5,234 bytes the configuration has to fit in, so what
+OPNsense does anyway was cut to make room: the web interface's theme, pf's
+default optimization, sticky load balancing (which needs source tracking,
+which is off), and the policy's priority and description. The comment on
+`edgeConfig` lists each one and why it changes nothing.
 
 **Booted in QEMU** from the pinned 26.7 image patched this way. The two cron
 jobs were in the crontab, Unbound was listening with its blocklist module
