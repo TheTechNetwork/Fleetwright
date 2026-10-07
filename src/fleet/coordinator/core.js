@@ -111,6 +111,12 @@ const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
  */
 const MAX_PUSH_TOKEN = 512;
 const MAX_DEVICES = 150;
+/**
+ * The most points of a machine's traffic passed on: half an hour of the
+ * pool's one-minute samples, with room to spare. A box sending more is not
+ * shown a longer history, it is shown none (vmMachinesFor, `net`).
+ */
+export const MAX_NET_POINTS = 60;
 
 /**
  * @typedef {object} Device
@@ -3161,6 +3167,18 @@ export class CoordinatorCore {
     // A NUMBER OR CANNOT TELL: `Number(null)` is 0, which would say a machine
     // that did not report its end ended at the epoch.
     const num = (/** @type {unknown} */ v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+    // WHAT IT SENT AND RECEIVED, as the hypervisor counted it: bytes a second,
+    // one point an interval, oldest first. Bounded, and every point a real
+    // count or null for a gap, never a 0 the pool did not say.
+    const series = (/** @type {unknown} */ a) =>
+      Array.isArray(a) && a.length <= MAX_NET_POINTS ? a.map((v) => (num(v) === null ? null : Math.round(/** @type {number} */ (v)))) : null;
+    const netOf = (/** @type {any} */ n) => {
+      const interval = num(n?.interval);
+      const rx = series(n?.rx);
+      const tx = series(n?.tx);
+      if (!interval || interval > 86_400 || !rx || !tx || rx.length !== tx.length || num(n?.end) === null) return null;
+      return { interval, end: n.end, rx, tx };
+    };
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
       for (const e of host.health.xo) {
@@ -3179,6 +3197,7 @@ export class CoordinatorCore {
             memory: num(m.memory),
             image: typeof m.image === 'string' ? m.image.slice(0, 80) : null,
             network: typeof m.network === 'string' ? m.network.slice(0, 80) : null,
+            net: netOf(m.net),
             address: String(e.address || ''),
             hosts: [host.hostId],
           });
