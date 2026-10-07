@@ -114,7 +114,22 @@ internal object XoPolicy {
          * the choice, which builds Debian alone.
          */
         val imageKinds: List<ImageKind>? = null,
+        /**
+         * Each pool's own machine, from a machine that can make one
+         * (xo-holder.js); null from one older than that, which is "cannot
+         * tell", never "none".
+         */
+        val holders: List<Holder>? = null,
     )
+
+    /** A pool's own machine: a permanent fleet host on the pool that holds it once its owner approves it. */
+    data class Holder(val pool: String?, val name: String, val running: Boolean)
+
+    /** The pool's own machine on the pool this network is in, if it has one. */
+    fun holderOn(inv: Inventory, network: String?): Holder? {
+        val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return null
+        return inv.holders?.firstOrNull { it.pool == pool }
+    }
 
     /**
      * A pool's machine image: the template sessions' machines are cloned
@@ -238,6 +253,14 @@ internal object XoPolicy {
         val images: Set<String> = emptySet(),
         /** The machine takes [images]. An older one is sent `image` alone, and offered Debian alone. */
         val imagesChoice: Boolean = false,
+        /**
+         * Make the pool a machine of its own on the way out, or keep the one
+         * there running (xo-holder.js). Needs the pool's machine image, there
+         * or made with it.
+         */
+        val holder: Boolean = false,
+        /** The machine makes one (`holder` in begin's `can`). An older one cannot, so it is neither offered nor sent. */
+        val holderChoice: Boolean = false,
     ) {
         /** An image is asked for, in whichever form this machine reads. */
         val wantsImage: Boolean get() = if (imagesChoice) images.isNotEmpty() else image
@@ -339,6 +362,11 @@ internal object XoPolicy {
                     a.optJSONObject(i)?.let { m -> Image(text(m, "pool"), text(m, "name") ?: "Fleetwright Debian 13", text(m, "key")) }
                 }
             },
+            holders = json.optJSONArray("holders")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    a.optJSONObject(i)?.let { h -> Holder(text(h, "pool"), text(h, "name") ?: "", h.optBoolean("running", false)) }
+                }
+            },
             imageKinds = json.optJSONArray("imageKinds")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
                     a.optJSONObject(i)?.let { k ->
@@ -375,8 +403,12 @@ internal object XoPolicy {
         val memory = (inv.currentLimits.memory?.let { gibRounded(it) } ?: (inv.memory / 2 / GIB)).coerceIn(1L, maxMemoryGib(inv))
         val free = inv.srs.filter { it.id in srs }.sumOf { it.free }
         val disk = (inv.currentLimits.disk?.let { gibRounded(it) } ?: (free / 2 / GIB)).coerceIn(MIN_DISK / GIB, maxDiskGib(inv, srs))
-        // On when there is one already, so Apply keeps it on the way out.
-        return Choice(srs, networks, egress, cpus, memory, disk, edge = edgeOn(inv, egress) != null, anyWayOut = anyWayOut)
+        // On when there is one already, so Apply keeps it on the way out; the
+        // same for the pool's own machine, which Apply keeps, or starts.
+        return Choice(
+            srs, networks, egress, cpus, memory, disk,
+            edge = edgeOn(inv, egress) != null, anyWayOut = anyWayOut, holder = holderOn(inv, egress) != null,
+        )
     }
 
     /**
@@ -396,7 +428,7 @@ internal object XoPolicy {
     fun withNetwork(c: Choice, id: String, on: Boolean): Choice {
         val networks = if (on) c.networks + id else c.networks - id
         val egress = c.egress?.takeIf { c.anyWayOut || it in networks }
-        return c.copy(networks = networks, egress = egress, edge = c.edge && egress != null)
+        return c.copy(networks = networks, egress = egress, edge = c.edge && egress != null, holder = c.holder && egress != null)
     }
 
     /**
@@ -432,6 +464,10 @@ internal object XoPolicy {
         }
         if (c.imageChoice && c.wantsImage && !c.edge && edgeOn(inv, c.egress) == null) {
             return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
+        }
+        if (c.holderChoice && c.holder && c.egress == null) return "The pool’s own machine goes on the way out: choose the network it is on."
+        if (c.holderChoice && c.holder && imageOn(inv, c.egress) == null && !(c.imageChoice && c.wantsImage)) {
+            return "The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it."
         }
         val (buildEdge, buildImage) = building(inv, c)
         if (c.edgeDiskChoice && (buildEdge || buildImage) && edgeDisk(inv, c) == null) {
@@ -471,6 +507,8 @@ internal object XoPolicy {
                     }
                 }
             }
+            // Only to a machine that makes one, and only when asked.
+            .apply { if (c.holderChoice && c.holder) put("holder", true) }
             // Only to a machine that reads it, and only with something to build.
             .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage))) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
