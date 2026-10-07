@@ -216,6 +216,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var keep by remember { mutableStateOf(false) }
     var keepLoaded by remember { mutableStateOf(false) }
     var viaMemory by rememberSaveable { mutableStateOf(false) }
+    // FACE OR FINGERPRINT WAS THE TAP: set when what this phone kept has just
+    // been opened with its sign-in, and spent by the effect after begin().
+    var autoBegin by remember { mutableStateOf(false) }
     var pendingSave by remember { mutableStateOf<String?>(null) }
     var keepNote by remember { mutableStateOf("") }
     var openedOnce by rememberSaveable { mutableStateOf(false) }
@@ -240,6 +243,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         if (entry.hasLogin) {
             email = entry.email.orEmpty()
             password = entry.password.orEmpty()
+            autoBegin = !entry.email.isNullOrBlank() && !entry.password.isNullOrBlank()
         }
         keep = true
         keepLoaded = true
@@ -524,6 +528,21 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             }
             beginning = false
         }
+    }
+
+    // ASKED FOR: "After FaceID it should auto connect." Opening what this
+    // phone kept is the person saying go, so Begin runs once, without a
+    // second tap, as soon as a machine is chosen: at once for the one that
+    // got through last time, or when the person taps one of several. An
+    // effect and not a call after unlocking, because `pick` is read at
+    // composition and is only the chosen machine once the screen has drawn
+    // it. begin() still sends only what was accepted, and stops on a
+    // certificate that needs somebody's word and does not have it; the same
+    // words on iOS (beginWithKept).
+    LaunchedEffect(autoBegin, pick?.hostId) {
+        if (!autoBegin || pick == null) return@LaunchedEffect
+        autoBegin = false
+        if (!beginning && job == null) begin()
     }
 
     fun startAgain() {

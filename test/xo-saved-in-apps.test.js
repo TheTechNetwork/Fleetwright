@@ -178,6 +178,19 @@ test('Android: the machine that got through last time is tried first, and every 
   assert.match(kfn('notePath'), /if \(past\) \{\s*if \(runningOn\.isNotBlank\(\)\) XoSaved\.rememberMachine\(settings, where, runningOn\)/);
 });
 
+test('both phones begin by themselves once Face ID or a fingerprint opened a kept sign-in and a machine is chosen', () => {
+  // ASKED FOR: "After FaceID it should auto connect." The unlock is the
+  // person saying go: Begin runs once, when a machine is chosen, and never
+  // for a sign-in that was typed. Begin's own checks still decide what is sent.
+  assert.match(bare(fn(SCREEN, 'unlockRemembered')), /autoBegin = !login\.email\.isEmpty && !login\.password\.isEmpty/);
+  assert.match(bare(fn(SCREEN, 'beginWithKept')), /guard autoBegin, let chosen else \{ return \}\s*autoBegin = false\s*guard !busy, job == nil else \{ return \}\s*await begin\(chosen\)/);
+  assert.match(bare(fn(SCREEN, 'openRemembered')), /viaMemory = true\s*await beginWithKept\(\)/);
+  assert.match(bare(fn(SCREEN, 'probe')), /await beginWithKept\(\)/);
+  assert.match(bare(fn(SCREEN, 'choose')), /if autoBegin \{ Task \{ await beginWithKept\(\) \} \}/);
+  assert.match(kfn('unlockRemembered'), /autoBegin = !entry\.email\.isNullOrBlank\(\) && !entry\.password\.isNullOrBlank\(\)/);
+  assert.match(bare(SHEET), /LaunchedEffect\(autoBegin, pick\?\.hostId\) \{\s*if \(!autoBegin \|\| pick == null\) return@LaunchedEffect\s*autoBegin = false\s*if \(!beginning && job == null\) begin\(\)/);
+});
+
 test('both phones say the same things about what is remembered', () => {
   for (const words of [
     'Got through last time, so it is tried first',
