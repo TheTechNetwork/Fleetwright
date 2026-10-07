@@ -116,7 +116,29 @@ class Fleet(
          * drawn as nothing, never as $0.00.
          */
         val spent: Spent? = null,
+        /**
+         * THE ARCHIVE (#346): the private repository it is pushed to before
+         * it stops, and what happened the last time it was. All null on a
+         * session with no archive and from a host older than archiving, and
+         * nothing is drawn then: no archive is not "not archived".
+         */
+        val archive: String? = null,
+        val archiveAt: Long? = null,
+        val archiveOk: Boolean? = null,
+        val archiveText: String? = null,
     ) {
+        /**
+         * The archive line for the session's page, or null when it has none.
+         * Before the first push it says so rather than implying one landed
+         * (C-5); after, it is the host's own sentence about the last push.
+         * Same words as iOS, held equal by test/linked-repos-in-apps.test.js.
+         */
+        val archiveLine: String? get() {
+            val repo = archive?.takeIf { it.isNotBlank() } ?: return null
+            if (archiveAt != null) archiveText?.takeIf { it.isNotBlank() }?.let { return it }
+            return "Pushed to $repo before it stops. Nothing has been pushed yet."
+        }
+
         // Not `Context`: android.content.Context is imported in this file, and a
         // nested class of the same name is a reading trap for whoever is next.
         data class ContextUsage(val tokens: Long?, val model: String?)
@@ -1219,6 +1241,86 @@ class Fleet(
 
     suspend fun clearRunnerRepo(): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
         runCatching { parseRunnerRepoSetting(send("DELETE", "/api/runner-repo", null)) }
+    }
+
+    /**
+     * What a linked-repository check found, for one role (#346). The same
+     * "null is cannot tell" as the runner check: asked as the GitHub App, the
+     * fleet cannot see whether YOU can push, and says so with a null.
+     */
+    data class LinkedRepoCheck(
+        val role: String,
+        val repo: String,
+        val isPublic: Boolean?,
+        val installed: Boolean?,
+        /** "write", "read" or "none": what this connection can do with its files. */
+        val contents: String?,
+        val push: Boolean?,
+        /** For templates: which of .claude, .github and default.json it carries. */
+        val carries: List<String>?,
+        val ok: Boolean,
+        val message: String,
+        /** For runners: the whole runner check, drawn the way Temporary machines draws it. */
+        val runnerRepo: RunnerRepoCheck?,
+    )
+
+    /** Every role this person has linked, by role, and the fleet's runner
+     * repository beside them: what they get for runners with none of their own. */
+    data class LinkedRepos(val ok: Boolean?, val links: Map<String, String>, val fleetRunners: String?)
+
+    /** The answer to linking or unlinking one role. */
+    data class LinkedRepoReply(val ok: Boolean?, val role: String?, val repo: String?, val text: String?, val linkedRepo: LinkedRepoCheck?)
+
+    suspend fun linkedRepos(): Result<LinkedRepos> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = get("/api/linked-repos")
+            val links = mutableMapOf<String, String>()
+            json.optJSONArray("links")?.let { a ->
+                for (i in 0 until a.length()) {
+                    val l = a.optJSONObject(i) ?: continue
+                    val role = l.optString("role")
+                    val repo = l.optString("repo")
+                    if (role.isNotBlank() && repo.isNotBlank()) links[role] = repo
+                }
+            }
+            LinkedRepos(
+                ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
+                links = links,
+                fleetRunners = json.optJSONObject("fleet")?.optString("runners")?.takeIf { it.isNotBlank() && it != "null" },
+            )
+        }
+    }
+
+    /** Linked only if the role's check passes; the check comes back either
+     * way, so a refusal says which answer stopped it. */
+    suspend fun linkRepo(role: String, repo: String): Result<LinkedRepoReply> = withContext(Dispatchers.IO) {
+        runCatching { parseLinkedRepoReply(send("PUT", "/api/linked-repos/$role", JSONObject().put("repo", repo))) }
+    }
+
+    suspend fun unlinkRepo(role: String): Result<LinkedRepoReply> = withContext(Dispatchers.IO) {
+        runCatching { parseLinkedRepoReply(send("DELETE", "/api/linked-repos/$role", null)) }
+    }
+
+    private fun parseLinkedRepoReply(json: JSONObject): LinkedRepoReply {
+        fun maybe(o: JSONObject, key: String): Boolean? =
+            if (o.has(key) && !o.isNull(key)) o.optBoolean(key) else null
+        fun text(o: JSONObject, key: String): String? = o.optString(key).takeIf { it.isNotBlank() && it != "null" }
+        val check = json.optJSONObject("linkedRepo")?.let { c ->
+            LinkedRepoCheck(
+                role = c.optString("role"),
+                repo = c.optString("repo"),
+                isPublic = maybe(c, "public"),
+                installed = maybe(c, "installed"),
+                contents = text(c, "contents"),
+                push = maybe(c, "push"),
+                carries = c.optJSONArray("carries")?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } } },
+                ok = c.optBoolean("ok", false),
+                message = c.optString("message"),
+                // The runner check inside it, read the way the runner setting reads it.
+                runnerRepo = c.optJSONObject("runnerRepo")?.let { parseRunnerRepoSetting(JSONObject().put("runnerRepo", it)).runnerRepo },
+            )
+        }
+        return LinkedRepoReply(ok = maybe(json, "ok"), role = text(json, "role"), repo = text(json, "repo"), text = text(json, "text"), linkedRepo = check)
     }
 
     /**
@@ -2606,6 +2708,12 @@ class Fleet(
                         asOf = longOrNull(s, "asOf"),
                     )
                 },
+                archive = o.optString("archive").takeIf { it.isNotBlank() && it != "null" },
+                archiveAt = o.optLong("archiveAt").takeIf { it > 0 },
+                // `has` first, for the same reason as everywhere else: a
+                // missing field read as false would be "the push failed".
+                archiveOk = if (o.has("archiveOk") && !o.isNull("archiveOk")) o.optBoolean("archiveOk") else null,
+                archiveText = o.optString("archiveText").takeIf { it.isNotBlank() && it != "null" },
             )
         }
     }
