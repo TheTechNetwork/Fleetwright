@@ -1047,24 +1047,29 @@ struct AddHypervisorView: View {
         let there = inv.groupCount(on: choice.egress)
         return Section {
             Stepper(value: $choice.groups, in: choice.groupRange(in: inv)) {
-                policyRow("Group networks", groupsLine(there))
+                policyRow("Groups", groupsLine(there))
             }
             .frame(minHeight: 44)
             .disabled(busy)
         } header: {
             sectionHead("Machines that work together")
         } footer: {
-            Text("A machine behind the edge router is fenced from every other: only the router may open a connection to it. "
-                 + "A group network has no way off the pool, and machines started in the same group reach each other on it. "
-                 + "New session › Where puts a machine in one.")
+            Text("Every machine the fleet starts here reaches the internet and nothing else: not your network, and not the other machines. "
+                 + "A group is for machines that need to talk to each other, like the nodes of a cluster you are testing. "
+                 + "Machines in the same group share a private network and keep their way to the internet. "
+                 + "You choose the group when you start a session, under Where. A group stays once it is made, because a machine may be on it.")
         }
     }
 
-    /// The same words as Android (PolicyForm.kt).
+    /// The same words as Android (XoPolicy.groupsLine). Asked for, of the
+    /// first version's "1: 1 made when you apply": "What does this even
+    /// mean". A count, said as a count, and what Apply will make.
     private func groupsLine(_ there: Int) -> String {
+        let count = choice.groups == 1 ? "1 group" : "\(choice.groups) groups"
         let more = choice.groups - there
-        if more <= 0 { return there == 0 ? "None" : "\(there), there now" }
-        return "\(choice.groups): " + (there == 0 ? "" : "\(there) there now, ") + "\(more) made when you apply"
+        if choice.groups == 0 { return "None, so every machine is on its own" }
+        if more <= 0 { return count }
+        return there == 0 ? "\(count), made when you apply" : "\(count): \(there) there now, \(more) made when you apply"
     }
 
     private func limitsSection(_ inv: XOPolicy.Inventory) -> some View {

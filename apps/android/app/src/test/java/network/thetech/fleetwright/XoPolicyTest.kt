@@ -410,9 +410,10 @@ class XoPolicyTest {
         c = c.copy(groups = 3)
         assertNull(XoPolicy.problem(inv, c))
         assertEquals(3, XoPolicy.payload(inv, c).getInt("groups"))
-        assertEquals("3: 1 there now, 2 made when you apply", XoPolicy.groupsLine(3, 1))
-        assertEquals("1, there now", XoPolicy.groupsLine(1, 1))
-        assertEquals("None", XoPolicy.groupsLine(0, 0))
+        assertEquals("3 groups: 1 there now, 2 made when you apply", XoPolicy.groupsLine(3, 1))
+        assertEquals("1 group, made when you apply", XoPolicy.groupsLine(1, 0))
+        assertEquals("1 group", XoPolicy.groupsLine(1, 1))
+        assertEquals("None, so every machine is on its own", XoPolicy.groupsLine(0, 0))
     }
 
     @Test

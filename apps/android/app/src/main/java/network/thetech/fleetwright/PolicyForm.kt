@@ -280,21 +280,22 @@ internal fun PolicyForm(
     if (choice.groupsChoice && choice.egress != null) {
         SectionHead("Machines that work together")
         Hint(
-            "A machine behind the edge router is fenced from every other: only the router may open a connection to it. " +
-                "A group network has no way off the pool, and machines started in the same group reach each other on it. " +
-                "New session › Where puts a machine in one.",
+            "Every machine the fleet starts here reaches the internet and nothing else: not your network, and not the other machines. " +
+                "A group is for machines that need to talk to each other, like the nodes of a cluster you are testing. " +
+                "Machines in the same group share a private network and keep their way to the internet. " +
+                "You choose the group when you start a session, under Where. A group stays once it is made, because a machine may be on it.",
         )
         val there = XoPolicy.groupCount(inv, choice.egress)
         val range = XoPolicy.groupRange(inv, choice)
         Stepper(
-            label = "Group networks",
+            label = "Groups",
             value = choice.groups.toLong(),
             min = range.first.toLong(),
             max = range.last.toLong(),
             shown = XoPolicy.groupsLine(choice.groups, there),
             bound = "${range.first} to ${range.last}",
-            less = "Fewer group networks",
-            more = "More group networks",
+            less = "Fewer groups",
+            more = "More groups",
             enabled = enabled,
             onValue = { onChange(choice.copy(groups = it.toInt())) },
         )
