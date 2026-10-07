@@ -122,7 +122,11 @@ test('several new commits are summarised, not dumped', async (t) => {
 
   assert.equal(r.changed, true);
   assert.match(r.message, /…and 4 more/, 'a chat message is not a place for an unbounded log');
-  assert.equal(r.message.split('\n').filter((l) => /^ {2}[0-9a-f]{7} /.test(l)).length, 10);
+  // {7,}, NOT {7}: `git log --oneline` abbreviates to seven characters
+  // unless another object in the repository shares that prefix, and then it
+  // takes eight or more. One commit in fourteen did on a CI run, and the test
+  // counted nine lines where there were ten.
+  assert.equal(r.message.split('\n').filter((l) => /^ {2}[0-9a-f]{7,} /.test(l)).length, 10);
 });
 
 // --- what it refuses to do --------------------------------------------------
