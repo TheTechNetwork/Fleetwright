@@ -115,12 +115,44 @@ internal object XoPolicy {
          */
         val imageKinds: List<ImageKind>? = null,
         /**
+         * Each pool's group networks, from a machine that makes them; null
+         * from one older than that, which is "cannot tell", never "none".
+         */
+        val groups: List<GroupNetwork>? = null,
+        /**
          * Each pool's own machine, from a machine that can make one
          * (xo-holder.js); null from one older than that, which is "cannot
          * tell", never "none".
          */
         val holders: List<Holder>? = null,
     )
+
+    /** A network for machines that work together: no way off the pool. */
+    data class GroupNetwork(val id: String, val name: String, val pool: String?)
+
+    /** What a group network is called, and the most a policy makes on one pool (edge-router.js). */
+    const val GROUP_PREFIX = "fleetwright-group-"
+    const val MAX_GROUPS = 4
+
+    /** The networks a person chooses among: the pool's, less its group networks, which are this policy's to make. */
+    fun choosable(inv: Inventory): List<Network> = inv.networks.filterNot { it.name.startsWith(GROUP_PREFIX) }
+
+    /** How many group networks the pool this network is in has. */
+    fun groupCount(inv: Inventory, network: String?): Int {
+        val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return 0
+        return (inv.groups ?: emptyList()).count { it.pool == pool }
+    }
+
+    /** What the stepper says: how many, and how many of them Apply makes. The same words as iOS (AddHypervisorView). */
+    fun groupsLine(groups: Int, there: Int): String {
+        val more = groups - there
+        if (more <= 0) return if (there == 0) "None" else "$there, there now"
+        return "$groups: " + (if (there == 0) "" else "$there there now, ") + "$more made when you apply"
+    }
+
+    /** The fewest there can be is the ones there now, which are never removed: a machine may be on one. */
+    fun groupRange(inv: Inventory, c: Choice): IntRange = minOf(groupCount(inv, c.egress), MAX_GROUPS)..MAX_GROUPS
+
 
     /** A pool's own machine: a permanent fleet host on the pool that holds it once its owner approves it. */
     data class Holder(val pool: String?, val name: String, val running: Boolean)
@@ -253,6 +285,10 @@ internal object XoPolicy {
         val images: Set<String> = emptySet(),
         /** The machine takes [images]. An older one is sent `image` alone, and offered Debian alone. */
         val imagesChoice: Boolean = false,
+        /** How many group networks the way out's pool is to have. Asked for: "the 3 VMs need to reach each other". */
+        val groups: Int = 0,
+        /** The machine makes them (`groups` in begin's `can`). An older one cannot, so they are neither offered nor sent. */
+        val groupsChoice: Boolean = false,
         /**
          * Make the pool a machine of its own on the way out, or keep the one
          * there running (xo-holder.js). Needs the pool's machine image, there
@@ -367,6 +403,14 @@ internal object XoPolicy {
                     a.optJSONObject(i)?.let { h -> Holder(text(h, "pool"), text(h, "name") ?: "", h.optBoolean("running", false)) }
                 }
             },
+            groups = json.optJSONArray("groups")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    a.optJSONObject(i)?.let { g ->
+                        val id = text(g, "id") ?: return@let null
+                        GroupNetwork(id, text(g, "name") ?: id, text(g, "pool"))
+                    }
+                }
+            },
             imageKinds = json.optJSONArray("imageKinds")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
                     a.optJSONObject(i)?.let { k ->
@@ -405,9 +449,11 @@ internal object XoPolicy {
         val disk = (inv.currentLimits.disk?.let { gibRounded(it) } ?: (free / 2 / GIB)).coerceIn(MIN_DISK / GIB, maxDiskGib(inv, srs))
         // On when there is one already, so Apply keeps it on the way out; the
         // same for the pool's own machine, which Apply keeps, or starts.
+        // As many group networks as there are: Apply asks for none it does not show.
         return Choice(
             srs, networks, egress, cpus, memory, disk,
-            edge = edgeOn(inv, egress) != null, anyWayOut = anyWayOut, holder = holderOn(inv, egress) != null,
+            edge = edgeOn(inv, egress) != null, anyWayOut = anyWayOut, groups = groupCount(inv, egress),
+            holder = holderOn(inv, egress) != null,
         )
     }
 
@@ -459,6 +505,9 @@ internal object XoPolicy {
         if (c.egress != null && c.egress !in networkIds) return "The way out has to be a network this pool listed. Nothing was changed."
         if (!c.anyWayOut && c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
         if (c.edge && c.egress == null) return "The edge router needs a way out: choose the network its WAN goes on."
+        if (c.groupsChoice && c.groups > 0 && c.egress == null) {
+            return "Group networks are made in the way out’s pool: choose the way out. Nothing was changed."
+        }
         if (c.imageChoice && c.wantsImage && c.egress == null) {
             return "The machine image is built behind the edge router: choose the way out it leaves through."
         }
@@ -507,6 +556,8 @@ internal object XoPolicy {
                     }
                 }
             }
+            // Only to a machine that makes them, and only with a way out.
+            .apply { if (c.groupsChoice && c.egress != null) put("groups", c.groups) }
             // Only to a machine that makes one, and only when asked.
             .apply { if (c.holderChoice && c.holder) put("holder", true) }
             // Only to a machine that reads it, and only with something to build.

@@ -957,6 +957,7 @@ class Fleet(
         start: Map<String, String>? = null,
         template: String? = null,
         network: String? = null,
+        group: String? = null,
     ): Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
@@ -972,7 +973,9 @@ class Fleet(
             "provision",
             (if (template == null) mapOf("platform" to platform) else mapOf("platform" to platform, "template" to template)) +
                 // A NETWORK OF YOUR POOL instead of behind the edge router (protocol 9).
-                (if (network == null) emptyMap() else mapOf("network" to network)),
+                (if (network == null) emptyMap() else mapOf("network" to network)) +
+                // AND A GROUP NETWORK beside it, to reach the others in that group (protocol 10).
+                (if (group == null) emptyMap() else mapOf("group" to group)),
             host,
             numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
             extra = if (start == null) emptyMap() else mapOf("start" to JSONObject(start.toMap())),
@@ -1475,6 +1478,8 @@ class Fleet(
         val hosts: List<String>,
         /** The pool's networks a machine from it can go on besides the uplink; null from an older coordinator. */
         val networks: List<VmNetwork>? = null,
+        /** The pool's group networks, for machines that work together; null from an older coordinator. */
+        val groups: List<VmNetwork>? = null,
     ) {
         /** "New machine from Fleetwright Debian 13 on rack", for a picker. */
         val label: String get() = "New machine from $name" + (poolName?.let { " on $it" } ?: "")
@@ -1486,6 +1491,14 @@ class Fleet(
      * in your vault. Empty is an answer (none of yours); an older coordinator
      * omits the field, which reads the same.
      */
+    private fun networksOf(a: JSONArray?): List<VmNetwork>? = a?.let {
+        (0 until it.length()).mapNotNull { j ->
+            val n = it.optJSONObject(j) ?: return@mapNotNull null
+            val id = n.optString("id").takeIf { s -> s.isNotBlank() } ?: return@mapNotNull null
+            VmNetwork(id, n.optString("name").ifBlank { id })
+        }
+    }
+
     suspend fun vmImages(): Result<List<VmImage>> = withContext(Dispatchers.IO) {
         runCatching {
             val list = get("/api/hosts").optJSONArray("vmImages") ?: return@runCatching emptyList()
@@ -1500,13 +1513,8 @@ class Fleet(
                     poolName = o.optString("poolName").takeIf { it.isNotBlank() && it != "null" },
                     address = o.optString("address"),
                     hosts = if (hosts == null) emptyList() else (0 until hosts.length()).map { hosts.optString(it) },
-                    networks = o.optJSONArray("networks")?.let { a ->
-                        (0 until a.length()).mapNotNull { j ->
-                            val n = a.optJSONObject(j) ?: return@mapNotNull null
-                            val id = n.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                            VmNetwork(id, n.optString("name").ifBlank { id })
-                        }
-                    },
+                    networks = networksOf(o.optJSONArray("networks")),
+                    groups = networksOf(o.optJSONArray("groups")),
                 )
             }
         }
@@ -1542,6 +1550,9 @@ class Fleet(
         val address: String,
         /** Kept ready, and not yet taken by a session. */
         val standby: Boolean = false,
+        /** The group network it is also on, by name, and its address there; null when in none, or from an older coordinator. */
+        val group: String? = null,
+        val groupIp: String? = null,
     ) {
         /**
          * Bytes a second through the machine's network interfaces, one point
@@ -1618,6 +1629,8 @@ class Fleet(
                     net = o.optJSONObject("net")?.let { traffic(it) },
                     address = o.optString("address"),
                     standby = o.optBoolean("standby", false),
+                    group = o.str("group"),
+                    groupIp = o.str("groupIp"),
                 )
             }
         }

@@ -183,6 +183,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canImage by remember { mutableStateOf(false) }
     // It builds any of its catalogue's images, chosen together; an older one Debian alone.
     var canImages by remember { mutableStateOf(false) }
+    var canGroups by remember { mutableStateOf(false) }
     // It makes the pool a machine of its own (`can` holds "holder"); an older one cannot.
     var canHolder by remember { mutableStateOf(false) }
     // What the fleet said when the token was kept there too, or what stood in
@@ -397,6 +398,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         edgeDisk = "edge-disk" in p.setup.can
         canImage = "image" in p.setup.can
         canImages = "images" in p.setup.can
+        canGroups = "groups" in p.setup.can
         canHolder = "holder" in p.setup.can
         policyKey = reply
         job = p.setup.job
@@ -639,6 +641,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             edgeDiskChoice = edgeDisk,
                             imageChoice = canImage,
                             imagesChoice = canImages && opened.imageKinds != null,
+                            groupsChoice = canGroups && opened.groups != null,
                             holderChoice = canHolder && opened.holders != null,
                         )
                     } else {

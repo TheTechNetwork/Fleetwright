@@ -371,4 +371,42 @@ class XoPolicyTest {
         assertEquals(4L, XoPolicy.stepFor(64))
         assertEquals(64L, XoPolicy.stepFor(2000))
     }
+
+    // --- Group networks ---------------------------------------------------------
+
+    @Test
+    fun anOlderMachineSaysNothingAboutGroupNetworksAndNothingIsSent() {
+        val inv = inventory()
+        assertNull("an inventory without groups is cannot tell, not none", inv.groups)
+        val c = XoPolicy.defaults(inv).copy(groups = 2)
+        assertFalse(XoPolicy.payload(inv, c).has("groups"))
+    }
+
+    @Test
+    fun groupNetworksStartAtTheOnesThereAndAreNeverFewer() {
+        val json = inventoryJson()
+        json.getJSONArray("networks").put(
+            JSONObject().put("id", "net-g1").put("name", "fleetwright-group-1").put("pool", "pool-1").put("vlan", JSONObject.NULL).put("egress", false),
+        )
+        json.put("groups", JSONArray().put(JSONObject().put("id", "net-g1").put("name", "fleetwright-group-1").put("pool", "pool-1")))
+        val inv = inventory(json)
+        assertEquals("a group network is this policy's, not a choice", listOf("net-mgmt", "net-lab"), XoPolicy.choosable(inv).map { it.id })
+        var c = XoPolicy.defaults(inv).copy(groupsChoice = true)
+        assertEquals("as many as there are", 1, c.groups)
+        assertEquals("one there is never asked away", 1..XoPolicy.MAX_GROUPS, XoPolicy.groupRange(inv, c))
+        c = c.copy(groups = 3)
+        assertNull(XoPolicy.problem(inv, c))
+        assertEquals(3, XoPolicy.payload(inv, c).getInt("groups"))
+        assertEquals("3: 1 there now, 2 made when you apply", XoPolicy.groupsLine(3, 1))
+        assertEquals("1, there now", XoPolicy.groupsLine(1, 1))
+        assertEquals("None", XoPolicy.groupsLine(0, 0))
+    }
+
+    @Test
+    fun groupNetworksNeedAWayOutToBeMadeIn() {
+        val inv = inventory(inventoryJson().put("groups", JSONArray()))
+        val c = XoPolicy.defaults(inv).copy(groupsChoice = true, groups = 2, egress = null)
+        assertEquals("Group networks are made in the way out’s pool: choose the way out. Nothing was changed.", XoPolicy.problem(inv, c))
+        assertFalse(XoPolicy.payload(inv, c).has("groups"))
+    }
 }

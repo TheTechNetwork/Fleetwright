@@ -162,7 +162,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   assert.match(form, /if \(canEdge && choice\.egress != null\) \{/);
   assert.ok(form.includes('title = if (there == null) "Build the edge router on it" else "Keep the edge router on it"'));
   assert.ok(form.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
-  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), holder = false)) }'));
+  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false)) }'));
   assert.match(sheet, /canEdge = "edge" in p\.setup\.can/);
   assert.match(policy, /\.put\("edge", c\.edge\)/);
   assert.ok(policy.includes('The edge router needs a way out: choose the network its WAN goes on.'));
@@ -202,7 +202,8 @@ test('Android: the form is the design’s tokens, 48dp, with nothing offered tha
   assert.ok(form.includes('enabled = enabled && value < max'));
   // The way out offers what the machine takes: any of the pool's networks
   // where it said `egress-any`, and only the fleet's where it did not.
-  assert.ok(form.includes('inv.networks.filter { anyWayOut || it.id in choice.networks }.forEach'));
+  // Less the pool's group networks, which are no way out (vm-groups-in-apps).
+  assert.ok(form.includes('choosable.filter { anyWayOut || it.id in choice.networks }.forEach'));
   assert.ok(file('HypervisorSheet.kt').includes('anyWayOut = "egress-any" in p.setup.can'));
   // ASKED FOR: "this needs proper progress, also which disk did it put it on?"
   assert.ok(file('HypervisorSheet.kt').includes('edgeDisk = "edge-disk" in p.setup.can'));
