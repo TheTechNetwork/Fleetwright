@@ -204,8 +204,12 @@ internal object XoPolicy {
     /** How much room the disks being built need: the image's when it is one of them, the router's otherwise. */
     fun diskNeed(inv: Inventory, c: Choice): Long = if (building(inv, c).second) IMAGE_DISK else EDGE_DISK
 
-    /** The edge router on a pool, and whether it is running. */
-    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null)
+    /**
+     * The edge router on a pool, whether it is running, and whether it drops
+     * what its threat rules match (null from a machine that predates saying,
+     * which built none that did).
+     */
+    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null, val blocks: Boolean? = null)
 
     /** The edge router on the pool this network is in, if it has one. */
     fun edgeOn(inv: Inventory, network: String?): Edge? {
@@ -269,6 +273,10 @@ internal object XoPolicy {
          * one ignores it, so it is neither offered nor sent.
          */
         val edgeDiskChoice: Boolean = false,
+        /** The edge drops what its threat rules match, rather than only logging it. Changing it on an edge that is there rebuilds it. */
+        val edgeBlock: Boolean = false,
+        /** The machine builds either kind (`edge-block` in begin's `can`). An older one only logs, so it is neither offered nor sent. */
+        val edgeBlockChoice: Boolean = false,
         /**
          * Make the machine image sessions' machines are cloned from, on the
          * way out's pool, behind its router. Needs the router, there or
@@ -390,7 +398,9 @@ internal object XoPolicy {
             currentLimits = Limits(limit("cpus"), limit("memory"), limit("disk")),
             edges = json.optJSONArray("edges")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
-                    a.optJSONObject(i)?.let { e -> Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr")) }
+                    a.optJSONObject(i)?.let { e ->
+                        Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr"), if (e.has("blocks")) e.optBoolean("blocks", false) else null)
+                    }
                 }
             },
             images = json.optJSONArray("images")?.let { a ->
@@ -453,6 +463,8 @@ internal object XoPolicy {
         return Choice(
             srs, networks, egress, cpus, memory, disk,
             edge = edgeOn(inv, egress) != null, anyWayOut = anyWayOut, groups = groupCount(inv, egress),
+            // As it is: Apply rebuilds nothing the person did not change.
+            edgeBlock = edgeOn(inv, egress)?.blocks ?: false,
             holder = holderOn(inv, egress) != null,
         )
     }
@@ -561,6 +573,7 @@ internal object XoPolicy {
             // Only to a machine that makes one, and only when asked.
             .apply { if (c.holderChoice && c.holder) put("holder", true) }
             // Only to a machine that reads it, and only with something to build.
+            .apply { if (c.edgeBlockChoice && c.edge) put("edgeBlock", c.edgeBlock) }
             .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage))) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
