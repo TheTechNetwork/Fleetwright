@@ -166,6 +166,9 @@ struct AddHypervisorView: View {
         /// It builds any of its catalogue's images, chosen together
         /// (`can` holds "images"); an older one Debian alone.
         var canImages = false
+        /// It makes the pool a machine of its own (`can` holds "holder");
+        /// an older one cannot.
+        var canHolder = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -817,7 +820,7 @@ struct AddHypervisorView: View {
             .disabled(busy)
             // No way out, no router and no image: the switches go off with it.
             .onChange(of: choice.egress) { _, way in
-                if way == nil { choice.edge = false; choice.image = false; choice.images = [] }
+                if way == nil { choice.edge = false; choice.image = false; choice.images = []; choice.holder = false }
             }
             if canEdge, choice.egress != nil {
                 Toggle(isOn: $choice.edge) {
@@ -849,6 +852,28 @@ struct AddHypervisorView: View {
                     // Built behind the router, so asking for it asks for that too.
                     .onChange(of: choice.image) { _, on in
                         if on, there == nil { choice.edge = true }
+                    }
+                }
+            }
+            // THE POOL'S OWN MACHINE, offered only by a machine that makes one:
+            // said as there when the pool has it, a switch when it has not.
+            // Asked for: "dedicated hypervisor VM on the pool".
+            if choice.holderChoice, choice.egress != nil {
+                if let mine = inv.holder(on: choice.egress) {
+                    policyRow("The pool’s own machine", holderThereLine(mine))
+                } else {
+                    Toggle(isOn: $choice.holder) {
+                        policyRow("Make the pool a machine of its own", holderLine)
+                    }
+                    .tint(Design.Palette.accent)
+                    .frame(minHeight: 44)
+                    .disabled(busy)
+                    // Made from the image: asking for it asks for Debian's, and
+                    // the router that is built behind, when the pool has neither.
+                    .onChange(of: choice.holder) { _, on in
+                        guard on, inv.image(on: choice.egress) == nil, !(choice.imageChoice && choice.wantsImage) else { return }
+                        if choice.imagesChoice { choice.images.insert(XOPolicy.debianKey) } else { choice.image = true }
+                        if there == nil { choice.edge = true }
                     }
                 }
             }
@@ -914,6 +939,21 @@ struct AddHypervisorView: View {
         return "\(kind.os) with Fleetwright installed, on a 20 GiB disk on the storage chosen. \(hostId) downloads its cloud "
             + "image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can "
             + "then start on a new machine from it."
+    }
+
+    /// What the pool's own machine is, before it is asked for. The same words
+    /// as Android (PolicyForm.kt).
+    private var holderLine: String {
+        "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the "
+            + "fleet may use, so the pool does not need \(hostId) to be awake. Once it joins, approve it under Machines and it "
+            + "holds the pool."
+    }
+
+    /// The one there, and what Apply does to it. The same words as Android.
+    private func holderThereLine(_ mine: XOPolicy.Inventory.Holder) -> String {
+        mine.running
+            ? "\(mine.name) is there and running. It holds the pool once you have approved it under Machines."
+            : "\(mine.name) is there and stopped. Apply starts it."
     }
 
     /// What making the image costs, before it is asked for. The same words as
@@ -1460,7 +1500,8 @@ struct AddHypervisorView: View {
             }
             policyJob = PolicyJob(key: begun.key, address: begun.address, reply: reply, canEdge: begun.can.contains("edge"),
                                   anyWayOut: begun.can.contains("egress-any"), edgeDisk: begun.can.contains("edge-disk"),
-                                  canImage: begun.can.contains("image"), canImages: begun.can.contains("images"))
+                                  canImage: begun.can.contains("image"), canImages: begun.can.contains("images"),
+                                  canHolder: begun.can.contains("holder"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1487,6 +1528,7 @@ struct AddHypervisorView: View {
                     choice.edgeDiskChoice = policyJob.edgeDisk
                     choice.imageChoice = policyJob.canImage
                     choice.imagesChoice = policyJob.canImages && opened.imageKinds != nil
+                    choice.holderChoice = policyJob.canHolder && opened.holders != nil
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not

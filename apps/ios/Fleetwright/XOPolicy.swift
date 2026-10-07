@@ -57,6 +57,10 @@ enum XOPolicy {
         /// machine's catalogue (vm-image.js, IMAGES); nil from one older than
         /// the choice, which builds Debian alone.
         var imageKinds: [ImageKind]? = nil
+        /// Each pool's own machine, from a machine that can make one
+        /// (xo-holder.js); nil from one older than that, which is "cannot
+        /// tell", never "none".
+        var holders: [Holder]? = nil
 
         struct Pool: Decodable, Equatable, Identifiable {
             let id: String
@@ -114,6 +118,14 @@ enum XOPolicy {
             var key: String? = nil
         }
 
+        /// A pool's own machine: a permanent fleet host on the pool that
+        /// holds it once its owner approves it.
+        struct Holder: Decodable, Equatable {
+            let pool: String?
+            let name: String
+            let running: Bool
+        }
+
         /// One operating system an image can be made of.
         struct ImageKind: Decodable, Equatable, Identifiable {
             let key: String
@@ -131,6 +143,12 @@ enum XOPolicy {
         func image(on network: String?) -> Image? {
             guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return nil }
             return images?.first { $0.pool == pool }
+        }
+
+        /// The pool's own machine on the pool this network is in, if it has one.
+        func holder(on network: String?) -> Holder? {
+            guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return nil }
+            return holders?.first { $0.pool == pool }
         }
 
         /// The edge router on the pool this network is in, if it has one.
@@ -242,6 +260,14 @@ enum XOPolicy {
         /// and offered Debian alone.
         var imagesChoice = false
 
+        /// Make the pool a machine of its own on the way out, or keep the one
+        /// there running (xo-holder.js). Needs the pool's machine image, there
+        /// or made with it.
+        var holder = false
+        /// The machine makes one (`holder` in begin's `can`). An older one
+        /// cannot, so it is neither offered nor sent.
+        var holderChoice = false
+
         /// An image is asked for, in whichever form this machine reads.
         var wantsImage: Bool { imagesChoice ? !images.isEmpty : image }
 
@@ -291,6 +317,8 @@ enum XOPolicy {
             c.egress = inv.networks.first { $0.egress && (anyWayOut || networks.contains($0.id)) }?.id
             // On when there is one already, so Apply keeps it on the way out.
             c.edge = inv.edge(on: c.egress) != nil
+            // The same for the pool's own machine: Apply keeps it, or starts it.
+            c.holder = inv.holder(on: c.egress) != nil
             c.cpus = XOPolicy.clamp(inv.current.limits.cpus ?? inv.capacity.cpus / 2, inv.cpuRange)
             let memory = inv.current.limits.memory.map(XOPolicy.nearestGiB) ?? Int(clamping: inv.capacity.memory / 2 / XOPolicy.gib)
             c.memoryGiB = XOPolicy.clamp(memory, inv.memoryRange)
@@ -315,6 +343,7 @@ enum XOPolicy {
             if !anyWayOut, let egress, !networks.contains(egress) {
                 self.egress = nil
                 edge = false
+                holder = false
             }
         }
 
@@ -335,6 +364,10 @@ enum XOPolicy {
             }
             if imageChoice, wantsImage, !edge, inv.edge(on: egress) == nil {
                 return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
+            }
+            if holderChoice, holder, egress == nil { return "The pool’s own machine goes on the way out: choose the network it is on." }
+            if holderChoice, holder, inv.image(on: egress) == nil, !(imageChoice && wantsImage) {
+                return "The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it."
             }
             let build = building(in: inv)
             if edgeDiskChoice, build.image || build.edge, edgeDisk(in: inv) == nil {
@@ -376,6 +409,8 @@ enum XOPolicy {
                     out["image"] = true
                 }
             }
+            // Only to a machine that makes one, and only when asked.
+            if holderChoice, holder { out["holder"] = true }
             // Only to a machine that reads it, and only with something to build.
             if edgeDiskChoice, edge || (imageChoice && wantsImage) { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
             return out
