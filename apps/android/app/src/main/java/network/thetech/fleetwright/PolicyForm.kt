@@ -106,7 +106,10 @@ internal fun PolicyForm(
             title = n.name.ifBlank { n.id },
             line = XoPolicy.networkLine(n),
             // Another pool has its own group networks to start from, and its router filters its own way.
-            onClick = { onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id), edgeBlock = XoPolicy.edgeOn(inv, n.id)?.blocks ?: false)) },
+            onClick = {
+                val edge = XoPolicy.edgeOn(inv, n.id)
+                onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id), edgeBlock = edge?.blocks ?: false, labsOpen = edge?.labs?.open ?: 0, labsClosed = edge?.labs?.closed ?: 0))
+            },
         )
     }
     RadioRow(
@@ -299,6 +302,49 @@ internal fun PolicyForm(
             enabled = enabled,
             onValue = { onChange(choice.copy(groups = it.toInt())) },
         )
+    }
+
+    // LABS, on the edge router: how many of each kind, four in all at most.
+    // Each is a network of its own with one machine at a time, and costs no
+    // machine of its own, which is the first thing said. Changing them
+    // rebuilds the router, said before Apply as blocking mode says it. iOS's words.
+    if (choice.labsChoice && choice.egress != null && (choice.edge || XoPolicy.edgeOn(inv, choice.egress) != null)) {
+        SectionHead("Labs")
+        Hint(
+            "A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. " +
+                "It costs no extra machine, only an interface on the router. Up to four in all.",
+        )
+        Stepper(
+            label = "Open labs",
+            value = choice.labsOpen.toLong(),
+            min = 0,
+            max = (XoPolicy.MAX_LABS - choice.labsClosed).toLong(),
+            shown = "${choice.labsOpen}: each reaches the internet and nothing private",
+            bound = "0 to ${XoPolicy.MAX_LABS - choice.labsClosed}",
+            less = "Fewer open labs",
+            more = "More open labs",
+            enabled = enabled,
+            onValue = { onChange(choice.copy(labsOpen = it.toInt())) },
+        )
+        Stepper(
+            label = "Closed labs",
+            value = choice.labsClosed.toLong(),
+            min = 0,
+            max = (XoPolicy.MAX_LABS - choice.labsOpen).toLong(),
+            shown = "${choice.labsClosed}: each reaches the fleet and Claude and nothing else",
+            bound = "0 to ${XoPolicy.MAX_LABS - choice.labsOpen}",
+            less = "Fewer closed labs",
+            more = "More closed labs",
+            enabled = enabled,
+            onValue = { onChange(choice.copy(labsClosed = it.toInt())) },
+        )
+        if (XoPolicy.labsChanged(inv, choice)) {
+            Text(
+                "Apply rebuilds the edge router to change the labs: machines behind it have no way out until the new one is up.",
+                style = Design.Style.bodySmall,
+                color = Design.Palette.attention.now,
+            )
+        }
     }
 
     SectionHead("Limits")

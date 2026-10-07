@@ -188,6 +188,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canHolder by remember { mutableStateOf(false) }
     // It builds an edge that drops what its threat rules match (`can` holds "edge-block"); an older one only one that logs.
     var canEdgeBlock by remember { mutableStateOf(false) }
+    // It makes labs on the edge (`can` holds "labs"); an older one cannot.
+    var canLabs by remember { mutableStateOf(false) }
     // What the fleet said when the token was kept there too, or what stood in
     // the way (XoHandoff.keepInFleet).
     var fleetNote by remember { mutableStateOf("") }
@@ -410,6 +412,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canGroups = "groups" in p.setup.can
         canHolder = "holder" in p.setup.can
         canEdgeBlock = "edge-block" in p.setup.can
+        canLabs = "labs" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -669,6 +672,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             groupsChoice = canGroups && opened.groups != null,
                             holderChoice = canHolder && opened.holders != null,
                             edgeBlockChoice = canEdgeBlock,
+                            labsChoice = canLabs && opened.labMax != null,
                         )
                     } else {
                         unopened = true

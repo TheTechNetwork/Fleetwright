@@ -1160,7 +1160,8 @@ class Fleet(
         // A MACHINE FROM YOUR HYPERVISOR is never GitHub's: a box holding the
         // pool's token makes it (protocol 8, `template`).
         val phone = PhoneGitHub(settings)
-        if (platform != "vm" && phone.signedIn) {
+        // NOR IS A LAB, which is a machine from your hypervisor in a lab.
+        if (platform != "vm" && platform != "lab" && phone.signedIn) {
             return runCatching { phone.startRunner(this, platform, minutes, start) }
                 .getOrElse { Reply(false, it.message ?: "that did not work", emptyList()) }
         }
@@ -1755,9 +1756,33 @@ class Fleet(
         val networks: List<VmNetwork>? = null,
         /** The pool's group networks, for machines that work together; null from an older coordinator. */
         val groups: List<VmNetwork>? = null,
+        /**
+         * The pool's labs (docs/hypervisors.md, "Labs"): networks of their own
+         * on its edge router, open or closed; null from a coordinator older
+         * than labs, and empty when the pool has none.
+         */
+        val labs: List<VmLab>? = null,
     ) {
         /** "New machine from Fleetwright Debian 13 on rack", for a picker. */
         val label: String get() = "New machine from $name" + (poolName?.let { " on $it" } ?: "")
+
+        /** The first free lab of that kind, or null when none is. */
+        fun freeLab(open: Boolean): VmLab? = labs?.firstOrNull { it.open == open && it.free }
+    }
+
+    /**
+     * A lab on the pool's edge router: open reaches the internet, closed only
+     * the fleet and Claude. Free is what the box saw, never assumed.
+     */
+    data class VmLab(val id: String, val name: String, val open: Boolean, val free: Boolean)
+
+    private fun labsOf(a: JSONArray?): List<VmLab>? = a?.let {
+        (0 until it.length()).mapNotNull { j ->
+            val l = it.optJSONObject(j) ?: return@mapNotNull null
+            val id = l.optString("id").takeIf { s -> s.isNotBlank() } ?: return@mapNotNull null
+            // Free only when the coordinator said so in so many words.
+            VmLab(id, l.optString("name").ifBlank { id }, l.optBoolean("open", false), l.opt("free") == true)
+        }
     }
 
     /**
@@ -1790,6 +1815,7 @@ class Fleet(
                     hosts = if (hosts == null) emptyList() else (0 until hosts.length()).map { hosts.optString(it) },
                     networks = networksOf(o.optJSONArray("networks")),
                     groups = networksOf(o.optJSONArray("groups")),
+                    labs = labsOf(o.optJSONArray("labs")),
                 )
             }
         }
@@ -1828,7 +1854,11 @@ class Fleet(
         /** The group network it is also on, by name, and its address there; null when in none, or from an older coordinator. */
         val group: String? = null,
         val groupIp: String? = null,
+        /** The lab it is in, and whether that lab is open; null when in none, or from an older coordinator. */
+        val lab: InLab? = null,
     ) {
+        data class InLab(val name: String, val open: Boolean)
+
         /**
          * Bytes a second through the machine's network interfaces, one point
          * an interval, oldest first, as Xen Orchestra's `vm.stats` counted
@@ -1906,6 +1936,10 @@ class Fleet(
                     standby = o.optBoolean("standby", false),
                     group = o.str("group"),
                     groupIp = o.str("groupIp"),
+                    lab = o.optJSONObject("lab")?.let { l ->
+                        val name = l.optString("name").takeIf { it.isNotBlank() }
+                        if (name == null || !l.has("open")) null else VmMachine.InLab(name, l.optBoolean("open", false))
+                    },
                 )
             }
         }

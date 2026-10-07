@@ -86,7 +86,8 @@ const A_FORM = ANDROID('PolicyForm.kt');
 const A_POLICY = ANDROID('XoPolicy.kt');
 
 test('Android: a machine from your hypervisor is asked of the fleet, never of GitHub, with the image it is cloned from', () => {
-  assert.match(A_FLEET, /if \(platform != "vm" && phone\.signedIn\) \{/);
+  // Nor is one in a lab, which is the same machine on a lab's network.
+  assert.match(A_FLEET, /if \(platform != "vm" && platform != "lab" && phone\.signedIn\) \{/);
   assert.match(A_FLEET, /if \(template == null\) mapOf\("platform" to platform\) else mapOf\("platform" to platform, "template" to template\)/);
   assert.match(A_FLEET, /get\("\/api\/hosts"\)\.optJSONArray\("vmImages"\)/);
   assert.match(A_MAIN, /fleet\.provision\(platform, minutes = request\.minutes, start = start, template = request\.template, network = request\.network, group = request\.group\)/);
