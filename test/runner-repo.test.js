@@ -196,7 +196,12 @@ test('with no GitHub connected on this box it says so, and says so as data', asy
     ticket: 'fwt_a_b',
     coordinator: 'https://fleet.example',
   };
-  for (const [name, args] of /** @type {Array<[string, string[]]>} */ ([['runnerrepo', ['eli/runners']], ['provision', ['linux']]])) {
+  for (const [name, args] of /** @type {Array<[string, string[]]>} */ ([
+    ['runnerrepo', ['eli/runners']],
+    ['provision', ['linux']],
+    // The linked-repository check is asked the same way (#346).
+    ['linkrepo', ['archive', 'eli/work']],
+  ])) {
     const r = await /** @type {any} */ (COMMANDS)[name].run(ctx, args);
     assert.equal(r.ok, false, name);
     assert.equal(r.needsConnection, 'github', name);

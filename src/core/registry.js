@@ -36,6 +36,12 @@ import { log } from '../log.js';
  * @property {string|null} rcUrl          claude.ai/code URL, when Remote Control came online
  * @property {string|null} [transcriptPath]  where the CLI writes this conversation, when its hook ran on this box and said; the hub reads the window's size off it
  * @property {import('./spent.js').Spent|null} [spent]  what the conversation has cost, as Claude Code counted it, when a hook inside its sandbox last carried the figure — kept so it is still known once the container is gone
+ * @property {string|null} [archive]       the private repository it is pushed to before it goes, as owner/repo — the starter's linked archive, fixed at start (src/core/archive.js)
+ * @property {string|null} [archiveBranch] the branch of its own it is pushed to there
+ * @property {number|null} [archiveAt]     when the last push was tried
+ * @property {boolean|null} [archiveOk]    whether it landed
+ * @property {string|null} [archiveText]   what happened, in a sentence
+ * @property {string|null} [archiveCommit] the commit the branch points at after the last push that landed
  * @property {string|null} createdBy      e.g. "telegram:12345", "web", "cli"
  * @property {number} createdAt
  * @property {number} updatedAt
@@ -156,6 +162,10 @@ export class Registry {
           profile: patch.profile ?? null,
           tasked: patch.tasked ?? false,
           secret: patch.secret ?? null,
+          // Where it is pushed before it goes. Named here like every field a
+          // FIRST upsert may carry: this branch builds the record from a list,
+          // and a field left off it is dropped on a fresh start without a word.
+          archive: patch.archive ?? null,
           account: patch.account ?? null,
           detail: patch.detail ?? null,
           rcUrl: patch.rcUrl ?? null,

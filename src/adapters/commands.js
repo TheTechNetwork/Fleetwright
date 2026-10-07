@@ -107,7 +107,7 @@ import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf, refreshSandboxImageStep } from '../core/update.js';
 import { applyRelease, currentVersion, versionDrift } from '../core/release-apply.js';
 import { armConfirmation } from '../core/update-confirm.js';
-import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
+import { PROTOCOL_VERSION, LINK_ROLES, REPO_RE } from '../fleet/protocol/intents.js';
 import { listSecretNames } from '../core/secret-store.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
 import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
@@ -131,6 +131,8 @@ import { readHouseRules, describeHouseRules } from '../core/rules.js';
 import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/files.js';
 import { dispatchRunner, checkRunnerRepo, RUNNER_WORKFLOWS, DEFAULT_MINUTES, MAX_MINUTES } from '../core/runners.js';
 import { checkRepoAccess } from '../core/repo-tokens.js';
+import { checkLinkedRepo } from '../core/linked-repo-check.js';
+import { archiveSession } from '../core/archive.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -200,6 +202,49 @@ function permissionOverride(flags) {
   if (dangerous) return true;
   return null;
 }
+
+/**
+ * Push a running session to its archive before something ends its container
+ * — a stop, a forget, a purge — and say how it went, as a line for the reply.
+ *
+ * Only a RUNNING session with an archive: one that is already stopped was
+ * pushed when it stopped, and there is no console left to read. Awaited,
+ * because the point is that it happens before the container goes; bounded by
+ * archive.js's own timeouts, and never a reason the stop does not happen.
+ *
+ * @param {Ctx} ctx @param {unknown} name @param {string} reason
+ * @returns {Promise<string>} empty, or a newline and a sentence
+ */
+async function archiveBefore(ctx, name, reason) {
+  const rec = ctx.sessions.registry.get(String(name || ''));
+  if (!rec?.archive || rec.status !== 'running') return '';
+  /** @type {ReturnType<typeof setTimeout>|undefined} */
+  let timer;
+  const r = await Promise.race([
+    archiveSession({
+      cfg: ctx.cfg,
+      registry: ctx.sessions.registry,
+      name: rec.name,
+      reason,
+      ...(ctx.fetch ? { fetchImpl: ctx.fetch } : {}),
+    }),
+    // A STOP IS NOT HELD HOSTAGE to a slow GitHub. Past this the stop goes
+    // ahead and says so; the push carries on and writes its outcome on the
+    // record when it lands.
+    new Promise((resolve) => {
+      timer = setTimeout(
+        () => resolve({ ok: false, text: `The push to ${rec.archive} was still going after ${ARCHIVE_WAIT_MS / 1000} seconds, so this did not wait for it.` }),
+        ARCHIVE_WAIT_MS,
+      );
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+  return /** @type {any} */ (r)?.text ? `\n${/** @type {any} */ (r).text}` : '';
+}
+
+/** How long a stop waits for a session's archive push. Under the sidecar's
+ * five-minute command timeout with room for the stop itself. */
+const ARCHIVE_WAIT_MS = 150_000;
 
 /**
  * Tappable shortcuts for the sessions a command could act on. Capped, because
@@ -718,7 +763,7 @@ export const COMMANDS = {
     // Telegram reserves a bare /start as the bot-intro command, so its adapter
     // mapped that one case to /help — see archive/telegram/telegram.js.
     aliases: ['start', 'launch', 'run'],
-    usage: '/new [name] [path] [--safe|--dangerous] [--profile=<name>] [--secret=<name>]',
+    usage: '/new [name] [path] [--safe|--dangerous] [--profile=<name>] [--secret=<name>] [--archive=<owner/repo>]',
     short: 'Start a new Claude session',
     help:
       'Start a new session. --safe keeps permission prompts on for this one session. ' +
@@ -726,10 +771,18 @@ export const COMMANDS = {
       'and the fleet can hand it a task in words instead. ' +
       'Without either the session comes up idle, waiting for a person. ' +
       '--secret=<name> lets it fetch that named secret at runtime (fleet-secret <name>); ' +
-      'the value stays on this box.',
+      'the value stays on this box. --archive=<owner/repo> pushes it to that private repository, ' +
+      'on a branch of its own, before it stops and every ten minutes while it runs.',
     run: async (ctx, args, flags, values) => {
       const [name, cwd] = args;
       const skipPermissions = permissionOverride(flags);
+      // ONE TOKEN, HELD TO GITHUB'S NAMING RULES, like the protocol holds it:
+      // the fleet sends the starter's archive as `--archive=owner/repo`, and a
+      // value that is not a repository is refused rather than stored.
+      const archive = values?.get('archive') ?? null;
+      if (archive !== null && !REPO_RE.test(archive)) {
+        return { ok: false, text: 'An archive is a repository, written owner/repo.' };
+      }
       // title and brief arrive as FIELDS on the context, never parsed out of
       // the command line. A title is prose with spaces in it, and putting prose
       // into a line that is then split is the same mistake `answer` taking an
@@ -752,8 +805,10 @@ export const COMMANDS = {
         // at runtime — the value lives in the store on this box and is read
         // there. See src/core/secret-store.js.
         secret: values?.get('secret') ?? ctx.secret ?? null,
+        archive,
       });
       let text = r.message;
+      if (r.ok && archive) text += `\nIt is pushed to ${archive}, on a branch of its own, before it stops and every ten minutes while it runs.`;
       if (r.ok && skipPermissions === false) text += '\nPermission prompts are ON for this session.';
       if (r.ok && skipPermissions === true && !ctx.cfg.skipPermissions) {
         text += '\nPermission checks are BYPASSED for this session.';
@@ -1052,7 +1107,7 @@ export const COMMANDS = {
     usage: '/stop <name>',
     short: 'Stop a running session',
     help: 'Stop a session. Its conversation is kept so /resume still works.',
-    run: (ctx, args) => {
+    run: async (ctx, args) => {
       if (!args[0]) {
         const running = ctx.sessions.running();
         if (!running.length) return { ok: false, text: 'Nothing is running.' };
@@ -1062,8 +1117,11 @@ export const COMMANDS = {
           buttons: sessionButtons(running, (s) => `/stop ${s.name}`, (s) => s.name),
         };
       }
+      // ARCHIVED FIRST, while the container still holds what it made. The
+      // stop goes ahead whatever the push says, and the reply carries both.
+      const archived = await archiveBefore(ctx, args[0], 'stop');
       const r = ctx.sessions.stop({ name: args[0], actor: ctx.actor });
-      return { ok: r.ok, text: r.message, sessions: r.session ? [r.session] : undefined };
+      return { ok: r.ok, text: `${r.message}${archived}`, sessions: r.session ? [r.session] : undefined };
     },
   },
 
@@ -1267,10 +1325,11 @@ export const COMMANDS = {
     short: 'Stop a session and put it in the bin',
     help: 'Stop a session and take it out of the list. Recoverable with /restore for seven days, ' +
       'because this used to be the one action here with no undo.',
-    run: (ctx, args) => {
+    run: async (ctx, args) => {
       if (!args[0]) return { ok: false, text: 'Which session? Try /forget <name>.' };
+      const archived = await archiveBefore(ctx, args[0], 'forget');
       const r = ctx.sessions.forget({ name: args[0] });
-      return { ok: r.ok, text: r.message };
+      return { ok: r.ok, text: `${r.message}${archived}` };
     },
   },
 
@@ -1296,10 +1355,11 @@ export const COMMANDS = {
     usage: '/purge <name>',
     short: 'Delete a session for good',
     help: 'Delete the conversation and the workspace now, with no recovery. This is what /forget used to do.',
-    run: (ctx, args) => {
+    run: async (ctx, args) => {
       if (!args[0]) return { ok: false, text: 'Which session? Try /purge <name>.' };
+      const archived = await archiveBefore(ctx, args[0], 'purge');
       const r = ctx.sessions.purge({ name: args[0] });
-      return { ok: r.ok, text: r.message };
+      return { ok: r.ok, text: `${r.message}${archived}` };
     },
   },
 
@@ -1605,6 +1665,56 @@ export const COMMANDS = {
       // "can start linux, macos machines" out of prose would break the day the
       // sentence is reworded.
       return { ok: check.ok, text: check.message, runnerRepo: check };
+    },
+  },
+
+  linkrepo: {
+    usage: '/linkrepo <archive|runners|templates> <owner/repo>',
+    short: 'Check a repository for one role of a linked repository',
+    help:
+      'Asks GitHub, with YOUR GitHub connection on this box, whether a repository fits a role: an archive '
+      + 'has to be private and writable, runners public with the runner workflows, templates readable. '
+      + 'Changes nothing; linking is done from the app. See docs/linked-repos.md.',
+    run: async (ctx, args) => {
+      const [role = '', repo = ''] = args.map(String);
+      if (!LINK_ROLES.includes(role) || !repo) return { ok: false, text: `Usage: /linkrepo <${LINK_ROLES.join('|')}> <owner/repo>` };
+      // WHOSE GITHUB, as `runnerrepo` resolves it: the answer is about what
+      // THIS PERSON's connection can do there.
+      const row = rowForActor(ctx.actor);
+      if (row === null || row === HOST_ROW) {
+        return { ok: false, text: 'Could not tell whose GitHub connection to check with.' };
+      }
+      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      if (!token) {
+        return {
+          ok: false,
+          text:
+            'GitHub is not connected for you on this box, and the check is made with your own connection. '
+            + 'Connect it in the app and check again.',
+          // As data, so a coordinator with several boxes asks the next one.
+          needsConnection: 'github',
+        };
+      }
+      const check = await checkLinkedRepo({ role, repo, token, ...(ctx.fetch ? { fetchImpl: ctx.fetch } : {}) });
+      return { ok: check.ok, text: check.message, linkedRepo: check };
+    },
+  },
+
+  archive: {
+    usage: '/archive <name>',
+    short: 'Push a session to its archive now',
+    help:
+      'Pushes the session to the private archive repository its owner linked, on its own branch: the '
+      + 'console, the transcript where this box can read it, and what changed in the workspace. It happens '
+      + 'by itself before a stop and every ten minutes; this is for now. See docs/linked-repos.md.',
+    run: async (ctx, args) => {
+      const name = String(args[0] || '');
+      if (!name) return { ok: false, text: 'Which session? Try /archive <name>.' };
+      const rec = ctx.sessions.registry.get(name);
+      if (!rec) return { ok: false, text: `No session named "${name}".` };
+      if (!rec.archive) return { ok: false, text: `"${name}" has no archive: it was started by somebody with none linked.` };
+      const r = await archiveSession({ cfg: ctx.cfg, registry: ctx.sessions.registry, name, reason: 'asked', ...(ctx.fetch ? { fetchImpl: ctx.fetch } : {}) });
+      return { ok: r.ok, text: r.text };
     },
   },
 

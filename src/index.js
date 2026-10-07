@@ -25,6 +25,14 @@ import { vaultEnvFor, vaultExpiryFor, vaultSecret } from './core/vault-store.js'
 import { loadEnvFile } from './core/env-file.js';
 import { answerSecretRequest, readNamedSecret } from './core/secret-store.js';
 import { HttpAdapter } from './adapters/http.js';
+import { archiveRunning, ARCHIVE_EVERY_MS } from './core/archive.js';
+import { onRunner } from './core/runner-login.js';
+
+/** The longest a runner's hub spends pushing sessions to their archives when
+ * it is told to stop. GitHub gives a cancelled job's steps a few seconds and a
+ * job that ran out of time none, so this is a best effort on top of the
+ * ten-minute checkpoint, never the thing the archive relies on. */
+const SHUTDOWN_ARCHIVE_MS = 20_000;
 
 export async function main() {
   const cfg = loadConfig();
@@ -259,6 +267,17 @@ export async function main() {
     // is just the remote control for it. Sessions survive a hub restart and are
     // re-adopted on the next reconcile.
     log.info(`${signal} — shutting down (tmux sessions are left running)`);
+    // EXCEPT ON A RUNNER, where a signal to the hub is the job ending and the
+    // machine going with every session on it. One last push of each that has
+    // an archive, bounded so a slow GitHub cannot hold the job open past the
+    // point GitHub kills it anyway. A permanent box's sessions outlive this
+    // restart, so it pushes nothing here. See src/core/archive.js.
+    if (signal !== 'revert' && onRunner(cfg)) {
+      await Promise.race([
+        archiveRunning({ cfg, registry, reason: 'shutdown' }),
+        new Promise((resolve) => setTimeout(resolve, SHUTDOWN_ARCHIVE_MS).unref?.()),
+      ]);
+    }
     for (const a of adapters) {
       try {
         await a.stop();
@@ -294,6 +313,13 @@ export async function main() {
       log.warn('reconcile failed', e);
     }
   }, 30_000).unref?.();
+
+  // THE ARCHIVE CHECKPOINT. A push as a session stops is not enough on its
+  // own: a runner is killed when its job ends and nothing gets to run first,
+  // so a session with an archive is pushed every ten minutes while it runs —
+  // the bound on what a runner can take with it. A pass that would commit
+  // what the branch already holds commits nothing. See src/core/archive.js.
+  setInterval(() => void archiveRunning({ cfg, registry }), ARCHIVE_EVERY_MS).unref?.();
 
   // The bin, on an hour.
   //

@@ -285,7 +285,7 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null, archive?: string|null }} opts
    *   `task` is the session's first message in words (protocol v7); either it or `profile`
    *   skipPermissions overrides FLEETWRIGHT_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
@@ -300,7 +300,7 @@ export class SessionManager {
    *   value never does. See src/core/secret-store.js.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null, archive = null } = {}) {
     this.reconcile();
 
     if (name && !isValidName(name)) return { ok: false, message: nameError(name) };
@@ -424,6 +424,10 @@ export class SessionManager {
       // the grant decides, not the ask. A name only, like `profile` — the value
       // lives in the store and never reaches here. See src/core/secret-store.js.
       secret,
+      // WHERE IT IS PUSHED BEFORE IT GOES: its starter's own private archive,
+      // fixed for the life of the session — a resume keeps it, because it is
+      // on the record. See src/core/archive.js.
+      archive,
     });
   }
 
@@ -504,10 +508,10 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean, archive?: string|null }} opts
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false, archive = null }) {
     // Whose Claude account got seeded, when THIS start created the volumes.
     // Stays null on resume and on non-sandboxed sessions: null on the record
     // means "whatever was already there".
@@ -632,6 +636,9 @@ export class SessionManager {
         // `fleet-secret` request to what `start --secret` allowed. A name, never
         // a value — the value stays in the store on this box.
         ...(secret ? { secret } : {}),
+        // The archive, by name, on a fresh start only; a resume keeps the one
+        // already on the record.
+        ...(archive ? { archive } : {}),
         // Whose Claude account this session runs on. Only set when this start
         // created the volumes — a resume keeps the account it began with, and
         // null on the record means "whatever was there already".
