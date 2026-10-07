@@ -954,6 +954,29 @@
                                 }
                               }
                             }
+                          },
+                          "labs": {
+                            "type": "array",
+                            "description": "the pool's labs: networks of their own on its edge router, made by the hypervisor's policy. A machine in one (`provision` with platform `lab` and the lab's id as `network`) is on it alone and reaches the internet when the lab is open, or only the fleet and Claude when it is closed. Absent or empty: the pool has none, or the box holding it predates labs.",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "open": {
+                                  "type": "boolean",
+                                  "description": "true: it reaches the internet; false: only the fleet and Claude"
+                                },
+                                "free": {
+                                  "type": "boolean",
+                                  "description": "no machine is on it, by the box\u2019s last look, and none was just asked for there"
+                                }
+                              }
+                            }
                           }
                         }
                       }
@@ -1090,6 +1113,21 @@
                               "null"
                             ],
                             "description": "its address on that group network"
+                          },
+                          "lab": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "description": "the lab it is in, by its network\u2019s name, and whether that lab is open; null is in no lab",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "open": {
+                                "type": "boolean"
+                              }
+                            }
                           },
                           "address": {
                             "type": "string",

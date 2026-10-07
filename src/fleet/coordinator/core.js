@@ -63,6 +63,20 @@ const MAX_SETUPS = 20;
 export const MAX_HOLDER_PINS = 3;
 /** The name a pool's own machine enrols under: `holder-` and six hex. */
 export const HOLDER_ID_RE = /^holder-[0-9a-f]{6}$/;
+/**
+ * LABS ONE PERSON MAY HOLD AT ONCE. A pool has at most four lab networks on
+ * its edge router, shared by everybody who keeps its token, and a lab is one
+ * of them for as long as its machine lives; two each leaves room for a
+ * second person. docs/hypervisors.md, "Labs".
+ */
+export const MAX_LABS_EACH = 2;
+/** How long a lab asked for is held before the box has reported its machine there. */
+const LAB_HOLD_MS = 15 * 60_000;
+/** How long a lab outlives its session, for a restart or a resume to start it again. */
+export const LAB_GRACE_MS = 5 * 60_000;
+/** What the policy job names a lab network: `fleetwright-lab-` and its number. */
+const isLabName = (/** @type {unknown} */ name) => /^fleetwright-lab-\d+$/.test(String(name || ''));
+/** @typedef {{ id: string, name: string, open: boolean, free: boolean }} LabOffer */
 const SETUP_TTL_MS = 24 * 60 * 60_000;
 
 /**
@@ -248,6 +262,23 @@ export class CoordinatorCore {
      * takes one. Stored on the Worker as `vmStandby`.
      */
     this.vmStandby = new VmStandby({ now });
+    /**
+     * LABS ASKED FOR AND NOT YET SEEN, by lab network id: held for the person
+     * who asked until the box reports the machine on it (#labsAskedFor). In
+     * memory only: lost on a restart, the box's next report says the same.
+     *
+     * @type {Map<string, { owner: string, vm: string, at: number }>}
+     */
+    this.labAsks = new Map();
+    /**
+     * LAB MACHINES' SESSIONS, by host: whether one has run a session, and
+     * since when none has (#labAfterSession). In memory only, as above.
+     *
+     * @type {Map<string, { ran: boolean, idleSince: number|null }>}
+     */
+    this.labSessions = new Map();
+    /** @type {Set<string>} labs being ended now, so a frame does not ask twice */
+    this.labEnding = new Set();
     /** When ready machines were last topped up, so a health frame every fifteen seconds does not do it each time. */
     this.standbyCheckedAt = 0;
     /**
@@ -481,6 +512,10 @@ export class CoordinatorCore {
       if (this.runnerStarts.has(hostId) && msg.health?.hub?.reachable !== false) {
         void this.#startOnRunner(hostId);
       }
+      // A LAB ENDS WITH ITS SESSION (docs/hypervisors.md, "Labs"): a machine
+      // in a lab that ran a session and has run none for LAB_GRACE_MS is
+      // ended, which frees the lab for the next person.
+      if (/^vm-[0-9a-f]{12}$/.test(hostId) && msg.health?.hub?.reachable !== false) this.#labAfterSession(hostId, msg.health);
       // MACHINES KEPT READY are topped up from a box that holds a pool, at
       // most once a minute: that box's frames are what say a pool can be
       // reached, and a new one is asked of it there and then.
@@ -1605,7 +1640,7 @@ export class CoordinatorCore {
       if (archive) params.archive = archive;
       spec = { ...spec, params };
     }
-    if (spec.verb === 'provision' && shaped.params.platform === 'vm') return this.#provisionVm(spec, shaped.params);
+    if (spec.verb === 'provision' && (shaped.params.platform === 'vm' || shaped.params.platform === 'lab')) return this.#provisionVm(spec, shaped.params);
     if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
     if (spec.verb === 'provision') {
       const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null);
@@ -2756,9 +2791,11 @@ export class CoordinatorCore {
           'session there with a profile.',
       };
     }
-    if ((spec.verb === 'provision' && spec.params?.platform === 'vm') || spec.verb === 'vmctl') {
+    if ((spec.verb === 'provision' && (spec.params?.platform === 'vm' || spec.params?.platform === 'lab')) || spec.verb === 'vmctl') {
       const speaks = Number(host?.health?.protocol);
-      const needs = spec.params?.group ? 10 : spec.verb === 'vmctl' || spec.params?.network ? 9 : 8;
+      // A LAB is asked only of a box that reported one, which speaks 10 at
+      // least; one older than that would refuse `lab` as a platform anyway.
+      const needs = spec.params?.group || spec.params?.platform === 'lab' ? 10 : spec.verb === 'vmctl' || spec.params?.network ? 9 : 8;
       if (Number.isInteger(speaks) && speaks >= needs) return null;
       return {
         ok: false,
@@ -3457,6 +3494,11 @@ export class CoordinatorCore {
             net: netOf(m.net),
             // The group network it is also on, and its address there.
             group: typeof m.group === 'string' ? m.group.slice(0, 80) : null,
+            // The lab it is in, by its network's name, and whether that lab is
+            // open to the internet or reaches only the fleet and Claude. Null
+            // is in no lab (a box from before labs says nothing, and so did
+            // not put it in one).
+            lab: m.lab && typeof m.lab === 'object' && isLabName(m.lab.name) && typeof m.lab.open === 'boolean' ? { name: String(m.lab.name), open: m.lab.open } : null,
             groupIp: typeof m.groupIp === 'string' && /^10\.200\.\d{1,3}\.\d{1,3}$/.test(m.groupIp) ? m.groupIp : null,
             address: String(e.address || ''),
             hosts: [host.hostId],
@@ -3533,12 +3575,12 @@ export class CoordinatorCore {
    * holding their pools' tokens reported (health `xo`, src/fleet/host/xo-pools.js).
    *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }> }>}
+   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>}
    */
   vmImagesFor(requester) {
     const email = String(requester?.email || '').toLowerCase();
     if (!email) return [];
-    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }> }>} */
+    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>} */
     const found = new Map();
     for (const h of this.#vmHolders(email, null)) {
       for (const entry of h.entries) {
@@ -3546,6 +3588,14 @@ export class CoordinatorCore {
           const have = found.get(image.id);
           if (have) {
             if (!have.hosts.includes(h.host.hostId)) have.hosts.push(h.host.hostId);
+            // A LAB ANOTHER BOX SAW counts too: one box may predate labs, or
+            // have looked more recently. Taken by either is taken.
+            for (const l of this.#labsOf(entry, image.pool)) {
+              const known = have.labs.find((x) => x.id === l.id);
+              if (!known) have.labs.push(l);
+              else known.free = known.free && l.free;
+            }
+            have.labs.sort((a, b) => a.name.localeCompare(b.name));
             continue;
           }
           found.set(image.id, {
@@ -3557,10 +3607,15 @@ export class CoordinatorCore {
             hosts: [h.host.hostId],
             // THE NETWORKS IT CAN GO ON besides the uplink: the pool's, that
             // the fleet may use, for "reachable from my network".
-            networks: entry.networks.filter((/** @type {any} */ n) => !n.group && (!image.pool || !n.pool || n.pool === image.pool)).map((/** @type {any} */ n) => ({ id: n.id, name: n.name })),
+            networks: entry.networks.filter((/** @type {any} */ n) => !n.group && !n.lab && !isLabName(n.name) && (!image.pool || !n.pool || n.pool === image.pool)).map((/** @type {any} */ n) => ({ id: n.id, name: n.name })),
             // THE GROUP NETWORKS, apart: a machine joins one as well as its
             // own network, to reach the others in its group.
             groups: entry.networks.filter((/** @type {any} */ n) => n.group && (!image.pool || !n.pool || n.pool === image.pool)).map((/** @type {any} */ n) => ({ id: n.id, name: n.name })),
+            // AND THE LABS (docs/hypervisors.md, "Labs"): the pool's lab
+            // networks on its edge router, each open or closed, and whether
+            // one is free now. A box from before labs reports none, and its
+            // lab networks are not offered as ordinary ones either.
+            labs: this.#labsOf(entry, image.pool),
           });
         }
       }
@@ -3569,12 +3624,129 @@ export class CoordinatorCore {
   }
 
   /**
+   * Whether a lab's session is over, from its machine's own health frame:
+   * once it has run a session, the first frame with none running starts the
+   * grace, a session running again cancels it, and a grace that runs out ends
+   * the machine through `vmctl stop`, asked as its owner of the boxes holding
+   * the pool, as End it now would. The grace is there for a restart or a
+   * resume, which stop a session for a moment and start it again.
+   *
+   * NOT KEPT ACROSS A RESTART of the coordinator: a lab whose session had
+   * already run is then forgotten until it runs another, and lives to the
+   * end in its tag, which the box keeps.
+   *
+   * @param {string} hostId @param {any} health
+   */
+  #labAfterSession(hostId, health) {
+    const machine = this.#labMachine(hostId);
+    if (!machine) {
+      this.labSessions.delete(hostId);
+      return;
+    }
+    const running = Number(health?.running);
+    if (!Number.isInteger(running)) return;
+    const was = this.labSessions.get(hostId) ?? { ran: false, idleSince: null };
+    if (running > 0) {
+      this.labSessions.set(hostId, { ran: true, idleSince: null });
+      return;
+    }
+    if (!was.ran) return;
+    const idleSince = was.idleSince ?? this.now();
+    this.labSessions.set(hostId, { ran: true, idleSince });
+    if (this.now() - idleSince < LAB_GRACE_MS || this.labEnding.has(hostId)) return;
+    this.labEnding.add(hostId);
+    const owner = machine.owner;
+    void this.dispatch({ verb: 'vmctl', params: { name: hostId, action: 'stop' }, actor: owner, requester: { email: owner, admin: false } })
+      .then((r) => {
+        this.record({
+          hostId,
+          event: r?.ok === false ? 'lab.end-failed' : 'lab.ended',
+          actor: owner,
+          text: r?.ok === false ? `${hostId}'s lab outlived its session and could not be ended: ${r?.text || 'no reason given'}` : `${hostId}'s session ended, so its lab was ended and is free again`,
+        });
+        if (r?.ok !== false) this.labSessions.delete(hostId);
+      })
+      .catch((e) => this.log.warn(`coordinator: could not end the lab ${hostId}: ${e?.message || e}`))
+      .finally(() => this.labEnding.delete(hostId));
+  }
+
+  /**
+   * The lab machine of that name, as the boxes holding its owner's pool saw
+   * it, with its owner from its enrolment; null for any other machine.
+   *
+   * @param {string} hostId @returns {{ owner: string }|null}
+   */
+  #labMachine(hostId) {
+    const owner = String(this.hostIds.get(hostId)?.owner || '').toLowerCase();
+    if (!owner) return null;
+    return this.vmMachinesFor({ email: owner }).some((m) => m.name === hostId && m.lab) ? { owner } : null;
+  }
+
+  /**
+   * A pool's labs as a person is offered them: each lab network the box
+   * reported in that pool, open or closed, and whether it is free. FREE IS
+   * KNOWN, never assumed: a lab the box could not say was empty, or one a
+   * machine was asked for on a moment ago and has not been seen on yet, is
+   * not free.
+   *
+   * @param {{ networks: any[] }} entry @param {string|null} pool
+   * @returns {LabOffer[]}
+   */
+  #labsOf(entry, pool) {
+    const pending = this.#labsAskedFor();
+    return entry.networks
+      .filter((/** @type {any} */ n) => n.lab && (!pool || !n.pool || n.pool === pool))
+      .map((/** @type {any} */ n) => ({ id: n.id, name: n.name, open: n.lab === 'open', free: n.taken === false && !pending.has(n.id) }))
+      .sort((/** @type {LabOffer} */ a, /** @type {LabOffer} */ b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * The lab networks a machine was asked for on and not yet reported there,
+   * by network id: a lab is held for the asker from the moment the box is
+   * asked, so a second ask cannot be sent to the same one before the box has
+   * looked again. Forgotten after LAB_HOLD_MS, when the box has long since
+   * said.
+   *
+   * @returns {Map<string, { owner: string, vm: string, at: number }>}
+   */
+  #labsAskedFor() {
+    const now = this.now();
+    const seen = new Set(this.#allVmNames());
+    for (const [id, a] of this.labAsks) if (now - a.at > LAB_HOLD_MS || seen.has(a.vm)) this.labAsks.delete(id);
+    return this.labAsks;
+  }
+
+  /** Every machine name any box holding a pool reported. @returns {string[]} */
+  #allVmNames() {
+    /** @type {string[]} */
+    const out = [];
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      for (const e of host.health.xo) for (const m of Array.isArray(e?.machines) ? e.machines : []) if (typeof m?.name === 'string') out.push(m.name);
+    }
+    return out;
+  }
+
+  /**
+   * How many labs a person holds: their machines the boxes saw in one, and
+   * the ones asked for and not yet seen. Each lab is one machine and one of
+   * the pool's few lab networks, so it is counted (MAX_LABS_EACH).
+   *
+   * @param {string} owner
+   */
+  #labsHeldBy(owner) {
+    const seen = this.vmMachinesFor({ email: owner }).filter((m) => m.lab).map((m) => m.name);
+    const asked = [...this.#labsAskedFor().values()].filter((a) => a.owner === owner && !seen.includes(a.vm)).length;
+    return seen.length + asked;
+  }
+
+  /**
    * The permanent boxes that hold one of this person's pool tokens, and what
    * each said its pools have — narrowed to one image when `template` is
    * given. In hostId order, so the same request goes to the same box.
    *
    * @param {string} email @param {string|null} template
-   * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null, group: boolean }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
+   * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
   #vmHolders(email, template) {
     /** @type {Array<{ host: any, entries: any[] }>} */
@@ -3587,7 +3759,16 @@ export class CoordinatorCore {
           address: String(e.address || ''),
           networks: (Array.isArray(e.networks) ? e.networks : [])
             .filter((/** @type {any} */ n) => XO_UUID_RE.test(String(n?.id)))
-            .map((/** @type {any} */ n) => ({ id: String(n.id), name: String(n.name || '').slice(0, 80), pool: typeof n.pool === 'string' ? n.pool : null, group: n.group === true })),
+            .map((/** @type {any} */ n) => ({
+              id: String(n.id),
+              name: String(n.name || '').slice(0, 80),
+              pool: typeof n.pool === 'string' ? n.pool : null,
+              group: n.group === true,
+              // A LAB NETWORK: which kind, and whether a machine is on it now,
+              // as the box saw. Null for either is cannot tell, never free.
+              lab: n.lab === 'open' || n.lab === 'closed' ? n.lab : null,
+              taken: typeof n.taken === 'boolean' ? n.taken : null,
+            })),
           images: (Array.isArray(e.images) ? e.images : [])
             .filter((/** @type {any} */ i) => XO_UUID_RE.test(String(i?.id)) && (!template || i.id === template))
             .map((/** @type {any} */ i) => ({
@@ -3629,18 +3810,36 @@ export class CoordinatorCore {
     }
     const template = typeof params.template === 'string' ? params.template : '';
     if (!template) return { ok: false, error: { code: 'bad_params' }, text: 'Say which machine image to start: `template`, as status lists it.' };
+    // A LAB (docs/hypervisors.md, "Labs"): one of the pool's lab networks on
+    // its edge router, named in `network`, with the machine on it alone. It
+    // takes no group (it is already on a network of its own) and is never a
+    // machine kept ready (one of those is on the uplink).
+    const lab = params.platform === 'lab';
+    if (lab) {
+      const network = typeof params.network === 'string' ? params.network : '';
+      if (!network) return { ok: false, error: { code: 'bad_params' }, text: 'Say which lab: `network`, one of the labs status lists under that image.' };
+      if (params.group) return { ok: false, error: { code: 'bad_params' }, text: 'A machine in a lab is on the lab’s network alone, so it joins no group.' };
+      const offered = this.vmImagesFor({ email: owner }).find((i) => i.template === template)?.labs.find((l) => l.id === network);
+      if (!offered) return { ok: false, error: { code: 'bad_params' }, text: 'That is not a lab on the pool that image is on.' };
+      if (!offered.free) return { ok: false, error: { code: 'lab_taken' }, text: `${offered.name} is in use. Choose another lab, or wait for its session to end.` };
+      if (this.#labsHeldBy(owner) >= MAX_LABS_EACH) {
+        return { ok: false, error: { code: 'too_many_labs' }, text: `You have ${MAX_LABS_EACH} labs already, the most one person can hold. End one and ask again.` };
+      }
+    }
     // A MACHINE KEPT READY, when this person keeps one from that image on
     // that network: the session starts on it now, and another is made behind
     // it. A machine is taken only with the time asked for still left on it.
     // NOT FOR A GROUP: a kept machine has no group network, and one cannot be
     // added to a running machine without restarting it.
-    if (!spec.standby && !params.group) {
+    if (!spec.standby && !params.group && !lab) {
       const network = typeof params.network === 'string' && params.network ? params.network : null;
       const minutes = Number(params.minutes) || 60;
       const taken = this.vmStandby.claim(owner, template, network, this.#standbyReady(owner, minutes));
       if (taken) return this.#startOnKept(spec, owner, taken);
     }
-    const holders = this.#vmHolders(owner, template);
+    // A LAB IS ASKED OF A BOX THAT SAW IT: the lab network is one of that
+    // box's pool's, and the box checks it again against its own look.
+    const holders = this.#vmHolders(owner, template).filter((h) => !lab || h.entries.some((e) => e.networks.some((n) => n.id === params.network && n.lab)));
     if (!holders.length) {
       return {
         ok: false,
@@ -3669,10 +3868,10 @@ export class CoordinatorCore {
     this.record({
       event: 'vm.requested',
       actor: spec.actor ?? null,
-      text: `${owner} asked for a machine from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}, as ${vmHost}`,
+      text: `${owner} asked for a machine from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}${lab ? ' in a lab' : ''}, as ${vmHost}`,
     });
     /** @type {Record<string, any>} */
-    const vmParams = { platform: 'vm', template, ticket: ticket.token };
+    const vmParams = { platform: lab ? 'lab' : 'vm', template, ticket: ticket.token };
     if (params.minutes !== undefined) vmParams.minutes = params.minutes;
     if (typeof params.network === 'string' && params.network) vmParams.network = params.network;
     if (typeof params.group === 'string' && params.group) vmParams.group = params.group;
@@ -3703,6 +3902,8 @@ export class CoordinatorCore {
         this.vmStandby.noteMade(vmHost, { owner, template, network: typeof params.network === 'string' && params.network ? params.network : null });
         this.onStateChanged?.();
       }
+      // THE LAB IS HELD for this machine until the box reports it there.
+      if (lab && answer?.ok !== false) this.labAsks.set(String(params.network), { owner, vm: vmHost, at: this.now() });
       // AND ONE MADE FOR A SESSION is replaced in the ready set, if this
       // person keeps some, the next time the pool is looked at.
       return { ...answer, hostId: host.hostId, vm: answer?.ok === false ? null : vmHost };
