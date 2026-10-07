@@ -135,13 +135,14 @@ test('minutes stop below the length GitHub kills a job at', () => {
 test('the platform list and the workflow map agree', () => {
   // Two lists that must not drift: the protocol refuses anything that is not
   // one of its words, and this map is what those words mean in a repository.
-  // Every word but `vm` names a workflow file; `vm` names none, so a ticket
-  // for a machine on somebody's pool can never admit a GitHub job.
+  // Every word but `vm` and `lab` names a workflow file; those two name none,
+  // so a ticket for a machine on somebody's pool can never admit a GitHub job.
   assert.deepEqual(
-    [...(VERBS.provision.params.platform.values || [])].filter((p) => p !== 'vm').sort(),
+    [...(VERBS.provision.params.platform.values || [])].filter((p) => p !== 'vm' && p !== 'lab').sort(),
     Object.keys(RUNNER_WORKFLOWS).sort(),
   );
   assert.equal(Object.hasOwn(RUNNER_WORKFLOWS, 'vm'), false);
+  assert.equal(Object.hasOwn(RUNNER_WORKFLOWS, 'lab'), false);
 });
 
 // --- the command line ------------------------------------------------------

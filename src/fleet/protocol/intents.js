@@ -1160,11 +1160,22 @@ export const VERBS = Object.freeze({
         // that pool's token. The other four select a workflow, and still only
         // those four do: RUNNER_WORKFLOWS has no `vm` entry, so a ticket for a
         // VM can never name a workflow a job could be admitted from.
-        values: ['macos', 'windows', 'linux', 'android', 'vm'],
+        //
+        // `lab` IS A `vm` IN A LAB: the same clone, on one of the pool's lab
+        // networks on its edge router (named in `network`) and nothing else,
+        // where the lab's rules decide what it reaches. A NEW VALUE, NOT A
+        // NEW VERSION, the way `xosetup`'s `policy` phase was added: a host
+        // that predates labs validates the enum and refuses `lab` by name,
+        // loudly, and the coordinator asks only a box that reported a lab
+        // anyway. `network` carries which one, so nothing new crosses.
+        // docs/hypervisors.md, "Labs".
+        values: ['macos', 'windows', 'linux', 'android', 'vm', 'lab'],
         describe:
           'Which operating system to bring up. `android` is a Linux runner with the SDK and a hardware-accelerated ' +
           'emulator, for driving an app rather than only building one. `vm` is a machine from your own hypervisor, ' +
-          'cloned from the image named in `template`.',
+          'cloned from the image named in `template`. `lab` is the same machine in a lab: alone on the lab network ' +
+          'named in `network`, behind the edge router, reaching the internet (an open lab) or only the fleet and ' +
+          'Claude (a closed one).',
       },
       // WHICH MACHINE IMAGE, for platform `vm`: the template's id in Xen
       // Orchestra, as `status` lists it under the host that holds the pool.
@@ -1177,7 +1188,7 @@ export const VERBS = Object.freeze({
         pattern: XO_UUID_RE,
         shapeName: 'a Xen Orchestra template id',
         since: 8,
-        describe: 'For platform `vm`: which machine image to clone, by its id. Ignored for the others.',
+        describe: 'For platform `vm` or `lab`: which machine image to clone, by its id. Ignored for the others.',
       },
       // WHICH NETWORK, for platform `vm`: one the person's pool lists and the
       // fleet may use, by its id, instead of the uplink behind the edge
@@ -1190,7 +1201,9 @@ export const VERBS = Object.freeze({
         pattern: XO_UUID_RE,
         shapeName: 'a Xen Orchestra network id',
         since: 9,
-        describe: 'For platform `vm`: which of your pool’s networks it goes on, by its id. Absent is behind the edge router.',
+        describe:
+          'For platform `vm`: which of your pool’s networks it goes on, by its id. Absent is behind the edge router. ' +
+          'For platform `lab`: which lab, by its network’s id, as status lists the labs under an image.',
       },
       // MACHINES THAT WORK TOGETHER: a second interface on one of the pool's
       // group networks (made by the hypervisor's policy, `fleetwright-group-N`),
@@ -1257,7 +1270,7 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary:
       'Ask for a temporary machine — macOS, Windows, Linux, an Android emulator, or a VM cloned from a machine image ' +
-      'on your own hypervisor (`vm`, with `template`) — that joins the fleet as an ' +
+      'on your own hypervisor (`vm`, with `template`; `lab` puts it in a lab of its own) — that joins the fleet as an ' +
       'ephemeral host for the minutes you name and is destroyed when the job ends. It does NOT return a host: the ' +
       'runner takes a few minutes to boot and appears in `status` as a host owned by you. Sessions started there ' +
       'are lost when it goes, so collect what you need before then. A runner spends GitHub Actions minutes and bills ' +

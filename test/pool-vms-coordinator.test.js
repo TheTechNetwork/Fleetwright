@@ -447,3 +447,132 @@ test('a machine in a group says which group and its address there, and an addres
     ['vm-bbbbbbbbbbbb', 'fleetwright-group-1', null],
   ]);
 });
+
+// --- labs ---------------------------------------------------------------------
+//
+// A lab is one of the pool's lab networks on its edge router, with one
+// machine on it alone: open (the internet) or closed (only the fleet and
+// Claude). docs/hypervisors.md, "Labs". The box's half, which takes the
+// network and keeps the machine alone on it, is in test/xo-pools.test.js.
+
+const LAB1 = '4b5c6d7e-8f9a-4b1c-8d2e-3f4a5b6c7d8e';
+const LAB2 = '5c6d7e8f-9a0b-4c2d-9e3f-4a5b6c7d8e9f';
+const LAB3 = '6d7e8f9a-0b1c-4d3e-8f4a-5b6c7d8e9f0a';
+
+/** A pool with three labs, as a box that knows labs reports them: open, closed, and one nobody could say was empty. */
+const withLabs = (/** @type {string} */ owner) => [{
+  ...holding(owner)[0],
+  networks: [
+    { id: LAB1, name: 'fleetwright-lab-1', pool: 'pool-1', lab: 'open', taken: false },
+    { id: LAB2, name: 'fleetwright-lab-2', pool: 'pool-1', lab: 'closed', taken: false },
+    { id: LAB3, name: 'fleetwright-lab-3', pool: 'pool-1', lab: 'open', taken: null },
+  ],
+  machines: [],
+}];
+const inLab = (/** @type {any} */ requester, /** @type {Record<string, any>} */ p) => ({ ...ask(requester), params: { platform: 'lab', template: DEBIAN, ...p } });
+
+test('a pool’s labs are offered under each image, open or closed, free only when the box said so, and never as ordinary networks', () => {
+  // An old box lists a lab network as it lists any network, with no kind.
+  const old = [{ ...holding(ELI)[0], networks: [{ id: LAB1, name: 'fleetwright-lab-1', pool: 'pool-1' }] }];
+  const { core } = fleet({ deb14: { xo: withLabs(ELI), protocol: 10 } });
+  const [image] = core.snapshot(eli).vmImages;
+  assert.deepEqual(image.labs, [
+    { id: LAB1, name: 'fleetwright-lab-1', open: true, free: true },
+    { id: LAB2, name: 'fleetwright-lab-2', open: false, free: true },
+    { id: LAB3, name: 'fleetwright-lab-3', open: true, free: false },
+  ]);
+  assert.deepEqual(image.networks, [], 'a lab network is offered as a network a machine can go on');
+  const older = fleet({ older: { xo: old, protocol: 10 } }).core.snapshot(eli).vmImages[0];
+  assert.deepEqual([older.labs, older.networks], [[], []], 'a box from before labs offers its lab network as a lab or as a network');
+});
+
+test('a machine in a lab is asked of a box that saw the lab, on that network and alone, and the lab is held until the box sees it there', async () => {
+  const { core, asked } = fleet({ blind: { xo: holding(ELI), protocol: 10 }, deb14: { xo: withLabs(ELI), protocol: 10 } });
+  const r = await core.dispatch(inLab(eli, { network: LAB2, minutes: 45 }));
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(asked.map((x) => x.hostId), ['deb14'], 'a box that did not report the lab was asked for it');
+  const sent = asked[0].spec.params;
+  assert.deepEqual([sent.platform, sent.template, sent.network, sent.minutes, sent.group], ['lab', DEBIAN, LAB2, 45, undefined]);
+  assert.match(sent.ticket, /^fwt_[0-9a-f]{12}_[0-9a-f]{48}$/);
+  // NOT FREE NOW, though the box has not looked again: a second ask for the
+  // same lab would put two people's machines on one network.
+  assert.equal(core.snapshot(eli).vmImages[0].labs.find((/** @type {any} */ l) => l.id === LAB2).free, false);
+  const again = await core.dispatch(inLab(eli, { network: LAB2 }));
+  assert.equal(again.error.code, 'lab_taken');
+  assert.equal(asked.length, 1);
+});
+
+test('a lab is refused when it is not named, not a lab, joined to a group, not known to be free, or past the two a person may hold', async () => {
+  const { core, asked } = fleet({ deb14: { xo: withLabs(ELI), protocol: 10 } });
+  assert.equal((await core.dispatch(inLab(eli, {}))).error.code, 'bad_params', 'no lab named');
+  assert.equal((await core.dispatch(inLab(eli, { network: NET }))).error.code, 'bad_params', 'not a lab');
+  assert.equal((await core.dispatch(inLab(eli, { network: LAB1, group: GROUP }))).error.code, 'bad_params', 'a lab machine joined a group');
+  assert.equal((await core.dispatch(inLab(eli, { network: LAB3 }))).error.code, 'lab_taken', 'a lab the box could not say was empty was handed out');
+  assert.equal(asked.length, 0);
+
+  // Two held, one seen and one asked for: the third is refused.
+  const seen = [{ ...withLabs(ELI)[0], machines: [{ name: 'vm-aaaaaaaaaaaa', state: 'Running', lab: { name: 'fleetwright-lab-3', open: true } }] }];
+  const two = fleet({ deb14: { xo: seen, protocol: 10 } });
+  assert.equal((await two.core.dispatch(inLab(eli, { network: LAB1 }))).ok, true);
+  const third = await two.core.dispatch(inLab(eli, { network: LAB2 }));
+  assert.equal(third.error.code, 'too_many_labs');
+  assert.match(third.text, /2 labs already/);
+  assert.equal(two.asked.length, 1);
+});
+
+test('a lab ends with its session: after the grace with none running it is stopped as its owner, and a session again cancels that', async () => {
+  let clock = 1_800_000_000_000;
+  const core = new CoordinatorCore({ now: () => clock });
+  const vm = 'vm-aaaaaaaaaaaa';
+  const holder = [{ ...withLabs(ELI)[0], machines: [{ name: vm, state: 'Running', lab: { name: 'fleetwright-lab-1', open: true } }] }];
+  core.registry.connect('deb14', () => {});
+  core.registry.recordHealth('deb14', { hub: { reachable: true }, protocol: 10, maxSessions: 5, running: 0, free: 5, labels: [], xo: holder });
+  /** @type {any[]} */
+  const asked = [];
+  core.send = /** @type {any} */ (async (/** @type {any} */ host, /** @type {any} */ spec) => {
+    asked.push({ hostId: host.hostId, spec });
+    return { ok: true, text: `${vm} is stopped and removed with its disk.` };
+  });
+  // Enrolled as Eli's, as a VM with a ticket would be.
+  const ticket = await core.runnerTickets.mint({ owner: ELI, platform: `vm:${DEBIAN}`, repository: null, start: null });
+  const key = await generateKeyPair();
+  const enrolled = await core.enrolVm({ ticket: ticket.token, publicJwk: key.publicJwk });
+  const name = enrolled.body.hostId;
+  holder[0].machines[0].name = name;
+  core.registry.connect(name, () => {}, { ephemeral: true, owner: ELI });
+  const frame = (/** @type {number} */ running) => core.onHostMessage(name, { kind: 'health', health: { hub: { reachable: true }, protocol: 10, maxSessions: 1, running, free: 1 - running, labels: [] } });
+
+  await frame(0);
+  clock += 60 * 60_000;
+  await frame(0);
+  assert.equal(asked.length, 0, 'a lab that never ran a session was ended');
+  await frame(1);
+  await frame(0);
+  clock += 4 * 60_000;
+  await frame(1);
+  await frame(0);
+  clock += 4 * 60_000;
+  await frame(0);
+  assert.equal(asked.length, 0, 'a session that came back did not restart the grace');
+  clock += 2 * 60_000;
+  await frame(0);
+  await until(() => asked.length === 1, 'the lab to be ended');
+  assert.equal(asked[0].hostId, 'deb14');
+  assert.deepEqual([asked[0].spec.verb, asked[0].spec.params], ['vmctl', { name, action: 'stop' }]);
+  assert.equal(asked[0].spec.requester.email, ELI, 'ended as somebody other than its owner');
+});
+
+test('a machine says which lab it is in and whether it is open, and anything else is no lab', () => {
+  const [entry] = withMachine(ELI);
+  const machines = [
+    { ...entry.machines[0], lab: { name: 'fleetwright-lab-2', open: false } },
+    { ...entry.machines[0], name: 'vm-bbbbbbbbbbbb', lab: { name: 'my-network', open: true } },
+    { ...entry.machines[0], name: 'vm-cccccccccccc' },
+  ];
+  const { core } = fleet({ deb14: { xo: [{ ...entry, machines }], protocol: 10 } });
+  assert.deepEqual(core.snapshot(eli).vmMachines.map((/** @type {any} */ m) => [m.name, m.lab]), [
+    ['vm-aaaaaaaaaaaa', { name: 'fleetwright-lab-2', open: false }],
+    ['vm-bbbbbbbbbbbb', null],
+    ['vm-cccccccccccc', null],
+  ]);
+});
