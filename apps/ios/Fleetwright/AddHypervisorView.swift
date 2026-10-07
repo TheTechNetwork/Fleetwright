@@ -172,6 +172,9 @@ struct AddHypervisorView: View {
         /// It makes the pool a machine of its own (`can` holds "holder");
         /// an older one cannot.
         var canHolder = false
+        /// It builds an edge that drops what its threat rules match
+        /// (`can` holds "edge-block"); an older one only one that logs.
+        var canEdgeBlock = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -825,6 +828,8 @@ struct AddHypervisorView: View {
             // No way out, no router and no image: the switches go off with it.
             .onChange(of: choice.egress) { _, way in
                 if way == nil { choice.edge = false; choice.image = false; choice.images = []; choice.holder = false }
+                // Another pool's router filters its own way.
+                choice.edgeBlock = inv.edge(on: way)?.blocks ?? false
                 // Another pool has its own group networks to start from.
                 choice.groups = XOPolicy.clamp(inv.groupCount(on: way), choice.groupRange(in: inv))
             }
@@ -839,6 +844,18 @@ struct AddHypervisorView: View {
                 .onChange(of: choice.edge) { _, on in
                     if !on, there == nil { choice.image = false; choice.images = [] }
                 }
+            }
+            // WHAT THE ROUTER DOES WITH WHAT ITS THREAT RULES MATCH, offered
+            // only by a machine that builds either kind, and only with the
+            // router asked for. Asked for: blocking mode for the edge's
+            // intrusion detection, which only ever logged.
+            if choice.edgeBlockChoice, canEdge, choice.edge, choice.egress != nil {
+                Toggle(isOn: $choice.edgeBlock) {
+                    policyRow("Drop what the threat rules match", edgeBlockLine(there))
+                }
+                .tint(Design.Palette.accent)
+                .frame(minHeight: 44)
+                .disabled(busy)
             }
             // THE MACHINE IMAGE sessions' machines are cloned from, offered
             // only by a machine that builds one, and only where there is none.
@@ -899,6 +916,16 @@ struct AddHypervisorView: View {
     /// What the switch does, in the concrete: what it costs when there is no
     /// router, and what Apply does to the one that is there. The same words
     /// as Android (PolicyForm.kt).
+    /// What blocking does, and what changing it costs on a router that is
+    /// there: it has no login, so it is rebuilt. The same words on Android.
+    private func edgeBlockLine(_ there: XOPolicy.Inventory.Edge?) -> String {
+        let what = choice.edgeBlock
+            ? "On: Suricata drops it, and while it cannot inspect, nothing leaves."
+            : "Off: Suricata logs it by machine and lets it through."
+        guard let there, (there.blocks ?? false) != choice.edgeBlock else { return what }
+        return "\(what) Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up."
+    }
+
     private func edgeLine(_ there: XOPolicy.Inventory.Edge?) -> String {
         guard let there else {
             return "An OPNsense VM with 2 vCPUs, 2 GiB of memory and a 3 GiB disk on the storage chosen. "
@@ -1536,7 +1563,8 @@ struct AddHypervisorView: View {
                                   anyWayOut: begun.can.contains("egress-any"), edgeDisk: begun.can.contains("edge-disk"),
                                   canImage: begun.can.contains("image"), canImages: begun.can.contains("images"),
                                   canGroups: begun.can.contains("groups"),
-                                  canHolder: begun.can.contains("holder"))
+                                  canHolder: begun.can.contains("holder"),
+                                  canEdgeBlock: begun.can.contains("edge-block"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1565,6 +1593,7 @@ struct AddHypervisorView: View {
                     choice.imagesChoice = policyJob.canImages && opened.imageKinds != nil
                     choice.groupsChoice = policyJob.canGroups && opened.groups != nil
                     choice.holderChoice = policyJob.canHolder && opened.holders != nil
+                    choice.edgeBlockChoice = policyJob.canEdgeBlock
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not

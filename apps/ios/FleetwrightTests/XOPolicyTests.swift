@@ -91,6 +91,21 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertFalse(XOPolicy.Choice.initial(for: none).edge)
     }
 
+    func testBlockingStartsAsTheRouterIsAndIsSentOnlyToAMachineThatBuildsEitherKind() throws {
+        // As it is, so Apply rebuilds nothing the person did not change.
+        let blocking = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true,"blocks":true}]"#))
+        XCTAssertTrue(XOPolicy.Choice.initial(for: blocking).edgeBlock)
+        let older = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true}]"#))
+        var c = XOPolicy.Choice.initial(for: older)
+        XCTAssertFalse(c.edgeBlock, "a router from a machine that predates blocking only logs")
+        c.edgeBlock = true
+        XCTAssertNil(c.payload(in: older)["edgeBlock"], "an older machine is not sent it")
+        c.edgeBlockChoice = true
+        XCTAssertEqual(c.payload(in: older)["edgeBlock"] as? Bool, true)
+        c.edge = false
+        XCTAssertNil(c.payload(in: older)["edgeBlock"], "sent with no router asked for")
+    }
+
     func testTheEdgeRouterGoesWithItsWayOut() throws {
         let inv = try inventory(inventoryJSON(edges: "[]"))
         var c = XOPolicy.Choice.initial(for: inv)
