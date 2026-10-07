@@ -78,6 +78,21 @@ function installerSources() {
   return out;
 }
 
+/**
+ * The executables in bin/, which are Node scripts with no `.js` on the name
+ * and so were not scanned by sources() either. That hole held one remedy:
+ * `fleetwright-sidecar enrol` with no pin printed "Get a pin with /enroll in
+ * Telegram", on the box, to somebody setting it up. Every file there is
+ * JavaScript, so comments are stripped the same way.
+ */
+function binSources() {
+  const root = fileURLToPath(new URL('../bin/', import.meta.url));
+  return readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => path.join(root, e.name))
+    .map((file) => ({ file, body: code(readFileSync(file, 'utf8')) }));
+}
+
 test('no remedy points at a surface that was archived', () => {
   const root = fileURLToPath(new URL('../src/', import.meta.url));
   /** @type {string[]} */
@@ -85,6 +100,7 @@ test('no remedy points at a surface that was archived', () => {
   const scanned = [
     ...sources(root).map((file) => ({ file, body: code(readFileSync(file, 'utf8')) })),
     ...installerSources(),
+    ...binSources(),
   ];
   for (const { file, body } of scanned) {
     for (const { name } of ARCHIVED) {

@@ -558,7 +558,7 @@ async function doEnrolActions(claim) {
 
 async function doEnrol(pin) {
   if (!pin) {
-    console.error('usage: fleetwright-sidecar enrol <six-digit pin>\n\nGet a pin with /enroll in Telegram or from the app.');
+    console.error('usage: fleetwright-sidecar enrol <six-digit pin>\n\nGet a pin from the app.');
     process.exit(2);
   }
   if (!cfg.coordinatorUrl) {
