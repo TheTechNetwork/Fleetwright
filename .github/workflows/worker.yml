@@ -210,6 +210,12 @@ jobs:
         working-directory: worker
         run: npx wrangler deploy --config wrangler.minter.toml --dry-run --outdir /tmp/minter-build
 
+      # THE RELAYS' WORKER, bundled on its own for the minter's reason: it
+      # holds our push credentials and the App's client secret.
+      - name: Bundle the relays' Worker without deploying it
+        working-directory: worker
+        run: npx wrangler deploy --config wrangler.relay.toml --dry-run --outdir /tmp/relay-build
+
       # THE CONFIG THAT ACTUALLY DEPLOYS. wrangler.toml above is the fork-safe
       # default; wrangler.production.toml is ours and is what the deploy job
       # uses. A syntax error in the file nobody dry-runs is a syntax error
@@ -496,6 +502,67 @@ jobs:
             echo "one admits nobody: the safe default, and also a fleet nobody can sign in to."
             echo "Hosts need none of it: they enrol with a pin and authenticate by signature."
           fi
+
+      # THE RELAYS, for coordinators that are not ours (docs/relay-terms.md,
+      # worker/wrangler.relay.toml). Off unless the repository variable
+      # FLEETWRIGHT_RELAY is 1: a fork deploying this workflow must not start
+      # delivering to our apps with credentials it copied, which is the same
+      # reason FLEETWRIGHT_PUSH is a switch and not a side effect.
+      #
+      # Its one route is <the fleet's hostname>/relay/*, in a copy of its
+      # config the way the minter's route is, and its secrets are the push
+      # credentials and the App's client secret the coordinator already has.
+      # A step of its own, so a relay that fails to deploy is said by name and
+      # does not take the coordinator's deploy with it.
+      - name: Deploy the relays
+        if: steps.creds.outputs.have == 'true' && vars.FLEETWRIGHT_RELAY == '1'
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_CONFIG: ${{ vars.WRANGLER_CONFIG }}
+          MINT_CLIENT_ID: ${{ vars.FLEETWRIGHT_GITHUB_CLIENT_ID }}
+          FLEETWRIGHT_FCM_SERVICE_ACCOUNT: ${{ secrets.FLEETWRIGHT_FCM_SERVICE_ACCOUNT || secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
+          FLEETWRIGHT_APNS_KEY: ${{ secrets.FLEETWRIGHT_APNS_KEY || secrets.AGENT_FLEET_APNS_KEY }}
+          FLEETWRIGHT_APNS_KEY_ID: ${{ secrets.FLEETWRIGHT_APNS_KEY_ID || secrets.AGENT_FLEET_APNS_KEY_ID }}
+          FLEETWRIGHT_APNS_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
+        run: |
+          set -u
+          config="${WRANGLER_CONFIG:-wrangler.toml}"
+          host=$(grep -v '^[[:space:]]*#' "$config" | sed -n 's/.*pattern *= *"\([^"/*]*\)", *custom_domain *= *true.*/\1/p' | head -1)
+          if [ -z "$host" ]; then
+            echo "::warning::The coordinator's config has no custom domain, so the relays have nowhere to be routed. Not deployed."
+            exit 0
+          fi
+          # The zone, asked of Cloudflare, longest suffix first, as the minter's is.
+          zone=""
+          candidate=$host
+          while [ -n "$candidate" ] && [ "${candidate#*.}" != "$candidate" ]; do
+            if curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                "https://api.cloudflare.com/client/v4/zones?name=$candidate&account.id=$CLOUDFLARE_ACCOUNT_ID" \
+              | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>process.exit(JSON.parse(s).result?.length?0:1))'; then
+              zone=$candidate
+              break
+            fi
+            candidate=${candidate#*.}
+          done
+          [ -z "$zone" ] && zone=$(printf '%s' "$host" | awk -F. 'NF>=2 {print $(NF-1)"."$NF}')
+          routed=.wrangler.relay.routed.toml
+          sed "/^preview_urls = false\$/a routes = [ { pattern = \"$host/relay/*\", zone_name = \"$zone\" } ]" wrangler.relay.toml > "$routed"
+          client_id=${MINT_CLIENT_ID:-$(sed -n 's/^FLEETWRIGHT_GITHUB_CLIENT_ID *= *"\(.*\)"/\1/p' "$config" | head -1)}
+          vars=()
+          [ -n "$client_id" ] && vars+=(--var "FLEETWRIGHT_GITHUB_CLIENT_ID:$client_id")
+          npx wrangler deploy --config "$routed" ${vars[@]+"${vars[@]}"}
+          missing=""
+          for name in FLEETWRIGHT_FCM_SERVICE_ACCOUNT FLEETWRIGHT_APNS_KEY FLEETWRIGHT_APNS_KEY_ID FLEETWRIGHT_APNS_TEAM_ID FLEETWRIGHT_GITHUB_CLIENT_SECRET; do
+            value="$(printenv "$name" || true)"
+            if [ -z "$value" ]; then missing="$missing $name"; continue; fi
+            printf '%s' "$value" | npx wrangler secret put "$name" --config "$routed"
+          done
+          rm -f "$routed"
+          [ -n "$missing" ] && echo "::warning::The relays are deployed without:$missing"
+          echo "::notice::The relays answer https://$host/relay/v1"
 
       - name: Where it landed
         if: steps.creds.outputs.have == 'true'

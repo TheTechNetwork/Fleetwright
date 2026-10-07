@@ -133,6 +133,16 @@ else
   printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
+# The relays' Worker, bundled separately for the minter's reason: it holds
+# our APNs key, our Firebase service account and the App's client secret, so
+# what it imports is the whole of what could touch them. No `--external`.
+printf 'relay      ... '
+if out=$(cd worker && ./node_modules/.bin/esbuild src/relay.js --bundle --format=esm --platform=neutral --outfile=/dev/null 2>&1); then
+  printf 'bundles\n'
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
+fi
+
 # The contract, and the copy of it the Worker ships. openapi.json is the source
 # and test/openapi.test.js executes it against BOTH coordinators — but the
 # Worker inlines its own copy, and a copy of a contract is a thing that drifts.
