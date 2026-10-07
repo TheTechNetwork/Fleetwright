@@ -1,11 +1,13 @@
 # The relays: what is shared, what is not, and what is written down
 
 Two services, for coordinators that are not ours: a **push relay** and an
-**OAuth callback relay**. Neither is live yet. This document is written before
-they are built on purpose — it is the specification the implementation has to
-satisfy, not a description of one that already exists, and the order matters
-because the promises below are the kind that are easy to make and easy to break
-by adding a log line.
+**OAuth callback relay**. This document was written before they were built, on
+purpose: it is the specification the implementation had to satisfy, and the
+order mattered because the promises below are the kind that are easy to make
+and easy to break by adding a log line. **They are built now**
+(`src/fleet/relay/relay.js`, a Worker of its own in
+`worker/wrangler.relay.toml`), and [How they were built](#how-they-were-built)
+at the end says where each promise below is kept and what is not proven yet.
 
 Tracked as [#348](https://github.com/TheTechNetwork/Fleetwright/issues/348).
 
@@ -162,10 +164,12 @@ discovered in review.
 ### What is written down
 
 Nothing about any authorization. No codes, no tokens, no ciphertext, no
-`state` values after they are redeemed — the pending record is deleted before
-the forward happens, the same way
-[`oauth.js`](../src/fleet/coordinator/oauth.js) already deletes a
-pending authorization before acting on it, so a replayed callback is refused.
+`state` values. The relay holds **no pending record at all**, which is
+stronger than deleting one before the forward: the `state` carries the fleet
+it belongs to, so there is nothing to look up but the fleet. A replayed
+callback is refused twice over, by GitHub, which takes a code once, and by the
+coordinator, which redeems its state once, the way
+[`oauth.js`](../src/fleet/coordinator/oauth.js) always has.
 
 Same as above: a counter per fleet id, for rate limits.
 
@@ -196,3 +200,80 @@ If any of that changes, it changes **here first**, with the date, in the same
 way [`app-parity.md`](./app-parity.md) requires a claim about the apps to
 change in that table before it is said anywhere else. A promise about data that
 is revised quietly is not a promise.
+
+---
+
+## How they were built
+
+Written 7 October 2026, against everything above. Where a promise is kept, and
+how a coordinator uses them.
+
+### Where each promise is kept
+
+- **A Worker of its own** (`worker/wrangler.relay.toml`), like the minter:
+  our APNs key, our Firebase service account and the App's client secret, and
+  one route, `<the fleet's hostname>/relay/*`. Deployed only when the
+  repository variable `FLEETWRIGHT_RELAY` is `1`, so a fork does not start
+  delivering to our apps with credentials it copied.
+- **What it keeps** is one Durable Object's rows: per fleet, a hash of its
+  secret and, if it uses the OAuth relay, its callback and public key; per
+  window, a counter that is overwritten when the window turns. No person, no
+  email, nothing linked to anybody. `test/relay.test.js` reads the store after
+  a push and after a sign-in and finds nothing else.
+- **No log line carries a request.** The senders log a provider's answer, and
+  an answer can quote what it was sent, so the relay gives them a logger that
+  keeps the HTTP status and drops every other word. An error says the method
+  and path and nothing about the body.
+- **Observability is off** in its config. Workers observability records each
+  request's URL, and the OAuth callback's URL carries the code and the state:
+  that would be every authorization, written down by somebody else. The minter
+  has it on; this does not, and a test holds the file to it.
+- **Notifications are sealed by the coordinator that sends them.** It makes
+  each phone's envelope before anything leaves (`relayPusher` in
+  `src/fleet/push.js`), and the senders deliver an envelope that arrives made
+  exactly as it is. A phone that registered a key gets ciphertext the relay
+  cannot read; one that did not gets what Apple or Google would be sent anyway.
+- **A GitHub token leaves sealed**, to the key the fleet registered, with the
+  scheme a notification is sealed with. The **state is sealed in with it**,
+  and the coordinator takes the token only for the state it came back with:
+  the fleet's key is public, so anybody can seal something to it, but nobody
+  can seal it for a sign-in they never saw.
+- **A fleet over a cap is told** the cap and when it resets, with a
+  `Retry-After`, and the coordinator says both in its log. The caps are per
+  fleet: 600 notifications and 1,200 Live Activity updates an hour, 60
+  sign-ins. Registering is open, since there is nothing to sign in to, so its
+  cap of 100 an hour is across everybody.
+
+### Using them
+
+Register once, from anywhere with Node:
+
+```sh
+node scripts/relay-register.mjs --relay https://fleet.thetech.network --callback https://your.coordinator
+```
+
+It makes a P-256 key on that machine, registers the public half and your
+callback, and prints `FLEETWRIGHT_RELAY_URL`, `_FLEET`, `_SECRET` and
+`_KEY`. The last two are secrets. Set them on your coordinator with
+`FLEETWRIGHT_PUSH=1`, and `FLEETWRIGHT_GITHUB_CLIENT_ID` to the App's public
+client id **with no client secret**. Without `--callback` the fleet uses the
+push relay only and no key is made. A coordinator with credentials of its own
+always sends with them, so ours never goes through the relay it runs.
+
+### What is not done, and what is not proven
+
+- **A token through the OAuth relay is not renewable.** Renewing a GitHub App
+  token needs the client secret, which the coordinator does not have and its
+  hosts are not given, and renewing through the relay would show it the refresh
+  token, which this document does not allow. So a connection lasts what GitHub
+  gives it, eight hours for a user token, and the person connects again. A
+  renewal that keeps the promise needs the refresh token sealed both ways and
+  is not built.
+- **No PKCE on the relayed sign-in.** The exchange is the relay's and a PKCE
+  verifier is the host's, and they never meet.
+- **Neither has run against the real services.** Both are exercised end to
+  end in this repository, the sign-in through the relay's own code and back
+  into a coordinator, and nothing here has delivered through Apple or Google
+  or exchanged a real GitHub code via the relay. The relay's callback also has
+  to be added to the App's list of callback URLs before the first sign-in.
+

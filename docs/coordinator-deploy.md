@@ -396,9 +396,14 @@ pulling.
 
 The alternative is building your own apps: your own bundle id, Firebase
 project, Apple team and store listings. That is a real cost and it is
-out of proportion to changing one hostname, which is why a **push relay** is on
-the roadmap ([#348](https://github.com/TheTechNetwork/Fleetwright/issues/348)):
+out of proportion to changing one hostname, which is why there is a **push
+relay** ([#348](https://github.com/TheTechNetwork/Fleetwright/issues/348)):
 your coordinator posts a notification and we deliver it with our credentials.
+Register once with `node scripts/relay-register.mjs --relay
+https://fleet.thetech.network`, set the three values it prints and
+`FLEETWRIGHT_PUSH=1`, and push works with no Apple or Google account of yours.
+Your coordinator seals each notification to a phone that registered a key
+before it leaves, so the relay forwards ciphertext.
 
 It carries the real payload — a contentless wake was the first design and it is
 useless, because the whole point is answering from a lock screen and a wake
@@ -406,7 +411,8 @@ cannot carry the options to answer with. So the promise is about **retention**:
 nothing about a notification is written down, the device token is used and
 dropped, and the only stored state is a rate-limit counter per fleet. That is
 specified in [`relay-terms.md`](./relay-terms.md), written before the code
-exists, because it is the kind of promise one log line breaks.
+existed, because it is the kind of promise one log line breaks; its last
+section says where each promise is kept.
 
 **The OAuth callbacks are the third case, and they are only a convenience.**
 Both authorize URLs send `redirect_uri` explicitly and the provider matches it
