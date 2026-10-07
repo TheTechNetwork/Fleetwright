@@ -152,6 +152,8 @@ fun StartSheet(
     // The machine images on your own pools a new machine can come from, from
     // the snapshot. Drawn from this and only this (C-2).
     var images by remember { mutableStateOf<List<Fleet.VmImage>>(emptyList()) }
+    // What is kept ready, so the image with one says so.
+    var standby by remember { mutableStateOf<Fleet.VmStandby?>(null) }
     var machineMinutes by remember { mutableIntStateOf(60) }
 
     // Suggest once the typing stops, not on every keystroke. A suggestion that
@@ -189,6 +191,7 @@ fun StartSheet(
         // is the safe way round for a control that spends money.
         canStartMachine = Fleet(settings).runners().getOrNull() != null
         images = Fleet(settings).vmImages().getOrDefault(emptyList())
+        standby = Fleet(settings).vmStandby().getOrNull()
         if (canStartMachine || images.isNotEmpty()) claude = claudeKept(settings)
     }
 
@@ -377,7 +380,11 @@ fun StartSheet(
                                         secret = ""
                                     }
                                 },
-                                label = { Text(if (template == image.template) "${image.label} \u2713" else image.label) },
+                                label = {
+                                    val ready = standby?.template == image.template && (standby?.ready ?: 0) > 0
+                                    val name = if (ready) "${image.label}, ready now" else image.label
+                                    Text(if (template == image.template) "$name \u2713" else name)
+                                },
                             )
                         }
                         if (canStartMachine) {

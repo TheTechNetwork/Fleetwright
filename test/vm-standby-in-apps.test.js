@@ -50,3 +50,30 @@ test('iOS says it in the shared words', () => {
   const ios = [I_FLEET, I_VIEW, I_LIST, I_SHEET].join('\n');
   for (const words of SHARED) assert.ok(ios.includes(words), words);
 });
+
+// --- Android ------------------------------------------------------------------
+
+const ANDROID = (/** @type {string} */ f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`);
+const A_FLEET = ANDROID('Fleet.kt');
+const A_VIEW = ANDROID('VmStandbyScreen.kt');
+const A_LIST = ANDROID('MachinesScreen.kt');
+const A_SHEET = ANDROID('StartSheet.kt');
+
+test('Android: what is kept ready is read from the snapshot and set through the fleet, 0 to 3', () => {
+  assert.match(A_FLEET, /get\("\/api\/hosts"\)\.optJSONObject\("vmStandby"\)/);
+  assert.match(A_FLEET, /send\("PUT", "\/api\/vm-standby", body\)/);
+  assert.match(A_FLEET, /\.put\("network", network \?: JSONObject\.NULL\)/);
+  assert.match(A_VIEW, /enabled = !busy && count > 0/);
+  assert.match(A_VIEW, /enabled = !busy && count < 3/);
+});
+
+test('Android: the setting is offered only where an image is, and the image with one ready says so', () => {
+  assert.match(A_LIST, /if \(poolImages\.isNotEmpty\(\)\) \{/);
+  assert.match(A_SHEET, /val ready = standby\?\.template == image\.template && \(standby\?\.ready \?: 0\) > 0/);
+  assert.match(A_LIST, /if \(m\.standby\) "kept ready" else m\.image/);
+});
+
+test('Android says it in the shared words', () => {
+  const android = [A_FLEET, A_VIEW, A_LIST, A_SHEET].join('\n');
+  for (const words of SHARED) assert.ok(android.includes(words), words);
+});
