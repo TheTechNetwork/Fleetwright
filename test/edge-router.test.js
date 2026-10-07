@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 
-import { ConfigPatch, EDGE, EDGE_FILTER, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf } from '../src/fleet/host/edge-router.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 
@@ -264,9 +264,9 @@ test('an edge that blocks hands what leaves to Suricata and drops what the four 
 // from this configuration booted in QEMU, four labs, two closed, blocking: one
 // pf rule per interface of each, in this order.
 
-/** Each rule as [sequence, action, interfaces, destination, port, divert, log]. @param {string} xml */
+/** Each filter rule as [sequence, action, interfaces, destination, port, divert, log]. @param {string} xml */
 const rulesOf = (xml) =>
-  [...xml.matchAll(/<rule>.*?<\/rule>/g)].map((m) => {
+  [...xml.slice(xml.indexOf('<Filter>')).matchAll(/<rule>.*?<\/rule>/g)].map((m) => {
     const r = m[0];
     const get = (/** @type {string} */ tag) => new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(r)?.[1] ?? null;
     return [Number(get('sequence')), get('action'), get('interface'), get('destination_net'), get('destination_port'), r.includes('<divert-to>'), get('log') === '1'];
@@ -282,9 +282,12 @@ test('each lab is an interface of its own on the edge, with its address, its DHC
   assert.match(xml, /<dnsmasq><enable>1<\/enable><port>53053<\/port><interface>lan,opt1,opt2<\/interface>/);
   assert.ok(xml.includes('<dhcp_ranges><interface>opt2</interface><start_addr>10.250.2.100</start_addr><end_addr>10.250.2.250</end_addr></dhcp_ranges>'));
   assert.match(xml, /<interfaces>lan,opt1,opt2<\/interfaces><homenet>10\.254\.0\.0\/24,10\.250\.1\.0\/24,10\.250\.2\.0\/24<\/homenet>/);
-  // Every lab between 1 and the most there is room for fits, either kind, either mode.
+  // Every lab between 1 and the most there is room for fits, either kind,
+  // either mode, with a coordinator whose name is long: it is written twice
+  // for a closed lab, in the alias and as a name it may resolve.
+  const long = `https://${'f'.repeat(63)}.${'e'.repeat(20)}.workers.dev`;
   for (const block of [false, true]) for (const kinds of [[true, true, true, true], [false, false, false, false], [true, false, true, false]]) {
-    assert.equal(edgeConfig({ block, labs: kinds, fleet: fleetHosts('https://fleet.example.network') }).length, OPNSENSE_IMAGE.room);
+    for (const url of ['https://fleet.example.network', long]) assert.equal(edgeConfig({ block, labs: kinds, fleet: fleetHosts(url) }).length, OPNSENSE_IMAGE.room, url);
   }
   assert.throws(() => edgeConfig({ labs: [true, true, true, true, true] }), /room for 4 labs/);
   assert.throws(() => edgeConfig({ labs: [false] }), /closed lab needs the fleet/);
@@ -315,6 +318,37 @@ test('a lab reaches nothing private and asks only the edge for names; an open on
   const open = edgeConfig({ labs: [true] }).toString('utf8');
   assert.ok(!open.includes('fleetwright_fleet'));
   assert.deepEqual(rulesOf(open).map((r) => r[0]), [1, 2, 3, 4]);
+});
+
+test('a closed lab resolves only the fleet’s own hosts and the names under them, and is refused the rest; open labs and the uplink ask Unbound as before', () => {
+  const fleet = fleetHosts('https://fleet.example.network');
+  const xml = edgeConfig({ block: true, labs: [true, true, false, false], fleet }).toString('utf8');
+  // ITS PORT 53 GOES TO DNSMASQ, before any filter rule, from the closed labs alone.
+  const rdr = /<nat><outbound><mode>automatic<\/mode><\/outbound>(<rule>.*?<\/rule>)<\/nat>/.exec(xml)?.[1] ?? '';
+  const get = (/** @type {string} */ tag) => new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(rdr)?.[1] ?? null;
+  assert.deepEqual(
+    [get('interface'), get('protocol'), /<destination>.*?<port>([^<]*)<\/port>/.exec(rdr)?.[1], get('target'), get('local-port'), get('pass')],
+    ['opt3,opt4', 'TCP/UDP', '53', '127.0.0.1', String(DNSMASQ_PORT), 'pass'],
+    'a closed lab’s questions reach Unbound, which answers any name',
+  );
+  // WHICH HAS NO RESOLVER OF ITS OWN, so a name it was not given is REFUSED,
+  const dnsmasq = /<dnsmasq>.*?<\/dnsmasq>/.exec(xml)?.[0] ?? '';
+  assert.ok(dnsmasq.includes('<no_resolv>1</no_resolv>'), 'dnsmasq would ask the edge’s resolv.conf, which is Unbound, for every other name');
+  // AND IS GIVEN THE FIREWALL'S LIST: every host a closed lab may reach is
+  // answered, by Unbound on the edge itself, and nothing else is.
+  const answered = [...dnsmasq.matchAll(/<domainoverrides><sequence>\d+<\/sequence><domain>([^<]+)<\/domain><ip>([^<]+)<\/ip><\/domainoverrides>/g)].map((m) => [m[1], m[2]]);
+  assert.ok(answered.length, 'no names at all');
+  assert.ok(answered.every(([, ip]) => ip === '127.0.0.1'));
+  const covers = (/** @type {string} */ zone, /** @type {string} */ host) => host === zone || host.endsWith(`.${zone}`);
+  for (const host of fleet) assert.ok(answered.some(([zone]) => covers(zone, host)), `${host} may be reached and not resolved`);
+  for (const [zone] of answered) assert.ok(fleet.includes(zone), `${zone} is not one of the hosts a closed lab may reach`);
+
+  // ONLY FOR CLOSED LABS: none, or only open ones, is the edge as it was.
+  for (const other of [edgeConfig(), edgeConfig({ block: true }), edgeConfig({ labs: [true, true] })]) {
+    const x = other.toString('utf8');
+    assert.ok(x.includes('<nat><outbound><mode>automatic</mode></outbound></nat>'));
+    assert.ok(!x.includes('no_resolv') && !x.includes('domainoverrides'));
+  }
 });
 
 test('an edge with labs grows its configuration into the file’s own blocks, after checking both the size and the slack', async () => {
@@ -398,6 +432,27 @@ test('lab networks are made up to the number asked, tagged open or closed, kept 
     ['tag.remove', 'net-l9', LAB.openTag],
   ]);
   assert.ok(!admin.calls.some(([m]) => m === 'network.delete'), 'a lab network was removed, though a machine may be on it');
+
+  // LABS PER PERSON on each lab: set, changed, taken off, and left alone by a
+  // phone that predates it; and gone from one no longer a lab.
+  const each = async (/** @type {number|null|undefined} */ perPerson, /** @type {string[]} */ tags) => {
+    const a = xo({});
+    const nets = [
+      { id: 'net-a', name_label: 'fleetwright-lab-1', $pool: 'p1', tags: [LAB.openTag, ...tags] },
+      { id: 'net-z', name_label: 'fleetwright-lab-2', $pool: 'p1', tags: [LAB.openTag, `${LAB.eachTag}3`] },
+    ];
+    await ensureLabs({ admin: a, pool: 'p1', networks: nets, setId: 'rs-1', inSet: ['net-a', 'net-z'], open: 1, closed: 0, perPerson });
+    return a.calls.filter(([, p]) => String(p.tag).startsWith(LAB.eachTag)).map(([m, p]) => [m, p.id, p.tag]);
+  };
+  assert.deepEqual(await each(2, []), [['tag.add', 'net-a', `${LAB.eachTag}2`], ['tag.remove', 'net-z', `${LAB.eachTag}3`]]);
+  assert.deepEqual(await each(2, [`${LAB.eachTag}3`]), [['tag.remove', 'net-a', `${LAB.eachTag}3`], ['tag.add', 'net-a', `${LAB.eachTag}2`], ['tag.remove', 'net-z', `${LAB.eachTag}3`]]);
+  assert.deepEqual(await each(null, [`${LAB.eachTag}3`]), [['tag.remove', 'net-a', `${LAB.eachTag}3`], ['tag.remove', 'net-z', `${LAB.eachTag}3`]]);
+  assert.deepEqual(await each(undefined, [`${LAB.eachTag}3`]), [['tag.remove', 'net-z', `${LAB.eachTag}3`]], 'a phone that says nothing changed the limit');
+  // And read back as the box reads it: no tag, or none that is a number, is no limit.
+  assert.equal(labsEachOf([{ name_label: 'fleetwright-lab-1', $pool: 'p1', tags: [LAB.openTag, `${LAB.eachTag}2`] }, { name_label: 'fleetwright-lab-2', $pool: 'p1', tags: [LAB.closedTag, `${LAB.eachTag}1`] }], 'p1'), 1);
+  for (const tags of [[LAB.openTag], [LAB.openTag, `${LAB.eachTag}0`], [LAB.openTag, `${LAB.eachTag}x`], [`${LAB.eachTag}2`]]) {
+    assert.equal(labsEachOf([{ name_label: 'fleetwright-lab-1', $pool: 'p1', tags }], 'p1'), null, JSON.stringify(tags));
+  }
   const most = await ensureLabs({ admin: xo({}, { 'network.create': () => `net-m${++n}` }), pool: 'p1', networks: [], setId: 'rs-1', inSet: [], open: 3, closed: 3 });
   assert.equal(most.labs.length, LAB.max);
 });

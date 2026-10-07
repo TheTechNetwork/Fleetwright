@@ -35,7 +35,7 @@
 import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain } from './xo-ws.js';
-import { EDGE, GROUP_PREFIX, LAB } from './edge-router.js';
+import { EDGE, GROUP_PREFIX, LAB, labsEachOf } from './edge-router.js';
 import { VM_IMAGE } from './vm-image.js';
 
 /** The prefix a pool's item carries in a vault answer. */
@@ -113,7 +113,7 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
 /**
  * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
- * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null }} Network
+ * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null, perPerson?: number }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
  * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null, group: string|null, groupIp: string|null, lab: { name: string, open: boolean }|null, net: Traffic|null }} Machine
  * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string, holder?: boolean }} Seen
@@ -377,12 +377,16 @@ export class XoPools {
           .filter((n) => typeof n?.id === 'string' && n.name_label !== EDGE.uplink)
           .map((n) => {
             const lab = labKind(n);
+            const perPerson = lab ? labsEachOf([n], null) : null;
             return {
               id: String(n.id),
               name: String(n.name_label || n.id).slice(0, 80),
               pool: n.$pool ?? null,
               group: String(n.name_label || '').startsWith(GROUP_PREFIX),
               ...(lab ? { lab, taken: occupied ? (occupied.get(String(n.id))?.length ?? 0) > 0 : null } : {}),
+              // And how many labs one person may hold on its pool, when the
+              // policy set a number. Absent is no limit, never 0.
+              ...(perPerson !== null ? { perPerson } : {}),
             };
           });
         // AND THE MACHINES MADE THERE, what each is and where it is, for the
