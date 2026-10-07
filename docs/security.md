@@ -307,6 +307,15 @@ machine of the fleet, through the coordinator.
   to is one no lab can use to leave without passing through the router.
   Putting the WAN on a network the fleet may also use is still allowed, and
   leaves that way around the router open.
+- **The edge filters names and watches traffic** (`docs/hypervisors.md`,
+  "What the edge filters"). Names on two threat blocklists resolve to
+  0.0.0.0, and DNS to any resolver but the edge is blocked; DNS over HTTPS
+  to a resolver by address is not, so this stops malware that uses the
+  network's resolver, not a session determined to get around it. Suricata
+  detects and logs; it does not block. Both are in the edge's own
+  configuration, which no fleet credential can change, and both are fetched
+  by the edge itself from their publishers over HTTPS: a compromised
+  blocklist publisher could make names fail to resolve, not reach anything.
 - **A kept acceptance is the person's earlier word, for that certificate
   only.** With it the phone sends `trust: accepted` without asking again,
   but only for a probe or a remembered path carrying the same fingerprint.
