@@ -243,6 +243,8 @@ says on health which journals a box has so the buttons are only ever live.)
 | **which image sessions run in** (`sandbox`) | segmented picker on the host page | chips in the host sheet | `/sandbox` |
 | **what work aimed at a tag finds** (`labels`) | chips on the host page, Remove on the removable ones | chips in the host sheet, ✕ on the removable ones | `/labels` |
 | **ask for a temporary machine** (`provision`) | picker, stepper and button under Add a machine, only when `/api/hosts` names a runner repository | chips, minutes and button under Hosts, same gate | `/provision` |
+| **linked repositories** (`/api/linked-repos`) | You › Linked repositories: archive, runners and templates, each with what it means above its field, Check and link, the check one fact per answer, Unlink only when linked | the same page, full screen | `/linkrepo` checks; linking is the app's |
+| **where a session is archived** (`archive*` on a session) | a line under the session's facts: the host's sentence about the last push, or that nothing has been pushed yet; a failed push in words and the error colour | the same line on the session sheet | `/archive <name>` pushes now |
 | **runner tokens** (`/api/runner-tokens`) | Runner tokens under Add a machine: mint, shown once, list, revoke | Runner tokens under Hosts, the same | curl |
 | **add a hypervisor** (`xoprobe`, `xosetup`) | Add a hypervisor under Machines, admins only | Add a hypervisor under Machines, admins only | — |
 | **a Xen Orchestra on plain HTTP** | offered after the HTTPS machines; a warning card says the password and token cross unencrypted, with how to give it HTTPS; Begin waits for "Send it without HTTPS anyway" | the same card and switch; Set up waits for it | — |
@@ -441,7 +443,7 @@ the same three places, in the same order, with the same things in them.
 |---|---|---|
 | **Sessions** | what is running, and answering what is asking | the reassurance line (it opens the machine it names), the session cards (answer, stop, resume, open), New, Bin, Recent activity. A session's page holds Files, Output and Forget. |
 | **Machines** | is each machine well, and doing something about one | one list, facts only, reporting and silent machines alike; each card opens the machine's page: what is wrong, software, logs, identity (Claude sign-in, Key, Approve for your credentials), releases, image, labels, house rules, reboot, revoke, replace key. Add a machine is one row after the list. |
-| **You** | who you are here, what your sessions may use, and setup | first run (fleet address, sign-in, demo) in that order; account and devices; GitHub on this phone; Credentials (the vault first, links made on a box as facts); Temporary machines; notifications; Siri; This fleet. |
+| **You** | who you are here, what your sessions may use, and setup | first run (fleet address, sign-in, demo) in that order; account and devices; GitHub on this phone; Credentials (the vault first, links made on a box as facts); Temporary machines; Linked repositories; notifications; Siri; This fleet. |
 
 **Admin-only rows are drawn for admins.** People, revoking a machine and
 revoking a device come from `GET /api/me`, which answers with the flag the
