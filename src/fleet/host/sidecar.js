@@ -554,6 +554,11 @@ export class Sidecar {
       case 'begin':
         if (!p.address) return { ok: false, text: 'Say where Xen Orchestra answers.' };
         return this.xoSetups.begin({ address: String(p.address), pin: p.pin ? String(p.pin) : null, trust: p.trust ? String(p.trust) : null, plain: p.plain ? String(p.plain) : null, actor });
+      case 'deploy':
+        // A begin for a pool with no Xen Orchestra, pinned to its master's
+        // SSH host key (xo-deploy.js).
+        if (!p.address) return { ok: false, text: 'Say where the pool master answers.' };
+        return this.xoSetups.beginDeploy({ address: String(p.address), pin: p.pin ? String(p.pin) : null, actor });
       case 'run':
         return this.xoSetups.run({ job: String(p.job || ''), sealed: String(p.sealed || ''), actor });
       case 'status':

@@ -37,6 +37,18 @@
 // network), and the limits. Xen Orchestra enforces all of it as the resource
 // set, which is the bound that holds when everything on our side has failed.
 //
+// A POOL WITH NO XEN ORCHESTRA is a job of its own too, begun with `deploy`
+// and the pool master's SSH host key as its pin instead of a certificate's.
+// The probe found that key: at an address with no Xen Orchestra it also says
+// what answered SSH there (xo-deploy.js, sshProbe). Its sealed `run`
+// carries the pool master's root password and the admin password the person
+// chose; the machine installs Xen Orchestra with the installer's own script
+// (xo-deploy.js, which says how the password is typed once and forgotten),
+// replaces the default admin password with theirs, and then runs the steps
+// above against the Xen Orchestra it made, pinned to a certificate it made
+// itself, so the person's phone gets a token back exactly as from a setup.
+// One job, so the phone can close at the first step.
+//
 // THIS MACHINE KEEPS NOTHING. It is the one that could reach Xen Orchestra
 // when somebody wanted to add it, and that is all it is: the pool must not
 // stop being manageable because this machine was retired, rebuilt or offline.
@@ -64,16 +76,17 @@
 import tls from 'node:tls';
 import net from 'node:net';
 import { randomBytes } from 'node:crypto';
-import { unlinkSync } from 'node:fs';
+import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
-import { XOSETUP_STEPS, XOPOLICY_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../protocol/intents.js';
-import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../protocol/intents.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { EDGE, GROUP_PREFIX, MAX_GROUPS, ensureEdge, ensureGroups, ensureUplink, srName } from './edge-router.js';
 import { VM_IMAGE, IMAGES, ensureImage, imageKeyOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
+import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -101,6 +114,8 @@ const WAITING_TTL_MS = 10 * 60_000;
 const FINISHED_TTL_MS = 6 * 60 * 60_000;
 /** How long a policy job waits for the person's choice, holding an admin session. */
 const POLICY_WAIT_MS = 10 * 60_000;
+/** How often an install that is quiet still says it is going: under the Lock Screen's twenty minutes of silence. */
+const DEPLOY_HEARTBEAT_MS = 5 * 60_000;
 /** The tag on the network the edge router's WAN goes on: the way out of every lab. */
 export const EGRESS_TAG = 'fleetwright-egress';
 /** What building the edge router asks of the server, checked before anything is made. */
@@ -139,13 +154,35 @@ const TOKEN_LIFETIME_MS = 180 * 24 * 60 * 60_000;
  *
  * @param {string} address
  * @param {{ timeoutMs?: number }} [opts]
- * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, certificate: ReturnType<typeof describeCertificate>, version: string|null, text: string }>}
+ * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, certificate: ReturnType<typeof describeCertificate>, version: string|null, text: string, ssh?: any }>}
  */
 // FOUR SECONDS AN ATTEMPT, and at most two attempts (HTTPS, then plain HTTP
 // on 80, or on the address's own port), so a probe answers inside the
 // coordinator's ten-second fan-out deadline even for an address that drops
 // packets.
 export async function probe(address, { timeoutMs = 4_000 } = {}) {
+  // OVER SSH TOO, AT THE SAME TIME, for an address with no Xen Orchestra:
+  // what a pool is added from when it has none (xo-deploy.js). Started now
+  // so it costs no time of its own, stopped as soon as Xen Orchestra answers,
+  // and its answer kept only when Xen Orchestra did not.
+  const stop = new AbortController();
+  const overSsh = sshProbe(address, { signal: stop.signal }).catch(() => null);
+  const found = await probeXo(address, { timeoutMs });
+  if (found.xo === true) {
+    stop.abort();
+    return found;
+  }
+  const ssh = await overSsh;
+  return ssh ? { ...found, ssh: ssh.ssh } : found;
+}
+
+/**
+ * The HTTPS look, then plain HTTP: `probe` without SSH.
+ *
+ * @param {string} address
+ * @param {{ timeoutMs: number }} opts
+ */
+async function probeXo(address, { timeoutMs }) {
   const { host, port, explicitPort } = splitAddress(address);
   const secure = await getRoot({ host, port, secure: true, timeoutMs });
   if (secure.ok) {
@@ -264,10 +301,19 @@ export class XoSetups {
    *   coordinatorUrl?: string|null,
    *   buildImage?: typeof ensureImage,
    *   holderPin?: ((job: string) => Promise<any>)|null,
+   *   installer?: typeof INSTALLER,
+   *   fetch?: typeof globalThis.fetch,
+   *   xoRetryMs?: number,
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000 }) {
     this.policyWaitMs = policyWaitMs;
+    // THE INSTALLER AN INSTALL RUNS, pinned (xo-deploy.js), where its files
+    // come from, and how long to wait between tries at a Xen Orchestra that
+    // has only just started.
+    this.installer = installer;
+    this.fetch = fetch;
+    this.xoRetryMs = xoRetryMs;
     // HOW THIS BOX ASKS THE FLEET FOR THE PIN a pool's own machine joins with
     // (xo-holder.js), for one job. Without it this box does not offer to make
     // one (`can`).
@@ -366,6 +412,60 @@ export class XoSetups {
   }
 
   /**
+   * An install's `begin` (phase `deploy`): the same key for the job, signed
+   * under its own context (`xodeploy-key`) over the pool master's SSH host
+   * key, whose SHA-256 in hex is the pin, so the phone can tell the key is
+   * this machine's for THIS pool master, and a deploy key can never pass for
+   * a setup's.
+   *
+   * @param {{ address: string, pin?: string|null, actor: string|null }} args
+   */
+  async beginDeploy({ address, pin, actor }) {
+    this.#prune();
+    if (!actor) return { ok: false, text: 'Installing Xen Orchestra has to be asked for by a signed-in person.' };
+    if (!this.signer) {
+      return {
+        ok: false,
+        text: 'This machine has no enrolment key to sign a job key with, so a phone could not tell the key was this machine’s. Enrol it with a pin first.',
+      };
+    }
+    if (!pin || !CERT_PIN_RE.test(pin)) return { ok: false, text: 'An install needs the pool master’s SSH host key you compared. Find a machine that can reach it from the app first.' };
+    if ([...this.jobs.values()].filter((j) => j.state === 'waiting' || j.state === 'running' || j.state === 'choosing').length >= 3) {
+      return { ok: false, text: 'This machine is already running three setups. Wait for one to finish.' };
+    }
+    const signer = /** @type {NonNullable<typeof this.signer>} */ (this.signer);
+    const job = randomBytes(6).toString('hex');
+    const key = await newSealKey();
+    const keySig = await signer.sign(signingInput('xodeploy-key', { address, job, key: key.publicKey, pin }));
+    const hostKey = { kty: 'EC', crv: 'P-256', x: signer.publicJwk.x, y: signer.publicJwk.y };
+    this.jobs.set(job, {
+      job,
+      address,
+      // The pool master's host key, as the hex of its SHA-256: what openPool
+      // holds the SSH connection to. Not `pin`, which is Xen Orchestra's.
+      hostKeyPin: pin,
+      purpose: 'deploy',
+      pin: null,
+      plain: false,
+      trust: null,
+      actor,
+      key,
+      state: 'waiting',
+      step: 0,
+      of: XODEPLOY_STEPS.length,
+      phase: XODEPLOY_STEPS[0],
+      text: 'Waiting for the passwords.',
+      at: this.now(),
+      cancelled: false,
+    });
+    return {
+      ok: true,
+      text: 'Ready for the passwords. Check the key is this machine’s, then send them sealed.',
+      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['deploy'] },
+    };
+  }
+
+  /**
    * @param {{ job: string, sealed: string, actor: string|null }} args
    */
   async run({ job, sealed, actor }) {
@@ -376,15 +476,16 @@ export class XoSetups {
     if (parts.length !== 3) return { ok: false, text: 'That is not a sealed sign-in.' };
     /** @type {any} */
     let inside;
+    const deploy = rec.purpose === 'deploy';
     try {
       inside = await openSealed({
         privateKey: rec.key.privateKey,
         publicKey: rec.key.publicKey,
-        aad: xosetupAad(job, rec.address),
+        aad: deploy ? xodeployAad(job, rec.address) : xosetupAad(job, rec.address),
         sealed: { epk: parts[0], iv: parts[1], ct: parts[2] },
       });
     } catch {
-      return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
+      return { ok: false, text: deploy ? 'The passwords did not open with this job’s key. Start again from the app.' : 'The sign-in did not open with this setup’s key. Start again from the app.' };
     }
     // ONE USE: the key goes as soon as it has opened the one thing it exists
     // for, which for a policy job is two things (below).
@@ -399,6 +500,25 @@ export class XoSetups {
       return { ok: false, text: rec.text, xosetup: status(rec) };
     }
     rec.reply = String(inside.reply);
+    // AN INSTALL'S TWO PASSWORDS, checked before anything is asked of the
+    // pool: the root password to reach the pool master with, and the admin
+    // password Xen Orchestra's default is replaced with, at least as long as
+    // the phone asks for.
+    if (deploy) {
+      const root = inside?.v === 1 && inside.purpose === 'deploy' && typeof inside.root?.password === 'string' ? inside.root.password : '';
+      const admin = inside?.v === 1 && typeof inside.xo?.password === 'string' ? inside.xo.password : '';
+      if (!root || root.length > 1024 || admin.length < MIN_ADMIN_PASSWORD || admin.length > 256) {
+        rec.state = 'failed';
+        rec.text = !root
+          ? 'The sealed passwords had no root password for the pool master in them, so nothing was started.'
+          : `The new admin password has to be ${MIN_ADMIN_PASSWORD} to 256 characters, so nothing was started.`;
+        return { ok: false, text: rec.text, xosetup: status(rec) };
+      }
+      rec.state = 'running';
+      rec.text = 'Starting.';
+      void this.#execute(rec, { root, admin });
+      return { ok: true, text: `Installing Xen Orchestra on the pool at ${rec.address}.`, xosetup: status(rec) };
+    }
     // A POLICY JOB keeps the key for the one more thing it must open: the
     // person's choice, sealed to it once they have seen the pool.
     if (inside.purpose === 'policy') {
@@ -485,9 +605,11 @@ export class XoSetups {
       rec.cancelled = true;
       if (rec.abort) {
         rec.abort.abort();
-        rec.text = rec.building === 'image'
-          ? 'Stopping the machine image’s build and removing what it made.'
-          : 'Stopping the edge router’s build and removing what it made.';
+        rec.text = rec.building === 'deploy'
+          ? 'Stopping the installer where it is.'
+          : rec.building === 'image'
+            ? 'Stopping the machine image’s build and removing what it made.'
+            : 'Stopping the edge router’s build and removing what it made.';
       } else {
         rec.text = 'Cancelling after this step.';
       }
@@ -510,7 +632,9 @@ export class XoSetups {
    * @param {any} rec
    */
   #open(rec) {
-    return rec.plain ? this.connectPlain({ address: rec.address }) : this.connect({ address: rec.address, pin: rec.pin });
+    // An install's Xen Orchestra is not at the address the job began with,
+    // which is the pool master's, but where the installer said it is.
+    return rec.plain ? this.connectPlain({ address: rec.address }) : this.connect({ address: rec.xoAddress ?? rec.address, pin: rec.pin });
   }
 
   /** @param {string} job @param {string|null} actor */
@@ -542,6 +666,7 @@ export class XoSetups {
     // it was.
     const policy = rec.purpose === 'policy';
     if (policy && rec.phase !== 'apply' && rec.phase !== 'done') return;
+    rec.reportedAt = this.now();
     try {
       this.emit({
         event: 'xosetup.progress',
@@ -551,9 +676,11 @@ export class XoSetups {
         phase: rec.phase,
         state: rec.state,
         text: rec.text,
-        ...(policy ? { purpose: 'policy' } : {}),
-        ...(rec.part && rec.state === 'running' ? { fill: rec.part.fill, stage: rec.part.stage, stages: rec.part.stages } : {}),
-        ...(rec.part && rec.state === 'running' && buildKey(rec) ? { build: buildKey(rec) } : {}),
+        ...(policy ? { purpose: 'policy' } : rec.purpose === 'deploy' ? { purpose: 'deploy' } : {}),
+        ...(rec.part && rec.state === 'running' ? { fill: rec.part.fill } : {}),
+        // THE PART OF A BUILD, and only of a build: an install's download is one
+        // bar, and "part 1 of 1" on the Lock Screen would be words about nothing.
+        ...(rec.part && rec.state === 'running' && buildKey(rec) ? { build: buildKey(rec), stage: rec.part.stage, stages: rec.part.stages } : {}),
       });
     } catch (e) {
       this.log.warn(`xosetup: could not report progress: ${/** @type {Error} */ (e).message}`);
@@ -565,19 +692,23 @@ export class XoSetups {
    * it, closes what it opened and wipes the sign-in.
    *
    * @param {any} rec
-   * @param {{ email?: string, password?: string, token?: string }} creds
+   * @param {{ email?: string, password?: string, token?: string, root?: string, admin?: string }} creds
    */
   async #execute(rec, creds) {
     /** @type {any} */
     const ctx = { rec, creds, admin: null, limited: null, notes: /** @type {string[]} */ ([]) };
     // What an error message is scrubbed of, taken before the sign-in step
     // wipes the originals, and wiped with them at the end.
-    const secrets = { password: creds.password, token: creds.token };
+    const secrets = { password: creds.password, token: creds.token, root: creds.root, admin: creds.admin };
     const policy = rec.purpose === 'policy';
-    const steps = policy ? this.#policySteps() : this.#steps();
-    const keys = policy ? XOPOLICY_STEPS : XOSETUP_STEPS;
+    const deploy = rec.purpose === 'deploy';
+    const steps = policy ? this.#policySteps() : deploy ? this.#deploySteps() : this.#steps();
+    const keys = policy ? XOPOLICY_STEPS : deploy ? XODEPLOY_STEPS : XOSETUP_STEPS;
     try {
       for (let i = 0; i < steps.length; i++) {
+        // A STEP THE ONE BEFORE IT RAN: the installer's six stages are one
+        // script, which moves the job through them itself as it says them.
+        if (!steps[i]) continue;
         if (rec.cancelled) {
           rec.state = 'cancelled';
           rec.text = `Cancelled before ${STEP_WORDS[keys[i]] ?? `step ${i + 1}`}.${policy ? ' Nothing was changed.' : ''}`;
@@ -589,7 +720,7 @@ export class XoSetups {
         rec.part = null;
         rec.text = `${STEP_WORDS[rec.phase]}.`;
         this.#report(rec);
-        const said = await steps[i](ctx);
+        const said = await /** @type {(ctx: any) => Promise<any>} */ (steps[i])(ctx);
         // What a step found, kept for the summary rather than reported on its
         // own: one event per step is what the phone shows, and a second one
         // saying what the first found would double every buzz on Android.
@@ -603,7 +734,10 @@ export class XoSetups {
       this.#report(rec);
       this.log.info(`xosetup: ${rec.job} finished for ${rec.address}`);
     } catch (e) {
-      if (policy && rec.cancelled) {
+      if (deploy && rec.cancelled) {
+        rec.state = 'cancelled';
+        rec.text = deployCancelled(rec.phase);
+      } else if (policy && rec.cancelled) {
         rec.state = 'cancelled';
         // Cancelled during the build, the policy was already in force: say
         // so, rather than that nothing changed.
@@ -632,6 +766,15 @@ export class XoSetups {
       rec.part = null;
       rec.abort = null;
       rec.building = null;
+      // AN INSTALL'S CONNECTION TO THE POOL MASTER, and the directory that
+      // held the installer, the certificate's key and the SSH files, go
+      // whichever way it ended.
+      try {
+        await ctx.pool?.close();
+      } catch {
+        /* closing */
+      }
+      if (ctx.dir) rmSync(ctx.dir, { recursive: true, force: true });
       try {
         ctx.admin?.close();
       } catch {
@@ -648,6 +791,11 @@ export class XoSetups {
       creds.token = undefined;
       secrets.password = undefined;
       secrets.token = undefined;
+      secrets.root = undefined;
+      secrets.admin = undefined;
+      creds.root = undefined;
+      creds.admin = undefined;
+      if (ctx.root) ctx.root.password = undefined;
       ctx.password = undefined;
       ctx.token = undefined;
     }
@@ -827,6 +975,135 @@ export class XoSetups {
   }
 
   /**
+   * An install's steps, in XODEPLOY_STEPS order: reach the pool master,
+   * fetch the pinned installer, run it (its six stages, as it says them),
+   * replace the default admin password, then onboarding's own steps against
+   * the Xen Orchestra it made.
+   *
+   * @returns {Array<((ctx: any) => Promise<any>)|null>}
+   */
+  #deploySteps() {
+    /** @param {any} rec @param {string} key */
+    const move = (rec, key) => {
+      rec.step = XODEPLOY_STEPS.indexOf(key);
+      rec.phase = key;
+      rec.part = null;
+      rec.text = `${STEP_WORDS[key]}.`;
+      this.#report(rec);
+    };
+    return [
+      // reach
+      async (/** @type {any} */ ctx) => {
+        const rec = ctx.rec;
+        rec.building = 'deploy';
+        rec.abort = new AbortController();
+        ctx.dir = jobDir();
+        // The password moves into an object openPool wipes on every way out.
+        ctx.root = { password: ctx.creds.root };
+        ctx.creds.root = undefined;
+        ctx.pool = await openPool({ address: rec.address, hostKey: rec.hostKeyPin, secret: ctx.root, dir: ctx.dir, signal: rec.abort.signal });
+        const pool = await readPool(ctx.pool);
+        if (pool.existing) {
+          throw new Error('this pool already has a VM named fleetwright-xo, which an earlier install made. If it runs Xen Orchestra, add it with its address; otherwise remove it, then try again. Nothing was changed.');
+        }
+        ctx.network = pool.network;
+        return `Xen Orchestra went on ${pool.network.slice(0, 80)}, the pool master’s own network${pool.sr ? `, with its disk on ${pool.sr.slice(0, 80)}` : ''}.`;
+      },
+      // installer
+      async (/** @type {any} */ ctx) => {
+        ctx.prepared = await prepareInstaller({ dir: ctx.dir, installer: this.installer, fetch: this.fetch, signal: ctx.rec.abort.signal });
+        // THE PIN, before Xen Orchestra exists: the certificate made here is
+        // the only one any later connection to it will take.
+        ctx.rec.pin = ctx.prepared.pin;
+      },
+      // network, and the five stages after it, as the script says them
+      async (/** @type {any} */ ctx) => {
+        const rec = ctx.rec;
+        const found = await runInstaller({
+          pool: ctx.pool,
+          prepared: ctx.prepared,
+          network: ctx.network,
+          signal: rec.abort.signal,
+          on: {
+            stage: (key) => {
+              if (!rec.cancelled && key !== rec.phase && XODEPLOY_STEPS.indexOf(key) > rec.step) move(rec, key);
+            },
+            say: (text, fill) => {
+              if (rec.cancelled) return;
+              rec.text = `${STEP_WORDS[rec.phase] ?? 'Installing'}: ${text}`.slice(0, 200);
+              const before = rec.part;
+              rec.part = fill === null ? null : { stage: 1, stages: 1, fill };
+              // An event when the download has moved a twentieth, and one
+              // every few minutes while the build is quiet, so the Lock
+              // Screen is not left saying it has heard nothing.
+              const moved = rec.part && (!before || Math.floor(before.fill / 50) !== Math.floor(rec.part.fill / 50));
+              if (moved || this.now() - (rec.reportedAt ?? 0) >= DEPLOY_HEARTBEAT_MS) this.#report(rec);
+            },
+          },
+        });
+        rec.xoAddress = found.address;
+        rec.vm = found.vm;
+        rec.building = null;
+        rec.abort = null;
+        rec.part = null;
+        // The pool master is not needed again: its connection goes now
+        // rather than at the end of onboarding.
+        await ctx.pool.close();
+        ctx.pool = null;
+      },
+      null, // image
+      null, // vm
+      null, // boot
+      null, // packages
+      null, // build
+      // admin
+      async (/** @type {any} */ ctx) => {
+        const rec = ctx.rec;
+        const admin = await this.#reachNewXo(rec);
+        try {
+          let user;
+          try {
+            user = await admin.call('session.signIn', { email: DEFAULT_ADMIN.email, password: DEFAULT_ADMIN.password });
+          } catch {
+            throw new Error(`Xen Orchestra at ${rec.xoAddress} no longer takes its default admin password, so somebody signed in to it and changed it before this machine could. Nothing more was done; look at it in Xen Orchestra before adding it.`);
+          }
+          if (!user?.id) throw new Error('Xen Orchestra signed its default admin in and did not say which user that is, so its password was not changed.');
+          await admin.call('user.set', { id: user.id, password: ctx.creds.admin });
+        } finally {
+          admin.close();
+        }
+        // ONBOARDING SIGNS IN WITH THE NEW ONE, which is the proof it took.
+        ctx.creds.email = DEFAULT_ADMIN.email;
+        ctx.creds.password = ctx.creds.admin;
+        ctx.creds.admin = undefined;
+      },
+      ...this.#steps(),
+    ];
+  }
+
+  /**
+   * The Xen Orchestra an install just made, over the certificate made for
+   * it. Tried for a minute: the installer says it is up once its service
+   * is, and the first connection can still land a moment early.
+   *
+   * @param {any} rec
+   */
+  async #reachNewXo(rec) {
+    /** @type {Error|null} */
+    let last = null;
+    for (let i = 0; i < 12; i++) {
+      if (rec.cancelled) throw new Error('cancelled');
+      try {
+        return await this.connect({ address: rec.xoAddress, pin: rec.pin });
+      } catch (e) {
+        last = /** @type {Error} */ (e);
+        await new Promise((r) => setTimeout(r, this.xoRetryMs));
+      }
+    }
+    throw new Error(`Xen Orchestra is installed at ${rec.xoAddress} and this machine cannot reach it (${last?.message ?? 'no answer'}). Its admin is still ${DEFAULT_ADMIN.email} with the password ${DEFAULT_ADMIN.password}: sign in to it and change that now, then add it from the app.`);
+  }
+
+  /**
    * The edge router, for the apply step.
    *
    * @param {any} ctx @param {any} p @param {any} way @param {string} uplink
@@ -867,6 +1144,13 @@ export class XoSetups {
         // Over plain HTTP the person already accepted that there is no
         // certificate at all, so there is nothing to ask of one.
         if (ctx.rec.plain) return 'It was set up over plain HTTP, as you accepted: the sign-in crossed the network unencrypted.';
+        // AN INSTALL'S CERTIFICATE IS THIS MACHINE'S OWN, made before Xen
+        // Orchestra existed, and the pin already held this connection to it:
+        // there is nobody's word to ask for.
+        if (ctx.rec.purpose === 'deploy') {
+          ctx.certificate = ctx.admin.certificate;
+          return;
+        }
         // THE PERSON'S WORD, for a certificate nothing vouches for. The pin
         // already held this connection to the certificate they saw; this
         // holds the setup to their having been told what was wrong with it.
@@ -987,9 +1271,14 @@ export class XoSetups {
       },
       // hand-off
       async (/** @type {any} */ ctx) => {
+        const deployed = ctx.rec.purpose === 'deploy';
         const record = {
           v: 1,
-          address: ctx.rec.address,
+          // An install's Xen Orchestra, where the installer put it; the pool
+          // master it was installed through is beside it, which is what the
+          // phone began the job with and opens the record under.
+          address: deployed ? ctx.rec.xoAddress : ctx.rec.address,
+          ...(deployed ? { poolMaster: ctx.rec.address } : {}),
           pin: ctx.rec.pin,
           user: FLEET_USER,
           userId: ctx.userId,
@@ -998,7 +1287,7 @@ export class XoSetups {
           // null is the server's default length, which it does not say.
           tokenExpires: ctx.tokenExpires ? new Date(ctx.tokenExpires).toISOString() : null,
           certificate: ctx.certificate
-            ? { trusted: ctx.certificate.trusted, accepted: ctx.rec.trust === 'accepted', notAfter: ctx.certificate.notAfter }
+            ? { trusted: ctx.certificate.trusted, accepted: ctx.rec.trust === 'accepted', ...(deployed ? { made: true } : {}), notAfter: ctx.certificate.notAfter }
             : null,
           // Every later call with this token crosses the network as it is.
           plain: ctx.rec.plain === true,
@@ -1008,8 +1297,10 @@ export class XoSetups {
         };
         const box = await seal({ to: ctx.rec.reply, aad: xosetupHandoffAad(ctx.rec.job, ctx.rec.address), payload: record });
         ctx.rec.handoff = `${box.epk}.${box.iv}.${box.ct}`;
-        this.#forgetOldCopy(ctx.rec.address);
-        ctx.summary = `${ctx.rec.address} is in the fleet: ${plural(ctx.pools.length, 'pool')}, worked through a limited user. Its token was sealed to your phone and this machine kept no copy; the admin sign-in was not kept either.`;
+        this.#forgetOldCopy(record.address);
+        ctx.summary = deployed
+          ? `Xen Orchestra is installed at ${record.address} and in the fleet: ${plural(ctx.pools.length, 'pool')}, worked through a limited user. Sign in to it as ${DEFAULT_ADMIN.email} with the password you chose. Its token was sealed to your phone; this machine kept no copy, and the root password was used once and not kept.`
+          : `${ctx.rec.address} is in the fleet: ${plural(ctx.pools.length, 'pool')}, worked through a limited user. Its token was sealed to your phone and this machine kept no copy; the admin sign-in was not kept either.`;
       },
     ];
   }
@@ -1045,7 +1336,34 @@ export const STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
   'hand-off': 'Handing over',
   choose: 'Waiting for your choice',
   apply: 'Applying what you chose',
+  // An install's own (XODEPLOY_STEPS); the apps say the same.
+  reach: 'Reaching the pool master',
+  installer: 'Fetching the installer',
+  network: 'Setting up its network',
+  image: 'Getting Debian 13',
+  vm: 'Making its VM',
+  boot: 'Booting it',
+  packages: 'Installing packages',
+  build: 'Building Xen Orchestra',
+  admin: 'Replacing the default admin password',
 }));
+
+/**
+ * How a cancelled install ended, in what is known of the pool by then. Before
+ * the installer ran, nothing was made. While it ran, it removes what it made
+ * if it is stopped before its VM starts and keeps the VM after, and which of
+ * those happened is the installer's to know, so the sentence names what to
+ * look for rather than claiming either (C-5).
+ *
+ * @param {string} phase
+ */
+function deployCancelled(phase) {
+  if (phase === 'reach' || phase === 'installer') return 'Cancelled before anything was made on the pool.';
+  if (STAGES.includes(phase)) {
+    return 'Cancelled while the installer ran. Anything it had made may still be on the pool: a VM named fleetwright-xo, and disks named for it.';
+  }
+  return 'Cancelled after Xen Orchestra was installed, as fleetwright-xo on the pool, before it was added. If this got past replacing its admin password, the password is the one you chose; add it from the app with its address.';
+}
 
 /**
  * What the phone is shown to choose from: the pool's storage and networks,
@@ -1309,11 +1627,11 @@ function unknown() {
  * An error's words, with anything from the sign-in taken out. Xen Orchestra
  * does not echo a password back, and this does not rely on it.
  *
- * @param {string} message @param {{ password?: string, token?: string }} creds
+ * @param {string} message @param {{ password?: string, token?: string, root?: string, admin?: string }} creds
  */
 function scrub(message, creds) {
   let out = String(message || 'an error');
-  for (const secret of [creds.password, creds.token]) {
+  for (const secret of [creds.password, creds.token, creds.root, creds.admin]) {
     if (secret && secret.length >= 4) out = out.split(secret).join('…');
   }
   return out.slice(0, 300);
