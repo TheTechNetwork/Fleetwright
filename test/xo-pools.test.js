@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
-import { VM_IMAGE, buildCloudConfig, ensureImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
+import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
@@ -573,14 +573,32 @@ function buildPool({ then, existing = [] }) {
           const state = looks === 1 ? { power_state: 'Running', startTime: 100 } : then === 'Halted' ? { power_state: 'Halted' } : { power_state: 'Running', startTime: 200 };
           return { 'build-vm': { id: 'build-vm', ...state } };
         }
-        return Object.fromEntries([base, ...existing].filter((o) => o.type === f.type).map((o) => [o.id, o]));
+        const drives = /** @type {any} */ (objects)[f.type]?.() ?? [];
+        return Object.fromEntries([base, ...existing, ...drives].filter((o) => o.type === f.type && (!f.id || o.id === f.id) && (!f.VM || o.VM === f.VM)).map((o) => [o.id, o]));
       }
       if (method === 'disk.import') return { $sendTo: '/upload/1' };
-      if (method === 'vm.create') return 'build-vm';
+      // AS XEN ORCHESTRA DOES: a cloud-init drive goes on the storage of the
+      // VM's first disk, so one asked for with none is refused, in its words.
+      if (method === 'vm.create') {
+        if (params.cloudConfig != null && !(params.VDIs || []).length) throw new Error("Can't create cloud init config drive for VM without disks");
+        return 'build-vm';
+      }
+      if (method === 'vm.attachDisk') disks.push({ vbd: `vbd-${disks.length}`, vdi: params.vdi, name: 'disk' });
+      if (method === 'vm.createCloudInitConfigDrive') disks.push({ vbd: `vbd-${disks.length}`, vdi: 'cfg-1', name: CONFIG_DRIVE_NAME });
+      if (method === 'vdi.delete') {
+        const i = disks.findIndex((d) => d.vdi === params.id);
+        if (i >= 0) disks.splice(i, 1);
+      }
       return true;
     },
   };
-  return { admin, calls, sr };
+  /** @type {Array<{ vbd: string, vdi: string, name: string }>} */
+  const disks = [];
+  const objects = {
+    VBD: () => disks.map((d) => ({ type: 'VBD', id: d.vbd, VM: 'build-vm', VDI: d.vdi, is_cd_drive: false })),
+    VDI: () => disks.map((d) => ({ type: 'VDI', id: d.vdi, name_label: d.name })),
+  };
+  return { admin, calls, sr, disks, objects };
 }
 
 /** @param {any} p */
@@ -611,9 +629,14 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   const text = await ensureImage({ ...buildArgs(p), say: (t) => said.push(t) });
   assert.match(text, /machine image is ready on rack/);
   const order = p.calls.map((c) => c.method).filter((m) => m !== 'xo.getAllObjects');
-  assert.deepEqual(order, ['disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
+  assert.deepEqual(order, ['disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vm.start', 'vdi.delete', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
   const create = /** @type {any} */ (p.calls.find((c) => c.method === 'vm.create')).params;
   assert.deepEqual(create.VIFs, [{ network: 'net-uplink' }], 'built behind the edge router');
+  // The install reaches the VM on a drive made once its disk is there, on that
+  // disk's storage; and it is gone before the VM is a template.
+  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params, { vm: 'build-vm', sr: 'sr-1', config: buildCloudConfig({ coordinatorUrl: 'https://fleet.test' }) });
+  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vdi.delete')).params, { id: 'cfg-1' });
+  assert.deepEqual(p.disks.map((d) => d.vdi), ['vdi-1'], 'the template keeps its own disk and nothing else');
   assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.resize')).params.size, VM_IMAGE.diskSize);
   assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }]);
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'resourceSet.addObject')).params, { id: 'set-1', object: 'build-vm' });

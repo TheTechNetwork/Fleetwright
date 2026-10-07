@@ -29,10 +29,15 @@
 // a timeout. The failed VM is kept, stopped and named for what happened, so
 // its log can be read in Xen Orchestra's console; the next build removes it.
 //
-// NOT RUN against a real pool: Xen Orchestra's calls here are its documented
-// ones (disk.import, disk.resize or vdi.set, vm.create with cloudConfig,
-// vm.convertToTemplate, resourceSet.addObject), exercised against the suite's
-// stand-in.
+// FIRST RUN against a real pool ended at vm.create: Xen Orchestra puts a
+// cloud-init drive on the storage of the VM's first disk and this VM had
+// none yet, so the drive is now made by its own call after the disk is in,
+// and taken off again before the VM becomes the template. The calls are Xen
+// Orchestra's documented ones (disk.import, disk.resize or vdi.set,
+// vm.create, vm.attachDisk, vm.createCloudInitConfigDrive, vdi.delete,
+// vm.convertToTemplate, resourceSet.addObject), exercised against a stand-in
+// that refuses what the real one refuses; the whole build is NOT YET RUN
+// through to a template on a real pool.
 
 import { spawn } from 'node:child_process';
 import { createReadStream, existsSync, statSync, rmSync, renameSync } from 'node:fs';
@@ -229,6 +234,25 @@ export function buildCloudConfig({ coordinatorUrl }) {
     '  - [/root/fleetwright-image.sh]',
     '',
   ].join('\n');
+}
+
+/** What Xen Orchestra names the cloud-init drive it makes (xo-server, createCloudInitConfigDrive). */
+export const CONFIG_DRIVE_NAME = 'XO CloudConfigDrive';
+
+/**
+ * Deletes the cloud-init drive Xen Orchestra attached to a VM, found by the
+ * name it gives every one, among the disks that VM has.
+ *
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin
+ * @param {string} vm
+ */
+async function dropConfigDrive(admin, vm) {
+  const vbds = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VBD', VM: vm } })) || {}));
+  for (const vbd of vbds) {
+    if (!vbd?.VDI || vbd.is_cd_drive) continue;
+    const vdi = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', id: vbd.VDI } })) || {})[0]);
+    if (vdi?.name_label === CONFIG_DRIVE_NAME) await admin.call('vdi.delete', { id: vdi.id });
+  }
 }
 
 /**
@@ -430,11 +454,16 @@ export async function ensureImage({
       CPUs: VM_IMAGE.cpus,
       memory: VM_IMAGE.memory,
       tags: [VM_IMAGE.buildTag],
-      cloudConfig: buildCloudConfig({ coordinatorUrl }),
       bootAfterCreate: false,
     });
     await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
     vdi = null; // the VM's now, and deleted with it
+    // THE CLOUD-INIT DRIVE AFTER THE DISK, by its own call and on the disk's
+    // storage. vm.create with `cloudConfig` puts the drive on the storage of
+    // the VM's first disk, and this VM has none until the line above: Xen
+    // Orchestra refused it with "Can't create cloud init config drive for VM
+    // without disks", which is how the first build on a real pool ended.
+    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl }) });
     signal?.throwIfAborted();
     await admin.call('vm.start', { id: vm });
 
@@ -471,6 +500,11 @@ export async function ensureImage({
     }
 
     say(`Making the machine image a template on ${poolName}.`, stage(4, INSTALLED));
+    // NOT THE BUILD'S DRIVE IN THE TEMPLATE. It holds the install script, and
+    // a clone of a template keeps its disks: every machine would boot with
+    // two cloud-init drives, its own and this one, and cloud-init takes
+    // whichever it finds first.
+    await dropConfigDrive(admin, /** @type {string} */ (vm));
     // NAMED AND TAGGED WHILE IT IS STILL A VM, so a conversion that fails
     // leaves nothing half-renamed: the VM is removed below either way.
     await admin.call('vm.set', {
