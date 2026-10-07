@@ -1,8 +1,8 @@
 // HTTP adapter: the browser UI, a JSON API, and the endpoint the Claude Code
 // SessionStart hook posts conversation uuids to.
 //
-// The server is ALWAYS started, even in a Telegram-only deployment, because
-// the hook needs somewhere to report. What varies is the bind address:
+// The server is ALWAYS started, even with the web UI turned off, because the
+// hook needs somewhere to report. What varies is the bind address:
 // 127.0.0.1 by default, and anything wider requires a token to be configured
 // (enforced in config.js). THE TOKEN IS REQUIRED ON LOOPBACK TOO. This header
 // used to say reaching the port "already means shell access", and that was

@@ -5,9 +5,11 @@
 // the box itself. Which leaves one question this file answers: how does it get
 // spent without SSHing in?
 //
-// The same way everything else here works. `/enroll 123456` in Telegram runs
-// the sidecar's own enrol path in-process, on the box the bot is running on.
-// Nothing about the fleet's credentials passes through the chat: the pin buys
+// The same way everything else here works. `/enroll 123456` through the
+// command registry — `fleetwright enroll 123456` on the box, or the web UI;
+// it was Telegram's job until that adapter was archived — runs the sidecar's
+// own enrol path in-process, on this box. Nothing about the fleet's
+// credentials passes through the surface that typed it: the pin buys
 // exactly one exchange and is worthless afterwards, and the private key is
 // generated locally and never leaves.
 //

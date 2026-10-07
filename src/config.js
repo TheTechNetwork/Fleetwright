@@ -457,8 +457,9 @@ export function loadConfig(env = process.env) {
     bind: str('FLEETWRIGHT_BIND', '127.0.0.1'),
     port: int('FLEETWRIGHT_PORT', 8790),
     token: str('FLEETWRIGHT_TOKEN'),
-    // Serve the browser UI. Turn off for a Telegram-only deployment; the
-    // internal hook endpoint keeps working either way.
+    // Serve the browser UI. Turn off on a box driven only from the app, the
+    // MCP server or the CLI; the internal hook endpoint keeps working either
+    // way.
     webEnabled: bool('FLEETWRIGHT_WEB', true),
 
     // --- Telegram, archived --------------------------------------------------

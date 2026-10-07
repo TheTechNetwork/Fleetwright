@@ -179,8 +179,11 @@ const ALIASES = {
 
 const DEFAULT_LINES = 40;
 const MAX_LINES = 200;
-// Two Telegram messages' worth. The adapter chunks at 4096, so this is a cap on
-// how much of somebody's chat a single command may take over.
+// A cap on how much one `logs` reply may carry. The number was sized for the
+// archived Telegram adapter — two of its 4096-character messages, so one
+// command could not take over somebody's chat — and is kept as it was: the
+// phones and the MCP server now read this reply, and nothing has re-sized it
+// for them.
 const MAX_CHARS = 7000;
 
 /** @param {string} word @returns {keyof typeof LOG_SOURCES | null} */

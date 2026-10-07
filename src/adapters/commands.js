@@ -1,10 +1,16 @@
 // The command registry: one text-in / text-out surface that every adapter
 // shares.
 //
-// This is the portability seam. Telegram, the web UI and the CLI do not
-// implement commands — they parse a line, call dispatch(), and render the
-// reply. Adding Slack or WhatsApp means writing an adapter that does those two
+// This is the portability seam. The web UI, the CLI and the fleet sidecar do
+// not implement commands — they parse a line, call dispatch(), and render the
+// reply. (Telegram did the same until it was archived; see docs/telegram.md.)
+// A new surface on THIS box means writing an adapter that does those two
 // things; it does not mean re-implementing "what does /start mean".
+//
+// IT IS ONE BOX'S REGISTRY. A surface for the whole fleet — the phones, the
+// MCP server, a chat bot that answers for every host — does not come here: it
+// speaks intents to the coordinator (src/fleet/protocol/intents.js), and the
+// sidecar on each host turns those into a line for this file.
 //
 // Adding a command means adding one entry to COMMANDS below. Deliberately
 // launcher-shaped for now — start/resume/stop/list/status — with the pane
@@ -15,7 +21,9 @@
  * @property {import('../core/sessions.js').SessionManager} sessions
  * @property {import('../core/login.js').LoginFlow} login
  * @property {import('../config.js').Config} cfg
- * @property {string} actor        stable id of who is asking, e.g. "telegram:12345"
+ * @property {string} actor        stable id of who is asking, e.g. "fleet:<email>"
+ *   from the sidecar, or "web"/"cli" on the box (older records also hold
+ *   "telegram:<id>"; see core/accounts.js for how each is read)
  * @property {string} [actorLabel] human name for logs/records
  * @property {string} [title]      prose a person wrote, carried as a FIELD rather
  *   than parsed out of the command line — see adapters/http.js
@@ -83,7 +91,8 @@
  *   text would be a picker built by parsing column padding
  * @property {Array<{ name: string }>} [secrets]
  *   the named secrets on this box, by name only — never a value
- * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
+ * @property {Button[]} [buttons]          offered choices — the web UI renders these as tappable
+ *   (as Telegram did); the sidecar relays them, and no fleet client reads them yet
  * @property {boolean} [ok]
  * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
  * @property {any} [check]                what a stored token can do, when asked

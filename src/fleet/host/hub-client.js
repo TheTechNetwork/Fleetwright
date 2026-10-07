@@ -127,8 +127,8 @@ export class HubClient {
 
   /**
    * Run one command line through fleetwright's command registry — the same
-   * registry Telegram, the web UI and the CLI all go through, so a fleet
-   * command can never behave differently from the same command typed in chat.
+   * registry the web UI and the CLI go through, so a fleet command can never
+   * behave differently from the same command typed on the box.
    *
    * @param {string} line
    * @returns {Promise<HubReply>}

@@ -1,6 +1,6 @@
-// The session manager. Every surface — Telegram, the web UI, the CLI — goes
-// through this one object, so they can never disagree about what a "start"
-// means.
+// The session manager. Every surface — the web UI, the CLI, the fleet sidecar
+// — goes through this one object, so they can never disagree about what a
+// "start" means.
 //
 // The single biggest simplification over the two-plane design this was
 // extracted from: the process that decides and the process that acts are the
@@ -43,8 +43,10 @@ import { log } from '../log.js';
  * @property {import('./registry.js').SessionRecord} [session]
  * @property {Array<{ label: string, command: string }>} [buttons] what to offer
  *   next, when the answer alone is not one somebody can act on. The command
- *   layer already carries these to both phones and to Telegram; a message that
- *   names a remedy the reader cannot reach is the failure this field removes.
+ *   layer carries these to the web UI, which draws them, and the sidecar
+ *   relays them to the coordinator, where no client draws them yet; a message
+ *   that names a remedy the reader cannot reach is the failure this field
+ *   removes.
  */
 
 export class SessionManager {

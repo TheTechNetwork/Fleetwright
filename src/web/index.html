@@ -132,8 +132,8 @@
 
 <script>
 // The UI never implements a command — it posts a command line to /api/command,
-// the same entry point Telegram uses. A capability can therefore never exist in
-// one surface and be quietly missing from the other.
+// the same entry point the CLI and the fleet sidecar use. A capability can
+// therefore never exist in one surface and be quietly missing from the other.
 const $ = (id) => document.getElementById(id);
 let peeking = null;
 
@@ -150,7 +150,8 @@ function flash(text, bad, buttons) {
   body.textContent = text;
   el.replaceChildren(body);
 
-  // The same offered choices Telegram renders as tappable buttons — chiefly
+  // The reply's offered choices, as tappable buttons (the archived Telegram
+  // adapter drew the same field as an inline keyboard) — chiefly
   // the summary-or-full resume prompt, which must not require typing a command
   // to answer.
   if (buttons && buttons.length) {
