@@ -446,8 +446,8 @@ for nothing.
   blocking mode does: stopped, a new one built beside it, the old one removed
   only once the new one is up, and how it filters kept as it was. The phone
   says that before Apply.
-- **What every lab gets**, the same three rules as the uplink: names from the
-  edge and from no other resolver, so the threat blocklists apply; and nothing
+- **What every lab gets**, the same three rules as the uplink: names only
+  from the edge, never another resolver, so the threat blocklists apply; and nothing
   private, so not the uplink and its machines, not your LAN, not the pool's
   API, not another lab. Suricata watches each lab's interface as it watches
   the uplink, and drops as it does when the edge blocks.
@@ -461,9 +461,20 @@ for nothing.
   sidecar could not stay connected and the session could not run. Everything
   else it sends is blocked and logged on the edge. The hosts are an OPNsense
   host alias, which the edge resolves with its own Unbound and keeps
-  resolved. Names asked of the edge still answer, so a closed lab is closed
-  to connections, not to DNS: a session determined to signal out through
-  lookups could.
+  resolved.
+- **A closed lab resolves only the fleet's own hosts**: the same list, and
+  the names under each (`api.claude.ai` under `claude.ai`), and every other
+  name, of any type, is refused. Before, the edge's Unbound answered a closed
+  lab any name by asking for it anywhere on the internet, so a session could
+  carry data out in the names it looked up. OPNsense 26.7's Unbound cannot
+  answer one network differently from another from `config.xml` (its access
+  lists allow or refuse all of a network's questions, and its blocklists match
+  only addresses and never the whole tree, so a TXT question would still
+  leave), so a closed lab's port 53 goes, by an `rdr pass` ahead of every
+  rule, to the dnsmasq the edge already runs for DHCP. That dnsmasq has no
+  resolver of its own (`no_resolv`) and one domain override per name, each
+  asking the edge's Unbound, which still filters the answer. The uplink and
+  open labs ask Unbound as before.
 
 **A session in a lab.** New session › Where offers *In a lab* under a
 machine image whose pool has labs: *Open: reaches the internet* or *Closed:
@@ -479,25 +490,33 @@ same moment, looks again and removes its machine if it was the second. The
 machine joins, and the session starts on it, exactly as on the uplink.
 
 **What a lab costs**: no machine of its own. The session's machine is
-counted against the pool's resource set like any other, and **a person may
-hold two labs at once** (`MAX_LABS_EACH`), because a pool has four at most,
-shared by everybody who keeps its token, and a lab is one of them for as long
-as its machine lives.
+counted against the pool's resource set like any other. **How many labs one
+person may hold at once is the admin's**, set in the policy as *Labs per
+person*: no limit unless one is set, and then a whole number from 1 to the
+labs the pool has. The policy job keeps it as a tag on each lab network
+(`fleetwright-lab-each:2`), where the box reads it with the fleet's own token
+and reports it; the coordinator refuses a lab past it, saying the number. A
+pool whose policy predates the setting has no tag, which is no limit and
+never 0. The coordinator counts a person's labs on that Xen Orchestra: their
+machines seen in a lab there and the ones asked for and not yet seen.
 
-**A lab ends with its session.** Once its machine has run a session and has
-run none for five minutes (a restart or a resume stops one for a moment), the
-coordinator ends the machine through `vmctl stop`, as its owner, and the lab
-is free again. A machine whose session never started lives to the end in its
-tag like any other, and the box sweeps it then; a lab is free the moment no
+**A lab ends when its machine does**, the way every machine from the pool
+ends: at the end in its tag, which *Give it longer* moves to the same 350
+minutes from when it was made as any other, or when its owner taps *End it
+now* (`vmctl`). The box's sweep removes it, and a lab is free the moment no
 machine of the fleet's has an interface on it, so a machine swept, ended or
-removed by hand frees it alike. A coordinator restarted mid-session forgets
-that the session ran, and the lab then lasts to the machine's end.
+removed by hand frees it alike. Nothing ends a lab when its session ends: the
+first version ended the machine five minutes after its session, which the
+owner took out.
 
 **What the phones show.** The policy screen asks how many of each, four in
 all, starting from what the edge has, and says what a lab is and that it
-costs no extra machine. New session says what the chosen kind reaches. A
-machine's page names its lab and what it reaches. A pool whose labs are all
-taken says so instead of offering one.
+costs no extra machine. Under them, *Labs per person* is a stepper whose
+lowest step is *No limit*, offered only by a machine that keeps it (`labs-each`
+in `can`) and starting from what the pool has; No limit is sent as null.
+New session says what the chosen kind reaches. A machine's page names its lab
+and what it reaches. A pool whose labs are all taken says so instead of
+offering one, and that one is free again when its machine ends.
 
 **Booted in QEMU**, from the pinned 26.7 image patched this way with four
 labs, two of them closed, and blocking on: the whole configuration was read
@@ -511,8 +530,25 @@ The fleet alias was there and empty, because this sandbox has no outbound DNS
 to resolve it. **Not run here:** a machine on a lab network, a real pool, and
 the alias resolving.
 
+**A closed lab's names were not booted.** They came after, and the 3 GiB image
+no longer fit on this sandbox's disk. What was run: dnsmasq's configuration
+rendered from the edge's `config.xml` with OPNsense 26.7's own template and
+its own config reader, then run in dnsmasq 2.91 on Linux in front of a
+stand-in resolver. The coordinator's host, `api.anthropic.com`,
+`platform.claude.com`, `api.claude.ai` and `claude.com` were asked of the
+resolver and answered; a made-up exfiltration name (as A and as TXT),
+`api.anthropic.com.attacker.example`, `evilclaude.ai` and `github.com` were
+REFUSED and never reached it. **Not yet seen:** the `rdr` rule in `pfctl -sn`
+on a booted edge, and OPNsense's own dnsmasq build answering.
+
+**An edge built before this change keeps answering a closed lab any name**
+until it is rebuilt, because nothing rebuilds an edge whose labs did not
+change. Changing its labs, or how it filters, rebuilds it with the new
+rules.
+
 **It did not fit, so the file grew.** The edge's configuration with labs is
-up to 7,360 bytes, and the file it replaces is 5,234. The image's file
+up to 8,021 bytes (four closed labs, blocking, a short coordinator name), and
+the file it replaces is 5,234. The image's file
 system has 4 KiB fragments, so `config.xml` already owns 8,192 bytes on the
 disk (its inode counts 16 sectors) and the 2,958 after its end are zeros. The
 build changes one more field: the file's size in its inode, from 5,234 to
@@ -520,7 +556,11 @@ build changes one more field: the file's size in its inode, from 5,234 to
 check-hashes (its superblock's `fs_metackhash` is 0). It is pinned and
 checked like the configuration: the field must read 5,234 and the slack must
 be zeros, or nothing is written. An edge without labs is byte for byte what
-was booted before.
+was booted before, and so is one with only open labs. The bound that matters
+now is the coordinator's name, which a closed lab's configuration carries
+twice (the alias and the names it may resolve): with four closed labs and
+blocking, a name of up to 106 characters fits, and a longer one is refused
+before anything is downloaded.
 
 ### Seeing what crossed a lab: designed, not built
 
