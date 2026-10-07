@@ -249,10 +249,13 @@ above them, a 22pt/sp question on the card that is asking one (and on the
 session's page, which used to set it smaller), hand-drawn status chips, 48dp/44pt
 option rows, and 44pt/48dp for the one primary action a card carries. A machine
 card is a button that opens its page; every card on that list is the same shape,
-and the attention ring is what says one is different.
+and the attention ring is what says one is different. A pool's page (Machines →
+Hypervisors → the pool, `manage.md`) is built the same way: its pools, hosts,
+VMs and storage are one shape of card, and none wears a ring, because none of
+them is asking anything.
 
-**Restyled in place** — You, credentials, the machine page, the start sheet,
-files, the recycle bin, session kinds. These are `Form`/`List` screens
+**Restyled in place** — You, credentials, the machine page, a component's page
+on a pool, the start sheet, files, the recycle bin, session kinds. These are `Form`/`List` screens
 on iOS and Material lists on Android, and they stay that way: the ground, the
 row colour, the section headings and every size and tint are the design's, but
 the row structure is still the platform's. On Android these are full-screen

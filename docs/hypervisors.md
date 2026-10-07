@@ -830,7 +830,7 @@ an earlier run, or changed since, and running setup again for a new token
 leaves it as it is.
 
 Changing it is its own flow, from the app: Machines → Hypervisors → the pool
-→ Change what it may use. The Hypervisors list is the pools this phone keeps
+→ Change what the fleet may use, a row on the pool's page (`manage.md`). The Hypervisors list is the pools this phone keeps
 a token for, written when it collects one, so a pool set up before the list
 existed appears there once it is set up again. It is a job like setup, begun on a machine that
 reaches the pool, with the admin sign-in sealed to that job's key, and it
