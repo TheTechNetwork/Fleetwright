@@ -295,8 +295,12 @@ const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
  * echoed back in replies. */
 const ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
-/** Actor ids, e.g. "telegram:12345" — or, since sign-in, a verified email
- * address, which is what makes `+` load-bearing: plus-addressing is ordinary
+/** Actor ids. What the coordinator sends is the verified email address of the
+ * credential that asked (worker.js, `client?.email`); the sidecar adds the
+ * `fleet:` prefix only when it hands it to the hub. Older ids such as
+ * "telegram:12345", from before the adapter was archived, still pass, because
+ * records on real boxes carry them. The email is what makes `+`
+ * load-bearing: plus-addressing is ordinary
  * (eli+fleet@thetech.network) and without it every intent from that person's
  * phone was refused as a bad envelope. The set stays a deliberate allowlist
  * rather than "anything", because this ends up in a state file and in logs. */
@@ -1576,7 +1580,7 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
   const spec = VERBS[env.verb];
 
   if (env.actor !== undefined && (typeof env.actor !== 'string' || !ACTOR_RE.test(env.actor))) {
-    return bad('bad_envelope', 'actor must be a short id like "telegram:12345"');
+    return bad('bad_envelope', 'actor must be a short id like "you@example.com"');
   }
 
   if (!Number.isSafeInteger(env.issuedAt)) {
