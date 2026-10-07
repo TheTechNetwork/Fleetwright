@@ -110,7 +110,7 @@ test('provision names a platform, and a repository only as a repository', () => 
   //
   // And a NETWORK since v9, the same shape: an id the box looks up among the
   // networks it reported for that pool.
-  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['minutes', 'network', 'platform', 'repo', 'template', 'ticket']);
+  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['group', 'minutes', 'network', 'platform', 'repo', 'template', 'ticket']);
   assert.equal(checkParams('provision', { platform: 'vm', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c' }).ok, true);
   for (const image of ['Debian 13', '../x', '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c; rm']) {
     assert.equal(checkParams('provision', { platform: 'vm', template: image }).ok, false, image);

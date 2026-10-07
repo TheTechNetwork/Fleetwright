@@ -1444,6 +1444,21 @@ const OPENAPI = JSON.stringify({
                                 }
                               }
                             }
+                          },
+                          "groups": {
+                            "type": "array",
+                            "description": "the pool's group networks, made by the hypervisor's policy: a machine joins one as well as its own network to reach the others in its group (`provision.group`)",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              }
+                            }
                           }
                         }
                       }
@@ -1566,6 +1581,20 @@ const OPENAPI = JSON.stringify({
                               "rx",
                               "tx"
                             ]
+                          },
+                          "group": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "the group network it is also on, by name"
+                          },
+                          "groupIp": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "its address on that group network"
                           },
                           "address": {
                             "type": "string",

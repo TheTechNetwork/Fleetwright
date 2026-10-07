@@ -2521,13 +2521,13 @@ export class CoordinatorCore {
     }
     if ((spec.verb === 'provision' && spec.params?.platform === 'vm') || spec.verb === 'vmctl') {
       const speaks = Number(host?.health?.protocol);
-      const needs = spec.verb === 'vmctl' || spec.params?.network ? 9 : 8;
+      const needs = spec.params?.group ? 10 : spec.verb === 'vmctl' || spec.params?.network ? 9 : 8;
       if (Number.isInteger(speaks) && speaks >= needs) return null;
       return {
         ok: false,
         error: { code: 'host_outdated' },
         text:
-          `${host?.hostId} is too old to ${spec.verb === 'vmctl' ? 'work' : 'make'} a machine on your hypervisor ${spec.params?.network ? 'on a network of your choosing ' : ''}— it speaks protocol ` +
+          `${host?.hostId} is too old to ${spec.verb === 'vmctl' ? 'work' : 'make'} a machine on your hypervisor ${spec.params?.group ? 'in a group ' : spec.params?.network ? 'on a network of your choosing ' : ''}— it speaks protocol ` +
           `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${needs}. Update it and ask again.`,
       };
     }
@@ -3216,6 +3216,9 @@ export class CoordinatorCore {
             image: typeof m.image === 'string' ? m.image.slice(0, 80) : null,
             network: typeof m.network === 'string' ? m.network.slice(0, 80) : null,
             net: netOf(m.net),
+            // The group network it is also on, and its address there.
+            group: typeof m.group === 'string' ? m.group.slice(0, 80) : null,
+            groupIp: typeof m.groupIp === 'string' && /^10\.200\.\d{1,3}\.\d{1,3}$/.test(m.groupIp) ? m.groupIp : null,
             address: String(e.address || ''),
             hosts: [host.hostId],
             // Kept ready and not yet taken by a session.
@@ -3291,12 +3294,12 @@ export class CoordinatorCore {
    * holding their pools' tokens reported (health `xo`, src/fleet/host/xo-pools.js).
    *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }> }>}
+   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }> }>}
    */
   vmImagesFor(requester) {
     const email = String(requester?.email || '').toLowerCase();
     if (!email) return [];
-    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }> }>} */
+    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }> }>} */
     const found = new Map();
     for (const h of this.#vmHolders(email, null)) {
       for (const entry of h.entries) {
@@ -3315,7 +3318,10 @@ export class CoordinatorCore {
             hosts: [h.host.hostId],
             // THE NETWORKS IT CAN GO ON besides the uplink: the pool's, that
             // the fleet may use, for "reachable from my network".
-            networks: entry.networks.filter((/** @type {any} */ n) => !image.pool || !n.pool || n.pool === image.pool).map((/** @type {any} */ n) => ({ id: n.id, name: n.name })),
+            networks: entry.networks.filter((/** @type {any} */ n) => !n.group && (!image.pool || !n.pool || n.pool === image.pool)).map((/** @type {any} */ n) => ({ id: n.id, name: n.name })),
+            // THE GROUP NETWORKS, apart: a machine joins one as well as its
+            // own network, to reach the others in its group.
+            groups: entry.networks.filter((/** @type {any} */ n) => n.group && (!image.pool || !n.pool || n.pool === image.pool)).map((/** @type {any} */ n) => ({ id: n.id, name: n.name })),
           });
         }
       }
@@ -3329,7 +3335,7 @@ export class CoordinatorCore {
    * given. In hostId order, so the same request goes to the same box.
    *
    * @param {string} email @param {string|null} template
-   * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
+   * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null, group: boolean }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
   #vmHolders(email, template) {
     /** @type {Array<{ host: any, entries: any[] }>} */
@@ -3342,7 +3348,7 @@ export class CoordinatorCore {
           address: String(e.address || ''),
           networks: (Array.isArray(e.networks) ? e.networks : [])
             .filter((/** @type {any} */ n) => XO_UUID_RE.test(String(n?.id)))
-            .map((/** @type {any} */ n) => ({ id: String(n.id), name: String(n.name || '').slice(0, 80), pool: typeof n.pool === 'string' ? n.pool : null })),
+            .map((/** @type {any} */ n) => ({ id: String(n.id), name: String(n.name || '').slice(0, 80), pool: typeof n.pool === 'string' ? n.pool : null, group: n.group === true })),
           images: (Array.isArray(e.images) ? e.images : [])
             .filter((/** @type {any} */ i) => XO_UUID_RE.test(String(i?.id)) && (!template || i.id === template))
             .map((/** @type {any} */ i) => ({
@@ -3387,7 +3393,9 @@ export class CoordinatorCore {
     // A MACHINE KEPT READY, when this person keeps one from that image on
     // that network: the session starts on it now, and another is made behind
     // it. A machine is taken only with the time asked for still left on it.
-    if (!spec.standby) {
+    // NOT FOR A GROUP: a kept machine has no group network, and one cannot be
+    // added to a running machine without restarting it.
+    if (!spec.standby && !params.group) {
       const network = typeof params.network === 'string' && params.network ? params.network : null;
       const minutes = Number(params.minutes) || 60;
       const taken = this.vmStandby.claim(owner, template, network, this.#standbyReady(owner, minutes));
@@ -3428,6 +3436,7 @@ export class CoordinatorCore {
     const vmParams = { platform: 'vm', template, ticket: ticket.token };
     if (params.minutes !== undefined) vmParams.minutes = params.minutes;
     if (typeof params.network === 'string' && params.network) vmParams.network = params.network;
+    if (typeof params.group === 'string' && params.group) vmParams.group = params.group;
     const vmSpec = { ...spec, params: vmParams };
     /** @type {string[]} */
     const skipped = [];

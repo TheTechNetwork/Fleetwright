@@ -185,7 +185,7 @@ export const XOPOLICY_STEPS = Object.freeze([
 // coordinator refuses rather than drop `network`, which would put the machine
 // somewhere the person did not choose.
 /** @type {number} */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -1096,6 +1096,20 @@ export const VERBS = Object.freeze({
         shapeName: 'a Xen Orchestra network id',
         since: 9,
         describe: 'For platform `vm`: which of your pool’s networks it goes on, by its id. Absent is behind the edge router.',
+      },
+      // MACHINES THAT WORK TOGETHER: a second interface on one of the pool's
+      // group networks (made by the hypervisor's policy, `fleetwright-group-N`),
+      // where machines in the same group reach each other and nothing else.
+      // Every machine is cut off from the others on the uplink either way.
+      // The box checks it is a group network it reported for that pool.
+      group: {
+        type: 'text',
+        required: false,
+        max: 36,
+        pattern: XO_UUID_RE,
+        shapeName: 'a Xen Orchestra network id',
+        since: 10,
+        describe: 'For platform `vm`: the group network it also joins, by its id, to reach the other machines on it. Absent is none.',
       },
       // HOW LONG TO PAY FOR. The job ends itself after this and the disconnect
       // retires the host — there is no cleanup step to forget. GitHub kills a
