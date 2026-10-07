@@ -82,6 +82,25 @@ struct Fleet {
         /// and never prices anything; neither does this app. Nil is CANNOT
         /// TELL and is drawn as nothing, never as $0.00.
         let spent: Spent?
+        /// THE ARCHIVE (#346): the private repository it is pushed to before
+        /// it stops, and what happened the last time it was. All nil on a
+        /// session with no archive and from a host older than archiving, and
+        /// nothing is drawn then: no archive is not "not archived".
+        let archive: String?
+        let archiveBranch: String?
+        let archiveAt: Double?
+        let archiveOk: Bool?
+        let archiveText: String?
+
+        /// The archive line for the session's page, or nil when it has none.
+        /// Before the first push it says so rather than implying one landed
+        /// (C-5); after, it is the host's own sentence about the last push.
+        /// Same words as Android, held equal by test/linked-repos-in-apps.test.js.
+        var archiveLine: String? {
+            guard let archive, !archive.isEmpty else { return nil }
+            if archiveAt != nil, let text = archiveText, !text.isEmpty { return text }
+            return "Pushed to \(archive) before it stops. Nothing has been pushed yet."
+        }
 
         struct Prompt: Codable, Hashable {
             let id: String?
@@ -740,6 +759,70 @@ struct Fleet {
 
     func clearRunnerRepo() async throws -> RunnerRepoSetting {
         try JSONDecoder().decode(RunnerRepoSetting.self, from: try await send("DELETE", "/api/runner-repo", body: nil))
+    }
+
+    /// What a linked-repository check found, for one role (#346). The same
+    /// "nil is cannot tell" as the runner check: asked as the GitHub App, the
+    /// fleet cannot see whether YOU can push, and says so with a nil.
+    struct LinkedRepoCheck: Codable, Hashable {
+        let role: String
+        let repo: String
+        let isPublic: Bool?
+        let installed: Bool?
+        /// "write", "read" or "none" — what this connection can do with its files.
+        let contents: String?
+        let push: Bool?
+        /// For templates: which of .claude, .github and default.json it carries.
+        let carries: [String]?
+        let ok: Bool
+        let message: String
+        /// For runners: the whole runner check, drawn the way Temporary machines draws it.
+        let runnerRepo: RunnerRepoCheck?
+
+        enum CodingKeys: String, CodingKey {
+            case role, repo, installed, contents, push, carries, ok, message, runnerRepo
+            case isPublic = "public"
+        }
+    }
+
+    /// One link: a role, and the repository linked for it.
+    struct LinkedRepo: Codable, Hashable {
+        let role: String
+        let repo: String
+        let setAt: Double?
+    }
+
+    /// Every role this person has linked, and the fleet's runner repository
+    /// beside them — what they get for `runners` with none of their own.
+    struct LinkedRepos: Codable {
+        let ok: Bool?
+        let links: [LinkedRepo]?
+        let fleet: FleetRepos?
+        struct FleetRepos: Codable { let runners: String? }
+    }
+
+    /// The answer to linking or unlinking one role.
+    struct LinkedRepoReply: Codable {
+        let ok: Bool?
+        let role: String?
+        let repo: String?
+        let text: String?
+        let linkedRepo: LinkedRepoCheck?
+    }
+
+    func linkedRepos() async throws -> LinkedRepos {
+        try JSONDecoder().decode(LinkedRepos.self, from: try await get("/api/linked-repos"))
+    }
+
+    /// Linked only if the role's check passes; the check comes back either
+    /// way, so a refusal says which answer stopped it.
+    func linkRepo(role: String, repo: String) async throws -> LinkedRepoReply {
+        let data = try await send("PUT", "/api/linked-repos/\(role)", body: ["repo": repo])
+        return try JSONDecoder().decode(LinkedRepoReply.self, from: data)
+    }
+
+    func unlinkRepo(role: String) async throws -> LinkedRepoReply {
+        try JSONDecoder().decode(LinkedRepoReply.self, from: try await send("DELETE", "/api/linked-repos/\(role)", body: nil))
     }
 
     /// Where to start a runner from this phone, and the ticket to start it with.

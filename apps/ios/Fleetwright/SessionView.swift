@@ -102,6 +102,16 @@ struct SessionView: View {
                     if let spent = session.spentLine() {
                         Text(spent).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                     }
+                    // WHERE ITS WORK GOES BEFORE IT STOPS, and whether the
+                    // last push landed. A failed one is said in words and in
+                    // the error colour, never in colour alone.
+                    if let line = session.archiveLine {
+                        Text(line)
+                            .fleetType(.micro)
+                            .foregroundStyle(session.archiveOk == false ? Design.Palette.bad : Design.Palette.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
                 }
                 .padding(.vertical, Design.Space.hair)
             }
