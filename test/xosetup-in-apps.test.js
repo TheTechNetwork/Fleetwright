@@ -49,14 +49,16 @@ test('iOS: the screen asks every machine first, then runs one job on one machine
   // later phase back to it from the job, so none of them names one. Its
   // params are built first, because `pin` goes only when there is a
   // certificate, and `trust` and `plain` only when a person gave their word.
-  assert.match(IOS, /var params = \["phase": "begin", "address": address\]\s*if let pin \{ params\["pin"\] = pin \}\s*if let trust \{ params\["trust"\] = trust \}\s*if plain \{ params\["plain"\] = "accepted" \}\s*return try await intent\("xosetup", params: params, host: host/);
+  // `relay` only for a machine that reached the address through this phone
+  // (test/relay-in-apps.test.js).
+  assert.match(IOS, /var params = \["phase": "begin", "address": address\]\s*if let pin \{ params\["pin"\] = pin \}\s*if let trust \{ params\["trust"\] = trust \}\s*if plain \{ params\["plain"\] = "accepted" \}\s*if let relay \{ params\["relay"\] = relay \}\s*return try await intent\("xosetup", params: params, host: host/);
   // NEVER HELD: each carries an idempotency key, which keeps a send that could
   // not reach the fleet out of the outbox and off the disk.
   const sends = IOS.match(/intent\("(?:xoprobe|xosetup)"[^\n]*\n?[^\n]*idempotencyKey: "app-\\\(UUID\(\)\.uuidString\)"/g) ?? [];
-  // Seven: the probe, and begin, run, status, cancel and policy
-  // (test/xopolicy-ios-in-apps.test.js has the last), and an install's
-  // deploy (test/xodeploy-in-apps.test.js).
-  assert.equal(sends.length, 7, 'every probe and phase is sent with an idempotency key');
+  // Eight: the probe, the probe through this phone, and begin, run, status,
+  // cancel and policy (test/xopolicy-ios-in-apps.test.js has the last), and
+  // an install's deploy (test/xodeploy-in-apps.test.js).
+  assert.equal(sends.length, 8, 'every probe and phase is sent with an idempotency key');
 });
 
 test('iOS: a machine that reached the address is offered, HTTPS with a certificate first, and the alternatives are said plainly', () => {
@@ -74,7 +76,7 @@ test('iOS: a machine that reached the address is offered, HTTPS with a certifica
   // The certificate the machine saw is shown for acceptance, grouped so it can
   // be compared against a terminal, and `begin` pins exactly that one.
   assert.match(SCREEN, /Text\(XOSetupKey\.grouped\(cert\)\)/);
-  assert.match(SCREEN, /if let cert = probe\.cert \{\s*pin = cert\s*plain = false[\s\S]{0,1500}?beginSetup\(address: target, pin: pin, host: probe\.hostId, trust: trust, plain: plain\)/);
+  assert.match(SCREEN, /if let cert = probe\.cert \{\s*pin = cert\s*plain = false[\s\S]{0,2000}?beginSetup\(address: target, pin: pin, host: probe\.hostId, trust: trust, plain: plain,/);
   // Cannot tell is said as cannot tell.
   assert.ok(SCREEN.includes('cannot tell whether it is Xen Orchestra'));
 });
