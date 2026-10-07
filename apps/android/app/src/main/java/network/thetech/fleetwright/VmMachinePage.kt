@@ -1,9 +1,11 @@
 package network.thetech.fleetwright
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -19,6 +21,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
@@ -43,6 +51,9 @@ import kotlinx.coroutines.launch
  * THE ACTIONS ARE THE BOX'S: it holds the token and works the machine under
  * your name, and only a machine tagged as made for you (xo-pools.js,
  * `control`). Each that interrupts a session asks first.
+ *
+ * WHAT IT DID ON THE NETWORK is the hypervisor's count at its interfaces,
+ * which a session on the machine cannot change: how much, not where to.
  */
 @Composable
 fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
@@ -140,6 +151,28 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                     Fact("Ends", m.until?.let { "${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it))}, ${relative(it)}" } ?: "Cannot tell")
                 }
 
+                SectionHead("On the network")
+                val net = m.net
+                if (net != null && net.rx.isNotEmpty()) {
+                    Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                        TrafficChart(net, Modifier.padding(top = Design.Space.inside).fillMaxWidth().height(56.dp))
+                        Text(
+                            "Received is the solid line, sent the dashed one.",
+                            style = Design.Style.micro,
+                            color = Design.Palette.inkDim.now,
+                            modifier = Modifier.padding(top = Design.Space.insideTight),
+                        )
+                        Fact("Now", nowWords(net))
+                        Fact("Last ${net.minutes} minutes", totalWords(net))
+                    }
+                } else {
+                    Hint(noTrafficWords(m))
+                }
+                Hint(
+                    "As the hypervisor counted it at this machine’s network interfaces, which nothing running on the machine can change. " +
+                        "It is how much went in and out, not where it went.",
+                )
+
                 SectionHead("Reach it")
                 val ssh = m.sshCommand
                 if (ssh != null) {
@@ -225,6 +258,88 @@ private fun Counter(label: String, enabled: Boolean, canLess: Boolean, canMore: 
         }
     }
 }
+
+/**
+ * A machine's traffic as two lines on one scale: received solid, sent dashed,
+ * so the two never rest on colour alone. A sample nobody counted breaks the
+ * line rather than drawing it to zero. The palette's chart ramp, chart5 and
+ * chart4, both clear 3:1 against the card in either theme. The same as iOS.
+ */
+@Composable
+private fun TrafficChart(net: Fleet.VmMachine.Traffic, modifier: Modifier) {
+    val received = Design.Palette.chart5.now
+    val sent = Design.Palette.chart4.now
+    fun most(points: List<Double?>) = points.filterNotNull().maxOrNull()?.let { rateText(it) } ?: "nothing counted"
+    val summary = "Over the last ${net.minutes} minutes, received at most ${most(net.rx)}, sent at most ${most(net.tx)}."
+    Canvas(modifier.semantics { contentDescription = summary }) {
+        val top = maxOf(1.0, (net.rx + net.tx).filterNotNull().maxOrNull() ?: 1.0)
+        fun line(points: List<Double?>): Path = Path().apply {
+            val step = if (points.size > 1) size.width / (points.size - 1) else 0f
+            var drawing = false
+            points.forEachIndexed { i, v ->
+                if (v == null) {
+                    drawing = false
+                    return@forEachIndexed
+                }
+                val at = Offset(i * step, size.height * (1 - (v / top).toFloat()))
+                if (drawing) lineTo(at.x, at.y) else moveTo(at.x, at.y)
+                drawing = true
+            }
+        }
+        drawPath(
+            line(net.tx), sent,
+            style = Stroke(
+                width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())),
+            ),
+        )
+        drawPath(line(net.rx), received, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+    }
+}
+
+private fun nowWords(net: Fleet.VmMachine.Traffic): String {
+    val rx = net.rx.lastOrNull() ?: return "Not counted in the last minute"
+    val tx = net.tx.lastOrNull() ?: return "Not counted in the last minute"
+    return "${rateText(rx)} in, ${rateText(tx)} out"
+}
+
+private fun totalWords(net: Fleet.VmMachine.Traffic): String {
+    val total = "${bytesText(net.received)} in, ${bytesText(net.sent)} out"
+    if (net.gaps == 0) return total
+    val gap = Math.round(net.gaps * net.interval / 60).toInt()
+    return "$total, with $gap minute${if (gap == 1) "" else "s"} not counted"
+}
+
+/**
+ * Nothing reported is said for what it is: a stopped machine sends nothing,
+ * a running one the pool did not answer for is cannot tell.
+ */
+private fun noTrafficWords(m: Fleet.VmMachine): String = when (m.state) {
+    "Running" -> "The pool has not said what it sent and received. The box holding it asks each time it looks."
+    null -> "Cannot tell."
+    else -> "It is not running, so there is nothing to count."
+}
+
+/**
+ * Bytes, the way a person reads them, in powers of a thousand as iOS's
+ * ByteCountFormatter writes them: 0 bytes, 12 KB, 4.2 MB.
+ */
+fun bytesText(bytes: Double): String {
+    val b = Math.round(bytes)
+    if (b < 1000) return "$b byte${if (b == 1L) "" else "s"}"
+    val units = listOf("KB", "MB", "GB", "TB")
+    var v = b / 1000.0
+    var i = 0
+    while (v >= 999.95 && i < units.size - 1) {
+        v /= 1000
+        i++
+    }
+    val n = if (i == 0) Math.round(v).toString() else String.format(java.util.Locale.ROOT, "%.1f", v).removeSuffix(".0")
+    return "$n ${units[i]}"
+}
+
+/** A rate, the same way: 12 KB/s. */
+fun rateText(perSecond: Double): String = "${bytesText(perSecond)}/s"
 
 private fun sizeWords(m: Fleet.VmMachine): String {
     val parts = listOfNotNull(m.cpus?.let { "$it vCPU${if (it == 1) "" else "s"}" }, m.memory?.let { XoPolicy.gib(it) })
