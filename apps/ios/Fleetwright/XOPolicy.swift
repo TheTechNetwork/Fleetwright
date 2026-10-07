@@ -114,6 +114,9 @@ enum XOPolicy {
             let pool: String?
             let running: Bool
             var sr: String? = nil
+            /// It drops what its threat rules match, rather than only logging
+            /// it; nil from a machine that predates saying, which built none.
+            var blocks: Bool? = nil
         }
 
         /// A pool's machine image: the template sessions' machines are cloned from.
@@ -269,6 +272,12 @@ enum XOPolicy {
         /// The machine reads `edgeSr` (`edge-disk` in begin's `can`). An
         /// older one ignores it, so it is neither offered nor sent.
         var edgeDiskChoice = false
+        /// The edge drops what its threat rules match, rather than only
+        /// logging it. Changing it on an edge that is there rebuilds it.
+        var edgeBlock = false
+        /// The machine builds either kind (`edge-block` in begin's `can`).
+        /// An older one only logs, so it is neither offered nor sent.
+        var edgeBlockChoice = false
         /// Make the machine image sessions' machines are cloned from, on the
         /// way out's pool, behind its router. Needs the router, there or
         /// built with it.
@@ -353,6 +362,8 @@ enum XOPolicy {
             c.egress = inv.networks.first { $0.egress && (anyWayOut || networks.contains($0.id)) }?.id
             // On when there is one already, so Apply keeps it on the way out.
             c.edge = inv.edge(on: c.egress) != nil
+            // As it is: Apply rebuilds nothing the person did not change.
+            c.edgeBlock = inv.edge(on: c.egress)?.blocks ?? false
             // The same for the pool's own machine: Apply keeps it, or starts it.
             c.holder = inv.holder(on: c.egress) != nil
             // As many as there are: Apply asks for none it does not show.
@@ -454,6 +465,8 @@ enum XOPolicy {
             if holderChoice, holder { out["holder"] = true }
             // Only to a machine that makes them, and only with a way out.
             if groupsChoice, egress != nil { out["groups"] = groups }
+            // Only to a machine that builds either kind, and only with the router.
+            if edgeBlockChoice, edge { out["edgeBlock"] = edgeBlock }
             // Only to a machine that reads it, and only with something to build.
             if edgeDiskChoice, edge || (imageChoice && wantsImage) { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
             return out
