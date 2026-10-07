@@ -120,7 +120,7 @@ test('Android: the token comes back to this phone, to a key sent inside the seal
   // Kept encrypted under the Keystore key, and collected on every sign-in
   // and launch as well as by the open screen.
   assert.ok(file('Fleet.kt').includes('putString("secret.$name.enc", encrypt(value))'));
-  assert.ok(handoff.includes('settings.putSecret(tokenName(entry.address), record)'));
+  assert.ok(handoff.includes('settings.putSecret(tokenName(at), record)'));
   assert.match(file('MainActivity.kt'), /XoHandoff\.collectPending\(settings, fleet\)/);
   assert.match(sheet, /val \(outcome, inFleet\) = XoHandoff\.collectAndKeep\(settings, fleet, id, r\.xosetup\)\s*outcome\?\.let \{ handedBack = it \}/);
   // Said only once this phone knows (C-5).

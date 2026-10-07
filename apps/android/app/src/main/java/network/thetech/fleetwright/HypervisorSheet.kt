@@ -205,6 +205,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // `refusal`, which the poll clears on every answer, because the person
     // needs to read it while they change what it was about.
     var choiceRefusal by remember { mutableStateOf("") }
+    // INSTALLING XEN ORCHESTRA, for a pool that has none: its own screen,
+    // drawn in place of this one (XoDeploySheet), and back here when it goes.
+    var deploying by rememberSaveable { mutableStateOf(false) }
 
     // WHAT THIS PHONE REMEMBERS (XoSaved). What was kept, once a fingerprint
     // or face opened it; the switch, on when what is on screen came from it;
@@ -689,6 +692,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         }
     }
 
+    if (deploying) {
+        XoDeploySheet(settings, address.trim(), probes, onDismiss = { deploying = false })
+        return
+    }
+
     FullScreen(title = if (policy) "What the fleet may use" else "Add a hypervisor", onDismiss = { password = ""; onDismiss() }) {
         val setup = progress
         val waitingOn = unvouched
@@ -946,6 +954,19 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             }
                             found.filter { it !in reachable }.forEach { p -> ProbeLine(p) }
                         }
+                    }
+                    // EVERY MACHINE THAT ANSWERED FOUND NO XEN ORCHESTRA:
+                    // reached nothing, or reached something that is not it.
+                    // Then, and only then, installing one is offered (C-2). A
+                    // machine that could not tell has not said there is none.
+                    if (!policy && found.isNotEmpty() && found.all { !it.reachable || it.xo == false }) {
+                        OutlinedButton(enabled = !beginning, onClick = { password = ""; deploying = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text("This pool has no Xen Orchestra yet")
+                        }
+                        Hint(
+                            "None of your machines found Xen Orchestra at $address. One of them can install it on the pool, from the pool " +
+                                "master’s root password, and then add it.",
+                        )
                     }
                 }
 
@@ -1288,9 +1309,11 @@ private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false) {
         }
         if (!ended && setup.state == "running") {
             // What is building, from the host's key, in the words the ongoing
-            // notification uses (XoSetup.buildDetail): the first version
-            // called every build the edge router's.
-            val line = listOfNotNull(
+            // notification uses (XoSetup.buildDetail); an install's download
+            // says how far it has got and is no part of a build: its own line
+            // (XoDeploy.stepLine).
+            val line = if (XoDeploy.words(setup.phase) != null) XoDeploy.stepLine(step, of, part?.fill)
+            else listOfNotNull(
                 "Step ${(step + 1).coerceAtMost(of)} of $of",
                 part?.let { XoSetup.buildDetail(it.build, it.stage, it.stages) },
                 part?.let { "${it.fill / 10}%" },

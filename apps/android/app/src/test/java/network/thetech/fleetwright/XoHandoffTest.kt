@@ -27,6 +27,20 @@ class XoHandoffTest {
         return "${box.getString("epk")}.${box.getString("iv")}.${box.getString("ct")}"
     }
 
+    /**
+     * AN INSTALL'S RECORD names the Xen Orchestra it made, with the pool
+     * master the job began with beside it, and opens under the pool master.
+     * Naming some other pool master is not this job's.
+     */
+    @Test
+    fun anInstallsRecordNamesItsXenOrchestraAndThePoolMaster() {
+        val key = Seal.newKey()
+        val aad = XoHandoff.aad(job, "xcp1.lan")
+        val kept = XoHandoff.open(sealed(record("192.168.1.50").put("poolMaster", "xcp1.lan"), key, aad), job, "xcp1.lan", key)
+        assertEquals("192.168.1.50", JSONObject(kept!!).getString("address"))
+        assertNull(XoHandoff.open(sealed(record("192.168.1.50").put("poolMaster", "xcp2.lan"), key, aad), job, "xcp1.lan", key))
+    }
+
     @Test
     fun theBindingIsTheMachines() {
         assertEquals("fleetwright-xosetup-handoff/v1:J:A", XoHandoff.aad("J", "A"))
