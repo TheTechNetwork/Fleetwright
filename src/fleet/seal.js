@@ -158,6 +158,20 @@ export function xosetupPolicyAad(job, address) {
 }
 
 /**
+ * What an install's passwords are sealed under: the pool master's root
+ * password and the admin password the person chose for the Xen Orchestra the
+ * machine installs, for one job at one pool master. Its own name, so a sealed
+ * root password can never be opened as a setup's sign-in, or the other way
+ * round. src/fleet/host/xo-deploy.js; the phone builds the same string.
+ *
+ * @param {string} job
+ * @param {string} address  the pool master's, as the job was begun with
+ */
+export function xodeployAad(job, address) {
+  return `fleetwright-xodeploy/v1:${job}:${address}`;
+}
+
+/**
  * The additional data a Claude login is kept under AT REST in the minter: the
  * GitHub account it belongs to. A stored row moved under another account does
  * not open, so storage that could be rearranged still could not hand one
