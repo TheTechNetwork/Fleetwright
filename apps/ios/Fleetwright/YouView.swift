@@ -14,7 +14,7 @@ import UIKit
 /// editing it by accident is how every request starts going somewhere else.
 ///
 /// Each finished piece of setup is one row: Credentials, Temporary machines,
-/// Devices, Siri and Shortcuts. What only an admin can do (People) is drawn
+/// Linked repositories, Devices, Siri and Shortcuts. What only an admin can do (People) is drawn
 /// for an admin and nobody else.
 struct YouView: View {
     let settings: Settings
@@ -26,6 +26,9 @@ struct YouView: View {
     @State private var runnersAnswered = false
     @State private var runnersSaved: String?
     @State private var runnersFleet: String?
+    /// How many roles this person has linked a repository for, once the
+    /// fleet has said; nil until then, and the row is not drawn.
+    @State private var linkedCount: Int?
 
     private var signedIn: Bool { !settings.credential.isEmpty }
     private var inDemo: Bool { Demo.isActive(settings.coordinatorURL) }
@@ -47,6 +50,19 @@ struct YouView: View {
                             if runnersAnswered {
                                 Text(describeTemporaryMachines(saved: runnersSaved, fleet: runnersFleet))
                                     .fleetType(.label)
+                            }
+                        }
+                    }
+                    // THE THREE ROLES A REPOSITORY CAN BE LINKED FOR, in one
+                    // place (#346). Drawn only once the fleet has answered for
+                    // this person: an older coordinator, or a credential that
+                    // is not a person's, has nothing it could link.
+                    if let linkedCount {
+                        NavigationLink {
+                            LinkedReposView(settings: settings)
+                        } label: {
+                            LabeledContent("Linked repositories") {
+                                Text(describeLinkedRepos(linkedCount)).fleetType(.label)
                             }
                         }
                     }
@@ -217,6 +233,9 @@ struct YouView: View {
             runnersAnswered = true
             runnersSaved = got.repo
             runnersFleet = got.fleet
+        }
+        if let linked = try? await Fleet(settings: settings).linkedRepos(), linked.ok != false {
+            linkedCount = linked.links?.count ?? 0
         }
     }
 
