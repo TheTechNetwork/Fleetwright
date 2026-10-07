@@ -86,8 +86,9 @@ test('iOS: SSH keys are public keys only, kept as one secret in the vault', () =
 });
 
 test('iOS: a new machine goes behind the edge router unless a network of the pool is chosen', () => {
-  assert.match(I_SHEET, /if let networks = chosenImage\?\.networks, !networks\.isEmpty \{/);
-  assert.match(I_SHEET, /network: chosenImage == nil \|\| vmNetwork\.isEmpty \? nil : vmNetwork/);
+  // Not offered for a machine in a lab, which goes on the lab alone.
+  assert.match(I_SHEET, /if vmLab\.isEmpty, let networks = chosenImage\?\.networks, !networks\.isEmpty \{/);
+  assert.match(I_SHEET, /: vmNetwork\.isEmpty \? nil : vmNetwork,/);
 });
 
 test('iOS says it in the shared words', () => {

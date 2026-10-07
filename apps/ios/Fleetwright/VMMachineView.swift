@@ -96,6 +96,12 @@ struct VMMachineView: View {
             if let group = m.group {
                 fact("Group", "\(group), at \(m.groupIp ?? "an address not reported") or \(m.name).local")
             }
+            // IN A LAB: which, and what its rules let it reach.
+            if let lab = m.lab {
+                fact("Lab", "\(lab.name), " + (lab.open
+                    ? "open: it reaches the internet and nothing private"
+                    : "closed: it reaches the fleet and Claude and nothing else"))
+            }
             fact("Size", sizeWords(m))
             fact("Ends", endWords(m))
         } header: {

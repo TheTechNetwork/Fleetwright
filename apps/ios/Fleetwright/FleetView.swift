@@ -460,7 +460,9 @@ struct FleetView: View {
             // sentence: only the first letter changes case.
             let label = request.imageLabel ?? newMachineChoices.first { $0.platform == platform }?.label ?? "New machine"
             let lowered = label.prefix(1).lowercased() + label.dropFirst()
-            status = platform == "vm"
+            status = platform == "lab"
+                ? "Asking your hypervisor for a \(lowered), in a lab of its own. The session starts on it when it joins."
+                : platform == "vm"
                 ? "Asking your hypervisor for a \(lowered). The session starts on it when it joins."
                 : "Asking GitHub for a \(lowered). The session starts on it when it joins."
             var start: [String: String] = [:]

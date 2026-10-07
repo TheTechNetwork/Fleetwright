@@ -53,9 +53,10 @@ test('iOS: the policy holds the host’s numbers and sends groups only to a mach
 });
 
 test('iOS: a machine is put in a group only where the pool has one, and the page says where the others reach it', () => {
-  assert.match(I_SHEET, /if let groups = chosenImage\?\.groups, !groups\.isEmpty \{/);
+  // A machine in a lab joins no group: it is on the lab's network alone.
+  assert.match(I_SHEET, /if vmLab\.isEmpty, let groups = chosenImage\?\.groups, !groups\.isEmpty \{/);
   assert.match(I_FLEET, /if let group \{ params\["group"\] = group \}/);
-  assert.match(I_SHEET, /group: chosenImage == nil \|\| vmGroup\.isEmpty \? nil : vmGroup/);
+  assert.match(I_SHEET, /group: chosenImage == nil \|\| vmGroup\.isEmpty \|\| !vmLab\.isEmpty \? nil : vmGroup/);
   assert.match(I_PAGE, /if let group = m\.group \{/);
 });
 

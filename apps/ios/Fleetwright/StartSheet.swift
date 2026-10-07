@@ -121,11 +121,13 @@ struct StartSheet: View {
     @State private var vmNetwork = ""
     /// The group network it joins as well; empty is none.
     @State private var vmGroup = ""
+    /// In a lab of its own: "open", "closed", or empty for none.
+    @State private var vmLab = ""
 
     /// The operating system when a new machine is chosen, else nil: "vm" for
     /// one from your hypervisor.
     private var chosenPlatform: String? {
-        if host.hasPrefix(vmImageTag) { return "vm" }
+        if host.hasPrefix(vmImageTag) { return vmLab.isEmpty ? "vm" : "lab" }
         return host.hasPrefix(newMachineTag) ? String(host.dropFirst(newMachineTag.count)) : nil
     }
 
@@ -326,12 +328,13 @@ struct StartSheet: View {
                             if now.hasPrefix(newMachineTag) || now.hasPrefix(vmImageTag) { profile = ""; secret = "" }
                             vmNetwork = ""
                             vmGroup = ""
+                            vmLab = ""
                         }
                         // WHERE IT GOES ON YOUR POOL, offered only when the
                         // pool has a network besides the uplink. Behind the
                         // edge router is the default and the safe one: a
                         // network of yours puts the machine beside your own.
-                        if let networks = chosenImage?.networks, !networks.isEmpty {
+                        if vmLab.isEmpty, let networks = chosenImage?.networks, !networks.isEmpty {
                             Picker("Network", selection: $vmNetwork) {
                                 Text("Behind the edge router").tag("")
                                 ForEach(networks) { network in Text(network.name).tag(network.id) }
@@ -341,10 +344,31 @@ struct StartSheet: View {
                         // pool has a group network. Asked for: "the 3 VMs need
                         // to reach each other". Start each of them here with
                         // the same group, and they do.
-                        if let groups = chosenImage?.groups, !groups.isEmpty {
+                        if vmLab.isEmpty, let groups = chosenImage?.groups, !groups.isEmpty {
                             Picker("Work with others on", selection: $vmGroup) {
                                 Text("No group").tag("")
                                 ForEach(groups) { group in Text(group.name).tag(group.id) }
+                            }
+                        }
+                        // IN A LAB OF ITS OWN, offered only when the pool has
+                        // labs on its edge router, and each kind only while one
+                        // of that kind is free (C-2). docs/hypervisors.md, "Labs".
+                        if let image = chosenImage, !(image.labs ?? []).isEmpty {
+                            let open = image.freeLab(open: true) != nil
+                            let closed = image.freeLab(open: false) != nil
+                            if open || closed {
+                                Picker("In a lab", selection: $vmLab) {
+                                    Text("No lab").tag("")
+                                    if open { Text("Open: reaches the internet").tag("open") }
+                                    if closed { Text("Closed: only the fleet and Claude").tag("closed") }
+                                }
+                                .onChange(of: vmLab) { _, now in
+                                    if !now.isEmpty { vmNetwork = ""; vmGroup = "" }
+                                }
+                            } else {
+                                Text("Every lab on this pool is in use. One is free again when its session ends.")
+                                    .fleetType(.label)
+                                    .foregroundStyle(Design.Palette.inkDim)
                             }
                         }
                         if chosenPlatform != nil {
@@ -356,7 +380,16 @@ struct StartSheet: View {
                     } header: {
                         Text("Where").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
-                        if chosenPlatform == "vm" {
+                        if chosenPlatform == "lab" {
+                            Text("A lab is a network of its own on your edge router, and this machine is alone on it. "
+                                 + (vmLab == "open"
+                                    ? "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab."
+                                    : "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.")
+                                 + " It costs no extra machine: the lab is an interface on the router you already have."
+                                 + " When the session ends, or the time runs out, the machine is removed and the lab is free for the next one.")
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                        } else if chosenPlatform == "vm" {
                             Text("It is cloned from your machine image and joins in a minute or two. The session starts on it then"
                                  + (taskIsEmpty
                                     ? ", idle, with nothing to do. Give it a task above to put it to work."
@@ -393,7 +426,7 @@ struct StartSheet: View {
                 // session. Nothing said so until after the machine had booted.
                 if chosenPlatform != nil, claude == .missing || claude == .needsGitHub {
                     Section {
-                        Text(chosenPlatform == "vm"
+                        Text(chosenImage != nil
                              ? "No Claude login is kept in your vault, so a machine from your hypervisor has nothing to run "
                                + "its session on. Keep one here first."
                              : "No Claude login is kept for your runners, so this one runs on the runner repository's "
@@ -541,8 +574,11 @@ struct StartSheet: View {
             minutes: platform == nil ? nil : machineMinutes,
             template: chosenImage?.template,
             imageLabel: chosenImage?.label,
-            network: chosenImage == nil || vmNetwork.isEmpty ? nil : vmNetwork,
-            group: chosenImage == nil || vmGroup.isEmpty ? nil : vmGroup
+            // A LAB rides in `network`: the first free one of the kind asked.
+            network: chosenImage == nil ? nil
+                : !vmLab.isEmpty ? chosenImage?.freeLab(open: vmLab == "open")?.id
+                : vmNetwork.isEmpty ? nil : vmNetwork,
+            group: chosenImage == nil || vmGroup.isEmpty || !vmLab.isEmpty ? nil : vmGroup
         ))
         dismiss()
     }
