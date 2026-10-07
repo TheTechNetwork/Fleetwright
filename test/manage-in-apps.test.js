@@ -14,15 +14,15 @@
 // password is reached for, that a screen draws only what the model offers, and
 // where the page is.
 //
-// THE ANDROID HALF IS NOT HERE YET. It lands on its own branch, stacked on this
-// one (CONTRIBUTING.md); the marked block at the bottom is its place, and the
-// "both phones" assertions belong there once it exists.
+// The Android half is at the bottom, with what holds the two phones to the
+// same structure where a table cannot: the same sections, in the same order.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 import { certSha256 } from '../src/fleet/host/xo-ws.js';
 import { RESIZE_METHODS } from '../src/fleet/host/xo-setup.js';
 
@@ -182,4 +182,108 @@ test('iOS: the question iOS asks before the local network says why', () => {
 });
 
 // ─── Android ────────────────────────────────────────────────────────────────
-// Lands with the Android layer.
+
+const KT_DIR = 'apps/android/app/src/main/java/network/thetech/fleetwright';
+const ANDROID = androidSources();
+const KT_MODEL = read(`${KT_DIR}/Manage.kt`);
+const KT_LINK = read(`${KT_DIR}/XoLink.kt`);
+const KT_WATCH = read(`${KT_DIR}/PoolWatch.kt`);
+const KT_SCREEN = read(`${KT_DIR}/PoolPage.kt`);
+const KT_MACHINES = read(`${KT_DIR}/MachinesScreen.kt`);
+
+test('Android: the pin is checked in the handshake, before the upgrade is written', () => {
+  const code = bare(KT_LINK);
+  // A trust manager that accepts the leaf whose SHA-256 is the pin, and throws
+  // for any other: the handshake ends and nothing is written.
+  assert.match(code, /override fun checkServerTrusted\([^)]*\) \{\s*val leaf = chain\?\.firstOrNull\(\) \?: throw CertificateException\([^)]*\)\s*if \(Manage\.fingerprint\(leaf\.encoded\) != pin\) \{\s*mismatch = true\s*throw CertificateException/);
+  // ORDER: the handshake, then the upgrade request, the first bytes written.
+  const open = code.slice(code.indexOf('suspend fun open('), code.indexOf('private fun upgrade('));
+  assert.ok(open.indexOf('ssl.startHandshake()') > 0, 'the handshake is not started explicitly');
+  assert.ok(open.indexOf('upgrade(ssl, host, port)') > open.indexOf('ssl.startHandshake()'), 'the upgrade is written before the pin is checked');
+  // A wrong certificate is said as one, not as a connection that failed.
+  assert.match(open, /if \(trust\.mismatch\) throw Failure\("the certificate was not the pinned one", Failure\.Kind\.WRONG_CERTIFICATE\)/);
+  // One trust manager in the app, and it is this one.
+  assert.equal((ANDROID.match(/: X509TrustManager/g) ?? []).length, 1, 'a second trust manager is in the app');
+  assert.ok(!ANDROID.includes('HostnameVerifier'), 'something turns hostname checks off for the rest of the app');
+  // TLS only, and a pool set up over plain HTTP is told so in words.
+  assert.match(bare(KT_WATCH), /if \(record\.plain \|\| pin == null\) \{\s*phase = Phase\.Stopped\(Manage\.Words\.plainPool\(address\), retry = false\)/);
+  // The bound xo-ws.js keeps.
+  assert.match(code, /const val MAX_MESSAGE_BYTES = 16 \* 1024 \* 1024/);
+});
+
+test('Android: the token is the one setup handed back, and no password is reached for', () => {
+  const code = [KT_MODEL, KT_LINK, KT_WATCH, KT_SCREEN].map(bare).join('\n');
+  assert.match(code, /settings\.secret\(XoHandoff\.tokenName\(address\)\)\?\.let \{ Manage\.record\(it, address\) \}/);
+  assert.match(code, /opened\.call\("session\.signIn", JSONObject\(\)\.put\("token", record\.token\)\)/);
+  for (const banned of ['XoSaved', 'password', 'email']) assert.ok(!code.includes(banned), `the Manage code reaches for ${banned}`);
+  // Written nowhere but when it last looked.
+  assert.ok(!/putSecret\(/.test(code), 'the Manage code writes a secret');
+  assert.equal((code.match(/settings\.xoLooked = /g) ?? []).length, 1);
+});
+
+test('Android: an action is drawn only from what the model offers, and asks by what it costs', () => {
+  const screen = bare(KT_SCREEN);
+  assert.match(screen, /val offered = Manage\.offered\(c, methods\)/);
+  assert.match(screen, /offered\.forEach \{ a ->\s*OutlinedButton\(onClick = \{ tap\(a, c\) \}/);
+  for (const d of TABLE.details) {
+    assert.ok(!screen.includes(`Text("${d.label}")`), `${d.label} is drawn by the screen rather than offered by the model`);
+  }
+  assert.match(screen, /Manage\.Confirmation\.None -> perform\(Run\.Act\(a\)\)\s*is Manage\.Confirmation\.Ask -> asking = /);
+  assert.match(screen, /is Manage\.Confirmation\.TypeName -> typing = /);
+  // The typed one is off until the name matches.
+  assert.match(screen, /val matches = typed\.trim\(\) == ask\.name/);
+  assert.match(screen, /TextButton\(onClick = \{ onDismiss\(\); onConfirm\(\) \}, enabled = matches/);
+  // The same order of reasons as iOS for offering nothing.
+  assert.match(screen, /methods == null -> Hint\(Manage\.Words\.methodsUnknown\)\s*offered\.isEmpty\(\) && !resize && !needsStopped && disks\.isEmpty\(\) -> Hint\(Manage\.Words\.nothingOffered\)/);
+  assert.match(screen, /\} else if \(needsStopped\) \{\s*Hint\(Manage\.Words\.tuneNeedsStopped\)/);
+});
+
+test('Android: every control on the pool’s pages is a 48dp target', () => {
+  const screen = bare(KT_SCREEN);
+  const buttons = (screen.match(/OutlinedButton\(|TextButton\(/g) ?? []).length;
+  const tall = (screen.match(/Modifier\.heightIn\(min = 48\.dp\)/g) ?? []).length;
+  assert.ok(buttons > 0);
+  assert.ok(tall >= buttons, `${buttons} buttons and ${tall} 48dp targets`);
+  // And every row is a card the whole of which is the way in.
+  assert.match(screen, /\.clickable\(onClickLabel = "Opens its page", role = Role\.Button, onClick = onClick\)\s*\.heightIn\(min = 48\.dp\)/);
+});
+
+test('Android: notifications are applied in the order they arrived', () => {
+  // One coroutine reads the channel the socket's thread fills, in order, on
+  // the composition's scope; nothing applies a notice from the socket's thread.
+  assert.match(bare(KT_WATCH), /scope\.launch \{\s*for \(\(method, params\) in opened\.notices\) \{/);
+  assert.match(bare(KT_LINK), /val notices = Channel<Pair<String, Any\?>>\(Channel\.UNLIMITED\)/);
+  assert.match(bare(KT_LINK), /notices\.trySend\(method to msg\.opt\("params"\)\)/);
+});
+
+test('Android: the page is under Machines, on the row that names the pool, and says when it was last looked at', () => {
+  assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}\)/);
+  assert.match(KT_MACHINES, /looked\?\.let \{ Manage\.Words\.rowLooked\(relative\(it\)\.toString\(\)\) \} \?: Manage\.Words\.never/);
+  assert.match(bare(KT_SCREEN), /PoolWatch\.Phase\.Live -> Manage\.Words\.watching/);
+  assert.match(KT_MODEL, /fun lookedAt\(time: String\) = "Last looked at \$time\. \$closed"/);
+  // The socket closes when the app stops, said as such.
+  assert.match(bare(KT_SCREEN), /if \(event == Lifecycle\.Event\.ON_STOP\) watch\.stop\(\)/);
+});
+
+test('both phones: the same sections, in the same order', () => {
+  // The kinds are listed in the order each enum declares them.
+  assert.match(IOS_MODEL, /enum Kind: String, CaseIterable \{\s*case pool, host, vm, sr\s*\}/);
+  assert.match(KT_MODEL, /enum class Kind\(val raw: String\) \{ POOL\("pool"\), HOST\("host"\), VM\("vm"\), SR\("sr"\) \}/);
+  // A component's page: what it is, how it is, what it can do.
+  const ios = bare(IOS_SCREEN);
+  const iosOrder = ['whatSection(c)', 'howSection(c)', 'doSection(c)'].map((s) => ios.indexOf(s));
+  assert.deepEqual([...iosOrder].sort((a, b) => a - b), iosOrder);
+  assert.ok(iosOrder[0] > 0);
+  const kt = bare(KT_SCREEN);
+  const ktOrder = ['SectionHead(Manage.Words.whatItIs)', 'SectionHead(Manage.Words.howItIs)', 'SectionHead(Manage.Words.whatItCanDo)'].map((s) => kt.indexOf(s));
+  assert.deepEqual([...ktOrder].sort((a, b) => a - b), ktOrder);
+  assert.ok(ktOrder[0] > 0);
+  // The same facts on that page, by the same labels.
+  for (const label of ['"Kind"', '"Where"', '"Address"', '"State"']) {
+    assert.ok(ios.includes(`fact(${label}`), `iOS has no ${label} fact`);
+    assert.ok(kt.includes(`Fact(${label}`), `Android has no ${label} fact`);
+  }
+  // And the change to the policy is on the pool's page on both, for an admin.
+  assert.match(ios, /if settings\.showsAdmin \{\s*NavigationLink \{\s*AddHypervisorView/);
+  assert.match(kt, /if \(admin == true\) \{[\s\S]{0,200}?OpenRow\(Manage\.Words\.changePolicy\)/);
+});

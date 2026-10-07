@@ -132,8 +132,12 @@ test('Android: the poll carries on through choosing and opens the pool once', ()
 test('Android: Hypervisors on Machines lists the pools this phone holds, for admins only', () => {
   const machines = file('MachinesScreen.kt');
   assert.match(machines, /if \(settings\.configured && admin == true && held\.isNotEmpty\(\)\) \{[\s\S]*?SectionHead\("Hypervisors"\)/);
-  assert.match(machines, /HeldRow\(h, onClick = \{ policyFor = h\.address \}\)/);
-  assert.ok(machines.includes('onClickLabel = "Change what it may use"'));
+  // Each opens the pool's page (PoolPage, docs/manage.md), and the policy is
+  // a row on that page, for an admin, as it is on iOS.
+  assert.match(machines, /HeldRow\(h, Manage\.lastLooked\(settings, h\.address\), onClick = \{ managing = h\.address \}\)/);
+  assert.ok(machines.includes('onClickLabel = "Opens its page"'));
+  assert.match(machines, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}/);
+  assert.match(file('PoolPage.kt'), /if \(admin == true\) \{[\s\S]{0,200}?OpenRow\(Manage\.Words\.changePolicy\) \{ onChangePolicy\(\) \}/);
   assert.match(machines, /HypervisorSheet\(settings, policyFor = pool,/);
   // The list is what collect records when it keeps a token, and only the
   // addresses whose token is still here are shown.
