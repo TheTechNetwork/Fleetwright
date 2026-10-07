@@ -20,7 +20,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 
-import { ConfigPatch, EDGE, EDGE_FILTER, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureUplink, fetchImage, isDefaultConfig } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, EDGE, EDGE_FILTER, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig } from '../src/fleet/host/edge-router.js';
+import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 
 const DEFAULT = readFileSync(new URL('./fixtures/opnsense-26.7-config.xml', import.meta.url));
@@ -255,6 +256,150 @@ test('an edge that blocks hands what leaves to Suricata and drops what the four 
   assert.equal(new Set(ids).size, ids.length);
   // Watching: no divert, no mode, no policy.
   for (const part of ['<divert-to>', '<mode>divert', '<policies>']) assert.ok(!watch.includes(part), `a watching edge has ${part}`);
+});
+
+// --- labs on the edge ---------------------------------------------------------
+//
+// docs/hypervisors.md, "Labs". The rules below were read back with `pfctl -sr`
+// from this configuration booted in QEMU, four labs, two closed, blocking: one
+// pf rule per interface of each, in this order.
+
+/** Each rule as [sequence, action, interfaces, destination, port, divert, log]. @param {string} xml */
+const rulesOf = (xml) =>
+  [...xml.matchAll(/<rule>.*?<\/rule>/g)].map((m) => {
+    const r = m[0];
+    const get = (/** @type {string} */ tag) => new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(r)?.[1] ?? null;
+    return [Number(get('sequence')), get('action'), get('interface'), get('destination_net'), get('destination_port'), r.includes('<divert-to>'), get('log') === '1'];
+  });
+
+test('each lab is an interface of its own on the edge, with its address, its DHCP and Suricata watching it', () => {
+  const xml = edgeConfig({ labs: [true, false], fleet: fleetHosts('https://fleet.example.network/x') }).toString('utf8');
+  assert.equal(Buffer.byteLength(xml), OPNSENSE_IMAGE.room, 'not the room the file’s own blocks give it');
+  assert.ok(balanced(xml.trimEnd()));
+  assert.ok(xml.includes('<opt1><enable>1</enable><if>xn2</if><descr>LAB1</descr><ipaddr>10.250.1.1</ipaddr><subnet>24</subnet></opt1>'));
+  assert.ok(xml.includes('<opt2><enable>1</enable><if>xn3</if><descr>LAB2</descr><ipaddr>10.250.2.1</ipaddr><subnet>24</subnet></opt2>'));
+  assert.ok(!xml.includes('<opt3>'));
+  assert.match(xml, /<dnsmasq><enable>1<\/enable><port>53053<\/port><interface>lan,opt1,opt2<\/interface>/);
+  assert.ok(xml.includes('<dhcp_ranges><interface>opt2</interface><start_addr>10.250.2.100</start_addr><end_addr>10.250.2.250</end_addr></dhcp_ranges>'));
+  assert.match(xml, /<interfaces>lan,opt1,opt2<\/interfaces><homenet>10\.254\.0\.0\/24,10\.250\.1\.0\/24,10\.250\.2\.0\/24<\/homenet>/);
+  // Every lab between 1 and the most there is room for fits, either kind, either mode.
+  for (const block of [false, true]) for (const kinds of [[true, true, true, true], [false, false, false, false], [true, false, true, false]]) {
+    assert.equal(edgeConfig({ block, labs: kinds, fleet: fleetHosts('https://fleet.example.network') }).length, OPNSENSE_IMAGE.room);
+  }
+  assert.throws(() => edgeConfig({ labs: [true, true, true, true, true] }), /room for 4 labs/);
+  assert.throws(() => edgeConfig({ labs: [false] }), /closed lab needs the fleet/);
+});
+
+test('a lab reaches nothing private and asks only the edge for names; an open one the internet, a closed one only the fleet and Claude', () => {
+  const xml = edgeConfig({ block: true, labs: [true, true, false, false], fleet: fleetHosts('https://fleet.example.network') }).toString('utf8');
+  assert.deepEqual(rulesOf(xml), [
+    [1, 'pass', 'lan,opt1,opt2,opt3,opt4', '(self)', '53', false, false],
+    [2, 'block', 'lan,opt1,opt2,opt3,opt4', 'any', 'fleetwright_dns', false, false],
+    [3, 'block', 'lan,opt1,opt2,opt3,opt4', 'fleetwright_private', null, false, false],
+    [4, 'pass', 'lan,opt1,opt2', 'any', null, true, false],
+    [9, 'pass', 'opt3,opt4', 'fleetwright_fleet', '443', true, false],
+    [10, 'block', 'opt3,opt4', 'any', null, false, true],
+  ]);
+  // What a closed lab may reach: the coordinator, and Claude's required hosts, the sandbox's own list.
+  const alias = /<name>fleetwright_fleet<\/name><type>host<\/type><content>([^<]*)<\/content>/.exec(xml);
+  assert.ok(alias, 'no alias of the fleet’s hosts');
+  assert.deepEqual(alias[1].split('\n'), ['fleet.example.network', ...REQUIRED_HOSTS]);
+  // Without labs, the uplink's rules are exactly what was booted before labs.
+  assert.deepEqual(rulesOf(edgeConfig().toString('utf8')).map((r) => r.slice(0, 4)), [
+    [1, 'pass', 'lan', 'lanip'],
+    [2, 'block', 'lan', 'any'],
+    [3, 'block', 'lan', 'fleetwright_private'],
+    [4, 'pass', 'lan', 'any'],
+  ]);
+  // Only open labs: no alias, no closed rules.
+  const open = edgeConfig({ labs: [true] }).toString('utf8');
+  assert.ok(!open.includes('fleetwright_fleet'));
+  assert.deepEqual(rulesOf(open).map((r) => r[0]), [1, 2, 3, 4]);
+});
+
+test('an edge with labs grows its configuration into the file’s own blocks, after checking both the size and the slack', async () => {
+  const { config, room, sizeField } = OPNSENSE_IMAGE;
+  const replacement = edgeConfig({ labs: [true] });
+  const patches = imagePatches(replacement);
+  assert.deepEqual(patches.map((p) => [p.offset, p.replacement.length]), [[sizeField.offset, 8], [config.offset, room]]);
+  // A small image with both regions where the real one has them, scaled down.
+  const total = 40_000;
+  const at = { size: 1_000, config: 10_000 };
+  const regions = patches.map((p, i) => ({ ...p, offset: i === 0 ? at.size : at.config }));
+  const img = (/** @type {number} */ size, /** @type {number} */ slackByte) => {
+    const buf = Buffer.alloc(total, 7);
+    buf.writeBigUInt64LE(BigInt(size), at.size);
+    DEFAULT.copy(buf, at.config);
+    buf.fill(slackByte, at.config + config.length, at.config + room);
+    return buf;
+  };
+  const out = await patch(img(sizeField.was, 0), 333, { regions, total });
+  assert.ok(Buffer.isBuffer(out), String(out));
+  assert.equal(out.readBigUInt64LE(at.size), BigInt(room), 'the inode does not say the file is the room’s length');
+  assert.ok(out.subarray(at.config, at.config + room).equals(replacement));
+  assert.ok(out.subarray(0, at.size).equals(img(sizeField.was, 0).subarray(0, at.size)), 'a byte outside the two regions changed');
+  assert.match(String(await patch(img(4096, 0), 333, { regions, total })), /does not have the configuration’s size where it should/);
+  assert.match(String(await patch(img(sizeField.was, 1), 333, { regions, total })), /does not have the default configuration where it should/);
+  assert.throws(() => imagePatches(Buffer.alloc(6000)), /5234 or 8192 bytes/);
+});
+
+test('an edge is built with an interface on each lab, in order, and tagged with them; one with other labs is rebuilt, filtering as it did', async () => {
+  const fleet = fleetHosts('https://fleet.example.network');
+  const labs = [{ id: 'net-lab-1', open: true }, { id: 'net-lab-2', open: false }];
+  const fresh = xo({ VM: [], 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-1' });
+  /** @type {any} */
+  let body = null;
+  const done = await ensureEdge(edgeArgs(fresh, { labs, fleet, upload: async (/** @type {any} */ u) => ((body = u.body), 'vdi-1') }).args);
+  const made = Object.fromEntries(fresh.calls)['vm.create'];
+  assert.deepEqual(made.VIFs, [{ network: 'net-wan' }, { network: 'net-up' }, { network: 'net-lab-1' }, { network: 'net-lab-2' }]);
+  assert.deepEqual(made.tags, [EDGE.tag, `${LAB.edgeTag}oc`]);
+  assert.equal(body.regions.length, 2, 'the file was not grown to hold the labs');
+  assert.match(done, /It has one open lab and one closed lab of their own/);
+
+  // There with the same labs: nothing done. Asked nothing of labs: nothing done.
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.blocksTag, `${LAB.edgeTag}oc`], power_state: 'Running' };
+  const onLabs = [{ id: 'v2', $VM: 'vm-old', device: '2', $network: 'net-lab-1' }, { id: 'v3', $VM: 'vm-old', device: '3', $network: 'net-lab-2' }];
+  for (const ask of [labs, null]) {
+    const same = xo({ VM: [old], VIF: onLabs });
+    const said = await ensureEdge(edgeArgs(same, { labs: ask, fleet }).args);
+    assert.deepEqual(same.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects'), []);
+    assert.match(said, /already there[\s\S]*with one open lab and one closed lab/);
+  }
+  // Other labs: rebuilt, still dropping, as nobody asked to change that.
+  const rebuilt = xo({ VM: [old], 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' });
+  const { args, said } = edgeArgs(rebuilt, { labs: [{ id: 'net-lab-1', open: true }], fleet });
+  await ensureEdge(args);
+  const params = Object.fromEntries(rebuilt.calls);
+  assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.blocksTag, `${LAB.edgeTag}o`]);
+  assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
+  assert.ok(said.includes('Rebuilding the edge router with one open lab. Machines behind it have no way out until it is up.'), said.join('\n'));
+  // The same kinds on a lab network made again: the old edge is not on it.
+  const moved = xo({ VM: [old], 'VM-template': [TEMPLATE], VIF: onLabs }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' });
+  await ensureEdge(edgeArgs(moved, { labs: [labs[0], { id: 'net-lab-2b', open: false }], fleet }).args);
+  assert.deepEqual(Object.fromEntries(moved.calls)['vm.create'].VIFs.at(-1), { network: 'net-lab-2b' });
+});
+
+test('lab networks are made up to the number asked, tagged open or closed, kept in the set, and one no longer asked for loses its kind', async () => {
+  let n = 0;
+  const admin = xo({}, { 'network.create': () => `net-l${++n}` });
+  const there = [
+    { id: 'net-l0', name_label: 'fleetwright-lab-1', $pool: 'p1', tags: [LAB.closedTag] },
+    { id: 'net-l9', name_label: 'fleetwright-lab-3', $pool: 'p1', tags: [LAB.openTag] },
+  ];
+  const r = await ensureLabs({ admin, pool: 'p1', networks: there, setId: 'rs-1', inSet: ['net-l0'], open: 1, closed: 1 });
+  assert.deepEqual(r.labs, [{ id: 'net-l0', name: 'fleetwright-lab-1', open: true }, { id: 'net-l1', name: 'fleetwright-lab-2', open: false }]);
+  assert.deepEqual(r.made, ['fleetwright-lab-2']);
+  assert.deepEqual(admin.calls.map(([m, p]) => [m, p.id ?? p.name, p.tag ?? p.object ?? null]), [
+    ['tag.remove', 'net-l0', LAB.closedTag],
+    ['tag.add', 'net-l0', LAB.openTag],
+    ['network.create', 'fleetwright-lab-2', null],
+    ['tag.add', 'net-l1', LAB.closedTag],
+    ['resourceSet.addObject', 'rs-1', 'net-l1'],
+    ['tag.remove', 'net-l9', LAB.openTag],
+  ]);
+  assert.ok(!admin.calls.some(([m]) => m === 'network.delete'), 'a lab network was removed, though a machine may be on it');
+  const most = await ensureLabs({ admin: xo({}, { 'network.create': () => `net-m${++n}` }), pool: 'p1', networks: [], setId: 'rs-1', inSet: [], open: 3, closed: 3 });
+  assert.equal(most.labs.length, LAB.max);
 });
 
 test('the edge router is made in the order that boots: disk in, WAN first, checksum offload off, started', async () => {

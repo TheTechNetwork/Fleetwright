@@ -83,7 +83,7 @@ import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOSETUP_JOB_RE, CERT_PIN
 import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
-import { EDGE, GROUP_PREFIX, MAX_GROUPS, ensureEdge, ensureGroups, ensureUplink, srName } from './edge-router.js';
+import { EDGE, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, srName } from './edge-router.js';
 import { VM_IMAGE, IMAGES, ensureImage, imageKeyOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
@@ -120,6 +120,8 @@ const DEPLOY_HEARTBEAT_MS = 5 * 60_000;
 export const EGRESS_TAG = 'fleetwright-egress';
 /** What building the edge router asks of the server, checked before anything is made. */
 export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start']);
+/** What making labs asks of the server, beside rebuilding the edge with them. */
+export const LAB_METHODS = Object.freeze(['network.create', 'tag.add', 'tag.remove', 'resourceSet.addObject']);
 /** What building the machine image asks of the server, checked before anything is made. */
 export const IMAGE_METHODS = Object.freeze(['disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'tag.add', 'resourceSet.addObject']);
 /**
@@ -406,7 +408,13 @@ export class XoSetups {
         // `groups`: it makes group networks for machines that work together.
         // `holder`: it makes the pool a machine of its own (xo-holder.js),
         // which needs both the fleet to join and a way to ask it for a pin.
-        can: ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(this.coordinatorUrl ? ['image', 'images'] : []), ...(this.coordinatorUrl && this.holderPin ? ['holder'] : [])],
+        // `labs`: it makes labs on the edge (edge-router.js, LAB), which needs
+        // the fleet's address, the one place a closed lab may still reach.
+        can: [
+          'policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups',
+          ...(this.coordinatorUrl ? ['image', 'images', 'labs'] : []),
+          ...(this.coordinatorUrl && this.holderPin ? ['holder'] : []),
+        ],
       },
     };
   }
@@ -855,7 +863,7 @@ export class XoSetups {
         // are this job's to put in the set, not choices on the phone, and a
         // machine on one would lose it if a choice left it out.
         const own = (ctx.networks || [])
-          .filter((/** @type {any} */ n) => (n?.name_label === EDGE.uplink || String(n?.name_label || '').startsWith(GROUP_PREFIX)) && ctx.setObjects?.includes(n.id))
+          .filter((/** @type {any} */ n) => (n?.name_label === EDGE.uplink || String(n?.name_label || '').startsWith(GROUP_PREFIX) || String(n?.name_label || '').startsWith(LAB.prefix)) && ctx.setObjects?.includes(n.id))
           .map((/** @type {any} */ n) => String(n.id))
           .filter((/** @type {string} */ id) => !p.networks.includes(id));
         await ctx.admin.call('resourceSet.set', { id: ctx.setId, objects: [...p.srs, ...p.networks, ...own], limits: p.limits });
@@ -883,7 +891,7 @@ export class XoSetups {
         // own, so a phone that predates it still reads the progress as the
         // step it knows, with the machine's sentence under it saying where the
         // download and the disk have got to.
-        if (!p.edge && !p.image && !p.groups && !p.holder) return;
+        if (!p.edge && !p.image && !p.groups && !p.holder && p.labs === null) return;
         const rec = ctx.rec;
         // The words every time, for the screen that asks; an event only when
         // the stage changes or the bar has moved a twentieth, so a Lock
@@ -904,6 +912,11 @@ export class XoSetups {
           const missing = EDGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the edge router cannot be built. The policy was applied.`);
         }
+        if (p.labs !== null) {
+          const missing = [...LAB_METHODS, ...EDGE_METHODS].filter((m, i, all) => all.indexOf(m) === i && !Object.hasOwn(ctx.methods, m));
+          if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the labs cannot be made. The policy was applied.`);
+          if (!this.coordinatorUrl) throw new Error('this machine does not know the fleet’s address, which a closed lab must still reach. The policy was applied.');
+        }
         if (p.holder && !(this.holderPin && this.coordinatorUrl)) throw new Error('this machine cannot ask the fleet for the pin a pool’s own machine joins with. The policy was applied.');
         if (p.image) {
           const missing = IMAGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
@@ -915,9 +928,19 @@ export class XoSetups {
         if (p.groups) {
           const made = await ensureGroups({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks, count: p.groups });
           if (made.length) built.push(`Made ${made.length === 1 ? 'a group network' : `${made.length} group networks`} for machines that work together.`);
-          if (!p.edge && !p.image && !p.holder) return built.join(' ') || undefined;
+          if (!p.edge && !p.image && !p.holder && p.labs === null) return built.join(' ') || undefined;
         }
         const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
+        // LABS' NETWORKS, made before the edge is (re)built with an interface
+        // on each: quick, and kept if the build fails, like group networks.
+        /** @type {Array<{ id: string, open: boolean }>|null} */
+        let labs = null;
+        if (p.labs !== null) {
+          const made = await ensureLabs({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks, open: p.labs.open, closed: p.labs.closed });
+          labs = made.labs.map((l) => ({ id: l.id, open: l.open }));
+          if (made.made.length) built.push(`Made ${made.made.length === 1 ? 'a lab network' : `${made.made.length} lab networks`}.`);
+        }
+        const edgeAsked = p.edge || labs !== null;
         // THE MACHINE IMAGE, after the router, on the same pool: it is built
         // on the uplink, so its install leaves through the router like every
         // machine cloned from it will (vm-image.js).
@@ -948,10 +971,10 @@ export class XoSetups {
             });
           };
           // ONE AFTER ANOTHER, router first: each image is built behind it.
-          if (p.edge) built.push(await this.#edge(ctx, p, way, uplink, say));
+          if (edgeAsked) built.push(await this.#edge(ctx, p, way, uplink, say, labs));
           for (const key of p.images) built.push(await image(key));
-        } else if (p.edge) {
-          built.push(await this.#edge(ctx, p, way, uplink, say));
+        } else if (edgeAsked) {
+          built.push(await this.#edge(ctx, p, way, uplink, say, labs));
         }
         // THE POOL'S OWN MACHINE, last: it is cloned from the image, which may
         // have been built a moment ago.
@@ -1108,8 +1131,9 @@ export class XoSetups {
    *
    * @param {any} ctx @param {any} p @param {any} way @param {string} uplink
    * @param {(text: string, part?: any) => void} say
+   * @param {Array<{ id: string, open: boolean }>|null} [labs] null leaves the edge's labs as they are
    */
-  async #edge(ctx, p, way, uplink, say) {
+  async #edge(ctx, p, way, uplink, say, labs = null) {
     const rec = ctx.rec;
     rec.building = 'edge';
     rec.part = null;
@@ -1123,6 +1147,8 @@ export class XoSetups {
       fleetSrs: p.srs,
       sr: p.edgeSr,
       block: p.edgeBlock,
+      labs,
+      fleet: fleetHosts(this.coordinatorUrl),
       rebuilding: () => {
         rec.building = 'edge-rebuild';
       },
@@ -1411,6 +1437,8 @@ export function inventoryOf(ctx, set) {
       sr: sr ? srName(sr) : null,
       // Whether it drops what its threat rules match, or only logs it.
       blocks: Array.isArray(v.tags) && v.tags.includes(EDGE.blocksTag),
+      // And the labs it was built with, by kind.
+      labs: { open: [...edgeLabsOf(v)].filter((c) => c === 'o').length, closed: [...edgeLabsOf(v)].filter((c) => c === 'c').length },
     };
   });
   // Each pool's machine image, by pool and name: what the phone needs to say
@@ -1443,6 +1471,8 @@ export function inventoryOf(ctx, set) {
     groups: (ctx.networks || [])
       .filter((/** @type {any} */ n) => typeof n?.name_label === 'string' && n.name_label.startsWith(GROUP_PREFIX))
       .map((/** @type {any} */ n) => ({ id: String(n.id), name: String(n.name_label).slice(0, 80), pool: n.$pool ? String(n.$pool) : null })),
+    // THE MOST LABS AN EDGE HAS ROOM FOR, so the phone never offers more.
+    labMax: LAB.max,
     capacity: {
       cpus: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.cpus?.cores) || 0), 0),
       memory: (ctx.hosts || []).reduce((/** @type {number} */ n, /** @type {any} */ h) => n + (Number(h?.memory?.size) || 0), 0),
@@ -1509,8 +1539,11 @@ export function currentLimits(set) {
  * `edgeBlock` is whether the edge router drops what its threat rules match
  * (true) or only logs it (false); absent, an edge that is there is left as it
  * is and a new one only logs (edge-router.js, ensureEdge).
+ * `labs` is how many labs the edge has, `{ open, closed }`, at most LAB.max
+ * together; absent, an edge's labs are left as they are. Labs live on the
+ * edge, so they need one there or asked for.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, image: boolean, images: string[], groups: number, holder: boolean, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, image: boolean, images: string[], groups: number, holder: boolean, labs: { open: number, closed: number }|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1551,6 +1584,20 @@ export function checkPolicy(p, choices) {
   if (image && !edge && !choices.edgePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
     return { ok: false, text: 'The machine image is built behind the edge router, and that pool has none yet. Build the router with it. Nothing was changed.' };
   }
+  // LABS, on the edge: how many of each kind, together at most LAB.max.
+  /** @type {{ open: number, closed: number }|null} */
+  let labs = null;
+  if (p.labs !== undefined && p.labs !== null) {
+    const open = p.labs?.open;
+    const closed = p.labs?.closed;
+    const whole = (/** @type {unknown} */ n) => typeof n === 'number' && Number.isInteger(n) && n >= 0;
+    if (!whole(open) || !whole(closed) || open + closed > LAB.max) return { ok: false, text: `Between 0 and ${LAB.max} labs in all. Nothing was changed.` };
+    if (egress === null) return { ok: false, text: 'Labs are on the edge router: choose the way out it is on. Nothing was changed.' };
+    if (!edge && !choices.edgePools?.has(choices.networkPools?.get(egress))) {
+      return { ok: false, text: 'Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed.' };
+    }
+    labs = { open, closed };
+  }
   const holder = p.holder === true;
   if (holder && egress === null) return { ok: false, text: 'The pool’s own machine goes on the way out: choose the network it is on.' };
   if (holder && !image && !choices.imagePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
@@ -1566,7 +1613,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image ? edgeSr : null, edgeBlock, image, images: asked, groups, holder, limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs ? edgeSr : null, edgeBlock, image, images: asked, groups, holder, labs, limits: { cpus, memory, disk } } };
 }
 
 /**

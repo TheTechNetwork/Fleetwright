@@ -973,7 +973,11 @@ test('a machine on a hypervisor is made by this process for the person asking, a
   const r = await sidecar.handle(intent({ verb: 'provision', actor: 'Eli@Example.com', params: { platform: 'vm', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30, network: '5d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', group: '6d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c' } }));
   assert.equal(r.ok, true, r.text);
   assert.equal(r.vm, 'vm-uuid');
-  assert.deepEqual(asked, [{ owner: 'eli@example.com', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30, network: '5d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', group: '6d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', coordinatorUrl: 'https://coord.example.workers.dev' }]);
+  assert.deepEqual(asked, [{ owner: 'eli@example.com', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, minutes: 30, network: '5d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', group: '6d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', lab: false, coordinatorUrl: 'https://coord.example.workers.dev' }]);
+  // A LAB is the same machine, asked of the same place, in a lab: never a runner's dispatch.
+  const lab = await sidecar.handle(intent({ id: 'idem-0000002', verb: 'provision', actor: 'Eli@Example.com', params: { platform: 'lab', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c', ticket, network: '5d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c' } }));
+  assert.equal(lab.ok, true, lab.text);
+  assert.deepEqual([asked[1].lab, asked[1].network], [true, '5d1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c']);
   assert.equal(stub.commands.length, 0, 'the ticket never reached the hub');
 });
 

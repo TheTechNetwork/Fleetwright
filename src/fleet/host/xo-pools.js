@@ -23,7 +23,9 @@
 //           to be gone by, are removed with their disks. A machine powers
 //           itself off at its end, so stopped is the ordinary case.
 //   make    a machine from an image, for the person whose pool it is, booted
-//           with a ticket to enrol itself and a Claude login to run on.
+//           with a ticket to enrol itself and a Claude login to run on; or the
+//           same machine in a lab, alone on one of the pool's lab networks
+//           (edge-router.js, LAB), whose rules are the edge's.
 //
 // WHAT THE LIMITED USER MAY DO is what its resource set allows: clone images
 // that are in the set onto storage and networks that are in the set, inside
@@ -33,7 +35,7 @@
 import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain } from './xo-ws.js';
-import { EDGE, GROUP_PREFIX } from './edge-router.js';
+import { EDGE, GROUP_PREFIX, LAB } from './edge-router.js';
 import { VM_IMAGE } from './vm-image.js';
 
 /** The prefix a pool's item carries in a vault answer. */
@@ -67,6 +69,8 @@ const ON_PREFIX = 'fleetwright-on:';
 const FOR_PREFIX = 'fleetwright-for:';
 /** The group network a machine is also on, and its address there. */
 const GROUP_TAG = 'fleetwright-grp:';
+/** The lab a machine is in, by its network's name. */
+const LAB_TAG = 'fleetwright-in-lab:';
 const GROUP_IP_TAG = 'fleetwright-gip:';
 /**
  * The uplink's range, which every session machine on it shares. Only the
@@ -109,9 +113,9 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
 /**
  * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
- * @typedef {{ id: string, name: string, pool: string|null, group: boolean }} Network
+ * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
- * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null, group: string|null, groupIp: string|null, net: Traffic|null }} Machine
+ * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null, group: string|null, groupIp: string|null, lab: { name: string, open: boolean }|null, net: Traffic|null }} Machine
  * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string, holder?: boolean }} Seen
  */
 
@@ -135,6 +139,44 @@ const tagValue = (vm, prefix) => {
   const t = (Array.isArray(vm?.tags) ? vm.tags : []).find((/** @type {string} */ x) => x.startsWith(prefix));
   return t ? t.slice(prefix.length) : null;
 };
+
+/**
+ * Which kind of lab a network is, by the tag the policy job gave it, or null
+ * for a network that is not a lab (or no longer is: a lab the policy took
+ * away loses its tag, and is offered no more).
+ *
+ * @param {any} n @returns {'open'|'closed'|null}
+ */
+function labKind(n) {
+  if (!String(n?.name_label || '').startsWith(LAB.prefix) || !Array.isArray(n?.tags)) return null;
+  if (n.tags.includes(LAB.openTag)) return 'open';
+  if (n.tags.includes(LAB.closedTag)) return 'closed';
+  return null;
+}
+
+/**
+ * How many of the fleet's own machines have an interface on each network, by
+ * network id, from Xen Orchestra's interfaces; null when it would not say,
+ * which makes every lab cannot tell rather than free.
+ *
+ * @param {any} rpc @param {any[]} vms
+ * @returns {Promise<Map<string, string[]>|null>} network id → the machines' ids on it
+ */
+async function machinesOnNetworks(rpc, vms) {
+  try {
+    const vifs = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VIF' } })) || {}));
+    const fleets = new Set(vms.filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag)).map((v) => v.id));
+    /** @type {Map<string, string[]>} */
+    const on = new Map();
+    for (const f of vifs) {
+      if (!fleets.has(f?.$VM) || typeof f?.$network !== 'string') continue;
+      on.set(f.$network, [...(on.get(f.$network) ?? []), String(f.$VM)]);
+    }
+    return on;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The address Xen Orchestra's guest tools reported: its own pick
@@ -325,17 +367,26 @@ export class XoPools {
         // should be reachable from the person's own network; and the group
         // networks, marked, which a machine joins as well as its own.
         const nets = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'network' } })) || {}));
+        // AND THE LABS, each with its kind and whether one of the fleet's
+        // machines is on it: a lab holds one machine at a time.
+        const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+        const labKinds = new Map(nets.filter((n) => labKind(n)).map((n) => [String(n.name_label), labKind(n)]));
+        const occupied = labKinds.size ? await machinesOnNetworks(rpc, vms) : new Map();
+        /** @type {Network[]} */
         const networks = nets
           .filter((n) => typeof n?.id === 'string' && n.name_label !== EDGE.uplink)
-          .map((n) => ({
-            id: String(n.id),
-            name: String(n.name_label || n.id).slice(0, 80),
-            pool: n.$pool ?? null,
-            group: String(n.name_label || '').startsWith(GROUP_PREFIX),
-          }));
+          .map((n) => {
+            const lab = labKind(n);
+            return {
+              id: String(n.id),
+              name: String(n.name_label || n.id).slice(0, 80),
+              pool: n.$pool ?? null,
+              group: String(n.name_label || '').startsWith(GROUP_PREFIX),
+              ...(lab ? { lab, taken: occupied ? (occupied.get(String(n.id))?.length ?? 0) > 0 : null } : {}),
+            };
+          });
         // AND THE MACHINES MADE THERE, what each is and where it is, for the
         // phone's page of it. Read after the sweep, so a removed one is gone.
-        const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
         const imageNames = new Map(templates.map((t) => [t.id, String(t.name_label || '').slice(0, 80)]));
         const machines = vms
           .filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag) && /^vm-[0-9a-f]{12}$/.test(String(v.name_label)))
@@ -356,6 +407,12 @@ export class XoPools {
               network: tagValue(v, ON_PREFIX),
               group: tagValue(v, GROUP_TAG),
               groupIp: tagValue(v, GROUP_IP_TAG),
+              // In a lab: which, and whether it is open, by that network's tag.
+              lab: (() => {
+                const inLab = tagValue(v, LAB_TAG);
+                const kind = inLab ? labKinds.get(inLab) : null;
+                return inLab && kind ? { name: inLab, open: kind === 'open' } : null;
+              })(),
               net: /** @type {Traffic|null} */ (null),
             };
           });
@@ -410,10 +467,16 @@ export class XoPools {
    * the reply the coordinator relays: `unreachable` when the pool could not
    * be reached, which is the one refusal another box might not have.
    *
-   * @param {{ owner: string, template: string, ticket: string, minutes?: number|null, network?: string|null, group?: string|null, coordinatorUrl: string }} ask
+   * IN A LAB (`lab`), `network` names one of the pool's lab networks, which
+   * must be one this box saw and saw empty, and the machine goes on it alone:
+   * no uplink, no fence (nothing else is on a lab's network) and no group. It
+   * is then checked to be the only machine there, because another box may
+   * have put one on the same lab at the same moment; the later one is removed.
+   *
+   * @param {{ owner: string, template: string, ticket: string, minutes?: number|null, network?: string|null, group?: string|null, lab?: boolean, coordinatorUrl: string }} ask
    * @returns {Promise<{ ok: boolean, text: string, unreachable?: boolean, vm?: string }>}
    */
-  async make({ owner, template, ticket, minutes = null, network = null, group = null, coordinatorUrl }) {
+  async make({ owner, template, ticket, minutes = null, network = null, group = null, lab = false, coordinatorUrl }) {
     const who = String(owner || '').toLowerCase();
     const m = TICKET_RE.exec(String(ticket || ''));
     if (!m) return { ok: false, text: 'That machine came without the ticket it enrols with, so it was not made.' };
@@ -427,8 +490,15 @@ export class XoPools {
     const image = /** @type {Image} */ (this.seen.get(k)?.images.find((i) => i.id === template));
     // A NETWORK OF THE PERSON'S CHOOSING, only one this box saw for that pool.
     const samePool = (/** @type {Network} */ n) => !image.pool || !n.pool || n.pool === image.pool;
-    const chosenNet = network ? this.seen.get(k)?.networks.find((n) => n.id === network && !n.group && samePool(n)) : null;
-    if (network && !chosenNet) return { ok: false, text: 'That network is not one this box saw on your pool, so the machine was not made.' };
+    // A LAB, only one of the pool's lab networks, and only one seen empty.
+    const labNet = lab ? this.seen.get(k)?.networks.find((n) => n.id === network && n.lab && samePool(n)) : null;
+    if (lab && !labNet) return { ok: false, text: 'That is not a lab this box saw on your pool, so the machine was not made.' };
+    if (lab && group) return { ok: false, text: 'A machine in a lab is on the lab’s network alone, so it joins no group. It was not made.' };
+    if (labNet && labNet.taken !== false) {
+      return { ok: false, text: `${labNet.name} ${labNet.taken ? 'has a machine on it' : 'could not be seen to be empty'}, so the machine was not made. Choose another lab.` };
+    }
+    const chosenNet = network && !lab ? this.seen.get(k)?.networks.find((n) => n.id === network && !n.group && !n.lab && samePool(n)) : null;
+    if (network && !lab && !chosenNet) return { ok: false, text: 'That network is not one this box saw on your pool, so the machine was not made.' };
     // A GROUP NETWORK, as well as its own: only one of the pool's group networks.
     const groupNet = group ? this.seen.get(k)?.networks.find((n) => n.id === group && n.group && samePool(n)) : null;
     if (group && !groupNet) return { ok: false, text: 'That is not a group network this box saw on your pool, so the machine was not made.' };
@@ -450,7 +520,7 @@ export class XoPools {
       // the clone gets an interface of its own rather than a copy.
       const networks = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'network' } })) || {}));
       const uplink = networks.find((n) => n?.name_label === EDGE.uplink && (!image.pool || n.$pool === image.pool));
-      const on = chosenNet ?? (uplink ? { id: String(uplink.id), name: EDGE.uplink } : null);
+      const on = labNet ? { id: labNet.id, name: labNet.name } : chosenNet ?? (uplink ? { id: String(uplink.id), name: EDGE.uplink } : null);
       // ITS PLACE ON THE GROUP NETWORK: a MAC and an address from its ticket's
       // id, the address moved along past any a machine in that group has.
       /** @type {{ mac: string, address: string }|null} */
@@ -463,7 +533,7 @@ export class XoPools {
       const vm = await rpc.call('vm.create', {
         template,
         name_label: name,
-        name_description: `A temporary machine for ${who}, made by Fleetwright. It powers off by itself at its end and is then removed.`,
+        name_description: `A temporary machine for ${who}${labNet ? `, in ${labNet.name}` : ''}, made by Fleetwright. It powers off by itself at its end and is then removed.`,
         ...(record.resourceSet ? { resourceSet: record.resourceSet } : {}),
         ...(on || joined ? { VIFs: [...(on ? [{ network: on.id }] : []), ...(joined && groupNet ? [{ network: groupNet.id, mac: joined.mac }] : [])] } : {}),
         tags: [
@@ -474,6 +544,7 @@ export class XoPools {
           `${FOR_PREFIX}${who}`,
           ...(on ? [`${ON_PREFIX}${on.name}`] : []),
           ...(joined && groupNet ? [`${GROUP_TAG}${groupNet.name}`, `${GROUP_IP_TAG}${joined.address}`] : []),
+          ...(labNet ? [`${LAB_TAG}${labNet.name}`] : []),
         ],
         cloudConfig: machineCloudConfig({
           name,
@@ -484,8 +555,8 @@ export class XoPools {
           minutes: BACKSTOP_MINUTES,
           sshKeys: keys,
           // ON THE UPLINK, fenced from the machines beside it; on a network
-          // of the person's choosing, left as that network has it.
-          isolate: !chosenNet && on ? { subnet: UPLINK_SUBNET, gateway: EDGE.lan.address } : null,
+          // of the person's choosing, or alone in a lab, left as it is.
+          isolate: !chosenNet && !labNet && on ? { subnet: UPLINK_SUBNET, gateway: EDGE.lan.address } : null,
           group: joined ? { mac: joined.mac, address: `${joined.address}/16` } : null,
         }),
         // The drive holds the ticket and the Claude login: gone once the
@@ -494,12 +565,30 @@ export class XoPools {
         destroyCloudConfigVdiAfterBoot: true,
         bootAfterCreate: true,
       });
-      this.log.info(`sidecar: made ${name} from ${image.name} on ${record.address} for ${who}`);
+      // ALONE IN ITS LAB: another box may have put a machine on the same lab
+      // in the same moment. The one made second goes.
+      if (labNet) {
+        const all = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+        const on = await machinesOnNetworks(rpc, all);
+        const there = (on?.get(labNet.id) ?? []).filter((id) => id !== String(vm));
+        const first = there.some((id) => {
+          const other = all.find((v) => v?.id === id);
+          const at = Number(tagValue(other, MADE_PREFIX));
+          return !(at > made) && !(at === made && String(other?.name_label) > name);
+        });
+        if (on === null || first) {
+          await rpc.call('vm.stop', { id: vm, force: true }).catch(() => {});
+          await rpc.call('vm.delete', { id: vm, deleteDisks: true }).catch(() => {});
+          return { ok: false, text: `${labNet.name} ${on === null ? 'could not be seen to be yours alone' : 'was taken a moment ago by another machine'}, so the machine was removed again. Choose another lab.` };
+        }
+      }
+      this.log.info(`sidecar: made ${name} from ${image.name} on ${record.address} for ${who}${labNet ? ` in ${labNet.name}` : ''}`);
       return {
         ok: true,
         vm: String(vm),
         text:
           `Making ${name} from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}${chosenNet ? `, on ${chosenNet.name}` : ''}` +
+          `${labNet ? `, in ${labNet.name}: ${labNet.lab === 'open' ? 'it reaches the internet and nothing private' : 'it reaches the fleet and Claude and nothing else'}` : ''}` +
           `${joined && groupNet ? `, with the others on ${groupNet.name} at ${joined.address}` : ''}. ` +
           `It joins the fleet as your temporary machine in a minute or two, for ${life} minutes` +
           `${claude ? '' : ', and has no Claude login of yours to run on: keep one in your vault'}.`,

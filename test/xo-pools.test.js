@@ -233,6 +233,78 @@ test('a machine in a group is also on the group network, with a MAC and an addre
   assert.match(r.text, /with the others on fleetwright-group-1 at 10\.200\.17\.53/);
 });
 
+// LABS: a lab network on the edge, tagged open or closed by the policy job,
+// with one of the fleet's machines on it at a time. docs/hypervisors.md, "Labs".
+const openLab = { type: 'network', id: 'net-lab-1', name_label: 'fleetwright-lab-1', $pool: 'pool-1', tags: ['fleetwright-lab:open'] };
+const closedLab = { type: 'network', id: 'net-lab-2', name_label: 'fleetwright-lab-2', $pool: 'pool-1', tags: ['fleetwright-lab:closed'] };
+const formerLab = { type: 'network', id: 'net-lab-3', name_label: 'fleetwright-lab-3', $pool: 'pool-1', tags: [] };
+const inLab = { type: 'VM', id: 'vm-in-lab', name_label: 'vm-222222222222', power_state: 'Running', tags: [VM_IMAGE.sessionTag, 'fleetwright-in-lab:fleetwright-lab-2'] };
+const labVif = { type: 'VIF', id: 'vif-in-lab', $VM: 'vm-in-lab', $network: 'net-lab-2' };
+// The edge's own interface on a lab, which is not one of the fleet's machines.
+const edgeVif = { type: 'VIF', id: 'vif-edge', $VM: 'vm-edge', $network: 'net-lab-1' };
+
+test('a look reports each lab, its kind and whether a machine of the fleet’s is on it, and a machine says which lab it is in', async () => {
+  const stand = xo({ objects: [pool, image, uplink, openLab, closedLab, formerLab, inLab, labVif, edgeVif] });
+  const pools = holder(stand);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  const [seen] = pools.report();
+  assert.deepEqual(seen.networks.map((n) => [n.name, n.lab ?? null, n.taken ?? null]), [
+    ['fleetwright-lab-1', 'open', false],
+    ['fleetwright-lab-2', 'closed', true],
+    ['fleetwright-lab-3', null, null],
+  ], 'the edge’s own interface made a lab look taken, or a lab the policy took away is still one');
+  assert.deepEqual(seen.machines.find((m) => m.name === 'vm-222222222222')?.lab, { name: 'fleetwright-lab-2', open: false });
+
+  // An interface list the pool will not give is cannot tell, never free.
+  const blind = xo({ objects: [pool, image, uplink, openLab] });
+  const call = blind.rpc.call;
+  blind.rpc.call = async (/** @type {string} */ method, /** @type {any} */ params = {}) =>
+    method === 'xo.getAllObjects' && params.filter?.type === 'VIF' ? Promise.reject(new Error('forbidden')) : call(method, params);
+  const unsure = holder(blind);
+  unsure.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await unsure.refresh();
+  assert.deepEqual(unsure.report()[0].networks.map((n) => n.taken), [null]);
+});
+
+test('a machine in a lab goes on the lab alone, unfenced, and only on a lab this box saw empty', async () => {
+  const stand = xo({ objects: [pool, image, uplink, openLab, closedLab, inLab, labVif] });
+  const pools = holder(stand);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  const ask = (/** @type {Record<string, any>} */ p) => pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, lab: true, coordinatorUrl: 'https://fleet.test', ...p });
+  assert.match((await ask({ network: 'net-lab-2' })).text, /fleetwright-lab-2 has a machine on it/);
+  assert.equal((await ask({ network: 'net-uplink' })).ok, false, 'not a lab');
+  assert.equal((await ask({ network: 'net-lab-1', group: 'net-lab-2' })).ok, false, 'a lab machine in a group');
+  // And a lab is never a plain machine's network of choice.
+  assert.equal((await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, network: 'net-lab-1', coordinatorUrl: 'https://fleet.test' })).ok, false);
+  assert.ok(!stand.calls.some((c) => c.method === 'vm.create'));
+
+  const r = await ask({ network: 'net-lab-1' });
+  assert.equal(r.ok, true, r.text);
+  const made = /** @type {any} */ (stand.calls.find((c) => c.method === 'vm.create')).params;
+  assert.deepEqual(made.VIFs, [{ network: 'net-lab-1' }], 'on the uplink as well, it would leave around the lab’s rules');
+  assert.ok(made.tags.includes('fleetwright-in-lab:fleetwright-lab-1'));
+  assert.ok(made.tags.includes(VM_IMAGE.sessionTag), 'swept like any machine');
+  assert.ok(!made.cloudConfig.includes('/etc/fleetwright-net.json'), 'fenced against an uplink it is not on');
+  assert.match(r.text, /in fleetwright-lab-1: it reaches the internet and nothing private/);
+});
+
+test('two machines put in one lab at once: the one made second is removed again', async () => {
+  const objects = [pool, image, uplink, closedLab];
+  const stand = xo({ objects });
+  const pools = holder(stand);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  // Another box's machine lands on the lab between this box's look and its clone.
+  const s = Math.floor(Date.now() / 1000);
+  objects.push({ ...inLab, id: 'vm-other', tags: [VM_IMAGE.sessionTag, `fleetwright-made:${s - 5}`] }, { ...labVif, $VM: 'vm-other' });
+  const r = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, lab: true, network: 'net-lab-2', coordinatorUrl: 'https://fleet.test' });
+  assert.equal(r.ok, false);
+  assert.match(r.text, /taken a moment ago by another machine/);
+  assert.deepEqual(stand.calls.filter((c) => c.method === 'vm.delete').map((c) => c.params.id), ['new-vm-id'], 'the machine there first was removed');
+});
+
 test('a place on a group network comes from the ticket’s id and never repeats an address in use', () => {
   const id = 'abcdef012345';
   const first = groupPlace(id, new Set());
@@ -262,8 +334,8 @@ test('a look reports the machines made there, what each is and where, for the ph
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
   await pools.refresh();
   assert.deepEqual(pools.report()[0].machines, [
-    { name: 'vm-111111111111', vm: 'vm-uuid', state: 'Running', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', group: null, groupIp: null, net: { interval: 60, end: s * 1000, rx: [100, 200], tx: [5, 6] } },
-    { name: 'vm-222222222222', vm: 'vm-stopped', state: 'Paused', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', group: null, groupIp: null, net: null },
+    { name: 'vm-111111111111', vm: 'vm-uuid', state: 'Running', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', group: null, groupIp: null, lab: null, net: { interval: 60, end: s * 1000, rx: [100, 200], tx: [5, 6] } },
+    { name: 'vm-222222222222', vm: 'vm-stopped', state: 'Paused', ip: '192.168.1.40', until: (s + 600) * 1000, madeAt: (s - 600) * 1000, cpus: 2, memory: 4 * 1024 ** 3, image: 'Fleetwright Debian 13', network: 'LAN', group: null, groupIp: null, lab: null, net: null },
   ]);
   assert.deepEqual(stand.calls.filter((c) => c.method === 'vm.stats').map((c) => c.params), [{ id: 'vm-uuid', granularity: 'minutes' }], 'only a running machine is asked what it did');
 });

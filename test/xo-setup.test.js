@@ -329,7 +329,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(setups.coordinatorUrl ? ['image', 'images'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -656,6 +656,62 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   assert.equal(imaged.policy.image, true);
   assert.equal(imaged.policy.edgeSr, 'b', 'where the disks go');
   assert.deepEqual(currentLimits({ limits: { cpus: { total: 4 }, memory: 1024, disk: null } }), { cpus: 4, memory: 1024, disk: null });
+});
+
+test('labs are made by the policy job, each its kind, kept in the set, and the edge already on them is left as it is', { skip }, async (t) => {
+  // docs/hypervisors.md, "Labs". The edge is rebuilt when its labs change
+  // (test/edge-router.test.js); here it already has these two.
+  const xo = await standIn(t, {
+    sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'net-l1'] }],
+    more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
+    nets: { 'net-l1': 'fleetwright-lab-1', 'net-l2': 'fleetwright-lab-2' },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-labs:oc'], power_state: 'Running' } },
+    vifs: {
+      w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' },
+      a: { id: 'a', type: 'VIF', $VM: 'edge', device: '2', $network: 'net-l1' },
+      b: { id: 'b', type: 'VIF', $VM: 'edge', device: '3', $network: 'net-l2' },
+    },
+  });
+  const { setups } = await machine({ coordinatorUrl: 'https://fleet.test' });
+  const actor = 'eli@example.com';
+  const { begun, reply, state } = await choosing(xo, setups, actor);
+  const [epk, iv, ct] = state.inventory.split('.');
+  const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(inventory.edges[0].labs, { open: 1, closed: 1 }, 'the phone starts from the labs the edge has');
+  assert.equal(inventory.labMax, 4);
+  const good = { v: 1, srs: ['sr2'], networks: ['net-lab'], egress: 'net-dmz', edge: true, labs: { open: 1, closed: 1 }, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  assert.equal((await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.deepEqual(
+    xo.calls.filter((c) => c.method === 'tag.add' && c.params.tag.startsWith('fleetwright-lab:')).map((c) => [c.params.id, c.params.tag]),
+    [['net-l1', 'fleetwright-lab:open'], ['net-l2', 'fleetwright-lab:closed']],
+  );
+  assert.ok(xo.calls.some((c) => c.method === 'resourceSet.addObject' && c.params.object === 'net-l2'), 'the fleet may not put a machine on the new lab');
+  const set = xo.calls.find((c) => c.method === 'resourceSet.set')?.params;
+  assert.ok(set.objects.includes('net-l1'), 'a lab the phone did not list was taken out of the set');
+  assert.ok(!xo.calls.some((c) => c.method === 'disk.import'), 'an edge already on those labs was rebuilt');
+  assert.match(end.text, /with one open lab and one closed lab/);
+});
+
+test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves them as they are', () => {
+  const choices = {
+    srs: new Map([['a', 100 * 1024 ** 3]]),
+    networks: new Set(['n1', 'n2']),
+    capacity: { cpus: 8, memory: 32 * 1024 ** 3 },
+    networkPools: new Map([['n1', 'p1'], ['n2', 'p2']]),
+    edgePools: new Set(['p1']),
+  };
+  const ok = { v: 1, srs: ['a'], networks: ['n1'], egress: 'n1', limits: { cpus: 2, memory: 4 * 1024 ** 3, disk: 50 * 1024 ** 3 } };
+  assert.equal(/** @type {any} */ (checkPolicy(ok, choices)).policy.labs, null);
+  assert.deepEqual(/** @type {any} */ (checkPolicy({ ...ok, labs: { open: 3, closed: 1 } }, choices)).policy.labs, { open: 3, closed: 1 });
+  assert.deepEqual(/** @type {any} */ (checkPolicy({ ...ok, labs: { open: 0, closed: 0 } }, choices)).policy.labs, { open: 0, closed: 0 }, 'none is an answer: take them away');
+  for (const labs of [{ open: 4, closed: 1 }, { open: -1, closed: 0 }, { open: 1.5, closed: 0 }, { open: '1', closed: 0 }, { open: 1 }, true]) {
+    assert.match(/** @type {any} */ (checkPolicy({ ...ok, labs }, choices)).text ?? '', /Between 0 and 4 labs/, JSON.stringify(labs));
+  }
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, egress: null, labs: { open: 1, closed: 0 } }, choices)).text, /choose the way out/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, egress: 'n2', labs: { open: 1, closed: 0 } }, choices)).text, /has none yet/);
+  assert.equal(checkPolicy({ ...ok, egress: 'n2', edge: true, labs: { open: 1, closed: 0 } }, choices).ok, true, 'with the router asked for');
 });
 
 test('group networks are 0 to 4, in the way out’s pool, and a phone that says nothing asks for none', () => {
