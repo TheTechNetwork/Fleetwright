@@ -919,6 +919,14 @@ sign-in. The phone now remembers where it worked.
     that answers with a different one is asked about in full.
   - Turning the switch off forgets it then.
 
+**Face ID is the tap.** Once Face ID or a fingerprint has opened a kept
+sign-in, the phone begins by itself as soon as a machine is chosen: at once
+for the one that got through last time, or when the person taps one of
+several. Asked for: *"After FaceID it should auto connect."* Begin still
+sends only what was accepted, so a certificate that needs somebody's word
+stops there and asks; a sign-in that was typed never starts anything by
+itself.
+
 The fleet never sees any of it. What leaves the phone is what always did:
 the sign-in sealed to one job's key on one machine.
 
