@@ -454,6 +454,21 @@ machine of the fleet, through the coordinator.
   minting Worker's role check answers for a private repository only inside
   `FLEETWRIGHT_GITHUB_MINT_OWNERS`, so the App's key is not an oracle over
   which private repositories exist elsewhere.
+- **A lab is an interface on the edge router, and its session holds no key**
+  (`docs/hypervisors.md`, "Labs"). Lab networks are made by the policy job
+  with the admin sign-in, attached to the edge, and given rules in its
+  configuration, which nothing in the fleet can change: nothing private,
+  names only from the edge, then the internet (open) or HTTPS to the
+  coordinator and Claude's required hosts and nothing else (closed). A
+  closed lab still resolves names through the edge, so it is closed to
+  connections, not to DNS. One machine is put on a lab at a time, by a box
+  that saw it empty and looks again after; the coordinator holds a lab from
+  the ask until the box sees the machine there. A compromised coordinator can
+  put a person's new machine in a free lab of their pool, open or closed,
+  which is what they could ask for themselves; it cannot change a lab's
+  rules. Seeing inside a lab would need a way into the edge, and none exists:
+  the design for one keeps its key on the pool's own machine, never with a
+  session, and is not built.
 - **SSH keys** are public keys, kept as the named secret
   `SSH_AUTHORIZED_KEYS` and checked on the phone and on the box to be public
   keys and nothing else. They go on the machine's cloud-init drive beside
