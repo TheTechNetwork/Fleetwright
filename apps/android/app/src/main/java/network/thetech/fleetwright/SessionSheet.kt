@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -176,6 +177,18 @@ fun SessionSheet(
                 // say, never drawn as zero.
                 session.timeLine()?.let { Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now) }
                 session.spentLine()?.let { Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now) }
+                // WHERE ITS WORK GOES BEFORE IT STOPS, and whether the last
+                // push landed. A failed one is said in words and in the error
+                // colour, never in colour alone.
+                session.archiveLine?.let { line ->
+                    SelectionContainer {
+                        Text(
+                            line,
+                            style = Design.Style.micro,
+                            color = if (session.archiveOk == false) Design.Palette.bad.now else Design.Palette.inkDim.now,
+                        )
+                    }
+                }
 
                 val prompt = session.prompt
                 // Read once into a local: `session` is delegated state, so the

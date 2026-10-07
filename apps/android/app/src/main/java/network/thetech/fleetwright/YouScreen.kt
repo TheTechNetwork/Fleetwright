@@ -46,7 +46,8 @@ import kotlinx.coroutines.launch
  * the sign-in, then two near-identical hints about the URL drawn together.
  * Signed in, the address is a fact with "Sign out to change it".
  *
- * Each finished piece of setup is one row. What only an admin can do (People)
+ * Each finished piece of setup is one row: Credentials, Temporary machines,
+ * Linked repositories, Devices. What only an admin can do (People)
  * is drawn for an admin and nobody else.
  */
 @Composable
@@ -72,6 +73,9 @@ fun YouScreen(
     var runnersAnswered by remember { mutableStateOf(false) }
     var runnersSaved by remember { mutableStateOf<String?>(null) }
     var runnersFleet by remember { mutableStateOf<String?>(null) }
+    // How many roles this person has linked a repository for, once the fleet
+    // has said; null until then, and the row is not drawn.
+    var linkedCount by remember { mutableStateOf<Int?>(null) }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     val inDemo = signedIn && Demo.isActive(settings.coordinatorUrl)
 
@@ -84,11 +88,15 @@ fun YouScreen(
                 runnersFleet = got.fleet
             }
         }
+        Fleet(settings).linkedRepos().onSuccess { got ->
+            if (got.ok != false) linkedCount = got.links.size
+        }
     }
 
     when (open) {
         "credentials" -> CredentialsScreen(settings, onDismiss = { open = null })
         "temporary" -> TemporaryMachinesSheet(settings, onDismiss = { open = null })
+        "linked" -> LinkedReposSheet(settings, onDismiss = { open = null })
         "devices" -> DevicesSheet(settings, if (viewAsMember) false else admin, onDismiss = { open = null })
         "kinds" -> KindsSheet(settings = settings, onDismiss = { open = null })
         "people" -> PeopleSheet(settings = settings, onDismiss = { open = null })
@@ -201,6 +209,13 @@ fun YouScreen(
                     "Temporary machines",
                     value = if (runnersAnswered) describeTemporaryMachines(runnersSaved, runnersFleet) else null,
                 ) { open = "temporary" }
+                // THE THREE ROLES A REPOSITORY CAN BE LINKED FOR, in one place
+                // (#346). Drawn only once the fleet has answered for this
+                // person: an older coordinator, or a credential that is not a
+                // person's, has nothing it could link.
+                linkedCount?.let { count ->
+                    OpenRow("Linked repositories", value = describeLinkedRepos(count)) { open = "linked" }
+                }
             }
         }
 
