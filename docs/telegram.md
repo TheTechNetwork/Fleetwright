@@ -104,6 +104,17 @@ nothing — a feature that is configured and absent is worse than one that
 is plainly gone.
 
 Restoring it means moving `archive/telegram/telegram.js` back to
-`src/adapters/`, re-adding the four lines in `src/index.js`, and
-answering the identity question above. The first two are typing. The
-third is the reason it is here.
+`src/adapters/` and starting it from `src/index.js`, but that is no
+longer enough to make it run. **The configuration it reads is gone.**
+`src/config.js` keeps only `telegram.token`, and the adapter also reads:
+
+- `cfg.telegram.allowedUsers`, the user ids it would answer, which came
+  from `FLEETWRIGHT_TELEGRAM_ALLOWED_USERS`. Nothing reads that variable
+  now, and without the key every message but `/whoami` is refused;
+- `cfg.telegram.apiBase`, the Bot API origin it calls. Without it the
+  adapter calls `undefined/bot<token>/getMe`, which fails, and it logs
+  that and does not start.
+
+So a restore also puts those two keys back into `config.js`, and still
+has to answer the identity question above, which is the reason it is
+here.
