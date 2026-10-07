@@ -291,6 +291,19 @@ and a table about somebody else's models would be wrong the week one changed.
 `null` is *cannot tell* — not running, no turn yet, an older host — and a
 screen draws it as nothing rather than as empty. `src/core/context-usage.js`.
 
+**Health, `list` and `status` say what a session cost, how its run spent its
+time, and since when it has been blocked on a person.** Three fields on each
+session record, all additive and all `null` for *cannot tell*:
+`awaitingSince` (epoch ms, a floor: the earlier of the hook's moment and the
+watcher's first look), `phases` (`{ since, current, currentSince, workingMs,
+awaitingMs, readyMs }`, closed time per phase for this run, so a client adds the
+open stretch on its own clock) and `spent` (`{ usd, complete, inputTokens,
+outputTokens, cacheReadTokens, cacheWriteTokens, asOf }`, Claude Code's own
+`cost-state` figure, at API prices, never computed by the fleet). The `list`
+reply also carries `prompt` and `startedAt` now, which health always had and
+the reply the phones read never did. `openapi.json`'s Session schema is the
+contract; [`telemetry.md`](./telemetry.md) is the reasoning.
+
 **The Claude row of a person's connections says how much of their limit is
 used.** `connect` (the listing) returns `connected`, and the `claude` row now
 carries `usage: { checkedAt, windows, why }`, where `windows` is the four

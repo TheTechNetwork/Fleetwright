@@ -227,6 +227,7 @@ says on health which journals a box has so the buttons are only ever live.)
 |---|---|---|---|
 | answer a waiting prompt | buttons from the host's options | buttons from the host's options | `/answer` |
 | session and fleet status | ✅ | ✅ | ✅ |
+| **how long it has waited on you, worked, and what it cost** (`awaitingSince`, `phases`, `spent`) | "Waiting for you · 12m"; the session page's two lines under its facts | the same, on the session sheet | `/status <name>`: `time:` and `cost:` |
 | journals and session output | Logs on the host page, Output on each session | Logs on the host sheet, Output on each session | ✅ |
 | update / upgrade a box | one tap | one tap | ✅ |
 | reboot a box | pin + typed hostname | pin + typed hostname | ✅ |

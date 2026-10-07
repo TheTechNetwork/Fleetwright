@@ -211,6 +211,21 @@ reads the transcript's tail because it is the only process that can — the
 volume belongs to the session's user namespace — and the hub keeps the number
 from the last event that carried one. `src/core/context-usage.js`.
 
+And `spent`: what the conversation has cost, as Claude Code itself counted it
+in the `cost-state` line it writes into the same transcript — a dollar figure
+at API prices, four token counts, whether every model had a price, and when it
+was written. Never summed or priced on either side (`src/core/spent.js` says
+why). The line can be megabytes back, so the hook reads backwards from the end
+and keeps how far it got in the container's `/tmp`, and only the first hook of
+a run pays for the scan. The hub keeps the figure on the session's record,
+written when it changes, so a stopped session's cost survives the container.
+
+The phases themselves are also added up: `advancePhases` in
+`src/core/activity.js` turns each change of phase into closed time — working,
+awaiting a person, at its own prompt — for one run of a container, and
+`/api/state` carries it as `phases` beside `activity`. See
+[`telemetry.md`](./telemetry.md), "What shipped".
+
 `src/core/activity.js` is the one table; `SessionManager.recordEvent` keeps
 the last phase per running session and drops it on every launch, resume and
 stop, so nothing said in one life of a container answers a question about the

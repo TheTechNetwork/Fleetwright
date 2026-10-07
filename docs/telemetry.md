@@ -1,13 +1,124 @@
 # Telemetry: what a fleet could know about its own sessions
 
-**Status: wanted, not built.** Nothing here is scheduled, no code has been
-written, and the privacy text this would have to change has not been changed.
-This file exists so the research is not done a third time — and because the
-first answer given to the question was wrong in a way worth recording.
+**Status: the three questions are answered, without any of the channels this
+file researches.** What a session cost, how long it worked and whether it is
+blocked on a person now come from what the machines already had — the hooks,
+the watcher, and a line Claude Code writes into its own transcript — and
+"What shipped" below says how. The OpenTelemetry route is still wanted and not
+built, and the privacy decisions in front of it are unchanged. This file exists
+so the research is not done a third time — and because the first answer given
+to the question was wrong in a way worth recording.
 
 Read as of 10 September 2026. Every claim about Anthropic's behaviour below is
 from their documentation, which is a statement by the party being asked about;
 the last section says what to do about that.
+
+## What shipped, and what it took
+
+Written 7 October 2026, against Claude Code 2.1.292; the research sections
+after this one are as of the date above.
+
+The row asked three things — what a session cost, how long it worked, and
+whether it is blocked on a person right now — and none of the answers needed a
+new channel. All three were already on the machines, in places this fleet
+already read for something else.
+
+| Question | Where the answer was | Field |
+|---|---|---|
+| Is it blocked on a person, and since when? | the watcher already saw it and raised `session.awaiting-input`, then kept the moment to itself; the `PermissionRequest` hook already said it with a timestamp | `awaitingSince` |
+| How long has it worked, and how long has it waited? | every lifecycle hook already arrived with a moment (`docs/hook-socket.md`); nothing added them up | `phases` |
+| What has it cost? | **Claude Code writes its own running total into the transcript**, as a `cost-state` line | `spent` |
+
+All three ride on each session in health and in the `list` and `status`
+replies, which is where both phones and fleet_await read sessions from. The
+contract is `openapi.json`'s Session schema. Each is null for CANNOT TELL, and
+every surface draws null as nothing rather than as zero.
+
+### Blocked on a person: a floor, not a stopwatch
+
+`src/fleet/host/watcher.js` `awaitingSince`. The earlier of two witnesses: the
+hook's own moment, when the CLI said a dialog went up, and the first tick the
+watcher saw one on the pane — which is all there is for the resume dialog (it
+appears before any hook can fire) and for an image older than the hooks. So it
+can be up to one watcher interval late, and a watcher that restarts begins
+again at its first look. Every reader rounds coarsely or says "at least".
+
+Finding it exposed a bug worth recording. `fleet_await` promised to return when
+a session needs a person and read `session.awaiting` to find out — a key no
+layer of the fleet had ever sent. The branch was unreachable on a live fleet
+and passed its tests only because their fake fleet invented the key: the fourth
+time that fake has certified a bug (`scripts/check-mcp-client.mjs` records the
+other three). And the phones' "Waiting for you" keyed on a `prompt` that health
+carried and the `list` reply — the one the phones actually read — never did.
+
+### Working versus waiting: the hooks' moments, added up
+
+`src/core/activity.js` `advancePhases`. Closed time per phase — working,
+awaiting a person, at its own prompt — plus the moment the open stretch began,
+so the phone adds the open part from its own clock (the reason `startedAt` is a
+timestamp). It belongs to one run of a container: cleared at every launch,
+resume and stop, and not by `SessionStart`, which fires again on `/clear` and
+`/compact` inside one run. Runtime state on the hub, so a hub restart starts
+counting again — `since` says when counting began, and the phones say "counted
+for the last 2h" rather than let the lost hours read as none.
+
+### Cost: Claude Code's own figure, never ours
+
+`src/core/spent.js`. The tempting version sums the `usage` on each assistant
+entry, and it is wrong three ways: Claude Code writes one entry per content
+block with the same usage repeated on each (9,833 entries for 5,042 messages on
+the transcript this was measured against), a subagent's turns are not all in the
+file, and dollars would need a price table — a table about somebody else's
+product, wrong the week a price changes.
+
+It does not need to. Claude Code writes a `cost-state` line —
+`totalCostUSD`, per-model token counts, `hasUnknownModelCost`, `startTime` and
+`totalDuration` — the running total its own `/cost` draws, written so a resumed
+conversation carries it on. That is the only figure this reads. Observed
+against CLI 2.1.292; a transcript without one, or with one in a shape this does
+not read, is null.
+
+Two facts about it decide how it is read and how it is drawn:
+
+- **It is written when a turn ends with nothing queued behind it**, after the
+  Stop hooks. So a session in the middle of a long turn is reported as of its
+  last pause, and `asOf` (`startTime + totalDuration`, the CLI's own clock)
+  says when that was. The phones add "as of 12m ago" once it is five minutes
+  old on a running session.
+- **It is irregular in the file.** On the 131 MB transcript this was measured
+  against the last one was 2.4 MB from the end and the widest gap was 16 MB, so
+  the half-megabyte tail `context-usage.js` reads would miss it. The reader goes
+  backwards from the end, stopping at the first figure or at what an earlier
+  read already covered, and gives up at 32 MB; that took 35 ms on that file, and
+  a second read of the same file reads nothing. The hook inside a sandbox keeps
+  how far it got in its container's `/tmp`, so only the first hook of a run
+  pays for the scan.
+
+The figure is **at API prices**, which is what Claude Code computes; on a Pro
+or Max sign-in it is not what anybody is billed, and every surface says "at API
+prices" rather than drawing a bare dollar sign that reads as a bill. When
+Claude Code says some model had no known price, the figure is a floor and is
+drawn as "at least". A sandboxed session's figure is kept on its registry
+record, written only when it changes, so what a session cost is still known
+after the container and the hub that heard it are both gone.
+
+### What this did not do, and why
+
+- **No OpenTelemetry, no collector, no new destination.** Everything above
+  travels host → your coordinator → your phone, on frames that already carried
+  the session's title, directory, question and window size. It adds a dollar
+  figure, four token counts and three durations to that frame, keeps no
+  history (the coordinator holds the last health frame, as before), and
+  aggregates nothing per person. None of the three privacy texts below is about
+  that path, and none of them is made misleading by it. The OTel route would
+  be a different class of data, and the decisions below still stand in front of
+  it.
+- **No status line.** Claude Code hands `cost.total_cost_usd` to a `statusLine`
+  command each time the status line updates, which would be fresher than `cost-state`. It would
+  also replace the status line of every session a person is driving through
+  Remote Control with ours, to read a number the transcript already holds.
+- **No price table, no summing.** For the reasons above, and because a number
+  this fleet computed would be a claim C-5 asks it to prove.
 
 ## The question
 
@@ -172,7 +283,10 @@ ever moves.
 
 ## Not decided
 
-Whether to do any of it. The reason to write it down now is that the research
+Whether to do the OpenTelemetry part of it. The three questions the row asked
+are answered above without it; what it would add is the grain — per-tool
+durations and results, lines and commits, per-skill cost — and that is the
+part that would be a new class of data. The reason to write it down now is that the research
 cost more than the conclusion, and the conclusion — **the data exists, at a
 finer grain than the API sells, on machines we already own, and the price is a
 privacy promise that has to be rewritten first** — is the kind that gets
