@@ -353,6 +353,21 @@ machine of the fleet, through the coordinator.
   `fleetwright-image` on that person's pool, and a network one it saw on
   that pool, so the coordinator can name which of the person's images and
   which of the networks the policy allows, and nothing else.
+- **The pool's own machine is admitted by a pin** (`docs/hypervisors.md`,
+  "A machine of its own"). The coordinator gives the pin only to the box
+  running that person's policy job, at most three times a job. The pin is
+  bound to a name the coordinator chose and no host had, so it cannot
+  replace an existing host's key. It is single use and lasts ten minutes. It
+  travels only on the machine's cloud-init drive, which the machine wipes
+  first and Xen Orchestra destroys after boot. Somebody who read the drive in
+  those minutes could enrol a machine of their own under that name. That
+  machine would be a member of the fleet with **nothing to hold**: a box is
+  handed the pool's token only once the person approves its key on the
+  phone, which shows its fingerprint, and nothing the coordinator or the
+  box does can approve it. The machine is made with the admin sign-in,
+  outside the resource set, so the limited token cannot remove it. Being
+  asked first (`xo[].holder` in its health) only reorders boxes the person
+  already gave the token to.
 - **Working a machine** (`vmctl`, `docs/hypervisors.md`, "Working a
   machine"). The box works only a machine it tagged as made for the person
   asking, under that person's pool token: restart, a size within the

@@ -4,8 +4,9 @@
 machine already in the fleet ("What ships first", below); the policy job
 builds its edge router and its **machine image**; and a session starts on a
 **new machine from that image** from New session › Where on either phone
-("Machines from your pool", next). **Not yet run:** a real XCP-ng pool behind
-Xen Orchestra. Labs, the dedicated machine and deploying Xen Orchestra are
+("Machines from your pool", next). The policy job also makes the pool **a
+machine of its own** that holds it ("A machine of its own"). **Not yet run:**
+a real XCP-ng pool behind Xen Orchestra. Labs and deploying Xen Orchestra are
 designed and not built. XCP-ng first, through Xen Orchestra; Proxmox second,
 behind the same interface.
 
@@ -150,6 +151,53 @@ converts to a raw disk with `qemu-img` before it is written (`apt install
 qemu-utils` on a box without it, and it says so). Each image is its own
 template, tagged `fleetwright-image:<key>`, and New session lists every image
 on your pools. A machine older than the choice is offered Debian alone.
+
+### A machine of its own
+
+**The policy screen offers to make the pool a Fleetwright machine of its
+own**, under Way out, from a machine whose setup offers it (`holder` in
+`can`). Until then, the boxes that hold a pool's token are whichever machines
+its owner approved, and that is often the laptop that set the pool up. When
+the laptop sleeps, nothing can start a machine on the pool. The pool's own
+machine stays up.
+
+**What Apply does**, last, after the router and the images:
+
+1. It reuses the one on the pool if there is one, and starts it if it is off.
+2. Otherwise it clones one from the pool's machine image (Debian's, where
+   there is one) with the admin sign-in.
+3. The clone goes on the way out, because it has to reach Xen Orchestra and
+   the coordinator, and the uplink behind the router reaches neither by
+   design.
+4. The clone is made outside the fleet's resource set. It does not count
+   against the fleet's limits, and the limited user the fleet works with can
+   neither see it nor remove it.
+5. It is tagged `fleetwright-holder` and `fleetwright-holder-for:<address>`,
+   and carries none of the tags the sweep removes machines by.
+
+Asking for one where the pool has no image also asks for Debian's image, and
+for the router the image is built behind.
+
+**It joins with a pin, not a ticket.** Just before it clones, the box running
+the job asks the coordinator for one (a `holder-pin` frame). The coordinator
+gives a pin only to the box running that person's policy job, at most three
+times a job. The pin is bound to a name the coordinator chooses: `holder-`
+and six hex, never a name a host already has, because re-enrolling a name
+replaces its key. It is the ordinary enrolment pin otherwise: single use, ten
+minutes, and it enrols a permanent host of nobody's. The machine boots with
+the pin, the name and the pool it holds on its cloud-init drive. The join
+script wipes the drive, schedules no end, and writes `FLEETWRIGHT_HOLDER_FOR`.
+The sidecar enrols at `/api/enroll/host` and spends the pin either way.
+
+**It holds nothing until you approve it.** It joins the fleet like any box,
+and the pool's token reaches it only as the `hypervisor:` vault item, once
+you approve its key on its page under Machines. The job's last line says so.
+Nothing the box or the coordinator does can approve it.
+
+**Once approved, it is asked first.** Its health marks that pool's entry
+`holder`. The coordinator then asks it before the other boxes holding your
+token, both to make your machines and to work them, after the box that last
+saw the machine. The other boxes are the fallback.
 
 ## The credential, which is the whole design again
 
@@ -392,7 +440,7 @@ Following `CONTRIBUTING.md`, coordinator first. **Done:** protocol 8
 (`template` on `provision`), the VM ticket and `/api/enroll/vm`, placement
 onto a box that holds the pool, the vault's `hypervisor:` kind; on the host,
 the pool holder, the clone, the sweep, the join and the machine image; both
-phones; these docs. **Next:** a network per machine and a group network for
+phones; these docs; the pool's own machine (A machine of its own). **Next:** a network per machine and a group network for
 tests that need several machines to reach each other; machines kept booted
 and waiting so a session starts in seconds; DNS filtering and intrusion
 detection on the edge router; and what each machine did on the network, on
@@ -653,13 +701,13 @@ which package to install when it has none.
   pool master: a checksum-verified cloud image cached on the storage
   repository, a VM made with cloud-init that runs `xo-install.sh`, and
   progress read back through xenstore so nothing needs to reach the VM. The
-  same image cache and cloud-init path builds the templates and the dedicated
-  machine. It needs the pool master's root password, sealed the same way.
+  same image cache and cloud-init path builds the templates and the pool's
+  own machine (A machine of its own). It needs the pool master's root password, sealed the same way.
 - **No machine in the fleet can reach the pool**: the phone's own network
   carries the first minute. The phone relays bytes between a machine and
   Xen Orchestra over TLS the machine terminates, so neither the phone nor the
-  coordinator reads the sign-in; that first minute makes the dedicated machine
-  on the pool, which joins the fleet and runs everything after it with the
+  coordinator reads the sign-in; that first minute makes the pool's own
+  machine, which joins the fleet and runs everything after it with the
   app closed.
 
 ### Without any host yet
