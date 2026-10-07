@@ -153,6 +153,8 @@ fun StartSheet(
     var vmNetwork by remember { mutableStateOf("") }
     // The group network it joins as well; empty is none.
     var vmGroup by remember { mutableStateOf("") }
+    // In a lab of its own: "open", "closed", or empty for none.
+    var vmLab by remember { mutableStateOf("") }
     // The machine images on your own pools a new machine can come from, from
     // the snapshot. Drawn from this and only this (C-2).
     var images by remember { mutableStateOf<List<Fleet.VmImage>>(emptyList()) }
@@ -374,6 +376,7 @@ fun StartSheet(
                                 onClick = {
                                     vmNetwork = ""
                                     vmGroup = ""
+                                    vmLab = ""
                                     if (template == image.template) {
                                         template = ""
                                         platform = ""
@@ -413,7 +416,7 @@ fun StartSheet(
                         // pool has a network besides the uplink. Behind the
                         // edge router is the default and the safe one: a
                         // network of yours puts the machine beside your own.
-                        val networks = images.firstOrNull { it.template == template }?.networks.takeIf { platform == "vm" }
+                        val networks = images.firstOrNull { it.template == template }?.networks.takeIf { platform == "vm" && vmLab.isEmpty() }
                         if (!networks.isNullOrEmpty()) {
                             Text("Network", style = MaterialTheme.typography.labelMedium)
                             AssistChip(
@@ -431,7 +434,7 @@ fun StartSheet(
                         // pool has a group network. Asked for: "the 3 VMs need
                         // to reach each other". Start each of them here with
                         // the same group, and they do.
-                        val groups = images.firstOrNull { it.template == template }?.groups.takeIf { platform == "vm" }
+                        val groups = images.firstOrNull { it.template == template }?.groups.takeIf { platform == "vm" && vmLab.isEmpty() }
                         if (!groups.isNullOrEmpty()) {
                             Text("Work with others on", style = MaterialTheme.typography.labelMedium)
                             AssistChip(
@@ -443,6 +446,35 @@ fun StartSheet(
                                     onClick = { vmGroup = if (vmGroup == g.id) "" else g.id },
                                     label = { Text(if (vmGroup == g.id) "${g.name} \u2713" else g.name) },
                                 )
+                            }
+                        }
+                        // IN A LAB OF ITS OWN, offered only when the pool has
+                        // labs on its edge router, and each kind only while
+                        // one of that kind is free (C-2). docs/hypervisors.md, "Labs".
+                        val image = images.firstOrNull { it.template == template }.takeIf { platform == "vm" }
+                        if (image != null && !image.labs.isNullOrEmpty()) {
+                            val open = image.freeLab(open = true) != null
+                            val closed = image.freeLab(open = false) != null
+                            if (open || closed) {
+                                Text("In a lab", style = MaterialTheme.typography.labelMedium)
+                                AssistChip(
+                                    onClick = { vmLab = "" },
+                                    label = { Text(if (vmLab.isEmpty()) "No lab \u2713" else "No lab") },
+                                )
+                                if (open) {
+                                    AssistChip(
+                                        onClick = { vmLab = if (vmLab == "open") "" else "open"; vmNetwork = ""; vmGroup = "" },
+                                        label = { Text(if (vmLab == "open") "Open: reaches the internet \u2713" else "Open: reaches the internet") },
+                                    )
+                                }
+                                if (closed) {
+                                    AssistChip(
+                                        onClick = { vmLab = if (vmLab == "closed") "" else "closed"; vmNetwork = ""; vmGroup = "" },
+                                        label = { Text(if (vmLab == "closed") "Closed: only the fleet and Claude \u2713" else "Closed: only the fleet and Claude") },
+                                    )
+                                }
+                            } else {
+                                Text("Every lab on this pool is in use. One is free again when its session ends.", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                         if (platform.isNotEmpty()) {
@@ -459,7 +491,16 @@ fun StartSheet(
                             // NO LINK PROMISED. A runner's credential cannot open
                             // Remote Control, so the notification that matters
                             // is the one when its task is done.
-                            if (platform == "vm") {
+                            if (platform == "vm" && vmLab.isNotEmpty()) {
+                                Text(
+                                    "A lab is a network of its own on your edge router, and this machine is alone on it. " +
+                                        (if (vmLab == "open") "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab."
+                                        else "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.") +
+                                        " It costs no extra machine: the lab is an interface on the router you already have." +
+                                        " When the session ends, or the time runs out, the machine is removed and the lab is free for the next one.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (platform == "vm") {
                                 Text(
                                     "It is cloned from your machine image and joins in a minute or two. The session starts on it then" +
                                         (if (task.isBlank()) ", idle, with nothing to do. Give it a task above to put it to work."
@@ -534,12 +575,18 @@ fun StartSheet(
                             profile = profile.ifBlank { null }.takeIf { platform.isEmpty() && task.isBlank() },
                             task = task.trim().ifBlank { null },
                             secret = secret.ifBlank { null }.takeIf { platform.isEmpty() },
-                            platform = platform.ifBlank { null },
+                            // A LAB is the same machine in a lab: platform `lab`.
+                            platform = (if (platform == "vm" && vmLab.isNotEmpty()) "lab" else platform).ifBlank { null },
                             minutes = machineMinutes.takeIf { platform.isNotEmpty() },
                             template = template.ifBlank { null }.takeIf { platform == "vm" },
                             imageLabel = images.firstOrNull { it.template == template }?.label.takeIf { platform == "vm" },
-                            network = vmNetwork.ifBlank { null }.takeIf { platform == "vm" },
-                            group = vmGroup.ifBlank { null }.takeIf { platform == "vm" },
+                            // A LAB rides in `network`: the first free one of the kind asked.
+                            network = if (vmLab.isNotEmpty()) {
+                                images.firstOrNull { it.template == template }?.freeLab(open = vmLab == "open")?.id.takeIf { platform == "vm" }
+                            } else {
+                                vmNetwork.ifBlank { null }.takeIf { platform == "vm" }
+                            },
+                            group = vmGroup.ifBlank { null }.takeIf { platform == "vm" && vmLab.isEmpty() },
                         ),
                     )
                     onDismiss()

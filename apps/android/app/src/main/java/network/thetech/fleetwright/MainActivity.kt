@@ -409,7 +409,9 @@ fun FleetScreen(
         request.platform?.let { platform ->
             val label = request.imageLabel ?: newMachineChoices.firstOrNull { it.platform == platform }?.label ?: "New machine"
             val lowered = label.replaceFirstChar { it.lowercase() }
-            status = if (platform == "vm") {
+            status = if (platform == "lab") {
+                "Asking your hypervisor for a $lowered, in a lab of its own. The session starts on it when it joins."
+            } else if (platform == "vm") {
                 "Asking your hypervisor for a $lowered. The session starts on it when it joins."
             } else {
                 "Asking GitHub for a $lowered. The session starts on it when it joins."

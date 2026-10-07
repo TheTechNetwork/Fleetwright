@@ -149,6 +149,10 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                     Fact("Network", m.network ?: "Not reported")
                     // IN A GROUP: where the others reach it, by address and by name.
                     m.group?.let { g -> Fact("Group", "$g, at ${m.groupIp ?: "an address not reported"} or ${m.name}.local") }
+                    // IN A LAB: which, and what its rules let it reach.
+                    m.lab?.let { l ->
+                        Fact("Lab", "${l.name}, " + if (l.open) "open: it reaches the internet and nothing private" else "closed: it reaches the fleet and Claude and nothing else")
+                    }
                     Fact("Size", sizeWords(m))
                     Fact("Ends", m.until?.let { "${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it))}, ${relative(it)}" } ?: "Cannot tell")
                 }

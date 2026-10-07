@@ -90,7 +90,8 @@ test('Android: the policy holds the host’s numbers and sends groups only to a 
 test('Android: a machine is put in a group only where the pool has one, and the page says where the others reach it', () => {
   assert.match(A_SHEET, /if \(!groups\.isNullOrEmpty\(\)\) \{/);
   assert.match(A_FLEET, /\(if \(group == null\) emptyMap\(\) else mapOf\("group" to group\)\)/);
-  assert.match(A_SHEET, /group = vmGroup\.ifBlank \{ null \}\.takeIf \{ platform == "vm" \}/);
+  // A machine in a lab joins no group: it is on the lab's network alone.
+  assert.match(A_SHEET, /group = vmGroup\.ifBlank \{ null \}\.takeIf \{ platform == "vm" && vmLab\.isEmpty\(\) \}/);
   assert.match(A_MAIN, /network = request\.network, group = request\.group\)/);
   assert.match(A_PAGE, /m\.group\?\.let \{ g -> Fact\("Group"/);
 });

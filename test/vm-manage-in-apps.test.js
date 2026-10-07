@@ -145,7 +145,9 @@ test('Android: SSH keys are public keys only, kept as one secret in the vault', 
 
 test('Android: a new machine goes behind the edge router unless a network of the pool is chosen', () => {
   assert.match(A_SHEET, /if \(!networks\.isNullOrEmpty\(\)\) \{/);
-  assert.match(A_SHEET, /network = vmNetwork\.ifBlank \{ null \}\.takeIf \{ platform == "vm" \},/);
+  // Not offered for a machine in a lab, which goes on the lab alone.
+  assert.match(A_SHEET, /\?\.networks\.takeIf \{ platform == "vm" && vmLab\.isEmpty\(\) \}/);
+  assert.match(A_SHEET, /vmNetwork\.ifBlank \{ null \}\.takeIf \{ platform == "vm" \}/);
 });
 
 test('both phones say it in the same words', () => {

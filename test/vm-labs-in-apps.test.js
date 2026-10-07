@@ -76,3 +76,43 @@ test('iOS says it in the shared words', () => {
   const ios = [I_POLICY, I_FORM, I_FLEET, I_SHEET, I_PAGE].join('\n');
   for (const words of SHARED) assert.ok(ios.includes(words), words);
 });
+
+// --- Android ------------------------------------------------------------------
+
+const ANDROID = (/** @type {string} */ f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`);
+const A_POLICY = ANDROID('XoPolicy.kt');
+const A_FORM = ANDROID('PolicyForm.kt');
+const A_SHEET_HV = ANDROID('HypervisorSheet.kt');
+const A_FLEET = ANDROID('Fleet.kt');
+const A_SHEET = ANDROID('StartSheet.kt');
+const A_PAGE = ANDROID('VmMachinePage.kt');
+const A_MAIN = ANDROID('MainActivity.kt');
+
+test('Android: the policy holds the host’s numbers, starts from the edge’s labs, and sends labs only where there is a router', () => {
+  assert.ok(A_POLICY.includes(`const val LAB_PREFIX = "${LAB.prefix}"`));
+  assert.ok(A_POLICY.includes(`const val MAX_LABS = ${LAB.max}`));
+  assert.match(A_POLICY, /if \(c\.labsChoice && c\.egress != null && \(c\.edge \|\| edgeOn\(inv, c\.egress\) != null\)\) \{\s*put\("labs", JSONObject\(\)\.put\("open", c\.labsOpen\)\.put\("closed", c\.labsClosed\)\)/);
+  assert.match(A_POLICY, /labsOpen = edgeOn\(inv, egress\)\?\.labs\?\.open \?: 0,/);
+  assert.match(A_SHEET_HV, /canLabs = "labs" in p\.setup\.can/);
+  assert.match(A_SHEET_HV, /labsChoice = canLabs && opened\.labMax != null/);
+  assert.match(A_POLICY, /it\.name\.startsWith\(LAB_PREFIX\)/);
+  assert.match(A_FORM, /max = \(XoPolicy\.MAX_LABS - choice\.labsClosed\)\.toLong\(\),/);
+  assert.match(A_FORM, /max = \(XoPolicy\.MAX_LABS - choice\.labsOpen\)\.toLong\(\),/);
+});
+
+test('Android: a lab is offered only by kind while one is free, rides in `network`, and the page says which', () => {
+  assert.match(A_SHEET, /if \(open\) \{\s*AssistChip\(/);
+  assert.match(A_SHEET, /if \(closed\) \{\s*AssistChip\(/);
+  assert.match(A_FLEET, /fun freeLab\(open: Boolean\): VmLab\? = labs\?\.firstOrNull \{ it\.open == open && it\.free \}/);
+  // Free only when the coordinator said so: anything else is not free.
+  assert.match(A_FLEET, /l\.opt\("free"\) == true/);
+  assert.match(A_SHEET, /\?\.freeLab\(open = vmLab == "open"\)\?\.id\.takeIf \{ platform == "vm" \}/);
+  assert.match(A_SHEET, /platform = \(if \(platform == "vm" && vmLab\.isNotEmpty\(\)\) "lab" else platform\)\.ifBlank \{ null \},/);
+  assert.match(A_MAIN, /status = if \(platform == "lab"\) \{/);
+  assert.match(A_PAGE, /m\.lab\?\.let \{ l ->/);
+});
+
+test('Android says it in the shared words', () => {
+  const android = [A_POLICY, A_FORM, A_SHEET_HV, A_FLEET, A_SHEET, A_PAGE].join('\n');
+  for (const words of SHARED) assert.ok(android.includes(words), words);
+});

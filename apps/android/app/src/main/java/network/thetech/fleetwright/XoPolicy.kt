@@ -125,7 +125,23 @@ internal object XoPolicy {
          * tell", never "none".
          */
         val holders: List<Holder>? = null,
+        /** The most labs an edge has room for, from a machine that makes them; null from one older than that, which makes none. */
+        val labMax: Int? = null,
     )
+
+    /** What a lab network is called, and the most labs an edge has room for (LAB in edge-router.js). */
+    const val LAB_PREFIX = "fleetwright-lab-"
+    const val MAX_LABS = 4
+
+    /** The labs an edge was built with, by kind. */
+    data class Labs(val open: Int, val closed: Int)
+
+    /** Whether Apply would rebuild the edge that is there to change its labs. */
+    fun labsChanged(inv: Inventory, c: Choice): Boolean {
+        if (!c.labsChoice) return false
+        val there = edgeOn(inv, c.egress) ?: return false
+        return (there.labs?.open ?: 0) != c.labsOpen || (there.labs?.closed ?: 0) != c.labsClosed
+    }
 
     /** A network for machines that work together: no way off the pool. */
     data class GroupNetwork(val id: String, val name: String, val pool: String?)
@@ -135,7 +151,7 @@ internal object XoPolicy {
     const val MAX_GROUPS = 4
 
     /** The networks a person chooses among: the pool's, less its group networks, which are this policy's to make. */
-    fun choosable(inv: Inventory): List<Network> = inv.networks.filterNot { it.name.startsWith(GROUP_PREFIX) }
+    fun choosable(inv: Inventory): List<Network> = inv.networks.filterNot { it.name.startsWith(GROUP_PREFIX) || it.name.startsWith(LAB_PREFIX) }
 
     /** How many group networks the pool this network is in has. */
     fun groupCount(inv: Inventory, network: String?): Int {
@@ -216,7 +232,7 @@ internal object XoPolicy {
      * what its threat rules match (null from a machine that predates saying,
      * which built none that did).
      */
-    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null, val blocks: Boolean? = null)
+    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null, val blocks: Boolean? = null, val labs: Labs? = null)
 
     /** The edge router on the pool this network is in, if it has one. */
     fun edgeOn(inv: Inventory, network: String?): Edge? {
@@ -304,6 +320,11 @@ internal object XoPolicy {
         val groups: Int = 0,
         /** The machine makes them (`groups` in begin's `can`). An older one cannot, so they are neither offered nor sent. */
         val groupsChoice: Boolean = false,
+        /** How many labs the edge is to have, of each kind (docs/hypervisors.md, "Labs"). Changing either rebuilds the edge. */
+        val labsOpen: Int = 0,
+        val labsClosed: Int = 0,
+        /** The machine makes them (`labs` in begin's `can`). An older one cannot, so they are neither offered nor sent. */
+        val labsChoice: Boolean = false,
         /**
          * Make the pool a machine of its own on the way out, or keep the one
          * there running (xo-holder.js). Needs the pool's machine image, there
@@ -406,7 +427,8 @@ internal object XoPolicy {
             edges = json.optJSONArray("edges")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
                     a.optJSONObject(i)?.let { e ->
-                        Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr"), if (e.has("blocks")) e.optBoolean("blocks", false) else null)
+                        val labs = e.optJSONObject("labs")?.let { l -> Labs(l.optInt("open", 0), l.optInt("closed", 0)) }
+                        Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr"), if (e.has("blocks")) e.optBoolean("blocks", false) else null, labs)
                     }
                 }
             },
@@ -428,6 +450,7 @@ internal object XoPolicy {
                     }
                 }
             },
+            labMax = if (json.has("labMax")) json.optInt("labMax", MAX_LABS) else null,
             imageKinds = json.optJSONArray("imageKinds")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
                     a.optJSONObject(i)?.let { k ->
@@ -473,6 +496,9 @@ internal object XoPolicy {
             // As it is: Apply rebuilds nothing the person did not change.
             edgeBlock = edgeOn(inv, egress)?.blocks ?: false,
             holder = holderOn(inv, egress) != null,
+            // The labs the edge has: Apply rebuilds nothing nobody changed.
+            labsOpen = edgeOn(inv, egress)?.labs?.open ?: 0,
+            labsClosed = edgeOn(inv, egress)?.labs?.closed ?: 0,
         )
     }
 
@@ -527,6 +553,13 @@ internal object XoPolicy {
         if (c.groupsChoice && c.groups > 0 && c.egress == null) {
             return "Group networks are made in the way out’s pool: choose the way out. Nothing was changed."
         }
+        if (c.labsChoice && c.labsOpen + c.labsClosed > MAX_LABS) return "Between 0 and $MAX_LABS labs in all. Nothing was changed."
+        if (c.labsChoice && c.labsOpen + c.labsClosed > 0 && c.egress == null) {
+            return "Labs are on the edge router: choose the way out it is on. Nothing was changed."
+        }
+        if (c.labsChoice && c.labsOpen + c.labsClosed > 0 && !c.edge && edgeOn(inv, c.egress) == null) {
+            return "Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed."
+        }
         if (c.imageChoice && c.wantsImage && c.egress == null) {
             return "The machine image is built behind the edge router: choose the way out it leaves through."
         }
@@ -577,6 +610,12 @@ internal object XoPolicy {
             }
             // Only to a machine that makes them, and only with a way out.
             .apply { if (c.groupsChoice && c.egress != null) put("groups", c.groups) }
+            // Only to a machine that makes them, and only where there is a router, there or asked for.
+            .apply {
+                if (c.labsChoice && c.egress != null && (c.edge || edgeOn(inv, c.egress) != null)) {
+                    put("labs", JSONObject().put("open", c.labsOpen).put("closed", c.labsClosed))
+                }
+            }
             // Only to a machine that makes one, and only when asked.
             .apply { if (c.holderChoice && c.holder) put("holder", true) }
             // Only to a machine that reads it, and only with something to build.
