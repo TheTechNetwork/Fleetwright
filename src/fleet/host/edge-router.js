@@ -143,6 +143,13 @@ export const LAB = Object.freeze({
   prefix: 'fleetwright-lab-',
   openTag: 'fleetwright-lab:open',
   closedTag: 'fleetwright-lab:closed',
+  /**
+   * On each lab network, how many labs one person may hold at once on its
+   * pool, when the policy sets a number ("Labs per person"); no tag is no
+   * limit. On the network and not the edge because the box reads it with the
+   * fleet's own token, which can see the lab networks and not the edge.
+   */
+  eachTag: 'fleetwright-lab-each:',
   /** On the edge, which labs it was built with, in order: `o` open, `c` closed. */
   edgeTag: 'fleetwright-edge-labs:',
   /** Lab n is 10.250.n.0/24, the edge at .1, machines given .100 to .250. */
@@ -162,11 +169,54 @@ export function edgeLabsOf(vm) {
 }
 
 /**
+ * How many labs one person may hold on a pool, from its lab networks' tags
+ * (LAB.eachTag): a whole number from 1, or null for no limit, which is also
+ * what a pool whose policy predates the setting has. Networks that somehow
+ * disagree are read as the smaller.
+ *
+ * @param {any[]} networks as Xen Orchestra lists them @param {string|null} pool
+ * @returns {number|null}
+ */
+export function labsEachOf(networks, pool) {
+  /** @type {number|null} */
+  let each = null;
+  for (const n of networks) {
+    if (!String(n?.name_label || '').startsWith(LAB.prefix) || (pool && n?.$pool !== pool)) continue;
+    if (!(Array.isArray(n?.tags) && (n.tags.includes(LAB.openTag) || n.tags.includes(LAB.closedTag)))) continue;
+    const t = n.tags.find((/** @type {string} */ x) => x.startsWith(LAB.eachTag));
+    const v = t && /^[1-9]\d{0,2}$/.test(t.slice(LAB.eachTag.length)) ? Number(t.slice(LAB.eachTag.length)) : null;
+    if (v !== null) each = each === null ? v : Math.min(each, v);
+  }
+  return each;
+}
+
+/**
+ * Where dnsmasq answers on the edge. It hands out every inside network's
+ * addresses and answers names for nobody but the closed labs (fleetHosts),
+ * since Unbound has port 53 and the rules send nothing else here.
+ */
+export const DNSMASQ_PORT = 53053;
+
+/**
  * Where a closed lab may still go: the fleet's coordinator, so its machine
  * can enrol and its sidecar stay connected, and the hosts Claude cannot work
  * without, which are the sandbox's own required list (src/core/egress.js)
  * rather than a second one. HTTPS only, by name: an OPNsense host alias,
  * which the edge resolves with its own Unbound and keeps resolved.
+ *
+ * AND THE ONLY NAMES IT RESOLVES, from the same list, so a session on it
+ * cannot carry data out in the names it looks up, which the edge's own
+ * resolver would otherwise ask about anywhere on the internet for it. Each
+ * name and the names under it (`claude.ai`, `api.claude.ai`), which is what
+ * a service behind one of them may ask for; everything else is REFUSED.
+ * Written as dnsmasq and not as Unbound, because OPNsense 26.7's Unbound
+ * has nothing in config.xml that answers one network differently from
+ * another: its access lists allow or refuse a network's every question,
+ * and its blocklists match only addresses (A, AAAA, CNAME, HTTPS) and
+ * never the whole tree, so a TXT question would still go out. So a closed
+ * lab's port 53 is sent to dnsmasq (`rdr pass`, before any rule), which has
+ * no resolver of its own (`no_resolv`) and one domain override per name,
+ * each asking Unbound on the edge itself, which still filters the answer.
  *
  * @param {string|null} coordinatorUrl
  * @returns {string[]}
@@ -230,14 +280,27 @@ export function fleetHosts(coordinatorUrl) {
  * resolver, nothing private, then an open lab's way out (diverted like the
  * uplink's when the edge blocks), a closed lab's HTTPS to the fleet's hosts
  * (`fleet`, fleetHosts), and everything else a closed lab sends blocked and
- * logged. Suricata watches the labs as it watches the uplink. Labs do not fit
- * in the 5,234 bytes, so a configuration with any is the room the file's own
- * blocks give it (OPNSENSE_IMAGE.room), and the build grows the file to it.
+ * logged. A closed lab's names are the same list's and no more: its port 53
+ * goes to dnsmasq, which asks the edge's Unbound for those and refuses the
+ * rest (fleetHosts says why not Unbound itself). The uplink and open labs
+ * ask Unbound as before. Suricata watches the labs as it watches the uplink.
+ * Labs do not fit in the 5,234 bytes, so a configuration with any is the
+ * room the file's own blocks give it (OPNSENSE_IMAGE.room), and the build
+ * grows the file to it. The most it holds is four closed labs and blocking,
+ * with a coordinator whose name is up to about a hundred characters, since
+ * a closed lab's configuration has that name twice; a longer one is refused
+ * here, before anything is downloaded.
  * BOOTED IN QEMU that way, four labs, two of them closed, blocking: the file
  * was read whole, each lab's interface came up at its address with its DHCP
  * range, Suricata watched all five inside networks, and `pfctl -sr` showed
  * the rules above, one per interface, in this order. The fleet's alias was
  * there and empty: this sandbox has no outbound DNS to resolve it with.
+ * A CLOSED LAB'S NAMES were not booted: they came after, and the image no
+ * longer fit on this sandbox's disk. dnsmasq's lines were rendered from this
+ * configuration with OPNsense 26.7's own template and its own config reader,
+ * and run in dnsmasq 2.91 on Linux against a stand-in resolver: the fleet's
+ * names and the names under them were asked of it, and every other name, of
+ * any type, was REFUSED and never asked. The rdr rule is not yet seen in pf.
  *
  * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[] }} [opts]
  * @returns {Buffer}
@@ -270,6 +333,22 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
       '\n'
     : '';
   const labNets = labs.map((_, i) => `${LAB.address(i + 1).replace(/\.1$/, '.0')}/${LAB.cidr}`);
+  // A CLOSED LAB'S NAMES (fleetHosts): its port 53 goes to dnsmasq, which
+  // has no resolver of its own and answers only the fleet's names, each by
+  // asking Unbound, and refuses the rest.
+  // A name under another one on the list is already answered with it.
+  const names = fleet.filter((h) => /^[a-z0-9.-]+$/i.test(h) && /[a-z]/i.test(h));
+  const closedNames = closedIf.length
+    ? names
+        .filter((h) => !names.some((o) => h.endsWith(`.${o}`)))
+        // Each with its place: dnsmasq's template sorts them by it.
+        .map((h, i) => `<domainoverrides><sequence>${i + 1}</sequence><domain>${h}</domain><ip>127.0.0.1</ip></domainoverrides>`)
+        .join('')
+    : '';
+  const closedDns = closedIf.length
+    ? `<rule><interface>${closed}</interface><ipprotocol>inet</ipprotocol><protocol>TCP/UDP</protocol>` +
+      `<destination><network>any</network><port>53</port></destination><target>127.0.0.1</target><local-port>${DNSMASQ_PORT}</local-port><pass>pass</pass></rule>`
+    : '';
   const xml =
     '<?xml version="1.0"?>\n<opnsense>\n<system>\n' +
     '<use_mfs_tmp/><use_mfs_var/><serialspeed>115200</serialspeed><primaryconsole>serial</primaryconsole><secondaryconsole>video</secondaryconsole>\n' +
@@ -288,10 +367,11 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${address}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
     labs.map((_, i) => `<opt${i + 1}><enable>1</enable><if>xn${i + 2}</if><descr>LAB${i + 1}</descr><ipaddr>${LAB.address(i + 1)}</ipaddr><subnet>${LAB.cidr}</subnet></opt${i + 1}>\n`).join('') +
     '</interfaces>\n' +
-    `<dnsmasq><enable>1</enable><port>53053</port><interface>${['lan', ...labIf].join(',')}</interface><dhcp_ranges><interface>lan</interface><start_addr>${from}</start_addr><end_addr>${to}</end_addr></dhcp_ranges>` +
+    `<dnsmasq><enable>1</enable><port>${DNSMASQ_PORT}</port><interface>${['lan', ...labIf].join(',')}</interface>${closedIf.length ? '<no_resolv>1</no_resolv>' : ''}<dhcp_ranges><interface>lan</interface><start_addr>${from}</start_addr><end_addr>${to}</end_addr></dhcp_ranges>` +
     labIf.map((on, i) => `<dhcp_ranges><interface>${on}</interface><start_addr>${LAB.address(i + 1).replace(/\.1$/, '.100')}</start_addr><end_addr>${LAB.address(i + 1).replace(/\.1$/, '.250')}</end_addr></dhcp_ranges>`).join('') +
+    closedNames +
     '</dnsmasq>\n' +
-    '<nat><outbound><mode>automatic</mode></outbound></nat>\n<filter/>\n' +
+    `<nat><outbound><mode>automatic</mode></outbound>${closedDns}</nat>\n<filter/>\n` +
     '<OPNsense><Firewall>\n' +
     '<Alias><aliases><alias><enabled>1</enabled><name>fleetwright_private</name><type>network</type>' +
     `<content>${NOT_FROM_LABS.join('\n')}</content><description>What labs may not reach</description></alias>` +
@@ -718,10 +798,14 @@ export async function ensureGroups({ admin, pool, networks, setId, inSet, count 
  * (xo-pools.js reads the tag), and the edge built without it has no
  * interface there, so a machine left on it reaches nothing.
  *
- * @param {{ admin: any, pool: string, networks: any[], setId: string, inSet: string[], open: number, closed: number }} opts
+ * LABS PER PERSON (`perPerson`) goes on each lab as LAB.eachTag: a number is
+ * written, null takes it off (no limit), and undefined, from a phone that
+ * predates the setting, leaves each lab's as it is.
+ *
+ * @param {{ admin: any, pool: string, networks: any[], setId: string, inSet: string[], open: number, closed: number, perPerson?: number|null }} opts
  * @returns {Promise<{ labs: Array<{ id: string, name: string, open: boolean }>, made: string[] }>}
  */
-export async function ensureLabs({ admin, pool, networks, setId, inSet, open, closed }) {
+export async function ensureLabs({ admin, pool, networks, setId, inSet, open, closed, perPerson }) {
   const count = Math.min(LAB.max, open + closed);
   /** @type {Array<{ id: string, name: string, open: boolean }>} */
   const labs = [];
@@ -746,14 +830,21 @@ export async function ensureLabs({ admin, pool, networks, setId, inSet, open, cl
     const other = isOpen ? LAB.closedTag : LAB.openTag;
     if (tags.includes(other)) await admin.call('tag.remove', { id, tag: other });
     if (!tags.includes(want)) await admin.call('tag.add', { id, tag: want });
+    if (perPerson !== undefined) {
+      const each = perPerson === null ? null : `${LAB.eachTag}${perPerson}`;
+      for (const t of tags) if (t.startsWith(LAB.eachTag) && t !== each) await admin.call('tag.remove', { id, tag: t });
+      if (each && !tags.includes(each)) await admin.call('tag.add', { id, tag: each });
+    }
     if (!inSet.includes(id)) await admin.call('resourceSet.addObject', { id: setId, object: id });
     labs.push({ id: String(id), name, open: isOpen });
   }
-  // ONE NO LONGER ASKED FOR is no longer a lab: its kind goes.
+  // ONE NO LONGER ASKED FOR is no longer a lab: its kind goes, and its limit.
   for (const n of networks) {
     const m = new RegExp(`^${LAB.prefix}(\\d+)$`).exec(String(n?.name_label || ''));
     if (!m || n?.$pool !== pool || Number(m[1]) <= count) continue;
-    for (const tag of [LAB.openTag, LAB.closedTag]) if (Array.isArray(n.tags) && n.tags.includes(tag)) await admin.call('tag.remove', { id: n.id, tag });
+    for (const tag of Array.isArray(n.tags) ? n.tags : []) {
+      if (tag === LAB.openTag || tag === LAB.closedTag || tag.startsWith(LAB.eachTag)) await admin.call('tag.remove', { id: n.id, tag });
+    }
   }
   return { labs, made };
 }

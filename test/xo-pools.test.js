@@ -235,7 +235,7 @@ test('a machine in a group is also on the group network, with a MAC and an addre
 
 // LABS: a lab network on the edge, tagged open or closed by the policy job,
 // with one of the fleet's machines on it at a time. docs/hypervisors.md, "Labs".
-const openLab = { type: 'network', id: 'net-lab-1', name_label: 'fleetwright-lab-1', $pool: 'pool-1', tags: ['fleetwright-lab:open'] };
+const openLab = { type: 'network', id: 'net-lab-1', name_label: 'fleetwright-lab-1', $pool: 'pool-1', tags: ['fleetwright-lab:open', 'fleetwright-lab-each:2'] };
 const closedLab = { type: 'network', id: 'net-lab-2', name_label: 'fleetwright-lab-2', $pool: 'pool-1', tags: ['fleetwright-lab:closed'] };
 const formerLab = { type: 'network', id: 'net-lab-3', name_label: 'fleetwright-lab-3', $pool: 'pool-1', tags: [] };
 const inLab = { type: 'VM', id: 'vm-in-lab', name_label: 'vm-222222222222', power_state: 'Running', tags: [VM_IMAGE.sessionTag, 'fleetwright-in-lab:fleetwright-lab-2'] };
@@ -249,11 +249,11 @@ test('a look reports each lab, its kind and whether a machine of the fleet’s i
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
   await pools.refresh();
   const [seen] = pools.report();
-  assert.deepEqual(seen.networks.map((n) => [n.name, n.lab ?? null, n.taken ?? null]), [
-    ['fleetwright-lab-1', 'open', false],
-    ['fleetwright-lab-2', 'closed', true],
-    ['fleetwright-lab-3', null, null],
-  ], 'the edge’s own interface made a lab look taken, or a lab the policy took away is still one');
+  assert.deepEqual(seen.networks.map((n) => [n.name, n.lab ?? null, n.taken ?? null, n.perPerson ?? null]), [
+    ['fleetwright-lab-1', 'open', false, 2],
+    ['fleetwright-lab-2', 'closed', true, null],
+    ['fleetwright-lab-3', null, null, null],
+  ], 'the edge’s own interface made a lab look taken, a lab the policy took away is still one, or a limit was misread');
   assert.deepEqual(seen.machines.find((m) => m.name === 'vm-222222222222')?.lab, { name: 'fleetwright-lab-2', open: false });
 
   // An interface list the pool will not give is cannot tell, never free.
@@ -286,6 +286,9 @@ test('a machine in a lab goes on the lab alone, unfenced, and only on a lab this
   assert.deepEqual(made.VIFs, [{ network: 'net-lab-1' }], 'on the uplink as well, it would leave around the lab’s rules');
   assert.ok(made.tags.includes('fleetwright-in-lab:fleetwright-lab-1'));
   assert.ok(made.tags.includes(VM_IMAGE.sessionTag), 'swept like any machine');
+  // ITS END IS ITS OWN, like any machine's: nothing else ends a lab, so a lab
+  // machine made without one would hold its lab until somebody ended it.
+  assert.ok(made.tags.some((/** @type {string} */ t) => t.startsWith(VM_IMAGE.untilPrefix)), 'made with no end of its own');
   assert.ok(!made.cloudConfig.includes('/etc/fleetwright-net.json'), 'fenced against an uplink it is not on');
   assert.match(r.text, /in fleetwright-lab-1: it reaches the internet and nothing private/);
 });

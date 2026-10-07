@@ -329,7 +329,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -678,8 +678,9 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
   const [epk, iv, ct] = state.inventory.split('.');
   const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
   assert.deepEqual(inventory.edges[0].labs, { open: 1, closed: 1 }, 'the phone starts from the labs the edge has');
+  assert.equal(inventory.edges[0].labsEach, null, 'labs from before labs per person were read as a limit');
   assert.equal(inventory.labMax, 4);
-  const good = { v: 1, srs: ['sr2'], networks: ['net-lab'], egress: 'net-dmz', edge: true, labs: { open: 1, closed: 1 }, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  const good = { v: 1, srs: ['sr2'], networks: ['net-lab'], egress: 'net-dmz', edge: true, labs: { open: 1, closed: 1 }, labsEach: 1, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
   assert.equal((await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'done', end.text);
@@ -687,6 +688,12 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
     xo.calls.filter((c) => c.method === 'tag.add' && c.params.tag.startsWith('fleetwright-lab:')).map((c) => [c.params.id, c.params.tag]),
     [['net-l1', 'fleetwright-lab:open'], ['net-l2', 'fleetwright-lab:closed']],
   );
+  // LABS PER PERSON, on each lab, where the box reads it with the fleet's token.
+  assert.deepEqual(
+    xo.calls.filter((c) => c.method === 'tag.add' && c.params.tag.startsWith('fleetwright-lab-each:')).map((c) => [c.params.id, c.params.tag]),
+    [['net-l1', 'fleetwright-lab-each:1'], ['net-l2', 'fleetwright-lab-each:1']],
+  );
+  assert.match(end.text, /One person may hold one lab at once\./);
   assert.ok(xo.calls.some((c) => c.method === 'resourceSet.addObject' && c.params.object === 'net-l2'), 'the fleet may not put a machine on the new lab');
   const set = xo.calls.find((c) => c.method === 'resourceSet.set')?.params;
   assert.ok(set.objects.includes('net-l1'), 'a lab the phone did not list was taken out of the set');
@@ -712,6 +719,17 @@ test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves 
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, egress: null, labs: { open: 1, closed: 0 } }, choices)).text, /choose the way out/);
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, egress: 'n2', labs: { open: 1, closed: 0 } }, choices)).text, /has none yet/);
   assert.equal(checkPolicy({ ...ok, egress: 'n2', edge: true, labs: { open: 1, closed: 0 } }, choices).ok, true, 'with the router asked for');
+
+  // LABS PER PERSON: no limit, or 1 to as many labs as there will be, and
+  // only with the labs; a phone that says nothing leaves it as it is.
+  const labs = { open: 2, closed: 1 };
+  const each = (/** @type {unknown} */ labsEach, more = {}) => /** @type {any} */ (checkPolicy({ ...ok, labs, labsEach, ...more }, choices));
+  assert.equal(each(null).policy.labsEach, null);
+  assert.equal(each(3).policy.labsEach, 3);
+  assert.equal(Object.hasOwn(/** @type {any} */ (checkPolicy({ ...ok, labs }, choices)).policy, 'labsEach'), false, 'a phone that predates it changed the limit');
+  for (const n of [0, 4, -1, 1.5, '2', true]) assert.match(each(n).text ?? '', /no limit, or 1 to 3, the labs there are/, JSON.stringify(n));
+  assert.match(each(1, { labs: { open: 0, closed: 0 } }).text, /With no labs, labs per person is no limit/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, labsEach: 1 }, choices)).text, /goes with the labs it limits/);
 });
 
 test('group networks are 0 to 4, in the way out’s pool, and a phone that says nothing asks for none', () => {

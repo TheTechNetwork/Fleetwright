@@ -83,7 +83,7 @@ import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOSETUP_JOB_RE, CERT_PIN
 import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
-import { EDGE, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, srName } from './edge-router.js';
+import { EDGE, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName } from './edge-router.js';
 import { VM_IMAGE, IMAGES, ensureImage, imageKeyOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
@@ -410,9 +410,12 @@ export class XoSetups {
         // which needs both the fleet to join and a way to ask it for a pin.
         // `labs`: it makes labs on the edge (edge-router.js, LAB), which needs
         // the fleet's address, the one place a closed lab may still reach.
+        // `labs-each`: it keeps how many labs one person may hold
+        // (`labsEach`, checkPolicy). An older one would drop the number
+        // without a word, so a phone offers it only where this is said.
         can: [
           'policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups',
-          ...(this.coordinatorUrl ? ['image', 'images', 'labs'] : []),
+          ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder'] : []),
         ],
       },
@@ -936,9 +939,10 @@ export class XoSetups {
         /** @type {Array<{ id: string, open: boolean }>|null} */
         let labs = null;
         if (p.labs !== null) {
-          const made = await ensureLabs({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks, open: p.labs.open, closed: p.labs.closed });
+          const made = await ensureLabs({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks, open: p.labs.open, closed: p.labs.closed, perPerson: p.labsEach });
           labs = made.labs.map((l) => ({ id: l.id, open: l.open }));
           if (made.made.length) built.push(`Made ${made.made.length === 1 ? 'a lab network' : `${made.made.length} lab networks`}.`);
+          if (p.labsEach !== undefined && labs.length) built.push(p.labsEach === null ? 'One person may hold any number of labs.' : `One person may hold ${p.labsEach === 1 ? 'one lab' : `${p.labsEach} labs`} at once.`);
         }
         const edgeAsked = p.edge || labs !== null;
         // THE MACHINE IMAGE, after the router, on the same pool: it is built
@@ -1439,6 +1443,10 @@ export function inventoryOf(ctx, set) {
       blocks: Array.isArray(v.tags) && v.tags.includes(EDGE.blocksTag),
       // And the labs it was built with, by kind.
       labs: { open: [...edgeLabsOf(v)].filter((c) => c === 'o').length, closed: [...edgeLabsOf(v)].filter((c) => c === 'c').length },
+      // And how many of them one person may hold at once, from the labs'
+      // own networks: a number, or null for no limit, which is what a
+      // policy from before the setting has.
+      labsEach: labsEachOf(ctx.networks || [], v.$pool ?? null),
     };
   });
   // Each pool's machine image, by pool and name: what the phone needs to say
@@ -1542,8 +1550,11 @@ export function currentLimits(set) {
  * `labs` is how many labs the edge has, `{ open, closed }`, at most LAB.max
  * together; absent, an edge's labs are left as they are. Labs live on the
  * edge, so they need one there or asked for.
+ * `labsEach` is how many of them one person may hold at once: null for no
+ * limit, or a whole number from 1 to the labs asked for, and only with them;
+ * absent, from a phone that predates it, the labs keep the one they have.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, image: boolean, images: string[], groups: number, holder: boolean, labs: { open: number, closed: number }|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, image: boolean, images: string[], groups: number, holder: boolean, labs: { open: number, closed: number }|null, labsEach?: number|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1598,6 +1609,18 @@ export function checkPolicy(p, choices) {
     }
     labs = { open, closed };
   }
+  // LABS PER PERSON: no limit (null), or one to as many labs as there are.
+  /** @type {number|null|undefined} */
+  let labsEach;
+  if (p.labsEach !== undefined) {
+    if (labs === null) return { ok: false, text: 'Labs per person goes with the labs it limits. Nothing was changed.' };
+    const all = labs.open + labs.closed;
+    const n = p.labsEach;
+    if (n !== null && !(typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= all)) {
+      return { ok: false, text: all ? `Labs per person is no limit, or 1 to ${all}, the labs there are. Nothing was changed.` : 'With no labs, labs per person is no limit. Nothing was changed.' };
+    }
+    labsEach = n;
+  }
   const holder = p.holder === true;
   if (holder && egress === null) return { ok: false, text: 'The pool’s own machine goes on the way out: choose the network it is on.' };
   if (holder && !image && !choices.imagePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
@@ -1613,7 +1636,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs ? edgeSr : null, edgeBlock, image, images: asked, groups, holder, labs, limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs ? edgeSr : null, edgeBlock, image, images: asked, groups, holder, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
 }
 
 /**
