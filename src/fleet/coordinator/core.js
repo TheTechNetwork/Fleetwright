@@ -248,7 +248,7 @@ export class CoordinatorCore {
      * fingerprint and typing a password is a gap it is evicted across. Every
      * later phase then answered `unknown_job`, and progress from a machine
      * still mid-run was dropped as coming from a job nobody had begun.
-     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number }>}
+     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, activityNews?: string, activityAt?: number }>}
      */
     this.setups = new Map();
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
@@ -877,13 +877,30 @@ export class CoordinatorCore {
     if (!this.push) return;
 
     const ended = progress.state !== 'running';
-    // THE LIVE ACTIVITY: numbers and a key, never words a lock screen should
+    // THE LIVE ACTIVITY: numbers and keys, never words a lock screen should
     // not show — see ActivityUpdate in push.js for why it cannot be sealed.
-    if (rec.activities.length && this.push.activity) {
+    // NEWS AT ONCE, THE BAR AT A PACE (ACTIVITY_FILL_EVERY_MS): a change of
+    // step, part, build or state is sent now at priority 10; the bar moving
+    // is sent at priority 5, at most every thirty seconds.
+    const news = `${progress.step}|${progress.phase}|${progress.state}|${progress.build}|${progress.stage}`;
+    const fresh = ended || news !== rec.activityNews;
+    const due = fresh || this.now() - (rec.activityAt ?? 0) >= ACTIVITY_FILL_EVERY_MS;
+    if (rec.activities.length && this.push.activity && due) {
+      rec.activityNews = news;
+      rec.activityAt = this.now();
       try {
         const r = await this.push.activity(rec.activities, {
           event: ended ? 'end' : 'update',
-          state: { step: progress.step, of: progress.of, phase: progress.phase, state: progress.state, ...(progress.fill === null ? {} : { fill: progress.fill }) },
+          state: {
+            step: progress.step,
+            of: progress.of,
+            phase: progress.phase,
+            state: progress.state,
+            ...(progress.fill === null ? {} : { fill: progress.fill }),
+            ...(progress.build === null ? {} : { build: progress.build }),
+            ...(progress.stage === null || progress.stages === null ? {} : { stage: progress.stage, stages: progress.stages }),
+          },
+          priority: fresh ? 10 : 5,
           ...(ended ? { dismissAt: this.now() + 15 * 60_000 } : {}),
         });
         if (r.dead.length) rec.activities = rec.activities.filter((t) => !r.dead.includes(t));
@@ -917,6 +934,8 @@ export class CoordinatorCore {
           step: String(progress.step),
           of: String(progress.of),
           ...(progress.fill === null ? {} : { fill: String(progress.fill) }),
+          ...(progress.build === null ? {} : { build: progress.build }),
+          ...(progress.stage === null || progress.stages === null ? {} : { stage: String(progress.stage), stages: String(progress.stages) }),
           phase: progress.phase,
           state: progress.state,
           purpose: progress.purpose,
@@ -4068,6 +4087,9 @@ const POLICY_TITLES = Object.freeze({ running: 'Changing what the fleet may use'
  * @property {'setup'|'policy'} purpose  adding a pool, or changing what the fleet may use on one
  * @property {number|null} fill  how far the step now running has got, in thousandths, when the host can
  *   tell (the edge router's download and disk), or null
+ * @property {'edge'|'image'|'holder'|null} build  what the step is building, from a fixed list, or null
+ * @property {number|null} stage  which part of that build is running, from 1, or null
+ * @property {number|null} stages  how many parts it has, or null
  * @property {string} text   one sentence for the person, never shown on a Live Activity
  * @property {number} at
  */
@@ -4105,9 +4127,35 @@ export function narrowProgress(msg) {
     // job, and "step 5 of 5" alone held the bar at four fifths for minutes.
     // A number and nothing else, so a Lock Screen can draw it.
     fill: Number.isInteger(msg?.fill) && msg.fill >= 0 && msg.fill <= 1000 ? msg.fill : null,
+    // WHAT IS BEING BUILT AND WHICH PART OF IT, so a Lock Screen can say
+    // "Building the machine image, part 2 of 4" rather than a bare
+    // percentage. Asked for: "Why no actual updates in the live activity?"
+    // A key from a fixed list and two small numbers, the only kinds of
+    // thing a Live Activity may carry (push.js, ActivityUpdate).
+    build: ['edge', 'image', 'holder'].includes(msg?.build) ? msg.build : null,
+    ...stageOf(msg),
     at: Date.now(),
   };
 }
+
+/** @param {any} msg @returns {{ stage: number|null, stages: number|null }} */
+function stageOf(msg) {
+  const stage = Number(msg?.stage);
+  const stages = Number(msg?.stages);
+  return Number.isInteger(stage) && Number.isInteger(stages) && stages >= 1 && stages <= 8 && stage >= 1 && stage <= stages
+    ? { stage, stages }
+    : { stage: null, stages: null };
+}
+
+/**
+ * How long a Live Activity waits between updates that only move the bar.
+ * Apple budgets an app's high-priority activity updates and throttles it
+ * past the budget, which is what froze the Lock Screen at 5%: a disk upload
+ * reported every 5% of every part, each at priority 10. So news (a step, a
+ * part, an end) goes at once at priority 10, and the bar moving goes at
+ * priority 5, which Apple delivers as it can, at most this often.
+ */
+export const ACTIVITY_FILL_EVERY_MS = 30_000;
 
 /**
  * A probe answer, narrowed to the fields a probe has.

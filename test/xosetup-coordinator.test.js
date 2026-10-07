@@ -14,7 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CoordinatorCore, narrowProgress, narrowCertificate } from '../src/fleet/coordinator/core.js';
+import { ACTIVITY_FILL_EVERY_MS, CoordinatorCore, narrowProgress, narrowCertificate } from '../src/fleet/coordinator/core.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS } from '../src/fleet/protocol/intents.js';
 
 const JOB = 'a1b2c3d4e5f6';
@@ -42,7 +42,8 @@ function fleet(boxes, reply) {
       return { sent: tokens.length, dead: [] };
     },
   };
-  const core = new CoordinatorCore({ push: /** @type {any} */ (push) });
+  const clock = { now: Date.now() };
+  const core = new CoordinatorCore({ push: /** @type {any} */ (push), now: () => clock.now });
   for (const hostId of boxes) {
     core.registry.connect(hostId, () => {});
     core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol: 7, maxSessions: 5, running: 0, free: 5, labels: [] });
@@ -53,7 +54,7 @@ function fleet(boxes, reply) {
     asked.push({ hostId: host.hostId, spec });
     return reply(host.hostId, spec);
   });
-  return { core, asked, sent, activities };
+  return { core, asked, sent, activities, clock };
 }
 
 /** A machine that answers `begin` with a job, and anything else plainly. */
@@ -201,7 +202,7 @@ test('a policy job building the edge router reaches the Lock Screen as a change,
   // ASKED FOR: the Live Activity during "Applying what you chose", where the
   // OPNsense download takes minutes. The first version dropped every policy
   // report, because `apply` is not one of onboarding's steps.
-  const { core, sent, activities } = fleet(['deb14'], machine);
+  const { core, sent, activities, clock } = fleet(['deb14'], machine);
   await core.registerDevice({ platform: 'ios', token: 'i'.repeat(64), actor: `fleet:${admin.email}` });
   await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
   await core.dispatch(begin(admin));
@@ -213,17 +214,35 @@ test('a policy job building the edge router reaches the Lock Screen as a change,
   assert.equal(sent[0].message.title, 'Changing what the fleet may use');
   assert.equal(sent[0].message.data.purpose, 'policy', 'Android draws its own words, so it is told which');
 
-  // HOW FAR THE BUILD HAS GOT, in thousandths, so the bar moves while the
-  // router's disk is written instead of sitting at four fifths. Asked for:
-  // "this needs proper progress".
-  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', purpose: 'policy', fill: 420, text: 'Writing the edge router’s disk to Local storage: 960 of 3072 MB.' });
-  assert.deepEqual(activities[1].update.state, { step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', fill: 420 });
+  assert.equal(activities[0].update.priority, 10, 'a step is news');
+
+  // HOW FAR THE BUILD HAS GOT, in thousandths, and WHAT IS BEING BUILT AND
+  // WHICH PART, so the Lock Screen says more than a percentage. Asked for:
+  // "this needs proper progress", then "Why no actual updates in the live
+  // activity?" A new part is news, sent at once.
+  const progress = (/** @type {any} */ extra) => core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', purpose: 'policy', text: 'Writing the machine image’s disk to tn-vms: 192 of 3072 MB.', ...extra });
+  await progress({ fill: 420, build: 'image', stage: 2, stages: 4 });
+  assert.deepEqual(activities[1].update.state, { step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', fill: 420, build: 'image', stage: 2, stages: 4 });
+  assert.equal(activities[1].update.priority, 10);
   assert.equal(sent[1].message.data.fill, '420');
+  assert.deepEqual([sent[1].message.data.build, sent[1].message.data.stage, sent[1].message.data.stages], ['image', '2', '4']);
   assert.equal(narrowProgress({ step: apply, of: 5, phase: 'apply', state: 'running', purpose: 'policy', fill: 1001 })?.fill, null, 'past the end is not a fill');
+  assert.equal(narrowProgress({ step: apply, of: 5, phase: 'apply', state: 'running', purpose: 'policy', build: 'rm -rf' })?.build, null, 'a build from the fixed list only');
+
+  // THE BAR MOVING IS PACED. Apple throttles an app that spends its
+  // priority-10 budget, which is what froze the Lock Screen at 5%: within
+  // thirty seconds only Android hears it, and after that it goes at 5.
+  await progress({ fill: 470, build: 'image', stage: 2, stages: 4 });
+  assert.equal(activities.length, 2, 'the bar moving was sent to Apple at once');
+  assert.equal(sent[2].message.data.fill, '470', 'Android draws every one');
+  clock.now += ACTIVITY_FILL_EVERY_MS;
+  await progress({ fill: 520, build: 'image', stage: 2, stages: 4 });
+  assert.deepEqual([activities[2].update.state.fill, activities[2].update.priority], [520, 5]);
 
   await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: XOPOLICY_STEPS.length, of: XOPOLICY_STEPS.length, phase: 'done', state: 'done', purpose: 'policy', text: 'The edge router is up.' });
-  assert.equal(activities[2].update.event, 'end');
-  assert.equal(sent[2].message.title, 'What the fleet may use is changed');
+  assert.equal(activities[3].update.event, 'end');
+  assert.equal(activities[3].update.priority, 10, 'the end is news');
+  assert.equal(sent[4].message.title, 'What the fleet may use is changed');
 
   // A policy step from a host that did not say it is one is refused, as any
   // phase onboarding does not have is.
