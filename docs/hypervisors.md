@@ -1,12 +1,13 @@
 # A machine from your own hypervisor
 
 **Status: built.** A pool that already has Xen Orchestra is added through a
-machine already in the fleet ("What ships first", below); the policy job
+machine already in the fleet ("What ships first", below), and one that has
+none gets one first ("A pool without Xen Orchestra"); the policy job
 builds its edge router and its **machine image**; and a session starts on a
 **new machine from that image** from New session › Where on either phone
 ("Machines from your pool", next). The policy job also makes the pool **a
 machine of its own** that holds it ("A machine of its own"). **Not yet run:**
-a real XCP-ng pool behind Xen Orchestra. Labs and deploying Xen Orchestra are
+a real XCP-ng pool behind Xen Orchestra, and the install on one. Labs are
 designed and not built. XCP-ng first, through Xen Orchestra; Proxmox second,
 behind the same interface.
 
@@ -820,6 +821,132 @@ Run against a real Xen Orchestra over HTTPS and plain HTTP: the phone's key
 opened the token, the token signed in as the limited user and an admin call
 was refused, and the machine's state directory was empty afterwards.
 
+### A pool without Xen Orchestra
+
+> Deploying Xen Orchestra with the installer's `xo-remote-deploy.sh`.
+
+**Built, and not yet run on a real pool.** When every machine that answered
+the probe found no Xen Orchestra at the address, Add a hypervisor offers *This
+pool has no Xen Orchestra yet*. A machine of the fleet then installs Xen
+Orchestra on the pool with XenOrchestraInstallerUpdater's own script and adds
+the pool to the fleet through it, in one job, so the phone can close at the
+first step and collects the token at the end as from any setup.
+
+What the person gives: the pool master's address, its root password, and a
+new password for Xen Orchestra's admin. In order:
+
+1. **The probe looks over SSH too.** Beside its HTTPS look, every permanent
+   machine runs `ssh-keyscan` at the address on port 22, and where no Xen
+   Orchestra answered it says which host keys did (each as OpenSSH prints its
+   fingerprint, and as the hex of the same digest) and whether it has what
+   installing needs (`bash`, `ssh`, `ssh-keyscan`, `python3`, GNU `getopt`,
+   `sed`, `mktemp`). So the probe Add a hypervisor already ran is what the
+   install starts from. The phone offers only a machine that reached the SSH
+   server and can install. One too old to look is named as that, and one with
+   no `ssh-keyscan` as cannot tell; neither is said to have found nothing.
+2. **The host key, compared.** Nobody vouches for an SSH host key, so the
+   phone always asks: it shows the key and the command that prints the pool
+   master's own (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`, from Local
+   Command Shell on its console), and Install waits until the person says they
+   match.
+3. **`xosetup deploy`**, a `begin` whose `pin` is the hex of the host key's
+   SHA-256. The machine makes the job's key and signs it with its enrolment
+   key under its own context, `xodeploy-key`, over the address, the job, the
+   key and that pin. The phone checks that before anything is sealed, as for
+   a setup, so a setup's signature or one over another pool master's key does
+   not pass. A new phase rather than a new parameter, the way `policy` came,
+   so it needs no protocol version: a machine older than it refuses the
+   value, and the coordinator says it is too old to install.
+4. **`run`**: both passwords and the key the token comes back to, sealed to the
+   job's key under `fleetwright-xodeploy/v1:<job>:<address>`, a binding of its
+   own, so a sealed root password is never opened as a setup's sign-in. The
+   admin password must be 12 to 256 characters, on the phone and on the
+   machine.
+5. **Reaching the pool master** (`reach`). The machine scans the host key again
+   and writes only a key with the accepted fingerprint to a `known_hosts` file
+   of the job's own, with `StrictHostKeyChecking=yes`; a server answering with
+   any other key is refused before the password is offered. It opens one
+   OpenSSH master connection as root, answering the password prompt through
+   `SSH_ASKPASS` from a unix socket in the job's 0700 directory, and wipes the
+   password as soon as the master is up. The password is never in an argument,
+   an environment or a file. It then reads the pool: that this is its master,
+   its default storage, the network of the master's management interface, and
+   whether an earlier install's VM (`fleetwright-xo`) is already there, which
+   stops the job with what to do.
+6. **The installer** (`installer`), pinned: commit `f9b299f` of
+   [00o-sh/XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater),
+   the fork the update plugin above comes from (ronivay's upstream does not
+   have the script). `xo-remote-deploy.sh`, `xo-install.sh` and the update
+   plugin's files are downloaded from that commit and each is checked against
+   its SHA-256 in `INSTALLER` (`src/fleet/host/xo-deploy.js`) before anything
+   runs. Moving the pin is reading the new script and changing the commit and
+   the hashes, as for OPNsense's image.
+7. **The installer's six stages** (`network` to `build`), as the script prints
+   them: the network, Debian 13's cloud image (checked by the script against
+   the SHA512SUMS Debian publishes and cached on the storage), the VM, its
+   boot and cloud-init, packages, and building Xen Orchestra. The machine runs
+   the script with an `SSH_OPTS` whose `ControlPath`, `ControlMaster=no` and
+   `BatchMode=yes` come first, and OpenSSH takes the first value it is given
+   for each option, so every `ssh` the script makes rides the master and none
+   can ask for a password. The download's percentage is the bar. The VM is
+   `fleetwright-xo`, 2 vCPUs, 4 GiB and 20 GiB, on the pool's default storage,
+   on the management network with an address from DHCP: the network the
+   machine reached the pool master on.
+8. **The default admin password replaced** (`admin`). The installer leaves
+   `admin@admin.net` / `admin`, and anybody on that network can sign in with it
+   until it changes. The moment the script says Xen Orchestra is up, the
+   machine signs in with the default and sets the person's password. If the
+   default no longer works, somebody signed in first, and the job stops saying
+   so rather than going on. The admin stays `admin@admin.net`.
+9. **Onboarding's own steps**, against the new Xen Orchestra, signing in with
+   the new password, which is the proof it took. The hand-off record names the
+   Xen Orchestra's address, with `poolMaster` beside it; the phone opens it
+   under the pool master it began with and keeps it under the Xen
+   Orchestra's address, like any other pool.
+
+**Xen Orchestra's certificate is one the machine made**, a self-signed P-256
+certificate written before the VM existed, so the pin is known in advance and
+nobody is asked to trust a certificate minted a minute ago inside a VM they
+cannot see. The script copies everything under its `plugins/` directory into
+the VM through cloud-init, so the certificate and key go there, and the
+configuration the machine writes points `PATH_TO_HTTPS_CERT` and
+`PATH_TO_HTTPS_KEY` at them with `AUTOCERT="false"` and HTTPS on 443
+(`xo-install.sh` checks the pair matches). cloud-init writes those files 0644,
+so the key is readable by every account in that VM; it has none but root and
+`xo`, which has sudo. The record says `certificate.made`, and a later policy
+change still asks about the certificate, since it is self-signed.
+
+**The VM has no login anybody holds.** The script puts a public key on the VM's
+`xo` account; the machine gives it one whose private half is never kept, so the
+password stays locked. Xen Orchestra is how the VM is managed.
+
+**Cancel** stops the script where it is. Before the installer ran, nothing was
+made. While it ran, the script removes what it made if it is stopped before its
+VM starts and keeps the VM after, and the job says what to look for on the pool
+rather than claiming either. A failed install keeps its VM, as the script does,
+and the job names it.
+
+**What it needs.** The machine needs the tools above, so a Mac needs GNU
+`getopt` (`brew install gnu-getopt`, first on PATH). The pool master downloads
+Debian's image and the VM downloads Xen Orchestra's sources and node.js, so both
+need the internet. Xen Orchestra is built from `vatesfr/xen-orchestra`'s
+`master`, as the installer does by default, and keeps itself current through the
+update plugin; it is not pinned.
+
+**What has run, and what has not.** Run here: the pinned script itself, through
+all six of its stages, against a stand-in `ssh` that runs its remote half
+locally with stand-in `xe`, `xenstore-read` and `curl`, with the password
+answered through the askpass socket, every client riding the master, and the
+cloud-init seed read back to check it carried the certificate, the key and the
+configuration. The suite (`test/xo-deploy.test.js`) drives a stand-in script
+with the same command line and output, because the installer is GPL and is not
+vendored, and then the whole job through onboarding against the suite's stand-in
+Xen Orchestra serving the machine's certificate. **Not run:** a real XCP-ng pool
+master, a real SSH server, Debian's download, `xo-install.sh` building Xen
+Orchestra, and the apps on a device. Whether XCP-ng's own page at the pool
+master's address reads as "not Xen Orchestra" to the probe, which is what
+offers the install, has not been seen on a real host.
+
 ### The policy: what the fleet may use
 
 Setup finishes in one go, with defaults: the resource set it makes holds
@@ -938,15 +1065,11 @@ shows the machine's progress under "Applying what you chose", from the
 download to the disk. The machine running the job needs `bzip2`, and says
 which package to install when it has none.
 
-### Next: deploying Xen Orchestra, and the phone's own network
+### Next: the phone's own network
 
-- **A pool without Xen Orchestra** is deployed with the same installer's
-  `xo-remote-deploy.sh`, which already does the hard part over SSH to the
-  pool master: a checksum-verified cloud image cached on the storage
-  repository, a VM made with cloud-init that runs `xo-install.sh`, and
-  progress read back through xenstore so nothing needs to reach the VM. The
-  same image cache and cloud-init path builds the templates and the pool's
-  own machine (A machine of its own). It needs the pool master's root password, sealed the same way.
+- **A pool without Xen Orchestra** is built ("A pool without Xen Orchestra").
+  The same image cache on the storage repository could build the templates
+  and the pool's own machine, which today download their own images.
 - **No machine in the fleet can reach the pool**: the phone's own network
   carries the first minute. The phone relays bytes between a machine and
   Xen Orchestra over TLS the machine terminates, so neither the phone nor the
@@ -972,7 +1095,8 @@ Each step finds its object by the `fleetwright` tag before making one, so the
 script can be run again after a failure, or to repair, and does only what is
 missing:
 
-1. **Xen Orchestra**, if there is none: deploy it.
+1. **Xen Orchestra**, if there is none: deploy it (built, "A pool without Xen
+   Orchestra").
 2. **The `fleetwright` user**, a password nobody sees, its **resource set**
    (the templates, networks and storage it may use, and quotas sized from
    what the pool has free), its ACL, and a token for it.

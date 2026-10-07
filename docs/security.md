@@ -270,7 +270,9 @@ machine of the fleet, through the coordinator.
   permanent machine to reach an address on its network, and answers with
   whether something did, whether it looks like Xen Orchestra and its
   certificate. Admin only, checked here, which a compromised coordinator does
-  not respect; the reach is "does this address answer HTTPS from that box".
+  not respect; the reach is "does this address answer HTTPS from that box",
+  and, from a box that can install Xen Orchestra, "does it answer SSH on
+  22, and with which host key", which is all `ssh-keyscan` learns.
 - **Progress on a Lock Screen is not sealed.** A Live Activity's content goes
   to the widget with no hook that could decrypt it first, so it carries step
   and part numbers and keys from fixed lists (the step, and what is being
@@ -319,6 +321,35 @@ machine of the fleet, through the coordinator.
   configuration, which no fleet credential can change, and both are fetched
   by the edge itself from their publishers over HTTPS: a compromised
   blocklist publisher could make names fail to resolve, not reach anything.
+- **A pool master's root password** (`docs/hypervisors.md`, "A pool without
+  Xen Orchestra"). Installing Xen Orchestra on a pool that has none carries the
+  pool master's root password and a new admin password from the phone to one
+  machine, sealed to the job's key under its own binding
+  (`fleetwright-xodeploy/v1:<job>:<address>`), with the job's key signed under
+  its own context over the pool master's SSH host key, which the person
+  compared with the pool master's console. The machine refuses a server
+  answering with any other host key before the password is offered (its own
+  `known_hosts`, `StrictHostKeyChecking=yes`), types the password once into one
+  OpenSSH master through `SSH_ASKPASS` from a socket only its process can reach,
+  and wipes it when the master is up; nothing the installer runs can ask for
+  it (`BatchMode=yes` on every client, riding the master). Root on the pool
+  master is everything on the pool, for as long as the master connection is
+  open: the length of the install, half an hour or so. What a compromised
+  coordinator can do is what it can with a setup: refuse, delay, or send the
+  request to another machine of the fleet, whose signature the phone checks
+  against the one it approved. The installer it runs as root on the pool
+  master and in the VM is pinned by commit and SHA-256 per file; Debian's
+  image is checked against Debian's own published checksum, fetched over
+  HTTPS by the pool master; Xen Orchestra's sources are the installer's
+  default, `master`, unpinned.
+- **Xen Orchestra's default admin password is a window.** The installer
+  leaves `admin@admin.net` / `admin`; until it is changed, anything on the
+  management network can sign in as admin. The machine changes it to the
+  person's the moment the script says Xen Orchestra is up, over a certificate
+  it made itself before the VM existed (so the pin is known and no first-use
+  trust is involved), and stops rather than going on if the default no longer
+  works. The certificate's key is 0644 inside that VM, whose only accounts are
+  root and `xo` (with sudo, by a key nobody holds).
 - **A kept acceptance is the person's earlier word, for that certificate
   only.** With it the phone sends `trust: accepted` without asking again,
   but only for a probe or a remembered path carrying the same fingerprint.
