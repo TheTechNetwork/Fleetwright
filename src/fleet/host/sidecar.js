@@ -59,6 +59,7 @@ import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } from '../seal.js';
 import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
+import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { runnerJobProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
@@ -390,6 +391,13 @@ export class Sidecar {
     this.onVmLoginHanded = onVmLoginHanded;
     /** @type {XoSetups|null} made on first use */
     this.xoSetups = null;
+    // CONNECTIONS THROUGH SOMEBODY'S PHONE, for a pool no machine reaches
+    // (xo-relay.js): bytes of TLS this process opened, as frames on its own
+    // socket to the coordinator, which joins them to the phone's.
+    this.relays = new RelayStreams({
+      send: (frame) => this.transport.send({ v: PROTOCOL_VERSION, kind: 'relay', hostId: this.hostId, ...frame }),
+      log: this.log,
+    });
     this.vaultIntervalMs = vaultIntervalMs;
     /** @type {any} */
     this.vaultTimer = null;
@@ -546,6 +554,8 @@ export class Sidecar {
         // And how it asks the fleet for the pin a pool's own machine joins
         // with, for the job it is running (xo-holder.js).
         holderPin: (/** @type {string} */ job) => this.#askHolderPin(job),
+        // And how it reaches a pool through the phone adding it.
+        relay: { open: (relay) => this.relays.open(relay), done: (relay) => this.relays.done(relay) },
       });
     }
     const actor = intent.actor ? String(intent.actor) : null;
@@ -553,12 +563,14 @@ export class Sidecar {
     switch (p.phase) {
       case 'begin':
         if (!p.address) return { ok: false, text: 'Say where Xen Orchestra answers.' };
-        return this.xoSetups.begin({ address: String(p.address), pin: p.pin ? String(p.pin) : null, trust: p.trust ? String(p.trust) : null, plain: p.plain ? String(p.plain) : null, actor });
+        return this.xoSetups.begin({ address: String(p.address), pin: p.pin ? String(p.pin) : null, trust: p.trust ? String(p.trust) : null, plain: p.plain ? String(p.plain) : null, relay: p.relay ? String(p.relay) : null, actor });
       case 'deploy':
         // A begin for a pool with no Xen Orchestra, pinned to its master's
-        // SSH host key (xo-deploy.js).
+        // SSH host key (xo-deploy.js). `relay` is passed so that it is
+        // refused in words, not dropped: installing needs this machine's own
+        // way to the pool, which a phone does not carry.
         if (!p.address) return { ok: false, text: 'Say where the pool master answers.' };
-        return this.xoSetups.beginDeploy({ address: String(p.address), pin: p.pin ? String(p.pin) : null, actor });
+        return this.xoSetups.beginDeploy({ address: String(p.address), pin: p.pin ? String(p.pin) : null, relay: p.relay ? String(p.relay) : null, actor });
       case 'run':
         return this.xoSetups.run({ job: String(p.job || ''), sealed: String(p.sealed || ''), actor });
       case 'status':
@@ -595,6 +607,13 @@ export class Sidecar {
    * @returns {Promise<Record<string, any>>}
    */
   async handle(msg) {
+    // BYTES THROUGH A PHONE, before anything that awaits: a relay's frames
+    // must reach its streams in the order they arrived, and they are not
+    // intents and get no reply (xo-relay.js checks each).
+    if (/** @type {any} */ (msg)?.kind === 'relay') {
+      this.relays.onFrame(msg);
+      return { kind: 'none' };
+    }
     // CONFIG BEFORE INTENT, because it is not one. A config frame carries named
     // values from a fixed set (src/fleet/protocol/config-frame.js) and gets no
     // reply — there is nothing to correlate and nothing to say. Checked first so
@@ -706,7 +725,14 @@ export class Sidecar {
       // key that lives only in its memory, and neither may become a command
       // line on the way to the hub. docs/hypervisors.md.
       if (intent.verb === 'xoprobe') {
-        const found = await probe(String(intent.params.address));
+        // Through the phone that asked, when it named its relay: one
+        // attempt, over HTTPS. Fifteen seconds for the phone to connect
+        // (xo-relay.js) and eight for the handshake, inside the
+        // coordinator's twenty-five for a probe through a phone.
+        const relay = intent.params.relay ? String(intent.params.relay) : null;
+        const found = relay
+          ? await probe(String(intent.params.address), { through: () => this.relays.open(relay), timeoutMs: 8_000 })
+          : await probe(String(intent.params.address));
         const { text, ...xoprobe } = found;
         return reply({ ok: true, text, xoprobe });
       }

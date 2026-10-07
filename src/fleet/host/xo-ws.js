@@ -12,7 +12,13 @@
 // self-signed server can make.
 //
 // So the client is written here, small: an RFC 6455 handshake and its frames
-// on top of node:tls, and JSON-RPC 2.0 on top of that. Text frames only,
+// on top of node:tls, and JSON-RPC 2.0 on top of that.
+//
+// OVER A SOCKET OF ITS OWN, OR OVER ONE IT IS HANDED. A pool no machine can
+// reach is reached through the phone adding it (xo-relay.js), and then the
+// TLS here runs over a stream of relay frames instead of a TCP socket: the
+// same handshake, the same pin, checked here, so the phone and the
+// coordinator carrying the stream see only what TLS lets anybody see. Text frames only,
 // because that is all Xen Orchestra speaks on /api/, and a server frame of any
 // other kind it has no business sending ends the connection.
 //
@@ -124,14 +130,17 @@ export function splitAddress(address, defaultPort = 443) {
  * before a single byte of ours is written. A server presenting anything else
  * is disconnected and never hears a request.
  *
- * @param {{ host: string, port: number, pin: string, timeoutMs?: number }} opts
+ * `via`, when given, is the stream to run TLS over instead of a TCP
+ * connection of its own: a connection through a phone (xo-relay.js). `host`
+ * is then only the name the certificate is checked for and sent as SNI.
+ *
+ * @param {{ host: string, port: number, pin: string, timeoutMs?: number, via?: import('node:stream').Duplex|null }} opts
  * @returns {Promise<import('node:tls').TLSSocket>}
  */
-export function connectPinnedTls({ host, port, pin, timeoutMs = 15_000 }) {
+export function connectPinnedTls({ host, port, pin, timeoutMs = 15_000, via = null }) {
   return new Promise((resolve, reject) => {
     const socket = tls.connect({
-      host,
-      port,
+      ...(via ? { socket: via } : { host, port }),
       // SNI only for names: sending an IP literal as a server name is not
       // allowed by the spec and some servers reset on it.
       ...(net.isIP(host) ? {} : { servername: host }),
@@ -140,6 +149,7 @@ export function connectPinnedTls({ host, port, pin, timeoutMs = 15_000 }) {
     });
     const timer = setTimeout(() => {
       socket.destroy();
+      via?.destroy();
       reject(new Error(`${host}:${port} did not answer within ${Math.round(timeoutMs / 1000)} seconds`));
     }, timeoutMs);
     socket.once('secureConnect', () => {
@@ -148,6 +158,7 @@ export function connectPinnedTls({ host, port, pin, timeoutMs = 15_000 }) {
       const seen = cert?.raw ? certSha256(cert.raw) : null;
       if (seen !== pin) {
         socket.destroy();
+        via?.destroy();
         reject(new Error(
           `${host}:${port} answered with a different certificate from the one you accepted. ` +
             'Nothing was sent. If Xen Orchestra’s certificate changed, check the address again from the app.',
@@ -158,6 +169,7 @@ export function connectPinnedTls({ host, port, pin, timeoutMs = 15_000 }) {
     });
     socket.once('error', (e) => {
       clearTimeout(timer);
+      via?.destroy();
       reject(e);
     });
   });
@@ -490,14 +502,15 @@ export async function connectXoPlain({ address, timeoutMs = 15_000 }) {
 }
 
 /**
- * Connect to Xen Orchestra's API at an address, pinned.
+ * Connect to Xen Orchestra's API at an address, pinned: over a TCP connection
+ * of this machine's own, or over `via`, a connection through a phone.
  *
- * @param {{ address: string, pin: string, timeoutMs?: number }} opts
+ * @param {{ address: string, pin: string, timeoutMs?: number, via?: import('node:stream').Duplex|null }} opts
  * @returns {Promise<XoRpc>}
  */
-export async function connectXo({ address, pin, timeoutMs = 15_000 }) {
+export async function connectXo({ address, pin, timeoutMs = 15_000, via = null }) {
   const { host, port } = splitAddress(address);
-  const socket = await connectPinnedTls({ host, port, pin, timeoutMs });
+  const socket = await connectPinnedTls({ host, port, pin, timeoutMs, via });
   const certificate = describeCertificate(socket, host);
   const link = await upgrade(socket, { host, port, timeoutMs });
   const rpc = new XoRpc(link);
