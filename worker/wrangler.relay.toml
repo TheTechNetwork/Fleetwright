@@ -1,0 +1,64 @@
+# The relays: push and the GitHub OAuth callback, for coordinators that are
+# not ours (docs/relay-terms.md, issue #348).
+#
+#   cd worker && npx wrangler deploy --config wrangler.relay.toml
+#
+# A SEPARATE SCRIPT FROM THE COORDINATOR, like the minter, because what is in
+# scope is the boundary. This one holds our APNs key, our Firebase service
+# account and the GitHub App's client secret, answers strangers, and can do
+# three things with them: deliver a notification somebody else's coordinator
+# made (and sealed, when the phone has a key), exchange a sign-in code and seal
+# the token to the key the fleet registered, and count. It cannot reach a fleet,
+# a host or a session, and it keeps no notification, device token, code, token
+# or `state` (src/fleet/relay/relay.js says what it keeps, which is a hash per
+# fleet and a counter per window).
+#
+# ITS ONE ROUTE is <the fleet's hostname>/relay/*, added by the deploy with
+# --route like the minter's, because the hostname is the coordinator config's
+# and not this file's. A route runs before the coordinator's Custom Domain on
+# the same hostname, so the coordinator never sees these requests.
+name = "fleetwright-relay"
+main = "src/relay.js"
+compatibility_date = "2026-01-15"
+
+workers_dev = false
+preview_urls = false
+
+# OFF, AND THIS IS THE LINE THE TERMS DEPEND ON. Workers observability records
+# each request's URL and everything the script logs, and the OAuth callback's
+# URL carries the code and the state. relay-terms.md promises nothing about an
+# authorization is written down; a dashboard log of every callback URL would
+# be exactly that, kept by somebody else. The minter has it on; this must not.
+# test/relay.test.js holds this file to it.
+[observability]
+enabled = false
+
+# WHAT IT NEEDS, none of which is in this file:
+#
+#   FLEETWRIGHT_APNS_KEY, _KEY_ID, _TEAM_ID   SECRET (the key). The same APNs
+#                                     key the coordinator sends with; the
+#                                     bundle id defaults to the app's. Unset →
+#                                     iOS devices are not delivered to
+#   FLEETWRIGHT_FCM_SERVICE_ACCOUNT   SECRET. The same Firebase service account,
+#                                     JSON or base64 of it. Unset → Android
+#                                     devices are not delivered to
+#   FLEETWRIGHT_GITHUB_CLIENT_ID      the App's client id. Public; the deploy
+#                                     passes it with --var
+#   FLEETWRIGHT_GITHUB_CLIENT_SECRET  SECRET. The App's client secret, for the
+#                                     exchange. The relay's callback,
+#                                     https://<the fleet's hostname>/relay/v1/github/callback,
+#                                     has to be on the App's list of callback
+#                                     URLs. Unset → the OAuth relay says it is
+#                                     unavailable
+
+# The fleets and the counters. A Durable Object rather than KV so a fork
+# deploys this file as it is, and so a counter is read and written in one
+# place: one object, which serialises every request, which a relay this size
+# can afford and which makes the caps exact.
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayState"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayState"]

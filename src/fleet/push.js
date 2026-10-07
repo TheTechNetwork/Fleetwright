@@ -33,10 +33,19 @@ import { sealTo } from './push-crypto.js';
 
 /**
  * @typedef {object} Pusher
- * @property {(devices: Array<{token: string, platform: string, pushKey?: string}>, message: PushMessage) => Promise<{sent: number, dead: string[]}>} send
+ * @property {(devices: Array<{token: string, platform: string, pushKey?: string, wire?: Wire}>, message: PushMessage) => Promise<{sent: number, dead: string[]}>} send
+ *   A device that arrives with its `wire` already made is sent exactly that:
+ *   the push relay's case (src/fleet/relay/relay.js), where the coordinator
+ *   that owns the phone sealed it, and the relay must not see what it sealed.
  * @property {(tokens: string[], update: ActivityUpdate) => Promise<{sent: number, dead: string[]}>} [activity]
  *   A Live Activity update, iOS only. Optional: a sender without it simply has
  *   no Live Activities, and the notification at the end still arrives.
+ */
+
+/**
+ * What goes on the wire for one device: envelopeFor's answer.
+ *
+ * @typedef {{ encrypted: boolean, title: string, body: string, data: Record<string, string> }} Wire
  */
 
 /**
@@ -194,7 +203,7 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
         // notifications all stop because one phone has a bad row is the wrong
         // failure mode for the thing the trust argument rests on (#351).
         try {
-          const wire = await envelopeFor(device, message, { now });
+          const wire = device.wire ?? (await envelopeFor(device, message, { now }));
           const category = message.category ? { category: message.category } : {};
           // THE WORDS HAVE TO TRAVEL SOMEHOW. Dropping the `notification` block
           // below is what lets the app draw the buttons, and it is also what
@@ -210,7 +219,7 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
           // promptForPush().
           const appDraws = Boolean(message.category || message.drawnByApp);
           const forTheApp = appDraws && !wire.encrypted
-            ? { title: message.title, body: message.body }
+            ? { title: wire.title, body: wire.body }
             : {};
           // DATA-ONLY WHEN ENCRYPTED, and this is not a detail. A `notification`
           // block is rendered by the system before the app is consulted, so an
@@ -371,7 +380,7 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
         // notifications all stop because one phone has a bad row is the wrong
         // failure mode for the thing the trust argument rests on (#351).
         try {
-          const wire = await envelopeFor(device, message, { now });
+          const wire = device.wire ?? (await envelopeFor(device, message, { now }));
           // `mutable-content: 1` IS WHAT RUNS THE EXTENSION. Without it iOS
           // renders the alert below and the ciphertext is never opened — the
           // person sees the fallback line and nothing else, forever, with
