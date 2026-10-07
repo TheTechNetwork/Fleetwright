@@ -30,6 +30,7 @@ export const SIDECAR_COMMANDS = Object.freeze([
   'update', 'upgrade', 'reboot',
   'connect', 'login', 'code', 'link', 'verify', 'unlink', 'accounts',
   'renew', 'provision', 'runnerrepo', 'githubaccess', 'setuptoken',
+  'linkrepo',
 ]);
 
 /**

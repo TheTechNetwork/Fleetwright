@@ -44,7 +44,7 @@
 // on any pane that is not exactly 80 columns wide.
 
 import os from 'node:os';
-import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN, REPO_RE } from '../protocol/intents.js';
+import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN, REPO_RE, LINK_ROLES } from '../protocol/intents.js';
 import { readConfigFrame } from '../protocol/config-frame.js';
 import { PendingVerifiers } from './pkce.js';
 import { exchangeCode, exchangeCloudflareCode, connectedText } from '../coordinator/oauth.js';
@@ -2058,12 +2058,19 @@ export function toCommandLine({ verb, params, actor }) {
       // charset-checked NAME, a single token, and what it names — the value —
       // never crosses this line either. It grants the session permission to
       // fetch that secret from the store at runtime. See src/core/secret-store.js.
+      //
+      // `archive` (v11) is here on the same terms: an `owner/repo` held to
+      // GitHub's naming rules by the protocol's pattern, so one token with no
+      // space, quote or leading dash. The hub keeps it on the record and
+      // pushes the session there before it goes (src/core/archive.js).
+      if (p.archive && !REPO_RE.test(String(p.archive))) throw new Error('an archive is a repository, as owner/repo');
       return [
         '/new',
         p.name,
         p.mode === 'safe' ? '--safe' : p.mode === 'dangerous' ? '--dangerous' : null,
         p.profile ? `--profile=${p.profile}` : null,
         p.secret ? `--secret=${p.secret}` : null,
+        p.archive ? `--archive=${p.archive}` : null,
       ]
         .filter(Boolean)
         .join(' ');
@@ -2226,6 +2233,13 @@ export function toCommandLine({ verb, params, actor }) {
       // the last place a malformed one could still become part of a line.
       if (!REPO_RE.test(String(p.repo || ''))) throw new Error('runnerrepo needs a repository as owner/repo');
       return `/runnerrepo ${p.repo}`;
+    case 'linkrepo':
+      // Two tokens, each held to one shape: the role is one of three words and
+      // the repository is `owner/repo`, both checked by the protocol and again
+      // here, the last place either could still become part of a line.
+      if (!LINK_ROLES.includes(String(p.role))) throw new Error('linkrepo needs a role');
+      if (!REPO_RE.test(String(p.repo || ''))) throw new Error('linkrepo needs a repository as owner/repo');
+      return `/linkrepo ${p.role} ${p.repo}`;
     case 'mint':
       // THE ONLY LINE A MINT PRODUCES IS THE QUESTION, never the answer. The
       // job token and the key are not on it and never become a command at all

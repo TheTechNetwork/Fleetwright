@@ -10,6 +10,7 @@
   "src/core/activity.js": 100,
   "src/core/api-token.js": 100,
   "src/core/apt-release.js": 100,
+  "src/core/archive.js": 83,
   "src/core/changelog.js": 95,
   "src/core/channel.js": 100,
   "src/core/claude-credential.js": 99,
