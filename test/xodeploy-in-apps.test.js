@@ -136,7 +136,8 @@ const ADD = read('apps/android/app/src/main/java/network/thetech/fleetwright/Hyp
 const NOTICE = read('apps/android/app/src/main/java/network/thetech/fleetwright/XoSetupNotice.kt');
 
 test('Android: installing is offered only when every machine that answered found no Xen Orchestra', () => {
-  assert.match(ADD, /if \(!policy && found\.isNotEmpty\(\) && found\.all \{ !it\.reachable \|\| it\.xo == false \}\) \{/);
+  // Nor through this phone, as on iOS.
+  assert.match(ADD, /if \(!policy && found\.isNotEmpty\(\) && found\.none \{ it\.through == "phone" \} && found\.all \{ !it\.reachable \|\| it\.xo == false \}\) \{/);
   assert.match(ADD, /if \(deploying\) \{\s*XoDeploySheet\(/);
 });
 

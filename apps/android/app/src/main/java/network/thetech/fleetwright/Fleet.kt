@@ -801,6 +801,12 @@ class Fleet(
          * with no permanent machine to ask.
          */
         val probes: List<Probe>? = null,
+        /**
+         * When no machine reached the address: one that can reach it through
+         * this phone instead, named by the fleet only when one can (C-2).
+         * Null offers nothing, which is also what an older fleet says.
+         */
+        val relayHost: String? = null,
         /** Where a hypervisor setup has got to, when the reply is about one. */
         val xosetup: Setup? = null,
         /**
@@ -837,6 +843,12 @@ class Fleet(
          * (`narrowSsh` in src/fleet/coordinator/core.js).
          */
         val ssh: SshProbe? = null,
+        /**
+         * "phone" when the machine reached the address through this phone's
+         * own network (a relay, XoRelay.kt) rather than its own. Null is its
+         * own network, which is every probe from a fleet before relays.
+         */
+        val through: String? = null,
     )
 
     /**
@@ -1636,6 +1648,16 @@ class Fleet(
         intent("xoprobe", mapOf("address" to address), idempotencyKey = "app-" + java.util.UUID.randomUUID().toString())
 
     /**
+     * The same question asked of ONE machine, through the relay this phone
+     * holds open to the address (XoRelay.kt): the fleet sends it to the
+     * relay's machine alone, and its answer is marked as through the phone.
+     * Never held, for the reason [xoprobe] gives, and because the relay it
+     * names lives only as long as the screen that opened it.
+     */
+    suspend fun xoprobeThrough(address: String, relay: String): Reply =
+        intent("xoprobe", mapOf("address" to address, "relay" to relay), idempotencyKey = "app-" + java.util.UUID.randomUUID().toString())
+
+    /**
      * One phase of onboarding a hypervisor. docs/hypervisors.md, and the verb
      * in src/fleet/protocol/intents.js.
      *
@@ -1666,6 +1688,7 @@ class Fleet(
         host: String? = null,
         trust: String? = null,
         plain: String? = null,
+        relay: String? = null,
     ): Reply =
         intent(
             "xosetup",
@@ -1686,6 +1709,10 @@ class Fleet(
                 // sentence that says their password would cross the network
                 // readable. Never beside a pin: the two are different setups.
                 if (plain != null) put("plain", plain)
+                // THROUGH THIS PHONE, for a machine that reached the address
+                // only that way: the job runs on the relay's machine and every
+                // connection it makes is TLS it opens over this phone.
+                if (relay != null) put("relay", relay)
             },
             host = host,
             idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),
@@ -2487,10 +2514,12 @@ class Fleet(
                                             } ?: emptyList(),
                                         )
                                     },
+                                    through = p.optString("through").takeIf { it == "phone" },
                                 )
                             }
                         }
                     },
+                    relayHost = json.optJSONObject("relay")?.optString("hostId")?.takeIf { it.isNotBlank() && it != "null" },
                     xosetup = json.optJSONObject("xosetup")?.let { s ->
                         val job = s.optString("job")
                         if (!XoSetup.JOB_RE.matches(job)) null

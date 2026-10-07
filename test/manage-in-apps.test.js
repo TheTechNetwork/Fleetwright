@@ -202,8 +202,12 @@ test('Android: the pin is checked in the handshake, before the upgrade is writte
   assert.ok(open.indexOf('upgrade(ssl, host, port)') > open.indexOf('ssl.startHandshake()'), 'the upgrade is written before the pin is checked');
   // A wrong certificate is said as one, not as a connection that failed.
   assert.match(open, /if \(trust\.mismatch\) throw Failure\("the certificate was not the pinned one", Failure\.Kind\.WRONG_CERTIFICATE\)/);
-  // One trust manager in the app, and it is this one.
-  assert.equal((ANDROID.match(/: X509TrustManager/g) ?? []).length, 1, 'a second trust manager is in the app');
+  // Two trust managers in the app, and neither accepts a certificate that is
+  // not pinned: this one, and the relay's look at what an address presents
+  // (XoRelay.kt, Reader), which refuses every certificate it reads
+  // (test/relay-in-apps.test.js holds it to that). A third is something new.
+  const managers = (ANDROID.match(/class (\w+)(?:\([^)]*\))? : X509TrustManager/g) ?? []).map((m) => m.replace(/^class (\w+)[\s\S]*$/, '$1')).sort();
+  assert.deepEqual(managers, ['PinTrust', 'Reader'], 'a trust manager other than the pin and the relay’s look is in the app');
   assert.ok(!ANDROID.includes('HostnameVerifier'), 'something turns hostname checks off for the rest of the app');
   // TLS only, and a pool set up over plain HTTP is told so in words.
   assert.match(bare(KT_WATCH), /if \(record\.plain \|\| pin == null\) \{\s*phase = Phase\.Stopped\(Manage\.Words\.plainPool\(address\), retry = false\)/);

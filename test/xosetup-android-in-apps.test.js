@@ -32,7 +32,8 @@ test('Android: the screen asks the address, probes, then begins, runs, polls and
   const sheet = file('HypervisorSheet.kt');
   const order = [
     'fleet.xoprobe(address.trim())',
-    'fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust, plain = if (plain) "accepted" else null)',
+    // `relay` only for a machine that reached it through this phone (relay-in-apps.test.js).
+    'fleet.xosetup("begin", address = where, pin = pin, host = p.hostId, trust = trust, plain = if (plain) "accepted" else null, relay = if (through) relayId else null)',
     'fleet.xosetup("run", job = p.setup.job, sealed = sealed)',
     'fleet.xosetup("status", job = id)',
     'fleet.xosetup("cancel", job = setup.job)',
@@ -278,8 +279,8 @@ test('Android: a Xen Orchestra answering in plain HTTP can be chosen, once the p
   // Saveable, and reset where the acknowledgement is: the address, the
   // machine and the probe.
   assert.match(sheet, /var plainAccepted by rememberSaveable \{/);
-  assert.match(sheet, /acknowledged = false\s*plainAccepted = false\s*val r = fleet\.xoprobe/);
-  assert.match(sheet, /chosen = null\s*acknowledged = false\s*plainAccepted = false\s*\}/);
+  assert.match(sheet, /acknowledged = false\s*plainAccepted = false\s*throughOffer = null\s*endRelay\(\)\s*val r = fleet\.xoprobe/);
+  assert.match(sheet, /chosen = null\s*acknowledged = false\s*plainAccepted = false\s*throughOffer = null\s*endRelay\(\)\s*\}/);
   assert.match(sheet, /chosen = p\.hostId\s*(?:\/\/[^\n]*\n\s*)*acknowledged = false\s*plainAccepted = false/);
   // `begin` for a plain machine: no pin, no trust, `plain = accepted`, and
   // nothing sent until the box is ticked. The key is checked over an empty
