@@ -82,7 +82,7 @@ export class PendingAuthorizations {
   constructor({ now = () => Date.now(), ttlMs = STATE_TTL_MS } = {}) {
     this.now = now;
     this.ttlMs = ttlMs;
-    /** @type {Map<string, { hostId: string, email: string|null, pkce: boolean, at: number }>} */
+    /** @type {Map<string, { hostId: string, email: string|null, pkce: boolean, relayed: boolean, at: number }>} */
     this.pending = new Map();
   }
 
@@ -93,9 +93,9 @@ export class PendingAuthorizations {
   }
 
   /**
-   * @param {{ state: string, hostId: string, email: string|null, pkce?: boolean }} flow
+   * @param {{ state: string, hostId: string, email: string|null, pkce?: boolean, relayed?: boolean }} flow
    */
-  mint({ state, hostId, email, pkce = false }) {
+  mint({ state, hostId, email, pkce = false, relayed = false }) {
     this.sweep();
     // Oldest first, so a flood of abandoned flows cannot evict a live one that
     // somebody is in the middle of.
@@ -107,7 +107,10 @@ export class PendingAuthorizations {
     // `pkce`: the host offered a challenge, so the code goes BACK TO IT to be
     // exchanged rather than being exchanged here. See `exchange` in
     // src/fleet/protocol/intents.js.
-    this.pending.set(state, { hostId, email, pkce: Boolean(pkce), at: this.now() });
+    // `relayed`: GitHub sends the person to the OAuth relay, which exchanges
+    // the code, so the only way this flow finishes is sealed, through
+    // finishRelayedGithubAuthorization, and never by a code arriving here.
+    this.pending.set(state, { hostId, email, pkce: Boolean(pkce), relayed: Boolean(relayed), at: this.now() });
     return state;
   }
 
@@ -191,6 +194,28 @@ export function authorizeUrl({ clientId, origin, state, codeChallenge = null }) 
     url.searchParams.set('code_challenge', codeChallenge);
     url.searchParams.set('code_challenge_method', 'S256');
   }
+  return url.toString();
+}
+
+/**
+ * Where to send somebody to authorize, for a coordinator that signs in to
+ * GitHub through the OAuth relay (src/fleet/relay/relay.js) because it has
+ * the App's id and not its secret.
+ *
+ * The `redirect_uri` is the RELAY'S, which is on the App's registered list
+ * where this coordinator's never will be, and the state is `<fleet>.<state>`:
+ * the fleet tells the relay where to send the person back, and the rest is
+ * this coordinator's own, redeemed once here.
+ *
+ * @param {{ clientId: string, relay: string, fleet: string, state: string }} args
+ */
+export function relayAuthorizeUrl({ clientId, relay, fleet, state }) {
+  const base = normaliseOrigin(relay);
+  if (!base) return null;
+  const url = new URL(/** @type {string} */ (GITHUB.authorization_endpoint));
+  url.searchParams.set('client_id', clientId);
+  url.searchParams.set('redirect_uri', `${base}/relay/v1/github/callback`);
+  url.searchParams.set('state', `${fleet}.${state}`);
   return url.toString();
 }
 

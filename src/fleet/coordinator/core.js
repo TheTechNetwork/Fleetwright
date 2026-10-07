@@ -20,8 +20,8 @@ import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, CERT_PIN_RE, XO_UUID_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE } from '../seal.js';
-import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
-import { checkPublicKey } from '../push-crypto.js';
+import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
+import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
@@ -170,6 +170,7 @@ export class CoordinatorCore {
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
    *     github?: (ask: { sealed: unknown }) => Promise<any>,
    *     vault?: (route: 'device'|'box', ask: Record<string, unknown>) => Promise<any> }|null,
+   *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
    * }} [opts]
    */
   constructor({
@@ -209,6 +210,14 @@ export class CoordinatorCore {
     // `claude` half keeps people's Claude logins for their own runners
     // (src/fleet/minter/claude.js), and is absent on a minter that predates it.
     minter = null,
+    // THE OAUTH RELAY (src/fleet/relay/relay.js, docs/relay-terms.md), for a
+    // coordinator that is not ours and so has the App's client id, which is
+    // public, and not its secret: { url, fleet, privateJwk, publicKey }. The
+    // relay exchanges the code and seals the token to `publicKey`; only this
+    // coordinator can open it. Absent is the normal case: a coordinator with
+    // the secret makes the exchange itself, and one with neither keeps the
+    // paste route.
+    oauthRelay = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -222,6 +231,7 @@ export class CoordinatorCore {
     this.cloudflareOauth = cloudflareOauth;
     this.runnerRepo = runnerRepo;
     this.minter = minter;
+    this.oauthRelay = oauthRelay?.url && oauthRelay?.fleet && oauthRelay?.privateJwk && oauthRelay?.publicKey ? oauthRelay : null;
     // Single-use, minutes-long, and minted only when this coordinator itself
     // dispatches a run — so a runner's owner is decided before the job exists
     // rather than by a reusable secret sitting in a repository. Separate store
@@ -1853,12 +1863,22 @@ export class CoordinatorCore {
     // out of something that was not an address. Each provider gets its OWN
     // state, minted into its own store, so one callback cannot redeem the
     // other's flow.
-    if (this.githubApp?.clientId && this.githubApp?.clientSecret) {
+    // THROUGH THE RELAY, for a coordinator with the App's id and not its
+    // secret: GitHub sends the person to the relay, which exchanges the code
+    // and sends them back here with the token sealed to this coordinator's
+    // key. No PKCE on this path, because the exchange is the relay's and the
+    // verifier is the host's, and they never meet. The state is minted here
+    // like any other, and redeemed once, here.
+    const relayed = !this.githubApp?.clientSecret && this.githubApp?.clientId && this.oauthRelay;
+    if ((this.githubApp?.clientId && this.githubApp?.clientSecret) || relayed) {
       const state = this.newId();
-      const codeChallenge = challengeFrom('github');
-      const url = authorizeUrl({ clientId: this.githubApp.clientId, origin, state, codeChallenge });
+      const codeChallenge = relayed ? null : challengeFrom('github');
+      const clientId = /** @type {string} */ (this.githubApp?.clientId);
+      const url = relayed
+        ? relayAuthorizeUrl({ clientId, relay: relayed.url, fleet: relayed.fleet, state })
+        : authorizeUrl({ clientId, origin, state, codeChallenge });
       if (url) {
-        this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge) });
+        this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge), ...(relayed ? { relayed: true } : {}) });
         offers.github = {
           url,
           hint:
@@ -2121,6 +2141,58 @@ export class CoordinatorCore {
     const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };
 
+    return this.#storeAuthorizedToken({ provider: 'github', label: 'GitHub', flow, exchanged, clientId });
+  }
+
+  /**
+   * Finish a GitHub sign-in that went through the OAuth relay: the person
+   * arrives with this coordinator's own state and the token sealed to its key
+   * (src/fleet/relay/relay.js), or with one word for what went wrong there.
+   *
+   * THE STATE IS CHECKED TWICE, and both matter. Redeemed once, here, like
+   * every other flow, so a replayed URL is refused; and found again INSIDE the
+   * sealed token, because this coordinator's public key is public and anybody
+   * can seal something to it, but nobody can seal it for a state they never
+   * saw. A flow minted for the direct exchange is not finished this way.
+   *
+   * NOT RENEWABLE, and said so. Renewing a GitHub App token needs the client
+   * secret, which this coordinator does not have and its hosts are not given;
+   * renewing through the relay would show the relay the refresh token, which
+   * relay-terms.md does not allow. So the token lasts what GitHub gives it,
+   * and the person connects again after that.
+   *
+   * @param {{ state?: unknown, sealed?: unknown, error?: unknown }} args
+   */
+  async finishRelayedGithubAuthorization({ state, sealed, error }) {
+    const clientId = this.githubApp?.clientId;
+    if (!this.oauthRelay || !clientId) return { ok: false, text: 'This fleet does not sign in to GitHub through the relay.' };
+    const flow = this.pendingGithub.redeem(state);
+    if (!flow || !flow.relayed) {
+      return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    }
+    if (typeof error === 'string' && error) {
+      // One word from the relay, mapped here, never echoed: the query is
+      // something anybody can write.
+      const words = /** @type {Record<string, string>} */ ({
+        denied: 'GitHub was not authorised, so nothing was connected.',
+        limited: 'The relay is limiting how many sign-ins this fleet makes in an hour. Try again later.',
+        exchange: 'GitHub did not accept the sign-in. Start again from the app.',
+        unavailable: 'The relay cannot finish GitHub sign-ins at the moment. Start again from the app later.',
+      });
+      return { ok: false, text: words[error] ?? 'The sign-in did not finish. Start again from the app.' };
+    }
+    if (typeof sealed !== 'string' || !sealed) return { ok: false, text: 'The relay did not send back a sign-in to finish.' };
+    let opened;
+    try {
+      const key = await crypto.subtle.importKey('jwk', this.oauthRelay.privateJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+      opened = await openWith(key, this.oauthRelay.publicKey, sealed);
+    } catch {
+      return { ok: false, text: 'The sign-in did not open with this fleet’s key, so nothing was connected.' };
+    }
+    if (opened?.state !== state || typeof opened?.accessToken !== 'string' || !opened.accessToken) {
+      return { ok: false, text: 'That sign-in was not made for this link, so nothing was connected.' };
+    }
+    const exchanged = { ok: true, accessToken: opened.accessToken, refreshToken: null, expiresIn: Number.isFinite(opened.expiresIn) ? opened.expiresIn : null };
     return this.#storeAuthorizedToken({ provider: 'github', label: 'GitHub', flow, exchanged, clientId });
   }
 

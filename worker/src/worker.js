@@ -359,7 +359,7 @@ curl -fsSL '${target}' | sh
     // minutes-long, and bound to the host and person who started the flow.
     // That is the whole security of these routes, and it is checked inside the
     // Durable Object because that is where the pending flow was minted.
-    if (url.pathname === '/oauth/github/callback' || url.pathname === '/oauth/cloudflare/callback') {
+    if (url.pathname === '/oauth/github/callback' || url.pathname === '/oauth/cloudflare/callback' || url.pathname === '/oauth/github/relayed') {
       return callFleet(env, request);
     }
 
@@ -2376,6 +2376,69 @@ const OPENAPI = JSON.stringify({
           },
           "400": {
             "description": "Refused \u2014 unknown, expired or already-used state, or GitHub declined.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/oauth/github/relayed": {
+      "get": {
+        "summary": "Finish a GitHub sign-in made through the OAuth relay",
+        "description": "Where the OAuth relay (docs/relay-terms.md) sends a browser back, for a coordinator that has the App's client id and not its secret. The relay exchanged the code and sealed the token to this coordinator's registered key; only this coordinator can open it. Unauthenticated by necessity and secured like the callback: the `state` is single-use and minted here, and the same state must be found again inside what was sealed. Returns HTML. A coordinator with no relay configured refuses every request here.",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sealed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The token, sealed to this coordinator's key. Absent when `error` is present."
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "denied",
+                "limited",
+                "exchange",
+                "unavailable"
+              ]
+            },
+            "description": "What went wrong at the relay, in one word."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connected. An HTML page telling the person they can close the tab.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: unknown, expired or already-used state, a sealed token that does not open or was made for another state, or what the relay said went wrong.",
             "content": {
               "text/html": {
                 "schema": {
