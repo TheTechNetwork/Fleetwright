@@ -46,6 +46,12 @@ enum XOPolicy {
     static let labPrefix = "fleetwright-lab-"
     static let maxLabs = 4
 
+    /// Labs per person, as the stepper says it. The same words as Android
+    /// (XoPolicy.labsEachLine).
+    static func labsEachLine(_ each: Int) -> String {
+        each == 0 ? "No limit" : each == 1 ? "At most one at once" : "At most \(each) at once"
+    }
+
     /// What the machine read, in `inventoryOf`'s shape. Sizes are bytes.
     struct Inventory: Decodable, Equatable {
         let v: Int
@@ -127,6 +133,10 @@ enum XOPolicy {
             /// The labs it was built with, by kind; nil from a machine that
             /// predates labs, whose edge has none.
             var labs: Labs? = nil
+            /// How many of them one person may hold at once; nil is no
+            /// limit, which is also what a policy from before the setting
+            /// has, and never 0.
+            var labsEach: Int? = nil
         }
 
         struct Labs: Decodable, Equatable {
@@ -322,6 +332,13 @@ enum XOPolicy {
         /// The machine makes them (`labs` in begin's `can`). An older one
         /// cannot, so they are neither offered nor sent.
         var labsChoice = false
+        /// How many labs one person may hold at once. 0 is the stepper's
+        /// "No limit", sent as null and never as 0, which is no number of
+        /// labs anybody could hold.
+        var labsEach = 0
+        /// The machine keeps it (`labs-each` in begin's `can`). An older one
+        /// would drop it without a word, so it is neither offered nor sent.
+        var labsEachChoice = false
 
         /// Whether Apply would rebuild the edge that is there to change its labs.
         func labsChanged(in inv: Inventory) -> Bool {
@@ -401,6 +418,7 @@ enum XOPolicy {
             // The labs the edge has: Apply rebuilds nothing nobody changed.
             c.labsOpen = inv.edge(on: c.egress)?.labs?.open ?? 0
             c.labsClosed = inv.edge(on: c.egress)?.labs?.closed ?? 0
+            c.labsEach = inv.edge(on: c.egress)?.labsEach ?? 0
             c.cpus = XOPolicy.clamp(inv.current.limits.cpus ?? inv.capacity.cpus / 2, inv.cpuRange)
             let memory = inv.current.limits.memory.map(XOPolicy.nearestGiB) ?? Int(clamping: inv.capacity.memory / 2 / XOPolicy.gib)
             c.memoryGiB = XOPolicy.clamp(memory, inv.memoryRange)
@@ -452,6 +470,11 @@ enum XOPolicy {
             }
             if labsChoice, labsOpen + labsClosed > 0, !edge, inv.edge(on: egress) == nil {
                 return "Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed."
+            }
+            if labsChoice, labsEachChoice, labsEach > labsOpen + labsClosed {
+                return labsOpen + labsClosed == 0
+                    ? "With no labs, labs per person is no limit. Nothing was changed."
+                    : "Labs per person is no limit, or 1 to \(labsOpen + labsClosed), the labs there are. Nothing was changed."
             }
             if imageChoice, wantsImage, egress == nil {
                 return "The machine image is built behind the edge router: choose the way out it leaves through."
@@ -508,7 +531,11 @@ enum XOPolicy {
             // Only to a machine that makes them, and only with a way out.
             if groupsChoice, egress != nil { out["groups"] = groups }
             // Only to a machine that makes them, and only where there is a router, there or asked for.
-            if labsChoice, egress != nil, edge || inv.edge(on: egress) != nil { out["labs"] = ["open": labsOpen, "closed": labsClosed] }
+            if labsChoice, egress != nil, edge || inv.edge(on: egress) != nil {
+                out["labs"] = ["open": labsOpen, "closed": labsClosed]
+                // And how many one person may hold, with them: null is no limit.
+                if labsEachChoice { out["labsEach"] = labsEach > 0 ? (labsEach as Any) : (NSNull() as Any) }
+            }
             // Only to a machine that builds either kind, and only with the router.
             if edgeBlockChoice, edge { out["edgeBlock"] = edgeBlock }
             // Only to a machine that reads it, and only with something to build.
