@@ -153,7 +153,7 @@ export function parse(line) {
     .split(/\s+/)
     .filter(Boolean);
   if (!parts.length) return { name: '', args: [], flags: new Set(), values: new Map() };
-  // Accept "/start", "start", and Telegram's "/start@mybot" group form.
+  // Accept "/start", "start", and "/start@mybot" — Telegram's group form, kept for the next chat client.
   const name = parts[0].replace(/^\//, '').split('@')[0].toLowerCase();
 
   /** @type {string[]} */

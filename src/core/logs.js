@@ -179,11 +179,14 @@ const ALIASES = {
 
 const DEFAULT_LINES = 40;
 const MAX_LINES = 200;
-// A cap on how much one `logs` reply may carry. The number was sized for the
-// archived Telegram adapter — two of its 4096-character messages, so one
-// command could not take over somebody's chat — and is kept as it was: the
-// phones and the MCP server now read this reply, and nothing has re-sized it
-// for them.
+// A cap on how much one `logs` reply may carry, in characters, on top of the
+// line cap above. A line can be any length, so 200 lines is not a size, and
+// this reply does not stop at the box: it crosses the sidecar and the
+// coordinator to a phone, or lands whole in an agent's context as an MCP tool
+// result. Somebody asking why a service failed needs the last screenful or
+// two, and a reply that is mostly a journal pushes out everything else they
+// were reading. The tail is kept (below), because that is the part that says
+// what went wrong.
 const MAX_CHARS = 7000;
 
 /** @param {string} word @returns {keyof typeof LOG_SOURCES | null} */
