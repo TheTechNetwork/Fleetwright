@@ -1,0 +1,313 @@
+{
+  "$comment": [
+    "Managing a Xen Orchestra pool from a phone (docs/manage.md), as a table both phones run.",
+    "Read by FleetwrightTests/ManageParityTests.swift and app/src/test/.../ManageParityTest.kt, and checked against the host's own definitions by test/manage-in-apps.test.js.",
+    "WHY A TABLE. The rules here are written twice, once in Swift and once in Kotlin: which object Xen Orchestra sent becomes which row, which actions are drawn from the methods a server lists (C-2), how each is confirmed by what it costs to undo, and the sentences a person reads. A test that greps both sources for a word proves the word is mentioned twice, not that the two phones agree; running both against the same inputs does.",
+    "objects is the inventory, in the shapes xo.getAllObjects returns (the fields src/fleet/host/xo-pools.js and edge-router.js already read). It is deliberately awkward: a host in maintenance mode, a host and a VM with no name and no state, a VM on a host and in a pool the token cannot see, a VM with no guest tools, sizes missing. Missing is CANNOT TELL and is said so, never drawn as zero (C-5).",
+    "actions lists, per component and method list, the ids offered, in the order they are drawn. An empty list and a null list of methods both offer nothing: a server that lists no method, and one whose list could not be read, are each a reason to draw no button.",
+    "details pins each offered action's words, the method it calls, the params it sends, what it costs and how it asks. now is the clock the snapshot name is made from, in milliseconds, so the name is the same on both phones.",
+    "pin is a certificate's DER bytes and the SHA-256 the host writes as the pin (certSha256 in src/fleet/host/xo-ws.js), so the phone that compares it in the TLS challenge computes the same text the machine recorded."
+  ],
+  "now": 1790000000000,
+  "pin": { "der": "MIIBCgKCAQEAw14RmkL/AH8=", "sha256": "eb4a317c9d42692ebd56cf6ec78c65d38fc6498e05a66132be4c3ca166467ed5" },
+  "bytes": [
+    [1023, "1023 bytes"],
+    [536870912, "512 MiB"],
+    [1073741824, "1 GiB"],
+    [1610612736, "1.5 GiB"],
+    [4831838208, "4.5 GiB"],
+    [23622320128, "22 GiB"],
+    [1374389534720, "1.3 TiB"],
+    [2199023255552, "2 TiB"]
+  ],
+  "objects": [
+    { "type": "pool", "id": "pool-1", "name_label": "Home", "master": "host-1" },
+    {
+      "type": "host", "id": "host-1", "name_label": "xcp1", "power_state": "Running", "enabled": true, "$pool": "pool-1",
+      "address": "192.168.1.10", "productBrand": "XCP-ng", "version": "8.3.0",
+      "cpus": { "cores": 16, "sockets": 1 }, "memory": { "usage": 23622320128, "size": 68719476736 }
+    },
+    {
+      "type": "host", "id": "host-2", "name_label": "xcp2", "power_state": "Running", "enabled": false, "$pool": "pool-1",
+      "cpus": { "cores": 8 }, "memory": { "size": 34359738368 }
+    },
+    { "type": "host", "id": "0f1e2d3c4b5a", "name_label": "  ", "power_state": "Unknown", "$pool": "pool-1" },
+    {
+      "type": "VM", "id": "vm-1", "name_label": "build-01", "power_state": "Running", "$container": "host-1", "$pool": "pool-1",
+      "CPUs": { "number": 2, "max": 4 }, "memory": { "size": 4294967296 }, "mainIpAddress": "10.0.0.5",
+      "managementAgentDetected": true, "$VBDs": ["vbd-1", "vbd-2"]
+    },
+    {
+      "type": "VM", "id": "vm-2", "name_label": "web", "power_state": "Halted", "$container": "pool-1", "$pool": "pool-1",
+      "CPUs": { "number": 1, "max": 1 }, "memory": { "size": 2147483648 }, "$VBDs": ["vbd-3"]
+    },
+    {
+      "type": "VM", "id": "vm-3", "name_label": "legacy", "power_state": "Running", "$container": "host-1", "$pool": "pool-1",
+      "CPUs": { "number": 4 }, "memory": { "size": 8589934592 }, "managementAgentDetected": false, "pvDriversDetected": false
+    },
+    {
+      "type": "VM", "id": "vm-4", "name_label": "frozen", "power_state": "Paused", "$container": "host-1", "$pool": "pool-1",
+      "CPUs": { "number": 2 }, "memory": { "size": 4831838208 }
+    },
+    {
+      "type": "VM", "id": "vm-5", "name_label": "asleep", "power_state": "Suspended", "$container": "pool-1", "$pool": "pool-1",
+      "CPUs": { "number": 1 }, "memory": { "size": 1073741824 }
+    },
+    { "type": "VM", "id": "vm-6", "name_label": "elsewhere", "power_state": "Running", "$container": "host-9", "$pool": "pool-9" },
+    { "type": "VM", "id": "vm-7", "name_label": "", "$pool": "pool-1" },
+    {
+      "type": "SR", "id": "sr-1", "name_label": "Local storage", "SR_type": "lvm", "$container": "host-1", "$pool": "pool-1",
+      "shared": false, "size": 536870912000, "physical_usage": 214748364800
+    },
+    {
+      "type": "SR", "id": "sr-2", "name_label": "NAS", "SR_type": "nfs", "$container": "pool-1", "$pool": "pool-1",
+      "shared": true, "size": 2199023255552, "physical_usage": 1099511627776
+    },
+    { "type": "SR", "id": "sr-3", "$container": "pool-1", "$pool": "pool-1" },
+    { "type": "VBD", "id": "vbd-1", "VM": "vm-1", "VDI": "vdi-1", "is_cd_drive": false, "position": "0" },
+    { "type": "VBD", "id": "vbd-2", "VM": "vm-1", "VDI": null, "is_cd_drive": true, "position": "3" },
+    { "type": "VBD", "id": "vbd-3", "VM": "vm-2", "VDI": "vdi-2", "is_cd_drive": false, "position": "0" },
+    { "type": "VDI", "id": "vdi-1", "name_label": "build-01 root", "size": 21474836480, "$SR": "sr-1" },
+    { "type": "VDI", "id": "vdi-2", "name_label": "", "size": 10737418240, "$SR": "sr-2" },
+    { "type": "message", "id": "msg-1", "name": "not something this lists" }
+  ],
+  "components": [
+    { "id": "pool-1", "kind": "pool", "name": "Home", "state": null, "what": "Pool of 3 hosts", "numbers": "2 of 6 VMs running" },
+    { "id": "host-1", "kind": "host", "name": "xcp1", "state": "running", "what": "Host in pool Home · XCP-ng 8.3.0", "numbers": "16 cores · 22 GiB of 64 GiB in use · 2 VMs running" },
+    { "id": "host-2", "kind": "host", "name": "xcp2", "state": "in maintenance mode", "what": "Host in pool Home", "numbers": "8 cores · 32 GiB, use cannot tell · no VMs running" },
+    { "id": "0f1e2d3c4b5a", "kind": "host", "name": "Unnamed host 0f1e2d3c", "state": "cannot tell", "what": "Host in pool Home", "numbers": "cores: cannot tell · memory: cannot tell · no VMs running" },
+    { "id": "vm-1", "kind": "vm", "name": "build-01", "state": "running", "what": "VM on xcp1 in pool Home", "numbers": "2 vCPUs · 4 GiB · 10.0.0.5" },
+    { "id": "vm-2", "kind": "vm", "name": "web", "state": "stopped", "what": "VM in pool Home, not on a host", "numbers": "1 vCPU · 2 GiB" },
+    { "id": "vm-3", "kind": "vm", "name": "legacy", "state": "running", "what": "VM on xcp1 in pool Home", "numbers": "4 vCPUs · 8 GiB" },
+    { "id": "vm-4", "kind": "vm", "name": "frozen", "state": "paused", "what": "VM on xcp1 in pool Home", "numbers": "2 vCPUs · 4.5 GiB" },
+    { "id": "vm-5", "kind": "vm", "name": "asleep", "state": "suspended", "what": "VM in pool Home, not on a host", "numbers": "1 vCPU · 1 GiB" },
+    { "id": "vm-6", "kind": "vm", "name": "elsewhere", "state": "running", "what": "VM on a host this token cannot see", "numbers": "vCPUs: cannot tell · memory: cannot tell" },
+    { "id": "vm-7", "kind": "vm", "name": "Unnamed VM vm-7", "state": "cannot tell", "what": "VM in pool Home, not on a host", "numbers": "vCPUs: cannot tell · memory: cannot tell" },
+    { "id": "sr-1", "kind": "sr", "name": "Local storage", "state": null, "what": "Storage, lvm, on xcp1", "numbers": "300 GiB free of 500 GiB" },
+    { "id": "sr-2", "kind": "sr", "name": "NAS", "state": null, "what": "Storage, nfs, shared by pool Home", "numbers": "1 TiB free of 2 TiB" },
+    { "id": "sr-3", "kind": "sr", "name": "Unnamed storage sr-3", "state": null, "what": "Storage, shared by pool Home", "numbers": "space: cannot tell" }
+  ],
+  "lists": {
+    "pool": ["pool-1"],
+    "host": ["0f1e2d3c4b5a", "host-1", "host-2"],
+    "vm": ["vm-5", "vm-1", "vm-6", "vm-4", "vm-3", "vm-7", "vm-2"],
+    "sr": ["sr-1", "sr-2", "sr-3"]
+  },
+  "disks": [
+    { "vm": "vm-1", "disks": [{ "id": "vdi-1", "name": "build-01 root", "size": "20 GiB", "storage": "Local storage", "line": "20 GiB on Local storage" }] },
+    { "vm": "vm-2", "disks": [{ "id": "vdi-2", "name": "Unnamed disk vdi-2", "size": "10 GiB", "storage": "NAS", "line": "10 GiB on NAS" }] },
+    { "vm": "vm-3", "disks": [] }
+  ],
+  "methods": {
+    "all": [
+      "vm.start", "vm.resume", "vm.unpause", "vm.stop", "vm.restart", "vm.pause", "vm.suspend", "vm.snapshot", "vm.clone",
+      "vm.delete", "vm.set", "disk.resize", "vdi.set", "host.setMaintenanceMode", "host.disable", "host.enable", "host.restart"
+    ]
+  },
+  "actions": [
+    { "why": "a running VM with its guest tools: everything a running VM can be asked", "component": "vm-1", "methods": "all", "offered": ["snapshot", "shutdown", "reboot", "pause", "suspend", "forceReboot", "forceShutdown"] },
+    { "why": "a server that lists nothing gets no buttons at all", "component": "vm-1", "methods": [], "offered": [] },
+    { "why": "a method list that could not be read is cannot tell, and draws nothing", "component": "vm-1", "methods": null, "offered": [] },
+    { "why": "clean and forced shutdown are one method, so one listed method offers both", "component": "vm-1", "methods": ["vm.stop"], "offered": ["shutdown", "forceShutdown"] },
+    { "why": "a stopped VM can be started, copied and deleted", "component": "vm-2", "methods": "all", "offered": ["start", "snapshot", "clone", "delete"] },
+    { "why": "no guest tools means a clean shutdown or reboot would be refused, so only the forced ones are drawn", "component": "vm-3", "methods": "all", "offered": ["snapshot", "pause", "suspend", "forceReboot", "forceShutdown"] },
+    { "why": "a paused VM is unpaused, or forced", "component": "vm-4", "methods": "all", "offered": ["unpause", "snapshot", "forceReboot", "forceShutdown"] },
+    { "why": "a suspended VM is resumed, or forced off", "component": "vm-5", "methods": "all", "offered": ["resume", "snapshot", "forceShutdown"] },
+    { "why": "a VM whose state is not known is offered nothing, because every action depends on the state", "component": "vm-7", "methods": "all", "offered": [] },
+    { "why": "a running host can go into maintenance mode or reboot", "component": "host-1", "methods": "all", "offered": ["maintenanceOn", "hostReboot"] },
+    { "why": "an older Xen Orchestra has disable and enable instead of setMaintenanceMode", "component": "host-1", "methods": ["host.disable", "host.enable"], "offered": ["maintenanceOn"] },
+    { "why": "a host in maintenance mode can leave it, or reboot", "component": "host-2", "methods": "all", "offered": ["maintenanceOff", "hostReboot"] },
+    { "why": "a host whose state is not known is offered nothing", "component": "0f1e2d3c4b5a", "methods": "all", "offered": [] },
+    { "why": "a pool has nothing in this slice", "component": "pool-1", "methods": "all", "offered": [] },
+    { "why": "storage has nothing in this slice", "component": "sr-1", "methods": "all", "offered": [] }
+  ],
+  "details": [
+    {
+      "component": "vm-1", "methods": "all", "action": "snapshot", "label": "Take a snapshot", "method": "vm.snapshot", "cost": "reversible",
+      "params": { "id": "vm-1", "name": "build-01 2026-09-21 14:13 UTC" }, "confirm": { "kind": "none" }, "done": "Took a snapshot of build-01."
+    },
+    {
+      "component": "vm-1", "methods": "all", "action": "shutdown", "label": "Shut down", "method": "vm.stop", "cost": "interrupting",
+      "params": { "id": "vm-1", "force": false },
+      "confirm": { "kind": "ask", "title": "Shut down build-01? Everything running on it stops.", "button": "Shut down" },
+      "done": "Shut down build-01."
+    },
+    {
+      "component": "vm-1", "methods": "all", "action": "reboot", "label": "Reboot", "method": "vm.restart", "cost": "interrupting",
+      "params": { "id": "vm-1", "force": false },
+      "confirm": { "kind": "ask", "title": "Reboot build-01? Everything running on it restarts.", "button": "Reboot" },
+      "done": "Rebooted build-01."
+    },
+    {
+      "component": "vm-1", "methods": "all", "action": "pause", "label": "Pause", "method": "vm.pause", "cost": "interrupting",
+      "params": { "id": "vm-1" },
+      "confirm": { "kind": "ask", "title": "Pause build-01? Everything running on it is frozen until it is unpaused.", "button": "Pause" },
+      "done": "Paused build-01."
+    },
+    {
+      "component": "vm-1", "methods": "all", "action": "suspend", "label": "Suspend", "method": "vm.suspend", "cost": "interrupting",
+      "params": { "id": "vm-1" },
+      "confirm": { "kind": "ask", "title": "Suspend build-01? Everything running on it stops until it is resumed, from where it left off.", "button": "Suspend" },
+      "done": "Suspended build-01."
+    },
+    {
+      "component": "vm-1", "methods": "all", "action": "forceReboot", "label": "Force a restart", "method": "vm.restart", "cost": "destructive",
+      "params": { "id": "vm-1", "force": true },
+      "confirm": { "kind": "type", "title": "Force build-01 to restart? It is reset as if its power button were held: anything not saved on it is lost.", "name": "build-01", "button": "Force a restart" },
+      "done": "Forced build-01 to restart."
+    },
+    {
+      "component": "vm-1", "methods": "all", "action": "forceShutdown", "label": "Force off", "method": "vm.stop", "cost": "destructive",
+      "params": { "id": "vm-1", "force": true },
+      "confirm": { "kind": "type", "title": "Force build-01 off? It is cut off as if unplugged: anything not saved on it is lost.", "name": "build-01", "button": "Force it off" },
+      "done": "Forced build-01 off."
+    },
+    {
+      "component": "vm-2", "methods": "all", "action": "start", "label": "Start", "method": "vm.start", "cost": "reversible",
+      "params": { "id": "vm-2" }, "confirm": { "kind": "none" }, "done": "Started web."
+    },
+    {
+      "component": "vm-2", "methods": "all", "action": "clone", "label": "Clone", "method": "vm.clone", "cost": "reversible",
+      "params": { "id": "vm-2", "name": "web (clone)", "full_copy": false }, "confirm": { "kind": "none" }, "done": "Cloned web as web (clone)."
+    },
+    {
+      "component": "vm-2", "methods": "all", "action": "delete", "label": "Delete", "method": "vm.delete", "cost": "destructive",
+      "params": { "id": "vm-2", "deleteDisks": true },
+      "confirm": { "kind": "type", "title": "Delete web and its disks? This cannot be undone.", "name": "web", "button": "Delete it" },
+      "done": "Deleted web and its disks."
+    },
+    {
+      "component": "vm-4", "methods": "all", "action": "unpause", "label": "Unpause", "method": "vm.unpause", "cost": "reversible",
+      "params": { "id": "vm-4" }, "confirm": { "kind": "none" }, "done": "Unpaused frozen."
+    },
+    {
+      "component": "vm-5", "methods": "all", "action": "resume", "label": "Resume", "method": "vm.resume", "cost": "reversible",
+      "params": { "id": "vm-5" }, "confirm": { "kind": "none" }, "done": "Resumed asleep."
+    },
+    {
+      "component": "host-1", "methods": "all", "action": "maintenanceOn", "label": "Enter maintenance mode", "method": "host.setMaintenanceMode", "cost": "reversible",
+      "params": { "id": "host-1", "maintenance": true }, "confirm": { "kind": "none" }, "done": "xcp1 is in maintenance mode."
+    },
+    {
+      "component": "host-1", "methods": ["host.disable", "host.enable"], "action": "maintenanceOn", "label": "Enter maintenance mode", "method": "host.disable", "cost": "reversible",
+      "params": { "id": "host-1" }, "confirm": { "kind": "none" }, "done": "xcp1 is in maintenance mode."
+    },
+    {
+      "component": "host-1", "methods": "all", "action": "hostReboot", "label": "Reboot", "method": "host.restart", "cost": "interrupting",
+      "params": { "id": "host-1" },
+      "confirm": { "kind": "ask", "title": "Reboot xcp1? 2 VMs running on it stop with it unless Xen Orchestra moves them to another host first.", "button": "Reboot" },
+      "done": "Rebooting xcp1."
+    },
+    {
+      "component": "host-2", "methods": "all", "action": "maintenanceOff", "label": "Leave maintenance mode", "method": "host.setMaintenanceMode", "cost": "reversible",
+      "params": { "id": "host-2", "maintenance": false }, "confirm": { "kind": "none" }, "done": "xcp2 is out of maintenance mode."
+    },
+    {
+      "component": "host-2", "methods": ["host.restart", "host.enable"], "action": "maintenanceOff", "label": "Leave maintenance mode", "method": "host.enable", "cost": "reversible",
+      "params": { "id": "host-2" }, "confirm": { "kind": "none" }, "done": "xcp2 is out of maintenance mode."
+    },
+    {
+      "component": "host-2", "methods": "all", "action": "hostReboot", "label": "Reboot", "method": "host.restart", "cost": "interrupting",
+      "params": { "id": "host-2" },
+      "confirm": { "kind": "ask", "title": "Reboot xcp2? No VM this phone can see is running on it.", "button": "Reboot" },
+      "done": "Rebooting xcp2."
+    }
+  ],
+  "tuning": [
+    { "why": "a running VM is told that its size changes only while stopped, and is not offered the change", "component": "vm-1", "methods": "all", "resize": false, "needsStopped": true, "grow": "disk.resize" },
+    { "why": "a stopped VM can be resized", "component": "vm-2", "methods": "all", "resize": true, "needsStopped": false, "grow": "disk.resize" },
+    { "why": "vdi.set grows a disk on a Xen Orchestra that does not list disk.resize, in the host's own order", "component": "vm-2", "methods": ["vdi.set"], "resize": false, "needsStopped": false, "grow": "vdi.set" },
+    { "why": "nothing listed, nothing offered, and nothing said about stopping", "component": "vm-2", "methods": [], "resize": false, "needsStopped": false, "grow": null },
+    { "why": "vm.set alone on a running VM: the sentence, no button", "component": "vm-1", "methods": ["vm.set"], "resize": false, "needsStopped": true, "grow": null },
+    { "why": "a VM whose state is not known is offered no change at all", "component": "vm-7", "methods": "all", "resize": false, "needsStopped": false, "grow": null },
+    { "why": "a host is not resized here", "component": "host-1", "methods": "all", "resize": false, "needsStopped": false, "grow": null }
+  ],
+  "resize": [
+    { "component": "vm-2", "cpus": 2, "memoryGiB": 4, "method": "vm.set", "params": { "id": "vm-2", "CPUs": 2, "memory": 4294967296 }, "done": "web now has 2 vCPUs and 4 GiB." },
+    { "component": "vm-2", "cpus": 1, "memoryGiB": 1, "method": "vm.set", "params": { "id": "vm-2", "CPUs": 1, "memory": 1073741824 }, "done": "web now has 1 vCPU and 1 GiB." }
+  ],
+  "grow": [
+    {
+      "component": "vm-2", "disk": "vdi-2", "toGiB": 20, "methods": "all", "method": "disk.resize", "params": { "id": "vdi-2", "size": 21474836480 },
+      "confirm": { "kind": "ask", "title": "Grow Unnamed disk vdi-2 to 20 GiB? A disk cannot be made smaller again.", "button": "Grow it" },
+      "done": "Unnamed disk vdi-2 is now 20 GiB."
+    },
+    {
+      "component": "vm-1", "disk": "vdi-1", "toGiB": 30, "methods": ["vdi.set"], "method": "vdi.set", "params": { "id": "vdi-1", "size": 32212254720 },
+      "confirm": { "kind": "ask", "title": "Grow build-01 root to 30 GiB? A disk cannot be made smaller again.", "button": "Grow it" },
+      "done": "build-01 root is now 30 GiB."
+    }
+  ],
+  "notifications": [
+    {
+      "why": "a VM that starts arrives as an enter carrying its new state, and the host it went to counts it",
+      "notice": { "type": "enter", "items": { "vm-2": { "type": "VM", "id": "vm-2", "name_label": "web", "power_state": "Running", "$container": "host-1", "$pool": "pool-1", "CPUs": { "number": 1 }, "memory": { "size": 2147483648 } } } },
+      "states": { "vm-2": "running" }, "numbers": { "host-1": "16 cores · 22 GiB of 64 GiB in use · 3 VMs running" }, "absent": []
+    },
+    {
+      "why": "a deleted VM leaves as an exit",
+      "notice": { "type": "exit", "items": { "vm-5": { "type": "VM", "id": "vm-5" } } },
+      "states": {}, "numbers": { "pool-1": "2 of 5 VMs running" }, "absent": ["vm-5"]
+    },
+    {
+      "why": "an object of a kind this does not list changes nothing",
+      "notice": { "type": "enter", "items": { "msg-2": { "type": "message", "id": "msg-2" } } },
+      "states": { "vm-1": "running" }, "numbers": { "pool-1": "2 of 6 VMs running" }, "absent": ["msg-2"]
+    },
+    {
+      "why": "a host going into maintenance mode arrives as an enter",
+      "notice": { "type": "enter", "items": { "host-1": { "type": "host", "id": "host-1", "name_label": "xcp1", "power_state": "Running", "enabled": false, "$pool": "pool-1" } } },
+      "states": { "host-1": "in maintenance mode" }, "numbers": {}, "absent": []
+    }
+  ],
+  "records": [
+    {
+      "why": "the record setup sealed back to the phone (xo-setup.js, hand-off)",
+      "address": "xo.lan",
+      "text": "{\"v\":1,\"address\":\"xo.lan\",\"pin\":\"eb4a317c9d42692ebd56cf6ec78c65d38fc6498e05a66132be4c3ca166467ed5\",\"user\":\"fleetwright\",\"userId\":\"u1\",\"resourceSet\":\"rs1\",\"token\":\"tok-abc\",\"tokenExpires\":\"2027-04-05T06:30:00.000Z\",\"certificate\":{\"trusted\":false,\"accepted\":true,\"notAfter\":\"2030-01-01T00:00:00.000Z\"},\"plain\":false,\"limits\":null,\"pools\":[{\"id\":\"pool-1\",\"name\":\"Home\"}],\"savedAt\":\"2026-09-01T00:00:00.000Z\"}",
+      "ok": true, "token": "tok-abc", "pin": "eb4a317c9d42692ebd56cf6ec78c65d38fc6498e05a66132be4c3ca166467ed5", "plain": false, "user": "fleetwright", "expires": 1806906600000
+    },
+    {
+      "why": "a pool set up over plain HTTP: no pin, and the server's own token length",
+      "address": "xo.lan",
+      "text": "{\"v\":1,\"address\":\"xo.lan\",\"pin\":null,\"user\":\"fleetwright\",\"token\":\"tok-plain\",\"tokenExpires\":null,\"plain\":true}",
+      "ok": true, "token": "tok-plain", "pin": null, "plain": true, "user": "fleetwright", "expires": null
+    },
+    { "why": "a record for another address is not this pool's", "address": "xo.lan", "text": "{\"v\":1,\"address\":\"other.lan\",\"pin\":null,\"token\":\"t\"}", "ok": false },
+    { "why": "a record with no token is nothing to connect with", "address": "xo.lan", "text": "{\"v\":1,\"address\":\"xo.lan\",\"pin\":null,\"token\":\"\"}", "ok": false },
+    { "why": "not JSON", "address": "xo.lan", "text": "tok-abc", "ok": false }
+  ],
+  "words": {
+    "watching": "Watching now. Changes arrive as Xen Orchestra makes them.",
+    "connecting": ["xo.lan", "Connecting to xo.lan…"],
+    "never": "Not looked at from this phone yet.",
+    "closed": "Nothing watches while the app is closed.",
+    "plainPool": ["xo.lan", "xo.lan was set up over plain HTTP. This phone manages a pool only over HTTPS, with the certificate pinned at setup, so it does not connect to this one."],
+    "noToken": ["xo.lan", "This phone holds no token for xo.lan any more. Run Add a hypervisor again for it."],
+    "expired": ["xo.lan", "5 April 2027", "Its token ran out on 5 April 2027. Run Add a hypervisor again for xo.lan to make a new one."],
+    "wrongCertificate": ["xo.lan", "xo.lan answered with a different certificate from the one pinned when it was set up. Nothing was sent. If Xen Orchestra’s certificate changed, run Add a hypervisor again for it."],
+    "signInRefused": ["xo.lan", "invalid credentials", "Xen Orchestra refused this phone’s token for xo.lan: invalid credentials. If it ran out or was revoked, run Add a hypervisor again for it."],
+    "noObjects": "This Xen Orchestra does not offer xo.getAllObjects, so nothing can be listed.",
+    "lost": ["the connection closed", "The connection ended: the connection closed. Look again to reconnect."],
+    "methodsUnknown": "Cannot tell which actions this Xen Orchestra offers, so none are drawn.",
+    "nothingOffered": "Nothing Xen Orchestra offers can be done to it in the state it is in.",
+    "seesNothing": "This token sees nothing on the pool.",
+    "limitedUser": ["fleetwright", "Signed in as fleetwright, the limited user setup made, so only what its resource set allows is listed."],
+    "tuneNeedsStopped": "vCPUs and memory change only while it is stopped.",
+    "growNote": "A disk can grow while the VM runs. It cannot be made smaller again.",
+    "refused": ["VM_BAD_POWER_STATE", "Xen Orchestra refused: VM_BAD_POWER_STATE"],
+    "slow": "Xen Orchestra did not answer in time. It may still be doing it; the list shows what it reports.",
+    "typePrompt": ["build-01", "Type build-01 to confirm."],
+    "gone": "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it.",
+    "lookAgain": "Look again",
+    "changePolicy": "Change what the fleet may use",
+    "whatItIs": "What it is",
+    "howItIs": "How it is",
+    "whatItCanDo": "What it can do",
+    "resizeButton": [[2, 4, "Set to 2 vCPUs and 4 GiB"], [1, 1, "Set to 1 vCPU and 1 GiB"]],
+    "growButton": ["build-01 root", 30, "Grow build-01 root to 30 GiB"],
+    "heading": { "pool": "Pools", "host": "Hosts", "vm": "VMs", "sr": "Storage" },
+    "kindTitle": { "pool": "Pool", "host": "Host", "vm": "VM", "sr": "Storage" },
+    "actionsFooter": "Each action is here only because this Xen Orchestra lists its method. Shutting down, rebooting, pausing and suspending ask first; forcing a VM off or deleting one asks for its name typed back."
+  }
+}

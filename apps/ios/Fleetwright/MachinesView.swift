@@ -138,13 +138,15 @@ struct MachinesView: View {
                 .fleetRow()
             }
 
-            // THE POOLS THIS PHONE HOLDS, each a way into changing what the
-            // fleet may use there. Behind the same gate as Add a hypervisor,
-            // for the same reason, and drawn only when there is one: a
-            // heading over nothing is a screen promising something it does
-            // not have. The rows are cards of the one shape (RHYTHM 1): the
-            // address at the weight a hostname gets, then what the record
-            // says the pools are called.
+            // THE POOLS THIS PHONE HOLDS, each a way to its page: what is on
+            // it and what can be done there, phone-direct with the token
+            // setup handed back (PoolManageView, docs/manage.md), and the
+            // change to what the fleet may use. Behind the same gate as Add a
+            // hypervisor, for the same reason, and drawn only when there is
+            // one: a heading over nothing is a screen promising something it
+            // does not have. The rows are cards of the one shape (RHYTHM 1):
+            // the address at the weight a hostname gets, what the record says
+            // the pools are called, and when this phone last looked.
             // A method rather than more of this body, for the reason
             // healthLines gives.
             if settings.configured && settings.showsAdmin && !hypervisors.isEmpty {
@@ -210,7 +212,7 @@ struct MachinesView: View {
             .fleetRow()
         ForEach(hypervisors) { pool in
             NavigationLink {
-                AddHypervisorView(settings: settings, policyFor: pool.address)
+                PoolManageView(settings: settings, pool: pool)
             } label: {
                 hypervisorRow(pool)
             }
@@ -229,13 +231,17 @@ struct MachinesView: View {
                  ?? "Pool names not recorded")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
-            // What the row is for, in words, since the address alone does
-            // not say. Dim like the line above: a way in, not news.
-            Text("Change what it may use")
+            // HOW CURRENT ITS PAGE WILL BE: nothing watches a pool while the
+            // app is closed, so the row says when this phone last looked
+            // rather than letting the page's first frame pass for now.
+            Text(Manage.lastLooked(pool.address).map { Manage.Words.rowLooked(relativeTime($0.timeIntervalSince1970 * 1000)) }
+                 ?? Manage.Words.never)
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
         }
         .frame(minHeight: 44, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens its page")
     }
 
     /// Push the page somebody asked for from elsewhere, once this list knows
