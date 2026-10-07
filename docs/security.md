@@ -392,6 +392,20 @@ machine of the fleet, through the coordinator.
   is spent, for up to 350 minutes before any session uses it. A machine a
   session has used is never handed to another. Keeping none, or fewer, ends
   the rest.
+- **Machines behind the edge router are fenced from each other**
+  (`install/fleetwright-net`, `docs/hypervisors.md`, "Machines that work
+  together"): at every boot each drops connections opened to it from the
+  uplink except by the router, and powers off if it cannot. The fence is in
+  the machine, so it holds against the other machines and not against its
+  own root, which can only expose itself; it does not stop forged frames on
+  the uplink, which the router's rules and a lab of its own are for. A
+  **group network** has no interface off the pool and is made by the policy
+  job with the admin sign-in, so a group is reachable only by the machines
+  put in it. **A group is the pool's, not a person's**: two people who keep
+  tokens for the same pool share its group networks, and machines either of
+  them puts in group 1 reach each other. A compromised coordinator can put a
+  person's new machine in one of their pool's groups, and so beside whatever
+  else is in that group.
 - **SSH keys** are public keys, kept as the named secret
   `SSH_AUTHORIZED_KEYS` and checked on the phone and on the box to be public
   keys and nothing else. They go on the machine's cloud-init drive beside

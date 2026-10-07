@@ -88,10 +88,11 @@ the resource set. Its build is on the Lock Screen and in Android's ongoing
 notification, like the router's. Details under "Templates, built by the
 policy job".
 
-**Not yet:** machines on the uplink can reach each other as well as the
-internet (one machine per network, and a group network for tests that need
-several, are the next round); a pool has to be added and approved boxes
-have to reach it; the first clone has not been run on a real XCP-ng pool.
+Machines on the uplink cannot reach each other unless they are put in a
+group ("Machines that work together").
+
+**Not yet:** a pool has to be added and approved boxes have to reach it; the
+first clone has not been run on a real XCP-ng pool.
 
 ## Machines kept ready
 
@@ -128,6 +129,70 @@ list as kept ready. The coordinator keeps the wish and the machines made for
 it as `vmStandby` (`src/fleet/coordinator/vm-standby.js`): a refusal past 32
 people, at most six machines each, and a machine that never enrolled
 forgotten after fifteen minutes.
+
+## Machines that work together
+
+> Allow fleet pool tests, so think testing HA for something, which means the
+> 3 VMs need to reach each other. Allow requesting VMs to be connected on
+> their own network, with a default of isolate from each other and only
+> allow outbound.
+
+**By default a machine reaches the internet and nothing else, and nothing
+reaches it.** The edge router already keeps every machine off your LAN, the
+pool's API and the rest of private address space. But the machines behind it
+share one network, the uplink, so without more they could reach each other
+directly, without passing the router. Now each one, at every boot, drops any
+connection opened to it from the uplink except by the router itself
+(`install/fleetwright-net`, an nftables table `inet fleetwright`); replies to
+what it opened still come back in, and inbound IPv6 is dropped. If the filter
+cannot be put in place the machine powers off rather than sit open beside
+everyone else's, and the box that made it removes it.
+
+**A group is how machines that need each other are let through.** In a
+pool's policy, under *Machines that work together*, a person asks for up to
+four **group networks**, `fleetwright-group-1` to `-4`: private networks in
+the way out's pool with no interface of their own, so nothing reaches them
+but the machines on them. The policy job makes them with the admin sign-in
+(the fleet's limited user cannot make networks) and puts them in the resource
+set. It never removes one, because a machine may be on it, and applying a
+policy keeps them in the set whatever the phone sent.
+
+Then, in New session › Where, *Work with others on* puts the new machine on
+one as well as its own network (`provision { group }`, protocol 10). Start
+three machines with the same group and they reach each other on it:
+
+- **An address each**, in 10.200.0.0/16, taken from the machine's ticket id
+  and moved past any other machine in that group has. There is no DHCP on a
+  group network; the address is set at every boot, on the interface whose MAC
+  (also from the ticket id) the box gave it.
+- **A name each**: `vm-xxxxxxxxxxxx.local`, over mDNS (avahi), so a test can
+  name its peers rather than carry addresses.
+- **Everything is let in on the group network**, and the uplink stays
+  fenced: in a group, a machine is still closed to every machine that is not.
+- **A group is the pool's, not a person's.** Two people who keep tokens for
+  the same pool share its group networks: their machines in group 1 reach
+  each other. A pool shared that way wants a group each.
+- **The page says it.** A machine's page names its group, its address there
+  and its `.local` name. The box tags it `fleetwright-grp:` and
+  `fleetwright-gip:` in Xen Orchestra, so the next machine in the group, made
+  by any box, avoids the address.
+
+**A network of your own choosing is left as it is.** A machine put on one of
+the pool's networks instead of behind the router gets no fence: that network
+is yours, with whatever is on it already.
+
+**What this is, and is not.** The fence is inside each machine, so it holds
+against every other machine on the uplink, and not against the machine's own
+root: a session that removes it exposes itself and nothing else. It does not
+stop a machine with root sending forged frames on the uplink (ARP or spoofed
+sources); the router's own rules are the boundary no session can touch, and
+a lab with its own router (below) is the shape for work that must not share
+a segment at all. A group network, like the uplink, is local to one host of a
+pool without Xen Orchestra's SDN controller, so the machines of a group must
+land on one host to reach each other. The script and its unit travel on the
+cloud-init drive, so machines from images built before them are fenced too;
+images built now carry nftables and avahi, and an older clone installs them
+when it can.
 
 ## Working a machine
 
@@ -290,12 +355,12 @@ our side has failed.
 ## What `provision` may express
 
 ```
-provision { platform: "vm", template: <Xen Orchestra template id>, minutes?: 5..350, network?: <Xen Orchestra network id> }
+provision { platform: "vm", template: <Xen Orchestra template id>, minutes?: 5..350, network?: <Xen Orchestra network id>, group?: <Xen Orchestra network id> }
 vmctl     { name: vm-<12 hex>, action: reboot|extend|resize|stop, minutes?: 5..350, cpus?: 1..64, memory?: 1..512 GiB }
 ```
 
-`template` is new on an existing verb, so it is `since: 8`, and `network`
-and `vmctl` are `since: 9`, and only a box
+`template` is new on an existing verb, so it is `since: 8`, `network`
+and `vmctl` are `since: 9`, and `group` is `since: 10`, and only a box
 that reports a pool (and so speaks 8) is ever asked; the coordinator refuses
 rather than let it be dropped. **The id must be an image the box itself saw
 on your pool**, tagged `fleetwright-image`: the box checks its own report,
