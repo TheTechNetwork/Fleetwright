@@ -10,7 +10,7 @@
 // Telegram answers a second concurrent getUpdates with HTTP 409, so two hubs
 // sharing one token will fight. One bot per hub.
 
-import { dispatch, commandMenu } from './commands.js';
+import { dispatch, COMMANDS } from './commands.js';
 import { log } from '../log.js';
 import { redactCommandLine } from '../core/redact.js';
 
@@ -258,6 +258,32 @@ export class TelegramAdapter {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * The command menu registered with setMyCommands for autocomplete. Derived from
+ * COMMANDS rather than written out separately, so a new command shows up in
+ * the client's "/" menu without anyone remembering to update a second list.
+ *
+ * It lived in commands.js while this adapter was wired, and was the one thing
+ * there that only Telegram called. The shaping below is Telegram's rules, not
+ * the registry's, so it is kept beside the only code that needs it.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {Array<{ command: string, description: string }>}
+ */
+export function commandMenu(cfg) {
+  return Object.entries(COMMANDS)
+    .filter(([name, def]) => {
+      if (!def.short) return false;
+      if (!cfg.loginEnabled && (name === 'login' || name === 'code')) return false;
+      return true;
+    })
+    .map(([name, def]) => ({
+      // Telegram requires lowercase, 1-32 chars, [a-z0-9_].
+      command: name.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 32),
+      description: String(def.short).slice(0, 256),
+    }));
 }
 
 /**

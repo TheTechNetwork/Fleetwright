@@ -634,12 +634,14 @@ function addressNote(cfg, channel) {
 }
 
 /**
- * `short` is the one-line description registered with Telegram's setMyCommands,
- * which is what makes the client autocomplete these as you type "/". Telegram
- * caps it at 256 characters and shows it inline, so keep it to a few words —
- * `help` is the longer text for /help.
+ * `short` is a few words for a chat client's "/" menu, shown inline beside the
+ * command as it autocompletes — `help` is the longer text for /help. Nothing
+ * live reads it today: the one client that did was Telegram, which is archived,
+ * and the menu it built from this field went with it to
+ * archive/telegram/telegram.js. It stays because it is a property of the
+ * command rather than of any client, and the next chat surface needs exactly it.
  *
- * @type {Record<string, { aliases?: string[], usage: string, help: string, short?: string, hidden?: boolean, run: (ctx: Ctx, args: string[], flags: Set<string>, values: Map<string, string>) => Promise<Reply>|Reply }>}
+ * @type {Record<string, { aliases?: string[], usage: string, help: string, short?: string, run: (ctx: Ctx, args: string[], flags: Set<string>, values: Map<string, string>) => Promise<Reply>|Reply }>}
  */
 export const COMMANDS = {
   help: {
@@ -653,7 +655,7 @@ export const COMMANDS = {
   new: {
     // `start` is here for the web UI and CLI, where it is the natural word.
     // Telegram reserves a bare /start as the bot-intro command, so its adapter
-    // maps that one case to /help — see adapters/telegram.js.
+    // mapped that one case to /help — see archive/telegram/telegram.js.
     aliases: ['start', 'launch', 'run'],
     usage: '/new [name] [path] [--safe|--dangerous] [--profile=<name>] [--secret=<name>]',
     short: 'Start a new Claude session',
@@ -2302,28 +2304,6 @@ const LOOKUP = (() => {
   }
   return m;
 })();
-
-/**
- * The command menu a chat client can register for autocomplete. Derived from
- * COMMANDS rather than written out separately, so a new command shows up in
- * the client's "/" menu without anyone remembering to update a second list.
- *
- * @param {import('../config.js').Config} cfg
- * @returns {Array<{ command: string, description: string }>}
- */
-export function commandMenu(cfg) {
-  return Object.entries(COMMANDS)
-    .filter(([name, def]) => {
-      if (def.hidden || !def.short) return false;
-      if (!cfg.loginEnabled && (name === 'login' || name === 'code')) return false;
-      return true;
-    })
-    .map(([name, def]) => ({
-      // Telegram requires lowercase, 1-32 chars, [a-z0-9_].
-      command: name.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 32),
-      description: String(def.short).slice(0, 256),
-    }));
-}
 
 /** @param {Ctx} ctx */
 export function helpText(ctx) {
