@@ -382,6 +382,15 @@ workflow by hand on `main` with **sync_app_key** ticked once after this ships,
 or the minter has no copy. See `docs/runner-central.md`, "Without a permanent
 box".
 
+**The relays** (`docs/relay-terms.md`) deploy only when the repository
+variable **`FLEETWRIGHT_RELAY`** is `1`, as their own Worker on
+`<the coordinator's hostname>/relay/*`, with the push credentials and the App's
+client secret the deploy job already syncs to the coordinator. Off otherwise,
+so a fork deploying this workflow does not start delivering to our apps with
+credentials it copied. **One manual step:** add
+`https://<the coordinator's hostname>/relay/v1/github/callback` to the GitHub
+App's callback URLs before the first sign-in goes through the relay.
+
 And four repository **variables**:
 
 | variable | |
