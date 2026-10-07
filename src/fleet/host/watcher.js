@@ -197,7 +197,9 @@ export class SessionWatcher {
      * two together are what makes "back at its prompt" a transition rather
      * than a state: a session parked at the prompt is one event when it
      * arrives there, not one every tick until somebody looks.
-     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean, readyAt?: number|null }>}
+     * `awaitingSince` is when it started waiting on a person, kept for as long
+     * as it goes on waiting — see awaitingSince() for why it is a floor.
+     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean, readyAt?: number|null, awaitingSince?: number|null }>}
      */
     this.seen = new Map();
     /** @type {any} */
@@ -371,7 +373,20 @@ export class SessionWatcher {
       // its prompt and not waiting on a person, and cleared by the tick that
       // finds it back — which is the tick that fires.
       const worked = running && !ready && !awaiting ? true : ready ? false : (before?.worked ?? false);
-      this.seen.set(name, { status: session.status, awaiting, rcUrl, ready: running && ready, worked, readyAt });
+      // SINCE WHEN IT HAS NEEDED A PERSON. The earlier of two witnesses: the
+      // hook's own moment, when the CLI said a dialog went up (the record's
+      // `phases`, src/core/activity.js), and the first tick this watcher saw
+      // it waiting, which is all there is for the resume dialog and for an
+      // image older than the hooks. Kept while it goes on waiting and dropped
+      // the tick it stops, so an answered question does not lend its start to
+      // the next one.
+      let awaitingSince = null;
+      if (running && awaiting) {
+        const told = activity?.phase === 'awaiting' && session.phases?.current === 'awaiting' ? Number(session.phases.currentSince) : NaN;
+        const seen = before?.awaiting && before.awaitingSince ? before.awaitingSince : Date.now();
+        awaitingSince = Number.isFinite(told) && told > 0 ? Math.min(told, seen) : seen;
+      }
+      this.seen.set(name, { status: session.status, awaiting, rcUrl, ready: running && ready, worked, readyAt, awaitingSince });
     }
 
     // A session the hub has forgotten is gone; keeping it would mean it fires
@@ -551,6 +566,27 @@ export class SessionWatcher {
    */
   readyAt(name) {
     return this.seen.get(name)?.readyAt ?? null;
+  }
+
+  /**
+   * Since when this session has been blocked on a person, as epoch
+   * milliseconds, or null when it is not.
+   *
+   * THE THIRD QUESTION the telemetry row asked — is it blocked on a person,
+   * and since when — and the one this process could already half answer: it
+   * raised `session.awaiting-input` on the transition and then kept the
+   * moment to itself, so a phone could say "waiting for you" and never for
+   * how long, and fleet_await read a key nothing sent.
+   *
+   * A FLOOR, NOT A STOPWATCH. Where the hook said when, that is exact; where
+   * only the pane did, it is the first tick that saw it, up to an interval
+   * late, and a watcher that restarted begins again at its first tick. Every
+   * reader says "at least" or rounds coarsely enough not to care.
+   *
+   * @param {string} name
+   */
+  awaitingSince(name) {
+    return this.seen.get(name)?.awaitingSince ?? null;
   }
 
   /** @param {boolean} quiet @param {Record<string, any>} event */

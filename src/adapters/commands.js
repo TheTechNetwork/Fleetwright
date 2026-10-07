@@ -242,6 +242,57 @@ function ago(at) {
 }
 
 /**
+ * How this run of a session has spent its time, as the `/status` line says it.
+ *
+ * Totals are closed time from the hub (src/core/activity.js advancePhases);
+ * the open stretch is added here, from the clock of the process answering,
+ * which is the same box's clock the totals were taken on. "Not reported" is
+ * CANNOT TELL — an image older than the hooks, or a run that has said
+ * nothing yet — and is never "worked 0m".
+ *
+ * @param {import('../core/activity.js').Phases|null|undefined} phases
+ * @param {number} [now]
+ */
+function describePhases(phases, now = Date.now()) {
+  if (!phases || typeof phases.since !== 'number') return 'not reported by this session';
+  const open = phases.current === 'ended' ? 0 : Math.max(0, now - phases.currentSince);
+  const t = { working: phases.workingMs, awaiting: phases.awaitingMs, ready: phases.readyMs };
+  if (phases.current in t) t[/** @type {'working'|'awaiting'|'ready'} */ (phases.current)] += open;
+  const parts = [`working ${span(t.working)}`];
+  if (t.awaiting > 0) parts.push(`waiting on a person ${span(t.awaiting)}`);
+  if (t.ready > 0) parts.push(`at its prompt ${span(t.ready)}`);
+  return `${parts.join(', ')} (counted since ${ago(phases.since)})`;
+}
+
+/**
+ * What a conversation has cost, in Claude Code's own figure.
+ *
+ * "At API prices" because that is what the figure is: on a Pro or Max
+ * sign-in it is not what anybody is billed, and a dollar sign alone would
+ * read as a bill. "At least" when Claude Code said some model had no known
+ * price. Never computed here (src/core/spent.js).
+ *
+ * @param {import('../core/spent.js').Spent|null|undefined} spent
+ */
+function describeSpent(spent) {
+  if (!spent) return 'not reported by Claude Code yet';
+  const parts = [];
+  if (typeof spent.usd === 'number') parts.push(`${spent.complete ? '' : 'at least '}$${spent.usd.toFixed(2)} at API prices`);
+  if (typeof spent.outputTokens === 'number') parts.push(`${spent.outputTokens.toLocaleString('en-US')} tokens out`);
+  if (!parts.length) return 'not reported by Claude Code yet';
+  return `${parts.join(', ')}, as Claude Code counted it${spent.asOf ? ` ${ago(spent.asOf)}` : ''}`;
+}
+
+/** @param {number} ms */
+function span(ms) {
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'under a minute';
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  return mins % 60 ? `${h}h ${mins % 60}m` : `${h}h`;
+}
+
+/**
  * What state a stopped session is in, as a word rather than a glyph.
  *
  * "Finished", "died" and "abandoned three weeks ago" shared one grey square.
@@ -1093,7 +1144,10 @@ export const COMMANDS = {
           ].join('\n'),
         };
       }
-      const s = ctx.sessions.get(args[0]);
+      // view(), not get(): the record plus what is known about it right now —
+      // the phases and the cost below are not on the record, and this reply is
+      // what fleet_status, fleet_await and a Telegram chat all read.
+      const s = ctx.sessions.view(args[0]);
       if (!s) return { ok: false, text: `No session named "${args[0]}".` };
       const lines = [
         `${label(s)} — ${s.status}`,
@@ -1104,6 +1158,8 @@ export const COMMANDS = {
         s.rcUrl ? `remote control: ${s.rcUrl}` : null,
         s.detail ? `last: ${s.detail}` : null,
         s.createdBy ? `started by: ${s.createdBy}` : null,
+        s.status === 'running' ? `time: ${describePhases(/** @type {any} */ (s).phases)}` : null,
+        `cost: ${describeSpent(/** @type {any} */ (s).spent)}`,
       ].filter(Boolean);
       return { ok: true, text: /** @type {string[]} */ (lines).join('\n'), sessions: [s] };
     },

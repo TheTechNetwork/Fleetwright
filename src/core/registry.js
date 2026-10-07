@@ -35,6 +35,7 @@ import { log } from '../log.js';
  * @property {string|null} detail         last human-readable outcome
  * @property {string|null} rcUrl          claude.ai/code URL, when Remote Control came online
  * @property {string|null} [transcriptPath]  where the CLI writes this conversation, when its hook ran on this box and said; the hub reads the window's size off it
+ * @property {import('./spent.js').Spent|null} [spent]  what the conversation has cost, as Claude Code counted it, when a hook inside its sandbox last carried the figure — kept so it is still known once the container is gone
  * @property {string|null} createdBy      e.g. "telegram:12345", "web", "cli"
  * @property {number} createdAt
  * @property {number} updatedAt

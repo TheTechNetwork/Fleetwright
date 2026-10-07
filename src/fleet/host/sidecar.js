@@ -1449,6 +1449,18 @@ export class Sidecar {
         // says it got there by finishing something since it started, which
         // is what fleet_await waits for. Additive, like the two above.
         readyAt: this.watcher?.readyAt?.(s.name) ?? null,
+        // THE THREE FIELDS HEALTH HAD AND THIS REPLY DID NOT, and the phones
+        // draw sessions from this reply. So a phone was told what a session
+        // was asking on every health frame it never read, and on the list it
+        // did read the question was always absent: "Waiting for you" and the
+        // answer card keyed on a field no list reply carried. Same values as
+        // health, from the same caches, so the two cannot disagree.
+        //
+        // `awaitingSince` is new to both: since when it has been blocked on a
+        // person, a floor from this box's clock (watcher.js awaitingSince).
+        prompt: this.#promptFor(s),
+        awaitingSince: this.watcher?.awaitingSince?.(s.name) ?? null,
+        startedAt: s.createdAt ?? null,
       };
     });
   }
@@ -1643,6 +1655,22 @@ export class Sidecar {
             // older host — and both phones draw that as nothing rather than
             // as empty.
             context: s.context ?? null,
+            // SINCE WHEN IT HAS BEEN BLOCKED ON A PERSON, or null when it is
+            // not: a floor, from this box's clock (watcher.js awaitingSince).
+            // `prompt` says what it is asking when the pane can be read;
+            // this says it is waiting even when it cannot, and for how long.
+            awaitingSince: this.watcher?.awaitingSince?.(s.name) ?? null,
+            // HOW THIS RUN HAS SPENT ITS TIME — working, blocked on a person,
+            // at its own prompt — from its own hooks (src/core/activity.js
+            // advancePhases). Closed totals and the moment the open stretch
+            // began, so the phone adds the open part from its own clock. Null
+            // is CANNOT TELL: not running, an image older than the hooks, a
+            // run that has said nothing yet.
+            phases: s.phases ?? null,
+            // WHAT IT HAS COST, as Claude Code counted it in its own
+            // transcript (src/core/spent.js). Never priced, summed or guessed
+            // on this box. Null is CANNOT TELL, never "free".
+            spent: s.spent ?? null,
           })),
         loggedIn: state.auth?.loggedIn === true,
         // HOW MANY PEOPLE CAN START A SESSION HERE. The health field that

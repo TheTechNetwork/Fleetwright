@@ -15,7 +15,7 @@ import { HubClient } from '../src/fleet/host/hub-client.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 import { generateKeyPair, sign, verify, signingInput } from '../src/fleet/crypto.js';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -322,6 +322,28 @@ test('several running sessions are all enriched', async (t) => {
   for (const s of r.sessions) {
     assert.equal(s.rcUrl, `https://claude.ai/code/session_${s.name}${'0'.repeat(20)}`);
   }
+});
+
+test('a list reply says what a session is asking, since when, and when it started, as health did', async (t) => {
+  // The phones draw sessions from THIS reply, and it carried none of the
+  // three: health had the question on every frame, and the list a phone
+  // actually read never did, so "Waiting for you" and the answer card keyed
+  // on a field that was always absent.
+  const trust = readFileSync(new URL('./fixtures/claude-2.1.234-trust.txt', import.meta.url), 'utf8');
+  const rec = sessionRecord('ask', { status: 'running', createdAt: 1234 });
+  const { sidecar } = await setup(
+    t,
+    { sessions: [rec], panes: { ask: trust }, onCommand: () => ({ ok: true, text: 'ok', sessions: [rec] }) },
+    { watch: true },
+  );
+  const before = Date.now();
+  await sidecar.watcher?.tick();
+
+  const r = await sidecar.handle(intent({ verb: 'list' }));
+  const s = r.sessions[0];
+  assert.match(String(s.prompt?.question), /trust/i, 'the question, in the host\'s words');
+  assert.ok(s.awaitingSince >= before, 'since when, from this box\'s clock');
+  assert.equal(s.startedAt, 1234);
 });
 
 // --- peek -------------------------------------------------------------------
