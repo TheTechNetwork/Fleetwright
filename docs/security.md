@@ -273,6 +273,43 @@ machine of the fleet, through the coordinator.
   not respect; the reach is "does this address answer HTTPS from that box",
   and, from a box that can install Xen Orchestra, "does it answer SSH on
   22, and with which host key", which is all `ssh-keyscan` learns.
+- **Through the phone, the bytes are TLS the machine opened**
+  (`/api/xosetup/relay`, `docs/hypervisors.md`, "Through the phone"). When
+  no machine reaches a pool, the phone adding it carries bytes between one
+  machine and the address on the phone's own network. The machine opens TLS
+  over them and holds it to the pin. The phone and the coordinator carry
+  ciphertext: neither reads the sign-in, the token, or anything Xen
+  Orchestra answers. Plain HTTP is refused through a phone, by the
+  coordinator and by the machine. So is installing Xen Orchestra, which is
+  SSH to the pool master: the machine refuses it, and the probe through a
+  phone looks only for HTTPS, never for SSH.
+- **The pin comes from the phone's own look.** Over a relay the coordinator
+  is on the probe's path. It could answer the machine's handshake itself,
+  and a person used to self-signed certificates might accept that one. So
+  the phone reads the certificate at the address directly, and offers the
+  machine only when its probe through the relay saw the same one. A
+  compromised coordinator can make the two disagree, which stops the setup.
+  It cannot make them agree on a certificate of its own, because it is not
+  on the phone's own path.
+- **What a compromised coordinator can do with a relay:** open TCP
+  connections from inside the phone's network to the one address the person
+  typed, at most eight, for at most fifteen minutes and 64 MiB, carrying
+  what it likes. That reaches Xen Orchestra's unauthenticated surface (its
+  sign-in page and the API's handshake) from the person's network for that
+  window, and nothing else: no frame carries an address, so it cannot point
+  the phone at another host or port. It can also drop, delay or corrupt
+  bytes, which TLS turns into a failed step. **What it cannot do:** read or
+  change anything inside the TLS, open a relay without an admin's phone, use
+  one from another phone or for another person, or keep one past the job.
+- **What a compromised phone can do with a relay:** nothing it could not
+  already. It is where the person types the admin password, so it could read
+  that without a relay. Through the relay it sees TLS records. It can
+  withhold or corrupt bytes, which fails the job, or connect the machine to
+  another server, which the pin refuses before a byte of the sign-in is
+  sent.
+- **What a compromised machine can do with a relay:** what it could do with
+  the sign-in sealed to it, which it already holds. The relay adds a TCP
+  path to the one address, only while its probe or its job runs.
 - **Progress on a Lock Screen is not sealed.** A Live Activity's content goes
   to the widget with no hook that could decrypt it first, so it carries step
   and part numbers and keys from fixed lists (the step, and what is being

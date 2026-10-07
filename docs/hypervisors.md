@@ -873,7 +873,8 @@ script**, the same way a GitHub code is sealed to the box that exchanges it,
 so the coordinator relays ciphertext it cannot read. The host that runs it is
 one already in the fleet that can reach the pool's address; the app asks them
 all (`xoprobe`) and offers the ones that reached it, and says what to check
-if none did.
+if none did. When none did, the phone itself may reach it, and carries the
+connection for one machine (Through the phone).
 
 **The app can close.** The machine runs the setup; progress reaches the phone
 as a Live Activity on the Lock Screen and in the Dynamic Island on iOS, and as
@@ -1235,17 +1236,110 @@ shows the machine's progress under "Applying what you chose", from the
 download to the disk. The machine running the job needs `bzip2`, and says
 which package to install when it has none.
 
-### Next: the phone's own network
+### Through the phone
+
+**No machine in the fleet can reach the pool: the phone's own network
+carries the first minute.** A homelab's Xen Orchestra is often on a Wi-Fi or
+a VPN the phone is on and no fleet machine is. When the probe reaches
+nothing, the coordinator names a machine that can work through a phone (a
+permanent one that speaks protocol 12), and only then does Add a hypervisor
+offer **Try through this phone**.
+
+```
+machine ──relay frames──▶ coordinator ──WebSocket──▶ phone ──TCP──▶ Xen Orchestra
+        └──────────────── TLS, opened by the machine, pinned ──────────────┘
+```
+
+1. **The phone looks first.** It reads the certificate at the address
+   itself, over its own network, and stops if nothing answers over TLS. It
+   says it cannot tell, rather than take a machine's word for a certificate.
+2. **It opens a relay** (`GET /api/xosetup/relay`, a WebSocket). The relay is
+   for one address, the one the person typed, and one machine. No frame
+   names an address: for each connection the machine asks for, the phone
+   opens plain TCP to that one address and pumps bytes both ways.
+3. **The machine probes through it** (`xoprobe` with `relay`): one TLS
+   handshake and one GET of `/signin`, over the relay, HTTPS only, and no
+   `ssh-keyscan` beside it. The probe's look over SSH (["A pool without Xen
+   Orchestra"](#a-pool-without-xen-orchestra)) would be the machine's own
+   network answering, and that is the network that cannot reach the pool.
+   The phone offers the machine only when it saw the certificate the phone
+   saw. Over a relay the coordinator is on the probe's path, and could
+   otherwise answer the handshake with a certificate of its own for the
+   person to accept.
+4. **The setup runs through it** (`xosetup begin` with `relay`). Every
+   connection the job makes goes through the relay. The machine opens TLS
+   over it and holds it to the pin (`src/fleet/host/xo-relay.js`, `connectXo`
+   with `via`). The phone and the coordinator carry TLS records, with the
+   sign-in and the token inside them. Neither can read them. Everything
+   after that is the setup as it always was: the key check, the sealed
+   sign-in, the steps, the token sealed back to the phone.
+
+**The screen has to stay open.** A relay is the phone's socket. iOS suspends
+an app's sockets in the background, and Android's screen closes the relay
+when it goes, a rotation included. The screen says so while the setup runs.
+
+**What bounds a relay** (`src/fleet/coordinator/relays.js`):
+
+- **One person and one phone.** Only an admin's own device credential can
+  open one; the break-glass token has no phone. Only that device may name
+  the relay in an intent.
+- **One machine, chosen when it is opened.** Frames from any other machine
+  are refused.
+- **One probe, then one job.** The machine may open connections only while
+  its probe is in flight or its job is bound to the relay, eight at most.
+- **Fifteen minutes and 64 MiB**, then it is closed. It is also closed when
+  the job ends (progress, a `status` that says so, or the machine's own
+  `done`), when the phone or the machine leaves, and on any frame that is
+  not the relay's.
+- **HTTPS only.** Plain HTTP is refused through a phone by the coordinator
+  and the machine. Over plain HTTP the phone and the coordinator could read
+  the sign-in.
+- **No install.** Installing Xen Orchestra (`deploy`) is SSH to the pool
+  master and the installer's own downloads, which a relay does not carry.
+  The machine refuses a `deploy` that names a relay before it makes
+  anything, in words: installing Xen Orchestra needs a machine that reaches
+  the pool. Neither phone offers it after an answer through the phone.
+- **No gigabytes.** Building the edge router or a machine image uploads its
+  disk to Xen Orchestra over HTTP connections a relay does not carry, and
+  labs are interfaces on the edge router, which is built again with them.
+  So a policy job through a phone refuses all three and goes on waiting for
+  a choice without them. A policy job that makes the pool its own machine (A
+  machine of its own) fits, where the pool already has a machine image. That
+  machine then reaches Xen Orchestra itself, and holds the pool with the app
+  closed.
+
+**What has run, and what has not.** `test/relay-end-to-end.test.js` runs the
+Node coordinator, a real sidecar and the suite's stand-in Xen Orchestra over
+TLS with a pinned self-signed certificate, at a `.invalid` name only the
+phone (played by the test) can resolve:
+
+- the machine's own probe finds nothing;
+- the probe through the phone sees the certificate the phone sees;
+- the setup finishes and the token comes back sealed;
+- the stand-in received the admin password, and every connection began with
+  a TLS record;
+- none of the password, the admin email, `session.signIn` or the token
+  appears in the bytes the phone carried;
+- an install through the phone is refused, the phone is asked to connect
+  nowhere, and the relay closes.
+
+`test/xo-deploy.test.js` holds the probe through a phone to one connection
+and no `ssh-keyscan`, against the fake pool master's.
+
+The Android relay compiles and its unit tests run. **Not run:** the Worker's
+relay socket in workerd, the iPhone's relay (Swift compiles only in CI), and
+either phone against a real Xen Orchestra.
+
+### Next: a pool's first machine image
 
 - **A pool without Xen Orchestra** is built ("A pool without Xen Orchestra").
   The same image cache on the storage repository could build the templates
   and the pool's own machine, which today download their own images.
-- **No machine in the fleet can reach the pool**: the phone's own network
-  carries the first minute. The phone relays bytes between a machine and
-  Xen Orchestra over TLS the machine terminates, so neither the phone nor the
-  coordinator reads the sign-in; that first minute makes the pool's own
-  machine, which joins the fleet and runs everything after it with the
-  app closed.
+- **A pool's first machine image through the phone.** A pool that has none
+  cannot be given its own machine through a relay, because the image is a
+  disk of gigabytes. Xen Orchestra fetching the cloud image itself, or the
+  pool master doing it over SSH as `xo-remote-deploy.sh` does, would let
+  that first minute make the pool's own machine there too.
 
 ### Without any host yet
 
