@@ -61,6 +61,9 @@ const BOUNDED = {
   runnerTickets: 'src/fleet/coordinator/runner-tickets.js',
   // Each person's own runner repository: a refusal at a count that fits.
   runnerRepos: 'src/fleet/coordinator/runner-repos.js',
+  // Each person's archive and templates repositories: a refusal at a count
+  // that fits both in one row.
+  linkedRepos: 'src/fleet/coordinator/linked-repos.js',
   // Sessions waiting for a runner to join: a window and an eviction.
   runnerStarts: 'src/fleet/coordinator/core.js',
   mcpClients: 'src/mcp/oauth.js',
@@ -176,6 +179,23 @@ test('a full runner repository store still fits in one Durable Object value', as
   assert.ok(refused, `the runner repository store did not refuse within ${FILL_CAP} rows`);
   const bytes = new TextEncoder().encode(JSON.stringify(repos.serialise())).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full runner repository store is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full linked-repository store still fits in one Durable Object value', async () => {
+  // A member adds a row here too, and each row holds two roles: both at the
+  // longest name the shape admits, under the widest email a sign-in carries.
+  const { LinkedRepos } = await import('../src/fleet/coordinator/linked-repos.js');
+  const links = new LinkedRepos();
+  let refused = false;
+  for (let i = 0; i < FILL_CAP; i++) {
+    const email = `${String(i).padStart(5, '0')}${'e'.repeat(59)}@${'d'.repeat(63)}.${'d'.repeat(63)}.${'d'.repeat(57)}.com`;
+    const name = `${'o'.repeat(39)}/${'r'.repeat(100)}`;
+    if (links.set(email, 'archive', name).ok === false) { refused = true; break; }
+    links.set(email, 'templates', name);
+  }
+  assert.ok(refused, `the linked-repository store did not refuse within ${FILL_CAP} rows`);
+  const bytes = new TextEncoder().encode(JSON.stringify(links.serialise())).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full linked-repository store is ${bytes} bytes, which does not fit in a DO value`);
 });
 
 test('a full hypervisor setup store still fits in one Durable Object value', async () => {

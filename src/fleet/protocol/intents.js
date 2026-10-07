@@ -184,8 +184,20 @@ export const XOPOLICY_STEPS = Object.freeze([
 // box is never sent either: only a box that reports a pool speaks 9, and the
 // coordinator refuses rather than drop `network`, which would put the machine
 // somewhere the person did not choose.
+//
+// v11, 7 Oct 2026: LINKED REPOSITORIES, three roles and one linking flow
+// (#346). `linkrepo` checks a repository for a role — the private archive a
+// session is pushed to before it goes, the public runner repository, or a
+// repository of templates — with the asking person's own GitHub connection.
+// A new verb, which costs nothing: an older host answers `unknown_verb`.
+// `start` gained `archive`, the starter's own archive repository, set by the
+// coordinator from their link and never by the caller, the way `provision`
+// carries `repo`. A host from before it is not handed one (`since: 11`) and
+// the session starts anyway, with the reply saying it will not be archived:
+// dropping it loses a copy, not the session, which is the difference from
+// `task`. See docs/linked-repos.md.
 /** @type {number} */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -346,6 +358,26 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  * both sides admitted `../x`, which is a path segment rather than a name the
  * moment it is put into `https://api.github.com/repos/…`. */
 export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * What a linked repository is FOR. One word on each link, because the three
+ * want different things and a single "linked repo" field meaning all of them
+ * is how somebody bootstraps a private thing onto a public scratch repository
+ * because "scratch" sounded temporary (#346):
+ *
+ *   archive    PRIVATE. Where a session is pushed, on a branch of its own,
+ *              before its container or its machine goes
+ *   runners    PUBLIC. Where temporary machines are started from — free
+ *              Actions minutes are a public repository's — and a launcher
+ *              only: it is world-readable, logs included
+ *   templates  EITHER. Skills, presets, configs and workflows a session may
+ *              read when asked to. Nothing in it is run or typed into a
+ *              session by itself
+ *
+ * Append only, like the verb table: an app that has never heard of a role
+ * shows the repository and not the role's sentences.
+ */
+export const LINK_ROLES = Object.freeze(['archive', 'runners', 'templates']);
 
 /** A compact JWT: three base64url segments. What a GitHub Actions job token is. */
 export const JWT_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -508,6 +540,32 @@ export const VERBS = Object.freeze({
           'A secret ON THAT HOST, by name — the session may fetch its value at runtime from the credential ' +
           'broker, and the value never crosses this protocol nor enters the container\'s environment. The ' +
           'host refuses a name it does not hold.',
+      },
+      // WHERE THIS SESSION IS PUSHED BEFORE IT GOES: the starter's own private
+      // archive repository, as they linked it. SET BY THE COORDINATOR, from
+      // the link of the person starting the session, and removed from anything
+      // a caller sent — the same rule `provision.repo` follows, and for the
+      // same reason: a field anybody could fill is the coordinator choosing
+      // where somebody's work is written. The MCP tool lists it, as it lists
+      // `provision.repo`, because every parameter is reachable from some tool
+      // (test/mcp.test.js); its description says a caller's value is replaced.
+      //
+      // What a compromised coordinator could do with it is bounded twice. The
+      // push is made with the STARTER's own GitHub credential, so it can only
+      // land somewhere they could already push; and the host asks GitHub that
+      // the repository is private immediately before it pushes, and refuses a
+      // public one whatever it was told, so a session's work cannot be aimed
+      // at a world-readable repository from here.
+      archive: {
+        type: 'text',
+        required: false,
+        max: 161,
+        pattern: REPO_RE,
+        shapeName: 'owner/repo',
+        since: 11,
+        describe:
+          'Set by the fleet from your linked archive repository; anything sent here is replaced. Where this ' +
+          'session is pushed, on a branch of its own, before it stops.',
       },
     },
     mutating: true,
@@ -1228,6 +1286,44 @@ export const VERBS = Object.freeze({
       'Check a GitHub repository as a place to start temporary machines from, with your own GitHub connection: ' +
       'whether it is public, whether the Fleetwright GitHub App reaches it with Actions write, and which runner ' +
       'workflows (linux, macos, windows, android) it has. Changes nothing.',
+  },
+
+  // CHECKING A REPOSITORY FOR A ROLE, before anybody links it — the general
+  // form of `runnerrepo`, for the three roles in LINK_ROLES. With the asking
+  // person's own GitHub connection, so it runs on a permanent box and never
+  // on a runner, and the answer is data: visibility, whether the Fleetwright
+  // App reaches it, what this connection can do with its files, and for
+  // templates which known shapes it carries. Null is "cannot tell", as in
+  // `runnerrepo`, and a different answer from "no".
+  //
+  // A NEW VERB rather than a `role` on `runnerrepo`. An older host would drop
+  // the role, run the runner check on a private archive and refuse it for
+  // being private — a wrong answer that looks like a right one — while
+  // `unknown_verb` is a true one. Not mutating: reads against api.github.com.
+  linkrepo: {
+    params: {
+      role: {
+        type: 'enum',
+        required: true,
+        values: [...LINK_ROLES],
+        since: 11,
+        describe: '`archive` (private, where sessions are pushed), `runners` (public, where machines start) or `templates` (either).',
+      },
+      repo: {
+        type: 'text',
+        required: true,
+        max: 161,
+        pattern: REPO_RE,
+        shapeName: 'owner/repo',
+        since: 11,
+        describe: 'The repository to check, as owner/repo.',
+      },
+    },
+    mutating: false,
+    summary:
+      'Check a GitHub repository for one role with your own GitHub connection: an `archive` has to be private and ' +
+      'writable, `runners` public with the runner workflows, `templates` either and readable. Changes nothing; ' +
+      'linking is done from the app or PUT /api/linked-repos/{role}.',
   },
 
   // A CLAUDE TOKEN FOR YOUR RUNNERS, MADE ON A MACHINE YOU PICK.

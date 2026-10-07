@@ -468,13 +468,15 @@ function passed(out) {
 /**
  * Does one installation cover one repository. `all` covers everything the
  * account owns; `selected` has to be asked, and is paged — an organisation can
- * give an App thousands of repositories.
+ * give an App thousands of repositories. Shared with the linked-repository
+ * check (./linked-repo-check.js), which asks the same question for the other
+ * two roles.
  *
  * @param {any} installation
  * @param {string} full
  * @param {(path: string) => Promise<{ res: Response, body: any }>} get
  */
-async function reaches(installation, full, get) {
+export async function reaches(installation, full, get) {
   if (installation?.repository_selection === 'all') return true;
   const wanted = full.toLowerCase();
   // Ten pages of a hundred. Past that the answer is "cannot tell", which the

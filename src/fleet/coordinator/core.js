@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, CERT_PIN_RE, XO_UUID_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, CERT_PIN_RE, XO_UUID_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
 import { checkPublicKey, openWith } from '../push-crypto.js';
@@ -27,6 +27,8 @@ import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
 import { RunnerTickets } from './runner-tickets.js';
 import { RunnerRepos } from './runner-repos.js';
+import { LinkedRepos } from './linked-repos.js';
+import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
@@ -168,6 +170,7 @@ export class CoordinatorCore {
    *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any>,
    *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any>,
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
+   *     linkedRepo?: (ask: { role: string, repo: string }) => Promise<any>,
    *     github?: (ask: { sealed: unknown }) => Promise<any>,
    *     vault?: (route: 'device'|'box', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
@@ -264,6 +267,10 @@ export class CoordinatorCore {
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
     // runner-repos.js for why a member may, and what bounds it.
     this.runnerRepos = new RunnerRepos({ now });
+    // AND THE OTHER TWO ROLES a person can link a repository for — the
+    // private archive a session is pushed to, and templates. See
+    // linked-repos.js for why `runners` stays in the store above.
+    this.linkedRepos = new LinkedRepos({ now });
     /**
      * A session to start on a runner once it joins, keyed by the host id the
      * runner enrolled under. Set when a ticket carrying a start is spent,
@@ -1573,6 +1580,19 @@ export class CoordinatorCore {
     // knows who asked before the job exists, and the job proves which dispatch
     // it is by presenting a single-use value it could not have invented. See
     // src/fleet/coordinator/runner-tickets.js.
+    // WHERE A SESSION IS PUSHED BEFORE IT GOES is the starter's own archive,
+    // decided here and never by the caller: whatever arrived in `archive` is
+    // replaced or removed, the rule `provision.repo` follows below. The
+    // starter is the verified requester; the break-glass token names nobody,
+    // so a session it starts has no archive. See linked-repos.js.
+    if (spec.verb === 'start') {
+      /** @type {Record<string, any>} */
+      const params = { ...shaped.params };
+      delete params.archive;
+      const archive = this.linkedRepos.get(spec.requester?.email, 'archive')?.repo;
+      if (archive) params.archive = archive;
+      spec = { ...spec, params };
+    }
     if (spec.verb === 'provision' && shaped.params.platform === 'vm') return this.#provisionVm(spec, shaped.params);
     if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
     if (spec.verb === 'provision') {
@@ -1619,7 +1639,7 @@ export class CoordinatorCore {
       // and move on only when the whole answer was "not connected for you
       // here", which is a reply that dispatched nothing. Anything else — a
       // dispatch, a refusal from GitHub — is the answer.
-      if ((spec.verb === 'provision' || spec.verb === 'runnerrepo') && placement.code === 'ambiguous_host') {
+      if ((spec.verb === 'provision' || spec.verb === 'runnerrepo' || spec.verb === 'linkrepo') && placement.code === 'ambiguous_host') {
         return this.#askEachBox(spec);
       }
       return { ok: false, error: { code: placement.code }, text: placement.reason };
@@ -1806,7 +1826,7 @@ export class CoordinatorCore {
       if (answer?.ok !== false && Array.isArray(answer?.sessions)) {
         this.registry.noteSessions(placement.host?.hostId || '', answer.sessions);
       }
-      return answer;
+      return withArchiveNote(answer, spec, placement.host);
     } catch (e) {
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
     }
@@ -2451,6 +2471,120 @@ export class CoordinatorCore {
   }
 
   /**
+   * One person's linked repositories, every role, for the screen that links
+   * them. `runners` is their own runner repository from RunnerRepos; the
+   * fleet's is beside it, as `fleet.runners`, so a person can see what they
+   * get by leaving theirs empty. A role with no link is absent from `links`
+   * rather than present and null: the list is what has been linked.
+   *
+   * @param {{ email?: string|null }|null} requester
+   */
+  linkedReposFor(requester) {
+    const email = String(requester?.email || '').toLowerCase();
+    /** @type {Array<{ role: string, repo: string, setAt: number|null }>} */
+    const links = [];
+    for (const role of LINK_ROLES) {
+      if (role === 'runners') {
+        const own = email ? this.runnerRepos.byEmail.get(email) : null;
+        if (own) links.push({ role, repo: own.repo, setAt: own.setAt || null });
+        continue;
+      }
+      const link = this.linkedRepos.get(email, role);
+      if (link) links.push({ role, repo: link.repo, setAt: link.setAt || null });
+    }
+    return { ok: true, links, fleet: { runners: this.runnerRepo || null } };
+  }
+
+  /**
+   * Link a repository for one role — ONLY IF IT PASSES THAT ROLE'S CHECK.
+   *
+   * `runners` is setRunnerRepo, unchanged, with the role on its answer. The
+   * other two are checked by the minting Worker as the App first, then by a
+   * permanent box with the person's own GitHub connection (`linkrepo`), the
+   * order setRunnerRepo takes; the Worker answers for the private roles only
+   * inside the accounts it mints into (repo-tokens.js says why), and says
+   * "not mine" otherwise, which is what sends the question to a box. What is
+   * saved is the name as GitHub spells it.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {unknown} role
+   * @param {unknown} repo
+   */
+  async setLinkedRepo(requester, role, repo) {
+    const r = String(role ?? '');
+    if (!LINK_ROLES.includes(r)) {
+      return { ok: false, error: { code: 'bad_params' }, text: `A linked repository is one of ${LINK_ROLES.join(', ')}.` };
+    }
+    if (r === 'runners') {
+      const set = /** @type {any} */ (await this.setRunnerRepo(requester, repo));
+      return { ...set, role: r, ...(set.runnerRepo ? { linkedRepo: runnersCheck(set.runnerRepo) } : {}) };
+    }
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) {
+      return {
+        ok: false,
+        error: { code: 'not_signed_in' },
+        text: 'A linked repository belongs to a person, so this needs a signed-in identity.',
+      };
+    }
+    const name = String(repo ?? '');
+    if (!REPO_RE.test(name)) return { ok: false, error: { code: 'bad_params' }, text: 'That is not a repository name. Write it as owner/repo.' };
+    /** @type {any} */
+    let reply = null;
+    if (this.minter?.linkedRepo) {
+      reply = await this.minter.linkedRepo({ role: r, repo: name }).then(
+        (/** @type {any} */ x) => (x && typeof x === 'object' ? x : null),
+        () => null,
+      );
+      if (reply?.needsMinter) reply = null;
+    }
+    reply ??= await this.dispatch({ verb: 'linkrepo', params: { role: r, repo: name }, actor: email, requester });
+    const check = reply?.linkedRepo;
+    if (reply?.ok === false || !check?.ok || check.role !== r) {
+      return {
+        ok: false,
+        role: r,
+        error: reply?.error ?? { code: 'check_failed' },
+        ...(check ? { linkedRepo: check } : {}),
+        ...(reply?.needsConnection ? { needsConnection: reply.needsConnection } : {}),
+        text: `${reply?.text || 'The check did not pass.'} Nothing was linked.`,
+      };
+    }
+    const saved = this.linkedRepos.set(email, r, check.repo);
+    if (saved.ok === false) return { ok: false, role: r, error: { code: 'not_saved' }, text: saved.text };
+    this.onStateChanged?.();
+    this.record({ event: 'linked.repo', actor: email, text: `${email} linked ${check.repo} as their ${r} repository` });
+    return { ok: true, role: r, repo: check.repo, linkedRepo: check, text: check.message };
+  }
+
+  /**
+   * @param {{ email?: string|null }|null} requester
+   * @param {unknown} role
+   */
+  clearLinkedRepo(requester, role) {
+    const r = String(role ?? '');
+    if (!LINK_ROLES.includes(r)) {
+      return { ok: false, error: { code: 'bad_params' }, text: `A linked repository is one of ${LINK_ROLES.join(', ')}.` };
+    }
+    if (r === 'runners') return { ...this.clearRunnerRepo(requester), role: r };
+    const email = String(requester?.email || '').toLowerCase();
+    const had = email ? this.linkedRepos.clear(email, r) : false;
+    if (had) {
+      this.onStateChanged?.();
+      this.record({ event: 'linked.repo', actor: email, text: `${email} unlinked their ${r} repository` });
+    }
+    return {
+      ok: true,
+      role: r,
+      text: had
+        ? (r === 'archive'
+          ? 'Unlinked. Sessions you start from now on are not pushed anywhere when they stop; ones already running keep the archive they started with.'
+          : 'Unlinked.')
+        : `You had no ${r} repository linked.`,
+    };
+  }
+
+  /**
    * WHICH REPOSITORIES AND WORKFLOWS MAY ADMIT THIS JOB, decided before its
    * GitHub token is verified, because verification is against this answer.
    *
@@ -2690,7 +2824,9 @@ export class CoordinatorCore {
       needsConnection: 'github',
       text:
         `None of the permanent boxes could ask GitHub for you: ${skipped.join(', ')}. ` +
-        'Connect GitHub in the app — it is your own connection that starts the machine — and ask again.',
+        (spec.verb === 'linkrepo'
+          ? 'Connect GitHub in the app — the repository is checked with your own connection — and ask again.'
+          : 'Connect GitHub in the app — it is your own connection that starts the machine — and ask again.'),
     };
   }
 
@@ -3844,6 +3980,35 @@ function explainUnsupportedVersion(reply, host) {
         'wrong direction: the box is already newer than the thing refusing it. What it is waiting for is\n' +
         'this coordinator to be deployed. Nothing else in the fleet is affected, and this host is already ' +
         'marked degraded so no new work is being sent to it.',
+  };
+}
+
+/**
+ * A session started where it cannot be archived SAYS SO, in the reply that
+ * started it.
+ *
+ * `start.archive` is `since: 11`, so a host from before it is spoken an older
+ * version and never handed the repository. Unlike a `task`, losing it does not
+ * make the session wrong — it works, and stopping it loses only what stopping
+ * always lost — so the start goes ahead rather than being refused. What must
+ * not happen is the person believing it will be pushed: C-5, a state nobody
+ * knows is not reported as one. `archived: false` is the same fact as data.
+ *
+ * @param {any} answer
+ * @param {any} spec
+ * @param {{ hostId: string, health?: any }|undefined} host
+ */
+function withArchiveNote(answer, spec, host) {
+  const archive = spec?.verb === 'start' ? spec.params?.archive : null;
+  if (!archive || answer?.ok === false) return answer;
+  const speaks = Number(host?.health?.protocol);
+  if (Number.isInteger(speaks) && speaks >= 11) return answer;
+  return {
+    ...answer,
+    archived: false,
+    text:
+      `${answer?.text ? `${answer.text} ` : ''}${host?.hostId ?? 'That machine'} is too old to archive a session, so this ` +
+      `one will not be pushed to ${archive} when it stops. Update it and the sessions you start there afterwards will be.`,
   };
 }
 

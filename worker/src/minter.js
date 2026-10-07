@@ -16,6 +16,9 @@
 //   POST /mint            a repository token for a runner (src/fleet/minter/answer.js)
 //   POST /runner-repo     can a runner be started from this repository, asked
 //                         as the App, so setting one needs no permanent box
+//   POST /linked-repo     the same for any role of a linked repository —
+//                         archive, runners or templates — and for the private
+//                         roles only within FLEETWRIGHT_GITHUB_MINT_OWNERS
 //   POST /github/token    a device finishing or renewing its own GitHub
 //                         sign-in, with the client secret that stays here
 //                         (src/fleet/minter/github.js)
@@ -49,14 +52,14 @@ import { answerMintRequest } from '../../src/fleet/minter/answer.js';
 import { answerDeposit, answerLogin, depositKeyAnswer } from '../../src/fleet/minter/claude.js';
 import { answerGithubToken } from '../../src/fleet/minter/github.js';
 import { answerVaultDevice, answerVaultBox } from '../../src/fleet/minter/vault.js';
-import { importAppKey, checkRunnerRepoForApp } from '../../src/core/repo-tokens.js';
+import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
 
 /** A request is a repository or a login, a job token and a public key. Anything bigger is not one. */
 const MAX_BODY = 16 * 1024;
 
 /** Everything this Worker answers. */
-const ROUTES = ['/mint', '/runner-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login', '/vault/device', '/vault/box'];
+const ROUTES = ['/mint', '/runner-repo', '/linked-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login', '/vault/device', '/vault/box'];
 
 /** The one public path: the deposit key's public half, and nothing else. */
 export const KEY_PATH = '/.well-known/fleetwright-minter';
@@ -294,6 +297,34 @@ export default {
         clientId: String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || ''),
         owners,
       }));
+    }
+    if (url.pathname === '/linked-repo') {
+      const pem = String(env.FLEETWRIGHT_GITHUB_APP_KEY || '');
+      const clientId = String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || '');
+      if (!pem || !clientId) {
+        return json(200, { ok: false, needsMinter: true, error: { code: 'not_a_minter' }, text: 'The minting Worker holds no GitHub App key.' });
+      }
+      let key;
+      try {
+        key = await keyFor(pem);
+      } catch (e) {
+        return json(200, { ok: false, error: { code: 'bad_key' }, text: `The GitHub App key does not load: ${/** @type {Error} */ (e).message}.` });
+      }
+      const check = await checkLinkedRepoForApp({
+        role: String(/** @type {any} */ (ask)?.role || ''),
+        repo: String(/** @type {any} */ (ask)?.repo || ''),
+        clientId,
+        key,
+        owners,
+      });
+      // NOT MINE TO SAY: a private role outside the accounts this key mints
+      // into. The same answer as no key at all, so the coordinator asks a box
+      // with the person's own connection — which can see exactly what they
+      // can, and nothing of anybody else's.
+      if (!check) {
+        return json(200, { ok: false, needsMinter: true, error: { code: 'owner_not_allowed' }, text: 'That account is not one this fleet mints into.' });
+      }
+      return json(200, { ok: check.ok, linkedRepo: check, text: check.message });
     }
     if (url.pathname === '/runner-repo') {
       const pem = String(env.FLEETWRIGHT_GITHUB_APP_KEY || '');

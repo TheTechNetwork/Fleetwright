@@ -87,6 +87,11 @@ const NOT_A_CLIENT_ROUTE = {
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
   '/api/enroll/actions':
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
+  '/api/linked-repos':
+    'TEMPORARILY, until both phones call it: the coordinator layer of linked repositories (#346) ships first, and ' +
+    'the iOS and Android layers stacked on it are what reach this. The Android layer removes this line.',
+  '/api/linked-repos/{role}':
+    'TEMPORARILY, for the same reason as /api/linked-repos above, and removed with it in the Android layer.',
   '/api/enroll/vm':
     'a MACHINE FROM A HYPERVISOR spends the ticket it was booted with here, through `fleetwright-sidecar enrol-vm` run by its cloud-init. Neither phone is that machine.',
 };
