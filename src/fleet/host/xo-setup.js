@@ -552,7 +552,8 @@ export class XoSetups {
         state: rec.state,
         text: rec.text,
         ...(policy ? { purpose: 'policy' } : {}),
-        ...(rec.part && rec.state === 'running' ? { fill: rec.part.fill } : {}),
+        ...(rec.part && rec.state === 'running' ? { fill: rec.part.fill, stage: rec.part.stage, stages: rec.part.stages } : {}),
+        ...(rec.part && rec.state === 'running' && buildKey(rec) ? { build: buildKey(rec) } : {}),
       });
     } catch (e) {
       this.log.warn(`xosetup: could not report progress: ${/** @type {Error} */ (e).message}`);
@@ -1273,7 +1274,10 @@ export function limitsFrom(hosts, srs, pools) {
 function status(rec) {
   // `part` while a step that can say how far it has got is running: the edge
   // router's build, its stage of three and how far through, in thousandths.
-  const s = { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text, ...(rec.part && rec.state === 'running' ? { part: rec.part } : {}) };
+  // `part.build` says WHAT the part is of, so the phone does not call an
+  // image's disk the edge router's: the first version had one sentence for
+  // every build, written when the router was the only thing built in parts.
+  const s = { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text, ...(rec.part && rec.state === 'running' ? { part: { ...rec.part, ...(buildKey(rec) ? { build: buildKey(rec) } : {}) } } : {}) };
   // THE TOKEN, SEALED, to the person who began the job (`#mine` already
   // checked) and only once it is done. Asked for as often as the phone likes
   // until the job is forgotten, because a phone that was closed at the end
@@ -1282,6 +1286,19 @@ function status(rec) {
   // THE POOL, SEALED, while the job waits on the person's choice.
   if (rec.state === 'choosing' && rec.inventory) return { ...s, inventory: rec.inventory };
   return s;
+}
+
+/**
+ * What the step now running is building, as the fixed key a Live Activity
+ * may carry (narrowProgress in core.js): `edge`, `image` or `holder`, or null.
+ * A rebuilt edge is still the edge router.
+ *
+ * @param {any} rec
+ */
+function buildKey(rec) {
+  const b = String(rec.building ?? '');
+  if (b === 'edge-rebuild') return 'edge';
+  return ['edge', 'image', 'holder'].includes(b) ? b : null;
 }
 
 function unknown() {

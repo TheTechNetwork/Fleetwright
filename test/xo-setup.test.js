@@ -616,7 +616,9 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   assert.equal(asked[0].setId, 'rs-0');
   assert.equal(asked[0].sr, 'sr2');
   assert.equal(asked[0].coordinatorUrl, 'https://fleet.test');
-  assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy'), 'its bar reaches the Lock Screen');
+  // Its bar reaches the Lock Screen, saying what is being built and which
+  // part: the phones once called every build's part the edge router's.
+  assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy' && e.build === 'image' && e.stage === 3 && e.stages === 4), JSON.stringify(events.at(-1)));
   assert.equal(asked[0].image, 'debian-13', 'a phone from before the choice asked for Debian');
   assert.equal(asked[0].resize, 'disk.resize', 'the long-standing name, where the server offers it');
   assert.deepEqual(inventory.imageKinds.map((/** @type {any} */ k) => k.key), ['debian-13', 'ubuntu-24.04', 'ubuntu-26.04']);
