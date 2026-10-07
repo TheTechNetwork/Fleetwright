@@ -90,8 +90,8 @@ test('no remedy points at a surface that was archived', () => {
     for (const { name } of ARCHIVED) {
       for (const line of body.split('\n')) {
         if (!line.includes(name)) continue;
-        // THE ONE THING IT MAY STILL SAY is that the surface is archived. Both
-        // config.js and index.js warn when FLEETWRIGHT_TELEGRAM_TOKEN is set,
+        // THE ONE THING IT MAY STILL SAY is that the surface is archived.
+        // config.js warns when FLEETWRIGHT_TELEGRAM_TOKEN is set,
         // which is the opposite of the bug — it tells somebody their
         // configuration is now inert, which they need to know.
         if (/archived/i.test(line)) continue;

@@ -534,6 +534,12 @@ export function validateConfig(cfg) {
   // NOT WARNED ABOUT WHEN ABSENT. "No FLEETWRIGHT_TELEGRAM_TOKEN — the Telegram
   // adapter is disabled" told every box in the fleet about a feature that no
   // longer exists, every start, for ever.
+  //
+  // AND WARNED ABOUT HERE ONLY. A token that is set and does nothing is the
+  // worst of the three states: the box would start clean, log nothing and
+  // answer no messages, which reads as a broken bot rather than an absent one.
+  // index.js used to log its own copy of this as well, so the journal said it
+  // twice; this is the one main() prints, and the one the tests read.
   if (cfg.telegram.token) {
     warnings.push(
       'FLEETWRIGHT_TELEGRAM_TOKEN is set and the Telegram adapter is archived — nothing reads it. ' +
