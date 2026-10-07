@@ -143,11 +143,18 @@ internal object XoPolicy {
         return (inv.groups ?: emptyList()).count { it.pool == pool }
     }
 
-    /** What the stepper says: how many, and how many of them Apply makes. The same words as iOS (AddHypervisorView). */
+    /**
+     * What the stepper says: a count, said as a count, and what Apply will
+     * make. The same words as iOS (AddHypervisorView.groupsLine). Asked for,
+     * of the first version's "1: 1 made when you apply": "What does this
+     * even mean".
+     */
     fun groupsLine(groups: Int, there: Int): String {
+        val count = if (groups == 1) "1 group" else "$groups groups"
         val more = groups - there
-        if (more <= 0) return if (there == 0) "None" else "$there, there now"
-        return "$groups: " + (if (there == 0) "" else "$there there now, ") + "$more made when you apply"
+        if (groups == 0) return "None, so every machine is on its own"
+        if (more <= 0) return count
+        return if (there == 0) "$count, made when you apply" else "$count: $there there now, $more made when you apply"
     }
 
     /** The fewest there can be is the ones there now, which are never removed: a machine may be on one. */
