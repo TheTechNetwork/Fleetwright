@@ -1,10 +1,16 @@
 // The command registry: one text-in / text-out surface that every adapter
 // shares.
 //
-// This is the portability seam. Telegram, the web UI and the CLI do not
-// implement commands — they parse a line, call dispatch(), and render the
-// reply. Adding Slack or WhatsApp means writing an adapter that does those two
+// This is the portability seam. The web UI, the CLI and the fleet sidecar do
+// not implement commands — they parse a line, call dispatch(), and render the
+// reply. (Telegram did the same until it was archived; see docs/telegram.md.)
+// A new surface on THIS box means writing an adapter that does those two
 // things; it does not mean re-implementing "what does /start mean".
+//
+// IT IS ONE BOX'S REGISTRY. A surface for the whole fleet — the phones, the
+// MCP server, a chat bot that answers for every host — does not come here: it
+// speaks intents to the coordinator (src/fleet/protocol/intents.js), and the
+// sidecar on each host turns those into a line for this file.
 //
 // Adding a command means adding one entry to COMMANDS below. Deliberately
 // launcher-shaped for now — start/resume/stop/list/status — with the pane
@@ -15,7 +21,10 @@
  * @property {import('../core/sessions.js').SessionManager} sessions
  * @property {import('../core/login.js').LoginFlow} login
  * @property {import('../config.js').Config} cfg
- * @property {string} actor        stable id of who is asking, e.g. "telegram:12345"
+ * @property {string} actor        stable id of who is asking, e.g. "fleet:<email>"
+ *   from the sidecar, or "web" from the console and the CLI on the box, which
+ *   send none (older records also hold "cli" and "telegram:<id>"; see
+ *   core/accounts.js for how each is read)
  * @property {string} [actorLabel] human name for logs/records
  * @property {string} [title]      prose a person wrote, carried as a FIELD rather
  *   than parsed out of the command line — see adapters/http.js
@@ -83,7 +92,8 @@
  *   text would be a picker built by parsing column padding
  * @property {Array<{ name: string }>} [secrets]
  *   the named secrets on this box, by name only — never a value
- * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
+ * @property {Button[]} [buttons]          offered choices — the web UI renders these as tappable
+ *   (as Telegram did); the sidecar relays them, and no fleet client reads them yet
  * @property {boolean} [ok]
  * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
  * @property {any} [check]                what a stored token can do, when asked
@@ -143,7 +153,7 @@ export function parse(line) {
     .split(/\s+/)
     .filter(Boolean);
   if (!parts.length) return { name: '', args: [], flags: new Set(), values: new Map() };
-  // Accept "/start", "start", and Telegram's "/start@mybot" group form.
+  // Accept "/start", "start", and "/start@mybot" — Telegram's group form, kept for the next chat client.
   const name = parts[0].replace(/^\//, '').split('@')[0].toLowerCase();
 
   /** @type {string[]} */
@@ -685,16 +695,18 @@ function addressNote(cfg, channel) {
 }
 
 /**
- * `short` is the one-line description registered with Telegram's setMyCommands,
- * which is what makes the client autocomplete these as you type "/". Telegram
- * caps it at 256 characters and shows it inline, so keep it to a few words —
- * `help` is the longer text for /help.
+ * `short` is a few words for a chat client's "/" menu, shown inline beside the
+ * command as it autocompletes — `help` is the longer text for /help. Nothing
+ * live reads it today: the one client that did was Telegram, which is archived,
+ * and the menu it built from this field went with it to
+ * archive/telegram/telegram.js. It stays because it is a property of the
+ * command rather than of any client, and the next chat surface needs exactly it.
  *
- * @type {Record<string, { aliases?: string[], usage: string, help: string, short?: string, hidden?: boolean, run: (ctx: Ctx, args: string[], flags: Set<string>, values: Map<string, string>) => Promise<Reply>|Reply }>}
+ * @type {Record<string, { aliases?: string[], usage: string, help: string, short?: string, run: (ctx: Ctx, args: string[], flags: Set<string>, values: Map<string, string>) => Promise<Reply>|Reply }>}
  */
 export const COMMANDS = {
   help: {
-    aliases: ['start_help', 'commands', '?'],
+    aliases: ['commands', '?'],
     usage: '/help',
     short: 'List every command',
     help: 'Show this list.',
@@ -704,7 +716,7 @@ export const COMMANDS = {
   new: {
     // `start` is here for the web UI and CLI, where it is the natural word.
     // Telegram reserves a bare /start as the bot-intro command, so its adapter
-    // maps that one case to /help — see adapters/telegram.js.
+    // mapped that one case to /help — see archive/telegram/telegram.js.
     aliases: ['start', 'launch', 'run'],
     usage: '/new [name] [path] [--safe|--dangerous] [--profile=<name>] [--secret=<name>]',
     short: 'Start a new Claude session',
@@ -2328,7 +2340,9 @@ export const COMMANDS = {
   whoami: {
     usage: '/whoami',
     short: 'Show the id the hub sees you as',
-    help: 'Show the id this hub sees you as — what goes in the allowlist.',
+    help:
+      'Show the id this hub sees you as — the actor it records on sessions you start: ' +
+      '`web` from the console or `fleetwright` on the box, `fleet:<email>` through the fleet.',
     run: (ctx) => ({ ok: true, text: `You are: ${ctx.actor}` }),
   },
 };
@@ -2358,28 +2372,6 @@ const LOOKUP = (() => {
   }
   return m;
 })();
-
-/**
- * The command menu a chat client can register for autocomplete. Derived from
- * COMMANDS rather than written out separately, so a new command shows up in
- * the client's "/" menu without anyone remembering to update a second list.
- *
- * @param {import('../config.js').Config} cfg
- * @returns {Array<{ command: string, description: string }>}
- */
-export function commandMenu(cfg) {
-  return Object.entries(COMMANDS)
-    .filter(([name, def]) => {
-      if (def.hidden || !def.short) return false;
-      if (!cfg.loginEnabled && (name === 'login' || name === 'code')) return false;
-      return true;
-    })
-    .map(([name, def]) => ({
-      // Telegram requires lowercase, 1-32 chars, [a-z0-9_].
-      command: name.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 32),
-      description: String(def.short).slice(0, 256),
-    }));
-}
 
 /** @param {Ctx} ctx */
 export function helpText(ctx) {

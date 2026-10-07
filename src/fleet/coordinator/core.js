@@ -3768,8 +3768,9 @@ function explainUnsupportedVersion(reply, host) {
  * The remedy is also the awkward part, and saying it out loud is the whole
  * point: THE VERB THAT FIXES THIS IS OFTEN THE ONE THAT IS UNKNOWN. `update`
  * over the fleet cannot update a box too old to have `update`. What works is
- * that box's own Telegram bot, or a shell on it — both of which talk to
- * fleetwright directly rather than through this protocol.
+ * a shell on that box, which talks to fleetwright directly rather than
+ * through this protocol. (This named the box's own Telegram bot too, until
+ * that adapter was archived; the message below already did not.)
  *
  * A pull that did not restart looks identical from here, and is at least as
  * common: the files are new and the running process still holds the old verb

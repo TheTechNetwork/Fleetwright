@@ -4,8 +4,8 @@
 // Everything except `serve` talks to the RUNNING hub over its loopback HTTP
 // port rather than touching the state file directly. Two writers to one JSON
 // file is a corruption bug waiting for a busy afternoon, and the hub is always
-// listening (config.js guarantees the HTTP adapter starts even in a
-// Telegram-only deployment).
+// listening (config.js guarantees the HTTP adapter starts even with the web
+// UI turned off).
 //
 //   fleetwright serve            run the service (what systemd starts)
 //   fleetwright doctor           check this box can actually run sessions

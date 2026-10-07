@@ -316,7 +316,7 @@ which happens on the order of minutes at worst.
 Joining, once:
 
 ```sh
-fleetwright-sidecar enrol 123456     # a pin from the app, or /enroll in Telegram
+fleetwright-sidecar enrol 123456     # a pin from the app
 fleetwright-sidecar identity         # host id, key fingerprint, coordinator
 fleetwright-sidecar doctor           # ...and whether the coordinator accepts it
 ```

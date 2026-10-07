@@ -717,9 +717,9 @@ export class Sidecar {
       // login, which is bounded by the mint timeout and never throws.
       if ((intent.verb === 'start' || intent.verb === 'resume') && this.claudeLoginReady) await this.claudeLoginReady;
 
-      // Everything else goes through the same command registry Telegram, the
-      // web UI and the CLI use, so a fleet command cannot behave differently
-      // from the same command typed into chat — or exist when that one does not.
+      // Everything else goes through the same command registry the web UI and
+      // the CLI use, so a fleet command cannot behave differently from the same
+      // command typed on the box — or exist when that one does not.
       const line = toCommandLine(intent);
       // Prose beside the line, never in it. The log prints only the line, so a
       // title never lands in the journal — it is a person's words about their

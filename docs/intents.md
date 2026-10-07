@@ -78,7 +78,7 @@ Coordinator → host:
   "verb": "resume",
   "params": { "name": "bigjob", "choice": "summary" },
   "issuedAt": 1755400000000,
-  "actor": "telegram:12345"
+  "actor": "you@example.com"
 }
 ```
 

@@ -241,19 +241,11 @@ export async function main() {
   await http.start();
   adapters.push(http);
 
-  // TELEGRAM IS ARCHIVED — see docs/telegram.md, which is the part that had to
-  // outlive the code. The adapter is at archive/telegram/telegram.js, unwired.
-  //
-  // A TOKEN THAT IS SET AND DOES NOTHING IS THE WORST OF THE THREE STATES. A
-  // box configured for Telegram would otherwise start clean, log nothing, and
-  // answer no messages — which reads as a broken bot rather than an absent one,
-  // and sends whoever set it looking at Telegram.
-  if (cfg.telegram.token) {
-    log.warn(
-      'FLEETWRIGHT_TELEGRAM_TOKEN is set, and the Telegram adapter is archived — nothing will read it. ' +
-        'The app and the MCP server are the surfaces now; see docs/telegram.md.',
-    );
-  }
+  // TELEGRAM IS ARCHIVED — see docs/telegram.md. The adapter is at
+  // archive/telegram/telegram.js, unwired, and nothing is started for it here.
+  // A box that still has FLEETWRIGHT_TELEGRAM_TOKEN set is told so once, by
+  // validateConfig() at the top of main(): this used to say it a second time
+  // in other words, so every start logged the same fact twice.
 
   if (cfg.restoreOnStart) {
     // After the adapters are up, so a slow restore (each resumed session waits
