@@ -76,6 +76,15 @@ export const XO_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 export const CERT_PIN_RE = /^[0-9a-f]{64}$/;
 
 /**
+ * An SSH host key's fingerprint, as OpenSSH prints it (`ssh-keygen -lf`,
+ * `ssh-keyscan | ssh-keygen -lf -`): `SHA256:` and the digest in base64 with
+ * its padding taken off. The form a person can read off the pool master's
+ * own console and compare. The same digest travels as `pin` in hex, the
+ * shape a certificate's does (CERT_PIN_RE), when an install is begun.
+ */
+export const SSH_HOST_KEY_RE = /^SHA256:[A-Za-z0-9+/]{43}$/;
+
+/**
  * What onboarding does, in order, by key. The host reports progress as an
  * index into this list and each app words each key itself, so a progress
  * update says nothing a lock screen should not show and every surface agrees
@@ -105,6 +114,30 @@ export const XOPOLICY_STEPS = Object.freeze([
   'inventory',
   'choose', // the pool's storage and networks, sealed to the phone, waiting on the person
   'apply', // what they chose, as the resource set and the egress network's tag
+]);
+
+/**
+ * What installing Xen Orchestra on a pool that has none does, in order, by
+ * key, and then onboarding's own steps against the Xen Orchestra it made: one
+ * job from the root password to the limited user's token, so the phone can
+ * close at the first step and collect the token at the end, as a setup's.
+ * docs/hypervisors.md, "A pool without Xen Orchestra".
+ *
+ * The six in the middle are XenOrchestraInstallerUpdater's own, the stages
+ * `xo-remote-deploy.sh` prints as `[n/6]`, in its order; the machine moves
+ * through them as the script says them, never on a clock.
+ */
+export const XODEPLOY_STEPS = Object.freeze([
+  'reach', // SSH to the pool master, held to the host key the person accepted; the root password used once and forgotten
+  'installer', // the installer's own files, at the pinned commit, each checked against its SHA-256
+  'network', // [1/6] the network its VM goes on: the pool master's management network
+  'image', // [2/6] Debian's cloud image, checked against Debian's published checksum and cached on the storage
+  'vm', // [3/6] the VM, made and started
+  'boot', // [4/6] its first boot and cloud-init
+  'packages', // [5/6] packages, node.js and yarn
+  'build', // [6/6] building Xen Orchestra and starting it
+  'admin', // the default admin password replaced with the person's, over the certificate this machine made for it
+  ...XOSETUP_STEPS,
 ]);
 
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
@@ -1367,10 +1400,17 @@ export const VERBS = Object.freeze({
   // WHAT A HOST DOES WITH IT is one TLS handshake and one GET of `/signin` at
   // the address, and what comes back is reduced to whether anything answered,
   // whether it looks like Xen Orchestra, the certificate's fingerprint, and
-  // what the certificate says and whether it checks out (narrowProbe).
+  // what the certificate says and whether it checks out (narrowProbe). A host
+  // of this release also asks `ssh-keyscan` at the address on port 22, and
+  // when it found no Xen Orchestra there says which SSH host keys
+  // answered and whether it could install (`ssh`, narrowSsh): what a pool
+  // with no Xen Orchestra is added from. An older host says nothing about
+  // SSH, which the phone reads as a machine too old to install, never as one
+  // that found nothing. No new parameter, so nothing needs a version.
   // That bounds what a compromised coordinator gains from asking: whether an
-  // address on a host's network answers HTTPS, which is a port scan one
-  // address at a time and nothing a page could carry. Admin only, checked in
+  // address on a host's network answers HTTPS or SSH, and with which
+  // certificate or host key, which is a port scan one address at a time and
+  // nothing a page could carry. Admin only, checked in
   // the coordinator; a new verb, so an older host answers `unknown_verb`.
   xoprobe: {
     params: {
@@ -1408,6 +1448,18 @@ export const VERBS = Object.freeze({
   //           same key, after `status` handed them the pool's inventory sealed
   //           to theirs (XOPOLICY_STEPS).
   //
+  //   deploy  `begin` for a pool with no Xen Orchestra: `pin` is the SHA-256
+  //           of the pool master's SSH host key the person compared, in hex,
+  //           and the machine signs the job's key under its own context
+  //           (`xodeploy-key`) over it, so a deploy key and a setup key can
+  //           never be taken for each other. The sealed `run` that follows
+  //           carries the pool master's root password and the admin password
+  //           the person chose; the machine installs Xen Orchestra and then
+  //           runs the steps above against it (XODEPLOY_STEPS), reporting as
+  //           `purpose: deploy`. A phase rather than a parameter, the way
+  //           `policy` came: an older host refuses the value it does not
+  //           know, loudly, and nothing needs a version.
+  //
   // PROGRESS ARRIVES AS AN EVENT, `xosetup.progress`, for the job's owner
   // only, and becomes a Live Activity on iOS and an ongoing notification on
   // Android. Its content is step numbers and a phase key, never an address or
@@ -1417,7 +1469,7 @@ export const VERBS = Object.freeze({
   // answers `unknown_verb` and strands nothing.
   xosetup: {
     params: {
-      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel', 'policy'] },
+      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel', 'policy', 'deploy'] },
       job: {
         type: 'text',
         required: false,
@@ -1442,7 +1494,8 @@ export const VERBS = Object.freeze({
         shapeName: 'a SHA-256 fingerprint in hex',
         describe:
           'For `begin`: the certificate fingerprint `xoprobe` reported and the person accepted. The machine refuses to ' +
-          'send a password to an address that answers with any other.',
+          'send a password to an address that answers with any other. For `deploy`: the SHA-256 of the pool master\'s ' +
+          'SSH host key the person compared, in hex; the machine refuses to SSH to a server with any other.',
       },
       sealed: {
         type: 'secret',
