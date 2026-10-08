@@ -28,6 +28,16 @@ const I_SETUP = IOS('AddHypervisorView.swift');
 const I_POLICY = IOS('XOPolicy.swift');
 
 /** What both phones say, word for word. */
+/** What Apply does to an image that is there, in the words both phones use. */
+const IMAGE_ACTION_WORDS = [
+  'Apply builds a new one beside it from the newest image, then removes this one. ',
+  'Apply removes it, and New session stops offering it. ',
+  'If a machine was made from this one, it is kept until that machine is gone.',
+  'If a machine was made from it, it is kept until that machine is gone.',
+  'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for.',
+  'A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it.',
+];
+
 const SHARED = [
   'The fleet has no report of this machine. The box holding your pool may not have looked yet, or it has been removed.',
   'No address reported yet. Its guest agent says it once it has booted.',
@@ -47,6 +57,7 @@ const SHARED = [
   'Only public keys, one a line, starting ssh-ed25519, ssh-rsa or ecdsa-sha2. This line is not one: ',
   'A machine made on your hypervisor after you keep them lets you in as fleetwright, with sudo: ',
   'It is there. New session › Where offers machines from it.',
+  ...IMAGE_ACTION_WORDS,
   ' with Fleetwright installed, on a 20 GiB disk on the storage chosen. ',
   'image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can ',
 ];
@@ -78,22 +89,12 @@ test('iOS: images are offered by operating system to a machine that builds them,
   assert.match(I_POLICY, /out\["images"\] = \(inv\.imageKinds \?\? \[\]\)\.map\(\\\.key\)\.filter \{ images\.contains\(\$0\) \}/);
 });
 
-/** What Apply does to an image that is there, in the words both phones use. */
-const IMAGE_ACTION_WORDS = [
-  'Apply builds a new one beside it from the newest image, then removes this one. ',
-  'Apply removes it, and New session stops offering it. ',
-  'If a machine was made from this one, it is kept until that machine is gone.',
-  'If a machine was made from it, it is kept until that machine is gone.',
-  'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for.',
-  'A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it.',
-];
 
 test('iOS: an image that is there is kept, rebuilt or removed, offered only by a machine that can and sent only when asked', () => {
   assert.match(I_SETUP, /canImageManage: begun\.can\.contains\("image-manage"\)/);
   assert.match(I_SETUP, /choice\.imageManageChoice = choice\.imagesChoice && policyJob\.canImageManage/);
   assert.match(I_SETUP, /if present\.contains\(kind\.key\), choice\.imageManageChoice \{/);
   for (const label of ['Text("Keep")', 'Text("Rebuild")', 'Text("Remove")']) assert.ok(I_SETUP.includes(label), label);
-  for (const words of IMAGE_ACTION_WORDS) assert.ok(`${I_SETUP}\n${I_POLICY}`.includes(words), words);
   assert.match(I_POLICY, /if !rebuild\.isEmpty \{ out\["rebuild"\] = rebuild \}/);
   assert.match(I_POLICY, /if !remove\.isEmpty \{ out\["remove"\] = remove \}/);
 });
@@ -147,6 +148,15 @@ test('Android: a machine’s page opens Xen Orchestra’s own console, and offer
   assert.match(A_PAGE, /if \(canExtend\(m\)\) \{\s*Text\("Give it longer"/);
   assert.match(A_PAGE, /return until < made \+ Fleet\.VmMachine\.MAX_MINUTES \* 60_000L/);
   for (const ask of ['asking = "reboot"', 'asking = "resize"', 'asking = "stop"']) assert.ok(A_PAGE.includes(ask), ask);
+});
+
+test('Android: an image that is there is kept, rebuilt or removed, offered only by a machine that can and sent only when asked', () => {
+  assert.match(A_HYPER, /canImageManage = "image-manage" in p\.setup\.can/);
+  assert.match(A_HYPER, /imageManageChoice = canImages && opened\.imageKinds != null && canImageManage,/);
+  assert.match(A_FORM, /if \(kind\.key in present && choice\.imageManageChoice\) \{/);
+  assert.match(A_FORM, /listOf\(null to "Keep", XoPolicy\.REBUILD to "Rebuild", XoPolicy\.REMOVE to "Remove"\)/);
+  assert.match(A_POLICY, /imageKeys\(inv, c, REBUILD\)\.takeIf \{ it\.isNotEmpty\(\) \}\?\.let \{ put\("rebuild", JSONArray\(it\)\) \}/);
+  assert.match(A_POLICY, /imageKeys\(inv, c, REMOVE\)\.takeIf \{ it\.isNotEmpty\(\) \}\?\.let \{ put\("remove", JSONArray\(it\)\) \}/);
 });
 
 test('Android: images are offered by operating system to a machine that builds them, and sent as a list', () => {

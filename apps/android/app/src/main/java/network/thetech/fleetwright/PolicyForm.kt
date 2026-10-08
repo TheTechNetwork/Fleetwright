@@ -171,14 +171,30 @@ internal fun PolicyForm(
     // "Still can't run sessions on it".
     val kinds = inv.imageKinds
     if (canImage && choice.egress != null && choice.imagesChoice && kinds != null) {
-        // ONE ROW PER OPERATING SYSTEM the machine can make an image of: said
-        // as there when the pool has it, a switch when it does not. Asked for:
-        // "os selection not just Debian".
+        // ONE ROW PER OPERATING SYSTEM the machine can make an image of: a
+        // box when the pool does not have it, and when it does, what Apply
+        // does to it, kept unless the person says otherwise. Asked for: "os
+        // selection not just Debian", and "There is no rebuild button or
+        // delete button".
         val there = XoPolicy.edgeOn(inv, choice.egress)
         val present = XoPolicy.imageKeysOn(inv, choice.egress)
         kinds.forEach { kind ->
-            if (kind.key in present) {
-                Hint("${kind.os} machine image. It is there. New session › Where offers machines from it.")
+            if (kind.key in present && choice.imageManageChoice) {
+                Text("${kind.os} machine image", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+                val action = choice.imageActions[kind.key]
+                listOf(null to "Keep", XoPolicy.REBUILD to "Rebuild", XoPolicy.REMOVE to "Remove").forEach { (value, title) ->
+                    RadioRow(
+                        selected = action == value,
+                        enabled = enabled,
+                        title = title,
+                        line = imageThereLine(value),
+                        onClick = {
+                            onChange(choice.copy(imageActions = if (value == null) choice.imageActions - kind.key else choice.imageActions + (kind.key to value)))
+                        },
+                    )
+                }
+            } else if (kind.key in present) {
+                Hint("${kind.os} machine image. ${imageThereLine(null)}")
             } else {
                 CheckRow(
                     checked = kind.key in choice.images,
@@ -491,6 +507,15 @@ private fun Stepper(
             ) { Text("+") }
         }
     }
+}
+
+/** What Apply does to an image that is there: kept (null), rebuilt or removed. The same words as iOS (AddHypervisorView.swift). */
+private fun imageThereLine(action: String?): String = when (action) {
+    XoPolicy.REBUILD -> "Apply builds a new one beside it from the newest image, then removes this one. " +
+        "If a machine was made from this one, it is kept until that machine is gone."
+    XoPolicy.REMOVE -> "Apply removes it, and New session stops offering it. " +
+        "If a machine was made from it, it is kept until that machine is gone."
+    else -> "It is there. New session › Where offers machines from it."
 }
 
 /** What making one of the images costs. The same words as iOS (AddHypervisorView.swift). */

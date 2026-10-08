@@ -227,9 +227,20 @@ internal object XoPolicy {
     /** The machine image's disk, VM_IMAGE.diskSize in vm-image.js. */
     const val IMAGE_DISK = 20L * 1024 * 1024 * 1024
 
-    /** The router or the image is to be built now, on storage still to be picked. */
+    /** What Apply may do to an image that is there, besides keeping it. */
+    const val REBUILD = "rebuild"
+    const val REMOVE = "remove"
+
+    /** The images the way out's pool has that Apply is to [REBUILD], or to [REMOVE], in the catalogue's order. */
+    fun imageKeys(inv: Inventory, c: Choice, action: String): List<String> {
+        if (!c.imageManageChoice) return emptyList()
+        val present = imageKeysOn(inv, c.egress)
+        return (inv.imageKinds ?: emptyList()).map { it.key }.filter { it in present && c.imageActions[it] == action }
+    }
+
+    /** The router or an image is to be built now, on storage still to be picked. A rebuilt image is built like a new one. */
     fun building(inv: Inventory, c: Choice): Pair<Boolean, Boolean> =
-        (c.edge && edgeOn(inv, c.egress) == null) to imagesToBuild(inv, c).isNotEmpty()
+        (c.edge && edgeOn(inv, c.egress) == null) to (imagesToBuild(inv, c).isNotEmpty() || imageKeys(inv, c, REBUILD).isNotEmpty())
 
     /** How much room the disks being built need: the image's when it is one of them, the router's otherwise. */
     fun diskNeed(inv: Inventory, c: Choice): Long = if (building(inv, c).second) IMAGE_DISK else EDGE_DISK
@@ -328,6 +339,13 @@ internal object XoPolicy {
         val images: Set<String> = emptySet(),
         /** The machine takes [images]. An older one is sent `image` alone, and offered Debian alone. */
         val imagesChoice: Boolean = false,
+        /**
+         * What Apply does to each image the way out's pool has, by key: [REBUILD] or [REMOVE]; one not named
+         * is kept. Asked for: "There is no rebuild button or delete button".
+         */
+        val imageActions: Map<String, String> = emptyMap(),
+        /** The machine rebuilds and removes images (`image-manage` in begin's `can`). An older one keeps every image. */
+        val imageManageChoice: Boolean = false,
         /** How many group networks the way out's pool is to have. Asked for: "the 3 VMs need to reach each other". */
         val groups: Int = 0,
         /** The machine makes them (`groups` in begin's `can`). An older one cannot, so they are neither offered nor sent. */
@@ -595,6 +613,12 @@ internal object XoPolicy {
         if (c.imageChoice && c.wantsImage && !c.edge && edgeOn(inv, c.egress) == null) {
             return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
         }
+        if (imageKeys(inv, c, REBUILD).isNotEmpty() && !c.edge && edgeOn(inv, c.egress) == null) {
+            return "A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it."
+        }
+        if (c.holderChoice && c.holder && DEBIAN_KEY in imageKeys(inv, c, REMOVE)) {
+            return "The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for."
+        }
         if (c.holderChoice && c.holder && c.egress == null) return "The pool’s own machine goes on the way out: choose the network it is on."
         if (c.holderChoice && c.holder && imageOn(inv, c.egress) == null && !(c.imageChoice && c.wantsImage)) {
             return "The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it."
@@ -647,11 +671,14 @@ internal object XoPolicy {
                     if (c.labsEachChoice) put("labsEach", if (c.labsEach > 0) c.labsEach else JSONObject.NULL)
                 }
             }
+            // Only to a machine that rebuilds and removes them, and only when asked.
+            .apply { imageKeys(inv, c, REBUILD).takeIf { it.isNotEmpty() }?.let { put("rebuild", JSONArray(it)) } }
+            .apply { imageKeys(inv, c, REMOVE).takeIf { it.isNotEmpty() }?.let { put("remove", JSONArray(it)) } }
             // Only to a machine that makes one, and only when asked.
             .apply { if (c.holderChoice && c.holder) put("holder", true) }
             // Only to a machine that reads it, and only with something to build.
             .apply { if (c.edgeBlockChoice && c.edge) put("edgeBlock", c.edgeBlock) }
-            .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage))) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
+            .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage) || imageKeys(inv, c, REBUILD).isNotEmpty())) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
     fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice): String =

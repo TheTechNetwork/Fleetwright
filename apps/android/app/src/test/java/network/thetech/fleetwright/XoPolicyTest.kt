@@ -203,6 +203,46 @@ class XoPolicyTest {
         assertFalse("none asked is nothing sent", XoPolicy.payload(inv, c.copy(images = emptySet())).has("images"))
     }
 
+    /**
+     * Asked for: "There is no rebuild button or delete button". An image the pool has is kept unless the
+     * person says otherwise; a rebuilt one is built like a new one, and nothing is sent to a machine that
+     * cannot.
+     */
+    @Test
+    fun anImageThereIsKeptRebuiltOrRemovedAndOnlyThoseAreSent() {
+        val kinds = JSONArray()
+            .put(JSONObject().put("key", "debian-13").put("os", "Debian 13"))
+            .put(JSONObject().put("key", "ubuntu-24.04").put("os", "Ubuntu 24.04 LTS"))
+        val inv = inventory(
+            inventoryJson()
+                .put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true)))
+                .put(
+                    "images",
+                    JSONArray()
+                        .put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Debian 13").put("key", "debian-13"))
+                        .put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Ubuntu 24.04 LTS").put("key", "ubuntu-24.04")),
+                )
+                .put("imageKinds", kinds),
+        )
+        val asked = XoPolicy.defaults(inv).copy(
+            edge = false, imageChoice = true, imagesChoice = true,
+            imageActions = mapOf("debian-13" to XoPolicy.REBUILD, "ubuntu-24.04" to XoPolicy.REMOVE),
+        )
+        assertFalse("a machine that cannot is sent neither", XoPolicy.payload(inv, asked).has("rebuild"))
+        val c = asked.copy(imageManageChoice = true)
+        assertNull(XoPolicy.problem(inv, c))
+        assertEquals("debian-13", XoPolicy.payload(inv, c).getJSONArray("rebuild").getString(0))
+        assertEquals("ubuntu-24.04", XoPolicy.payload(inv, c).getJSONArray("remove").getString(0))
+        assertTrue("a rebuild needs room like a build", XoPolicy.building(inv, c).second)
+        val holding = c.copy(holderChoice = true, holder = true, imageActions = mapOf("debian-13" to XoPolicy.REMOVE))
+        assertEquals(
+            "The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for.",
+            XoPolicy.problem(inv, holding),
+        )
+        assertFalse("kept is nothing sent", XoPolicy.payload(inv, c.copy(imageActions = emptyMap())).has("rebuild"))
+        assertFalse(XoPolicy.payload(inv, c.copy(imageActions = emptyMap())).has("remove"))
+    }
+
     @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in

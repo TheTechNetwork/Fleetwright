@@ -206,6 +206,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canLabs by remember { mutableStateOf(false) }
     // It keeps how many labs one person may hold (`labs-each` in `can`).
     var canLabsEach by remember { mutableStateOf(false) }
+    // It rebuilds and removes an image that is there (`can` holds "image-manage"); an older one keeps every image.
+    var canImageManage by remember { mutableStateOf(false) }
     // What the fleet said when the token was kept there too, or what stood in
     // the way (XoHandoff.keepInFleet).
     var fleetNote by remember { mutableStateOf("") }
@@ -509,6 +511,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canEdgeBlock = "edge-block" in p.setup.can
         canLabs = "labs" in p.setup.can
         canLabsEach = "labs-each" in p.setup.can
+        canImageManage = "image-manage" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -782,6 +785,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             edgeDiskChoice = edgeDisk,
                             imageChoice = canImage,
                             imagesChoice = canImages && opened.imageKinds != null,
+                            imageManageChoice = canImages && opened.imageKinds != null && canImageManage,
                             groupsChoice = canGroups && opened.groups != null,
                             holderChoice = canHolder && opened.holders != null,
                             edgeBlockChoice = canEdgeBlock,
