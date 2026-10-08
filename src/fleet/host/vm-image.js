@@ -11,8 +11,8 @@
 // HOW IT IS BUILT WITHOUT ANYBODY AT A CONSOLE. Debian's own cloud image
 // (genericcloud, the build pinned below by its published SHA-512) reads
 // cloud-init from the config drive Xen Orchestra makes for a VM. The machine
-// running the policy job downloads it once, streams its raw disk out of the
-// archive with tar and xz into Xen Orchestra's disk import, grows the disk to
+// running the policy job downloads its qcow2 once, checks it against that
+// digest, hands it to Xen Orchestra's disk import as it is, grows the disk to
 // the size a session needs, and boots a VM from it on the uplink, behind the
 // edge router, with a cloud-init that installs Fleetwright from this fleet's
 // own /install without a pin, wipes everything that would make two clones
@@ -39,8 +39,7 @@
 // that refuses what the real one refuses; the whole build is NOT YET RUN
 // through to a template on a real pool.
 
-import { spawn } from 'node:child_process';
-import { createReadStream, existsSync, statSync, rmSync, renameSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
 
 import { fetchPinned, uploadDisk, srName } from './edge-router.js';
 
@@ -49,25 +48,23 @@ export const DEBIAN_IMAGE = Object.freeze({
   key: 'debian-13',
   os: 'Debian 13',
   name: 'Fleetwright Debian 13',
-  format: 'tar-raw',
+  format: 'qcow2',
   label: 'Debian',
   algorithm: /** @type {'sha512'} */ ('sha512'),
   release: '13',
   build: '20261001-2618',
-  url: 'https://cloud.debian.org/images/cloud/trixie/20261001-2618/debian-13-genericcloud-amd64-20261001-2618.tar.xz',
+  url: 'https://cloud.debian.org/images/cloud/trixie/20261001-2618/debian-13-genericcloud-amd64-20261001-2618.qcow2',
   /** As published in that build's SHA512SUMS, and as downloaded. */
-  sha512: 'aff146935ebb43916fce61c462a464b066c30415a24a3d7812b773aed2bfda416de2224efba7189b876f13b22de862301c0a1c70f9686e231878bbffe4d2874e',
-  compressedSize: 229985460,
-  /** The one file in the archive, and its size. */
-  member: 'disk.raw',
+  sha512: 'f46f0671a6e5bdec5291ab8972bae2f10e5408c2f64a74078f11efc2f06a436a9d0313ed50e0472542eeabf780e9f7c792ac0a314c6c20507fcd9fd81b468c3d',
+  compressedSize: 341508096,
+  /** The disk's size inside the qcow2, before it is grown. */
   rawSize: 3221225472,
 });
 
 /**
- * Ubuntu's cloud images, pinned the same way. Ubuntu publishes them as qcow2
- * (its tarball holds a bare ext4 partition, which does not boot), so the box
- * converts the download to a raw disk with `qemu-img` before it is written.
- * `rawSize` is the virtual size in the qcow2 header.
+ * Ubuntu's cloud images, pinned the same way and uploaded the same way: as
+ * the qcow2 Ubuntu publishes (its tarball holds a bare ext4 partition, which
+ * does not boot). `rawSize` is the virtual size in the qcow2 header.
  */
 export const UBUNTU_2404_IMAGE = Object.freeze({
   key: 'ubuntu-24.04',
@@ -155,31 +152,6 @@ export const VM_IMAGE = Object.freeze({
 
 /** The run user's account, which the install makes the hub run as. */
 const RUN_USER = 'fleetwright';
-
-/**
- * The image's raw disk, streamed out of the archive by tar and xz as it is
- * read. Node has neither; a machine without them is told which package.
- *
- * @param {string} file
- * @param {{ spawnImpl?: typeof spawn, signal?: AbortSignal }} [opts]
- */
-export function unpackDebian(file, { spawnImpl = spawn, signal } = {}) {
-  const child = spawnImpl('tar', ['-xJOf', file, DEBIAN_IMAGE.member], { stdio: ['ignore', 'pipe', 'pipe'] });
-  signal?.addEventListener('abort', () => child.kill(), { once: true });
-  let said = '';
-  child.stderr?.on('data', (d) => {
-    said = (said + d).slice(-400);
-  });
-  child.on('error', (/** @type {any} */ e) => {
-    child.stdout?.destroy(
-      e?.code === 'ENOENT' ? new Error('this machine has no tar to unpack the Debian image with. Install it (apt install tar xz-utils) and apply again') : e,
-    );
-  });
-  child.on('close', (code) => {
-    if (code) child.stdout?.destroy(new Error(`tar could not unpack the Debian image: ${said.trim() || `exit ${code}`}`));
-  });
-  return /** @type {import('node:stream').Readable} */ (child.stdout);
-}
 
 /**
  * The cloud-init the build VM boots with. One script, so that "everything
@@ -284,44 +256,12 @@ export const IMAGE_STAGES = 4;
 /** Thousandths of the bar the bytes take; the install has most of the rest. */
 const BYTES_SHARE = 450;
 const INSTALLED = 970;
-/** @param {number} downloaded @param {number} written @param {any} [spec] */
+/** The same file is downloaded and then written. @param {number} downloaded @param {number} written @param {any} [spec] */
 export function imageFill(downloaded, written, spec = DEBIAN_IMAGE) {
-  const bytes = spec.compressedSize + spec.rawSize;
-  return Math.min(BYTES_SHARE, Math.floor((BYTES_SHARE * (Math.min(downloaded, spec.compressedSize) + Math.min(written, spec.rawSize))) / bytes));
+  const size = spec.compressedSize;
+  return Math.min(BYTES_SHARE, Math.floor((BYTES_SHARE * (Math.min(downloaded, size) + Math.min(written, size))) / (2 * size)));
 }
 
-/**
- * A qcow2 download as the raw disk Xen Orchestra imports, converted once with
- * `qemu-img` beside it and kept while its size is right. A machine without
- * qemu-img is told which package.
- *
- * @param {string} file @param {any} spec
- * @param {{ spawnImpl?: typeof spawn, signal?: AbortSignal }} [opts]
- * @returns {Promise<string>} the raw file
- */
-export async function convertQcow2(file, spec, { spawnImpl = spawn, signal } = {}) {
-  const out = `${file}.raw`;
-  if (existsSync(out) && statSync(out).size === spec.rawSize) return out;
-  const part = `${out}.part`;
-  rmSync(part, { force: true });
-  await new Promise((resolve, reject) => {
-    const child = spawnImpl('qemu-img', ['convert', '-f', 'qcow2', '-O', 'raw', file, part], { stdio: ['ignore', 'ignore', 'pipe'] });
-    signal?.addEventListener('abort', () => child.kill(), { once: true });
-    let said = '';
-    child.stderr?.on('data', (d) => {
-      said = (said + d).slice(-400);
-    });
-    child.on('error', (/** @type {any} */ e) =>
-      reject(e?.code === 'ENOENT' ? new Error(`this machine has no qemu-img to convert the ${spec.os} image with. Install it (apt install qemu-utils) and apply again`) : e));
-    child.on('close', (code) => (code ? reject(new Error(`qemu-img could not convert the ${spec.os} image: ${said.trim() || `exit ${code}`}`)) : resolve(undefined)));
-  });
-  if (statSync(part).size !== spec.rawSize) {
-    rmSync(part, { force: true });
-    throw new Error(`the ${spec.os} image converted to ${statSync(part).size} bytes, not ${spec.rawSize}`);
-  }
-  renameSync(part, out);
-  return out;
-}
 /** How far through the install, by time against what it usually takes, never quite done. @param {number} elapsed */
 export function installFill(elapsed) {
   const share = Math.min(0.95, elapsed / VM_IMAGE.installTypicalMs);
@@ -352,8 +292,6 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   image?: string,
  *   resize?: 'disk.resize'|'vdi.set',
  *   getImage?: typeof fetchPinned,
- *   unpackImpl?: typeof unpackDebian,
- *   convert?: typeof convertQcow2,
  *   upload?: typeof uploadDisk,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
@@ -364,7 +302,7 @@ export async function ensureImage({
   admin, pool, poolName = 'this pool', uplink, setId, srs, fleetSrs, sr: chosenSr = null, address, pin, plain, imageDir, coordinatorUrl, say, signal,
   image: key = DEBIAN_IMAGE.key,
   resize = 'disk.resize',
-  getImage = fetchPinned, unpackImpl = unpackDebian, convert = convertQcow2, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
+  getImage = fetchPinned, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
 }) {
   const spec = IMAGES[key];
   if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was built`);
@@ -409,9 +347,6 @@ export async function ensureImage({
   });
   signal?.throwIfAborted();
   if (!downloaded) say(`${os} was already downloaded and checked.`, stage(1, imageFill(spec.compressedSize, 0, spec)));
-  // QCOW2 IS CONVERTED FIRST, once, and kept beside the download.
-  const raw = spec.format === 'qcow2' ? await convert(file, spec, { signal }) : null;
-  signal?.throwIfAborted();
 
   /** @type {string|null} */
   let vdi = null;
@@ -422,7 +357,11 @@ export async function ensureImage({
     say(`Writing the machine image’s disk to ${on}.`, stage(2, imageFill(spec.compressedSize, 0, spec)));
     const { $sendTo } = await admin.call('disk.import', {
       sr: sr.id,
-      type: 'iso',
+      // AS PUBLISHED: Xen Orchestra reads the qcow2 itself (xo-server
+      // 5.201.0 and on, which the policy job requires), so nothing on this
+      // machine unpacks or converts it, and a third of a gigabyte crosses
+      // the network where a 3 GiB raw disk did.
+      type: 'qcow2',
       name: VM_IMAGE.buildName,
       description: `${os} (${spec.build}), becoming Fleetwright's machine image`,
     });
@@ -431,9 +370,9 @@ export async function ensureImage({
       pin,
       plain,
       sendTo: $sendTo,
-      body: raw ? createReadStream(raw) : unpackImpl(file, { signal }),
-      size: spec.rawSize,
-      filename: `${spec.key}.raw`,
+      body: createReadStream(file),
+      size: spec.compressedSize,
+      filename: `${spec.key}.qcow2`,
       signal,
       onProgress: (d, t) => say(`Writing the machine image’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, imageFill(spec.compressedSize, d, spec))),
     });

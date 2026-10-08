@@ -601,6 +601,13 @@ function buildPool({ then, existing = [] }) {
   return { admin, calls, sr, disks, objects };
 }
 
+// THE DOWNLOAD the build is handed: a file with a qcow2's magic at its head,
+// so the bytes that reach the upload can be compared with what was fetched.
+const imageDir = mkdtempSync(join(tmpdir(), 'fw-image-'));
+const downloaded = join(imageDir, 'debian-13.qcow2');
+writeFileSync(downloaded, Buffer.concat([Buffer.from([0x51, 0x46, 0x49, 0xfb]), Buffer.from('the image as Debian published it')]));
+test.after(() => rmSync(imageDir, { recursive: true, force: true }));
+
 /** @param {any} p */
 const buildArgs = (p) => ({
   admin: p.admin,
@@ -616,9 +623,15 @@ const buildArgs = (p) => ({
   imageDir: '/nowhere',
   coordinatorUrl: 'https://fleet.test',
   say: () => {},
-  getImage: /** @type {any} */ (async () => '/nowhere/debian.tar.xz'),
-  unpackImpl: /** @type {any} */ (() => ({})),
-  upload: /** @type {any} */ (async (/** @type {any} */ o) => { o.onProgress?.(DEBIAN_IMAGE.rawSize, DEBIAN_IMAGE.rawSize); return 'vdi-1'; }),
+  getImage: /** @type {any} */ (async () => downloaded),
+  upload: /** @type {any} */ (async (/** @type {any} */ o) => {
+    /** @type {Buffer[]} */
+    const chunks = [];
+    for await (const c of o.body) chunks.push(c);
+    p.uploaded = { ...o, body: Buffer.concat(chunks) };
+    o.onProgress?.(DEBIAN_IMAGE.compressedSize, DEBIAN_IMAGE.compressedSize);
+    return 'vdi-1';
+  }),
   sleep: async () => {},
 });
 
@@ -638,6 +651,12 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vdi.delete')).params, { id: 'cfg-1' });
   assert.deepEqual(p.disks.map((d) => d.vdi), ['vdi-1'], 'the template keeps its own disk and nothing else');
   assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.resize')).params.size, VM_IMAGE.diskSize);
+  // AS PUBLISHED: Xen Orchestra is told it is a qcow2, and is sent the file
+  // that was downloaded and checked, byte for byte, nothing unpacked or
+  // converted on the way.
+  assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.import')).params.type, 'qcow2');
+  assert.deepEqual(p.uploaded.body, readFileSync(downloaded));
+  assert.equal(p.uploaded.size, DEBIAN_IMAGE.compressedSize, 'the length sent is the pinned download, which fetchPinned checked');
   assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }]);
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'resourceSet.addObject')).params, { id: 'set-1', object: 'build-vm' });
   assert.ok(said.some((s) => /Installing Fleetwright on the machine image/.test(s)));

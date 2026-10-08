@@ -503,6 +503,43 @@ test('the pool’s own machine is made last, from its image, with a pin asked fo
   assert.deepEqual(made.params.VIFs, [{ network: 'net-dmz' }]);
 });
 
+test('a Xen Orchestra older than xo-server 5.201.0 is told so before an image is downloaded', { skip }, async (t) => {
+  // ASKED FOR: "It's a latest xen, we should make that a requirement". The
+  // image goes up as the qcow2 Debian or Ubuntu publishes, which disk.import
+  // takes from 5.201.0 on; an older one is refused by name and version.
+  for (const [xoServer, builds] of [['5.200.9', false], ['5.201.0', true]]) {
+    const xo = await standIn(t, {
+      sets: [chosenBefore()],
+      more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate'],
+      vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+      xoServer,
+    });
+    /** @type {any[]} */
+    const asked = [];
+    const { setups } = await machine({
+      coordinatorUrl: 'https://fleet.test',
+      buildImage: async (/** @type {any} */ o) => {
+        asked.push(o);
+        return 'The machine image is ready on Home.';
+      },
+    });
+    const actor = 'eli@example.com';
+    const { begun } = await choosing(xo, setups, actor);
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', image: true, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+    assert.equal((await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, begun.xosetup.job, actor);
+    if (builds) {
+      assert.equal(end.state, 'done', end.text);
+      assert.equal(asked.length, 1);
+    } else {
+      assert.equal(end.state, 'failed');
+      assert.match(end.text, /is xo-server 5\.200\.9, and the machine image needs xo-server 5\.201\.0 or newer \(Xen Orchestra 6\.5/);
+      assert.match(end.text, /The policy was applied\./);
+      assert.equal(asked.length, 0, 'nothing was downloaded');
+    }
+  }
+});
+
 test('a Xen Orchestra without disk.resize builds the image through vdi.set, and one with neither says both names', { skip }, async (t) => {
   for (const [grow, expect] of [[['vdi.set'], 'vdi.set'], [[], null]]) {
     const xo = await standIn(t, {
