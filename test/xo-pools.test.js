@@ -558,14 +558,24 @@ function runImageScript({ fail = '', token = REPORT_TOKEN } = {}) {
   const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
   const dir = mkdtempSync(join(tmpdir(), 'image-script-'));
   try {
-    const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test'].map((c) =>
+    const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent'].map((c) =>
       `${c}() { echo "${c} $*" >>"$CALLS"; ${c === fail ? 'return 1' : 'return 0'}; }`);
-    // python3 is only ever the report: its fifth argument is the step.
-    stubs.push('python3() { echo "report $5" >>"$CALLS"; }');
-    const body = script.replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`).replace('#!/bin/bash', '');
+    // python3 only ever builds a report's body: its fourth argument is the
+    // step, which is all the body need be here; curl is what sends it.
+    stubs.push('python3() { echo "$4"; }');
+    const body = script
+      .replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`)
+      .replace("screens='/dev/console /dev/tty1'", "screens=''")
+      .replace('#!/bin/bash', '');
     const run = spawnSync('bash', ['-c', `${stubs.join('\n')}\n${body}`], { env: { CALLS: join(dir, 'calls'), PATH: process.env.PATH }, encoding: 'utf8' });
     assert.equal(run.status, 0, run.stderr);
-    return readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n');
+    // A report is a curl to the report route under an agent of its own, not
+    // a stock one a CDN's bot check turns away, and reads back as
+    // `report <step>`.
+    return readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n').map((c) => {
+      const sent = /^curl -fsS -m 10 -A fleetwright-image .*--data-binary (\S+) https:\/\/fleet\.test\/api\/xosetup\/report$/.exec(c);
+      return sent ? `report ${sent[1]}` : c;
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -578,6 +588,10 @@ test('the install script reports each step to the fleet and powers off when ever
   assert.deepEqual(calls.filter((c) => c.startsWith('report ')), ['report started', 'report packages', 'report installer', 'report cleaning', 'report done']);
   assert.equal(calls.at(-1), 'systemctl poweroff');
   assert.ok(calls.includes('rm -f /root/fleetwright-image.sh'), 'the script, with its token in it, is not left in the image');
+  // A VM that never reports in is most often one with no network, so the
+  // first thing it puts on its screen is whether it has one.
+  assert.ok(calls.indexOf('ip -4 -br addr') < calls.indexOf('apt-get update'));
+  assert.ok(calls.includes('getent hosts deb.debian.org'));
 });
 
 test('the install script stops at the first step that fails, says so with its log, and reboots rather than becoming the template', () => {
@@ -587,7 +601,7 @@ test('the install script stops at the first step that fails, says so with its lo
   const calls = runImageScript({ fail: 'apt-get' });
   assert.equal(calls.at(-1), 'systemctl reboot');
   assert.ok(calls.includes('report failed'));
-  assert.ok(!calls.some((c) => c.startsWith('curl ')), 'nothing after the failure ran');
+  assert.ok(!calls.some((c) => c.includes('/install')), 'nothing after the failure ran');
   assert.ok(!calls.includes('systemctl poweroff'));
   const checked = runImageScript({ fail: 'test' });
   assert.equal(checked.at(-1), 'systemctl reboot', 'an install that left no fleetwright-vm-join is a failure too');
