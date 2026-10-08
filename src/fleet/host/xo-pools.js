@@ -60,7 +60,7 @@ const GRACE_MS = 60_000;
 const BUSY_TAG = 'fleetwright-busy';
 /** When a machine was made, its image and its network, as tags beside its end. */
 const MADE_PREFIX = 'fleetwright-made:';
-const FROM_PREFIX = 'fleetwright-from:';
+const FROM_PREFIX = VM_IMAGE.fromPrefix;
 const ON_PREFIX = 'fleetwright-on:';
 /**
  * Whose machine it is. Two people can keep tokens for the same Xen

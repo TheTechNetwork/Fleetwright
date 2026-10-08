@@ -149,6 +149,8 @@ export const VM_IMAGE = Object.freeze({
   sessionTag: 'fleetwright-session',
   /** And when each must be gone by, as `fleetwright-until:<epoch seconds>`. */
   untilPrefix: 'fleetwright-until:',
+  /** And which template it came from, as `fleetwright-from:<template id>`. */
+  fromPrefix: 'fleetwright-from:',
   template: 'Other install media',
   /** The disk a clone has: room for the session image, a workspace and a build. */
   diskSize: 20 * 1024 ** 3,
@@ -386,6 +388,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   pollMs?: number,
  *   reporter?: (() => Promise<string|null>)|null,
  *   vmReport?: () => ({ step: string, detail: string|null, at: number }|null),
+ *   replace?: boolean,
  * }} opts
  */
 export async function ensureImage({
@@ -394,12 +397,16 @@ export async function ensureImage({
   resize = 'disk.resize',
   getImage = fetchPinned, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
   reporter = null, vmReport = () => null,
+  replace = false,
 }) {
   const spec = IMAGES[key];
   if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was built`);
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
   const there = templates.find((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key);
-  if (there) {
+  // REBUILT WHEN ASKED: the new one is built beside it and the one there is
+  // retired only once the new one is a template, so a build that fails or is
+  // cancelled leaves the pool with the image it had (retireImage below).
+  if (there && !replace) {
     // IN THE SET, whatever else: an image made before the set existed, or
     // taken out of it in Xen Orchestra, is one the fleet can see and not use.
     await admin.call('resourceSet.addObject', { id: setId, object: there.id }).catch(() => {});
@@ -582,8 +589,83 @@ export async function ensureImage({
     if (vdi) await admin.call('vdi.delete', { id: vdi }).catch(() => {});
     throw e;
   }
+  if (there) {
+    const retired = await retireImage(admin, there);
+    return (
+      `The ${os} machine image was rebuilt on ${poolName}, its disk on ${on}. ` +
+      (retired.removed
+        ? 'The one that was there was removed.'
+        : `The one that was there was kept as "${retired.name}", because ${machines(retired.clones)} made from it still ${retired.clones === 1 ? 'exists' : 'exist'}; New session no longer offers it, and it can be removed once ${retired.clones === 1 ? 'that machine is' : 'they are'} gone.`)
+    );
+  }
   return (
     `The machine image is ready on ${poolName}: ${spec.name}, ${os} with Fleetwright installed, its disk on ${on}. ` +
     'Start a session on a new machine from it under New session › Where.'
   );
+}
+
+/** @param {number} n */
+const machines = (n) => (n === 1 ? 'a machine' : `${n} machines`);
+
+/**
+ * The machines made from a template: every VM tagged with where it came from
+ * (xo-pools.js tags each clone so), the ones kept ready among them.
+ *
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin
+ * @param {string} template
+ */
+async function clonesOf(admin, template) {
+  const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+  return vms.filter((v) => Array.isArray(v?.tags) && v.tags.includes(`${VM_IMAGE.fromPrefix}${template}`)).length;
+}
+
+/**
+ * A template that is no longer the image: deleted when nothing was made from
+ * it, and otherwise kept, untagged so no box offers it again and renamed so
+ * whoever looks in Xen Orchestra can tell why it is there. A machine made from
+ * it keeps the disk it was made with either way; deleting the template under
+ * it is what this declines to find out about.
+ *
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin
+ * @param {any} template
+ * @returns {Promise<{ removed: true } | { removed: false, clones: number, name: string }>}
+ */
+async function retireImage(admin, template) {
+  const clones = await clonesOf(admin, String(template.id));
+  if (!clones) {
+    await admin.call('vm.delete', { id: template.id, deleteDisks: true });
+    return { removed: true };
+  }
+  const name = `${String(template.name_label || VM_IMAGE.name).slice(0, 60)} (replaced)`;
+  for (const tag of (template.tags || []).filter((/** @type {string} */ t) => t === VM_IMAGE.tag || t.startsWith(`${VM_IMAGE.tag}:`))) {
+    await admin.call('tag.remove', { id: template.id, tag }).catch(() => {});
+  }
+  await admin.call('vm.set', { id: template.id, name_label: name }).catch(() => {});
+  return { removed: false, clones, name };
+}
+
+/**
+ * The machine image `key` taken off a pool, when the person asked. Never
+ * from under a machine made from it: then it stays as it is, and the sentence
+ * says how many machines and that removing it waits for them.
+ *
+ * @param {{ admin: any, pool: string, poolName?: string, image: string }} opts
+ * @returns {Promise<string>}
+ */
+export async function removeImage({ admin, pool, poolName = 'this pool', image: key }) {
+  const spec = IMAGES[key];
+  if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was removed`);
+  const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
+  const there = templates.filter((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key);
+  if (!there.length) return `The ${spec.os} machine image was already gone from ${poolName}.`;
+  /** @type {number[]} */
+  const kept = [];
+  for (const t of there) {
+    const clones = await clonesOf(admin, String(t.id));
+    if (clones) kept.push(clones);
+    else await admin.call('vm.delete', { id: t.id, deleteDisks: true });
+  }
+  if (!kept.length) return `The ${spec.os} machine image was removed from ${poolName}. New session no longer offers it.`;
+  const n = kept.reduce((a, b) => a + b, 0);
+  return `The ${spec.os} machine image was kept on ${poolName}: ${machines(n)} made from it still ${n === 1 ? 'exists' : 'exist'}. Remove ${n === 1 ? 'that machine' : 'them'} and apply again.`;
 }

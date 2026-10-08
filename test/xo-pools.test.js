@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
-import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
+import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, removeImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
@@ -785,6 +785,51 @@ test('a build VM that never reports in is named as the likely problem, and one t
   assert.match(String(err), /did not finish within 25 minutes, and its VM never reported in.*kept, stopped, as "fleetwright-image-build \(install timed out\)"/);
   assert.ok(p.calls.some((c) => c.method === 'vm.stop' && c.params.id === 'build-vm'));
   assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, where a timeout used to delete it');
+});
+
+// --- rebuilt and removed ----------------------------------------------------
+//
+// ASKED FOR: "There is no rebuild button or delete button", on a pool whose
+// three images were built before the install script stopped at its first
+// failure, so any of them may be one that should not have become a template.
+
+const OLD = { type: 'VM-template', id: 'img-old', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag, 'fleetwright-image:debian-13'] };
+const CLONE = { type: 'VM', id: 'vm-a', $pool: 'pool-1', tags: [`${VM_IMAGE.fromPrefix}img-old`] };
+
+test('a rebuild makes the new image beside the old one, and removes the old one once the new one is a template', async () => {
+  const p = buildPool({ then: 'Halted', existing: [OLD] });
+  const text = await ensureImage({ ...buildArgs(p), replace: true });
+  const order = p.calls.map((c) => c.method).filter((m) => m !== 'xo.getAllObjects');
+  assert.ok(order.indexOf('vm.convertToTemplate') < order.lastIndexOf('vm.delete'), 'never neither: the new one first');
+  assert.deepEqual(p.calls.filter((c) => c.method === 'vm.delete').map((c) => c.params), [{ id: 'img-old', deleteDisks: true }]);
+  assert.match(text, /rebuilt on rack.*The one that was there was removed\./);
+});
+
+test('a rebuild keeps the old image while a machine made from it exists, untagged so nothing offers it', async () => {
+  const p = buildPool({ then: 'Halted', existing: [OLD, CLONE] });
+  const text = await ensureImage({ ...buildArgs(p), replace: true });
+  assert.ok(!p.calls.some((c) => c.method === 'vm.delete' && c.params.id === 'img-old'));
+  assert.deepEqual(p.calls.filter((c) => c.method === 'tag.remove' && c.params.id === 'img-old').map((c) => c.params.tag).sort(), [VM_IMAGE.tag, 'fleetwright-image:debian-13']);
+  assert.ok(p.calls.some((c) => c.method === 'vm.set' && c.params.id === 'img-old' && c.params.name_label === 'Fleetwright Debian 13 (replaced)'));
+  assert.match(text, /kept as "Fleetwright Debian 13 \(replaced\)", because a machine made from it still exists/);
+});
+
+test('a rebuild that fails leaves the image that was there as it was', async () => {
+  const p = buildPool({ then: 'rebooted', existing: [OLD] });
+  await assert.rejects(ensureImage({ ...buildArgs(p), replace: true }), /did not install/);
+  assert.ok(!p.calls.some((c) => c.params?.id === 'img-old'), 'nothing was done to it');
+});
+
+test('a removed image is deleted, and one a machine was made from is kept with how many and what to do', async () => {
+  const gone = buildPool({ then: 'Halted', existing: [OLD] });
+  assert.match(await removeImage({ admin: gone.admin, pool: 'pool-1', poolName: 'rack', image: 'debian-13' }), /removed from rack\. New session no longer offers it\./);
+  assert.deepEqual(gone.calls.filter((c) => c.method === 'vm.delete').map((c) => c.params), [{ id: 'img-old', deleteDisks: true }]);
+
+  const kept = buildPool({ then: 'Halted', existing: [OLD, CLONE, { ...CLONE, id: 'vm-b' }] });
+  assert.match(await removeImage({ admin: kept.admin, pool: 'pool-1', poolName: 'rack', image: 'debian-13' }), /kept on rack: 2 machines made from it still exist\. Remove them and apply again\./);
+  assert.ok(!kept.calls.some((c) => c.method === 'vm.delete'));
+
+  assert.match(await removeImage({ admin: kept.admin, pool: 'pool-2', image: 'debian-13' }), /already gone/);
 });
 
 test('cancelled mid-build, what was made is removed', async () => {
