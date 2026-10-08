@@ -149,10 +149,12 @@ export function qcow2Raw(file, { signal } = {}) {
             const at = Number(entry & offsetBits);
             const length = Math.min(Number((entry >> x) & sectorBits) * 512 + 512 - (at % 512), fileSize - at);
             const packed = await readAt(fh, at, length);
+            // The read runs to the end of its last sector, past where the
+            // compressed stream stops, so neither may insist on ending there:
+            // Z_SYNC_FLUSH for deflate, ZSTD_e_flush for zstd (Node 26 calls
+            // a zstd frame with bytes after it an "unexpected end of file").
             cluster = zstd
-              ? zlib.zstdDecompressSync(packed)
-              // Z_SYNC_FLUSH: the read runs to the end of its last sector,
-              // past where the deflate stream stops.
+              ? zlib.zstdDecompressSync(packed, { finishFlush: zlib.constants.ZSTD_e_flush })
               : zlib.inflateRawSync(packed, { finishFlush: zlib.constants.Z_SYNC_FLUSH });
             if (cluster.length < want) throw new Error(`a compressed cluster at ${at} of the image inflates to ${cluster.length} bytes, not ${clusterSize}`);
           } else {
