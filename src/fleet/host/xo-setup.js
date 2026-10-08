@@ -96,7 +96,7 @@ import { randomBytes } from 'node:crypto';
 import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
-import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOSETUP_JOB_RE, CERT_PIN_RE } from '../protocol/intents.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
@@ -387,13 +387,14 @@ export class XoSetups {
    *   coordinatorUrl?: string|null,
    *   buildImage?: typeof ensureImage,
    *   holderPin?: ((job: string) => Promise<any>)|null,
+   *   imageReporter?: ((job: string) => Promise<any>)|null,
    *   installer?: typeof INSTALLER,
    *   fetch?: typeof globalThis.fetch,
    *   xoRetryMs?: number,
    *   relay?: { open: (relay: string) => Promise<import('node:stream').Duplex>, done: (relay: string) => void }|null,
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000, relay = null }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null, imageReporter = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000, relay = null }) {
     this.policyWaitMs = policyWaitMs;
     // THE INSTALLER AN INSTALL RUNS, pinned (xo-deploy.js), where its files
     // come from, and how long to wait between tries at a Xen Orchestra that
@@ -410,6 +411,10 @@ export class XoSetups {
     // one (`can`).
     /** @type {((job: string) => Promise<any>)|null} */
     this.holderPin = holderPin;
+    // AND FOR THE TOKEN a machine image's build VM reports its install with
+    // (vm-image.js). Without it the build goes on, judged by power state.
+    /** @type {((job: string) => Promise<any>)|null} */
+    this.imageReporter = imageReporter;
     // THE FLEET A MACHINE IMAGE INSTALLS FROM AND ITS MACHINES JOIN: this
     // box's own, as it pinned it. Without one this box does not offer to
     // build an image (`can`).
@@ -713,6 +718,22 @@ export class XoSetups {
     rec.text = 'Applying what you chose.';
     rec.waiting.resolve(checked.policy);
     return { ok: true, text: rec.text, xosetup: status(rec) };
+  }
+
+  /**
+   * What a machine image's build VM said, passed on by the coordinator
+   * (core.js, imageReport). Kept on the job for the build's next look
+   * (vm-image.js), never shown as it came: a step is a word from
+   * IMAGE_REPORT_STEPS and the sentence for it is the build's.
+   *
+   * @param {any} msg  `{ job, step, detail? }`
+   */
+  imageReport(msg) {
+    const job = String(msg?.job || '');
+    const rec = XOSETUP_JOB_RE.test(job) ? this.jobs.get(job) : undefined;
+    const step = String(msg?.step || '');
+    if (!rec || rec.building !== 'image' || !IMAGE_REPORT_STEPS.includes(step)) return;
+    rec.vmReport = { step, detail: step === 'failed' && typeof msg.detail === 'string' ? msg.detail.slice(-2000) : null, at: this.now() };
   }
 
   /** @param {{ job: string, actor: string|null }} args */
@@ -1116,6 +1137,16 @@ export class XoSetups {
               coordinatorUrl: /** @type {string} */ (this.coordinatorUrl),
               signal: rec.abort.signal,
               say,
+              // A FRESH TOKEN FOR EACH BUILD, and what its VM last said: the
+              // coordinator passes each report here (imageReport below).
+              reporter: this.imageReporter
+                ? async () => {
+                  rec.vmReport = null;
+                  const answer = await /** @type {(job: string) => Promise<any>} */ (this.imageReporter)(rec.job).catch(() => null);
+                  return answer?.ok && typeof answer.token === 'string' ? answer.token : null;
+                }
+                : null,
+              vmReport: () => rec.vmReport ?? null,
             });
           };
           // ONE AFTER ANOTHER, router first: each image is built behind it.

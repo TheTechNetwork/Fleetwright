@@ -28,7 +28,7 @@ import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src
 import { standIn, PASSWORD, skip } from './helpers/xo-stand-in.js';
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, holderPin?: any, relay?: any }} */ opts = {}) {
+async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, holderPin?: any, imageReporter?: any, relay?: any }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -435,20 +435,35 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   });
   /** @type {any[]} */
   const asked = [];
+  /** @type {string[]} */
+  const tokensFor = [];
+  /** What the build saw of its VM's reports, as the coordinator passed them on. */
+  const heard = /** @type {any[]} */ ([]);
+  const box = /** @type {{ setups?: XoSetups, job?: string }} */ ({});
   const { setups, events } = await machine({
     coordinatorUrl: 'https://fleet.test',
+    imageReporter: async (/** @type {string} */ job) => (tokensFor.push(job), { ok: true, token: 'fwi_token' }),
     buildImage: async (/** @type {any} */ o) => {
       asked.push(o);
+      assert.equal(await o.reporter(), 'fwi_token');
+      for (const msg of [{ step: 'installer' }, { step: 'Everything is fine' }, { step: 'failed', detail: 'E: no' }]) {
+        box.setups?.imageReport({ job: box.job, ...msg });
+        heard.push(o.vmReport()?.step ?? null);
+      }
+      box.setups?.imageReport({ job: 'ffffffffffff', step: 'done' });
+      heard.push(o.vmReport()?.detail ?? null);
       o.say('Installing Fleetwright on the machine image.', { stage: 3, stages: 4, fill: 600 });
       return 'The machine image is ready on Home.';
     },
   });
+  box.setups = setups;
   const actor = 'eli@example.com';
   const { begun, reply, state } = await choosing(xo, setups, actor);
   const [epk, iv, ct] = state.inventory.split('.');
   const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
   assert.deepEqual(inventory.images, [], 'no image yet, so the phone offers one');
   const job = begun.xosetup.job;
+  box.job = job;
   const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', image: true, edgeSr: 'sr2', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
   const took = await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor });
   assert.equal(took.ok, true, took.text);
@@ -462,6 +477,11 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   assert.equal(asked[0].setId, 'rs-0');
   assert.equal(asked[0].sr, 'sr2');
   assert.equal(asked[0].coordinatorUrl, 'https://fleet.test');
+  // ITS VM REPORTS ITS INSTALL: a token asked for this job, and each step the
+  // coordinator passes on kept for the build, a word it does not know dropped
+  // and another job's report not this one's.
+  assert.deepEqual(tokensFor, [job]);
+  assert.deepEqual(heard, ['installer', 'installer', 'failed', 'E: no']);
   // Its bar reaches the Lock Screen, saying what is being built and which
   // part: the phones once called every build's part the edge router's.
   assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy' && e.build === 'image' && e.stage === 3 && e.stages === 4), JSON.stringify(events.at(-1)));
