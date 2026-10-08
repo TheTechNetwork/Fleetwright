@@ -78,6 +78,26 @@ test('iOS: images are offered by operating system to a machine that builds them,
   assert.match(I_POLICY, /out\["images"\] = \(inv\.imageKinds \?\? \[\]\)\.map\(\\\.key\)\.filter \{ images\.contains\(\$0\) \}/);
 });
 
+/** What Apply does to an image that is there, in the words both phones use. */
+const IMAGE_ACTION_WORDS = [
+  'Apply builds a new one beside it from the newest image, then removes this one. ',
+  'Apply removes it, and New session stops offering it. ',
+  'If a machine was made from this one, it is kept until that machine is gone.',
+  'If a machine was made from it, it is kept until that machine is gone.',
+  'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for.',
+  'A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it.',
+];
+
+test('iOS: an image that is there is kept, rebuilt or removed, offered only by a machine that can and sent only when asked', () => {
+  assert.match(I_SETUP, /canImageManage: begun\.can\.contains\("image-manage"\)/);
+  assert.match(I_SETUP, /choice\.imageManageChoice = choice\.imagesChoice && policyJob\.canImageManage/);
+  assert.match(I_SETUP, /if present\.contains\(kind\.key\), choice\.imageManageChoice \{/);
+  for (const label of ['Text("Keep")', 'Text("Rebuild")', 'Text("Remove")']) assert.ok(I_SETUP.includes(label), label);
+  for (const words of IMAGE_ACTION_WORDS) assert.ok(`${I_SETUP}\n${I_POLICY}`.includes(words), words);
+  assert.match(I_POLICY, /if !rebuild\.isEmpty \{ out\["rebuild"\] = rebuild \}/);
+  assert.match(I_POLICY, /if !remove\.isEmpty \{ out\["remove"\] = remove \}/);
+});
+
 test('iOS: SSH keys are public keys only, kept as one secret in the vault', () => {
   assert.match(I_SSH, /static let secretName = "SSH_AUTHORIZED_KEYS"/);
   assert.match(I_SSH, /vault\.keepSecret\(fleet, name: Self\.secretName, value: lines\.joined\(separator: "\\n"\)\)/);

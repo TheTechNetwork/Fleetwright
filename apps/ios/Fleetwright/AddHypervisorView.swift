@@ -206,6 +206,9 @@ struct AddHypervisorView: View {
         var canLabs = false
         /// It keeps how many labs one person may hold (`can` holds "labs-each").
         var canLabsEach = false
+        /// It rebuilds and removes an image that is there (`can` holds
+        /// "image-manage"); an older one keeps every image as it is.
+        var canImageManage = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -1050,17 +1053,31 @@ struct AddHypervisorView: View {
         return there.sr.map { "\(state) Its disk is on \($0)." } ?? state
     }
 
-    /// ONE ROW PER OPERATING SYSTEM the machine can make an image of: said
-    /// as there when the pool has it, a switch when it does not. Asked for:
-    /// "os selection not just Debian". A method rather than more of the
-    /// section's body, for the reason healthLines gives in MachinesView.
+    /// ONE ROW PER OPERATING SYSTEM the machine can make an image of: a
+    /// switch when the pool does not have it, and when it does, what Apply
+    /// does to it, kept unless the person says otherwise. Asked for: "os
+    /// selection not just Debian", and "There is no rebuild button or delete
+    /// button". A method rather than more of the section's body, for the
+    /// reason healthLines gives in MachinesView.
     @ViewBuilder
     private func imageRows(_ kinds: [XOPolicy.Inventory.ImageKind], inv: XOPolicy.Inventory,
                            router there: XOPolicy.Inventory.Edge?) -> some View {
         let present = inv.imageKeys(on: choice.egress)
         ForEach(kinds) { kind in
-            if present.contains(kind.key) {
-                policyRow("\(kind.os) machine image", "It is there. New session › Where offers machines from it.")
+            if present.contains(kind.key), choice.imageManageChoice {
+                let action = choice.imageActions[kind.key] ?? .keep
+                Picker(selection: Binding(get: { action }, set: { choice.imageActions[kind.key] = $0 })) {
+                    Text("Keep").tag(XOPolicy.ImageAction.keep)
+                    Text("Rebuild").tag(XOPolicy.ImageAction.rebuild)
+                    Text("Remove").tag(XOPolicy.ImageAction.remove)
+                } label: {
+                    policyRow("\(kind.os) machine image", imageThereLine(action))
+                }
+                .tint(Design.Palette.accent)
+                .frame(minHeight: 44)
+                .disabled(busy)
+            } else if present.contains(kind.key) {
+                policyRow("\(kind.os) machine image", imageThereLine(.keep))
             } else {
                 Toggle(isOn: Binding(
                     get: { choice.images.contains(kind.key) },
@@ -1075,6 +1092,21 @@ struct AddHypervisorView: View {
                 .frame(minHeight: 44)
                 .disabled(busy)
             }
+        }
+    }
+
+    /// What Apply does to an image that is there. The same words as Android
+    /// (PolicyForm.kt).
+    private func imageThereLine(_ action: XOPolicy.ImageAction) -> String {
+        switch action {
+        case .keep:
+            return "It is there. New session › Where offers machines from it."
+        case .rebuild:
+            return "Apply builds a new one beside it from the newest image, then removes this one. "
+                + "If a machine was made from this one, it is kept until that machine is gone."
+        case .remove:
+            return "Apply removes it, and New session stops offering it. "
+                + "If a machine was made from it, it is kept until that machine is gone."
         }
     }
 
@@ -1826,7 +1858,8 @@ struct AddHypervisorView: View {
                                   canHolder: begun.can.contains("holder"),
                                   canEdgeBlock: begun.can.contains("edge-block"),
                                   canLabs: begun.can.contains("labs"),
-                                  canLabsEach: begun.can.contains("labs-each"))
+                                  canLabsEach: begun.can.contains("labs-each"),
+                                  canImageManage: begun.can.contains("image-manage"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1858,6 +1891,7 @@ struct AddHypervisorView: View {
                     choice.edgeBlockChoice = policyJob.canEdgeBlock
                     choice.labsChoice = policyJob.canLabs && opened.labMax != nil
                     choice.labsEachChoice = choice.labsChoice && policyJob.canLabsEach
+                    choice.imageManageChoice = choice.imagesChoice && policyJob.canImageManage
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
