@@ -433,6 +433,20 @@ machine of the fleet, through the coordinator.
   `fleetwright-image` on that person's pool, and a network one it saw on
   that pool, so the coordinator can name which of the person's images and
   which of the networks the policy allows, and nothing else.
+- **A machine image's build VM reports its install** at `/api/xosetup/report`,
+  without a fleet credential, because its token is one: minted by the
+  coordinator only for the box running that policy job (`image-reporter`),
+  one live token per job and three per job at most, kept as a SHA-256 hash,
+  gone when the job ends or after an hour, and good for 24 reports. What it
+  admits is a word from a fixed list of steps, passed to that box and no
+  other; only a failure carries text, the end of the install log, stripped of
+  control and direction characters and cut to 2000. The token is written into
+  the build VM's cloud-init drive, which the build deletes, and the script
+  that holds it deletes itself and runs `cloud-init clean` before the VM
+  becomes the template, so no clone carries it. Somebody who read the drive
+  while the build ran could report a step that is not true, or end the build
+  early with a made-up failure, and nothing more. Every refusal is the same
+  403.
 - **The pool's own machine is admitted by a pin** (`docs/hypervisors.md`,
   "A machine of its own"). The coordinator gives the pin only to the box
   running that person's policy job, at most three times a job. The pin is

@@ -804,10 +804,24 @@ admin sign-in for as long as it runs:
   `cloud-init clean`. **It powers off when everything worked and reboots when
   anything did not**: cloud-init does not run its script twice, so a reboot is
   a VM that stays up, and its start time moving is read as the failure at
-  once. A failed build's VM is kept, stopped, as `fleetwright-image-build
-  (install failed)`, for its log; applying again removes it. A good one is
-  named Fleetwright Debian 13, tagged `fleetwright-image`, converted to a
-  template and put in the resource set.
+  once. The steps run in a subshell of their own, so the first one that fails
+  stops the rest; they used to run where bash ignores `set -e`, and a broken
+  install could power off and become the template.
+
+  **It says where it has got to.** The box running the job asks the
+  coordinator for a report token for it, and the script posts each step to
+  `/api/xosetup/report` with it: started, packages, installer (Fleetwright and
+  the session image, most of the time), cleaning, done. The coordinator passes
+  each step to the box, and the phone shows it in place of a guess against
+  time. A VM that has said nothing after five minutes is named as the likely
+  problem: no network behind the edge router, or a start-up script that did
+  not run. A failure sends the end of the install log with it, which is the
+  only way to read it, because the VM has no password. A failed build's VM is
+  kept, stopped, as `fleetwright-image-build (install failed)`, and one that
+  runs past 25 minutes as `fleetwright-image-build (install timed out)`;
+  applying again removes it. A good one is named Fleetwright Debian 13,
+  tagged `fleetwright-image`, converted to a template and put in the resource
+  set.
 - **OPNsense, built and proved for the edge router.** Not from a second disk:
   OPNsense's configuration importer waits for a key press at the console, so
   attached media is not read unattended. What first boot does read is
