@@ -101,7 +101,7 @@ import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetup
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { EDGE, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName } from './edge-router.js';
-import { VM_IMAGE, IMAGES, ensureImage, imageKeyOf } from './vm-image.js';
+import { VM_IMAGE, IMAGES, ensureImage, removeImage, imageKeyOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 
@@ -386,6 +386,7 @@ export class XoSetups {
    *   policyWaitMs?: number,
    *   coordinatorUrl?: string|null,
    *   buildImage?: typeof ensureImage,
+   *   dropImage?: typeof removeImage,
    *   holderPin?: ((job: string) => Promise<any>)|null,
    *   imageReporter?: ((job: string) => Promise<any>)|null,
    *   installer?: typeof INSTALLER,
@@ -394,7 +395,7 @@ export class XoSetups {
    *   relay?: { open: (relay: string) => Promise<import('node:stream').Duplex>, done: (relay: string) => void }|null,
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, holderPin = null, imageReporter = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000, relay = null }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, dropImage = removeImage, holderPin = null, imageReporter = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000, relay = null }) {
     this.policyWaitMs = policyWaitMs;
     // THE INSTALLER AN INSTALL RUNS, pinned (xo-deploy.js), where its files
     // come from, and how long to wait between tries at a Xen Orchestra that
@@ -420,6 +421,7 @@ export class XoSetups {
     // build an image (`can`).
     this.coordinatorUrl = coordinatorUrl;
     this.buildImage = buildImage;
+    this.dropImage = dropImage;
     this.signer = signer;
     this.emit = emit;
     this.stateDir = stateDir;
@@ -515,9 +517,11 @@ export class XoSetups {
         // `labs-each`: it keeps how many labs one person may hold
         // (`labsEach`, checkPolicy). An older one would drop the number
         // without a word, so a phone offers it only where this is said.
+        // `image-manage`: it rebuilds or removes an image that is there
+        // (`rebuild`, `remove`). An older one keeps every image as it is.
         can: [
           'policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups',
-          ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each'] : []),
+          ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder'] : []),
         ],
       },
@@ -706,7 +710,7 @@ export class XoSetups {
     // does not carry; refused while the job still waits, so the person can
     // choose again without them. Labs are among them: they live on the edge
     // router, which is built again with an interface on each.
-    if (rec.relay && (checked.policy.edge || checked.policy.image || checked.policy.labs)) {
+    if (rec.relay && (checked.policy.edge || checked.policy.image || checked.policy.rebuild.length || checked.policy.labs)) {
       return {
         ok: false,
         text: 'Building the edge router, its labs or a machine image moves gigabytes, which this machine does not send through your phone. Choose them from a machine that reaches the pool, such as the pool’s own once it has joined.',
@@ -920,6 +924,8 @@ export class XoSetups {
           ? 'Cancelled before anything was changed.'
           : rec.building === 'holder'
             ? 'Cancelled while making the pool’s own machine. What the fleet may use was changed, and whatever else you asked for was built.'
+            : rec.building === 'image' && rec.replacing
+            ? 'Cancelled while rebuilding the machine image. What the fleet may use was changed; the new image was not made, what was made of it was removed, and the one that was there is as it was.'
             : rec.building === 'image'
             ? 'Cancelled while building the machine image. What the fleet may use was changed; the image was not made, and what was made of it was removed.'
             : rec.building === 'edge-rebuild'
@@ -1059,7 +1065,7 @@ export class XoSetups {
         // own, so a phone that predates it still reads the progress as the
         // step it knows, with the machine's sentence under it saying where the
         // download and the disk have got to.
-        if (!p.edge && !p.image && !p.groups && !p.holder && p.labs === null) return;
+        if (!p.edge && !p.image && !p.groups && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return;
         const rec = ctx.rec;
         // The words every time, for the screen that asks; an event only when
         // the stage changes or the bar has moved a twentieth, so a Lock
@@ -1086,17 +1092,20 @@ export class XoSetups {
           if (!this.coordinatorUrl) throw new Error('this machine does not know the fleet’s address, which a closed lab must still reach. The policy was applied.');
         }
         if (p.holder && !(this.holderPin && this.coordinatorUrl)) throw new Error('this machine cannot ask the fleet for the pin a pool’s own machine joins with. The policy was applied.');
-        if (p.image) {
+        if (p.image || p.rebuild.length) {
           const missing = IMAGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (!RESIZE_METHODS.some((m) => Object.hasOwn(ctx.methods, m))) missing.push(RESIZE_METHODS.join(' or '));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the machine image cannot be built. The policy was applied.`);
+        }
+        if ((p.rebuild.length || p.remove.length) && !Object.hasOwn(ctx.methods, 'vm.delete')) {
+          throw new Error('this Xen Orchestra does not offer vm.delete, so no machine image can be removed or replaced. The policy was applied.');
         }
         // GROUP NETWORKS, made before anything is built: quick, and a build
         // that fails should not take them with it.
         if (p.groups) {
           const made = await ensureGroups({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks, count: p.groups });
           if (made.length) built.push(`Made ${made.length === 1 ? 'a group network' : `${made.length} group networks`} for machines that work together.`);
-          if (!p.edge && !p.image && !p.holder && p.labs === null) return built.join(' ') || undefined;
+          if (!p.edge && !p.image && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return built.join(' ') || undefined;
         }
         const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
         // LABS' NETWORKS, made before the edge is (re)built with an interface
@@ -1113,14 +1122,16 @@ export class XoSetups {
         // THE MACHINE IMAGE, after the router, on the same pool: it is built
         // on the uplink, so its install leaves through the router like every
         // machine cloned from it will (vm-image.js).
-        if (p.image) {
+        if (p.image || p.rebuild.length || p.remove.length) {
           const poolName = String((ctx.pools || []).find((/** @type {any} */ x) => x?.id === way.$pool)?.name_label || 'this pool').slice(0, 80);
-          const image = async (/** @type {string} */ key) => {
+          const image = async (/** @type {string} */ key, replace = false) => {
             rec.building = 'image';
+            rec.replacing = replace;
             rec.part = null;
             rec.abort = new AbortController();
             return this.buildImage({
               image: key,
+              replace,
               admin: ctx.admin,
               resize: RESIZE_METHODS.find((m) => Object.hasOwn(ctx.methods, m)),
               pool: way.$pool,
@@ -1151,7 +1162,11 @@ export class XoSetups {
           };
           // ONE AFTER ANOTHER, router first: each image is built behind it.
           if (edgeAsked) built.push(await this.#edge(ctx, p, way, uplink, say, labs));
+          // REMOVED FIRST, which frees their disks for what is built next;
+          // then the new images, then the ones rebuilt.
+          for (const key of p.remove) built.push(await this.dropImage({ admin: ctx.admin, pool: way.$pool, poolName, image: key }));
           for (const key of p.images) built.push(await image(key));
+          for (const key of p.rebuild) built.push(await image(key, true));
         } else if (edgeAsked) {
           built.push(await this.#edge(ctx, p, way, uplink, say, labs));
         }
@@ -1682,6 +1697,9 @@ function choicesOf(inventory) {
     // Which pools have a machine image already: the pool's own machine is
     // cloned from one (checkPolicy).
     imagePools: new Set((inventory.images || []).map((/** @type {any} */ i) => i.pool)),
+    // And which images each pool has, by key: only those can be rebuilt or
+    // removed (checkPolicy).
+    imagesOn: (inventory.images || []).reduce((/** @type {Map<string|null, Set<string>>} */ m, /** @type {any} */ i) => m.set(i.pool, (m.get(i.pool) ?? new Set()).add(i.key || 'debian-13')), new Map()),
   };
 }
 
@@ -1729,7 +1747,7 @@ export function currentLimits(set) {
  * limit, or a whole number from 1 to the labs asked for, and only with them;
  * absent, from a phone that predates it, the labs keep the one they have.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, image: boolean, images: string[], groups: number, holder: boolean, labs: { open: number, closed: number }|null, labsEach?: number|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, image: boolean, images: string[], rebuild: string[], remove: string[], groups: number, holder: boolean, labs: { open: number, closed: number }|null, labsEach?: number|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1796,7 +1814,24 @@ export function checkPolicy(p, choices) {
     }
     labsEach = n;
   }
+  // REBUILT OR REMOVED: images the way out's pool has, by key, each kept,
+  // rebuilt or removed and never two of those. A phone that predates the
+  // choice sends neither, and every image stays as it is.
+  const keys = (/** @type {unknown} */ v) => (v === undefined || v === null ? [] : Array.isArray(v) && v.every((x) => typeof x === 'string') ? [...new Set(/** @type {string[]} */ (v))] : null);
+  const rebuild = keys(p.rebuild);
+  const remove = keys(p.remove);
+  if (!rebuild || !remove) return { ok: false, text: 'Which images to rebuild or remove is a list of them. Nothing was changed.' };
+  if ((rebuild.length || remove.length) && egress === null) return { ok: false, text: 'Machine images are rebuilt and removed on the way out’s pool: choose the way out. Nothing was changed.' };
+  const present = egress === null ? new Set() : choices.imagesOn?.get(choices.networkPools?.get(egress) ?? null) ?? new Set();
+  if ([...rebuild, ...remove].some((k) => !present.has(k))) return { ok: false, text: 'That names a machine image this pool does not have. Nothing was changed.' };
+  if ([...rebuild, ...asked].some((k) => remove.includes(k)) || rebuild.some((k) => asked.includes(k))) {
+    return { ok: false, text: 'A machine image is kept, rebuilt or removed, one of those. Nothing was changed.' };
+  }
+  if (rebuild.length && !edge && !choices.edgePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
+    return { ok: false, text: 'A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it. Nothing was changed.' };
+  }
   const holder = p.holder === true;
+  if (holder && remove.includes('debian-13')) return { ok: false, text: 'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for. Nothing was changed.' };
   if (holder && egress === null) return { ok: false, text: 'The pool’s own machine goes on the way out: choose the network it is on.' };
   if (holder && !image && !choices.imagePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
     return { ok: false, text: 'The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it. Nothing was changed.' };
@@ -1811,7 +1846,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs ? edgeSr : null, edgeBlock, image, images: asked, groups, holder, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, image, images: asked, rebuild, remove, groups, holder, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
 }
 
 /**

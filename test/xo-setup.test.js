@@ -28,7 +28,7 @@ import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src
 import { standIn, PASSWORD, skip } from './helpers/xo-stand-in.js';
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, holderPin?: any, imageReporter?: any, relay?: any }} */ opts = {}) {
+async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, dropImage?: any, holderPin?: any, imageReporter?: any, relay?: any }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -330,7 +330,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -555,6 +555,35 @@ test('a Xen Orchestra without disk.resize builds the image through vdi.set, and 
   }
 });
 
+test('an image that is there is rebuilt or removed when the person asks, removed ones first', { skip }, async (t) => {
+  // ASKED FOR: "There is no rebuild button or delete button".
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'vm.delete'],
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    templates: {
+      deb: { id: 'deb', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] },
+      u24: { id: 'u24', type: 'VM-template', name_label: 'Fleetwright Ubuntu 24.04 LTS', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04'] },
+    },
+  });
+  /** @type {string[]} */
+  const done = [];
+  const { setups } = await machine({
+    coordinatorUrl: 'https://fleet.test',
+    buildImage: async (/** @type {any} */ o) => (done.push(`${o.replace ? 'rebuild' : 'build'} ${o.image}`), `Rebuilt ${o.image}.`),
+    dropImage: async (/** @type {any} */ o) => (done.push(`remove ${o.image} on ${o.pool}`), `Removed ${o.image}.`),
+  });
+  const actor = 'eli@example.com';
+  const { begun } = await choosing(xo, setups, actor);
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', rebuild: ['debian-13'], remove: ['ubuntu-24.04'], limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  const took = await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor });
+  assert.equal(took.ok, true, took.text);
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.deepEqual(done, ['remove ubuntu-24.04 on p1', 'rebuild debian-13']);
+  assert.match(end.text, /Removed ubuntu-24\.04\. Rebuilt debian-13\./);
+});
+
 test('group networks are made by the policy job in the way out’s pool, put in the set, and nothing is built', { skip }, async (t) => {
   // ASKED FOR: "the 3 VMs need to reach each other". A network with no way
   // off the pool, made with the admin sign-in the fleet's user does not have.
@@ -676,6 +705,28 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   const imaged = /** @type {any} */ (checkPolicy({ ...ok, image: true, edge: true, edgeSr: 'b' }, pooled));
   assert.equal(imaged.policy.image, true);
   assert.equal(imaged.policy.edgeSr, 'b', 'where the disks go');
+
+  // REBUILT OR REMOVED, asked for: "There is no rebuild button or delete
+  // button". Only an image the way out's pool has, and each one thing.
+  const there = { ...pooled, edgePools: new Set(['p1']), imagesOn: new Map([['p1', new Set(['debian-13', 'ubuntu-24.04'])]]) };
+  const changed = /** @type {any} */ (checkPolicy({ ...ok, rebuild: ['debian-13'], remove: ['ubuntu-24.04'], images: ['ubuntu-26.04'] }, there));
+  assert.equal(changed.ok, true, changed.text);
+  assert.deepEqual([changed.policy.rebuild, changed.policy.remove, changed.policy.images], [['debian-13'], ['ubuntu-24.04'], ['ubuntu-26.04']]);
+  assert.deepEqual([/** @type {any} */ (checkPolicy(ok, there)).policy.rebuild, /** @type {any} */ (checkPolicy(ok, there)).policy.remove], [[], []], 'a phone that predates it keeps every image');
+  for (const [p, words, against = there] of /** @type {Array<[any, RegExp, any?]>} */ ([
+    [{ ...ok, rebuild: ['ubuntu-26.04'] }, /does not have/],
+    [{ ...ok, remove: ['debian-13'], egress: 'n2' }, /does not have/],
+    [{ ...ok, rebuild: ['debian-13'], remove: ['debian-13'] }, /one of those/],
+    [{ ...ok, rebuild: ['debian-13'], images: ['debian-13'] }, /one of those/],
+    [{ ...ok, remove: ['debian-13'], holder: true }, /Debian 13 image, so that one stays/],
+    [{ ...ok, remove: 'debian-13' }, /a list of them/],
+    [{ ...ok, rebuild: ['debian-13'], egress: null }, /choose the way out/],
+    [{ ...ok, rebuild: ['debian-13'] }, /behind the edge router/, { ...there, edgePools: new Set() }],
+  ])) {
+    const r = /** @type {any} */ (checkPolicy(p, against));
+    assert.equal(r.ok, false, JSON.stringify(p));
+    assert.match(r.text, words);
+  }
   assert.deepEqual(currentLimits({ limits: { cpus: { total: 4 }, memory: 1024, disk: null } }), { cpus: 4, memory: 1024, disk: null });
 });
 
