@@ -22,13 +22,22 @@
 // the template, tagged so the fleet's boxes find it, and is put in the
 // resource set so the limited user can clone it.
 //
-// HOW THE BUILD SAYS IT FAILED. A VM cannot hand anything back but its power
-// state, so the install script powers off when everything worked and reboots
-// when anything did not: cloud-init does not run its script twice, so a
-// reboot is a VM that comes back up and stays up, and Xen Orchestra's
-// `startTime` moves. That is read as the failure, at once, instead of after
-// a timeout. The failed VM is kept, stopped and named for what happened, so
-// its log can be read in Xen Orchestra's console; the next build removes it.
+// HOW THE BUILD SAYS IT FAILED. The install script powers off when
+// everything worked and reboots when anything did not: cloud-init does not
+// run its script twice, so a reboot is a VM that comes back up and stays up,
+// and Xen Orchestra's `startTime` moves. That is read as the failure, at
+// once, instead of after a timeout.
+//
+// AND WHERE IT HAS GOT TO. Power state was all the box could see, so a real
+// build sat at "18 min so far, usually about 8" with nothing to say why. The
+// script now reports each step to this fleet's coordinator with a token the
+// box asked for (core.js, imageReport), the coordinator passes it to the box,
+// and the phone is told the step: installing packages, installing
+// Fleetwright, or a VM that has not reported in at all, which is a network
+// or a start-up script that did not run. A failure sends the end of the
+// install log with it, the only way to read it: the VM has no password. A
+// failed or timed-out VM is kept, stopped and named for what happened; the
+// next build removes it.
 //
 // FIRST RUN against a real pool ended at vm.create: Xen Orchestra puts a
 // cloud-init drive on the storage of the VM's first disk and this VM had
@@ -42,6 +51,7 @@
 
 import { fetchPinned, uploadDisk, srName } from './edge-router.js';
 import { qcow2Raw, qcow2Size } from './qcow2.js';
+import { IMAGE_REPORT_TOKEN_RE } from '../protocol/intents.js';
 
 /** Debian 13's cloud image, pinned. A newer build is a new entry here. */
 export const DEBIAN_IMAGE = Object.freeze({
@@ -158,17 +168,50 @@ const RUN_USER = 'fleetwright';
  * worked" and "something did not" are the two ways it can end: powered off,
  * or rebooted (see the top of this file).
  *
- * @param {{ coordinatorUrl: string }} opts
+ * AND IT SAYS WHERE IT HAS GOT TO, when it was given a token: each step, as
+ * a word from IMAGE_REPORT_STEPS, to this fleet's coordinator, which passes
+ * it to the box running the build (core.js, imageReport). A failure sends
+ * the end of the install log with it, because the VM has no password and
+ * nobody can read the log any other way. Python's own urllib, because
+ * cloud-init is written in Python and so it is there before anything is
+ * installed; a report that cannot be sent is dropped and the install goes
+ * on, judged by power state as before.
+ *
+ * THE STEPS RUN IN A SUBSHELL OF THEIR OWN, and that is the fix for a bug:
+ * they used to run in a `{ ... } && poweroff || reboot` group, and bash
+ * ignores `set -e` inside anything on the left of `&&`. A step that failed
+ * did not stop the script, so a broken install went on, powered off, and
+ * became the template.
+ *
+ * @param {{ coordinatorUrl: string, token?: string|null }} opts
  */
-export function buildCloudConfig({ coordinatorUrl }) {
+export function buildCloudConfig({ coordinatorUrl, token = null }) {
   const origin = new URL(coordinatorUrl).origin;
+  if (token !== null && !IMAGE_REPORT_TOKEN_RE.test(token)) throw new Error('that is not a report token');
   const script = [
     '#!/bin/bash',
     'set -u',
     'log=/var/log/fleetwright-image.log',
-    '{',
-    '  set -e',
+    `origin='${origin}'`,
+    `token='${token ?? ''}'`,
+    'report() {',
+    '  [ -n "$token" ] || return 0',
+    "  python3 -c '",
+    'import json, sys, urllib.request',
+    'body = {"token": sys.argv[2], "step": sys.argv[3]}',
+    'if sys.argv[3] == "failed":',
+    '    try:',
+    '        body["detail"] = open(sys.argv[4], errors="replace").read()[-2000:]',
+    '    except OSError:',
+    '        pass',
+    'req = urllib.request.Request(sys.argv[1] + "/api/xosetup/report", json.dumps(body).encode(), {"content-type": "application/json"})',
+    'urllib.request.urlopen(req, timeout=10).read()',
+    `' "$origin" "$token" "$1" "$log" >/dev/null 2>&1 || true`,
+    '}',
+    'steps() {',
+    '  set -eo pipefail',
     '  export DEBIAN_FRONTEND=noninteractive',
+    '  report packages',
     '  apt-get update',
     '  apt-get install -y curl ca-certificates openssh-server',
     // The Xen guest agent, where Debian has it: it is what lets Xen
@@ -178,16 +221,29 @@ export function buildCloudConfig({ coordinatorUrl }) {
     // its group by (install/fleetwright-net). A clone installs them itself
     // when they are missing, at the cost of a minute.
     '  apt-get install -y nftables avahi-daemon libnss-mdns || true',
+    '  report installer',
     `  curl -fsSL '${origin}/install' | FLEETWRIGHT_COORDINATOR_URL='${origin}' FLEETWRIGHT_USER=${RUN_USER} sh -s -- --yes`,
     '  test -x /opt/fleetwright/current/install/fleetwright-vm-join',
+    '  report cleaning',
     // Started by each clone once it has enrolled, never by the image.
     '  systemctl disable --now fleetwright-sidecar fleetwright 2>/dev/null || true',
     // NOTHING THAT MAKES TWO CLONES ONE MACHINE.
     '  rm -f /var/lib/fleetwright-sidecar/host-key.json /var/lib/fleetwright-sidecar/host-key.json.*',
     '  truncate -s 0 /etc/machine-id',
     '  rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*',
+    // NOR THE TOKEN, which is in this script and cloud-init's copy of it.
+    '  rm -f /root/fleetwright-image.sh',
     '  cloud-init clean --logs',
-    '} >"$log" 2>&1 && systemctl poweroff || systemctl reboot',
+    '}',
+    'report started',
+    '( steps ) >"$log" 2>&1',
+    'if [ $? -eq 0 ]; then',
+    '  report done',
+    '  systemctl poweroff',
+    'else',
+    '  report failed',
+    '  systemctl reboot',
+    'fi',
   ].join('\n');
   return [
     '#cloud-config',
@@ -262,11 +318,43 @@ export function imageFill(downloaded, written, spec = DEBIAN_IMAGE) {
   return Math.min(BYTES_SHARE, Math.floor((BYTES_SHARE * (Math.min(downloaded, spec.compressedSize) + Math.min(written, spec.rawSize))) / bytes));
 }
 
-/** How far through the install, by time against what it usually takes, never quite done. @param {number} elapsed */
-export function installFill(elapsed) {
-  const share = Math.min(0.95, elapsed / VM_IMAGE.installTypicalMs);
+/**
+ * Where each step the build VM reports puts the install's share of the bar:
+ * at least the first number, and time moves it no further than the second.
+ * The session image is fetched inside `installer`, which is most of it.
+ */
+const STEP_SHARE = Object.freeze({
+  started: [0.05, 0.1], packages: [0.1, 0.25], installer: [0.25, 0.9], cleaning: [0.9, 0.95], done: [0.95, 0.95], failed: [0, 0.95],
+});
+
+/**
+ * How far through the install: by the step the build VM last reported when
+ * it has said one, and by time against what it usually takes when it has
+ * not. Never quite done; the VM powering off is done.
+ *
+ * @param {number} elapsed @param {string|null} [step]
+ */
+export function installFill(elapsed, step = null) {
+  const [least, most] = step && Object.hasOwn(STEP_SHARE, step) ? STEP_SHARE[/** @type {keyof typeof STEP_SHARE} */ (step)] : [0, 0.95];
+  const share = Math.min(most, Math.max(least, elapsed / VM_IMAGE.installTypicalMs));
   return BYTES_SHARE + Math.floor((INSTALLED - BYTES_SHARE) * share);
 }
+
+/** What the phone says the build VM is doing, for each step it reports. */
+const STEP_WORDS = Object.freeze({
+  started: 'its VM is up and has started the install',
+  packages: 'installing Debian’s packages',
+  installer: 'installing Fleetwright and fetching the session image',
+  cleaning: 'clearing what would make two machines cloned from it the same',
+  done: 'the install is done and its VM is powering off',
+  failed: 'the install failed',
+});
+
+/** How long a build VM with a token may say nothing before the phone says so. */
+const SILENT_MS = 5 * 60_000;
+
+/** The last few lines of a log, for a sentence on a phone. @param {string|null|undefined} log */
+const logEnd = (log) => String(log || '').trim().split('\n').slice(-4).join('\n').slice(-600);
 
 /** @param {number} ms */
 const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -296,6 +384,8 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
  *   pollMs?: number,
+ *   reporter?: (() => Promise<string|null>)|null,
+ *   vmReport?: () => ({ step: string, detail: string|null, at: number }|null),
  * }} opts
  */
 export async function ensureImage({
@@ -303,6 +393,7 @@ export async function ensureImage({
   image: key = DEBIAN_IMAGE.key,
   resize = 'disk.resize',
   getImage = fetchPinned, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
+  reporter = null, vmReport = () => null,
 }) {
   const spec = IMAGES[key];
   if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was built`);
@@ -406,9 +497,32 @@ export async function ensureImage({
     // the VM's first disk, and this VM has none until the line above: Xen
     // Orchestra refused it with "Can't create cloud init config drive for VM
     // without disks", which is how the first build on a real pool ended.
-    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl }) });
+    // A TOKEN FOR ITS REPORTS, when the fleet gives one (core.js,
+    // #onImageReporter). Without one the build is judged by power state
+    // alone, as it was before reports existed.
+    const token = reporter ? await reporter() : null;
+    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token }) });
     signal?.throwIfAborted();
     await admin.call('vm.start', { id: vm });
+
+    // A FAILED OR STALLED INSTALL KEEPS ITS VM, stopped and named for what
+    // happened, so it can be looked at in Xen Orchestra; the next build
+    // removes it. A timeout used to delete it, with the only evidence.
+    const giveUp = async (/** @type {string} */ what) => {
+      keep = true;
+      await admin.call('vm.stop', { id: vm, force: true }).catch(() => {});
+      await admin.call('vm.set', { id: vm, name_label: `${VM_IMAGE.buildName} (${what})` }).catch(() => {});
+      return `Its build VM was kept, stopped, as "${VM_IMAGE.buildName} (${what})". Applying again removes it and starts over`;
+    };
+    const failed = async (/** @type {{ detail: string|null }|null} */ report) => {
+      const kept = await giveUp('install failed');
+      const end = logEnd(report?.detail);
+      return new Error(
+        end
+          ? `Fleetwright did not install on the machine image. The end of its log:\n${end}\n${kept}`
+          : `Fleetwright did not install on the machine image, and it did not send its log back. ${kept}`,
+      );
+    };
 
     const started = now();
     /** @type {number|null} */
@@ -417,29 +531,31 @@ export async function ensureImage({
       signal?.throwIfAborted();
       await sleep(pollMs);
       signal?.throwIfAborted();
+      const report = vmReport();
+      // SAID SO ITSELF: no need to wait for the reboot that says the same.
+      if (report?.step === 'failed') throw await failed(report);
       const seen = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { id: vm } })) || {})[0]);
       if (!seen) throw new Error('the machine image’s build VM disappeared from Xen Orchestra while it was installing');
       if (seen.power_state === 'Halted') break;
       if (seen.power_state === 'Running') {
         const at = Number(seen.startTime) || null;
         if (firstStart === null) firstStart = at;
-        else if (at !== null && at !== firstStart) {
-          // REBOOTED: the install said it failed (see the top of this file).
-          keep = true;
-          await admin.call('vm.stop', { id: vm, force: true }).catch(() => {});
-          await admin.call('vm.set', { id: vm, name_label: `${VM_IMAGE.buildName} (install failed)` }).catch(() => {});
-          throw new Error(
-            'Fleetwright did not install on the machine image. Its build VM was kept, stopped, as ' +
-            `"${VM_IMAGE.buildName} (install failed)": start it and read /var/log/fleetwright-image.log in its console. ` +
-            'Applying again removes it and starts over',
-          );
-        }
+        // REBOOTED: the install said it failed (see the top of this file),
+        // and its report of why may have got here first or not at all.
+        else if (at !== null && at !== firstStart) throw await failed(vmReport());
       }
       const elapsed = now() - started;
+      const minutes = Math.max(1, Math.round(elapsed / 60_000));
       if (elapsed > VM_IMAGE.installMs) {
-        throw new Error(`the install on the machine image did not finish within ${Math.round(VM_IMAGE.installMs / 60_000)} minutes, so the build was given up`);
+        const last = report ? `; the last it said was that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}` : token ? ', and its VM never reported in, so it most likely has no network or its start-up script did not run' : '';
+        throw new Error(`the install on the machine image did not finish within ${Math.round(VM_IMAGE.installMs / 60_000)} minutes${last}. ${await giveUp('install timed out')}`);
       }
-      say(`Installing Fleetwright on the machine image: ${Math.max(1, Math.round(elapsed / 60_000))} min so far, usually about ${Math.round(VM_IMAGE.installTypicalMs / 60_000)}.`, stage(3, installFill(elapsed)));
+      const words = report
+        ? `${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}, ${minutes} min so far.`
+        : token && elapsed > SILENT_MS
+          ? `${minutes} min so far, and its VM has not reported in. It may have no network, or its start-up script did not run.`
+          : `${minutes} min so far, usually about ${Math.round(VM_IMAGE.installTypicalMs / 60_000)}.`;
+      say(`Installing Fleetwright on the machine image: ${words}`, stage(3, installFill(elapsed, report?.step ?? null)));
     }
 
     say(`Making the machine image a template on ${poolName}.`, stage(4, INSTALLED));

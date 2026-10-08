@@ -554,6 +554,9 @@ export class Sidecar {
         // And how it asks the fleet for the pin a pool's own machine joins
         // with, for the job it is running (xo-holder.js).
         holderPin: (/** @type {string} */ job) => this.#askHolderPin(job),
+        // And for the token its machine image's build VM reports its
+        // install with (vm-image.js), for the job it is running.
+        imageReporter: (/** @type {string} */ job) => this.#askForJob('image-reporter', job),
         // And how it reaches a pool through the phone adding it.
         relay: { open: (relay) => this.relays.open(relay), done: (relay) => this.relays.done(relay) },
       });
@@ -619,6 +622,13 @@ export class Sidecar {
     // reply — there is nothing to correlate and nothing to say. Checked first so
     // validateIntent never sees a frame it would refuse as a malformed intent.
     if (/** @type {any} */ (msg)?.kind === 'config') return this.#onConfig(msg);
+    // A MACHINE IMAGE'S BUILD VM SAYING WHERE ITS INSTALL HAS GOT TO, passed
+    // on by the coordinator because this box asked for its token. No reply:
+    // the VM was answered when the coordinator took the report.
+    if (/** @type {any} */ (msg)?.kind === 'image-report') {
+      this.xoSetups?.imageReport(msg);
+      return { kind: 'none' };
+    }
     // THE ANSWER TO A MINT THIS RUNNER ASKED FOR. Not an intent either, and it
     // gets no reply: it closes a request this process opened. An answer
     // nobody is waiting for is dropped — it is sealed to a key that has gone.
@@ -1304,7 +1314,21 @@ export class Sidecar {
    * @returns {Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>}
    */
   async #askHolderPin(job) {
-    const id = `holder-${crypto.randomUUID()}`;
+    return this.#askForJob('holder-pin', job);
+  }
+
+  /**
+   * Something the coordinator gives only the box running policy job `job`:
+   * a holder pin, or the token a machine image's build VM reports with
+   * (core.js, #onHolderPin and #onImageReporter). Answered by a `minted`
+   * frame. Never rejects: no answer is null.
+   *
+   * @param {'holder-pin'|'image-reporter'} kind
+   * @param {string} job
+   * @returns {Promise<any>}
+   */
+  async #askForJob(kind, job) {
+    const id = `${kind}-${crypto.randomUUID()}`;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.mintWaiters.delete(id);
@@ -1314,7 +1338,7 @@ export class Sidecar {
       this.mintWaiters.set(id, { resolve, timer });
       let sent;
       try {
-        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'holder-pin', id, hostId: this.hostId, job });
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind, id, hostId: this.hostId, job });
       } catch {
         sent = false;
       }

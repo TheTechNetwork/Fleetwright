@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
 import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
@@ -538,8 +539,65 @@ test('the image’s cloud-init installs from this fleet without a pin, leaves no
   for (const wiped of ['truncate -s 0 /etc/machine-id', 'rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*', 'host-key.json', 'cloud-init clean']) {
     assert.ok(config.includes(wiped), wiped);
   }
-  assert.match(config, /&& systemctl poweroff \|\| systemctl reboot/);
   assert.match(config, /systemctl disable --now fleetwright-sidecar fleetwright/);
+  assert.ok(!config.includes('fwi_'), 'no token, no reports');
+  assert.throws(() => buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: "x'; reboot; '" }), /not a report token/, 'a token is never a way into the script');
+});
+
+/**
+ * The build VM's install script, run in bash with every command it calls
+ * replaced by a function that writes down how it was called: what it reports,
+ * and how it ends. Functions, not stubs on PATH, because `test` is a builtin
+ * and `rm` must not touch this machine.
+ *
+ * @param {{ fail?: string, token?: string|null }} [o]  a command that fails
+ */
+function runImageScript({ fail = '', token = REPORT_TOKEN } = {}) {
+  const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token });
+  const lines = config.split('\n');
+  const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
+  const dir = mkdtempSync(join(tmpdir(), 'image-script-'));
+  try {
+    const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test'].map((c) =>
+      `${c}() { echo "${c} $*" >>"$CALLS"; ${c === fail ? 'return 1' : 'return 0'}; }`);
+    // python3 is only ever the report: its fifth argument is the step.
+    stubs.push('python3() { echo "report $5" >>"$CALLS"; }');
+    const body = script.replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`).replace('#!/bin/bash', '');
+    const run = spawnSync('bash', ['-c', `${stubs.join('\n')}\n${body}`], { env: { CALLS: join(dir, 'calls'), PATH: process.env.PATH }, encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    return readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const REPORT_TOKEN = `fwi_a1b2c3d4e5f6_${'ab'.repeat(24)}`;
+
+test('the install script reports each step to the fleet and powers off when every step worked', () => {
+  const calls = runImageScript();
+  assert.deepEqual(calls.filter((c) => c.startsWith('report ')), ['report started', 'report packages', 'report installer', 'report cleaning', 'report done']);
+  assert.equal(calls.at(-1), 'systemctl poweroff');
+  assert.ok(calls.includes('rm -f /root/fleetwright-image.sh'), 'the script, with its token in it, is not left in the image');
+});
+
+test('the install script stops at the first step that fails, says so with its log, and reboots rather than becoming the template', () => {
+  // THE BUG THIS FIXES: the steps ran in `{ ... } && poweroff || reboot`, and
+  // bash ignores `set -e` on the left of `&&`. A failed apt-get went on to
+  // the next step, and a broken install powered off and was made the template.
+  const calls = runImageScript({ fail: 'apt-get' });
+  assert.equal(calls.at(-1), 'systemctl reboot');
+  assert.ok(calls.includes('report failed'));
+  assert.ok(!calls.some((c) => c.startsWith('curl ')), 'nothing after the failure ran');
+  assert.ok(!calls.includes('systemctl poweroff'));
+  const checked = runImageScript({ fail: 'test' });
+  assert.equal(checked.at(-1), 'systemctl reboot', 'an install that left no fleetwright-vm-join is a failure too');
+  assert.ok(!checked.some((c) => c.startsWith('cloud-init ')));
+});
+
+test('without a token the script reports nothing and still ends the same two ways', () => {
+  const calls = runImageScript({ token: null });
+  assert.deepEqual(calls.filter((c) => c.startsWith('report ')), [], 'nothing is sent anywhere');
+  assert.equal(calls.at(-1), 'systemctl poweroff');
 });
 
 test('the image goes on storage the fleet may use with room for a whole disk', () => {
@@ -556,9 +614,9 @@ test('the image goes on storage the fleet may use with room for a whole disk', (
 /**
  * An admin stand-in for a build: the VM it makes goes from Running to
  * whatever `then` says on the second look.
- * @param {{ then: 'Halted'|'rebooted', existing?: any[] }} o
+ * @param {{ then: 'Halted'|'rebooted'|'Running', existing?: any[], runs?: number }} o
  */
-function buildPool({ then, existing = [] }) {
+function buildPool({ then, existing = [], runs = 1 }) {
   let looks = 0;
   const base = { type: 'VM-template', id: 'other-media', name_label: VM_IMAGE.template, $pool: 'pool-1', tags: [] };
   const sr = { type: 'SR', id: 'sr-1', name_label: 'Local storage', $pool: 'pool-1', size: 500 * 1024 ** 3, physical_usage: 0 };
@@ -571,7 +629,7 @@ function buildPool({ then, existing = [] }) {
         const f = params.filter || {};
         if (f.id === 'build-vm') {
           looks++;
-          const state = looks === 1 ? { power_state: 'Running', startTime: 100 } : then === 'Halted' ? { power_state: 'Halted' } : { power_state: 'Running', startTime: 200 };
+          const state = looks <= runs || then === 'Running' ? { power_state: 'Running', startTime: 100 } : then === 'Halted' ? { power_state: 'Halted' } : { power_state: 'Running', startTime: 200 };
           return { 'build-vm': { id: 'build-vm', ...state } };
         }
         const drives = /** @type {any} */ (objects)[f.type]?.() ?? [];
@@ -678,11 +736,55 @@ test('a Xen Orchestra without disk.resize grows the image’s disk through vdi.s
 
 test('a build that reboots failed, and its VM is kept stopped, named for what happened', async () => {
   const p = buildPool({ then: 'rebooted' });
-  await assert.rejects(ensureImage(buildArgs(p)), /did not install on the machine image.*fleetwright-image.log/s);
+  await assert.rejects(ensureImage(buildArgs(p)), /did not install on the machine image, and it did not send its log back/);
   assert.ok(p.calls.some((c) => c.method === 'vm.stop' && c.params.id === 'build-vm'));
   assert.ok(p.calls.some((c) => c.method === 'vm.set' && /install failed/.test(c.params.name_label)));
   assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, for its log');
   assert.ok(!p.calls.some((c) => c.method === 'vm.convertToTemplate'));
+});
+
+test('a build VM’s reports are what the phone is told, and a failure it reports ends the build at once with its log', async () => {
+  // ASKED FOR: "Or script call back something so we get it in the app",
+  // after a real build sat at "18 min so far, usually about 8".
+  const p = buildPool({ then: 'Running' });
+  const reports = [null, { step: 'packages', detail: null, at: 0 }, { step: 'installer', detail: null, at: 0 }, { step: 'failed', detail: 'Get:1 deb.debian.org\nE: Unable to fetch some archives', at: 0 }];
+  let looks = 0;
+  /** @type {Array<{ text: string, fill: number }>} */
+  const shown = [];
+  const err = await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    vmReport: () => reports[Math.min(looks, reports.length - 1)],
+    sleep: async () => { looks++; },
+    say: (text, part) => shown.push({ text, fill: part?.fill ?? 0 }),
+  }).catch((e) => e);
+  assert.ok(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params.config.includes(REPORT_TOKEN), 'the VM is given its token');
+  const install = shown.filter((s) => s.text.startsWith('Installing Fleetwright on the machine image:'));
+  assert.match(install[0].text, /installing Debian’s packages, 1 min so far\./);
+  assert.match(install[1].text, /installing Fleetwright and fetching the session image/);
+  assert.ok(install[1].fill > install[0].fill, 'a later step moves the bar on');
+  assert.match(String(err), /did not install on the machine image\. The end of its log:\nGet:1 deb\.debian\.org\nE: Unable to fetch some archives\n/);
+  assert.ok(p.calls.some((c) => c.method === 'vm.set' && /install failed/.test(c.params.name_label)));
+  assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept');
+});
+
+test('a build VM that never reports in is named as the likely problem, and one that runs out of time is kept', async () => {
+  const p = buildPool({ then: 'Running' });
+  let at = 0;
+  /** @type {string[]} */
+  const shown = [];
+  const err = await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    now: () => at,
+    sleep: async () => { at += 2 * 60_000; },
+    say: (text) => shown.push(text),
+  }).catch((e) => e);
+  assert.ok(shown.some((s) => /min so far, usually about 8\./.test(s)), 'quiet at first: it may still be booting');
+  assert.ok(shown.some((s) => /6 min so far, and its VM has not reported in\. It may have no network, or its start-up script did not run\./.test(s)));
+  assert.match(String(err), /did not finish within 25 minutes, and its VM never reported in.*kept, stopped, as "fleetwright-image-build \(install timed out\)"/);
+  assert.ok(p.calls.some((c) => c.method === 'vm.stop' && c.params.id === 'build-vm'));
+  assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, where a timeout used to delete it');
 });
 
 test('cancelled mid-build, what was made is removed', async () => {
