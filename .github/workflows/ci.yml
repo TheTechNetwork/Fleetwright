@@ -299,23 +299,50 @@ jobs:
   # able to turn this gate green by not running — so a skipped dependency passes
   # and a failed or CANCELLED one does not. `success()` alone gets the
   # cancellation case wrong, which is the one that matters: a cancelled run is
-  # not a run that said yes.
+  # not a run that said yes. The one copy that steps aside is a cancelled run
+  # whose twin on the SAME commit went on: a push to a stacked branch starts
+  # two, and the cancelled one's red mark said nothing about the code.
   gate:
     name: CI passed
     needs: [test, checks]
     if: always()
     runs-on: ubuntu-26.04
+    # To read this workflow's other runs on the same commit, and nothing else.
+    permissions:
+      actions: read
     steps:
       - name: Every job above either passed or was skipped
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -eu
           echo "results: $RESULTS"
+          cancelled=0
           for r in $RESULTS; do
             case "$r" in
               success|skipped) ;;
+              cancelled) cancelled=1 ;;
               *) echo "::error::a job this gate depends on reported '$r'"; exit 1 ;;
             esac
           done
+          if [ "$cancelled" = 1 ]; then
+            # REPLACED, OR STOPPED. A push to a stacked branch starts this
+            # workflow twice for one commit, and the concurrency group cancels
+            # one of the two: not always the older, when both start in the
+            # same second. The copy that was cancelled steps aside for the one
+            # that was not, whose own gate gives the answer. With no such run
+            # it still fails: a run somebody stopped is not a run that said yes.
+            run=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '"\(.workflow_id) \(.head_sha)"')
+            workflow=${run%% *}
+            sha=${run#* }
+            other=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?head_sha=$sha&per_page=100" --jq "[.workflow_runs[] | select(.id != $RUN_ID and .conclusion != \"cancelled\")] | first | .html_url // empty")
+            if [ -z "$other" ]; then
+              echo "::error::a job this gate depends on was cancelled, and no other run of this workflow on $sha went on in its place"
+              exit 1
+            fi
+            echo "::notice::cancelled because another run on the same commit went on; its result is the one that counts: $other"
+          fi
           echo "CI passed"
