@@ -250,11 +250,12 @@ default. The box takes only a network it saw on that pool
 **The operating system.** The policy offers one switch per image the machine
 can build: Debian 13, Ubuntu 24.04 LTS and Ubuntu 26.04 LTS, each from its
 publisher's own cloud image, pinned by its published checksum (Ubuntu's by
-SHA-256 from its release's `SHA256SUMS`). Every image goes to Xen Orchestra
-as the qcow2 its publisher ships, which `disk.import` reads itself from
-xo-server 5.201.0 on (Xen Orchestra 6.5, May 2026). That version is required
-for an image, and an older one is told so by version before anything is
-downloaded, so no box unpacks or converts a disk. Each image is its own
+SHA-256 from its release's `SHA256SUMS`). Every image is downloaded as the
+qcow2 its publisher ships, and the box reads the raw disk out of it into Xen
+Orchestra's disk import as it uploads (`src/fleet/host/qcow2.js`, Node's own
+zlib, nothing to install). The pool cannot take the qcow2 itself: XCP-ng's
+`qcow-stream-tool` refuses compressed clusters (`Compressed_unsupported`),
+and every distribution compresses them. Each image is its own
 template, tagged `fleetwright-image:<key>`, and New session lists every image
 on your pools. A machine older than the choice is offered Debian alone.
 
@@ -793,9 +794,10 @@ admin sign-in for as long as it runs:
 
 - **Linux, built** (`src/fleet/host/vm-image.js`). Debian 13's official cloud
   image, the `genericcloud` build of 1 October 2026 as its qcow2, pinned by
-  the SHA-512 Debian publishes for it, is downloaded once and checked every
-  time it is used. It goes to Xen Orchestra's disk import as it is, a third
-  of a gigabyte where the raw disk was 3 GiB, is grown to 20 GiB, and booted on
+  the SHA-512 Debian publishes for it, is downloaded once (a third of a
+  gigabyte) and checked every time it is used. Its raw disk is read out of it
+  straight into Xen Orchestra's disk import, the same bytes as the `.raw`
+  Debian publishes beside it, grown to 20 GiB, and booted on
   the uplink with cloud-init that installs Fleetwright from this fleet's own
   `/install` with no pin, leaves its services off, and wipes what would make
   two clones one machine (the machine id, SSH host keys, any host key) before
