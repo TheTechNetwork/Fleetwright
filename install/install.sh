@@ -1603,6 +1603,21 @@ elif ! command -v podman >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
     warn "  install it yourself and re-run to build the sandbox image"
   fi
 fi
+# QEMU-IMG, FOR THE MACHINE IMAGE. Ubuntu publishes its cloud images as
+# qcow2, and Xen Orchestra imports raw disks, so a box that builds an Ubuntu
+# machine image converts it first. Optional like podman: only the box that
+# runs a pool's policy job ever needs it, and a box without it says so when
+# asked. Linux only: no Mac builds a pool's image.
+if [ "$PLATFORM" != macos ] && ! command -v qemu-img >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
+  say "Installing qemu-img (for building Ubuntu machine images on a pool)"
+  if { pkg_install qemu-utils || pkg_install qemu-img; } && command -v qemu-img >/dev/null; then
+    ok "installed qemu-img"
+  else
+    warn "could not install qemu-img ($(pkg_why)) — this box cannot build an Ubuntu machine image"
+    warn "  install it yourself (apt install qemu-utils) if this box will hold a pool"
+  fi
+fi
+
 if [ "$PLATFORM" = macos ]; then
   : # already reported above; HAVE_PODMAN stays 0 so nothing downstream runs
 elif command -v podman >/dev/null; then
