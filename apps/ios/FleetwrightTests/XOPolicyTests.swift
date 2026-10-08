@@ -279,6 +279,36 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertNil(c.payload(in: inv)["images"], "none asked is nothing sent")
     }
 
+    /// Asked for: "There is no rebuild button or delete button". An image the
+    /// pool has is kept unless the person says otherwise; a rebuilt one is
+    /// built like a new one, and nothing is sent to a machine that cannot.
+    func testAnImageThereIsKeptRebuiltOrRemovedAndOnlyThoseAreSent() throws {
+        let kinds = #"[{"key":"debian-13","os":"Debian 13"},{"key":"ubuntu-24.04","os":"Ubuntu 24.04 LTS"}]"#
+        let inv = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true}]"#,
+                                              images: #"[{"pool":"pool-1","name":"Fleetwright Debian 13","key":"debian-13"},{"pool":"pool-1","name":"Fleetwright Ubuntu 24.04 LTS","key":"ubuntu-24.04"}]"#,
+                                              imageKinds: kinds))
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.edge = false
+        c.imageChoice = true
+        c.imagesChoice = true
+        c.imageActions = ["debian-13": .rebuild, "ubuntu-24.04": .remove]
+        XCTAssertNil(c.payload(in: inv)["rebuild"], "a machine that cannot is sent neither")
+        c.imageManageChoice = true
+        XCTAssertNil(c.problem(in: inv))
+        XCTAssertEqual(c.payload(in: inv)["rebuild"] as? [String], ["debian-13"])
+        XCTAssertEqual(c.payload(in: inv)["remove"] as? [String], ["ubuntu-24.04"])
+        XCTAssertEqual(c.building(in: inv).image, true, "a rebuild needs room like a build")
+        c.holderChoice = true
+        c.holder = true
+        c.imageActions["ubuntu-24.04"] = .keep
+        c.imageActions["debian-13"] = .remove
+        XCTAssertEqual(c.problem(in: inv), "The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for.")
+        c.holder = false
+        c.imageActions = [:]
+        XCTAssertNil(c.payload(in: inv)["rebuild"], "kept is nothing sent")
+        XCTAssertNil(c.payload(in: inv)["remove"])
+    }
+
     func testEachLimitIsHeldToTheMachinesBounds() throws {
         let inv = try inventory()
         XCTAssertEqual(inv.cpuRange, 1...16)

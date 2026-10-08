@@ -32,6 +32,12 @@ enum XOPolicy {
     /// The image an older machine builds, and what an image that predates
     /// saying which it is was made of.
     static let debianKey = "debian-13"
+
+    /// What Apply does to a machine image the pool has. Asked for: "There is
+    /// no rebuild button or delete button".
+    enum ImageAction: String, CaseIterable {
+        case keep, rebuild, remove
+    }
     /// The smallest limits the machine takes: a GiB of memory, ten of disk
     /// (MIN_MEMORY and MIN_DISK in xo-setup.js). One vCPU is the floor of
     /// `cpuRange`.
@@ -319,6 +325,12 @@ enum XOPolicy {
         /// The machine takes `images`. An older one is sent `image` alone,
         /// and offered Debian alone.
         var imagesChoice = false
+        /// What Apply does to each image the way out's pool has, by key; one
+        /// not named is kept.
+        var imageActions: [String: ImageAction] = [:]
+        /// The machine rebuilds and removes images (`image-manage` in begin's
+        /// `can`). An older one keeps every image, so neither is offered.
+        var imageManageChoice = false
         /// How many group networks the way out's pool is to have. Asked for:
         /// "the 3 VMs need to reach each other".
         var groups = 0
@@ -369,10 +381,18 @@ enum XOPolicy {
             return (imagesChoice ? images : [XOPolicy.debianKey]).subtracting(inv.imageKeys(on: egress))
         }
 
-        /// The router or the image is to be built now, on storage still to
-        /// be picked.
+        /// The images the way out's pool has that Apply is to rebuild, or to
+        /// remove, in the catalogue's order.
+        func imageKeys(_ action: ImageAction, in inv: Inventory) -> [String] {
+            guard imageManageChoice else { return [] }
+            let present = inv.imageKeys(on: egress)
+            return (inv.imageKinds ?? []).map(\.key).filter { present.contains($0) && imageActions[$0] == action }
+        }
+
+        /// The router or an image is to be built now, on storage still to be
+        /// picked. A rebuilt image is built like a new one.
         func building(in inv: Inventory) -> (edge: Bool, image: Bool) {
-            (edge && inv.edge(on: egress) == nil, !imagesToBuild(in: inv).isEmpty)
+            (edge && inv.edge(on: egress) == nil, !imagesToBuild(in: inv).isEmpty || !imageKeys(.rebuild, in: inv).isEmpty)
         }
 
         /// How much room the disks being built need on the storage picked:
@@ -482,6 +502,12 @@ enum XOPolicy {
             if imageChoice, wantsImage, !edge, inv.edge(on: egress) == nil {
                 return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
             }
+            if !imageKeys(.rebuild, in: inv).isEmpty, !edge, inv.edge(on: egress) == nil {
+                return "A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it."
+            }
+            if holderChoice, holder, imageKeys(.remove, in: inv).contains(XOPolicy.debianKey) {
+                return "The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for."
+            }
             if holderChoice, holder, egress == nil { return "The pool’s own machine goes on the way out: choose the network it is on." }
             if holderChoice, holder, inv.image(on: egress) == nil, !(imageChoice && wantsImage) {
                 return "The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it."
@@ -526,6 +552,11 @@ enum XOPolicy {
                     out["image"] = true
                 }
             }
+            // Only to a machine that rebuilds and removes them, and only when asked.
+            let rebuild = imageKeys(.rebuild, in: inv)
+            let remove = imageKeys(.remove, in: inv)
+            if !rebuild.isEmpty { out["rebuild"] = rebuild }
+            if !remove.isEmpty { out["remove"] = remove }
             // Only to a machine that makes one, and only when asked.
             if holderChoice, holder { out["holder"] = true }
             // Only to a machine that makes them, and only with a way out.
@@ -539,7 +570,7 @@ enum XOPolicy {
             // Only to a machine that builds either kind, and only with the router.
             if edgeBlockChoice, edge { out["edgeBlock"] = edgeBlock }
             // Only to a machine that reads it, and only with something to build.
-            if edgeDiskChoice, edge || (imageChoice && wantsImage) { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
+            if edgeDiskChoice, edge || (imageChoice && wantsImage) || !rebuild.isEmpty { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
             return out
         }
     }
