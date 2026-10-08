@@ -612,6 +612,13 @@ export class Coordinator {
       return json(res, answer.status, answer.body);
     }
 
+    // A machine image's build VM reporting on its install. The Worker asks the
+    // same function. See CoordinatorCore#imageReport.
+    if (p === '/api/xosetup/report' && req.method === 'POST') {
+      const answer = await this.core.imageReport(await readJson(req));
+      return json(res, answer.status, answer.body);
+    }
+
     if (p === '/api/enroll/actions' && req.method === 'POST') {
       const body = await readJson(req);
       const audiences = splitList(process.env.FLEETWRIGHT_ACTIONS_AUDIENCE);
