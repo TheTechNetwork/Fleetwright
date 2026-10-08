@@ -65,6 +65,18 @@ export const XO_ADDRESS_RE =
 export const XOSETUP_JOB_RE = /^[0-9a-f]{12}$/;
 
 /**
+ * What a machine image's build VM may say it is doing, in the order it does
+ * it (vm-image.js's install script). A word from this list and nothing else:
+ * the VM is told a token, not trusted with a sentence, so the words a phone
+ * shows for each step are the host's. `failed` alone carries `detail`, the
+ * end of the install log, because that is the one thing nobody can read
+ * anywhere else (the VM has no password to log in with).
+ */
+export const IMAGE_REPORT_STEPS = Object.freeze(['started', 'packages', 'installer', 'cleaning', 'done', 'failed']);
+/** The token a build VM reports with: `fwi_`, the job it belongs to, and 24 random bytes. */
+export const IMAGE_REPORT_TOKEN_RE = /^fwi_([0-9a-f]{12})_([0-9a-f]{48})$/;
+
+/**
  * A Xen Orchestra object id, as `provision` names a machine image by: the
  * UUID XAPI gives every VM and template. Nothing looser, because the value is
  * looked up in a pool and a lookup that accepted anything would be a lookup a

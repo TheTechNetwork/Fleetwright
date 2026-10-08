@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
@@ -26,7 +26,7 @@ import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
-import { RunnerTickets } from './runner-tickets.js';
+import { RunnerTickets, randomHex, hashSecret, constantTimeEqual } from './runner-tickets.js';
 import { RunnerRepos } from './runner-repos.js';
 import { LinkedRepos } from './linked-repos.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
@@ -62,6 +62,20 @@ const MAX_SETUPS = 20;
  * pool. One is the ordinary case; a few cover a clone that failed to boot.
  */
 export const MAX_HOLDER_PINS = 3;
+/**
+ * Report tokens one policy job may ask for, one per machine image it builds.
+ * One is the ordinary case; the rest cover a build started over.
+ */
+export const MAX_IMAGE_REPORTERS = 3;
+/**
+ * How long a build VM may report with its token: the download, the disk and
+ * the install's own 25 minutes, with room. The job ending takes it back sooner.
+ */
+const IMAGE_REPORT_TTL_MS = 60 * 60_000;
+/** Reports one token carries: one per step, and room for a retry of each. */
+const MAX_IMAGE_REPORTS = 24;
+/** The end of the install log a failed build sends back, at most. */
+const IMAGE_REPORT_DETAIL = 2000;
 /** The name a pool's own machine enrols under: `holder-` and six hex. */
 export const HOLDER_ID_RE = /^holder-[0-9a-f]{6}$/;
 /** How long a lab asked for is held before the box has reported its machine there. */
@@ -285,7 +299,7 @@ export class CoordinatorCore {
      * fingerprint and typing a password is a gap it is evicted across. Every
      * later phase then answered `unknown_job`, and progress from a machine
      * still mid-run was dropped as coming from a job nobody had begun.
-     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, activityNews?: string, activityAt?: number }>}
+     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number }, activityNews?: string, activityAt?: number }>}
      */
     this.setups = new Map();
     /**
@@ -545,6 +559,8 @@ export class CoordinatorCore {
     // AND THE BOX RUNNING A POLICY JOB, for the pin its pool's own machine
     // enrols with.
     if (msg.kind === 'holder-pin') return this.#onHolderPin(hostId, msg);
+    // AND FOR THE TOKEN ITS MACHINE IMAGE'S BUILD VM REPORTS ITS INSTALL WITH.
+    if (msg.kind === 'image-reporter') return this.#onImageReporter(hostId, msg);
     // AND THE BOX RUNNING A SETUP THROUGH SOMEBODY'S PHONE, for its bytes:
     // TLS it opened itself, which only it and Xen Orchestra can read.
     if (msg.kind === 'relay') return this.relays.fromHost(hostId, msg);
@@ -1070,12 +1086,17 @@ export class CoordinatorCore {
       if (!Array.isArray(e) || !XOSETUP_JOB_RE.test(String(e[0])) || !e[1] || typeof e[1] !== 'object') continue;
       const r = e[1];
       if (typeof r.hostId !== 'string' || !(Number(r.startedAt) >= cutoff)) continue;
+      const reporter = narrowReporter(r.reporter);
       this.setups.set(e[0], {
         hostId: r.hostId,
         owner: typeof r.owner === 'string' ? r.owner : null,
         startedAt: Number(r.startedAt),
         last: r.last ? narrowProgress(r.last) : null,
         activities: Array.isArray(r.activities) ? r.activities.filter((/** @type {unknown} */ t) => typeof t === 'string' && /^[0-9a-f]{64,400}$/.test(t)).slice(-4) : [],
+        // KEPT ACROSS A RESTART, or a build VM halfway through its install
+        // would be refused for the rest of it because the object was evicted.
+        ...(reporter ? { reporter } : {}),
+        ...(Number.isInteger(r.reporters) && r.reporters > 0 ? { reporters: Math.min(r.reporters, MAX_IMAGE_REPORTERS) } : {}),
       });
     }
   }
@@ -1102,7 +1123,11 @@ export class CoordinatorCore {
     if (!progress) return;
     rec.last = progress;
     this.onStateChanged?.();
-    if (ENDED_SETUP.has(progress.state)) this.relays.closeForJob(job, 'The job using this relay ended, so it was closed.');
+    if (ENDED_SETUP.has(progress.state)) {
+      this.relays.closeForJob(job, 'The job using this relay ended, so it was closed.');
+      // A build VM's token is the job's, and goes with it.
+      delete rec.reporter;
+    }
     if (!this.push) return;
 
     const ended = progress.state !== 'running';
@@ -3516,6 +3541,96 @@ export class CoordinatorCore {
   }
 
   /**
+   * The box running a policy job asks for the token its machine image's build
+   * VM reports with (imageReport below). Answered on the same socket by a
+   * `minted` frame, as a holder pin is.
+   *
+   * ONLY FOR THE MACHINE RUNNING THE JOB, and one live token per job: a new
+   * one replaces the last, so a build started over leaves nothing behind for
+   * the VM it gave up on. The coordinator keeps the hash; the token goes to
+   * the box and from there into the build VM's cloud-init drive, which the
+   * build deletes before the VM becomes the template.
+   *
+   * @param {string} hostId
+   * @param {any} msg
+   */
+  async #onImageReporter(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for a report token without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the build goes on without reports */ }
+    };
+    const job = String(msg.job || '');
+    const rec = XOSETUP_JOB_RE.test(job) ? this.setups.get(job) : undefined;
+    if (!rec || rec.hostId !== hostId || (rec.last && ENDED_SETUP.has(rec.last.state))) {
+      answer({ ok: false, error: { code: 'not_your_job' }, text: `${hostId} is not running that setup, so it is given no token.` });
+      return;
+    }
+    rec.reporters = (rec.reporters ?? 0) + 1;
+    if (rec.reporters > MAX_IMAGE_REPORTERS) {
+      answer({ ok: false, error: { code: 'too_many' }, text: `This setup has asked for a report token ${MAX_IMAGE_REPORTERS} times already. Start it again.` });
+      return;
+    }
+    const secret = randomHex(24);
+    const expiresAt = this.now() + IMAGE_REPORT_TTL_MS;
+    rec.reporter = { hash: await hashSecret(secret), expiresAt, reports: 0 };
+    this.onStateChanged?.();
+    answer({ ok: true, token: `fwi_${job}_${secret}`, expiresAt });
+  }
+
+  /**
+   * A machine image's build VM says which step of its install it is on.
+   * Passed to the box running the job, whose sentence for that step is what
+   * the phone shows: until now the box could see only the VM's power state,
+   * and the bar was a guess against time.
+   *
+   * REACHABLE WITHOUT A CREDENTIAL because the token is one: minted for one
+   * job, held as a hash, gone when the job ends or after an hour, and good for
+   * a couple of dozen reports. A step is a word from IMAGE_REPORT_STEPS and
+   * nothing else; only `failed` carries text, the end of the install log,
+   * cut short and stripped of control characters. Every refusal is the same
+   * 403, so a guess learns nothing about which part was wrong.
+   *
+   * @param {any} body  `{ token, step, detail? }`
+   * @returns {Promise<{ status: number, body: Record<string, any> }>}
+   */
+  async imageReport(body) {
+    const refuse = () => ({ status: 403, body: { ok: false, error: { code: 'unknown' }, text: 'That token is not one this fleet gave a build, or the build is over.' } });
+    const m = IMAGE_REPORT_TOKEN_RE.exec(String(body?.token || ''));
+    if (!m) return refuse();
+    const [, job, secret] = m;
+    const rec = this.setups.get(job);
+    const reporter = rec?.reporter;
+    if (!rec || !reporter || this.now() > reporter.expiresAt) return refuse();
+    if (!constantTimeEqual(reporter.hash, await hashSecret(secret))) return refuse();
+    const step = String(body?.step || '');
+    if (!IMAGE_REPORT_STEPS.includes(step)) {
+      return { status: 400, body: { ok: false, error: { code: 'bad_step' }, text: `step is one of ${IMAGE_REPORT_STEPS.join(', ')}` } };
+    }
+    if (++reporter.reports > MAX_IMAGE_REPORTS) return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported enough.' } };
+    const detail = step === 'failed' && typeof body?.detail === 'string'
+      ? body.detail.replace(/[^\P{C}\n\t]/gu, '').slice(-IMAGE_REPORT_DETAIL)
+      : null;
+    const host = this.registry.hosts.get(rec.hostId);
+    if (!host?.connected || typeof host.send !== 'function') {
+      return { status: 503, body: { ok: false, error: { code: 'host_away' }, text: 'The machine running this build is not connected just now.' } };
+    }
+    try {
+      host.send({ v: PROTOCOL_VERSION, kind: 'image-report', job, step, ...(detail ? { detail } : {}) });
+    } catch {
+      return { status: 503, body: { ok: false, error: { code: 'host_away' }, text: 'The machine running this build is not connected just now.' } };
+    }
+    return { status: 202, body: { ok: true } };
+  }
+
+  /**
    * Ask the minting Worker's Claude half, and turn "there is none" and "it did
    * not answer" into refusals like any other, so no caller has to know which
    * of the three it was.
@@ -4723,6 +4838,19 @@ const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done:
  * @property {string} text   one sentence for the person, never shown on a Live Activity
  * @property {number} at
  */
+
+/**
+ * A build VM's report token as storage gave it back, or null for a row that
+ * is not one: the hash, when it stops, and how many reports it has carried.
+ *
+ * @param {any} r
+ * @returns {{ hash: string, expiresAt: number, reports: number }|null}
+ */
+function narrowReporter(r) {
+  if (!r || typeof r !== 'object' || typeof r.hash !== 'string' || !/^[0-9a-f]{64}$/.test(r.hash)) return null;
+  if (!Number.isFinite(r.expiresAt) || !Number.isInteger(r.reports) || r.reports < 0) return null;
+  return { hash: r.hash, expiresAt: Number(r.expiresAt), reports: r.reports };
+}
 
 /**
  * A host's progress report, narrowed to its known shape or refused.

@@ -587,6 +587,17 @@ export class Fleet {
       return json(answer.body, answer.status);
     }
 
+    // A MACHINE IMAGE'S BUILD VM SAYING WHERE ITS INSTALL HAS GOT TO, with
+    // the token the box running the build booted it with. Before the client
+    // check for the same reason: the token is what admits it. Nothing is
+    // persisted here; the count of reports it has carried may be lost to an
+    // eviction, which costs a build a few more reports and nothing else.
+    // See CoordinatorCore#imageReport.
+    if (url.pathname === '/api/xosetup/report' && request.method === 'POST') {
+      const answer = await this.core.imageReport(await readJson(request));
+      return json(answer.body, answer.status);
+    }
+
     if (url.pathname === '/api/enroll/host' && request.method === 'POST') {
       const body = await readJson(request);
       const wanted = String(body?.hostId || '');

@@ -2673,6 +2673,65 @@
         }
       }
     },
+    "/api/xosetup/report": {
+      "post": {
+        "security": [],
+        "summary": "A machine image's build VM reports a step of its install",
+        "description": "Reachable without a credential BECAUSE the token is the credential: the box running a policy job asks the coordinator for it over its own socket (`image-reporter`, answered by `minted`), one live token per job, held as a hash, gone when the job ends or after an hour, good for 24 reports. The box writes it into the build VM's cloud-init drive, which the build deletes before the VM becomes the template. The step is passed to that box, whose sentence for it is what the phone shows. See docs/hypervisors.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token",
+                  "step"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "description": "the `fwi_` token the build VM was booted with"
+                  },
+                  "step": {
+                    "type": "string",
+                    "enum": [
+                      "started",
+                      "packages",
+                      "installer",
+                      "cleaning",
+                      "done",
+                      "failed"
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "description": "with `failed` only: the end of the install log, cut to 2000 characters"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "passed to the machine running the build"
+          },
+          "400": {
+            "description": "not a step this build reports \u2014 `bad_step`"
+          },
+          "403": {
+            "description": "not a token this fleet gave a build, or the build is over \u2014 `unknown`"
+          },
+          "429": {
+            "description": "this token has carried all the reports it may \u2014 `too_many`"
+          },
+          "503": {
+            "description": "the machine running the build is not connected \u2014 `host_away`"
+          }
+        }
+      }
+    },
     "/api/xosetup/relay": {
       "get": {
         "summary": "Carry a relay through this phone, for a pool no machine reaches",

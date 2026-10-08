@@ -64,7 +64,7 @@ function hex(bytes) {
 }
 
 /** @param {number} n */
-function randomHex(n) {
+export function randomHex(n) {
   return hex(crypto.getRandomValues(new Uint8Array(n)));
 }
 
@@ -75,12 +75,12 @@ function randomHex(n) {
  *
  * @param {string} secret
  */
-async function hashSecret(secret) {
+export async function hashSecret(secret) {
   return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))));
 }
 
 /** @param {string} a @param {string} b */
-function constantTimeEqual(a, b) {
+export function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);

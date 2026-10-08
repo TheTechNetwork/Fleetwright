@@ -89,6 +89,8 @@ const NOT_A_CLIENT_ROUTE = {
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
   '/api/enroll/vm':
     'a MACHINE FROM A HYPERVISOR spends the ticket it was booted with here, through `fleetwright-sidecar enrol-vm` run by its cloud-init. Neither phone is that machine.',
+  '/api/xosetup/report':
+    'a MACHINE IMAGE\u2019S BUILD VM reports each step of its install here, from the script its cloud-init runs, with the token the box running the build gave it. The phone sees the step as that box\u2019s progress, never by calling this.',
 };
 
 /**
