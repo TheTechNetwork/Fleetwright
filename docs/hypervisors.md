@@ -257,7 +257,9 @@ zlib, nothing to install). The pool cannot take the qcow2 itself: XCP-ng's
 `qcow-stream-tool` refuses compressed clusters (`Compressed_unsupported`),
 and every distribution compresses them. Each image is its own
 template, tagged `fleetwright-image:<key>`, and New session lists every image
-on your pools. A machine older than the choice is offered Debian alone.
+on your pools. A machine older than the choice is offered Debian alone. One
+that is there can be kept, rebuilt or removed from the same screen ("Keep,
+rebuild or remove", under Templates).
 
 ### A machine of its own
 
@@ -844,6 +846,20 @@ admin sign-in for as long as it runs:
 Rebuilding is the same script with the newest image, so a template is
 replaced rather than patched, and the old one is deleted once nothing was
 cloned from it.
+
+**Keep, rebuild or remove.** Each image a pool has is a choice on the policy
+screen, Keep unless the person says otherwise (`rebuild` and `remove` in the
+policy, offered by a machine that says `image-manage`). Apply removes first,
+then builds what is new, then rebuilds. A rebuild makes the new image beside
+the old one and retires the old one only once the new one is a template, so
+a rebuild that fails or is cancelled leaves the pool with the image it had.
+An image a machine was made from (each clone is tagged
+`fleetwright-from:<template>`) is never deleted from under it: a rebuild keeps
+it untagged, so nothing offers it, and named `(replaced)`; a remove leaves it
+and says how many machines to remove first. The Debian image stays while the
+pool's own machine is asked for, since that machine is cloned from it. Asked
+for after the first three images were built with the install script that did
+not stop at a failed step: any of them may be one to replace.
 
 ## The interface, so Proxmox is a second driver and not a second design
 
