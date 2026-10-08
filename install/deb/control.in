@@ -4,7 +4,7 @@ Architecture: @ARCH@
 Maintainer: @MAINTAINER@
 Installed-Size: @SIZE@
 Depends: debconf (>= 0.5) | debconf-2.0, tmux, curl, ca-certificates, sudo, tar, gzip
-Recommends: podman, uidmap
+Recommends: podman, uidmap, qemu-utils
 Section: admin
 Priority: optional
 Homepage: https://github.com/TheTechNetwork/Fleetwright
