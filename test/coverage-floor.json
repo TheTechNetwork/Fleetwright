@@ -96,6 +96,7 @@
   "src/fleet/host/pane.js": 100,
   "src/fleet/host/pkce.js": 100,
   "src/fleet/host/prompt.js": 100,
+  "src/fleet/host/qcow2.js": 100,
   "src/fleet/host/runner-broker.js": 80,
   "src/fleet/host/sidecar.js": 95,
   "src/fleet/host/transports/websocket.js": 90,

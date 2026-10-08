@@ -139,23 +139,6 @@ export const EGRESS_TAG = 'fleetwright-egress';
 export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start']);
 /** What making labs asks of the server, beside rebuilding the edge with them. */
 export const LAB_METHODS = Object.freeze(['network.create', 'tag.add', 'tag.remove', 'resourceSet.addObject']);
-/**
- * THE XEN ORCHESTRA A MACHINE IMAGE NEEDS: xo-server 5.201.0, Xen Orchestra
- * 6.5 (May 2026), the first whose `disk.import` takes a qcow2 disk. Every
- * image is uploaded as the qcow2 its distribution publishes, so an older
- * server is refused before anything is downloaded, rather than a machine
- * here unpacking or converting it to suit.
- */
-export const IMAGE_XO_SERVER = '5.201.0';
-
-/** Whether a version is at least another, by its first three numbers. @param {unknown} have @param {string} want */
-export function versionAtLeast(have, want) {
-  const a = String(have ?? '').split('.').map((x) => Number.parseInt(x, 10) || 0);
-  const b = want.split('.').map((x) => Number.parseInt(x, 10) || 0);
-  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
-  return true;
-}
-
 /** What building the machine image asks of the server, checked before anything is made. */
 export const IMAGE_METHODS = Object.freeze(['disk.import', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'tag.add', 'resourceSet.addObject']);
 /**
@@ -1086,12 +1069,6 @@ export class XoSetups {
           const missing = IMAGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (!RESIZE_METHODS.some((m) => Object.hasOwn(ctx.methods, m))) missing.push(RESIZE_METHODS.join(' or '));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the machine image cannot be built. The policy was applied.`);
-          const version = await ctx.admin.call('system.getServerVersion').catch(() => null);
-          if (typeof version !== 'string' || !versionAtLeast(version, IMAGE_XO_SERVER)) {
-            throw new Error(
-              `this Xen Orchestra ${typeof version === 'string' ? `is xo-server ${version.slice(0, 20)}` : 'did not say which version it is'}, and the machine image needs xo-server ${IMAGE_XO_SERVER} or newer (Xen Orchestra 6.5, from May 2026), which takes the qcow2 disk the image is uploaded as. Update Xen Orchestra and apply again. The policy was applied.`,
-            );
-          }
         }
         // GROUP NETWORKS, made before anything is built: quick, and a build
         // that fails should not take them with it.

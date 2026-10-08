@@ -11,6 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -601,12 +602,11 @@ function buildPool({ then, existing = [] }) {
   return { admin, calls, sr, disks, objects };
 }
 
-// THE DOWNLOAD the build is handed: a file with a qcow2's magic at its head,
-// so the bytes that reach the upload can be compared with what was fetched.
-const imageDir = mkdtempSync(join(tmpdir(), 'fw-image-'));
-const downloaded = join(imageDir, 'debian-13.qcow2');
-writeFileSync(downloaded, Buffer.concat([Buffer.from([0x51, 0x46, 0x49, 0xfb]), Buffer.from('the image as Debian published it')]));
-test.after(() => rmSync(imageDir, { recursive: true, force: true }));
+// THE DOWNLOAD the build is handed: a real compressed qcow2 (qemu-img's, see
+// test/qcow2.test.js), and the SHA-256 of the raw disk qemu-img reads out of
+// it, which is what must reach the upload.
+const downloaded = new URL('./fixtures/qcow2/zlib.qcow2', import.meta.url).pathname;
+const DOWNLOADED_RAW = { size: 263168, sha256: '6e6cb97d4a311209778794ef3611d7ce245e9df9a6745038d4375214c0ac003f' };
 
 /** @param {any} p */
 const buildArgs = (p) => ({
@@ -651,12 +651,13 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vdi.delete')).params, { id: 'cfg-1' });
   assert.deepEqual(p.disks.map((d) => d.vdi), ['vdi-1'], 'the template keeps its own disk and nothing else');
   assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.resize')).params.size, VM_IMAGE.diskSize);
-  // AS PUBLISHED: Xen Orchestra is told it is a qcow2, and is sent the file
-  // that was downloaded and checked, byte for byte, nothing unpacked or
-  // converted on the way.
-  assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.import')).params.type, 'qcow2');
-  assert.deepEqual(p.uploaded.body, readFileSync(downloaded));
-  assert.equal(p.uploaded.size, DEBIAN_IMAGE.compressedSize, 'the length sent is the pinned download, which fetchPinned checked');
+  // RAW, READ OUT OF THE DOWNLOAD: the pool takes no compressed qcow2
+  // (Compressed_unsupported on a real pool), so what Xen Orchestra is sent is
+  // the raw disk, the same bytes qemu-img reads out of it, at its length.
+  assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.import')).params.type, 'iso');
+  assert.equal(p.uploaded.size, DOWNLOADED_RAW.size);
+  assert.equal(p.uploaded.body.length, DOWNLOADED_RAW.size);
+  assert.equal(createHash('sha256').update(p.uploaded.body).digest('hex'), DOWNLOADED_RAW.sha256);
   assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }]);
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'resourceSet.addObject')).params, { id: 'set-1', object: 'build-vm' });
   assert.ok(said.some((s) => /Installing Fleetwright on the machine image/.test(s)));

@@ -12,7 +12,8 @@
 // (genericcloud, the build pinned below by its published SHA-512) reads
 // cloud-init from the config drive Xen Orchestra makes for a VM. The machine
 // running the policy job downloads its qcow2 once, checks it against that
-// digest, hands it to Xen Orchestra's disk import as it is, grows the disk to
+// digest, reads the raw disk out of it into Xen Orchestra's disk import as it
+// goes (qcow2.js, Node's own zlib, nothing to install), grows the disk to
 // the size a session needs, and boots a VM from it on the uplink, behind the
 // edge router, with a cloud-init that installs Fleetwright from this fleet's
 // own /install without a pin, wipes everything that would make two clones
@@ -39,9 +40,8 @@
 // that refuses what the real one refuses; the whole build is NOT YET RUN
 // through to a template on a real pool.
 
-import { createReadStream } from 'node:fs';
-
 import { fetchPinned, uploadDisk, srName } from './edge-router.js';
+import { qcow2Raw, qcow2Size } from './qcow2.js';
 
 /** Debian 13's cloud image, pinned. A newer build is a new entry here. */
 export const DEBIAN_IMAGE = Object.freeze({
@@ -62,9 +62,9 @@ export const DEBIAN_IMAGE = Object.freeze({
 });
 
 /**
- * Ubuntu's cloud images, pinned the same way and uploaded the same way: as
- * the qcow2 Ubuntu publishes (its tarball holds a bare ext4 partition, which
- * does not boot). `rawSize` is the virtual size in the qcow2 header.
+ * Ubuntu's cloud images, pinned the same way and read the same way: from the
+ * qcow2 Ubuntu publishes (its tarball holds a bare ext4 partition, which does
+ * not boot). `rawSize` is the virtual size in the qcow2 header.
  */
 export const UBUNTU_2404_IMAGE = Object.freeze({
   key: 'ubuntu-24.04',
@@ -256,10 +256,10 @@ export const IMAGE_STAGES = 4;
 /** Thousandths of the bar the bytes take; the install has most of the rest. */
 const BYTES_SHARE = 450;
 const INSTALLED = 970;
-/** The same file is downloaded and then written. @param {number} downloaded @param {number} written @param {any} [spec] */
+/** The qcow2 downloaded, then the raw disk written. @param {number} downloaded @param {number} written @param {any} [spec] */
 export function imageFill(downloaded, written, spec = DEBIAN_IMAGE) {
-  const size = spec.compressedSize;
-  return Math.min(BYTES_SHARE, Math.floor((BYTES_SHARE * (Math.min(downloaded, size) + Math.min(written, size))) / (2 * size)));
+  const bytes = spec.compressedSize + spec.rawSize;
+  return Math.min(BYTES_SHARE, Math.floor((BYTES_SHARE * (Math.min(downloaded, spec.compressedSize) + Math.min(written, spec.rawSize))) / bytes));
 }
 
 /** How far through the install, by time against what it usually takes, never quite done. @param {number} elapsed */
@@ -353,15 +353,19 @@ export async function ensureImage({
   /** @type {string|null} */
   let vm = null;
   let keep = false;
+  // THE LENGTH SENT is the disk the qcow2's header holds: Content-Length goes
+  // ahead of the bytes, and the download it is read from is the pinned one.
+  const holds = await qcow2Size(file);
   try {
     say(`Writing the machine image’s disk to ${on}.`, stage(2, imageFill(spec.compressedSize, 0, spec)));
     const { $sendTo } = await admin.call('disk.import', {
       sr: sr.id,
-      // AS PUBLISHED: Xen Orchestra reads the qcow2 itself (xo-server
-      // 5.201.0 and on, which the policy job requires), so nothing on this
-      // machine unpacks or converts it, and a third of a gigabyte crosses
-      // the network where a 3 GiB raw disk did.
-      type: 'qcow2',
+      // RAW, EXPANDED HERE AS IT GOES. The pool cannot take the qcow2 as it
+      // is published: XCP-ng's qcow-stream-tool refused it on a real pool
+      // with Compressed_unsupported, and every distribution compresses its
+      // clusters. A raw disk is what it takes, so qcow2.js reads the raw disk
+      // out of the checked download into the upload, nothing written here.
+      type: 'iso',
       name: VM_IMAGE.buildName,
       description: `${os} (${spec.build}), becoming Fleetwright's machine image`,
     });
@@ -370,9 +374,9 @@ export async function ensureImage({
       pin,
       plain,
       sendTo: $sendTo,
-      body: createReadStream(file),
-      size: spec.compressedSize,
-      filename: `${spec.key}.qcow2`,
+      body: qcow2Raw(file, { signal }),
+      size: holds,
+      filename: `${spec.key}.raw`,
       signal,
       onProgress: (d, t) => say(`Writing the machine image’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, imageFill(spec.compressedSize, d, spec))),
     });
