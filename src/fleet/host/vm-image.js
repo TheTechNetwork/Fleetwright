@@ -161,16 +161,37 @@ export function imageKeyOf(t) {
  * their own VM; this repository carries only its address and digest. Its
  * address is a CI artifact of the release job: if it ever goes, the build
  * goes on without it and says so.
+ *
+ * KEPT CURRENT BY RENOVATE, in two halves. Renovate reads `release` (the
+ * annotation, matched by the custom manager in renovate.json) and proposes
+ * the next GitLab release. It cannot follow the file: the address is a job
+ * number, not the version, and upstream publishes no digest. So `file` is
+ * written only by `node scripts/pin-guest-agent.mjs`, which reads that
+ * release's own asset link, downloads it, checks it is an x86-64 ELF that
+ * needs no newer glibc than the oldest image here, and pins its size and
+ * SHA-256. Until it has run, the two disagree: test/xo-pools.test.js fails
+ * on the pull request, naming the command, and a box given the mismatch
+ * refuses the file and builds without it rather than trust an old digest
+ * for a new name.
  */
 export const GUEST_AGENT = Object.freeze({
+  // renovate: datasource=gitlab-releases depName=xen-project/xen-guest-agent
   release: '0.4.0',
-  url: 'https://gitlab.com/xen-project/xen-guest-agent/-/jobs/6041686346/artifacts/raw/target/release/xen-guest-agent',
-  size: 6644528,
-  sha256: 'aa2e1dca26594f7de4377f5a74999329fa51b10235b78ee8fbf4a814f654b3a3',
+  /** The release's "Linux x86 64bit" asset, as scripts/pin-guest-agent.mjs pinned it. */
+  file: Object.freeze({
+    release: '0.4.0',
+    url: 'https://gitlab.com/xen-project/xen-guest-agent/-/jobs/6041686346/artifacts/raw/target/release/xen-guest-agent',
+    size: 6644528,
+    sha256: 'aa2e1dca26594f7de4377f5a74999329fa51b10235b78ee8fbf4a814f654b3a3',
+  }),
 });
 
-/** Upstream's unit for it (startup/xen-guest-agent.service at 0.4.0), as written there. */
-const GUEST_AGENT_UNIT = [
+/**
+ * Upstream's unit for it (startup/xen-guest-agent.service at 0.4.0), as
+ * written there. scripts/pin-guest-agent.mjs refuses a release whose unit
+ * is not this one.
+ */
+export const GUEST_AGENT_UNIT = [
   '[Unit]',
   'Description=Xen guest agent',
   'Conflicts=xe-linux-distribution.service',
@@ -498,7 +519,9 @@ async function addressesFor(host) {
  * @param {string} imageDir @param {AbortSignal} [signal] @returns {Promise<Buffer>}
  */
 async function fetchAgent(imageDir, signal) {
-  const file = await fetchPinned({ dir: imageDir, url: GUEST_AGENT.url, size: GUEST_AGENT.size, algorithm: 'sha256', digest: GUEST_AGENT.sha256, label: 'Xen guest agent', signal });
+  const { release, file: pin } = GUEST_AGENT;
+  if (pin.release !== release) throw new Error(`the pinned file is ${pin.release}'s, not ${release}'s, so it was not used`);
+  const file = await fetchPinned({ dir: imageDir, url: pin.url, size: pin.size, algorithm: 'sha256', digest: pin.sha256, label: 'Xen guest agent', signal });
   return readFileSync(file);
 }
 
