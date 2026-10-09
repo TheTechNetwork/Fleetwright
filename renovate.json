@@ -128,6 +128,15 @@
         "major"
       ],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "The guest agent's pull request needs its file pinned by hand (the custom manager above says why), so it says how.",
+      "matchPackageNames": [
+        "xen-project/xen-guest-agent"
+      ],
+      "prBodyNotes": [
+        "**Before merging:** run `node scripts/pin-guest-agent.mjs` on this branch and commit what it writes. Renovate moved the version; that script pins the file (address, size, SHA-256) and refuses a build that will not run on the images here. CI stays red until it has."
+      ]
     }
   ],
   "vulnerabilityAlerts": {
@@ -220,6 +229,28 @@
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+RENOVATE_VERSION: '(?<currentValue>[^']+)'"
+      ]
+    },
+    {
+      "description": [
+        "The Xen guest agent every machine image carries, GUEST_AGENT in",
+        "src/fleet/host/vm-image.js, from upstream's GitLab releases.",
+        "",
+        "Renovate moves the version and nothing else: the file's address is a CI",
+        "job number, not the version, and upstream publishes no digest, so no",
+        "datasource can say what the new file is. scripts/pin-guest-agent.mjs",
+        "writes that half (address, size, SHA-256) from the release's own asset",
+        "link, after checking the binary runs on every image here. Until it has",
+        "run, the version and the file disagree and the pull request is red,",
+        "which is the point: a bumped name with an old digest would build",
+        "without the agent and nobody would be told why."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/fleet/host/vm-image\\.js$/"
+      ],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+release: '(?<currentValue>[^']+)'"
       ]
     }
   ]
