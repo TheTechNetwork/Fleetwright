@@ -817,7 +817,12 @@ admin sign-in for as long as it runs:
   each step to the box, and the phone shows it in place of a guess against
   time. A VM that has said nothing after five minutes is named as the likely
   problem: no network behind the edge router, or a start-up script that did
-  not run. A failure sends the end of the install log with it, which is the
+  not run. Its screen shows its address, its route and a name looked up
+  first; a VM that cannot look up a name for half a minute stops there and
+  prints the servers DHCP told it to ask. Its reports still reach the
+  coordinator then: the box writes the coordinator's addresses into the
+  script, and a report that cannot go by name is sent to those under the
+  same name, so TLS still checks the coordinator's certificate. A failure sends the end of the install log with it, which is the
   only way to read it, because the VM has no password. A failed build's VM is
   kept, stopped, as `fleetwright-image-build (install failed)`, and one that
   runs past 25 minutes as `fleetwright-image-build (install timed out)`;
