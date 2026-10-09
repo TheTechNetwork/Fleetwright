@@ -136,6 +136,10 @@ enum XOPolicy {
             /// It drops what its threat rules match, rather than only logging
             /// it; nil from a machine that predates saying, which built none.
             var blocks: Bool? = nil
+            /// It is two routers sharing their addresses, so one carries the
+            /// machines while the other restarts; nil from a machine that
+            /// predates saying, which built one.
+            var ha: Bool? = nil
             /// The labs it was built with, by kind; nil from a machine that
             /// predates labs, whose edge has none.
             var labs: Labs? = nil
@@ -311,6 +315,12 @@ enum XOPolicy {
         /// The machine builds either kind (`edge-block` in begin's `can`).
         /// An older one only logs, so it is neither offered nor sent.
         var edgeBlockChoice = false
+        /// The edge is two routers sharing their addresses. Changing it on
+        /// an edge that is there makes or removes the second.
+        var edgeHa = false
+        /// The machine builds a pair (`edge-ha` in begin's `can`). An older
+        /// one builds one, so it is neither offered nor sent.
+        var edgeHaChoice = false
         /// Make the machine image sessions' machines are cloned from, on the
         /// way out's pool, behind its router. Needs the router, there or
         /// built with it.
@@ -431,6 +441,7 @@ enum XOPolicy {
             c.edge = inv.edge(on: c.egress) != nil
             // As it is: Apply rebuilds nothing the person did not change.
             c.edgeBlock = inv.edge(on: c.egress)?.blocks ?? false
+            c.edgeHa = inv.edge(on: c.egress)?.ha ?? false
             // The same for the pool's own machine: Apply keeps it, or starts it.
             c.holder = inv.holder(on: c.egress) != nil
             // As many as there are: Apply asks for none it does not show.
@@ -569,6 +580,7 @@ enum XOPolicy {
             }
             // Only to a machine that builds either kind, and only with the router.
             if edgeBlockChoice, edge { out["edgeBlock"] = edgeBlock }
+            if edgeHaChoice, edge { out["edgeHa"] = edgeHa }
             // Only to a machine that reads it, and only with something to build.
             if edgeDiskChoice, edge || (imageChoice && wantsImage) || !rebuild.isEmpty { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
             return out
