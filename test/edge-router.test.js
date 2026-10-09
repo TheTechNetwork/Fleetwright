@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 
-import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf } from '../src/fleet/host/edge-router.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 
@@ -39,9 +39,12 @@ function balanced(/** @type {string} */ xml) {
   return stack.length === 0;
 }
 
-test('the edge configuration fits exactly where the default was, and says what the edge is', () => {
+test('the edge configuration fits the room the default’s file has, and says what the edge is', () => {
+  // The room, not the 5,234 bytes the default fills: blocking with the
+  // updates job (EDGE_UPDATES) does not fit those, so every edge's file is
+  // grown to what its own blocks hold (imagePatches), as labs' always was.
   const config = edgeConfig();
-  assert.equal(config.length, OPNSENSE_IMAGE.config.length, 'not the length of the file it replaces');
+  assert.equal(config.length, OPNSENSE_IMAGE.room, 'not the room the file’s own blocks give it');
   const xml = config.toString('utf8');
   // The padding is trailing whitespace only, which XML allows after the root.
   assert.match(xml, /<\/opnsense>\n *$/);
@@ -136,7 +139,7 @@ async function patch(/** @type {Buffer} */ buf, /** @type {number} */ size, /** 
 test('the patch replaces exactly the configuration, however the image arrives in pieces', async () => {
   const offset = 300_001;
   const total = 400_000;
-  const replacement = edgeConfig();
+  const replacement = edgeConfig({ length: OPNSENSE_IMAGE.config.length });
   const want = image(offset, total);
   replacement.copy(want, offset);
   for (const size of [1, 7, 4096, 5234, 65536, total]) {
@@ -148,7 +151,7 @@ test('the patch replaces exactly the configuration, however the image arrives in
 
 test('an image without the default configuration at the offset, or of the wrong size, is not written', async () => {
   const offset = 4096;
-  const replacement = edgeConfig();
+  const replacement = edgeConfig({ length: OPNSENSE_IMAGE.config.length });
   const wrong = Buffer.from(DEFAULT);
   wrong[0] = 0x20;
   const moved = await patch(image(offset, 20_000, wrong), 1000, { offset, replacement, total: 20_000 });
@@ -238,7 +241,7 @@ test('an edge that blocks hands what leaves to Suricata and drops what the four 
   // way out never reached Suricata or no policy turned an alert into a drop.
   const block = edgeConfig({ block: true }).toString('utf8');
   const watch = edgeConfig().toString('utf8');
-  assert.equal(block.length, OPNSENSE_IMAGE.config.length, 'blocking no longer fits the file it replaces');
+  assert.equal(block.length, OPNSENSE_IMAGE.room, 'blocking no longer fits the room');
   assert.ok(balanced(block.trimEnd()));
   // Only the rule that lets labs out is diverted: DNS and private space are
   // decided before Suricata would see them.
@@ -256,6 +259,26 @@ test('an edge that blocks hands what leaves to Suricata and drops what the four 
   assert.equal(new Set(ids).size, ids.length);
   // Watching: no divert, no mode, no policy.
   for (const part of ['<divert-to>', '<mode>divert', '<policies>']) assert.ok(!watch.includes(part), `a watching edge has ${part}`);
+});
+
+test('every edge asks for the Xen guest agent and updates itself once a day, however it is built', () => {
+  // ASKED FOR: the guest agent everywhere, so Xen Orchestra shows the edge's
+  // address. OPNsense installs a plugin named in system.firmware.plugins only
+  // from its firmware update, so the two come together (EDGE_UPDATES). A
+  // job that is missing, or at another hour, is a router that never gets the
+  // agent or restarts in the working day.
+  const long = `https://${'f'.repeat(63)}.${'e'.repeat(20)}.workers.dev`;
+  for (const opts of [{}, { block: true }, { block: true, labs: [false, false, false, false], fleet: fleetHosts(long) }]) {
+    const xml = edgeConfig(opts).toString('utf8');
+    const system = xml.slice(xml.indexOf('<system>'), xml.indexOf('</system>'));
+    assert.ok(system.includes('<firmware><plugins>os-xen</plugins></firmware>'), JSON.stringify(opts));
+    const jobs = [...xml.matchAll(/<job[ >].*?<\/job>/g)].map((m) => m[0]);
+    const update = jobs.filter((j) => j.includes('<command>firmware auto-update</command>'));
+    assert.equal(update.length, 1, JSON.stringify(opts));
+    assert.match(update[0], /<hours>10<\/hours>/);
+    assert.match(update[0], /^<job><enabled>1<\/enabled>/, 'on, and at minute 0 (Cron.xml’s default)');
+  }
+  assert.equal(EDGE_UPDATES.plugin, 'os-xen');
 });
 
 // --- labs on the edge ---------------------------------------------------------
@@ -374,7 +397,7 @@ test('an edge with labs grows its configuration into the file’s own blocks, af
   assert.ok(out.subarray(0, at.size).equals(img(sizeField.was, 0).subarray(0, at.size)), 'a byte outside the two regions changed');
   assert.match(String(await patch(img(4096, 0), 333, { regions, total })), /does not have the configuration’s size where it should/);
   assert.match(String(await patch(img(sizeField.was, 1), 333, { regions, total })), /does not have the default configuration where it should/);
-  assert.throws(() => imagePatches(Buffer.alloc(6000)), /5234 or 8192 bytes/);
+  assert.throws(() => imagePatches(Buffer.alloc(6000)), /is 8192 bytes, not 6000/);
 });
 
 test('an edge is built with an interface on each lab, in order, and tagged with them; one with other labs is rebuilt, filtering as it did', async () => {
@@ -386,12 +409,12 @@ test('an edge is built with an interface on each lab, in order, and tagged with 
   const done = await ensureEdge(edgeArgs(fresh, { labs, fleet, upload: async (/** @type {any} */ u) => ((body = u.body), 'vdi-1') }).args);
   const made = Object.fromEntries(fresh.calls)['vm.create'];
   assert.deepEqual(made.VIFs, [{ network: 'net-wan' }, { network: 'net-up' }, { network: 'net-lab-1' }, { network: 'net-lab-2' }]);
-  assert.deepEqual(made.tags, [EDGE.tag, `${LAB.edgeTag}oc`]);
+  assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag, `${LAB.edgeTag}oc`]);
   assert.equal(body.regions.length, 2, 'the file was not grown to hold the labs');
   assert.match(done, /It has one open lab and one closed lab of their own/);
 
   // There with the same labs: nothing done. Asked nothing of labs: nothing done.
-  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.blocksTag, `${LAB.edgeTag}oc`], power_state: 'Running' };
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag, `${LAB.edgeTag}oc`], power_state: 'Running' };
   const onLabs = [{ id: 'v2', $VM: 'vm-old', device: '2', $network: 'net-lab-1' }, { id: 'v3', $VM: 'vm-old', device: '3', $network: 'net-lab-2' }];
   for (const ask of [labs, null]) {
     const same = xo({ VM: [old], VIF: onLabs });
@@ -404,7 +427,7 @@ test('an edge is built with an interface on each lab, in order, and tagged with 
   const { args, said } = edgeArgs(rebuilt, { labs: [{ id: 'net-lab-1', open: true }], fleet });
   await ensureEdge(args);
   const params = Object.fromEntries(rebuilt.calls);
-  assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.blocksTag, `${LAB.edgeTag}o`]);
+  assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag, `${LAB.edgeTag}o`]);
   assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
   assert.ok(said.includes('Rebuilding the edge router with one open lab. Machines behind it have no way out until it is up.'), said.join('\n'));
   // The same kinds on a lab network made again: the old edge is not on it.
@@ -474,7 +497,7 @@ test('the edge router is made in the order that boots: disk in, WAN first, check
   assert.equal(made.template, 'tpl-other');
   assert.deepEqual(made.VIFs, [{ network: 'net-wan' }, { network: 'net-up' }]);
   assert.deepEqual(made.VDIs, []);
-  assert.deepEqual(made.tags, [EDGE.tag]);
+  assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag]);
   assert.ok(!made.tags.includes('fleetwright'), "the fleet's token could manage its own way out");
   assert.deepEqual(params['vm.attachDisk'], { vm: 'vm-1', vdi: 'vdi-1', bootable: true, position: '0' });
   assert.deepEqual(admin.calls.filter(([m]) => m === 'vif.set').map(([, p]) => p), [
@@ -549,7 +572,7 @@ test('cancel stops the build where it is and removes the partial disk, and only 
 
 test('an edge router already there is not built again: its WAN follows the way out, and it is started', async () => {
   const admin = xo({
-    VM: [{ id: 'vm-old', $pool: 'p1', tags: [EDGE.tag], power_state: 'Halted' }],
+    VM: [{ id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Halted', addresses: { '1/ipv4/0': '10.254.0.1', '0/ipv4/0': '10.10.10.237' } }],
     VIF: [{ id: 'vif-w', $VM: 'vm-old', device: '0', $network: 'net-before' }],
   });
   const { args } = edgeArgs(admin);
@@ -557,11 +580,29 @@ test('an edge router already there is not built again: its WAN follows the way o
   const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects');
   assert.deepEqual(methods, ['vif.set', 'vm.start']);
   assert.deepEqual(admin.calls.find(([m]) => m === 'vif.set')?.[1], { id: 'vif-w', network: 'net-wan' });
-  assert.match(done, /already there[\s\S]*WAN moved to eth0\.10[\s\S]*was started/);
+  assert.match(done, /already there, on eth0\.10 at 10\.10\.10\.237,[\s\S]*WAN moved to eth0\.10[\s\S]*was started/, 'its WAN address, not its LAN one');
+  assert.ok(!done.includes('does not know'));
+});
+
+test('an edge from before it updated itself is rebuilt once to get that and the guest agent, and one whose address nobody knows says so', async () => {
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag], power_state: 'Running' };
+  const admin = xo(
+    { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
+    { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' },
+  );
+  /** @type {string[]} */
+  const said = [];
+  const done = await ensureEdge(edgeArgs(admin, { say: (/** @type {string} */ t) => said.push(t) }).args);
+  assert.ok(said.includes('Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.'));
+  assert.deepEqual(Object.fromEntries(admin.calls)['vm.create'].tags, [EDGE.tag, EDGE.updatesTag], 'logging, as it was');
+  assert.match(done, /updates itself every day after 10:00 UTC, restarting when OPNsense needs it to, and gets the Xen guest agent with its first update\./);
+  // Current, and Xen Orchestra knows no address: cannot tell, not "none".
+  const quiet = xo({ VM: [{ ...old, tags: [EDGE.tag, EDGE.updatesTag] }], VIF: [] });
+  assert.match(await ensureEdge(edgeArgs(quiet).args), /already there, on eth0\.10, logging[\s\S]*Xen Orchestra does not know its WAN address: it has none, or its guest agent has not arrived yet/);
 });
 
 test('an edge built the other way is rebuilt: the old one stopped, the new one built and tagged, and only then the old one removed', async () => {
-  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag], power_state: 'Running' };
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Running' };
   const admin = xo(
     { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
     { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' },
@@ -574,13 +615,13 @@ test('an edge built the other way is rebuilt: the old one stopped, the new one b
   assert.deepEqual(methods, ['vm.stop', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.delete']);
   const params = Object.fromEntries(admin.calls);
   assert.deepEqual(params['vm.stop'], { id: 'vm-old', force: true });
-  assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.blocksTag]);
+  assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag]);
   assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
   assert.match(done, /dropped[\s\S]*replaced the one that was there/);
 });
 
 test('a rebuild that fails leaves the old edge running as it was, and an edge asked nothing of is left alone', async () => {
-  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.blocksTag], power_state: 'Running' };
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag], power_state: 'Running' };
   const admin = xo(
     { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
     { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } },

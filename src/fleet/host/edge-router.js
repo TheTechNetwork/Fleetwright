@@ -65,8 +65,8 @@ export const OPNSENSE_IMAGE = Object.freeze({
   /** /usr/local/etc/config.xml, as the nano build left it, and its SHA-256. */
   config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
   /**
-   * MORE ROOM, IN THE FILE'S OWN BLOCKS, for an edge with labs, whose
-   * configuration does not fit in 5,234 bytes. The file system's fragments
+   * MORE ROOM, IN THE FILE'S OWN BLOCKS, for every edge: labs, and then
+   * the updates job, did not fit in 5,234 bytes. The file system's fragments
    * are 4 KiB, so the file already owns 8,192 bytes on the disk (its inode
    * counts 16 sectors), and the 2,958 after its end are zeros. Growing it is
    * one field: the size in its inode (number 6523), an 8-byte little-endian
@@ -88,6 +88,8 @@ export const EDGE = Object.freeze({
   tag: 'fleetwright-edge',
   /** On an edge built to drop what its threat rules match, so a policy can tell what it has without logging in, which it cannot. */
   blocksTag: 'fleetwright-edge-blocks',
+  /** On an edge that updates itself and carries the Xen guest agent (EDGE_UPDATES); one without it is rebuilt to get both. */
+  updatesTag: 'fleetwright-edge-updates',
   uplink: 'fleetwright-uplink',
   template: 'Other install media',
   /** The edge's LAN, which is the uplink: a range a home or office LAN rarely uses. */
@@ -118,6 +120,25 @@ export const EDGE_FILTER = Object.freeze({
    */
   divertPort: 8000,
 });
+
+/**
+ * HOW THE EDGE KEEPS ITSELF UP TO DATE, and how it gets the Xen guest agent,
+ * which are the same thing. Nobody can log in to it and the build can only
+ * write its configuration, so the one way to put a package on it is
+ * OPNsense's own: a plugin named in `system.firmware.plugins` is installed by
+ * the firmware update when it is missing (scripts/firmware/sync.subr.sh,
+ * from update.sh `sync`), and that update is the cron action "Automatic
+ * firmware update" (`firmware auto-update`, rc.firmware with up to 25
+ * minutes' random delay). Plugin install itself has no cron action.
+ *
+ * WHAT THAT COSTS, chosen with the person: the update takes OPNsense's
+ * stable updates within its release and reboots when the kernel or base
+ * system changed, so every machine behind it loses its way out for those
+ * minutes. Once a day at 10:00 UTC, which is 04:00 in Mountain time, where
+ * the first pool is. The agent is `os-xen`, so Xen Orchestra shows the
+ * edge's addresses from its first update on.
+ */
+export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
 
 /** The rule files' ids, less their last digit, which is each one's place in EDGE_FILTER.rules. */
 const RULE_FILE_UUID = '5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1';
@@ -252,15 +273,20 @@ export function fleetHosts(coordinatorUrl) {
  * everything. The DNS and private rules above it are not diverted: they
  * decide before Suricata would see the packet.
  *
- * ROOM. It has to fit in the 5,234 bytes of the file it replaces, and blocking
- * all but filled them. What was cut to make room is what OPNsense does
- * anyway: the web interface's theme (nobody can log in to see it), pf's
+ * ROOM. It has to fit in the 8,192 bytes the file's own blocks hold
+ * (OPNSENSE_IMAGE.room), and four closed labs, blocking and a long
+ * coordinator name all but fill them. It once had to fit in the 5,234 the
+ * default fills, and what was cut then is what OPNsense does anyway: the web
+ * interface's theme (nobody can log in to see it), pf's
  * `normal` optimization (its default when unset), sticky load balancing (it
  * does nothing without source tracking, which is off), and the policy's
  * `prio` and description, which OPNsense reads as 0 and none when absent.
  * NOT its `enabled`: booted without it, the policy came up disabled and an
- * alert installed as an alert, because a model default is not written into an
- * item that came from the file. A test keeps both modes inside the file.
+ * alert installed as an alert, though IDS.xml's default for it is 1; why is
+ * not known, so every `enabled` is written. Cut since, for the updates job
+ * (EDGE_UPDATES): the aliases' descriptions, which OPNsense does not
+ * require, and the private rule's is shorter. A test keeps every mode inside
+ * the room.
  *
  * VERSIONS STAMPED ONE BELOW CURRENT, on purpose. OPNsense's templates read
  * the configuration as written, not the model with its defaults, and the
@@ -284,12 +310,13 @@ export function fleetHosts(coordinatorUrl) {
  * goes to dnsmasq, which asks the edge's Unbound for those and refuses the
  * rest (fleetHosts says why not Unbound itself). The uplink and open labs
  * ask Unbound as before. Suricata watches the labs as it watches the uplink.
- * Labs do not fit in the 5,234 bytes, so a configuration with any is the
- * room the file's own blocks give it (OPNSENSE_IMAGE.room), and the build
- * grows the file to it. The most it holds is four closed labs and blocking,
- * with a coordinator whose name is up to about a hundred characters, since
- * a closed lab's configuration has that name twice; a longer one is refused
- * here, before anything is downloaded.
+ * Every configuration is the room the file's own blocks give it
+ * (OPNSENSE_IMAGE.room), and the build grows the file to it: labs first
+ * needed it, and the updates job needs it now without them. The most it
+ * holds is four closed labs and blocking, with a coordinator whose name is
+ * up to about a hundred characters, since a closed lab's configuration has
+ * that name twice; a longer one is refused here, before anything is
+ * downloaded.
  * BOOTED IN QEMU that way, four labs, two of them closed, blocking: the file
  * was read whole, each lab's interface came up at its address with its DHCP
  * range, Suricata watched all five inside networks, and `pfctl -sr` showed
@@ -305,7 +332,7 @@ export function fleetHosts(coordinatorUrl) {
  * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[] }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], length = labs.length ? OPNSENSE_IMAGE.room : OPNSENSE_IMAGE.config.length } = {}) {
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], length = OPNSENSE_IMAGE.room } = {}) {
   const { address, prefix, from, to } = EDGE.lan;
   if (labs.length > LAB.max) throw new Error(`an edge has room for ${LAB.max} labs, not ${labs.length}`);
   if (labs.includes(false) && !fleet.length) throw new Error('a closed lab needs the fleet’s hosts to let through');
@@ -361,7 +388,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     '<webgui><protocol>https</protocol><noantilockout>1</noantilockout></webgui>\n' +
     '<disablenatreflection>yes</disablenatreflection><usevirtualterminal>1</usevirtualterminal><disableconsolemenu/>\n' +
     '<disablechecksumoffloading>1</disablechecksumoffloading><disablesegmentationoffloading>1</disablesegmentationoffloading><disablelargereceiveoffloading>1</disablelargereceiveoffloading>\n' +
-    '<pf_share_forward>1</pf_share_forward>\n' +
+    `<pf_share_forward>1</pf_share_forward><firmware><plugins>${EDGE_UPDATES.plugin}</plugins></firmware>\n` +
     '</system>\n<interfaces>\n' +
     `<wan><enable>1</enable><if>${wanIf}</if><descr>WAN</descr><ipaddr>dhcp</ipaddr><blockpriv>0</blockpriv><blockbogons>0</blockbogons></wan>\n` +
     `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${address}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
@@ -374,16 +401,16 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     `<nat><outbound><mode>automatic</mode></outbound>${closedDns}</nat>\n<filter/>\n` +
     '<OPNsense><Firewall>\n' +
     '<Alias><aliases><alias><enabled>1</enabled><name>fleetwright_private</name><type>network</type>' +
-    `<content>${NOT_FROM_LABS.join('\n')}</content><description>What labs may not reach</description></alias>` +
-    '<alias><enabled>1</enabled><name>fleetwright_dns</name><type>port</type><content>53\n853</content><description>DNS and DNS over TLS</description></alias>' +
-    (closedIf.length ? `<alias><enabled>1</enabled><name>fleetwright_fleet</name><type>host</type><content>${fleet.join('\n')}</content><description>The fleet and Claude</description></alias>` : '') +
+    `<content>${NOT_FROM_LABS.join('\n')}</content></alias>` +
+    '<alias><enabled>1</enabled><name>fleetwright_dns</name><type>port</type><content>53\n853</content></alias>' +
+    (closedIf.length ? `<alias><enabled>1</enabled><name>fleetwright_fleet</name><type>host</type><content>${fleet.join('\n')}</content></alias>` : '') +
     '</aliases></Alias>\n' +
     '<Filter><rules>\n' +
     rule(1, 'pass', `<protocol>TCP/UDP</protocol><source_net>${src}</source_net><destination_net>${self}</destination_net><destination_port>53</destination_port>`, 'Labs ask the edge for names', inside) +
     '\n' +
     rule(2, 'block', `<protocol>TCP/UDP</protocol><source_net>${src}</source_net><destination_net>any</destination_net><destination_port>fleetwright_dns</destination_port>`, 'No other resolver', inside) +
     '\n' +
-    rule(3, 'block', `<protocol>any</protocol><source_net>${src}</source_net><destination_net>fleetwright_private</destination_net>`, 'Nothing private from a lab', inside) +
+    rule(3, 'block', `<protocol>any</protocol><source_net>${src}</source_net><destination_net>fleetwright_private</destination_net>`, 'Nothing private', inside) +
     '\n' +
     rule(4, 'pass', `<protocol>any</protocol><source_net>${src}</source_net><destination_net>any</destination_net>${divert}`, 'Labs reach the internet', out) +
     '\n' +
@@ -405,6 +432,12 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     '</IDS>\n<cron version="1.0.3"><jobs>' +
     `<job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e02"><enabled>1</enabled><command>unbound dnsbl</command><minutes>${EDGE_FILTER.every}</minutes><hours>*</hours><description>Blocklists</description></job>` +
     `<job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03"><origin>IDS</origin><enabled>1</enabled><command>ids update</command><minutes>${EDGE_FILTER.every}</minutes><hours>*</hours><description>Rules</description></job>` +
+    // No id (nothing names this job; OPNsense gives it one) and no minutes:
+    // Cron.xml's default is 0, and the saved model writes it in, as it wrote
+    // the days, months and weekdays the jobs above leave out (crontab read
+    // back from the booted edge). `enabled` stays, as the IDS policy's does
+    // (ROOM, in this function's comment).
+    `<job><enabled>1</enabled><command>firmware auto-update</command><hours>${EDGE_UPDATES.hours}</hours><description>Updates</description></job>` +
     '</jobs></cron>\n</OPNsense>\n</opnsense>\n';
   const body = Buffer.from(xml, 'utf8');
   if (body.length > length) {
@@ -452,8 +485,7 @@ const sizeBytes = (n) => {
  */
 export function imagePatches(replacement) {
   const { config, room, sizeField } = OPNSENSE_IMAGE;
-  if (replacement.length === config.length) return [{ offset: config.offset, replacement, check: isDefaultConfig, what: 'the default configuration' }];
-  if (replacement.length !== room) throw new Error(`a configuration is ${config.length} or ${room} bytes, not ${replacement.length}`);
+  if (replacement.length !== room) throw new Error(`a configuration is ${room} bytes, not ${replacement.length}`);
   return [
     { offset: sizeField.offset, replacement: sizeBytes(room), check: (b) => b.equals(sizeBytes(sizeField.was)), what: 'the configuration’s size' },
     { offset: config.offset, replacement, check: isDefaultConfigWithSlack, what: 'the default configuration' },
@@ -955,11 +987,14 @@ export async function ensureEdge(opts) {
   const hasLabs = edge ? edgeLabsOf(edge) : '';
   const wantLabs = labs === null ? hasLabs : labsKey(labs);
   const filterChanged = block !== null && block !== blocks;
+  // AN EDGE FROM BEFORE IT UPDATED ITSELF (EDGE_UPDATES) is rebuilt once:
+  // its configuration is fixed at build, so that is the only way it gets it.
+  const updates = edge?.tags?.includes?.(EDGE.updatesTag) === true;
   // ON THE LABS' OWN NETWORKS, not only as many of each kind: a lab network
   // made again in Xen Orchestra is a new network the old edge is not on.
   const vifs = edge ? /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: edge.id } })) || {})) : [];
   const onLabs = labs === null || labs.every((l, i) => vifs.some((v) => String(v?.device) === String(i + 2) && v?.$network === l.id));
-  if (edge && (filterChanged || wantLabs !== hasLabs || !onLabs)) {
+  if (edge && (filterChanged || wantLabs !== hasLabs || !onLabs || !updates)) {
     const keep = block ?? blocks;
     rebuilding?.();
     say(
@@ -967,7 +1002,9 @@ export async function ensureEdge(opts) {
         ? keep
           ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.'
           : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.'
-        : `Rebuilding the edge router with ${labsSaid(wantLabs)}. Machines behind it have no way out until it is up.`,
+        : wantLabs !== hasLabs || !onLabs
+          ? `Rebuilding the edge router with ${labsSaid(wantLabs)}. Machines behind it have no way out until it is up.`
+          : 'Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.',
     );
     if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
     let said;
@@ -993,9 +1030,27 @@ export async function ensureEdge(opts) {
       await admin.call('vm.start', { id: edge.id });
       said.push('It was stopped, and was started.');
     }
-    return [`The edge router was already there, on ${egress.name}, ${blocks ? 'dropping' : 'logging'} what its threat rules match${hasLabs ? `, with ${labsSaid(hasLabs)}` : ''}.`, ...said].join(' ');
+    const at = wanAddressOf(edge);
+    return [
+      `The edge router was already there, on ${egress.name}${at ? ` at ${at}` : ''}, ${blocks ? 'dropping' : 'logging'} what its threat rules match${hasLabs ? `, with ${labsSaid(hasLabs)}` : ''}.`,
+      ...said,
+      ...(at ? [] : [`Xen Orchestra does not know its WAN address: it has none, or its guest agent has not arrived yet, which comes with its first update after ${EDGE_UPDATES.hours}:00 UTC.`]),
+    ].join(' ');
   }
   return buildEdge({ ...opts, block: block === true, labs: labs ?? [] });
+}
+
+/**
+ * The edge's WAN address as Xen Orchestra has it from the guest agent
+ * (EDGE_UPDATES): interface 0's first IPv4 address, or null when it does not
+ * know, which is not the same as the edge having none.
+ *
+ * @param {any} edge @returns {string|null}
+ */
+export function wanAddressOf(edge) {
+  const a = edge?.addresses && typeof edge.addresses === 'object' ? edge.addresses : {};
+  const ip = [a['0/ipv4/0'], a['0/ip']].find((x) => typeof x === 'string' && net.isIPv4(x));
+  return ip ?? null;
 }
 
 /** Labs as the edge's tag keeps them: `o` open, `c` closed, in order. @param {Array<{ open: boolean }>} labs */
@@ -1076,7 +1131,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
       VDIs: [],
       CPUs: EDGE.cpus,
       memory: EDGE.memory,
-      tags: [EDGE.tag, ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : [])],
+      tags: [EDGE.tag, EDGE.updatesTag, ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : [])],
       bootAfterCreate: false,
     });
     await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
@@ -1094,7 +1149,8 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const { address: lan, prefix } = EDGE.lan;
   return (
     `The edge router is up: OPNsense ${OPNSENSE_IMAGE.release}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}, its disk on ${on}. ` +
-    `Labs on the uplink reach the internet and nothing private, and what its threat rules match is ${block ? 'dropped' : 'logged'}.${labs.length ? ` It has ${labsSaid(labsKey(labs))} of their own.` : ''} It has no login; its rules are fixed.`
+    `Labs on the uplink reach the internet and nothing private, and what its threat rules match is ${block ? 'dropped' : 'logged'}.${labs.length ? ` It has ${labsSaid(labsKey(labs))} of their own.` : ''} It has no login; its rules are fixed. ` +
+    `It updates itself every day after ${EDGE_UPDATES.hours}:00 UTC, restarting when OPNsense needs it to, and gets the Xen guest agent with its first update.`
   );
 }
 
