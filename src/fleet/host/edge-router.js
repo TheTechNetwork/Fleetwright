@@ -39,7 +39,7 @@
 // off on both interfaces (XCP-ng's advice for FreeBSD guests, which otherwise
 // drop forwarded traffic), and started.
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import http from 'node:http';
@@ -158,6 +158,12 @@ export const EDGE_FILTER = Object.freeze({
  * edge's addresses from its first update on.
  */
 export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
+
+/**
+ * TWO EDGES (`ha` in edgeConfig): the CARP group of the uplink, each lab's
+ * the next, and the second router's name in Xen Orchestra.
+ */
+export const EDGE_HA = Object.freeze({ vhid: 1, second: 'fleetwright-edge-b', nodeTag: 'fleetwright-edge-node:', passwordKey: 'fleetwright-carp' });
 
 /** The rule files' ids, less their last digit, which is each one's place in EDGE_FILTER.rules. */
 const RULE_FILE_UUID = '5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1';
@@ -346,11 +352,33 @@ export function fleetHosts(coordinatorUrl) {
  * names and the names under them were asked of it, and every other name, of
  * any type, was REFUSED and never asked. The rdr rule is not yet seen in pf.
  *
- * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[] }} [opts]
+ * TWO OF THEM (`ha`, EDGE_HA): each inside network's gateway address (the
+ * uplink's 10.254.0.1, each lab's .1) is a CARP address the two share, the
+ * one that is master answering it; each router has its own beside it, .2
+ * for the first and .3 for the second. Each hands out its own half of the
+ * DHCP range, naming the shared address as gateway and resolver, so a
+ * machine's lease outlives the router that gave it. Names are asked of
+ * `(self)`, which in pf includes the CARP addresses. OPNsense passes CARP's
+ * own advertisements before any rule here ("CARP defaults", filter.lib.inc),
+ * so the private-ranges rule does not stop them; they carry an HMAC of a
+ * password made for the pair, so a machine on the uplink cannot claim the
+ * gateway. The second updates an hour after the first, so the two never
+ * restart together.
+ *
+ * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], length = OPNSENSE_IMAGE.grow.room } = {}) {
-  const { address, prefix, from, to } = EDGE.lan;
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, length = OPNSENSE_IMAGE.grow.room } = {}) {
+  const { address, prefix } = EDGE.lan;
+  if (ha && !((ha.node === 0 || ha.node === 1) && /^[0-9a-f]{16,64}$/.test(ha.password))) throw new Error('a pair of edges needs which one this is and their shared password');
+  /** This router's own address on a network whose gateway is `gw` (x.y.z.1). @param {string} gw */
+  const own = (gw) => (ha ? gw.replace(/\.1$/, `.${2 + ha.node}`) : gw);
+  /** This router's share of a network's DHCP range. @param {string} gw */
+  const range = (gw) => {
+    const [lo, hi] = ha ? (ha.node === 0 ? [100, 174] : [175, 250]) : [100, 250];
+    return [gw.replace(/\.1$/, `.${lo}`), gw.replace(/\.1$/, `.${hi}`)];
+  };
+  const [from, to] = range(address);
   if (labs.length > LAB.max) throw new Error(`an edge has room for ${LAB.max} labs, not ${labs.length}`);
   if (labs.includes(false) && !fleet.length) throw new Error('a closed lab needs the fleet’s hosts to let through');
   const labIf = labs.map((_, i) => `opt${i + 1}`);
@@ -367,7 +395,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
   // names come from the edge's own address on whichever it arrived on.
   const inside = ['lan', ...labIf].join(',');
   const src = labs.length ? 'any' : 'lan';
-  const self = labs.length ? '(self)' : 'lanip';
+  const self = labs.length || ha ? '(self)' : 'lanip';
   const out = ['lan', ...openIf].join(',');
   const closed = closedIf.join(',');
   const labRules = closedIf.length
@@ -396,7 +424,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
   const xml =
     '<?xml version="1.0"?>\n<opnsense>\n<system>\n' +
     '<use_mfs_tmp/><use_mfs_var/><serialspeed>115200</serialspeed><primaryconsole>serial</primaryconsole><secondaryconsole>video</secondaryconsole>\n' +
-    '<hostname>fleetwright-edge</hostname><domain>internal</domain>\n' +
+    `<hostname>fleetwright-edge${ha?.node ? '-b' : ''}</hostname><domain>internal</domain>\n` +
     '<group><name>admins</name><description>System Administrators</description><scope>system</scope><gid>1999</gid><member>0</member><priv>page-all</priv></group>\n' +
     // `*` is a locked account to FreeBSD and a hash PHP never verifies: no
     // login on the console, over SSH or in the web interface.
@@ -408,11 +436,24 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     `<pf_share_forward>1</pf_share_forward><firmware><plugins>${EDGE_UPDATES.plugin}</plugins></firmware>\n` +
     '</system>\n<interfaces>\n' +
     `<wan><enable>1</enable><if>${wanIf}</if><descr>WAN</descr><ipaddr>dhcp</ipaddr><blockpriv>0</blockpriv><blockbogons>0</blockbogons></wan>\n` +
-    `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${address}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
-    labs.map((_, i) => `<opt${i + 1}><enable>1</enable><if>xn${i + 2}</if><descr>LAB${i + 1}</descr><ipaddr>${LAB.address(i + 1)}</ipaddr><subnet>${LAB.cidr}</subnet></opt${i + 1}>\n`).join('') +
+    `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${own(address)}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
+    labs.map((_, i) => `<opt${i + 1}><enable>1</enable><if>xn${i + 2}</if><descr>LAB${i + 1}</descr><ipaddr>${own(LAB.address(i + 1))}</ipaddr><subnet>${LAB.cidr}</subnet></opt${i + 1}>\n`).join('') +
     '</interfaces>\n' +
+    (ha
+      ? '<virtualip>' +
+        [address, ...labs.map((_, i) => LAB.address(i + 1))]
+          .map((gw, i) => `<vip><interface>${['lan', ...labIf][i]}</interface><mode>carp</mode><subnet>${gw}</subnet><subnet_bits>${i ? LAB.cidr : prefix}</subnet_bits><password>${ha.password}</password><vhid>${EDGE_HA.vhid + i}</vhid><advbase>1</advbase><advskew>${ha.node * 100}</advskew></vip>`)
+          .join('') +
+        '</virtualip>\n'
+      : '') +
     `<dnsmasq><enable>1</enable><port>${DNSMASQ_PORT}</port><interface>${['lan', ...labIf].join(',')}</interface>${closedIf.length ? '<no_resolv>1</no_resolv>' : ''}<dhcp_ranges><interface>lan</interface><start_addr>${from}</start_addr><end_addr>${to}</end_addr></dhcp_ranges>` +
-    labIf.map((on, i) => `<dhcp_ranges><interface>${on}</interface><start_addr>${LAB.address(i + 1).replace(/\.1$/, '.100')}</start_addr><end_addr>${LAB.address(i + 1).replace(/\.1$/, '.250')}</end_addr></dhcp_ranges>`).join('') +
+    labIf.map((on, i) => `<dhcp_ranges><interface>${on}</interface><start_addr>${range(LAB.address(i + 1))[0]}</start_addr><end_addr>${range(LAB.address(i + 1))[1]}</end_addr></dhcp_ranges>`).join('') +
+    // The shared address as gateway (3) and resolver (6), not this router's.
+    (ha
+      ? [address, ...labs.map((_, i) => LAB.address(i + 1))]
+          .flatMap((gw, i) => [3, 6].map((o) => `<dhcp_options><type>set</type><option>${o}</option><interface>${['lan', ...labIf][i]}</interface><value>${gw}</value></dhcp_options>`))
+          .join('')
+      : '') +
     closedNames +
     '</dnsmasq>\n' +
     `<nat><outbound><mode>automatic</mode></outbound>${closedDns}</nat>\n<filter/>\n` +
@@ -454,7 +495,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     // the days, months and weekdays the jobs above leave out (crontab read
     // back from the booted edge). `enabled` stays, as the IDS policy's does
     // (ROOM, in this function's comment).
-    `<job><enabled>1</enabled><command>firmware auto-update</command><hours>${EDGE_UPDATES.hours}</hours><description>Updates</description></job>` +
+    `<job><enabled>1</enabled><command>firmware auto-update</command><hours>${Number(EDGE_UPDATES.hours) + (ha?.node ?? 0)}</hours><description>Updates</description></job>` +
     '</jobs></cron>\n</OPNsense>\n</opnsense>\n';
   const body = Buffer.from(xml, 'utf8');
   if (body.length > length) {
@@ -971,6 +1012,7 @@ export function buildFill(downloaded, written) {
  *   sr?: string|null,
  *   block?: boolean|null,
  *   labs?: Array<{ id: string, open: boolean }>|null,
+ *   ha?: boolean|null,
  *   fleet?: string[],
  *   rebuilding?: () => void,
  *   address: string, pin: string|null, plain: boolean,
@@ -983,36 +1025,177 @@ export function buildFill(downloaded, written) {
  * }} opts
  */
 export async function ensureEdge(opts) {
-  const { admin, pool, egress, block = null, labs = null, rebuilding, say } = opts;
-  const vms = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {});
-  const edge = /** @type {any} */ (vms.find((v) => /** @type {any} */ (v)?.$pool === pool && /** @type {any} */ (v)?.tags?.includes?.(EDGE.tag)));
+  const { admin, pool, egress, labs = null, ha = null, rebuilding, say } = opts;
+  const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+  const ours = vms.filter((v) => v?.$pool === pool && v?.tags?.includes?.(EDGE.tag));
+  const second = ours.find((v) => v.tags.includes(`${EDGE_HA.nodeTag}1`)) ?? null;
+  const edge = ours.find((v) => v !== second) ?? null;
+  const wantPair = ha ?? Boolean(second);
+  if (!wantPair && !second) return ensureOne(opts, edge);
+
+  // BACK TO ONE: the second goes, and the first is rebuilt on its own, since
+  // its configuration gives the gateway address to CARP rather than to it.
+  if (!wantPair && second) {
+    rebuilding?.();
+    say('Going back to one edge router: the second is removed and the first is rebuilt on its own. Machines behind it have no way out until it is up.');
+    if (second.power_state !== 'Halted') await admin.call('vm.stop', { id: second.id, force: true });
+    await admin.call('vm.delete', { id: second.id, deleteDisks: true });
+    return ensureOne(opts, edge, true);
+  }
+
+  const now = edge ? await edgeState(admin, edge, opts) : null;
+  const keep = opts.block ?? now?.blocks ?? false;
+  const both = [edge, second].filter(Boolean);
+  const changed = now && (now.filterChanged || now.wantLabs !== now.hasLabs || !now.onLabs || !now.updates);
+  const secondOnLabs = second ? (await edgeState(admin, second, opts)).onLabs : true;
+
+  // A PAIR THAT IS THERE AND WANTS NOTHING NEW: its WANs follow the way out
+  // and a stopped one is started, as one edge's would be.
+  if (edge && second && now && !changed && secondOnLabs) {
+    /** @type {string[]} */
+    const said = [];
+    for (const v of both) {
+      const vifs = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: v.id } })) || {}));
+      const wan = vifs.find((x) => String(x?.device) === '0');
+      if (wan && wan.$network !== egress.id) {
+        await admin.call('vif.set', { id: wan.id, network: egress.id });
+        said.push(`${v.name_label}’s WAN moved to ${egress.name}.`);
+      }
+      if (v.power_state !== 'Running') {
+        await admin.call('vm.start', { id: v.id });
+        said.push(`${v.name_label} was stopped, and was started.`);
+      }
+    }
+    const at = both.map((v) => `${v.name_label} ${wanAddressOf(v) ? `at ${wanAddressOf(v)}` : 'at an address Xen Orchestra does not know yet'}`);
+    return [
+      `The edge routers were already there, a pair on ${egress.name} sharing ${EDGE.lan.address}, ${now.blocks ? 'dropping' : 'logging'} what their threat rules match${now.hasLabs ? `, with ${labsSaid(now.hasLabs)}` : ''}: ${at.join(', ')}.`,
+      ...said,
+    ].join(' ');
+  }
+
+  rebuilding?.();
+  const build = (/** @type {0|1} */ node, /** @type {string} */ password, start = true) => buildEdge({ ...opts, block: keep, labs: labs ?? [], ha: { node, password }, start });
+
+  // ONE AT A TIME, when both are there: the second is replaced while the
+  // first carries the machines, then the first while the second does, with
+  // the password the pair has, so the new one and the old one agree.
+  const known = pairPassword(edge) ?? pairPassword(second);
+  if (edge && second && known) {
+    say('Rebuilding the edge routers one at a time. Machines behind them keep their way out, apart from a moment as each hands over.');
+    for (const [node, old] of /** @type {Array<[0|1, any]>} */ ([[1, second], [0, edge]])) {
+      if (old.power_state !== 'Halted') await admin.call('vm.stop', { id: old.id, force: true });
+      try {
+        await build(node, known);
+      } catch (e) {
+        await admin.call('vm.start', { id: old.id }).catch(() => {});
+        /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. ${old.name_label}, which it was replacing, was started again, as it was`;
+        throw e;
+      }
+      await admin.call('vm.delete', { id: old.id, deleteDisks: true });
+    }
+    return `Both edge routers were rebuilt, one at a time, ${keep ? 'dropping' : 'logging'} what their threat rules match${labs?.length ? `, with ${labsSaid(labsKey(labs))}` : ''}. They share ${EDGE.lan.address}, and each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC.`;
+  }
+
+  // FROM ONE TO TWO, or a pair whose password is lost: the new second is
+  // made but not started while the old router runs, because the old one has
+  // the gateway address as its own; then the old one stops, the second
+  // starts and takes the address, and the first is rebuilt beside it. The
+  // machines behind it have no way out only while the second starts.
+  const password = randomBytes(16).toString('hex');
+  if (edge) {
+    say('Making the second edge router, then handing over to it while the first is rebuilt. Machines behind it have no way out while the second starts.');
+    for (const v of second ? [second] : []) {
+      if (v.power_state !== 'Halted') await admin.call('vm.stop', { id: v.id, force: true });
+      await admin.call('vm.delete', { id: v.id, deleteDisks: true });
+    }
+    const b = await build(1, password, false);
+    if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
+    try {
+      await admin.call('vm.start', { id: b.vm });
+    } catch (e) {
+      await admin.call('vm.start', { id: edge.id }).catch(() => {});
+      await admin.call('vm.delete', { id: b.vm, deleteDisks: true }).catch(() => {});
+      /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. The edge router that was there was started again, as it was`;
+      throw e;
+    }
+    try {
+      await build(0, password);
+    } catch (e) {
+      // Not started again: it has the gateway address as its own, which the
+      // second now holds.
+      /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. ${EDGE_HA.second} carries the machines on its own; the old edge router is left stopped, since it would clash with it, and applying again finishes the pair`;
+      throw e;
+    }
+    await admin.call('vm.delete', { id: edge.id, deleteDisks: true });
+    return `There are two edge routers now, sharing ${EDGE.lan.address}: when one restarts, the other carries the machines behind them. Each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC. The one that was there was replaced.`;
+  }
+  const a = await build(0, password);
+  await build(1, password);
+  return `${a.text} There are two edge routers, sharing ${EDGE.lan.address}: when one restarts, the other carries the machines behind them, and each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC.`;
+}
+
+/**
+ * The pair's CARP password where buildEdge kept it, or null.
+ *
+ * @param {any} v @returns {string|null}
+ */
+function pairPassword(v) {
+  const p = v?.xenStoreData?.[EDGE_HA.passwordKey];
+  return typeof p === 'string' && /^[0-9a-f]{16,64}$/.test(p) ? p : null;
+}
+
+/**
+ * What an edge router has and what the policy asks of it.
+ *
+ * @param {any} admin @param {any} edge @param {{ block?: boolean|null, labs?: Array<{ id: string, open: boolean }>|null }} opts
+ */
+async function edgeState(admin, edge, { block = null, labs = null }) {
   const blocks = edge?.tags?.includes?.(EDGE.blocksTag) === true;
-  const hasLabs = edge ? edgeLabsOf(edge) : '';
+  const hasLabs = edgeLabsOf(edge);
   const wantLabs = labs === null ? hasLabs : labsKey(labs);
-  const filterChanged = block !== null && block !== blocks;
-  // AN EDGE FROM BEFORE IT UPDATED ITSELF (EDGE_UPDATES) is rebuilt once:
-  // its configuration is fixed at build, so that is the only way it gets it.
-  const updates = edge?.tags?.includes?.(EDGE.updatesTag) === true;
   // ON THE LABS' OWN NETWORKS, not only as many of each kind: a lab network
   // made again in Xen Orchestra is a new network the old edge is not on.
-  const vifs = edge ? /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: edge.id } })) || {})) : [];
-  const onLabs = labs === null || labs.every((l, i) => vifs.some((v) => String(v?.device) === String(i + 2) && v?.$network === l.id));
-  if (edge && (filterChanged || wantLabs !== hasLabs || !onLabs || !updates)) {
-    const keep = block ?? blocks;
+  const vifs = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: edge.id } })) || {}));
+  return {
+    blocks,
+    hasLabs,
+    wantLabs,
+    vifs,
+    filterChanged: block !== null && block !== blocks,
+    // AN EDGE FROM BEFORE IT UPDATED ITSELF (EDGE_UPDATES) is rebuilt once:
+    // its configuration is fixed at build, so that is the only way it gets it.
+    updates: edge?.tags?.includes?.(EDGE.updatesTag) === true,
+    onLabs: labs === null || labs.every((l, i) => vifs.some((v) => String(v?.device) === String(i + 2) && v?.$network === l.id)),
+  };
+}
+
+/**
+ * One edge router, as there has always been: built, rebuilt when what it
+ * filters or its labs change (or `force`), or left as it is.
+ *
+ * @param {Parameters<typeof ensureEdge>[0]} opts @param {any} edge @param {boolean} [force]
+ */
+async function ensureOne(opts, edge, force = false) {
+  const { admin, egress, block = null, labs = null, rebuilding, say } = opts;
+  const st = edge ? await edgeState(admin, edge, opts) : null;
+  if (edge && st && (force || st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates)) {
+    const keep = block ?? st.blocks;
     rebuilding?.();
-    say(
-      filterChanged
-        ? keep
-          ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.'
-          : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.'
-        : wantLabs !== hasLabs || !onLabs
-          ? `Rebuilding the edge router with ${labsSaid(wantLabs)}. Machines behind it have no way out until it is up.`
-          : 'Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.',
-    );
+    if (!force) {
+      say(
+        st.filterChanged
+          ? keep
+            ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.'
+            : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.'
+          : st.wantLabs !== st.hasLabs || !st.onLabs
+            ? `Rebuilding the edge router with ${labsSaid(st.wantLabs)}. Machines behind it have no way out until it is up.`
+            : 'Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.',
+      );
+    }
     if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
     let said;
     try {
-      said = await buildEdge({ ...opts, block: keep, labs: labs ?? [] });
+      said = (await buildEdge({ ...opts, ha: null, block: keep, labs: labs ?? [] })).text;
     } catch (e) {
       // Never neither: the one that was there comes back as it was.
       await admin.call('vm.start', { id: edge.id }).catch(() => {});
@@ -1022,8 +1205,8 @@ export async function ensureEdge(opts) {
     await admin.call('vm.delete', { id: edge.id, deleteDisks: true });
     return `${said} It replaced the one that was there, which was removed.`;
   }
-  if (edge) {
-    const wan = vifs.find((v) => String(v?.device) === '0');
+  if (edge && st) {
+    const wan = st.vifs.find((v) => String(v?.device) === '0');
     const said = [];
     if (wan && wan.$network !== egress.id) {
       await admin.call('vif.set', { id: wan.id, network: egress.id });
@@ -1035,12 +1218,12 @@ export async function ensureEdge(opts) {
     }
     const at = wanAddressOf(edge);
     return [
-      `The edge router was already there, on ${egress.name}${at ? ` at ${at}` : ''}, ${blocks ? 'dropping' : 'logging'} what its threat rules match${hasLabs ? `, with ${labsSaid(hasLabs)}` : ''}.`,
+      `The edge router was already there, on ${egress.name}${at ? ` at ${at}` : ''}, ${st.blocks ? 'dropping' : 'logging'} what its threat rules match${st.hasLabs ? `, with ${labsSaid(st.hasLabs)}` : ''}.`,
       ...said,
       ...(at ? [] : [`Xen Orchestra does not know its WAN address: it has none, or its guest agent has not arrived yet, which comes with its first update after ${EDGE_UPDATES.hours}:00 UTC.`]),
     ].join(' ');
   }
-  return buildEdge({ ...opts, block: block === true, labs: labs ?? [] });
+  return (await buildEdge({ ...opts, ha: null, block: block === true, labs: labs ?? [] })).text;
 }
 
 /**
@@ -1071,12 +1254,13 @@ function labsSaid(key) {
 /**
  * A new edge router, built, tagged with how it filters, and started.
  *
- * @param {Parameters<typeof ensureEdge>[0] & { block: boolean, labs: Array<{ id: string, open: boolean }> }} opts
+ * @param {Omit<Parameters<typeof ensureEdge>[0], 'ha'> & { block: boolean, labs: Array<{ id: string, open: boolean }>, ha?: { node: 0|1, password: string }|null, start?: boolean }} opts
  */
-async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, block, labs, fleet = [], address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
+async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, block, labs, fleet = [], ha = null, start = true, address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
   // Checked before anything is downloaded: a closed lab with nowhere to let
   // the fleet through would be a machine that never joins.
-  const config = edgeConfig({ block, labs: labs.map((l) => l.open), fleet });
+  const config = edgeConfig({ block, labs: labs.map((l) => l.open), fleet, ha });
+  const name = ha?.node ? EDGE_HA.second : EDGE.vm;
   const sr = edgeStorage({ pool, srs, fleetSrs, sr: chosenSr });
   const on = srName(sr);
 
@@ -1107,7 +1291,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
     const { $sendTo } = await admin.call('disk.import', {
       sr: sr.id,
       type: 'iso',
-      name: EDGE.vm,
+      name,
       description: `OPNsense ${OPNSENSE_IMAGE.release}, configured by Fleetwright as the edge router`,
     });
     const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ regions: imagePatches(config), total: OPNSENSE_IMAGE.rawSize }));
@@ -1123,10 +1307,10 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
     });
     signal?.throwIfAborted();
 
-    say(`Making the edge router, its disk on ${on}, and starting it.`, stage(3, MAKING));
+    say(`Making the edge router, its disk on ${on}${start ? ', and starting it' : ''}.`, stage(3, MAKING));
     vm = await admin.call('vm.create', {
       template: template.id,
-      name_label: EDGE.vm,
+      name_label: name,
       name_description: 'The only way out of every lab. Made by Fleetwright; its rules are fixed and it has no login.',
       // WAN, uplink, then each lab, in order: xn0, xn1, xn2 and on, as the
       // configuration names them.
@@ -1134,27 +1318,34 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
       VDIs: [],
       CPUs: EDGE.cpus,
       memory: EDGE.memory,
-      tags: [EDGE.tag, EDGE.updatesTag, ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : [])],
+      tags: [EDGE.tag, EDGE.updatesTag, ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : []), ...(ha ? [`${EDGE_HA.nodeTag}${ha.node}`] : [])],
       bootAfterCreate: false,
     });
+    // The pair's CARP password, kept with each of them where the next
+    // rebuild finds it (pairPassword): Xen Orchestra's admins can read it,
+    // and the fleet's token cannot see the edge at all.
+    if (ha) await admin.call('vm.set', { id: vm, xenStoreData: { [EDGE_HA.passwordKey]: ha.password } });
     await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
     const vifs = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: vm } })) || {});
     for (const v of vifs) await admin.call('vif.set', { id: /** @type {any} */ (v).id, txChecksumming: false });
     signal?.throwIfAborted();
-    await admin.call('vm.start', { id: vm });
+    if (start) await admin.call('vm.start', { id: vm });
   } catch (e) {
     // Nothing half-made is left for the next run to trip over.
     if (vm) await admin.call('vm.delete', { id: vm, deleteDisks: true }).catch(() => {});
     else if (vdi) await admin.call('vdi.delete', { id: vdi }).catch(() => {});
-    else await removePartialDisk(admin, sr.id);
+    else await removePartialDisk(admin, sr.id, name);
     throw e;
   }
   const { address: lan, prefix } = EDGE.lan;
-  return (
+  if (ha) return { vm, text: `${name} is ${start ? 'up' : 'made'}: OPNsense ${OPNSENSE_IMAGE.release}, at 10.254.0.${2 + ha.node} on ${EDGE.uplink} and sharing ${lan} with the other, its disk on ${on}.` };
+  return {
+    vm,
+    text:
     `The edge router is up: OPNsense ${OPNSENSE_IMAGE.release}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}, its disk on ${on}. ` +
     `Labs on the uplink reach the internet and nothing private, and what its threat rules match is ${block ? 'dropped' : 'logged'}.${labs.length ? ` It has ${labsSaid(labsKey(labs))} of their own.` : ''} It has no login; its rules are fixed. ` +
-    `It updates itself every day after ${EDGE_UPDATES.hours}:00 UTC, restarting when OPNsense needs it to, and gets the Xen guest agent with its first update.`
-  );
+    `It updates itself every day after ${EDGE_UPDATES.hours}:00 UTC, restarting when OPNsense needs it to, and gets the Xen guest agent with its first update.`,
+  };
 }
 
 /**
@@ -1162,11 +1353,11 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
  * the storage it was going to, and attached to nothing. Only those, so the
  * disk of a router that is there is never touched.
  *
- * @param {any} admin @param {string} sr
+ * @param {any} admin @param {string} sr @param {string} [name]
  */
-async function removePartialDisk(admin, sr) {
+async function removePartialDisk(admin, sr, name = EDGE.vm) {
   try {
-    const vdis = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', name_label: EDGE.vm, $SR: sr } })) || {});
+    const vdis = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', name_label: name, $SR: sr } })) || {});
     for (const d of /** @type {any[]} */ (vdis)) {
       if (!Array.isArray(d?.$VBDs) || d.$VBDs.length === 0) await admin.call('vdi.delete', { id: d.id }).catch(() => {});
     }
