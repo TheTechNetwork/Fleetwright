@@ -552,7 +552,7 @@ change. Changing its labs, or how it filters, rebuilds it with the new
 rules.
 
 **It did not fit, so the file grew.** The edge's configuration with labs is
-up to 8,021 bytes (four closed labs, blocking, a short coordinator name), and
+up to 8,033 bytes (four closed labs, blocking, a short coordinator name), and
 the file it replaces is 5,234. The image's file
 system has 4 KiB fragments, so `config.xml` already owns 8,192 bytes on the
 disk (its inode counts 16 sectors) and the 2,958 after its end are zeros. The
@@ -560,12 +560,12 @@ build changes one more field: the file's size in its inode, from 5,234 to
 8,192. Nothing is allocated, moved or freed, and the file system keeps no
 check-hashes (its superblock's `fs_metackhash` is 0). It is pinned and
 checked like the configuration: the field must read 5,234 and the slack must
-be zeros, or nothing is written. An edge without labs is byte for byte what
-was booted before, and so is one with only open labs. The bound that matters
-now is the coordinator's name, which a closed lab's configuration carries
-twice (the alias and the names it may resolve): with four closed labs and
-blocking, a name of up to 106 characters fits, and a longer one is refused
-before anything is downloaded.
+be zeros, or nothing is written. Every edge grows the file now, labs or not:
+blocking with the daily update ("It keeps itself up to date") no longer fits
+the 5,234 bytes either. The bound that matters is the coordinator's name,
+which a closed lab's configuration carries twice (the alias and the names it
+may resolve): with four closed labs and blocking, a name of up to 101
+characters fits, and a longer one is refused before anything is downloaded.
 
 ### Seeing what crossed a lab: designed, not built
 
@@ -573,8 +573,9 @@ What a lab adds over a group network was meant to be inspection as well as
 rules: the edge's firewall log and Suricata's alerts for that lab's interface,
 handed to its session. **That needs a way into the edge, and there is none.**
 The edge has no API and no login on purpose (root's password is `*`), its
-WAN takes an address from DHCP on your network that Xen Orchestra cannot see
-(OPNsense's nano image has no Xen guest agent), and no box is behind it. A
+WAN takes an address from DHCP on your network that Xen Orchestra sees only
+once its first update has brought the guest agent ("It keeps itself up to
+date"), and no box is behind it. A
 key to the edge would control every lab and the edge itself, so the session
 must never hold one; that is the line not to cross.
 
@@ -654,7 +655,36 @@ out, a machine that can build it offers *Build the edge router on it*
    thing that could reach it is a lab, and it is not tagged `fleetwright`, so
    the fleet's token cannot touch the fleet's own way out.
 3. When it is already there, moves its WAN if the way out changed and starts
-   it if it was stopped. Nothing is rebuilt.
+   it if it was stopped, and says the WAN address Xen Orchestra has for it,
+   or that Xen Orchestra does not know it, which is not the same as it having
+   none. Nothing is rebuilt, unless it is from before the edge updated
+   itself (below).
+
+### It keeps itself up to date
+
+> Why don't we install the guest agent and drivers everywhere?
+
+The edge runs OPNsense's own **Automatic firmware update** once a day at
+10:00 UTC (04:00 Mountain), with up to 25 minutes' random delay, and its
+configuration names the **`os-xen`** plugin, OPNsense's package of the Xen
+guest utilities. The two come together because nobody can log in to the edge
+and the build writes only its configuration: a plugin named in
+`system.firmware.plugins` is installed by that update when it is missing, and
+OPNsense 26.7 has no other unattended way to install one (plugin install has
+no cron action). So the edge has the guest agent from its first update on, and
+Xen Orchestra shows its addresses from then.
+
+**What it costs, chosen on purpose:** the update takes OPNsense's stable
+updates within 26.7, and restarts the edge when the kernel or base system
+changed. **Every machine behind it has no way out for those minutes.** It does
+not move to a new major release on its own.
+
+An edge built before this is **rebuilt once**, on the next Apply, because its
+configuration is fixed when it is built; the phone says so before it starts,
+and the machines behind it have no way out while it runs. A new edge is tagged
+`fleetwright-edge-updates`, which is how the next policy tells the two apart.
+**Not yet run** on a real pool: that the first update installs `os-xen` on the
+nano image, and that Xen Orchestra then reads the WAN address as interface 0's.
 
 ### What the edge filters
 
@@ -722,8 +752,8 @@ out ending `divert-to 8000`, the policy was in Suricata's own
 `rule-policies.config` as enabled, alert to drop, over the four files, and a
 sample ET-style rule put where a download lands was installed by OPNsense's own
 `installRules.py` as `drop`. The first boot found the policy written but
-**disabled**, because a model default is not written into an item that came
-from the file; it now says `enabled` in so many words, and a test holds it to
+**disabled**, though OPNsense's model gives it a default of enabled; why is
+not known, so it now says `enabled` in so many words, and a test holds it to
 that. **Not run here:** a packet actually dropped, since QEMU's network here has
 no machine on the LAN side, and the netfront driver on a real pool, which divert
 does not depend on.
@@ -731,8 +761,12 @@ does not depend on.
 It all but filled the 5,234 bytes the configuration has to fit in, so what
 OPNsense does anyway was cut to make room: the web interface's theme, pf's
 default optimization, sticky load balancing (which needs source tracking,
-which is off), and the policy's priority and description. The comment on
-`edgeConfig` lists each one and why it changes nothing.
+which is off), and the policy's priority and description. The daily update
+then needed more than was left, so the file grows to its 8,192 bytes for
+every edge, the aliases lose their descriptions (OPNsense does not require
+them and nobody can log in to read them), and the private rule's label is
+shorter. The comment on `edgeConfig` lists each one and why it changes
+nothing.
 
 **Booted in QEMU** from the pinned 26.7 image patched this way. The two cron
 jobs were in the crontab, Unbound was listening with its blocklist module
