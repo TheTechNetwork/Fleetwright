@@ -50,7 +50,9 @@
 // through to a template on a real pool.
 
 import { lookup } from 'node:dns/promises';
+import { readFileSync } from 'node:fs';
 import { isIPv4 } from 'node:net';
+import { gzipSync } from 'node:zlib';
 
 import { fetchPinned, uploadDisk, srName } from './edge-router.js';
 import { qcow2Raw, qcow2Size } from './qcow2.js';
@@ -141,6 +143,46 @@ export function imageKeyOf(t) {
 }
 
 /** Names and sizes in Xen Orchestra. */
+/**
+ * XCP-ng's guest agent, pinned like the images: what tells Xen Orchestra a
+ * VM's addresses and that it has booted. Upstream's own release build (the
+ * 0.4.0 release's "Linux x86 64bit executable"), which needs glibc 2.28 at
+ * most, so it runs on every image here.
+ *
+ * WHY IT IS CARRIED AND NOT INSTALLED. Debian has no package for any Xen
+ * guest agent, so `apt-get install xe-guest-utilities || true` installed
+ * nothing on Debian and every Debian clone showed no address in Xen
+ * Orchestra; and apt needs the network, so a build VM whose network was the
+ * problem never had one either. Now the box downloads it, checks it, and
+ * writes it into the cloud-init drive, and the build VM starts it before
+ * anything needs a network. It stays in the image, so every clone has it.
+ *
+ * AGPL-3.0, unmodified, fetched from upstream by the person's own box onto
+ * their own VM; this repository carries only its address and digest. Its
+ * address is a CI artifact of the release job: if it ever goes, the build
+ * goes on without it and says so.
+ */
+export const GUEST_AGENT = Object.freeze({
+  release: '0.4.0',
+  url: 'https://gitlab.com/xen-project/xen-guest-agent/-/jobs/6041686346/artifacts/raw/target/release/xen-guest-agent',
+  size: 6644528,
+  sha256: 'aa2e1dca26594f7de4377f5a74999329fa51b10235b78ee8fbf4a814f654b3a3',
+});
+
+/** Upstream's unit for it (startup/xen-guest-agent.service at 0.4.0), as written there. */
+const GUEST_AGENT_UNIT = [
+  '[Unit]',
+  'Description=Xen guest agent',
+  'Conflicts=xe-linux-distribution.service',
+  '',
+  '[Service]',
+  'ExecStart=/usr/sbin/xen-guest-agent',
+  'Restart=on-failure',
+  '',
+  '[Install]',
+  'WantedBy=multi-user.target',
+];
+
 export const VM_IMAGE = Object.freeze({
   /** On the template, which is how a box holding a pool's token finds it. */
   tag: 'fleetwright-image',
@@ -195,12 +237,17 @@ const RUN_USER = 'fleetwright';
  * build VM had an address and a route and could not look up a single name:
  * it said so on its screen and nowhere the phone could see.
  *
- * @param {{ coordinatorUrl: string, token?: string|null, addresses?: string[] }} opts
+ * AND THE GUEST AGENT, when the box has it (`agent`, GUEST_AGENT gzipped and
+ * in base64): written by cloud-init and started first, so Xen Orchestra
+ * shows the build VM's address whatever its network does.
+ *
+ * @param {{ coordinatorUrl: string, token?: string|null, addresses?: string[], agent?: string|null }} opts
  */
-export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [] }) {
+export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [], agent = null }) {
   const url = new URL(coordinatorUrl);
   const origin = url.origin;
   if (token !== null && !IMAGE_REPORT_TOKEN_RE.test(token)) throw new Error('that is not a report token');
+  if (agent !== null && !/^[A-Za-z0-9+/]+=*$/.test(agent)) throw new Error('that is not the guest agent');
   // Addresses as the box's own resolver gave them, and nothing else: each is
   // checked to be one before it is written into a shell script.
   const pinned = [...new Set(addresses.filter((a) => isIPv4(a)))].slice(0, 4);
@@ -268,9 +315,9 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [] 
     '  report packages',
     '  apt-get update',
     '  apt-get install -y curl ca-certificates openssh-server',
-    // The Xen guest agent, where Debian has it: it is what lets Xen
-    // Orchestra see a clone's address and know it has booted.
-    '  apt-get install -y xe-guest-utilities || true',
+    // The packaged agent only where the box could not bring GUEST_AGENT:
+    // Ubuntu has one, Debian has none, and the two must not both run.
+    '  [ -x /usr/sbin/xen-guest-agent ] || apt-get install -y xe-guest-utilities || true',
     // What a clone fences itself with on the uplink and finds the others in
     // its group by (install/fleetwright-net). A clone installs them itself
     // when they are missing, at the cost of a minute.
@@ -289,6 +336,8 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [] 
     '  rm -f /root/fleetwright-image.sh',
     '  cloud-init clean --logs',
     '}',
+    // FIRST, so Xen Orchestra has its address before anything can fail.
+    '[ -x /usr/sbin/xen-guest-agent ] && systemctl enable --now xen-guest-agent.service',
     'report started',
     // tee carries on past a screen it cannot open, and the status is the
     // steps', not tee's.
@@ -310,6 +359,18 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [] 
     '    shell: /bin/bash',
     '    lock_passwd: true',
     'write_files:',
+    ...(agent
+      ? [
+          '  - path: /usr/sbin/xen-guest-agent',
+          "    permissions: '0755'",
+          '    encoding: gz+b64',
+          `    content: ${agent}`,
+          '  - path: /etc/systemd/system/xen-guest-agent.service',
+          "    permissions: '0644'",
+          '    content: |',
+          ...GUEST_AGENT_UNIT.map((l) => (l ? `      ${l}` : '')),
+        ]
+      : []),
     '  - path: /root/fleetwright-image.sh',
     "    permissions: '0700'",
     '    content: |',
@@ -430,6 +491,17 @@ async function addressesFor(host) {
   }
 }
 
+/**
+ * GUEST_AGENT, downloaded once into the state directory and checked against
+ * its digest on every use (fetchPinned).
+ *
+ * @param {string} imageDir @param {AbortSignal} [signal] @returns {Promise<Buffer>}
+ */
+async function fetchAgent(imageDir, signal) {
+  const file = await fetchPinned({ dir: imageDir, url: GUEST_AGENT.url, size: GUEST_AGENT.size, algorithm: 'sha256', digest: GUEST_AGENT.sha256, label: 'Xen guest agent', signal });
+  return readFileSync(file);
+}
+
 /** @param {number} ms */
 const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -460,6 +532,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   pollMs?: number,
  *   reporter?: (() => Promise<string|null>)|null,
  *   addressesOf?: (host: string) => Promise<string[]>,
+ *   getAgent?: (imageDir: string, signal?: AbortSignal) => Promise<Buffer>,
  *   vmReport?: () => ({ step: string, detail: string|null, at: number }|null),
  *   replace?: boolean,
  * }} opts
@@ -469,7 +542,7 @@ export async function ensureImage({
   image: key = DEBIAN_IMAGE.key,
   resize = 'disk.resize',
   getImage = fetchPinned, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
-  reporter = null, vmReport = () => null, addressesOf = addressesFor,
+  reporter = null, vmReport = () => null, addressesOf = addressesFor, getAgent = fetchAgent,
   replace = false,
 }) {
   const spec = IMAGES[key];
@@ -558,7 +631,18 @@ export async function ensureImage({
     // disk's id and its new size in bytes.
     await admin.call(resize === 'vdi.set' ? 'vdi.set' : 'disk.resize', { id: vdi, size: VM_IMAGE.diskSize });
 
-    say(`Installing Fleetwright on the machine image, its disk on ${on}.`, stage(3, installFill(0)));
+    // THE GUEST AGENT, or the build goes on without it and says so: an
+    // image without one works, Xen Orchestra just cannot see its address.
+    /** @type {string|null} */
+    let agent = null;
+    let noAgent = '';
+    try {
+      agent = gzipSync(await getAgent(imageDir, signal)).toString('base64');
+    } catch (e) {
+      signal?.throwIfAborted();
+      noAgent = ` It goes without the Xen guest agent, so Xen Orchestra will not show its address: ${String(/** @type {any} */ (e)?.message || e).slice(0, 160)}.`;
+    }
+    say(`Installing Fleetwright on the machine image, its disk on ${on}.${noAgent}`, stage(3, installFill(0)));
     vm = await admin.call('vm.create', {
       template: base.id,
       name_label: VM_IMAGE.buildName,
@@ -582,7 +666,7 @@ export async function ensureImage({
     // alone, as it was before reports existed.
     const token = reporter ? await reporter() : null;
     const addresses = token ? await addressesOf(new URL(coordinatorUrl).hostname) : [];
-    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token, addresses }) });
+    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token, addresses, agent }) });
     signal?.throwIfAborted();
     await admin.call('vm.start', { id: vm });
 

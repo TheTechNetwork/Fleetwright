@@ -16,6 +16,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
 import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, removeImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
@@ -545,6 +546,29 @@ test('the image’s cloud-init installs from this fleet without a pin, leaves no
   assert.match(buildCloudConfig({ coordinatorUrl: 'https://fleet.test', addresses: ["1.2.3.4'; reboot; '", 'fleet.test'] }), /pinned=''/, 'nor is an address that is not one');
 });
 
+/** A stand-in for GUEST_AGENT's bytes. */
+const AGENT = Buffer.from('\x7fELF a stand-in for xen-guest-agent');
+
+test('the guest agent goes in the cloud-init drive and starts before anything that needs a network; the packaged one is only a fallback', () => {
+  // ASKED FOR: the guest agent everywhere. Debian has no package for one, so
+  // `apt-get install xe-guest-utilities || true` put nothing on a Debian
+  // image, and apt needs the network, so a build VM whose network was the
+  // problem never had one either.
+  const agent = gzipSync(AGENT).toString('base64');
+  const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: REPORT_TOKEN, agent });
+  const lines = config.split('\n');
+  const at = lines.indexOf('  - path: /usr/sbin/xen-guest-agent');
+  assert.ok(at > lines.indexOf('write_files:'), 'not written by cloud-init');
+  assert.deepEqual(lines.slice(at + 1, at + 4), ["    permissions: '0755'", '    encoding: gz+b64', `    content: ${agent}`]);
+  assert.ok(gunzipSync(Buffer.from(agent, 'base64')).equals(AGENT), 'what cloud-init writes is the agent');
+  assert.ok(config.includes('      ExecStart=/usr/sbin/xen-guest-agent'));
+  const start = lines.findIndex((l) => l.includes('systemctl enable --now xen-guest-agent.service'));
+  assert.ok(start > 0 && start < lines.findIndex((l) => l.trim() === 'report started'), 'started after the first report, or not at all');
+  assert.ok(config.includes('[ -x /usr/sbin/xen-guest-agent ] || apt-get install -y xe-guest-utilities || true'), 'both agents would run');
+  assert.ok(!buildCloudConfig({ coordinatorUrl: 'https://fleet.test' }).includes('/usr/sbin/xen-guest-agent\n'), 'none written without one');
+  assert.throws(() => buildCloudConfig({ coordinatorUrl: 'https://fleet.test', agent: "x\n    content: |\n      reboot" }), /not the guest agent/, 'nor is anything else written in its place');
+});
+
 /**
  * The build VM's install script, run in bash with every command it calls
  * replaced by a function that writes down how it was called: what it reports,
@@ -719,6 +743,7 @@ const buildArgs = (p) => ({
   imageDir: '/nowhere',
   coordinatorUrl: 'https://fleet.test',
   addressesOf: async () => ['203.0.113.7'],
+  getAgent: async () => AGENT,
   say: () => {},
   getImage: /** @type {any} */ (async () => downloaded),
   upload: /** @type {any} */ (async (/** @type {any} */ o) => {
@@ -744,7 +769,7 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.deepEqual(create.VIFs, [{ network: 'net-uplink' }], 'built behind the edge router');
   // The install reaches the VM on a drive made once its disk is there, on that
   // disk's storage; and it is gone before the VM is a template.
-  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params, { vm: 'build-vm', sr: 'sr-1', config: buildCloudConfig({ coordinatorUrl: 'https://fleet.test' }) });
+  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params, { vm: 'build-vm', sr: 'sr-1', config: buildCloudConfig({ coordinatorUrl: 'https://fleet.test', agent: gzipSync(AGENT).toString('base64') }) });
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vdi.delete')).params, { id: 'cfg-1' });
   assert.deepEqual(p.disks.map((d) => d.vdi), ['vdi-1'], 'the template keeps its own disk and nothing else');
   assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.resize')).params.size, VM_IMAGE.diskSize);
@@ -800,6 +825,7 @@ test('a build VM’s reports are what the phone is told, and a failure it report
   const config = /** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params.config;
   assert.ok(config.includes(REPORT_TOKEN), 'the VM is given its token');
   assert.ok(config.includes("pinned='fleet.test:443:203.0.113.7'"), 'and the coordinator’s address, as this box looked it up');
+  assert.ok(config.includes(`    content: ${gzipSync(AGENT).toString('base64')}`), 'and the guest agent the box fetched');
   const install = shown.filter((s) => s.text.startsWith('Installing Fleetwright on the machine image:'));
   assert.match(install[0].text, /installing Debian’s packages, 1 min so far\./);
   assert.match(install[1].text, /installing Fleetwright and fetching the session image/);
@@ -836,6 +862,23 @@ test('a build VM that never reports in is named as the likely problem, and one t
 
 const OLD = { type: 'VM-template', id: 'img-old', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag, 'fleetwright-image:debian-13'] };
 const CLONE = { type: 'VM', id: 'vm-a', $pool: 'pool-1', tags: [`${VM_IMAGE.fromPrefix}img-old`] };
+
+test('a guest agent the box cannot get does not stop the build, and the phone is told what it goes without', async () => {
+  const p = buildPool({ then: 'Halted' });
+  /** @type {string[]} */
+  const said = [];
+  const text = await ensureImage({
+    ...buildArgs(p),
+    getAgent: async () => {
+      throw new Error('the Xen guest agent image downloaded with SHA-256 0000…, not the published aa2e…, so it was not used');
+    },
+    say: (t) => said.push(t),
+  });
+  assert.match(text, /machine image is ready on rack/);
+  assert.ok(said.some((s) => /^Installing Fleetwright on the machine image, its disk on .*\. It goes without the Xen guest agent, so Xen Orchestra will not show its address: the Xen guest agent image downloaded with SHA-256 0000/.test(s)));
+  const config = /** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params.config;
+  assert.ok(!config.includes('encoding: gz+b64'), 'nothing that failed its check is written');
+});
 
 test('a rebuild makes the new image beside the old one, and removes the old one once the new one is a template', async () => {
   const p = buildPool({ then: 'Halted', existing: [OLD] });
