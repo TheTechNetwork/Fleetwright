@@ -823,6 +823,17 @@ admin sign-in for as long as it runs:
   AGPL-3.0, unmodified, and fetched by your box onto your VM; this repository
   carries only its address and digest.
 
+  **Renovate keeps it current, in two halves.** It proposes the next
+  upstream release by moving the version in `GUEST_AGENT`, and nothing more:
+  the file's address is a CI job number rather than the version, and
+  upstream publishes no digest, so no datasource can say what the new file
+  is. `node scripts/pin-guest-agent.mjs` on that pull request's branch writes
+  the other half from the release's own asset link, after checking the build
+  is an x86-64 executable needing no newer glibc than the oldest image's
+  (Ubuntu 24.04, 2.39) and that upstream's systemd unit has not changed.
+  Until it has run, the pull request is red and says why, and a box given the
+  mismatch builds without the agent rather than trust the old digest.
+
   **It says where it has got to.** The box running the job asks the
   coordinator for a report token for it, and the script posts each step to
   `/api/xosetup/report` with it: started, packages, installer (Fleetwright and
