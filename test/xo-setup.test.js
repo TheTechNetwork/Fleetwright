@@ -431,7 +431,7 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   const xo = await standIn(t, {
     sets: [chosenBefore()],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
   });
   /** @type {any[]} */
   const asked = [];
@@ -495,7 +495,7 @@ test('the pool’s own machine is made last, from its image, with a pin asked fo
   const xo = await standIn(t, {
     sets: [chosenBefore()],
     more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
   });
   /** @type {string[]} */
@@ -528,7 +528,7 @@ test('a Xen Orchestra without disk.resize builds the image through vdi.set, and 
     const xo = await standIn(t, {
       sets: [chosenBefore()],
       more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', ...grow],
-      vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+      vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     });
     /** @type {any[]} */
     const asked = [];
@@ -560,7 +560,7 @@ test('an image that is there is rebuilt or removed when the person asks, removed
   const xo = await standIn(t, {
     sets: [chosenBefore()],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'vm.delete'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: {
       deb: { id: 'deb', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] },
       u24: { id: 'u24', type: 'VM-template', name_label: 'Fleetwright Ubuntu 24.04 LTS', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04'] },
@@ -737,7 +737,7 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
     sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'net-l1'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
     nets: { 'net-l1': 'fleetwright-lab-1', 'net-l2': 'fleetwright-lab-2' },
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-labs:oc'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-labs:oc'], power_state: 'Running' } },
     vifs: {
       w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' },
       a: { id: 'a', type: 'VIF', $VM: 'edge', device: '2', $network: 'net-l1' },
@@ -869,7 +869,7 @@ test('through a phone, a policy makes the pool its own machine, and gigabyte bui
   const xo = await standIn(t, {
     sets: [chosenBefore()],
     more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start', 'disk.import', 'vm.attachDisk', 'vif.set'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
   });
   const relay = wire(xo.address);
