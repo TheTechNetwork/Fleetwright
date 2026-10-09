@@ -202,6 +202,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canHolder by remember { mutableStateOf(false) }
     // It builds an edge that drops what its threat rules match (`can` holds "edge-block"); an older one only one that logs.
     var canEdgeBlock by remember { mutableStateOf(false) }
+    // It builds the edge as two routers sharing their addresses (`can` holds "edge-ha"); an older one builds one.
+    var canEdgeHa by remember { mutableStateOf(false) }
     // It makes labs on the edge (`can` holds "labs"); an older one cannot.
     var canLabs by remember { mutableStateOf(false) }
     // It keeps how many labs one person may hold (`labs-each` in `can`).
@@ -509,6 +511,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canGroups = "groups" in p.setup.can
         canHolder = "holder" in p.setup.can
         canEdgeBlock = "edge-block" in p.setup.can
+        canEdgeHa = "edge-ha" in p.setup.can
         canLabs = "labs" in p.setup.can
         canLabsEach = "labs-each" in p.setup.can
         canImageManage = "image-manage" in p.setup.can
@@ -789,6 +792,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             groupsChoice = canGroups && opened.groups != null,
                             holderChoice = canHolder && opened.holders != null,
                             edgeBlockChoice = canEdgeBlock,
+                            edgeHaChoice = canEdgeHa,
                             labsChoice = canLabs && opened.labMax != null,
                             labsEachChoice = canLabs && opened.labMax != null && canLabsEach,
                         )
