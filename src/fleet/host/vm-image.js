@@ -49,6 +49,9 @@
 // that refuses what the real one refuses; the whole build is NOT YET RUN
 // through to a template on a real pool.
 
+import { lookup } from 'node:dns/promises';
+import { isIPv4 } from 'node:net';
+
 import { fetchPinned, uploadDisk, srName } from './edge-router.js';
 import { qcow2Raw, qcow2Size } from './qcow2.js';
 import { IMAGE_REPORT_TOKEN_RE } from '../protocol/intents.js';
@@ -185,11 +188,23 @@ const RUN_USER = 'fleetwright';
  * did not stop the script, so a broken install went on, powered off, and
  * became the template.
  *
- * @param {{ coordinatorUrl: string, token?: string|null }} opts
+ * A REPORT STILL GETS OUT WHEN NAMES DO NOT. The box looks up the
+ * coordinator's addresses as it writes this (`addresses`), and a report curl
+ * could not send by name is sent again to those, under the same name, so
+ * TLS still checks the coordinator's own certificate. Asked for after a real
+ * build VM had an address and a route and could not look up a single name:
+ * it said so on its screen and nowhere the phone could see.
+ *
+ * @param {{ coordinatorUrl: string, token?: string|null, addresses?: string[] }} opts
  */
-export function buildCloudConfig({ coordinatorUrl, token = null }) {
-  const origin = new URL(coordinatorUrl).origin;
+export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [] }) {
+  const url = new URL(coordinatorUrl);
+  const origin = url.origin;
   if (token !== null && !IMAGE_REPORT_TOKEN_RE.test(token)) throw new Error('that is not a report token');
+  // Addresses as the box's own resolver gave them, and nothing else: each is
+  // checked to be one before it is written into a shell script.
+  const pinned = [...new Set(addresses.filter((a) => isIPv4(a)))].slice(0, 4);
+  const port = url.port || (url.protocol === 'http:' ? '80' : '443');
   const script = [
     '#!/bin/bash',
     'set -u',
@@ -200,6 +215,7 @@ export function buildCloudConfig({ coordinatorUrl, token = null }) {
     "screens='/dev/console /dev/tty1'",
     `origin='${origin}'`,
     `token='${token ?? ''}'`,
+    `pinned='${pinned.length ? `${url.hostname}:${port}:${pinned.join(',')}` : ''}'`,
     // THE BODY BY PYTHON, which has JSON and is there before anything is
     // installed; SENT BY CURL once there is one, with a user agent of its
     // own. curl is what fetched /install through the same front door, and a
@@ -217,7 +233,8 @@ export function buildCloudConfig({ coordinatorUrl, token = null }) {
     'print(json.dumps(body))',
     `' "$token" "$1" "$log" 2>/dev/null) || return 0`,
     '  if command -v curl >/dev/null 2>&1; then',
-    `    curl -fsS -m 10 -A fleetwright-image -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1 || true`,
+    `    curl -fsS -m 10 -A fleetwright-image -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1 ||`,
+    `      { [ -n "$pinned" ] && curl -fsS -m 10 -A fleetwright-image --resolve "$pinned" -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1; } || true`,
     '  else',
     "    python3 -c '",
     'import sys, urllib.request',
@@ -234,7 +251,20 @@ export function buildCloudConfig({ coordinatorUrl, token = null }) {
     '  echo "fleetwright: building the machine image"',
     '  ip -4 -br addr || true',
     '  ip -4 route || true',
-    '  getent hosts deb.debian.org || echo "fleetwright: cannot look up deb.debian.org, so this VM has no working DNS"',
+    // A NAME, GIVEN HALF A MINUTE. The first real run looked once, in the
+    // VM's first second, and said it had no DNS while its resolver may not
+    // yet have been told the server DHCP named. Every step after this needs
+    // names, so without them it stops here, saying which server it asked.
+    '  named=',
+    '  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do',
+    '    if getent hosts deb.debian.org; then named=1; break; fi',
+    '    sleep 2',
+    '  done',
+    '  if [ -z "$named" ]; then',
+    '    echo "fleetwright: cannot look up deb.debian.org after 30 seconds, so this VM has no working DNS. The servers it was told to ask:"',
+    "    resolvectl dns 2>/dev/null || grep '^nameserver' /etc/resolv.conf || echo '(none)'",
+    '    exit 1',
+    '  fi',
     '  report packages',
     '  apt-get update',
     '  apt-get install -y curl ca-certificates openssh-server',
@@ -382,6 +412,24 @@ const SILENT_MS = 5 * 60_000;
 /** The last few lines of a log, for a sentence on a phone. @param {string|null|undefined} log */
 const logEnd = (log) => String(log || '').trim().split('\n').slice(-4).join('\n').slice(-600);
 
+/**
+ * The coordinator's IPv4 addresses as this box's resolver has them, for a
+ * build VM whose own names do not work (buildCloudConfig). None, rather than
+ * an error, when they cannot be had: the VM then reports by name alone.
+ *
+ * @param {string} host @returns {Promise<string[]>}
+ */
+async function addressesFor(host) {
+  try {
+    /** @type {Promise<Array<{ address: string }>>} */
+    const late = new Promise((resolve) => setTimeout(() => resolve([]), 5_000).unref());
+    const found = await Promise.race([lookup(host, { all: true, family: 4 }), late]);
+    return found.map((a) => a.address);
+  } catch {
+    return [];
+  }
+}
+
 /** @param {number} ms */
 const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -411,6 +459,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   sleep?: (ms: number) => Promise<void>,
  *   pollMs?: number,
  *   reporter?: (() => Promise<string|null>)|null,
+ *   addressesOf?: (host: string) => Promise<string[]>,
  *   vmReport?: () => ({ step: string, detail: string|null, at: number }|null),
  *   replace?: boolean,
  * }} opts
@@ -420,7 +469,7 @@ export async function ensureImage({
   image: key = DEBIAN_IMAGE.key,
   resize = 'disk.resize',
   getImage = fetchPinned, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
-  reporter = null, vmReport = () => null,
+  reporter = null, vmReport = () => null, addressesOf = addressesFor,
   replace = false,
 }) {
   const spec = IMAGES[key];
@@ -532,7 +581,8 @@ export async function ensureImage({
     // #onImageReporter). Without one the build is judged by power state
     // alone, as it was before reports existed.
     const token = reporter ? await reporter() : null;
-    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token }) });
+    const addresses = token ? await addressesOf(new URL(coordinatorUrl).hostname) : [];
+    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token, addresses }) });
     signal?.throwIfAborted();
     await admin.call('vm.start', { id: vm });
 

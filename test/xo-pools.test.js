@@ -542,6 +542,7 @@ test('the image’s cloud-init installs from this fleet without a pin, leaves no
   assert.match(config, /systemctl disable --now fleetwright-sidecar fleetwright/);
   assert.ok(!config.includes('fwi_'), 'no token, no reports');
   assert.throws(() => buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: "x'; reboot; '" }), /not a report token/, 'a token is never a way into the script');
+  assert.match(buildCloudConfig({ coordinatorUrl: 'https://fleet.test', addresses: ["1.2.3.4'; reboot; '", 'fleet.test'] }), /pinned=''/, 'nor is an address that is not one');
 });
 
 /**
@@ -550,16 +551,20 @@ test('the image’s cloud-init installs from this fleet without a pin, leaves no
  * and how it ends. Functions, not stubs on PATH, because `test` is a builtin
  * and `rm` must not touch this machine.
  *
- * @param {{ fail?: string, token?: string|null }} [o]  a command that fails
+ * @param {{ fail?: string, token?: string|null, addresses?: string[], offline?: boolean }} [o]
+ *   a command that fails; and, offline, a VM that cannot look up a name, so
+ *   curl gets nowhere by name and only by an address it is given
  */
-function runImageScript({ fail = '', token = REPORT_TOKEN } = {}) {
-  const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token });
+function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false } = {}) {
+  const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token, addresses });
   const lines = config.split('\n');
   const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
   const dir = mkdtempSync(join(tmpdir(), 'image-script-'));
   try {
-    const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent'].map((c) =>
-      `${c}() { echo "${c} $*" >>"$CALLS"; ${c === fail ? 'return 1' : 'return 0'}; }`);
+    const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent', 'sleep', 'resolvectl'].map((c) => {
+      const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : '';
+      return `${c}() { echo "${c} $*" >>"$CALLS"; ${fails}${fails ? '; ' : ''}return 0; }`;
+    });
     // python3 only ever builds a report's body: its fourth argument is the
     // step, which is all the body need be here; curl is what sends it.
     stubs.push('python3() { echo "$4"; }');
@@ -571,10 +576,11 @@ function runImageScript({ fail = '', token = REPORT_TOKEN } = {}) {
     assert.equal(run.status, 0, run.stderr);
     // A report is a curl to the report route under an agent of its own, not
     // a stock one a CDN's bot check turns away, and reads back as
-    // `report <step>`.
+    // `report <step>`, or `report <step> to <host:port:address>` when it went
+    // to an address rather than by name.
     return readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n').map((c) => {
-      const sent = /^curl -fsS -m 10 -A fleetwright-image .*--data-binary (\S+) https:\/\/fleet\.test\/api\/xosetup\/report$/.exec(c);
-      return sent ? `report ${sent[1]}` : c;
+      const sent = /^curl -fsS -m 10 -A fleetwright-image (?:--resolve (\S+) )?.*--data-binary (\S+) https:\/\/fleet\.test\/api\/xosetup\/report$/.exec(c);
+      return sent ? `report ${sent[2]}${sent[1] ? ` to ${sent[1]}` : ''}` : c;
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -606,6 +612,24 @@ test('the install script stops at the first step that fails, says so with its lo
   const checked = runImageScript({ fail: 'test' });
   assert.equal(checked.at(-1), 'systemctl reboot', 'an install that left no fleetwright-vm-join is a failure too');
   assert.ok(!checked.some((c) => c.startsWith('cloud-init ')));
+});
+
+test('a VM that cannot look up a name stops within half a minute, says which servers it asked, and its failure still reaches the fleet', () => {
+  // ASKED FOR after a real build VM had an address and a route from the edge
+  // router and printed "cannot look up deb.debian.org" on its screen in its
+  // first second, then went on: one look, too early to be sure, and a
+  // failure the phone could not hear because its reports went by name.
+  const calls = runImageScript({ offline: true, addresses: ['203.0.113.7', '203.0.113.7', '198.51.100.2'] });
+  assert.equal(calls.filter((c) => c === 'getent hosts deb.debian.org').length, 15, 'fifteen looks, two seconds apart');
+  assert.ok(calls.includes('sleep 2'));
+  assert.ok(calls.includes('resolvectl dns'), 'and the servers DHCP gave it, on its screen and in the log it sends');
+  assert.ok(!calls.some((c) => c.startsWith('apt-get')), 'nothing that needs a name is tried');
+  assert.ok(calls.includes('report failed to fleet.test:443:203.0.113.7,198.51.100.2'), 'sent again to the addresses the box gave it');
+  assert.equal(calls.at(-1), 'systemctl reboot');
+
+  const named = runImageScript({ addresses: ['203.0.113.7'] });
+  assert.equal(named.filter((c) => c.startsWith('getent')).length, 1, 'a VM with names looks once');
+  assert.ok(!named.some((c) => c.includes(' to fleet.test:')), 'and reports by name alone');
 });
 
 test('without a token the script reports nothing and still ends the same two ways', () => {
@@ -694,6 +718,7 @@ const buildArgs = (p) => ({
   plain: false,
   imageDir: '/nowhere',
   coordinatorUrl: 'https://fleet.test',
+  addressesOf: async () => ['203.0.113.7'],
   say: () => {},
   getImage: /** @type {any} */ (async () => downloaded),
   upload: /** @type {any} */ (async (/** @type {any} */ o) => {
@@ -772,7 +797,9 @@ test('a build VM’s reports are what the phone is told, and a failure it report
     sleep: async () => { looks++; },
     say: (text, part) => shown.push({ text, fill: part?.fill ?? 0 }),
   }).catch((e) => e);
-  assert.ok(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params.config.includes(REPORT_TOKEN), 'the VM is given its token');
+  const config = /** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params.config;
+  assert.ok(config.includes(REPORT_TOKEN), 'the VM is given its token');
+  assert.ok(config.includes("pinned='fleet.test:443:203.0.113.7'"), 'and the coordinator’s address, as this box looked it up');
   const install = shown.filter((s) => s.text.startsWith('Installing Fleetwright on the machine image:'));
   assert.match(install[0].text, /installing Debian’s packages, 1 min so far\./);
   assert.match(install[1].text, /installing Fleetwright and fetching the session image/);
