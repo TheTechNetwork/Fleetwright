@@ -1317,7 +1317,13 @@ its own resource set and must not be able to.
    what the hosts have and the chosen storage holds. A choice that fails is
    refused and the job goes on waiting. One that passes becomes the resource
    set (`resourceSet.set`, its storage, networks and limits), and the egress
-   tag moves to the chosen network.
+   tag moves to the chosen network. Everything else the fleet put in the set
+   stays: its machine images, its own machines, and its uplink, group and lab
+   networks; and every image tagged as the fleet's goes back in if it is not
+   there, because a phone keeping an image sends nothing about it. `resourceSet.set` replaces the list, and it used to be written
+   with storage and networks alone, so a change that asked only for an Ubuntu
+   image took the Debian one out, and the next machine from it was refused
+   with "not enough permissions".
 
 The key the inventory comes back to lives in the screen's memory and
 nowhere else, so a screen that is rebuilt while the machine waits (an
