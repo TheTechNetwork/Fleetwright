@@ -92,6 +92,14 @@ final class XOLink: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             lock.withLock { opening = c }
             task.resume()
+            // ITS OWN DEADLINE, as calls have. The request timeout is reset
+            // by any byte, and a network that cannot route to the address
+            // can leave the page at "Connecting…" for longer than anybody
+            // waits. Only while it is still opening: an open socket is left.
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
+                guard let self, self.lock.withLock({ self.opening != nil }) else { return }
+                self.end("it did not answer within \(Int(timeout)) seconds")
+            }
         }
         receive()
     }
