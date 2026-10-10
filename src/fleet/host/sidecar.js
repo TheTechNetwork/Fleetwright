@@ -61,6 +61,7 @@ import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
+import { EdgeWatch } from './edge-watch.js';
 import { runnerJobProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
@@ -193,6 +194,7 @@ export class Sidecar {
    *   vaultIntervalMs?: number,
    *   xoStateDir?: string|null,
    *   xoPools?: XoPools|null,
+   *   edgeWatch?: EdgeWatch|null,
    *   holderFor?: string,
    *   vmLogin?: { email: string, token: string|null }|null,
    *   onVmLoginHanded?: (() => void)|null,
@@ -237,6 +239,7 @@ export class Sidecar {
     // vaults, in memory only (src/fleet/host/xo-pools.js). Made here for any
     // box that asks the vault; a test hands its own.
     xoPools = null,
+    edgeWatch = null,
     holderFor = '',
     // THIS BOX AS A MACHINE FROM SOMEBODY'S HYPERVISOR: whose it is and the
     // Claude login it runs on, from the file it was booted with
@@ -387,6 +390,11 @@ export class Sidecar {
     // ON A POOL'S OWN MACHINE, the Xen Orchestra it was made to hold
     // (xo-holder.js): its health says so, and the coordinator asks it first.
     this.pools = xoPools ?? (vaultKey ? new XoPools({ log: this.log, holderFor }) : null);
+    /**
+     * THE POOLS' EDGE ROUTERS, read with the key the person's vault keeps
+     * beside a pool's token (edge-watch.js), for the pools that have one.
+     */
+    this.edgeWatch = this.pools ? (edgeWatch ?? new EdgeWatch({ pools: this.pools, log: this.log, onChange: () => void this.#pushHealth() })) : null;
     this.vmLogin = vmLogin;
     this.onVmLoginHanded = onVmLoginHanded;
     /** @type {XoSetups|null} made on first use */
@@ -447,6 +455,7 @@ export class Sidecar {
     }
     // THE POOLS, between vault passes, while it holds any: the sweep is what
     // ends a machine at its end, so ten minutes late is too late.
+    this.edgeWatch?.start();
     if (this.pools && this.poolIntervalMs > 0) {
       this.poolTimer = setInterval(() => {
         if (this.pools?.held.size) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
@@ -464,6 +473,7 @@ export class Sidecar {
     this.renewTimer = null;
     if (this.poolTimer) clearInterval(this.poolTimer);
     this.poolTimer = null;
+    this.edgeWatch?.stop();
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.vaultTimer = null;
     this.watcher?.stop();
@@ -1615,7 +1625,14 @@ export class Sidecar {
       // answering or not, because making a machine is this process's and not
       // the hub's. Absent when it holds none, so an older coordinator sees
       // nothing new.
-      ...(this.pools?.held.size ? { xo: this.pools.report().map(({ problem, ...seen }) => seen) } : {}),
+      ...(this.pools?.held.size
+        ? {
+            xo: this.pools.report().map(({ problem, ...seen }) => {
+              const edges = this.edgeWatch?.reportFor(seen.owner, seen.address);
+              return edges ? { ...seen, edges } : seen;
+            }),
+          }
+        : {}),
       // WHICH OF THOSE CAN BE TAKEN OFF, so a screen offers Remove on exactly
       // the ones it works for. The flat list above cannot say: `arm64` and
       // `gpu` look identical in it, and one of them is a fact the host refuses

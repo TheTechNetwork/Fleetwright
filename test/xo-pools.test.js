@@ -1052,3 +1052,15 @@ test('a pool’s page is only its owner’s, and a box that cannot reach it send
   assert.equal(r.unreachable, true);
   assert.equal(r.text, 'xo.lan could not be reached from here: ECONNREFUSED');
 });
+
+test('the key to a pool’s edge routers is kept with its token when it is whole, and the pool is held without it when it is not', () => {
+  // docs/hypervisors.md, "Watching the edge routers": the phone keeps the
+  // routers' key beside the token after a policy job.
+  const edge = { key: 'k'.repeat(80), secret: 's'.repeat(80), pin: 'b'.repeat(64), routers: [{ name: 'fleetwright-edge', address: '192.168.1.40' }, { name: 'fleetwright-edge-b', address: 'nope' }, { name: 'other', address: '1.2.3.4' }] };
+  const pools = holder(xo());
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record({ edge }) }, { name: 'hypervisor:other.lan', value: record({ address: 'other.lan', edge: { ...edge, secret: 'a:b' } }) }] }]);
+  assert.deepEqual(pools.held.get(`${ELI} xo.lan`)?.record.edge, { key: edge.key, secret: edge.secret, pin: edge.pin, routers: [{ name: 'fleetwright-edge', address: '192.168.1.40' }, { name: 'fleetwright-edge-b', address: null }] });
+  const other = pools.held.get(`${ELI} other.lan`);
+  assert.ok(other, 'a pool whose router key is malformed is still held');
+  assert.equal(other.record.edge, undefined);
+});

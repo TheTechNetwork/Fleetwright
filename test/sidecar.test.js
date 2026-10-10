@@ -1027,6 +1027,19 @@ test('a pool’s page from away is this process’s too: read and worked for the
   assert.equal(stub.commands.length, 0, 'neither became a command line');
 });
 
+test('what a box reads of a pool’s edge routers rides on that pool’s entry in its health', async (t) => {
+  const edges = { at: 1_700_000_000_000, routers: [{ name: 'fleetwright-edge', role: 'master' }], events: [] };
+  const xoPools = /** @type {any} */ ({
+    held: new Map([['eli@example.com xo.lan', {}]]),
+    report: () => [{ address: 'xo.lan', owner: 'eli@example.com', reachable: true }, { address: 'other.lan', owner: 'eli@example.com', reachable: true, problem: 'x' }],
+    refresh: async () => {},
+  });
+  const edgeWatch = /** @type {any} */ ({ start() {}, stop() {}, reportFor: (/** @type {string} */ o, /** @type {string} */ a) => (a === 'xo.lan' ? edges : null) });
+  const { sidecar } = await setup(t, {}, { xoPools, edgeWatch });
+  const health = /** @type {any} */ (await sidecar.health());
+  assert.deepEqual(health.xo, [{ address: 'xo.lan', owner: 'eli@example.com', reachable: true, edges }, { address: 'other.lan', owner: 'eli@example.com', reachable: true }]);
+});
+
 test('a machine from a hypervisor hands its owner’s login to its hub once, then forgets the file', async (t) => {
   /** @type {any[]} */
   const given = [];

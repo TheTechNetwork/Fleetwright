@@ -113,7 +113,8 @@ export const SSH_KEYS_ITEM = 'secret:SSH_AUTHORIZED_KEYS';
 const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]{16,8192}(?: [^\n]{0,200})?$/;
 
 /**
- * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string }} PoolRecord
+ * @typedef {{ key: string, secret: string, pin: string, routers: Array<{ name: string, address: string|null }> }} EdgeKey
+ * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, edge?: EdgeKey }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null, perPerson?: number }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
@@ -320,7 +321,26 @@ export function poolRecord(name, value) {
   // A pinned connection needs its pin; only a person's acceptance of plain
   // HTTP, recorded at setup, goes without one.
   if (!plain && !pin) return null;
-  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined };
+  const edge = edgeKey(r.edge);
+  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(edge ? { edge } : {}) };
+}
+
+/**
+ * THE KEY TO THE POOL'S EDGE ROUTERS, as the phone keeps it beside the token
+ * after a policy job (edge-credentials.js): the key and secret, the routers'
+ * certificate, and where Xen Orchestra last saw each router. Anything that
+ * is not all of that is no key, and the pool is held without one.
+ *
+ * @param {any} e @returns {EdgeKey|null}
+ */
+export function edgeKey(e) {
+  const b64 = /^[A-Za-z0-9+/]{80}$/;
+  if (!e || typeof e !== 'object' || !b64.test(e.key) || !b64.test(e.secret) || !/^[0-9a-f]{64}$/.test(e.pin)) return null;
+  const routers = (Array.isArray(e.routers) ? e.routers : [])
+    .filter((/** @type {any} */ r) => r?.name === 'fleetwright-edge' || r?.name === 'fleetwright-edge-b')
+    .slice(0, 2)
+    .map((/** @type {any} */ r) => ({ name: String(r.name), address: typeof r.address === 'string' && /^\d{1,3}(\.\d{1,3}){3}$/.test(r.address) ? r.address : null }));
+  return { key: e.key, secret: e.secret, pin: e.pin, routers };
 }
 
 export class XoPools {
