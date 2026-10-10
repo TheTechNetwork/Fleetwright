@@ -158,6 +158,19 @@ export function xosetupPolicyAad(job, address) {
 }
 
 /**
+ * What the key a box reads a pool's edge routers with is sealed under on its
+ * way from the policy job to the phone, which keeps it in the person's vault
+ * with the pool's token (src/fleet/host/edge-credentials.js). Its own name
+ * over the same job and address, as each of the job's messages has.
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function xosetupWatchAad(job, address) {
+  return `fleetwright-xosetup-watch/v1:${job}:${address}`;
+}
+
+/**
  * What an install's passwords are sealed under: the pool master's root
  * password and the admin password the person chose for the Xen Orchestra the
  * machine installs, for one job at one pool master. Its own name, so a sealed

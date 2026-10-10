@@ -22,7 +22,8 @@ import path from 'node:path';
 
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits } from '../src/fleet/host/xo-setup.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS } from '../src/fleet/protocol/intents.js';
-import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../src/fleet/seal.js';
+import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupWatchAad } from '../src/fleet/seal.js';
+import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
 import { standIn, PASSWORD, skip } from './helpers/xo-stand-in.js';
@@ -776,6 +777,9 @@ test('a pair of edge routers is one edge to the phone, said to be a pair', { ski
   setups.cancel({ job: begun.xosetup.job, actor: 'eli@example.com' });
 });
 
+/** A key a router was built with, as buildEdge keeps it (edge-credentials.js). */
+const WATCH = newWatch();
+
 test('labs are made by the policy job, each its kind, kept in the set, and the edge already on them is left as it is', { skip }, async (t) => {
   // docs/hypervisors.md, "Labs". The edge is rebuilt when its labs change
   // (test/edge-router.test.js); here it already has these two.
@@ -783,7 +787,7 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
     sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'net-l1'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
     nets: { 'net-l1': 'fleetwright-lab-1', 'net-l2': 'fleetwright-lab-2' },
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-labs:oc'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch', 'fleetwright-edge-labs:oc'], power_state: 'Running', xenStoreData: { [EDGE_WATCH.key]: JSON.stringify(WATCH) } } },
     vifs: {
       w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' },
       a: { id: 'a', type: 'VIF', $VM: 'edge', device: '2', $network: 'net-l1' },
@@ -818,6 +822,11 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
   assert.ok(set.objects.includes('net-l1'), 'a lab the phone did not list was taken out of the set');
   assert.ok(!xo.calls.some((c) => c.method === 'disk.import'), 'an edge already on those labs was rebuilt');
   assert.match(end.text, /with one open lab and one closed lab/);
+  // THE KEY THE ROUTER HAS goes to the phone that ran the policy, sealed to
+  // it, so its vault can hand it to the boxes that read the router.
+  const [wEpk, wIv, wCt] = String(end.watch).split('.');
+  const watch = /** @type {any} */ (await open({ ...reply, aad: xosetupWatchAad(begun.xosetup.job, xo.address), sealed: { epk: wEpk, iv: wIv, ct: wCt } }));
+  assert.deepEqual(watch, { v: 1, address: xo.address, key: WATCH.key, secret: WATCH.secret, pin: WATCH.pin, routers: [{ name: 'fleetwright-edge', address: null }] });
 });
 
 test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves them as they are', () => {

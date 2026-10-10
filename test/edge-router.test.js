@@ -23,6 +23,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf } from '../src/fleet/host/edge-router.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
+import { EDGE_WATCH, newWatch, watchOf } from '../src/fleet/host/edge-credentials.js';
 
 const DEFAULT = readFileSync(new URL('./fixtures/opnsense-26.7-config.xml', import.meta.url));
 
@@ -455,7 +456,7 @@ test('an edge is built with an interface on each lab, in order, and tagged with 
   let body = null;
   const done = await ensureEdge(edgeArgs(fresh, { labs, fleet, upload: async (/** @type {any} */ u) => ((body = u.body), 'vdi-1') }).args);
   const made = Object.fromEntries(fresh.calls)['vm.create'];
-  assert.deepEqual(made.VIFs, [{ network: 'net-wan' }, { network: 'net-up' }, { network: 'net-lab-1' }, { network: 'net-lab-2' }]);
+  assert.deepEqual(made.VIFs.map((/** @type {any} */ v) => v.network), ['net-wan', 'net-up', 'net-lab-1', 'net-lab-2']);
   assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag, `${LAB.edgeTag}oc`]);
   assert.equal(body.regions.length, OPNSENSE_IMAGE.grow.edits.length + 1, 'the file was not given its block');
   assert.match(done, /It has one open lab and one closed lab of their own/);
@@ -542,7 +543,7 @@ test('the edge router is made in the order that boots: disk in, WAN first, check
   assert.equal(params['disk.import'].type, 'iso');
   const made = params['vm.create'];
   assert.equal(made.template, 'tpl-other');
-  assert.deepEqual(made.VIFs, [{ network: 'net-wan' }, { network: 'net-up' }]);
+  assert.deepEqual(made.VIFs.map((/** @type {any} */ v) => v.network), ['net-wan', 'net-up']);
   assert.deepEqual(made.VDIs, []);
   assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag]);
   assert.ok(!made.tags.includes('fleetwright'), "the fleet's token could manage its own way out");
@@ -881,4 +882,61 @@ test('the edge router is asked for only with a way out for its WAN', () => {
   assert.equal(/** @type {any} */ (checkPolicy({ ...base, egress: 'n2', edgeHa: true }, choices)).policy.edgeHa, null, 'not without an edge');
   assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n2', edge: true, edgeHa: 2 }, choices)).text, /is a pair is yes or no/);
   assert.ok(!existsSync('/nowhere'));
+});
+
+// WATCHING THE ROUTERS: docs/hypervisors.md, "Watching the edge routers".
+// Asked for: "Why is there no live info of opnsense in the app to help
+// trouble shoot this?" edge-credentials.test.js holds the parts themselves.
+
+test('a watched router has the key’s user beside root, its certificate at the top, the API on its WAN from private addresses only, and syslog out', () => {
+  const w = newWatch();
+  const plain = edgeConfig({ labs: [true, false], fleet: fleetHosts('https://fleet.example.network') }).toString('utf8');
+  const xml = edgeConfig({ labs: [true, false], fleet: fleetHosts('https://fleet.example.network'), watch: w, syslog: ['192.168.1.20'] }).toString('utf8').trimEnd();
+  assert.ok(balanced(xml), 'the file no longer parses');
+  assert.ok(!/fleetwright-watch|ssl-certref|<cert |<Syslog/.test(plain), 'a router built without a key has none of it');
+  assert.ok(xml.indexOf(`<name>${EDGE_WATCH.user}</name>`) > xml.indexOf('<name>root</name>') && xml.indexOf(`<name>${EDGE_WATCH.user}</name>`) < xml.indexOf('</system>'), 'the user is a system user, after root');
+  assert.match(xml, new RegExp(`<webgui><protocol>https</protocol><ssl-certref>${w.refid}</ssl-certref>`));
+  assert.ok(xml.indexOf('<cert uuid=') > xml.indexOf('</system>') && xml.indexOf('<cert uuid=') < xml.indexOf('<interfaces>'), 'the certificate is a top-level <cert>');
+  assert.ok(xml.indexOf('<Syslog version=') > xml.indexOf('</cron>') && xml.indexOf('<Syslog version=') < xml.indexOf('</OPNsense>'));
+  // The one way in, after the inside rules, on the WAN and nowhere else.
+  const wan = rulesOf(xml).filter((r) => r[2] === 'wan');
+  assert.deepEqual(wan, [[20, 'pass', 'wan', 'wanip', '443', false, false]]);
+  assert.match(xml, /<source_net>fleetwright_private<\/source_net><destination_net>wanip<\/destination_net>/);
+  // The biggest router there can be still fits the block, watched.
+  const long = `https://${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(57)}`;
+  assert.equal(edgeConfig({ block: true, labs: [false, false, false, false], fleet: fleetHosts(long), ha: { node: 1, password: 'f'.repeat(64) }, watch: w, syslog: ['10.0.0.1', '10.0.0.2'] }).length, OPNSENSE_IMAGE.grow.room);
+});
+
+test('a router without the key the job brings is rebuilt once, keeping its WAN MAC; one with it is left as it is', async () => {
+  const w = newWatch();
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Running' };
+  const wanVif = { id: 'vif-w', $VM: 'vm-old', device: '0', $network: 'net-wan', MAC: '02:AA:BB:CC:DD:EE' };
+  const admin = xo({ VM: [old], 'VM-template': [TEMPLATE], VIF: [wanVif] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' });
+  const { args, said } = edgeArgs(admin, { watch: w, syslog: ['192.168.1.20'] });
+  await ensureEdge(args);
+  const params = Object.fromEntries(admin.calls);
+  assert.ok(said.includes('Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it have no way out until it is up.'), said.join('\n'));
+  assert.deepEqual(params['vm.create'].VIFs[0], { network: 'net-wan', mac: '02:aa:bb:cc:dd:ee' }, 'the new router is not where the old one was on the way out');
+  assert.ok(params['vm.create'].tags.includes(EDGE_WATCH.tag));
+  assert.deepEqual(watchOf({ xenStoreData: params['vm.set'].xenStoreData }), w, 'the key is not kept where the next rebuild finds it');
+  assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
+
+  // Built with this key: nothing done. With another (a lost one, a tag and no key): rebuilt.
+  const watched = { ...old, tags: [...old.tags, EDGE_WATCH.tag], xenStoreData: { [EDGE_WATCH.key]: JSON.stringify(w) } };
+  const same = xo({ VM: [watched], VIF: [wanVif] });
+  await ensureEdge(edgeArgs(same, { watch: w }).args);
+  assert.deepEqual(same.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects'), []);
+  const other = xo({ VM: [{ ...watched, xenStoreData: {} }], 'VM-template': [TEMPLATE], VIF: [wanVif] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' });
+  await ensureEdge(edgeArgs(other, { watch: w }).args);
+  assert.ok(other.calls.some(([m]) => m === 'vm.create'), 'a router whose key is gone keeps a key the phone was never given');
+
+  // A new router: a MAC of its own, the same for the same pool every time.
+  const macOf = async () => {
+    const a = xo({ VM: [], 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-1' });
+    await ensureEdge(edgeArgs(a, { watch: w }).args);
+    return Object.fromEntries(a.calls)['vm.create'].VIFs[0].mac;
+  };
+  const first = await macOf();
+  assert.match(first, /^02(:[0-9a-f]{2}){5}$/, 'locally administered and unicast');
+  assert.equal(await macOf(), first);
 });

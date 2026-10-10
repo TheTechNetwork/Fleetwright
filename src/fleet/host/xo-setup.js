@@ -97,12 +97,13 @@ import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
-import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupWatchAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
-import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName } from './edge-router.js';
+import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName, wanAddressOf } from './edge-router.js';
 import { VM_IMAGE, IMAGES, ensureImage, removeImage, imageKeyOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
+import { newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
@@ -365,6 +366,8 @@ async function getRoot({ host, port, secure, timeoutMs, through = null }) {
  * @property {string} text
  * @property {string} [handoff]  once done: the limited user's token record,
  *   sealed to the key the phone sent inside the sign-in, as epk.iv.ct
+ * @property {string} [watch]  once a policy job is done: the key the fleet reads
+ *   the pool's edge routers with (edge-credentials.js), sealed to the same key
  * @property {string} [inventory]  a policy job waiting on the person: the
  *   pool's storage, networks and capacity (inventoryOf), sealed to the same key
  */
@@ -907,6 +910,12 @@ export class XoSetups {
         // saying what the first found would double every buzz on Android.
         if (typeof said === 'string') ctx.notes.push(said);
       }
+      // THE KEY THE FLEET READS THE ROUTERS WITH goes to the phone that ran
+      // the policy, sealed to the key it sent (edge-credentials.js), which
+      // keeps it in the person's vault with the pool's token. Every policy
+      // job that finds one hands it back, so a phone that missed it once,
+      // or a vault that lost it, has it again from the next.
+      if (policy && ctx.rec.reply) await this.#handWatch(ctx).catch((e) => this.log.warn(`xosetup: ${rec.job} could not seal the routers' key: ${/** @type {Error} */ (e).message}`));
       rec.step = rec.of;
       rec.phase = 'done';
       rec.state = 'done';
@@ -1349,6 +1358,18 @@ export class XoSetups {
     rec.building = 'edge';
     rec.part = null;
     rec.abort = new AbortController();
+    // THE KEY THE FLEET READS THE ROUTERS WITH (edge-credentials.js): the
+    // one they were built with, so a rebuild keeps it and the person's vault
+    // stays right, or a new one for routers that have none. Its logs go to
+    // the pool's own machine and to this one, which is on the way to Xen
+    // Orchestra and so, usually, on the routers' way out.
+    const onPool = (ctx.edges || []).filter((/** @type {any} */ v) => v?.$pool === way.$pool);
+    ctx.watch = onPool.map(watchOf).find(Boolean) ?? newWatch({ now: this.now() });
+    ctx.watchPool = way.$pool;
+    const syslog = [
+      ...(ctx.holders || []).filter((/** @type {any} */ v) => v?.$pool === way.$pool && v.power_state === 'Running').map((/** @type {any} */ v) => String(v.mainIpAddress || '')),
+      String(ctx.admin?.localAddress || ''),
+    ].filter((ip, i, all) => isPrivateV4(ip) && all.indexOf(ip) === i);
     return ensureEdge({
       admin: ctx.admin,
       pool: way.$pool,
@@ -1361,6 +1382,8 @@ export class XoSetups {
       ha: p.edgeHa,
       labs,
       fleet: fleetHosts(this.coordinatorUrl),
+      watch: ctx.watch,
+      syslog,
       rebuilding: () => {
         rec.building = 'edge-rebuild';
       },
@@ -1371,6 +1394,27 @@ export class XoSetups {
       signal: rec.abort.signal,
       say,
     });
+  }
+
+  /**
+   * The routers' key, sealed to the phone, with which routers it opens and
+   * where Xen Orchestra last saw them. A rebuilt router keeps its WAN MAC
+   * (edge-router.js, wanMacFor), so the address it had is the one it is
+   * likely to have again; a box that reads them also learns it from their
+   * syslog (edge-watch.js).
+   *
+   * @param {any} ctx
+   */
+  async #handWatch(ctx) {
+    const edges = (ctx.edges || []).filter((/** @type {any} */ v) => !ctx.watchPool || v?.$pool === ctx.watchPool);
+    const watch = ctx.watch ?? edges.map(watchOf).find(Boolean) ?? null;
+    if (!watch) return;
+    const routers = edges
+      .map((/** @type {any} */ v) => ({ name: v.tags?.includes?.(`${EDGE_HA.nodeTag}1`) ? EDGE_HA.second : EDGE.vm, address: wanAddressOf(v) }))
+      .filter((/** @type {any} */ r, /** @type {number} */ i, /** @type {any[]} */ all) => all.findIndex((x) => x.name === r.name) === i);
+    const payload = { v: 1, address: ctx.rec.address, key: watch.key, secret: watch.secret, pin: watch.pin, routers };
+    const box = await seal({ to: ctx.rec.reply, aad: xosetupWatchAad(ctx.rec.job, ctx.rec.address), payload });
+    ctx.rec.watch = `${box.epk}.${box.iv}.${box.ct}`;
   }
 
   /** The steps, in XOSETUP_STEPS order. Each may return the sentence it leaves on the job. */
@@ -1906,6 +1950,8 @@ function status(rec) {
   // until the job is forgotten, because a phone that was closed at the end
   // collects it whenever it next looks.
   if (rec.state === 'done' && rec.handoff) return { ...s, handoff: rec.handoff };
+  // THE ROUTERS' KEY, SEALED the same way, once a policy job is done.
+  if (rec.state === 'done' && rec.watch) return { ...s, watch: rec.watch };
   // THE POOL, SEALED, while the job waits on the person's choice.
   if (rec.state === 'choosing' && rec.inventory) return { ...s, inventory: rec.inventory };
   return s;
@@ -1940,6 +1986,14 @@ function scrub(message, creds) {
     if (secret && secret.length >= 4) out = out.split(secret).join('…');
   }
   return out.slice(0, 300);
+}
+
+/** A private IPv4 address, the only kind a router's syslog is sent to. @param {string} ip */
+function isPrivateV4(ip) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (!m || m.slice(1).some((x) => Number(x) > 255)) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b < 128);
 }
 
 /** @param {number} n @param {string} word */
