@@ -1480,7 +1480,10 @@ case "${NODE_BIN:-}" in
       for candidate in /usr/local/bin/node /usr/bin/node; do
         [ -x "$candidate" ] || continue
         candidate_major="$(node_major "$candidate")" || continue
-        [ "$candidate_major" -ge 18 ] || continue
+        # The floor, not a number of its own: this read 18, so a box whose node
+        # came from the prerequisite step got Debian's 20 installed beside it
+        # and the service pointed at that, which cannot run this.
+        [ "$candidate_major" -ge "$NODE_FLOOR" ] || continue
         UNIT_NODE_BIN="$candidate"
         break 3
       done

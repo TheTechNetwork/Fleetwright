@@ -344,6 +344,13 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     // when they are missing, at the cost of a minute.
     '  apt-get install -y nftables avahi-daemon libnss-mdns || true',
     '  report installer',
+    // NODE 24 FIRST, THE DOCUMENTED WAY. The installer needs the node
+    // package.json names and refuses an older one rather than add an apt
+    // repository; the distributions' own are older (Debian 13 ships 20), so a
+    // build that went straight to it stopped with "too old". The prerequisite
+    // step puts nvm and that node in the run user's home, and is a no-op on an
+    // image whose own node is already new enough.
+    `  curl -fsSL '${origin}/prereq' | FLEETWRIGHT_USER=${RUN_USER} sh`,
     `  curl -fsSL '${origin}/install' | FLEETWRIGHT_COORDINATOR_URL='${origin}' FLEETWRIGHT_USER=${RUN_USER} sh -s -- --yes`,
     '  test -x /opt/fleetwright/current/install/fleetwright-vm-join',
     '  report cleaning',
