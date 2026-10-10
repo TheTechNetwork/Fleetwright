@@ -470,6 +470,20 @@ machine of the fleet, through the coordinator.
   that person could, and nothing to anybody else's. The console is Xen
   Orchestra's own page, signed in to there; the phone never holds the pool's
   token for it.
+- **The edge routers' key** (`docs/hypervisors.md`, "Watching the edge
+  routers"). Each router has one API user with no password and a key whose
+  privileges are the CARP, Unbound, gateway and dnsmasq status pages, plus
+  `user-config-readonly`. OPNsense has no read-only form of those pages, so
+  **the key can stop or start Unbound and dnsmasq, and put CARP into
+  maintenance**: machines behind the routers would lose names or their
+  gateway until it is undone. It cannot change the configuration, so the
+  firewall's rules stay as built, and it cannot read or clear the logs. The
+  API answers only HTTPS to the WAN address from private addresses, with a
+  certificate the job made and the box pins, so the key is sent to nothing
+  else. The key lives on the routers in Xen Orchestra (admins only), in the
+  person's vault beside the pool's token, and in the memory of the boxes they
+  approved for the pool. A compromised coordinator sees none of it: the key
+  reaches the phone sealed, and the vault keeps it sealed.
 - **A pool's page from away** (`xolook`, `xoact`, `docs/manage.md`, "From
   away"). A box that holds a person's pool token reads the page for their
   phone and seals it to a key the phone made for that one look, so the
