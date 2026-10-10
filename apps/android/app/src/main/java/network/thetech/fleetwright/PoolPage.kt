@@ -123,8 +123,9 @@ private fun StatusCard(watch: PoolWatch) {
     val scope = rememberCoroutineScope()
     val phase = watch.phase
     val line = when (phase) {
-        PoolWatch.Phase.Live -> Manage.Words.watching
+        PoolWatch.Phase.Live -> watch.currentLine
         PoolWatch.Phase.Connecting -> Manage.Words.connecting(watch.address)
+        PoolWatch.Phase.Relaying -> Manage.Words.askingFleet(watch.address)
         is PoolWatch.Phase.Stopped -> phase.why
         PoolWatch.Phase.Idle -> watch.lookedLine
     }

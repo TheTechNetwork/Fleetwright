@@ -1832,6 +1832,20 @@ struct Fleet {
                                 idempotencyKey: "app-\(UUID().uuidString)")
     }
 
+    /// A pool's page, read by one of your machines that holds its token, for
+    /// this phone away from the pool's network: sealed to `reply`, a key made
+    /// for this one look (PoolWatch). Never held: an old page is no page.
+    func xolook(_ address: String, reply: String) async throws -> Reply {
+        try await intent("xolook", params: ["address": address, "reply": reply], idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// One of the pool page's actions, done by that machine: `method` and the
+    /// JSON of what the page would have sent it. Never held, like `vmctl`.
+    func xoact(_ address: String, method: String, args: String) async throws -> Reply {
+        try await intent("xoact", params: ["address": address, "method": method, "args": args],
+                         idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
     func revokeClient(_ id: String) async throws -> Reply {
         let path = "/api/clients/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
         return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))

@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -30,6 +32,14 @@ import org.json.JSONObject
  * what is kept is when it was last looked at, and the screen says that time
  * rather than implying the picture is current.
  *
+ * FROM AWAY, THROUGH A MACHINE. On 5G the phone reaches no pool. When the
+ * socket cannot open, the page is read instead by one of the person's
+ * machines that holds the pool's token (`xolook`, docs/manage.md "From
+ * away"), sealed to a key made here for the one look, and read again every 20
+ * seconds while the page is open, since nothing pushes changes that way. Its
+ * actions go the same way (`xoact`). The screen says which machine and when,
+ * never "Watching now" (C-5).
+ *
  * Every method here runs on the main thread, from [scope]: the composition's.
  */
 internal class PoolWatch(private val settings: Settings, val address: String, private val scope: CoroutineScope) {
@@ -37,6 +47,9 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
     sealed interface Phase {
         object Idle : Phase
         object Connecting : Phase
+
+        /** The phone could not reach the pool and is asking a machine to. */
+        object Relaying : Phase
         object Live : Phase
 
         /**
@@ -62,7 +75,12 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
     var user by mutableStateOf<String?>(null)
         private set
 
+    /** The machine the page is read through, while this phone cannot reach the pool itself. Null is read directly, over the socket. */
+    var via by mutableStateOf<String?>(null)
+        private set
+
     private var link: XoLink? = null
+    private var polling: Job? = null
 
     /**
      * Bumped by every start and every stop. STOPPED WHILE IT WAITED: the page
@@ -73,7 +91,7 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
 
     /** Connect, sign in with the token, read the method list and the pool. A second call while connecting or connected does nothing. */
     suspend fun start() {
-        if (phase == Phase.Connecting || phase == Phase.Live) return
+        if (phase == Phase.Connecting || phase == Phase.Relaying || phase == Phase.Live) return
         val record = settings.secret(XoHandoff.tokenName(address))?.let { Manage.record(it, address) }
         if (record == null) {
             phase = Phase.Stopped(Manage.Words.noToken(address), retry = false)
@@ -97,17 +115,18 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
             XoLink.open(address, pin)
         } catch (e: XoLink.Failure) {
             if (generation != mine) return
-            phase = if (e.kind == XoLink.Failure.Kind.WRONG_CERTIFICATE) {
-                Phase.Stopped(Manage.Words.wrongCertificate(address), retry = false)
+            if (e.kind == XoLink.Failure.Kind.WRONG_CERTIFICATE) {
+                phase = Phase.Stopped(Manage.Words.wrongCertificate(address), retry = false)
             } else {
-                Phase.Stopped(Manage.Words.unreachable(address, e.message ?: "it did not answer"), retry = true)
+                readThrough(e.message ?: "it did not answer")
             }
             return
         } catch (e: Exception) {
             // AWAY FROM THE POOL'S NETWORK: the socket never opened, which is
-            // a pool this phone could not reach, not a connection that ended.
+            // a pool this phone could not reach, so one of your machines is
+            // asked to read it instead.
             if (generation != mine) return
-            phase = Phase.Stopped(Manage.Words.unreachable(address, e.message ?: "it did not answer"), retry = true)
+            readThrough(e.message ?: "it did not answer")
             return
         }
         if (generation != mine) {
@@ -169,7 +188,14 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
     /** Close the socket, keeping what was seen and when. */
     fun stop() {
         generation++
-        if (phase == Phase.Connecting) phase = Phase.Idle
+        polling?.cancel()
+        polling = null
+        if (phase == Phase.Connecting || phase == Phase.Relaying) phase = Phase.Idle
+        if (via != null) {
+            via = null
+            if (phase == Phase.Live) touch()
+            phase = Phase.Idle
+        }
         val open = link ?: return
         link = null
         open.close()
@@ -189,6 +215,7 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
      * itself arrives as a notification.
      */
     suspend fun run(method: String, params: Map<String, Any>, done: String): Pair<Boolean, String> {
+        if (via != null && phase == Phase.Live) return runThrough(method, params, done)
         val open = link
         if (open == null || phase != Phase.Live) return false to Manage.Words.lost("this phone is not connected")
         return try {
@@ -214,8 +241,85 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
             return Manage.Words.lookedAt("$time, ${relative(at)}")
         }
 
-    /** How current what is shown is: watching, or when it was last looked at. */
-    val currentLine: String get() = if (phase == Phase.Live) Manage.Words.watching else lookedLine
+    /** How current what is shown is: watching, read through a machine at a time, or when it was last looked at. */
+    val currentLine: String
+        get() {
+            if (phase != Phase.Live) return lookedLine
+            val host = via ?: return Manage.Words.watching
+            val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(lookedAt ?: System.currentTimeMillis()))
+            return Manage.Words.through(host, time)
+        }
+
+    /**
+     * Read the page through a machine that holds the pool's token, after this
+     * phone could not reach it ([why]). Again on the timer while the page is
+     * open; a failure then keeps what was shown and says so.
+     */
+    private suspend fun readThrough(why: String) {
+        val first = via == null
+        if (first) phase = Phase.Relaying
+        val asked = generation
+        val key = Seal.newKey()
+        try {
+            val r = Fleet(settings).xolook(address, key.publicKey)
+            val sealed = r.sealed
+            if (!r.ok || sealed == null) throw IllegalStateException(r.text.ifBlank { "the fleet sent no page" })
+            val page = Seal.open(key, Seal.xolookAad(address), sealed)
+            if (asked != generation) return
+            // NULL IS CANNOT TELL, as over the socket: no action is drawn.
+            val listed = page.optJSONArray("methods")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }
+            if (listed != null && "xo.getAllObjects" !in listed) {
+                phase = Phase.Stopped(Manage.Words.noObjects, retry = false)
+                return
+            }
+            methods = listed
+            snapshot = Manage.Snapshot().taking(page.optJSONArray("objects"))
+            via = r.hostId ?: Manage.Words.oneOfYours
+            phase = Phase.Live
+            touch()
+            if (polling == null) poll()
+        } catch (e: Exception) {
+            if (asked != generation) return
+            polling?.cancel()
+            polling = null
+            val host = via
+            via = null
+            phase = if (host != null) {
+                Phase.Stopped(Manage.Words.throughLost(host, e.message ?: "it stopped answering"), retry = true)
+            } else {
+                Phase.Stopped(Manage.Words.unreachableEverywhere(address, why, e.message ?: "nothing answered"), retry = true)
+            }
+        }
+    }
+
+    private fun poll() {
+        polling = scope.launch {
+            while (true) {
+                delay(THROUGH_EVERY_MS)
+                if (via == null) break
+                readThrough("")
+            }
+        }
+    }
+
+    /** An action, asked of the machine the page is read through, then the page read again so the change shows without waiting for the timer. */
+    private suspend fun runThrough(method: String, params: Map<String, Any>, done: String): Pair<Boolean, String> =
+        try {
+            val r = Fleet(settings).xoact(address, method, JSONObject(params).toString())
+            if (!r.ok) {
+                false to r.text.ifBlank { Manage.Words.refused("the fleet refused it") }
+            } else {
+                readThrough("")
+                true to done
+            }
+        } catch (e: Exception) {
+            false to Manage.Words.throughLost(via ?: Manage.Words.oneOfYours, e.message ?: "it did not answer")
+        }
+
+    companion object {
+        /** How often a page read through a machine is asked for again. */
+        const val THROUGH_EVERY_MS = 20_000L
+    }
 
     /** The socket ended without being asked to: a phone that slept, a network that changed, a server that went. */
     private fun lost(which: XoLink, why: String) {

@@ -665,6 +665,16 @@ internal object Manage {
         fun unreachable(address: String, why: String) =
             "This phone could not reach $address: $why. The pool’s page works from the pool’s own network or over a VPN to it; " +
                 "changing what the fleet may use works from anywhere, through one of your machines."
+        /** While a machine is asked to read it instead. */
+        fun askingFleet(address: String) = "This phone cannot reach $address from here, so it is asking one of your machines that can."
+        /** Read through a machine, said with when: nothing pushes changes that way, so "Watching now" would claim what is not happening (C-5). */
+        fun through(host: String, time: String) =
+            "Read through $host at $time. This phone cannot reach the pool from here, so the page is read there again every 20 seconds while it is open."
+        fun throughLost(host: String, why: String) = "$host stopped reading this pool for the phone: $why. What is shown is from the last time it did."
+        fun unreachableEverywhere(address: String, why: String, fleetWhy: String) =
+            "This phone could not reach $address: $why. None of your machines could read it for the phone either: $fleetWhy"
+        /** When the fleet did not say which machine read it. */
+        const val oneOfYours = "one of your machines"
         const val methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         const val nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
         const val seesNothing = "This token sees nothing on the pool."

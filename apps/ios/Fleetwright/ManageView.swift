@@ -35,7 +35,7 @@ struct PoolManageView: View {
     init(settings: Settings, pool: XOSetupHandoff.Held) {
         self.settings = settings
         self.pool = pool
-        _watch = State(initialValue: PoolWatch(address: pool.address))
+        _watch = State(initialValue: PoolWatch(address: pool.address, fleet: Fleet(settings: settings)))
     }
 
     var body: some View {
@@ -114,8 +114,9 @@ struct PoolManageView: View {
 
     private var statusLine: String {
         switch watch.phase {
-        case .live: return Manage.Words.watching
+        case .live: return watch.currentLine
         case .connecting: return Manage.Words.connecting(pool.address)
+        case .relaying: return Manage.Words.askingFleet(pool.address)
         case let .stopped(why, _): return why
         case .idle: return watch.lookedLine
         }
@@ -132,7 +133,7 @@ struct PoolManageView: View {
         switch watch.phase {
         case .idle: return true
         case let .stopped(_, retry): return retry
-        case .live, .connecting: return false
+        case .live, .connecting, .relaying: return false
         }
     }
 

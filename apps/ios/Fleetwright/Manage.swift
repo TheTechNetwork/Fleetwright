@@ -715,6 +715,23 @@ enum Manage {
             "This phone could not reach \(address): \(why). The pool’s page works from the pool’s own network or over a VPN to it; "
                 + "changing what the fleet may use works from anywhere, through one of your machines."
         }
+        /// WHILE A MACHINE IS ASKED to read it instead.
+        static func askingFleet(_ address: String) -> String {
+            "This phone cannot reach \(address) from here, so it is asking one of your machines that can."
+        }
+        /// READ THROUGH A MACHINE, said with when: nothing pushes changes that
+        /// way, so "Watching now" would claim what is not happening (C-5).
+        static func through(_ host: String, at time: String) -> String {
+            "Read through \(host) at \(time). This phone cannot reach the pool from here, so the page is read there again every 20 seconds while it is open."
+        }
+        static func throughLost(_ host: String, _ why: String) -> String {
+            "\(host) stopped reading this pool for the phone: \(why). What is shown is from the last time it did."
+        }
+        static func unreachableEverywhere(_ address: String, _ why: String, _ fleetWhy: String) -> String {
+            "This phone could not reach \(address): \(why). None of your machines could read it for the phone either: \(fleetWhy)"
+        }
+        /// When the fleet did not say which machine read it.
+        static let oneOfYours = "one of your machines"
         static let methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         static let nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
         static let seesNothing = "This token sees nothing on the pool."
