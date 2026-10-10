@@ -16,9 +16,13 @@ import { readFileSync } from 'node:fs';
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const I_POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
 const I_FORM = read('apps/ios/Fleetwright/AddHypervisorView.swift');
+const A = (/** @type {string} */ f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`);
+const A_POLICY = A('XoPolicy.kt');
+const A_SHEET = A('HypervisorSheet.kt');
+const A_FORM = A('PolicyForm.kt');
 const HOST = read('src/fleet/host/xo-setup.js');
 
-/** What the phones say, word for word: iOS here, and Android with it in its own layer. */
+/** What both phones say, word for word. */
 const SHARED = [
   'Two edge routers',
   'On: they share the way out, so one carries the machines while the other restarts for an update.',
@@ -31,20 +35,26 @@ test('offered only by a machine whose `can` says so, and only with the router as
   assert.ok(HOST.includes("'edge-ha'"), 'the machine does not say it can');
   assert.match(I_FORM, /canEdgeHa: begun\.can\.contains\("edge-ha"\)/);
   assert.match(I_FORM, /if choice\.edgeHaChoice, canEdge, choice\.edge, choice\.egress != nil \{/);
+  assert.match(A_SHEET, /canEdgeHa = "edge-ha" in p\.setup\.can/);
+  assert.match(A_FORM, /if \(canEdge && choice\.edgeHaChoice && choice\.edge && choice\.egress != null\) \{/);
 });
 
 test('sent only to a machine that reads it, only with the router, as the key checkPolicy reads', () => {
   assert.match(I_POLICY, /if edgeHaChoice, edge \{ out\["edgeHa"\] = edgeHa \}/);
+  assert.match(A_POLICY, /if \(c\.edgeHaChoice && c\.edge\) put\("edgeHa", c\.edgeHa\)/);
   assert.ok(HOST.includes('p.edgeHa'));
 });
 
-test('the phone starts it as the router is, and as each pool’s is when the way out changes', () => {
+test('both phones start it as the router is, and as each pool’s is when the way out changes', () => {
   assert.match(I_POLICY, /c\.edgeHa = inv\.edge\(on: c\.egress\)\?\.ha \?\? false/);
+  assert.match(A_POLICY, /edgeHa = edgeOn\(inv, egress\)\?\.ha \?: false/);
   assert.match(I_FORM, /choice\.edgeHa = inv\.edge\(on: way\)\?\.ha \?\? false/);
+  assert.match(A_FORM, /edgeHa = edge\?\.ha \?: false/);
 });
 
-test('the phone says it in these words', () => {
+test('both phones say it in the same words', () => {
   for (const words of SHARED) {
     assert.ok(I_FORM.includes(words), `iOS: ${words}`);
+    assert.ok(A_FORM.includes(words), `Android: ${words}`);
   }
 });

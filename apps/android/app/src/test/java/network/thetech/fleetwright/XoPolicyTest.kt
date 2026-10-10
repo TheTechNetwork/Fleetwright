@@ -89,6 +89,19 @@ class XoPolicyTest {
         assertFalse("sent with no router asked for", XoPolicy.payload(older, c.copy(edgeBlockChoice = true, edge = false)).has("edgeBlock"))
     }
 
+    @Test
+    fun aPairStartsAsTheRouterIsAndIsSentOnlyToAMachineThatBuildsOne() {
+        // As it is, so Apply makes or removes no second router unasked.
+        val pair = inventory(inventoryJson().put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true).put("ha", true))))
+        assertTrue(XoPolicy.defaults(pair).edgeHa)
+        val older = inventory(inventoryJson().put("edges", JSONArray().put(JSONObject().put("pool", "pool-1").put("running", true))))
+        assertEquals(null, XoPolicy.edgeOn(older, "net-lab")?.ha)
+        val c = XoPolicy.defaults(older).copy(edgeHa = true)
+        assertFalse("an older machine is not sent it", XoPolicy.payload(older, c).has("edgeHa"))
+        assertTrue(XoPolicy.payload(older, c.copy(edgeHaChoice = true)).getBoolean("edgeHa"))
+        assertFalse("sent with no router asked for", XoPolicy.payload(older, c.copy(edgeHaChoice = true, edge = false)).has("edgeHa"))
+    }
+
     /**
      * LABS PER PERSON (docs/hypervisors.md, "Labs"): a pool that says
      * nothing has no limit and is never read as 0, No limit is sent as null,
