@@ -39,12 +39,11 @@ function balanced(/** @type {string} */ xml) {
   return stack.length === 0;
 }
 
-test('the edge configuration fits the room the default’s file has, and says what the edge is', () => {
-  // The room, not the 5,234 bytes the default fills: blocking with the
-  // updates job (EDGE_UPDATES) does not fit those, so every edge's file is
-  // grown to what its own blocks hold (imagePatches), as labs' always was.
+test('the edge configuration fills the block the build gives it, and says what the edge is', () => {
+  // The block (OPNSENSE_IMAGE.grow), not the 5,234 bytes the default fills:
+  // the file is moved to a whole block of its own, and padded to it.
   const config = edgeConfig();
-  assert.equal(config.length, OPNSENSE_IMAGE.room, 'not the room the file’s own blocks give it');
+  assert.equal(config.length, OPNSENSE_IMAGE.grow.room, 'not the block the build gives the file');
   const xml = config.toString('utf8');
   // The padding is trailing whitespace only, which XML allows after the root.
   assert.match(xml, /<\/opnsense>\n *$/);
@@ -241,7 +240,7 @@ test('an edge that blocks hands what leaves to Suricata and drops what the four 
   // way out never reached Suricata or no policy turned an alert into a drop.
   const block = edgeConfig({ block: true }).toString('utf8');
   const watch = edgeConfig().toString('utf8');
-  assert.equal(block.length, OPNSENSE_IMAGE.room, 'blocking no longer fits the room');
+  assert.equal(block.length, OPNSENSE_IMAGE.grow.room, 'blocking no longer fits the room');
   assert.ok(balanced(block.trimEnd()));
   // Only the rule that lets labs out is diverted: DNS and private space are
   // decided before Suricata would see them.
@@ -297,7 +296,7 @@ const rulesOf = (xml) =>
 
 test('each lab is an interface of its own on the edge, with its address, its DHCP and Suricata watching it', () => {
   const xml = edgeConfig({ labs: [true, false], fleet: fleetHosts('https://fleet.example.network/x') }).toString('utf8');
-  assert.equal(Buffer.byteLength(xml), OPNSENSE_IMAGE.room, 'not the room the file’s own blocks give it');
+  assert.equal(Buffer.byteLength(xml), OPNSENSE_IMAGE.grow.room, 'not the block the build gives the file');
   assert.ok(balanced(xml.trimEnd()));
   assert.ok(xml.includes('<opt1><enable>1</enable><if>xn2</if><descr>LAB1</descr><ipaddr>10.250.1.1</ipaddr><subnet>24</subnet></opt1>'));
   assert.ok(xml.includes('<opt2><enable>1</enable><if>xn3</if><descr>LAB2</descr><ipaddr>10.250.2.1</ipaddr><subnet>24</subnet></opt2>'));
@@ -310,7 +309,7 @@ test('each lab is an interface of its own on the edge, with its address, its DHC
   // for a closed lab, in the alias and as a name it may resolve.
   const long = `https://${'f'.repeat(63)}.${'e'.repeat(20)}.workers.dev`;
   for (const block of [false, true]) for (const kinds of [[true, true, true, true], [false, false, false, false], [true, false, true, false]]) {
-    for (const url of ['https://fleet.example.network', long]) assert.equal(edgeConfig({ block, labs: kinds, fleet: fleetHosts(url) }).length, OPNSENSE_IMAGE.room, url);
+    for (const url of ['https://fleet.example.network', long]) assert.equal(edgeConfig({ block, labs: kinds, fleet: fleetHosts(url) }).length, OPNSENSE_IMAGE.grow.room, url);
   }
   assert.throws(() => edgeConfig({ labs: [true, true, true, true, true] }), /room for 4 labs/);
   assert.throws(() => edgeConfig({ labs: [false] }), /closed lab needs the fleet/);
@@ -374,30 +373,42 @@ test('a closed lab resolves only the fleet’s own hosts and the names under the
   }
 });
 
-test('an edge with labs grows its configuration into the file’s own blocks, after checking both the size and the slack', async () => {
-  const { config, room, sizeField } = OPNSENSE_IMAGE;
+test('the configuration moves to a free block, and every byte of the file system that records it is checked before it is replaced', async () => {
+  // OPNSENSE_IMAGE.grow, planned from the real image by
+  // scripts/opnsense-room.mjs (src/fleet/host/ufs-room.js checks the plan as
+  // fsck would). Here: that the build replaces exactly those bytes, in order,
+  // and refuses an image where any of them is not what the plan says.
+  const { grow } = OPNSENSE_IMAGE;
   const replacement = edgeConfig({ labs: [true] });
   const patches = imagePatches(replacement);
-  assert.deepEqual(patches.map((p) => [p.offset, p.replacement.length]), [[sizeField.offset, 8], [config.offset, room]]);
-  // A small image with both regions where the real one has them, scaled down.
-  const total = 40_000;
-  const at = { size: 1_000, config: 10_000 };
-  const regions = patches.map((p, i) => ({ ...p, offset: i === 0 ? at.size : at.config }));
-  const img = (/** @type {number} */ size, /** @type {number} */ slackByte) => {
+  assert.deepEqual(patches.map((p) => p.offset), [...grow.edits.map((e) => e.offset), grow.data.offset]);
+  assert.ok(patches.every((p, i) => i === 0 || p.offset > patches[i - 1].offset), 'out of the order the image streams in');
+  // The same regions in a small image, each where the next is, scaled down.
+  const at = patches.map((_, i) => 1_000 + i * 100);
+  at[at.length - 1] = 4_000;
+  const total = at.at(-1) + grow.room + 500;
+  const regions = patches.map((p, i) => ({ ...p, offset: at[i] }));
+  const img = (/** @type {number} */ wrong = -1, dirty = false) => {
     const buf = Buffer.alloc(total, 7);
-    buf.writeBigUInt64LE(BigInt(size), at.size);
-    DEFAULT.copy(buf, at.config);
-    buf.fill(slackByte, at.config + config.length, at.config + room);
+    grow.edits.forEach((e, i) => {
+      const was = Buffer.from(e.was, 'hex');
+      if (i === wrong) was[0] ^= 1;
+      was.copy(buf, at[i]);
+    });
+    buf.fill(dirty ? 1 : 0, at.at(-1), at.at(-1) + grow.room);
     return buf;
   };
-  const out = await patch(img(sizeField.was, 0), 333, { regions, total });
+  const out = await patch(img(), 333, { regions, total });
   assert.ok(Buffer.isBuffer(out), String(out));
-  assert.equal(out.readBigUInt64LE(at.size), BigInt(room), 'the inode does not say the file is the room’s length');
-  assert.ok(out.subarray(at.config, at.config + room).equals(replacement));
-  assert.ok(out.subarray(0, at.size).equals(img(sizeField.was, 0).subarray(0, at.size)), 'a byte outside the two regions changed');
-  assert.match(String(await patch(img(4096, 0), 333, { regions, total })), /does not have the configuration’s size where it should/);
-  assert.match(String(await patch(img(sizeField.was, 1), 333, { regions, total })), /does not have the default configuration where it should/);
-  assert.throws(() => imagePatches(Buffer.alloc(6000)), /is 8192 bytes, not 6000/);
+  grow.edits.forEach((e, i) => assert.equal(out.subarray(at[i], at[i] + e.becomes.length / 2).toString('hex'), e.becomes, e.what));
+  assert.ok(out.subarray(at.at(-1), at.at(-1) + grow.room).equals(replacement));
+  assert.equal(out[at[0] - 1], 7, 'a byte outside the regions changed');
+  assert.match(String(await patch(img(3), 333, { regions, total })), /inode 6523: first block/);
+  assert.match(String(await patch(img(-1, true), 333, { regions, total })), /the free block the configuration moves to/);
+  assert.throws(() => imagePatches(Buffer.alloc(6000)), /is 32768 bytes, not 6000/);
+  // The plan moves the inode's first block to where the configuration goes.
+  const first = grow.edits.find((e) => e.what.endsWith('first block'));
+  assert.equal(Number(Buffer.from(/** @type {any} */ (first).becomes, 'hex').readBigInt64LE()) * 4096, grow.data.offset);
 });
 
 test('an edge is built with an interface on each lab, in order, and tagged with them; one with other labs is rebuilt, filtering as it did', async () => {
@@ -410,7 +421,7 @@ test('an edge is built with an interface on each lab, in order, and tagged with 
   const made = Object.fromEntries(fresh.calls)['vm.create'];
   assert.deepEqual(made.VIFs, [{ network: 'net-wan' }, { network: 'net-up' }, { network: 'net-lab-1' }, { network: 'net-lab-2' }]);
   assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag, `${LAB.edgeTag}oc`]);
-  assert.equal(body.regions.length, 2, 'the file was not grown to hold the labs');
+  assert.equal(body.regions.length, OPNSENSE_IMAGE.grow.edits.length + 1, 'the file was not given its block');
   assert.match(done, /It has one open lab and one closed lab of their own/);
 
   // There with the same labs: nothing done. Asked nothing of labs: nothing done.
