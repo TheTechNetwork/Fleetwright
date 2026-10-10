@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 
-import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf } from '../src/fleet/host/edge-router.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 
@@ -278,6 +278,42 @@ test('every edge asks for the Xen guest agent and updates itself once a day, how
     assert.match(update[0], /^<job><enabled>1<\/enabled>/, 'on, and at minute 0 (Cron.xml’s default)');
   }
   assert.equal(EDGE_UPDATES.plugin, 'os-xen');
+});
+
+test('two edges share each gateway address by CARP, each with its own beside it, its half of DHCP and its own hour to update', () => {
+  // ASKED FOR: HA, "will allow maintenance": one edge carries the labs while
+  // the other restarts. Booted in QEMU as a pair (docs/hypervisors.md).
+  const fleet = fleetHosts('https://fleet.example.network');
+  const password = '0123456789abcdef';
+  const [a, b] = /** @type {const} */ ([0, 1]).map((node) => edgeConfig({ block: true, labs: [true, false], fleet, ha: { node, password } }).toString('utf8'));
+  for (const [x, node] of /** @type {Array<[string, 0|1]>} */ ([[a, 0], [b, 1]])) {
+    assert.ok(balanced(x.trimEnd()));
+    const mine = 2 + node;
+    assert.ok(x.includes(`<lan><enable>1</enable><if>xn1</if><descr>LAN</descr><ipaddr>10.254.0.${mine}</ipaddr>`), 'its own LAN address, not the shared one');
+    assert.ok(x.includes(`<descr>LAB2</descr><ipaddr>10.250.2.${mine}</ipaddr>`));
+    const vips = [...x.matchAll(/<vip>.*?<\/vip>/g)].map((m) => m[0]);
+    assert.deepEqual(vips.map((v) => /<subnet>([^<]+)<\/subnet>/.exec(v)?.[1]), ['10.254.0.1', '10.250.1.1', '10.250.2.1'], 'each gateway shared');
+    assert.deepEqual(vips.map((v) => /<vhid>(\d+)<\/vhid>/.exec(v)?.[1]), ['1', '2', '3']);
+    assert.ok(vips.every((v) => v.includes('<mode>carp</mode>') && v.includes(`<password>${password}</password>`) && v.includes(`<advskew>${node * 100}</advskew>`)), 'the same password, the first preferred');
+    const [lo, hi] = node ? [175, 250] : [100, 174];
+    assert.ok(x.includes(`<dhcp_ranges><interface>lan</interface><start_addr>10.254.0.${lo}</start_addr><end_addr>10.254.0.${hi}</end_addr></dhcp_ranges>`), 'its half of the range, so no two leases collide');
+    for (const [iface, gw] of [['lan', '10.254.0.1'], ['opt2', '10.250.2.1']]) {
+      for (const o of [3, 6]) assert.ok(x.includes(`<option>${o}</option><interface>${iface}</interface><value>${gw}</value>`), `${iface} ${o}: the shared address, which outlives either router`);
+    }
+    assert.match(x, new RegExp(`<command>firmware auto-update</command><hours>${10 + node}</hours>`), 'never both restarting at once');
+    assert.ok(x.includes(`<hostname>${node ? 'fleetwright-edge-b' : 'fleetwright-edge'}</hostname>`));
+  }
+  // Without labs, names are asked of (self), which includes the shared address.
+  assert.match(edgeConfig({ ha: { node: 0, password } }).toString('utf8'), /<destination_net>\(self\)<\/destination_net><destination_port>53<\/destination_port>/);
+  assert.match(edgeConfig().toString('utf8'), /<destination_net>lanip<\/destination_net><destination_port>53<\/destination_port>/, 'a single edge as before');
+  assert.ok(!edgeConfig().toString('utf8').includes('<virtualip>'));
+  // The most a pair holds fits.
+  const long = `https://${'f'.repeat(63)}.${'e'.repeat(20)}.workers.dev`;
+  assert.equal(edgeConfig({ block: true, labs: [false, false, false, false], fleet: fleetHosts(long), ha: { node: 1, password: 'f'.repeat(64) } }).length, OPNSENSE_IMAGE.grow.room);
+  for (const ha of [{ node: 2, password }, { node: 0, password: 'short' }, { node: 0, password: "x'<y" }]) {
+    assert.throws(() => edgeConfig({ ha: /** @type {any} */ (ha) }), /which one this is and their shared password/);
+  }
+  assert.equal(EDGE_HA.second, 'fleetwright-edge-b');
 });
 
 // --- labs on the edge ---------------------------------------------------------
@@ -650,6 +686,90 @@ test('a rebuild that fails leaves the old edge running as it was, and an edge as
   }
 });
 
+// --- two edges (HA) -----------------------------------------------------------
+//
+// ASKED FOR: "do ha will allow maintenance". A pair shares each gateway
+// address by CARP; booted in QEMU as a pair (docs/hypervisors.md).
+
+/** An admin stand-in that hands out VM ids in order and records xenStoreData. */
+function pairXo(/** @type {any[]} */ vms) {
+  let n = 0;
+  return xo({ VM: vms, 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => `vm-new-${++n}` });
+}
+const methodsOf = (/** @type {any} */ admin) => admin.calls.map((/** @type {any} */ c) => c[0]).filter((/** @type {string} */ m) => !['xo.getAllObjects', 'vif.set'].includes(m));
+const created = (/** @type {any} */ admin) => admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.create').map((/** @type {any} */ c) => c[1]);
+const passwords = (/** @type {any} */ admin) => admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.set' && c[1].xenStoreData).map((/** @type {any} */ c) => c[1].xenStoreData[EDGE_HA.passwordKey]);
+
+test('a pair asked for where there is none is two edges, each tagged with which it is and given the same password', async () => {
+  const admin = pairXo([]);
+  const done = await ensureEdge(edgeArgs(admin, { ha: true }).args);
+  assert.deepEqual(created(admin).map((c) => [c.name_label, c.tags.filter((/** @type {string} */ x) => x.startsWith(EDGE_HA.nodeTag))]), [[EDGE.vm, [`${EDGE_HA.nodeTag}0`]], [EDGE_HA.second, [`${EDGE_HA.nodeTag}1`]]]);
+  const [p0, p1] = passwords(admin);
+  assert.match(p0, /^[0-9a-f]{32}$/);
+  assert.equal(p1, p0, 'two passwords, and neither would hear the other');
+  assert.equal(admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.start').length, 2);
+  assert.match(done, /two edge routers, sharing 10\.254\.0\.1: when one restarts, the other carries the machines behind them/);
+});
+
+test('one edge becomes a pair with the way out gone only while the second starts: made first, then the old one stops, then the first is rebuilt', async () => {
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Running' };
+  const admin = pairXo([old]);
+  const { args, said } = edgeArgs(admin, { ha: true });
+  const done = await ensureEdge(args);
+  // The second made but not started while the old one still has 10.254.0.1.
+  assert.deepEqual(methodsOf(admin), ['disk.import', 'vm.create', 'vm.set', 'vm.attachDisk', 'vm.stop', 'vm.start', 'disk.import', 'vm.create', 'vm.set', 'vm.attachDisk', 'vm.start', 'vm.delete']);
+  const starts = admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.start').map((/** @type {any} */ c) => c[1].id);
+  assert.deepEqual(starts, ['vm-new-1', 'vm-new-2'], 'the second, then the new first');
+  assert.deepEqual(admin.calls.find((/** @type {any} */ c) => c[0] === 'vm.stop')?.[1], { id: 'vm-old', force: true });
+  assert.deepEqual(admin.calls.find((/** @type {any} */ c) => c[0] === 'vm.delete')?.[1], { id: 'vm-old', deleteDisks: true });
+  assert.equal(new Set(passwords(admin)).size, 1);
+  assert.ok(said.some((s) => /no way out while the second starts/.test(s)), 'the outage is said before it happens');
+  assert.match(done, /There are two edge routers now/);
+});
+
+test('a pair is rebuilt one at a time with the password it has, and the second goes first', async () => {
+  const password = 'ab'.repeat(16);
+  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const admin = pairXo([a, b]);
+  const { args, said } = edgeArgs(admin, { block: true });
+  const done = await ensureEdge(args);
+  const stops = admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.stop' || c[0] === 'vm.delete').map((/** @type {any} */ c) => `${c[0]} ${c[1].id}`);
+  assert.deepEqual(stops, ['vm.stop vm-b', 'vm.delete vm-b', 'vm.stop vm-a', 'vm.delete vm-a'], 'never both down at once');
+  assert.deepEqual(created(admin).map((c) => c.name_label), [EDGE_HA.second, EDGE.vm]);
+  assert.ok(created(admin).every((c) => c.tags.includes(EDGE.blocksTag)));
+  assert.deepEqual(passwords(admin), [password, password], 'a new password would leave the new one and the old one deaf to each other');
+  assert.ok(said.some((s) => /keep their way out/.test(s)));
+  assert.match(done, /rebuilt, one at a time, dropping/);
+  // A pair asked nothing new is left alone, and says where each is.
+  const still = pairXo([{ ...a, addresses: { '0/ipv4/0': '10.10.10.237' } }, b]);
+  const left = await ensureEdge(edgeArgs(still).args);
+  assert.deepEqual(methodsOf(still), []);
+  assert.match(left, /a pair on eth0\.10 sharing 10\.254\.0\.1, logging[\s\S]*fleetwright-edge at 10\.10\.10\.237, fleetwright-edge-b at an address Xen Orchestra does not know yet/);
+});
+
+test('a rebuild of one of the pair that fails starts the old one again, and the other was never touched', async () => {
+  const password = 'cd'.repeat(16);
+  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const admin = xo({ VM: [a, b], 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } });
+  await assert.rejects(ensureEdge(edgeArgs(admin, { block: true }).args), /no memory left on the host\. fleetwright-edge-b, which it was replacing, was started again/);
+  assert.ok(!admin.calls.some((/** @type {any} */ c) => (c[0] === 'vm.stop' || c[0] === 'vm.delete') && c[1].id === 'vm-a'), 'the first carried the machines throughout');
+});
+
+test('going back to one removes the second and rebuilds the first on its own', async () => {
+  const password = 'ef'.repeat(16);
+  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const admin = pairXo([a, b]);
+  const done = await ensureEdge(edgeArgs(admin, { ha: false }).args);
+  const order = admin.calls.filter((/** @type {any} */ c) => ['vm.stop', 'vm.delete', 'vm.create'].includes(c[0])).map((/** @type {any} */ c) => `${c[0]} ${c[1].id ?? c[1].name_label}`);
+  assert.deepEqual(order, ['vm.stop vm-b', 'vm.delete vm-b', 'vm.stop vm-a', `vm.create ${EDGE.vm}`, 'vm.delete vm-a']);
+  assert.ok(!created(admin)[0].tags.some((/** @type {string} */ x) => x.startsWith(EDGE_HA.nodeTag)), 'one edge, not one of a pair');
+  assert.deepEqual(passwords(admin), []);
+  assert.match(done, /The edge router is up/);
+});
+
 test('a build that fails leaves nothing half-made behind', async () => {
   const admin = xo(
     { VM: [], 'VM-template': [TEMPLATE], VIF: [] },
@@ -752,5 +872,13 @@ test('the edge router is asked for only with a way out for its WAN', () => {
   const noEdge = checkPolicy({ ...base, egress: 'n2', edgeBlock: true }, choices);
   assert.equal(noEdge.ok && noEdge.policy.edgeBlock, null);
   assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n2', edge: true, edgeBlock: 'yes' }, choices)).text, /yes or no/);
+  // Two routers or one, the same way: absent from an older phone, the edge
+  // stays as many as it is.
+  for (const [edgeHa, want] of /** @type {Array<[any, any]>} */ ([[true, true], [false, false], [undefined, null]])) {
+    const r = checkPolicy({ ...base, egress: 'n2', edge: true, edgeHa }, choices);
+    assert.equal(r.ok && r.policy.edgeHa, want, String(edgeHa));
+  }
+  assert.equal(/** @type {any} */ (checkPolicy({ ...base, egress: 'n2', edgeHa: true }, choices)).policy.edgeHa, null, 'not without an edge');
+  assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n2', edge: true, edgeHa: 2 }, choices)).text, /is a pair is yes or no/);
   assert.ok(!existsSync('/nowhere'));
 });
