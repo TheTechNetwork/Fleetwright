@@ -581,3 +581,38 @@ test('a machine says which lab it is in and whether it is open, and anything els
     ['vm-cccccccccccc', null],
   ]);
 });
+
+test('how a pool’s edge routers are reaches its owner from the freshest box watching them, in the shape it may take', () => {
+  // ASKED FOR: "Why is there no live info of opnsense in the app to help
+  // trouble shoot this?", during a two-router DNS failure nothing on the
+  // phone could explain. docs/hypervisors.md, "Watching the edge routers".
+  const routers = (/** @type {any} */ extra = {}) => [
+    { name: 'fleetwright-edge', address: '192.168.1.40', reached: true, role: 'master', dns: true, gateway: true, leases: 3, heardAt: 1_700_000_100_000, problem: null, ...extra },
+    { name: 'fleetwright-edge-b', address: 'not an address', reached: false, role: 'leader', dns: 'yes', gateway: null, leases: -1, problem: 'connect ECONNREFUSED\u0007', ssh: 'nope' },
+    { name: 'somebody-else', reached: true },
+  ];
+  const events = [
+    { at: 1_700_000_050_000, router: 'fleetwright-edge-b', kind: 'carp', text: 'carp: 1@xn1: MASTER -> BACKUP' },
+    { at: 1_700_000_060_000, router: 'fleetwright-edge', kind: 'shell', text: 'rm -rf' },
+    { at: 1_700_000_070_000, router: 'fleetwright-edge', kind: 'dns', text: 'x'.repeat(500) },
+  ];
+  const watched = (/** @type {number} */ at, /** @type {any} */ extra = {}) => [{ ...holding(ELI)[0], edges: { at, routers: routers(extra), events } }];
+  const { core } = fleet({
+    older: { xo: watched(1_700_000_000_000, { role: 'backup' }) },
+    newer: { xo: watched(1_700_000_200_000) },
+    theirs: { xo: [{ ...holding(SAM)[0], address: 'other.lan', edges: { at: 1_700_000_300_000, routers: routers(), events } }] },
+    blind: { xo: holding(ELI) },
+  });
+  const edges = core.snapshot(eli).vmEdges;
+  assert.equal(edges.length, 1, 'one entry a pool, and only the person’s own');
+  const [e] = edges;
+  assert.equal(e.hostId, 'newer', 'the freshest report wins');
+  assert.deepEqual(e.routers, [
+    { name: 'fleetwright-edge', address: '192.168.1.40', reached: true, role: 'master', dns: true, gateway: true, leases: 3, heardAt: 1_700_000_100_000, problem: null },
+    // What could not be read comes through as cannot tell, never as a value.
+    { name: 'fleetwright-edge-b', address: null, reached: false, role: null, dns: null, gateway: null, leases: null, heardAt: null, problem: 'connect ECONNREFUSED' },
+  ]);
+  assert.deepEqual(e.events.map((/** @type {any} */ v) => [v.kind, v.text.length]), [['carp', 29], ['dns', 240]], 'a kind not on the list is dropped, and a line is bounded');
+  assert.deepEqual(core.snapshot(sam).vmEdges.map((/** @type {any} */ v) => v.address), ['other.lan']);
+  assert.deepEqual(core.snapshot(null).vmEdges, []);
+});
