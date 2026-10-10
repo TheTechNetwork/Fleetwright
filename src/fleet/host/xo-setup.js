@@ -1042,7 +1042,15 @@ export class XoSetups {
           .filter((/** @type {any} */ n) => (n?.name_label === EDGE.uplink || String(n?.name_label || '').startsWith(GROUP_PREFIX) || String(n?.name_label || '').startsWith(LAB.prefix)) && ctx.setObjects?.includes(n.id))
           .map((/** @type {any} */ n) => String(n.id))
           .filter((/** @type {string} */ id) => !p.networks.includes(id));
-        await ctx.admin.call('resourceSet.set', { id: ctx.setId, objects: [...p.srs, ...p.networks, ...own], limits: p.limits });
+        // NOR ANYTHING ELSE THE FLEET PUT IN THE SET: its machine images and
+        // its own machines, which are not storage or networks and so are not
+        // the phone's to choose. `resourceSet.set` replaces the list, and
+        // this used to write storage and networks alone: every change of
+        // policy took the images out, and the next machine asked for from one
+        // was refused by Xen Orchestra with "not enough permissions".
+        const chosenKinds = new Set([...(ctx.srs || []), ...(ctx.networks || [])].map((/** @type {any} */ o) => String(o?.id)));
+        const rest = (ctx.setObjects || []).filter((/** @type {string} */ id) => !chosenKinds.has(id));
+        await ctx.admin.call('resourceSet.set', { id: ctx.setId, objects: [...new Set([...p.srs, ...p.networks, ...own, ...rest])], limits: p.limits });
         const said = [`It may use ${plural(p.srs.length, 'storage repository')}, ${plural(p.networks.length, 'network')}, ${p.limits.cpus} vCPUs, ${gib(p.limits.memory)} of memory and ${gib(p.limits.disk)} of disk.`];
         // THE EGRESS, as a tag on that network, so the edge router is built
         // on the network the person named and the choice can be seen in Xen
