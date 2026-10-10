@@ -1530,7 +1530,9 @@
                       "writefile",
                       "xoprobe",
                       "xosetup",
-                      "vmctl"
+                      "vmctl",
+                      "xolook",
+                      "xoact"
                     ]
                   },
                   "params": {

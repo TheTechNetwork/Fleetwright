@@ -64,6 +64,10 @@ export const DEFAULT_DENY = ([
   // machine that runs it. An agent has no key to seal it to, and bringing a
   // pool into the fleet is not something to reach for unasked.
   'xosetup',
+  // A POOL'S PAGE FROM AWAY: the look comes back sealed to a key on the
+  // phone, which an agent has no use for, and an action on somebody's pool
+  // is the page's to offer with its confirmation, not a tool's.
+  'xolook', 'xoact',
   // NOT `forget`, ANY MORE. It was withheld as "destroys a conversation that
   // cannot be recovered", and that stopped being true when the seven-day
   // recycle bin shipped — `forget` is now the RECOVERABLE one and `purge` is
