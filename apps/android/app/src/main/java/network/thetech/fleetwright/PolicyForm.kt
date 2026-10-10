@@ -108,7 +108,7 @@ internal fun PolicyForm(
             // Another pool has its own group networks to start from, and its router filters its own way.
             onClick = {
                 val edge = XoPolicy.edgeOn(inv, n.id)
-                onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id), edgeBlock = edge?.blocks ?: false, labsOpen = edge?.labs?.open ?: 0, labsClosed = edge?.labs?.closed ?: 0, labsEach = edge?.labsEach ?: 0))
+                onChange(choice.copy(egress = n.id, groups = XoPolicy.groupCount(inv, n.id), edgeBlock = edge?.blocks ?: false, edgeHa = edge?.ha ?: false, labsOpen = edge?.labs?.open ?: 0, labsClosed = edge?.labs?.closed ?: 0, labsEach = edge?.labsEach ?: 0))
             },
         )
     }
@@ -164,6 +164,28 @@ internal fun PolicyForm(
                 what
             },
             onChange = { on -> onChange(choice.copy(edgeBlock = on)) },
+        )
+    }
+    // TWO ROUTERS OR ONE, offered only by a machine that builds a pair, and
+    // only with the router asked for. Asked for: "do ha will allow
+    // maintenance". The same words as iOS.
+    if (canEdge && choice.edgeHaChoice && choice.edge && choice.egress != null) {
+        val there = XoPolicy.edgeOn(inv, choice.egress)
+        val what = if (choice.edgeHa) {
+            "On: they share the way out, so one carries the machines while the other restarts for an update."
+        } else {
+            "Off: one router, and when it restarts for an update, machines behind it have no way out for those minutes."
+        }
+        CheckRow(
+            checked = choice.edgeHa,
+            enabled = enabled,
+            title = "Two edge routers",
+            line = when {
+                there == null || (there.ha ?: false) == choice.edgeHa -> what
+                choice.edgeHa -> "$what Apply makes the second and hands over to it: machines behind it have no way out while it starts."
+                else -> "$what Apply removes the second and rebuilds the first: machines behind it have no way out until it is up."
+            },
+            onChange = { on -> onChange(choice.copy(edgeHa = on)) },
         )
     }
     // THE MACHINE IMAGE sessions' machines are cloned from, offered only by a

@@ -255,7 +255,7 @@ internal object XoPolicy {
      * no limit, which is also what a policy from before the setting has, and
      * never 0.
      */
-    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null, val blocks: Boolean? = null, val labs: Labs? = null, val labsEach: Int? = null)
+    data class Edge(val pool: String?, val running: Boolean, val sr: String? = null, val blocks: Boolean? = null, val labs: Labs? = null, val labsEach: Int? = null, val ha: Boolean? = null)
 
     /** The edge router on the pool this network is in, if it has one. */
     fun edgeOn(inv: Inventory, network: String?): Edge? {
@@ -323,6 +323,10 @@ internal object XoPolicy {
         val edgeBlock: Boolean = false,
         /** The machine builds either kind (`edge-block` in begin's `can`). An older one only logs, so it is neither offered nor sent. */
         val edgeBlockChoice: Boolean = false,
+        /** The edge is two routers sharing their addresses. Changing it on an edge that is there makes or removes the second. */
+        val edgeHa: Boolean = false,
+        /** The machine builds a pair (`edge-ha` in begin's `can`). An older one builds one, so it is neither offered nor sent. */
+        val edgeHaChoice: Boolean = false,
         /**
          * Make the machine image sessions' machines are cloned from, on the
          * way out's pool, behind its router. Needs the router, there or
@@ -467,7 +471,7 @@ internal object XoPolicy {
                     a.optJSONObject(i)?.let { e ->
                         val labs = e.optJSONObject("labs")?.let { l -> Labs(l.optInt("open", 0), l.optInt("closed", 0)) }
                         val each = if (e.isNull("labsEach")) null else e.optInt("labsEach", 0).takeIf { it >= 1 }
-                        Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr"), if (e.has("blocks")) e.optBoolean("blocks", false) else null, labs, each)
+                        Edge(text(e, "pool"), e.optBoolean("running", false), text(e, "sr"), if (e.has("blocks")) e.optBoolean("blocks", false) else null, labs, each, ha = if (e.has("ha")) e.optBoolean("ha", false) else null)
                     }
                 }
             },
@@ -534,6 +538,7 @@ internal object XoPolicy {
             edge = edgeOn(inv, egress) != null, anyWayOut = anyWayOut, groups = groupCount(inv, egress),
             // As it is: Apply rebuilds nothing the person did not change.
             edgeBlock = edgeOn(inv, egress)?.blocks ?: false,
+            edgeHa = edgeOn(inv, egress)?.ha ?: false,
             holder = holderOn(inv, egress) != null,
             // The labs the edge has: Apply rebuilds nothing nobody changed.
             labsOpen = edgeOn(inv, egress)?.labs?.open ?: 0,
@@ -678,6 +683,7 @@ internal object XoPolicy {
             .apply { if (c.holderChoice && c.holder) put("holder", true) }
             // Only to a machine that reads it, and only with something to build.
             .apply { if (c.edgeBlockChoice && c.edge) put("edgeBlock", c.edgeBlock) }
+            .apply { if (c.edgeHaChoice && c.edge) put("edgeHa", c.edgeHa) }
             .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage) || imageKeys(inv, c, REBUILD).isNotEmpty())) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
