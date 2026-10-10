@@ -47,6 +47,10 @@ final class PoolWatch {
     /// Bumped on every change, for the one animation that carries it.
     private(set) var revision = 0
 
+    /// Whether this attempt's socket opened. Until it has, a failure is a pool
+    /// this phone could not reach, not a connection that ended.
+    @ObservationIgnored private var reached = false
+
     /// Outside the main actor, so letting go of this object closes the socket.
     private let holder = LinkHolder()
     /// While the first read is in flight, notifications wait here rather than
@@ -87,6 +91,7 @@ final class PoolWatch {
             return
         }
         phase = .connecting
+        reached = false
         // THE MAIN QUEUE, NOT A TASK PER MESSAGE. The socket hands messages
         // over in order, and Xen Orchestra's notifications only make sense in
         // order: an object that arrived and then went must not go and then
@@ -124,9 +129,10 @@ final class PoolWatch {
         } catch {
             if stale() { return }
             drop(link)
-            phase = .stopped(Manage.Words.lost(error.localizedDescription), retry: true)
+            phase = .stopped(Manage.Words.unreachable(address, error.localizedDescription), retry: true)
             return
         }
+        reached = true
         do {
             _ = try await link.call("session.signIn", ["token": record.token])
         } catch {
@@ -248,7 +254,7 @@ final class PoolWatch {
         loading = false
         held = []
         if phase == .live || phase == .connecting {
-            phase = .stopped(Manage.Words.lost(reason), retry: true)
+            phase = .stopped(reached ? Manage.Words.lost(reason) : Manage.Words.unreachable(address, reason), retry: true)
         }
     }
 

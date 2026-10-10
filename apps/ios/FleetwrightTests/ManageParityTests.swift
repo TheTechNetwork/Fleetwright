@@ -245,6 +245,7 @@ final class ManageParityTests: XCTestCase {
 
         XCTAssertEqual(Manage.Words.expired(arg("expired", 0), on: arg("expired", 1)), arg("expired", 2))
         XCTAssertEqual(Manage.Words.signInRefused(arg("signInRefused", 0), arg("signInRefused", 1)), arg("signInRefused", 2))
+        XCTAssertEqual(Manage.Words.unreachable(arg("unreachable", 0), arg("unreachable", 1)), arg("unreachable", 2))
         for c in one("resizeButton").compactMap({ $0 as? [Any] }) {
             let cpus = (c[0] as? NSNumber)?.intValue ?? 0
             let gib = (c[1] as? NSNumber)?.intValue ?? 0
@@ -261,7 +262,7 @@ final class ManageParityTests: XCTestCase {
         // EVERY KEY IS CHECKED: a sentence added to the table and to neither
         // phone would otherwise sit there proving nothing.
         let checked = Set(fixed.keys).union(single.keys)
-            .union(["expired", "signInRefused", "resizeButton", "growButton", "heading", "kindTitle"])
+            .union(["expired", "signInRefused", "unreachable", "resizeButton", "growButton", "heading", "kindTitle"])
         XCTAssertEqual(Set(words.keys), checked)
     }
 }

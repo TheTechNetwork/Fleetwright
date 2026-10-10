@@ -661,6 +661,10 @@ internal object Manage {
             "Xen Orchestra refused this phone’s token for $address: $why. If it ran out or was revoked, run Add a hypervisor again for it."
         const val noObjects = "This Xen Orchestra does not offer xo.getAllObjects, so nothing can be listed."
         fun lost(why: String) = "The connection ended: $why. Look again to reconnect."
+        /** Away from the pool's network, said as that rather than as a connection that ended (Manage.swift says why). */
+        fun unreachable(address: String, why: String) =
+            "This phone could not reach $address: $why. The pool’s page works from the pool’s own network or over a VPN to it; " +
+                "changing what the fleet may use works from anywhere, through one of your machines."
         const val methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         const val nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
         const val seesNothing = "This token sees nothing on the pool."
