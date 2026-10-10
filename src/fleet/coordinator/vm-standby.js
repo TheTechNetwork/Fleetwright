@@ -19,6 +19,11 @@
 // BOUNDED, because it is one Durable Object value (test/do-key-bounds.test.js):
 // a refusal past MAX_PEOPLE wishes, at most MAX_READY machines each, and a
 // machine still being made forgotten after PENDING_MS.
+//
+// AND WHY THE LAST ONE DID NOT COME, kept until one does. A machine that never
+// joined used to be forgotten in silence: the count went from "1 being made"
+// to "0 being made" and nothing said that it had failed, so a person looking
+// at the screen an hour later was told nothing was happening and not why.
 
 /** The most machines one person may keep ready. Each costs a VM's worth of the pool, all the time. */
 export const MAX_READY = 3;
@@ -35,6 +40,7 @@ export const PENDING_MS = 15 * 60_000;
 /**
  * @typedef {{ template: string, count: number, network: string|null }} Wish
  * @typedef {{ owner: string, template: string, network: string|null, at: number, enrolled: boolean }} Kept
+ * @typedef {{ at: number, text: string }} Failure
  */
 
 export class VmStandby {
@@ -45,6 +51,8 @@ export class VmStandby {
     this.wishes = new Map();
     /** @type {Map<string, Kept>} by the host id the machine enrols as */
     this.machines = new Map();
+    /** @type {Map<string, Failure>} by owner: the last machine that did not come, until one does */
+    this.failures = new Map();
   }
 
   /** @param {string} owner @returns {Wish|null} */
@@ -64,8 +72,10 @@ export class VmStandby {
     if (count > 0 && !this.wishes.has(owner) && this.wishes.size >= MAX_PEOPLE) {
       return { ok: false, text: `This fleet already keeps machines ready for ${MAX_PEOPLE} people, which is as many as it can store.` };
     }
-    if (count === 0) this.wishes.delete(owner);
-    else this.wishes.set(owner, { template, count, network });
+    if (count === 0) {
+      this.wishes.delete(owner);
+      this.failures.delete(owner);
+    } else this.wishes.set(owner, { template, count, network });
     // WHAT NO LONGER MATCHES is ended: another image or network, or more of
     // them than now asked for. The oldest are the ones kept, because they are
     // the ones ready soonest, or already.
@@ -89,10 +99,47 @@ export class VmStandby {
     return true;
   }
 
-  /** It joined the fleet. @param {string} hostId */
+  /** It joined the fleet, which also answers whatever went wrong before. @param {string} hostId */
   noteEnrolled(hostId) {
     const m = this.machines.get(hostId);
-    if (m) m.enrolled = true;
+    if (!m) return;
+    m.enrolled = true;
+    this.failures.delete(m.owner);
+  }
+
+  /** One the box would not make after all: no longer being made. @param {string} hostId */
+  forget(hostId) {
+    this.machines.delete(hostId);
+  }
+
+  /**
+   * Why a machine this person keeps ready did not come, in a sentence, kept
+   * until one does. Only for somebody who still keeps some.
+   *
+   * @param {string} owner @param {string} text
+   */
+  noteFailed(owner, text) {
+    if (!this.wishes.has(owner)) return;
+    this.failures.set(owner, { at: this.now(), text: String(text).slice(0, 300) });
+  }
+
+  /** @param {string} owner @returns {Failure|null} */
+  failureFor(owner) {
+    return this.failures.get(owner) ?? null;
+  }
+
+  /**
+   * When the oldest of this person's still being made was asked for, or null
+   * when none is. What "being made" is measured from on the phone.
+   *
+   * @param {string} owner
+   */
+  makingSince(owner) {
+    const wish = this.wishes.get(owner);
+    const at = [...this.machines.values()]
+      .filter((m) => m.owner === owner && !m.enrolled && (!wish || (m.template === wish.template && m.network === wish.network)))
+      .map((m) => m.at);
+    return at.length ? Math.min(...at) : null;
   }
 
   /** @param {string} hostId */
@@ -115,6 +162,13 @@ export class VmStandby {
       if (m.owner !== owner) continue;
       if (m.enrolled ? !isReady(id) : this.now() - m.at > PENDING_MS) {
         this.machines.delete(id);
+        if (!m.enrolled) {
+          this.noteFailed(
+            owner,
+            `${id} did not join the fleet within ${PENDING_MS / 60_000} minutes of being asked for, so it was given up on and another is asked for. ` +
+              'A machine that cannot look up names or reach this fleet from its network never joins.',
+          );
+        }
         continue;
       }
       if (wish && (m.template !== wish.template || m.network !== wish.network)) continue;
@@ -143,7 +197,7 @@ export class VmStandby {
   }
 
   serialise() {
-    return { wishes: [...this.wishes.entries()], machines: [...this.machines.entries()] };
+    return { wishes: [...this.wishes.entries()], machines: [...this.machines.entries()], failures: [...this.failures.entries()] };
   }
 
   /** @param {unknown} saved */
@@ -164,6 +218,10 @@ export class VmStandby {
         at: Number(e[1].at) || 0,
         enrolled: e[1].enrolled === true,
       });
+    }
+    for (const e of Array.isArray(s.failures) ? s.failures.slice(0, MAX_PEOPLE) : []) {
+      if (!Array.isArray(e) || typeof e[0] !== 'string' || !this.wishes.has(e[0]) || !e[1] || typeof e[1].text !== 'string') continue;
+      this.failures.set(e[0], { at: Number(e[1].at) || 0, text: e[1].text.slice(0, 300) });
     }
   }
 }

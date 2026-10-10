@@ -4153,6 +4153,14 @@ export class CoordinatorCore {
     const image = holders[0].entries[0].images[0];
     const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start });
     const vmHost = `vm-${ticket.id}`;
+    // A MACHINE KEPT READY IS BEING MADE FROM HERE, not from the box's answer.
+    // Counted only once the box said yes, a top-up set off by a health frame
+    // in between saw none being made and asked for a second: two machines
+    // for one kept ready, on a real pool.
+    const kept = spec.standby ? { owner, template, network: typeof params.network === 'string' && params.network ? params.network : null } : null;
+    if (kept && !this.vmStandby.noteMade(vmHost, kept)) {
+      return { ok: false, error: { code: 'full' }, text: 'As many machines as may be kept ready for you are already being made.' };
+    }
     this.onStateChanged?.();
     this.record({
       event: 'vm.requested',
@@ -4187,8 +4195,8 @@ export class CoordinatorCore {
         skipped.push(`${host.hostId} (${answer.text || 'could not reach the pool'})`);
         continue;
       }
-      if (spec.standby && answer?.ok !== false) {
-        this.vmStandby.noteMade(vmHost, { owner, template, network: typeof params.network === 'string' && params.network ? params.network : null });
+      if (kept && answer?.ok === false) {
+        this.vmStandby.forget(vmHost);
         this.onStateChanged?.();
       }
       // THE LAB IS HELD for this machine until the box reports it there.
@@ -4196,6 +4204,10 @@ export class CoordinatorCore {
       // AND ONE MADE FOR A SESSION is replaced in the ready set, if this
       // person keeps some, the next time the pool is looked at.
       return { ...answer, hostId: host.hostId, vm: answer?.ok === false ? null : vmHost };
+    }
+    if (kept) {
+      this.vmStandby.forget(vmHost);
+      this.onStateChanged?.();
     }
     return {
       ok: false,
@@ -4275,7 +4287,11 @@ export class CoordinatorCore {
     const wish = owner ? this.vmStandby.wishFor(owner) : null;
     if (!wish) return null;
     const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
-    return { template: wish.template, count: wish.count, network: wish.network, ready, starting };
+    // WHEN THE ONE BEING MADE WAS ASKED FOR, and why the last did not come:
+    // "0 being made" said nothing about a machine that had just failed.
+    const since = this.vmStandby.makingSince(owner);
+    const failed = this.vmStandby.failureFor(owner);
+    return { template: wish.template, count: wish.count, network: wish.network, ready, starting, ...(since === null ? {} : { since }), ...(failed ? { failed } : {}) };
   }
 
   /**
@@ -4329,15 +4345,38 @@ export class CoordinatorCore {
     for (const owner of owners) {
       const wish = this.vmStandby.wishFor(owner);
       if (!wish) continue;
+      // ONE AT A TIME PER PERSON, taken before the first await: the count
+      // below is read before a ticket exists, so two top-ups at once (the
+      // Keep button and a health frame, on a real pool) both found none
+      // being made and asked for one each.
+      if (this.#toppingUp.has(owner)) continue;
       const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
       if (ready + starting >= wish.count) continue;
-      /** @type {Record<string, any>} */
-      const params = { platform: 'vm', template: wish.template, minutes: 350 };
-      if (wish.network) params.network = wish.network;
-      // THE ACTOR IS THE OWNER: the box makes the machine for whoever the
-      // intent's actor is (sidecar.js, #makeVm), as it does for a person's own.
-      const r = await this.#provisionVm({ verb: 'provision', params, actor: owner, requester: { email: owner, admin: false }, standby: true }, params);
-      if (r?.ok === false) this.log.warn(`coordinator: could not make a machine to keep ready for ${owner}: ${r.text}`);
+      this.#toppingUp.add(owner);
+      try {
+        await this.#topUpOne(owner, wish);
+      } finally {
+        this.#toppingUp.delete(owner);
+      }
+    }
+  }
+
+  /** People a machine to keep ready is being asked for right now. @type {Set<string>} */
+  #toppingUp = new Set();
+
+  /** @param {string} owner @param {{ template: string, network: string|null }} wish */
+  async #topUpOne(owner, wish) {
+    /** @type {Record<string, any>} */
+    const params = { platform: 'vm', template: wish.template, minutes: 350 };
+    if (wish.network) params.network = wish.network;
+    // THE ACTOR IS THE OWNER: the box makes the machine for whoever the
+    // intent's actor is (sidecar.js, #makeVm), as it does for a person's own.
+    const r = await this.#provisionVm({ verb: 'provision', params, actor: owner, requester: { email: owner, admin: false }, standby: true }, params);
+    if (r?.ok === false) {
+      this.log.warn(`coordinator: could not make a machine to keep ready for ${owner}: ${r.text}`);
+      // SAID WHERE THE PERSON LOOKS, not only in this log.
+      this.vmStandby.noteFailed(owner, String(r.text || 'The box holding the pool would not make the machine.'));
+      this.onStateChanged?.();
     }
   }
 

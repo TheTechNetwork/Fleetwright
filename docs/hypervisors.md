@@ -133,6 +133,15 @@ it as `vmStandby` (`src/fleet/coordinator/vm-standby.js`): a refusal past 32
 people, at most six machines each, and a machine that never enrolled
 forgotten after fifteen minutes.
 
+**And why the last one did not come**, kept until one does: a machine that
+did not join within those fifteen minutes, or a box that would not make one,
+is a sentence beside the count (`failed`), and the one being made says when it
+was asked for (`since`). It used to be forgotten in silence, so the count went
+from "1 being made" to "0 being made" with nothing to say a machine had failed.
+A kept machine counts as being made from its ticket, before the box is asked,
+and one person's top-ups run one at a time: a real pool was asked for two
+machines for one kept ready, by the Keep button and a health frame at once.
+
 ## Machines that work together
 
 > Allow fleet pool tests, so think testing HA for something, which means the
