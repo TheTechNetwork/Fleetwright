@@ -20,6 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import java.text.DateFormat
+import java.util.Date
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -57,11 +60,31 @@ fun VmStandbyScreen(settings: Settings, images: List<Fleet.VmImage>, onDismiss: 
                 count = got.count
             }
         }
+        // WHILE IT IS OPEN IT MOVES: a machine takes minutes to be made, and a
+        // count read once on arrival said "being made" long after the machine
+        // had joined, or failed. The reply to Keep them ready goes once the
+        // count has moved on from it; a refusal stays until the next tap.
+        while (true) {
+            delay(15_000)
+            Fleet(settings).vmStandby().onSuccess { got ->
+                if (got != kept && !failed) message = ""
+                kept = got
+            }
+        }
     }
 
     FullScreen(title = "Keep machines ready", onDismiss = onDismiss) {
         SectionHead("Keep machines ready")
-        Hint(kept?.let { "${it.ready} ready now, ${it.starting} being made, of ${it.count} kept." } ?: "None kept ready.")
+        Hint(
+            kept?.let { k ->
+                val asked = k.since?.takeIf { k.starting > 0 }?.let { " The one being made was asked for at ${clock(it)}." } ?: ""
+                "${k.ready} ready now, ${k.starting} being made, of ${k.count} kept.$asked"
+            } ?: "None kept ready.",
+        )
+        // WHY THE LAST ONE DID NOT COME. The count alone went from "1 being
+        // made" to "0 being made" and said nothing about the machine that had
+        // failed in between.
+        kept?.failed?.let { Hint("${clock(it.at)}: ${it.text}", Design.Palette.bad.now) }
         images.forEach { image ->
             AssistChip(
                 onClick = { template = image.template; network = "" },
@@ -104,3 +127,6 @@ fun VmStandbyScreen(settings: Settings, images: List<Fleet.VmImage>, onDismiss: 
         )
     }
 }
+
+/** A time today, as the phone tells it. */
+private fun clock(ms: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(ms))
