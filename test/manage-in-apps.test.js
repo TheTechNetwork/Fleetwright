@@ -291,3 +291,18 @@ test('both phones: the same sections, in the same order', () => {
   assert.match(ios, /if settings\.showsAdmin \{\s*NavigationLink \{\s*AddHypervisorView/);
   assert.match(kt, /if \(admin == true\) \{[\s\S]{0,200}?OpenRow\(Manage\.Words\.changePolicy\)/);
 });
+
+test('both phones: a pool the phone could not reach says so, and what still works from where it is', () => {
+  // ON 5G the page sat at "Connecting to 10.10.10.230…" and then gave a bare
+  // network error. A socket that never opened is a pool this phone could not
+  // reach from its network; one that opened and then went is still "ended".
+  const ios = bare(IOS_WATCH);
+  assert.match(ios, /try await link\.open\(\)\s*\} catch XOLink\.Failure\.wrongCertificate \{[\s\S]{0,200}?\} catch \{[\s\S]{0,80}?phase = \.stopped\(Manage\.Words\.unreachable\(address, error\.localizedDescription\), retry: true\)[\s\S]{0,40}?\}\s*reached = true/);
+  assert.match(ios, /phase = \.stopped\(reached \? Manage\.Words\.lost\(reason\) : Manage\.Words\.unreachable\(address, reason\), retry: true\)/);
+  // Its own deadline, and only while the socket is still opening.
+  assert.match(bare(IOS_LINK), /asyncAfter\(deadline: \.now\(\) \+ timeout\) \{ \[weak self\] in\s*guard let self, self\.lock\.withLock\(\{ self\.opening != nil \}\) else \{ return \}/);
+  const kt = bare(KT_WATCH);
+  assert.equal((kt.match(/Phase\.Stopped\(Manage\.Words\.unreachable\(address, e\.message \?: "it did not answer"\), retry = true\)/g) ?? []).length, 2);
+  assert.ok(kt.indexOf('Manage.Words.unreachable(') < kt.indexOf('link = opened'), 'only before the socket is open');
+  assert.match(TABLE.words.unreachable[2], /works from anywhere, through one of your machines\.$/);
+});

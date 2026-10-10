@@ -100,12 +100,14 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
             phase = if (e.kind == XoLink.Failure.Kind.WRONG_CERTIFICATE) {
                 Phase.Stopped(Manage.Words.wrongCertificate(address), retry = false)
             } else {
-                Phase.Stopped(Manage.Words.lost(e.message ?: "it did not answer"), retry = true)
+                Phase.Stopped(Manage.Words.unreachable(address, e.message ?: "it did not answer"), retry = true)
             }
             return
         } catch (e: Exception) {
+            // AWAY FROM THE POOL'S NETWORK: the socket never opened, which is
+            // a pool this phone could not reach, not a connection that ended.
             if (generation != mine) return
-            phase = Phase.Stopped(Manage.Words.lost(e.message ?: "it did not answer"), retry = true)
+            phase = Phase.Stopped(Manage.Words.unreachable(address, e.message ?: "it did not answer"), retry = true)
             return
         }
         if (generation != mine) {
