@@ -400,6 +400,8 @@ export class XoRpc {
     this.certificate = null;
     /** Opened over plain HTTP by `connectXoPlain`, with no TLS at all. */
     this.plain = false;
+    /** @type {string|null} This machine's address on the connection, when it made it itself. */
+    this.localAddress = null;
     this.nextId = 1;
     /** @type {Map<number, { resolve: (v: any) => void, reject: (e: Error) => void, timer: ReturnType<typeof setTimeout> }>} */
     this.pending = new Map();
@@ -515,5 +517,8 @@ export async function connectXo({ address, pin, timeoutMs = 15_000, via = null }
   const link = await upgrade(socket, { host, port, timeoutMs });
   const rpc = new XoRpc(link);
   rpc.certificate = certificate;
+  // This machine's own address on the way to Xen Orchestra, when it went
+  // there itself: where a router on the same network can send it syslog.
+  rpc.localAddress = via ? null : String(socket.localAddress || '').replace(/^::ffff:/, '') || null;
   return rpc;
 }
