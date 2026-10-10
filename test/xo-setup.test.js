@@ -353,12 +353,17 @@ async function choose(/** @type {any} */ begun, /** @type {string} */ address, /
   return `${box.epk}.${box.iv}.${box.ct}`;
 }
 
-test('changing the policy keeps the machine images and the fleet\'s own machines in the set', { skip }, async (t) => {
+test('changing the policy keeps the machine images and the fleet\'s own machines in the set, and puts back an image taken out', { skip }, async (t) => {
   // Every change of policy wrote storage and networks alone into the set,
   // which `resourceSet.set` replaces: the Debian image went with a change
   // that only asked for an Ubuntu one, and the next machine asked for from
   // it was refused with "not enough permissions".
-  const xo = await standIn(t, { sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'tpl-debian', 'vm-holder'] }] });
+  // And an Ubuntu image already taken out by such a change, which the next
+  // change puts back: the phone sends nothing about an image it keeps.
+  const xo = await standIn(t, {
+    sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'tpl-debian', 'vm-holder'] }],
+    templates: { 'tpl-ubuntu': { id: 'tpl-ubuntu', type: 'VM-template', $pool: 'p1', name_label: 'Fleetwright Ubuntu 24.04', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04'] } },
+  });
   const { setups } = await machine();
   const actor = 'eli@example.com';
   const { begun } = await choosing(xo, setups, actor);
@@ -368,7 +373,7 @@ test('changing the policy keeps the machine images and the fleet\'s own machines
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'done', end.text);
   // What the phone chose replaces the storage and networks; the rest stays.
-  assert.deepEqual(xo.sets[0].objects, ['sr1', 'net-dmz', 'tpl-debian', 'vm-holder']);
+  assert.deepEqual(xo.sets[0].objects, ['sr1', 'net-dmz', 'tpl-debian', 'vm-holder', 'tpl-ubuntu']);
 });
 
 test('a setup run again leaves what the fleet may use as a person left it', { skip }, async (t) => {

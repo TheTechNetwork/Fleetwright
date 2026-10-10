@@ -1048,9 +1048,13 @@ export class XoSetups {
         // this used to write storage and networks alone: every change of
         // policy took the images out, and the next machine asked for from one
         // was refused by Xen Orchestra with "not enough permissions".
+        // AND EVERY IMAGE OF THE FLEET'S, whether or not it is in the set
+        // now, so a pool this already happened to is put right by its next
+        // change of policy: a phone keeping an image sends nothing about it.
         const chosenKinds = new Set([...(ctx.srs || []), ...(ctx.networks || [])].map((/** @type {any} */ o) => String(o?.id)));
         const rest = (ctx.setObjects || []).filter((/** @type {string} */ id) => !chosenKinds.has(id));
-        await ctx.admin.call('resourceSet.set', { id: ctx.setId, objects: [...new Set([...p.srs, ...p.networks, ...own, ...rest])], limits: p.limits });
+        const images = (ctx.images || []).map((/** @type {any} */ t) => String(t.id));
+        await ctx.admin.call('resourceSet.set', { id: ctx.setId, objects: [...new Set([...p.srs, ...p.networks, ...own, ...rest, ...images])], limits: p.limits });
         const said = [`It may use ${plural(p.srs.length, 'storage repository')}, ${plural(p.networks.length, 'network')}, ${p.limits.cpus} vCPUs, ${gib(p.limits.memory)} of memory and ${gib(p.limits.disk)} of disk.`];
         // THE EGRESS, as a tag on that network, so the edge router is built
         // on the network the person named and the choice can be seen in Xen
