@@ -592,9 +592,10 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
       const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : '';
       return `${c}() { echo "${c} $*" >>"$CALLS"; ${fails}${fails ? '; ' : ''}return 0; }`;
     });
-    // python3 only ever builds a report's body: its fourth argument is the
-    // step, which is all the body need be here; curl is what sends it.
-    stubs.push('python3() { echo "$4"; }');
+    // python3 builds a report's body, whose fourth argument is the step and
+    // all the body need be here (curl is what sends it), and asks a server
+    // for a name when names do not work, with three.
+    stubs.push('python3() { echo "${4-}"; }');
     const body = script
       .replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`)
       .replace("screens='/dev/console /dev/tty1'", "screens=''")
@@ -659,6 +660,11 @@ test('a VM that cannot look up a name stops within half a minute, says which ser
   assert.equal(calls.filter((c) => c === 'getent hosts deb.debian.org').length, 15, 'fifteen looks, two seconds apart');
   assert.ok(calls.includes('sleep 2'));
   assert.ok(calls.includes('resolvectl dns'), 'and the servers DHCP gave it, on its screen and in the log it sends');
+  // And who answers when asked straight, and whose MAC the gateway is: a
+  // build behind two edge routers was told 10.254.0.1 and heard nothing,
+  // and the log could not say whether either router answered at all.
+  assert.ok(calls.includes('ip -4 route show default'), 'its gateway is asked as well as its servers');
+  assert.ok(calls.indexOf('ip neigh show') > calls.lastIndexOf('getent hosts deb.debian.org'));
   assert.ok(!calls.some((c) => c.startsWith('apt-get')), 'nothing that needs a name is tried');
   assert.ok(calls.includes('report failed to fleet.test:443:203.0.113.7,198.51.100.2'), 'sent again to the addresses the box gave it');
   assert.equal(calls.at(-1), 'systemctl reboot');
