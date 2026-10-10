@@ -118,7 +118,9 @@ internal object Manage {
 
     fun component(o: JSONObject): Component? {
         val id = text(o.opt("id")) ?: return null
-        val kind = when (o.opt("type")) {
+        // As String because Android marks opt() @RecentlyNullable, and over that
+        // type Kotlin 2.4 calls the when below not exhaustive, else and all.
+        val kind = when (o.opt("type") as? String) {
             "pool" -> Kind.POOL
             "host" -> Kind.HOST
             "VM" -> Kind.VM
@@ -279,7 +281,7 @@ internal object Manage {
 
         fun enter(o: JSONObject) {
             val id = text(o.opt("id")) ?: return
-            when (o.opt("type")) {
+            when (o.opt("type") as? String) {
                 "VBD" -> attachment(o)?.let { attachments[id] = it }
                 "VDI" -> disk(o)?.let { disks[id] = it }
                 else -> component(o)?.let { components[id] = it }
