@@ -331,6 +331,31 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     '  if [ -z "$named" ]; then',
     '    echo "fleetwright: cannot look up deb.debian.org after 30 seconds, so this VM has no working DNS. The servers it was told to ask:"',
     "    resolvectl dns 2>/dev/null || grep '^nameserver' /etc/resolv.conf || echo '(none)'",
+    // AND WHO ANSWERS WHEN ASKED STRAIGHT: each server it was told, its
+    // gateway and whichever router gave it its lease, by a DNS query of its
+    // own, with the address the answer came back from. Asked for after a
+    // build behind two edge routers was told 10.254.0.1 and heard nothing:
+    // whether the routers answer at all, only at their own addresses, or
+    // from the wrong one, is the difference between three fixes. Then whose
+    // MAC the shared address resolves to.
+    '    echo "fleetwright: asked straight for deb.debian.org:"',
+    "    gw=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}') || true",
+    "    lease=$(cat /run/systemd/netif/leases/* /var/lib/dhcp/*.leases 2>/dev/null | grep -oE '(SERVER_ADDRESS=|dhcp-server-identifier )[0-9.]+' | grep -oE '[0-9.]+$' | head -1) || true",
+    "    for s in $( { resolvectl dns 2>/dev/null; grep '^nameserver' /etc/resolv.conf 2>/dev/null; echo \"$gw $lease\"; } | grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | grep -v '^127[.]' | sort -u ); do",
+    "      python3 -c '",
+    'import socket, struct, sys',
+    'q = struct.pack(">6H", 0x1234, 0x0100, 1, 0, 0, 0) + b"".join(bytes([len(p)]) + p.encode() for p in "deb.debian.org".split(".")) + b"\\0" + struct.pack(">2H", 1, 1)',
+    's = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)',
+    's.settimeout(3)',
+    'try:',
+    '    s.sendto(q, (sys.argv[1], 53))',
+    '    r, a = s.recvfrom(512)',
+    '    print("  " + sys.argv[1] + ": answered from " + a[0] + ", " + str(struct.unpack(">H", r[6:8])[0]) + " records, rcode " + str(r[3] & 15))',
+    'except OSError as e:',
+    '    print("  " + sys.argv[1] + ": no answer (" + (str(e) or type(e).__name__) + ")")',
+    "' \"$s\" || true",
+    '    done',
+    '    ip neigh show 2>/dev/null || true',
     '    exit 1',
     '  fi',
     '  report packages',
@@ -506,7 +531,9 @@ const STEP_WORDS = Object.freeze({
 const SILENT_MS = 5 * 60_000;
 
 /** The last few lines of a log, for a sentence on a phone. @param {string|null|undefined} log */
-const logEnd = (log) => String(log || '').trim().split('\n').slice(-4).join('\n').slice(-600);
+// Enough for the DNS probe above, its servers and who answered ARP; and still
+// within what a sealed push carries.
+const logEnd = (log) => String(log || '').trim().split('\n').slice(-12).join('\n').slice(-1000);
 
 /**
  * The coordinator's IPv4 addresses as this box's resolver has them, for a
