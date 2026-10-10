@@ -525,8 +525,8 @@ offering one, and that one is free again when its machine ends.
 
 **Booted in QEMU**, from the pinned 26.7 image patched this way with four
 labs, two of them closed, and blocking on: the whole configuration was read
-(the file has a whole 32 KiB block, below), each lab's interface came up at its
-address, dnsmasq had a range on each, Suricata's home network was the uplink
+(the file has a whole 32 KiB block, below), each lab's interface came up at
+its address, dnsmasq had a range on each, Suricata's home network was the uplink
 and the four labs, and `pfctl -sr` showed, per interface and in this order,
 DNS to the edge, no other resolver, nothing private, the way out (the uplink
 and the open labs, diverted to Suricata), the closed labs' HTTPS to the fleet
