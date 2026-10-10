@@ -1618,6 +1618,147 @@ const OPENAPI = JSON.stringify({
                         }
                       }
                     },
+                    "vmEdges": {
+                      "description": "How each of your pools' edge routers is, as the box watching them last read them (`xo[].edges` in that box's health): which router holds the gateway address, whether each answers names and has its way out, and what they said lately. One entry a pool, the freshest when two boxes watch it. A pool no box watches is absent, which means nothing is watching it, not that it is fine. Absent altogether from an older coordinator.",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "address",
+                          "hostId",
+                          "at",
+                          "routers",
+                          "events"
+                        ],
+                        "properties": {
+                          "address": {
+                            "type": "string",
+                            "description": "the pool, by the address its token is kept under"
+                          },
+                          "hostId": {
+                            "type": "string",
+                            "description": "the box that read it"
+                          },
+                          "at": {
+                            "type": "number",
+                            "description": "when it was read, ms since the epoch"
+                          },
+                          "routers": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "name"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "fleetwright-edge, or fleetwright-edge-b for the second of a pair"
+                                },
+                                "address": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ],
+                                  "description": "its WAN address, null when not known"
+                                },
+                                "reached": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ],
+                                  "description": "whether its API answered the last read"
+                                },
+                                "role": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ],
+                                  "enum": [
+                                    "master",
+                                    "backup",
+                                    "init",
+                                    null
+                                  ],
+                                  "description": "its CARP role on the uplink: master holds the gateway address. Null for one router alone, or cannot tell"
+                                },
+                                "dns": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ],
+                                  "description": "whether its resolver is running; null is cannot tell"
+                                },
+                                "gateway": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ],
+                                  "description": "whether its way out is up; null is cannot tell"
+                                },
+                                "leases": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ],
+                                  "description": "how many DHCP leases it holds"
+                                },
+                                "heardAt": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ],
+                                  "description": "when it last sent a log line, ms since the epoch"
+                                },
+                                "problem": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ],
+                                  "description": "why it could not be read, in a sentence"
+                                }
+                              }
+                            }
+                          },
+                          "events": {
+                            "type": "array",
+                            "description": "what the routers logged lately, oldest first, at most 40",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "at",
+                                "router",
+                                "kind",
+                                "text"
+                              ],
+                              "properties": {
+                                "at": {
+                                  "type": "number"
+                                },
+                                "router": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "carp",
+                                    "dns",
+                                    "dhcp",
+                                    "gateway",
+                                    "firmware",
+                                    "ids",
+                                    "system"
+                                  ]
+                                },
+                                "text": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
                     "vmMachines": {
                       "description": "The machines already made from your images, as the boxes holding your pools last saw them: one per name. Work one with `vmctl`. Absent from an older coordinator, which means none can be shown.",
                       "type": "array",

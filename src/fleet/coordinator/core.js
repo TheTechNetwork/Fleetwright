@@ -154,6 +154,20 @@ const MAX_DEVICES = 150;
 export const MAX_NET_POINTS = 60;
 
 /**
+ * WHAT A BOX WATCHING A POOL'S EDGE ROUTERS MAY SAY OF THEM (health
+ * `xo[].edges`, src/fleet/host/edge-watch.js), and no more: each router by
+ * the name it boots with, and the events it sent, by kind and bounded. A box
+ * that says more is not shown more; what does not fit is left out.
+ */
+export const EDGE_REPORT = Object.freeze({
+  name: /^fleetwright-edge(-b)?$/,
+  roles: Object.freeze(['master', 'backup', 'init']),
+  kinds: Object.freeze(['carp', 'dns', 'dhcp', 'gateway', 'firmware', 'ids', 'system']),
+  events: 40,
+  text: 240,
+});
+
+/**
  * @typedef {object} Device
  * @property {string} id            opaque, minted at enrollment
  * @property {'ios'|'android'|'web'} platform
@@ -3766,6 +3780,10 @@ export class CoordinatorCore {
       vmMachines: this.vmMachinesFor(requester),
       // WHAT THIS PERSON KEEPS READY, and how many are: null is keeping none.
       vmStandby: this.vmStandbyFor(requester),
+      // AND HOW EACH POOL'S EDGE ROUTERS ARE, as the box watching them last
+      // read them: which holds the gateway address, whether each answers
+      // names, and what they said lately. Only the person's own pools.
+      vmEdges: this.vmEdgesFor(requester),
     };
   }
 
@@ -3955,6 +3973,60 @@ export class CoordinatorCore {
       return { ...answer, hostId: host.hostId };
     }
     return { ok: false, error: { code: 'unreachable' }, text: `None of the machines holding your token could reach ${address}: ${skipped.join('; ')}.` };
+  }
+
+  /**
+   * How a person's pools' edge routers are, by what the boxes watching them
+   * reported (health `xo[].edges`, src/fleet/host/edge-watch.js): one entry a
+   * pool, the freshest report of it when two boxes watch the same one.
+   *
+   * CANNOT TELL STAYS CANNOT TELL. Every flag is true, false or null, and a
+   * router the box could not read says so in `problem` rather than coming
+   * through as down. A pool no box watches is absent, which the phones say
+   * as "nothing is watching", never as "fine".
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @returns {Array<{ address: string, hostId: string, at: number, routers: Array<Record<string, any>>, events: Array<Record<string, any>> }>}
+   */
+  vmEdgesFor(requester) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return [];
+    const flag = (/** @type {unknown} */ v) => (typeof v === 'boolean' ? v : null);
+    const when = (/** @type {unknown} */ v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
+    const text = (/** @type {unknown} */ v, /** @type {number} */ max) => (typeof v === 'string' && v.trim() ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max) : null);
+    /** @type {Map<string, { address: string, hostId: string, at: number, routers: Array<Record<string, any>>, events: Array<Record<string, any>> }>} */
+    const found = new Map();
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      for (const e of host.health.xo) {
+        if (String(e?.owner || '').toLowerCase() !== email || !e?.edges || typeof e.edges !== 'object') continue;
+        const address = String(e.address || '');
+        const at = when(e.edges.at);
+        if (!address || at === null) continue;
+        const have = found.get(address);
+        if (have && have.at >= at) continue;
+        const routers = (Array.isArray(e.edges.routers) ? e.edges.routers : [])
+          .filter((/** @type {any} */ r) => EDGE_REPORT.name.test(String(r?.name || '')))
+          .slice(0, 2)
+          .map((/** @type {any} */ r) => ({
+            name: String(r.name),
+            address: typeof r.address === 'string' && /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/.test(r.address) ? r.address : null,
+            reached: flag(r.reached),
+            role: EDGE_REPORT.roles.includes(r.role) ? r.role : null,
+            dns: flag(r.dns),
+            gateway: flag(r.gateway),
+            leases: Number.isInteger(r.leases) && r.leases >= 0 && r.leases < 100_000 ? r.leases : null,
+            heardAt: when(r.heardAt),
+            problem: text(r.problem, 200),
+          }));
+        const events = (Array.isArray(e.edges.events) ? e.edges.events : [])
+          .slice(-EDGE_REPORT.events)
+          .filter((/** @type {any} */ v) => when(v?.at) !== null && EDGE_REPORT.name.test(String(v?.router || '')) && EDGE_REPORT.kinds.includes(v?.kind) && text(v?.text, EDGE_REPORT.text))
+          .map((/** @type {any} */ v) => ({ at: /** @type {number} */ (when(v.at)), router: String(v.router), kind: String(v.kind), text: /** @type {string} */ (text(v.text, EDGE_REPORT.text)) }));
+        found.set(address, { address, hostId: host.hostId, at, routers, events });
+      }
+    }
+    return [...found.values()].sort((a, b) => a.address.localeCompare(b.address));
   }
 
   /**
