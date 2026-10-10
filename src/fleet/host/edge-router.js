@@ -20,14 +20,15 @@
 // that file into place (opnsense-importer, bootstrap_and_exit). The nano image
 // is a plain UFS2 file system written by makefs, and that file is 5,234
 // contiguous bytes at a fixed offset in it (found by reading the published
-// 26.7 image; the whole image is pinned by its SHA-256 below, so the offset
-// cannot drift under us). So the image is streamed from the download to Xen
-// Orchestra with exactly those bytes replaced by this file's configuration,
-// padded to the same length, and the file system is otherwise untouched:
-// same inode, same size, same blocks. XML allows the trailing whitespace the
+// 26.7 image; the whole image is pinned by its SHA-256 below, so nothing can
+// drift under us). The build gives the file a whole free block of its own,
+// by the file system's rules (OPNSENSE_IMAGE.grow), and streams the image
+// from the download to Xen Orchestra with that block holding this file's
+// configuration, padded to its length, and the few bytes of the file system
+// that record the move changed. XML allows the trailing whitespace the
 // padding is made of. Before a byte is replaced, the original is checked
-// against the default configuration's own SHA-256, so a wrong offset fails
-// instead of corrupting the disk.
+// against what must be there, so a wrong offset fails instead of corrupting
+// the disk.
 //
 // WHAT RUNS WHERE. The machine running the policy job downloads the image
 // (once, kept in its state directory, checked before every use), unpacks it
@@ -65,21 +66,39 @@ export const OPNSENSE_IMAGE = Object.freeze({
   /** /usr/local/etc/config.xml, as the nano build left it, and its SHA-256. */
   config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
   /**
-   * MORE ROOM, IN THE FILE'S OWN BLOCKS, for every edge: labs, and then
-   * the updates job, did not fit in 5,234 bytes. The file system's fragments
-   * are 4 KiB, so the file already owns 8,192 bytes on the disk (its inode
-   * counts 16 sectors), and the 2,958 after its end are zeros. Growing it is
-   * one field: the size in its inode (number 6523), an 8-byte little-endian
-   * integer at this offset, from 5,234 to 8,192. Nothing is allocated, moved
-   * or freed, and the file system keeps no check-hashes (its superblock's
-   * `fs_metackhash` is 0), so nothing else records the size. Both are
-   * checked before they are written, like the configuration itself: the
-   * field must say 5,234 and the slack must be zeros. Read from the 26.7
-   * image pinned above, with the file system's own superblock and inode
-   * table.
+   * ROOM: A WHOLE BLOCK FOR THE CONFIGURATION, 32 KiB, made by the file
+   * system's own rules (src/fleet/host/ufs-room.js). The default file is two
+   * 4 KiB fragments in cylinder group 1, which `makefs` packed full, so it
+   * cannot grow where it is: it moves to the first wholly free block (in
+   * group 4), its fragments are marked free, and every count that records
+   * either (the inode's size, sectors and first block; both groups' bitmaps,
+   * free counts and run sums; group 4's cluster map; the per-group summary
+   * array; the superblock's totals) is changed with it. Planned and checked
+   * as fsck would by scripts/opnsense-room.mjs against the 26.7 image pinned
+   * above, and carried here as each byte it changes and what must be there
+   * before it is: the build checks every one, and that the block is zeros,
+   * before writing anything. 8 KiB, the file's own fragments, was the room
+   * until two routers' rules (HA) needed more.
    */
-  room: 8192,
-  sizeField: Object.freeze({ offset: 1833744, was: 5234 }),
+  grow: Object.freeze({
+    room: 32768,
+    inode: 6523,
+    data: Object.freeze({ offset: 2345304064, length: 32768 }),
+    edits: Object.freeze([
+      { offset: 66552, was: 'eb60000000000000', becomes: 'ea60000000000000', what: 'superblock: free blocks' },
+      { offset: 66568, was: '0000000000000000', becomes: '0200000000000000', what: 'superblock: free fragments' },
+      { offset: 1833744, was: '72140000000000001000000000000000', becomes: '00800000000000004000000000000000', what: 'inode 6523: size and sectors' },
+      { offset: 1833840, was: 'daa7020000000000', becomes: 'a8bc080000000000', what: 'inode 6523: first block' },
+      { offset: 31555600, was: '000000000000000000df010000000000', becomes: '000000000000000000df010002000000', what: 'summary of cylinder group 1' },
+      { offset: 31555648, was: '00000000cb13000000df010000000000', becomes: '00000000ca13000000df010000000000', what: 'summary of cylinder group 4' },
+      { offset: 502399012, was: '00', becomes: '02', what: 'cylinder group 1' },
+      { offset: 502399036, was: '00', becomes: '01', what: 'cylinder group 1' },
+      { offset: 502420899, was: '00', becomes: '0c', what: 'cylinder group 1' },
+      { offset: 2009202716, was: 'cb', becomes: 'ca', what: 'cylinder group 4' },
+      { offset: 2009228445, was: 'ff', becomes: '00', what: 'cylinder group 4' },
+      { offset: 2009234802, was: 'e0', becomes: 'c0', what: 'cylinder group 4' },
+    ]),
+  }),
 });
 
 /** Names in Xen Orchestra. The edge is not tagged `fleetwright`, so the fleet's token cannot touch it. */
@@ -273,11 +292,11 @@ export function fleetHosts(coordinatorUrl) {
  * everything. The DNS and private rules above it are not diverted: they
  * decide before Suricata would see the packet.
  *
- * ROOM. It has to fit in the 8,192 bytes the file's own blocks hold
- * (OPNSENSE_IMAGE.room), and four closed labs, blocking and a long
- * coordinator name all but fill them. It once had to fit in the 5,234 the
- * default fills, and what was cut then is what OPNsense does anyway: the web
- * interface's theme (nobody can log in to see it), pf's
+ * ROOM. It has to fit in the block the build gives the file
+ * (OPNSENSE_IMAGE.grow, 32 KiB). It once had to fit in the 5,234 bytes the
+ * default fills, then the 8,192 of its own fragments, and what was cut for
+ * those is what OPNsense does anyway: the web interface's theme (nobody can
+ * log in to see it), pf's
  * `normal` optimization (its default when unset), sticky load balancing (it
  * does nothing without source tracking, which is off), and the policy's
  * `prio` and description, which OPNsense reads as 0 and none when absent.
@@ -310,12 +329,10 @@ export function fleetHosts(coordinatorUrl) {
  * goes to dnsmasq, which asks the edge's Unbound for those and refuses the
  * rest (fleetHosts says why not Unbound itself). The uplink and open labs
  * ask Unbound as before. Suricata watches the labs as it watches the uplink.
- * Every configuration is the room the file's own blocks give it
- * (OPNSENSE_IMAGE.room), and the build grows the file to it: labs first
- * needed it, and the updates job needs it now without them. The most it
- * holds is four closed labs and blocking, with a coordinator whose name is
- * up to about a hundred characters, since a closed lab's configuration has
- * that name twice; a longer one is refused here, before anything is
+ * Every configuration is the block the build gives the file
+ * (OPNSENSE_IMAGE.grow), which holds four closed labs and blocking with a
+ * coordinator name as long as DNS allows, written twice for a closed lab; a
+ * configuration that did not fit would be refused here, before anything is
  * downloaded.
  * BOOTED IN QEMU that way, four labs, two of them closed, blocking: the file
  * was read whole, each lab's interface came up at its address with its DHCP
@@ -332,7 +349,7 @@ export function fleetHosts(coordinatorUrl) {
  * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[] }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], length = OPNSENSE_IMAGE.room } = {}) {
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], length = OPNSENSE_IMAGE.grow.room } = {}) {
   const { address, prefix, from, to } = EDGE.lan;
   if (labs.length > LAB.max) throw new Error(`an edge has room for ${LAB.max} labs, not ${labs.length}`);
   if (labs.includes(false) && !fleet.length) throw new Error('a closed lab needs the fleet’s hosts to let through');
@@ -458,37 +475,23 @@ export function isDefaultConfig(original) {
 }
 
 /**
- * Is this the default configuration followed by nothing but the zeros of the
- * file's last fragment? What growing the file into its own blocks replaces.
- *
- * @param {Buffer} original
- */
-export function isDefaultConfigWithSlack(original) {
-  const { length } = OPNSENSE_IMAGE.config;
-  return original.length === OPNSENSE_IMAGE.room && isDefaultConfig(original.subarray(0, length)) && original.subarray(length).every((b) => b === 0);
-}
-
-/** A size as the inode keeps it: 8 bytes, little-endian. @param {number} n */
-const sizeBytes = (n) => {
-  const b = Buffer.alloc(8);
-  b.writeBigUInt64LE(BigInt(n));
-  return b;
-};
-
-/**
- * What the build writes into the image: the configuration over the default
- * one, and, when it needs the room (labs), the file's size in its inode, each
- * checked against what must be there before it is replaced.
+ * What the build writes into the image: the configuration in the free block
+ * it moves to, and each byte of the file system that records the move
+ * (OPNSENSE_IMAGE.grow), every one checked against what must be there before
+ * it is replaced, and the block checked to be zeros.
  *
  * @param {Buffer} replacement  edgeConfig's answer
  * @returns {Array<{ offset: number, replacement: Buffer, check: (original: Buffer) => boolean, what: string }>}
  */
 export function imagePatches(replacement) {
-  const { config, room, sizeField } = OPNSENSE_IMAGE;
-  if (replacement.length !== room) throw new Error(`a configuration is ${room} bytes, not ${replacement.length}`);
+  const { grow } = OPNSENSE_IMAGE;
+  if (replacement.length !== grow.room) throw new Error(`a configuration is ${grow.room} bytes, not ${replacement.length}`);
   return [
-    { offset: sizeField.offset, replacement: sizeBytes(room), check: (b) => b.equals(sizeBytes(sizeField.was)), what: 'the configuration’s size' },
-    { offset: config.offset, replacement, check: isDefaultConfigWithSlack, what: 'the default configuration' },
+    ...grow.edits.map((e) => {
+      const was = Buffer.from(e.was, 'hex');
+      return { offset: e.offset, replacement: Buffer.from(e.becomes, 'hex'), check: (/** @type {Buffer} */ b) => b.equals(was), what: e.what };
+    }),
+    { offset: grow.data.offset, replacement, check: (/** @type {Buffer} */ b) => b.every((x) => x === 0), what: 'the free block the configuration moves to' },
   ];
 }
 
