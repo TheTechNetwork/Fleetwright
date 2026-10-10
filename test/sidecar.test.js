@@ -1001,6 +1001,32 @@ test('working a machine on a hypervisor is this process’s too, for the person 
   assert.equal(stub.commands.length, 0);
 });
 
+test('a pool’s page from away is this process’s too: read and worked for the person asking, the sealed answer going back as given', async (t) => {
+  /** @type {any[]} */
+  const asked = [];
+  const sealed = { epk: 'e', iv: 'i', ct: 'c' };
+  const xoPools = /** @type {any} */ ({
+    held: new Map([['eli@example.com xo.lan', {}]]),
+    report: () => [],
+    look: async (/** @type {any} */ ask) => (asked.push(['look', ask]), { ok: true, text: 'Read xo.lan through this machine.', sealed }),
+    act: async (/** @type {any} */ ask) => (asked.push(['act', ask]), { ok: true, text: 'xo.lan did it.' }),
+    refresh: async () => {},
+  });
+  const { sidecar, stub } = await setup(t, {}, { xoPools });
+  const key = 'B'.repeat(87);
+  const looked = await sidecar.handle(intent({ verb: 'xolook', actor: 'Eli@Example.com', params: { address: 'xo.lan', reply: key } }));
+  assert.equal(looked.ok, true);
+  assert.deepEqual(looked.sealed, sealed);
+  const args = JSON.stringify({ id: '2d3e4f50-6172-4384-9596-a7b8c9d0e1f2' });
+  const acted = await sidecar.handle(intent({ verb: 'xoact', actor: 'Eli@Example.com', params: { address: 'xo.lan', method: 'vm.start', args } }));
+  assert.equal(acted.text, 'xo.lan did it.');
+  assert.deepEqual(asked, [
+    ['look', { owner: 'eli@example.com', address: 'xo.lan', reply: key }],
+    ['act', { owner: 'eli@example.com', address: 'xo.lan', method: 'vm.start', args }],
+  ]);
+  assert.equal(stub.commands.length, 0, 'neither became a command line');
+});
+
 test('a machine from a hypervisor hands its owner’s login to its hub once, then forgets the file', async (t) => {
   /** @type {any[]} */
   const given = [];
