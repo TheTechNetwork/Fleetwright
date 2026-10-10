@@ -2042,6 +2042,18 @@ class Fleet(
         )
 
     /**
+     * A pool's page, read by one of your machines that holds its token, for
+     * this phone away from the pool's network: sealed to [reply], a key made
+     * for this one look (PoolWatch). Never held: an old page is no page.
+     */
+    suspend fun xolook(address: String, reply: String): Reply =
+        intent("xolook", mapOf("address" to address, "reply" to reply), idempotencyKey = "app-" + java.util.UUID.randomUUID().toString())
+
+    /** One of the pool page's actions, done by that machine: [method] and the JSON of what the page would have sent. Never held, like [vmctl]. */
+    suspend fun xoact(address: String, method: String, args: String): Reply =
+        intent("xoact", mapOf("address" to address, "method" to method, "args" to args), idempotencyKey = "app-" + java.util.UUID.randomUUID().toString())
+
+    /**
      * Whether the person this credential belongs to is the fleet's admin.
      *
      * The same flag the coordinator's destructive-route guard reads, so a row

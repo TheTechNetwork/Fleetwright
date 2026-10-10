@@ -6,9 +6,11 @@
     "objects is the inventory, in the shapes xo.getAllObjects returns (the fields src/fleet/host/xo-pools.js and edge-router.js already read). It is deliberately awkward: a host in maintenance mode, a host and a VM with no name and no state, a VM on a host and in a pool the token cannot see, a VM with no guest tools, sizes missing. Missing is CANNOT TELL and is said so, never drawn as zero (C-5).",
     "actions lists, per component and method list, the ids offered, in the order they are drawn. An empty list and a null list of methods both offer nothing: a server that lists no method, and one whose list could not be read, are each a reason to draw no button.",
     "details pins each offered action's words, the method it calls, the params it sends, what it costs and how it asks. now is the clock the snapshot name is made from, in milliseconds, so the name is the same on both phones.",
+    "xolookAad is the additional data a pool's page is sealed under when one of your machines reads it for a phone away from the pool (xolookAad in src/fleet/seal.js), so both phones open what the machine seals.",
     "pin is a certificate's DER bytes and the SHA-256 the host writes as the pin (certSha256 in src/fleet/host/xo-ws.js), so the phone that compares it in the TLS challenge computes the same text the machine recorded."
   ],
   "now": 1790000000000,
+  "xolookAad": ["xo.lan", "fleetwright-xolook/v1:xo.lan"],
   "pin": { "der": "MIIBCgKCAQEAw14RmkL/AH8=", "sha256": "eb4a317c9d42692ebd56cf6ec78c65d38fc6498e05a66132be4c3ca166467ed5" },
   "bytes": [
     [1023, "1023 bytes"],
@@ -290,6 +292,11 @@
     "noObjects": "This Xen Orchestra does not offer xo.getAllObjects, so nothing can be listed.",
     "lost": ["the connection closed", "The connection ended: the connection closed. Look again to reconnect."],
     "unreachable": ["xo.lan", "the request timed out", "This phone could not reach xo.lan: the request timed out. The pool’s page works from the pool’s own network or over a VPN to it; changing what the fleet may use works from anywhere, through one of your machines."],
+    "askingFleet": ["xo.lan", "This phone cannot reach xo.lan from here, so it is asking one of your machines that can."],
+    "through": ["rpi-7550", "14:02", "Read through rpi-7550 at 14:02. This phone cannot reach the pool from here, so the page is read there again every 20 seconds while it is open."],
+    "throughLost": ["rpi-7550", "connect ETIMEDOUT", "rpi-7550 stopped reading this pool for the phone: connect ETIMEDOUT. What is shown is from the last time it did."],
+    "unreachableEverywhere": ["xo.lan", "the request timed out", "No connected machine holds your token for xo.lan.", "This phone could not reach xo.lan: the request timed out. None of your machines could read it for the phone either: No connected machine holds your token for xo.lan."],
+    "oneOfYours": "one of your machines",
     "methodsUnknown": "Cannot tell which actions this Xen Orchestra offers, so none are drawn.",
     "nothingOffered": "Nothing Xen Orchestra offers can be done to it in the state it is in.",
     "seesNothing": "This token sees nothing on the pool.",

@@ -83,6 +83,25 @@ final class ManageParityTests: XCTestCase {
         XCTAssertEqual(Manage.fingerprint(der: der), pin["sha256"])
     }
 
+    /// A page one of your machines read for this phone opens under the
+    /// additional data the machine sealed it with (xolookAad in seal.js).
+    func testAPageReadThroughAMachineOpensUnderTheMachinesAAD() throws {
+        let row = try XCTUnwrap(try table()["xolookAad"] as? [String])
+        XCTAssertEqual(Seal.xolookAAD(address: row[0]), row[1])
+    }
+
+    /// A page as the machine sends it (a flat list of objects) is read into
+    /// the same rows as the socket's keyed answer.
+    func testAPageReadThroughAMachineBecomesTheSameRows() throws {
+        let objects = try XCTUnwrap(try table()["objects"] as? [[String: Any]])
+        var keyed = Manage.Snapshot()
+        keyed.take(Dictionary(uniqueKeysWithValues: objects.compactMap { o in (o["id"] as? String).map { ($0, o as Any) } }))
+        var listed = Manage.Snapshot()
+        listed.take(objects as [Any])
+        XCTAssertFalse(listed.isEmpty)
+        XCTAssertEqual(listed, keyed)
+    }
+
     func testEveryObjectBecomesTheRowTheTableSays() throws {
         let t = try table()
         let s = snapshot(t)
@@ -232,7 +251,7 @@ final class ManageParityTests: XCTestCase {
             "tuneNeedsStopped": Manage.Words.tuneNeedsStopped, "growNote": Manage.Words.growNote, "slow": Manage.Words.slow,
             "actionsFooter": Manage.Words.actionsFooter, "gone": Manage.Words.gone, "lookAgain": Manage.Words.lookAgain,
             "changePolicy": Manage.Words.changePolicy, "whatItIs": Manage.Words.whatItIs, "howItIs": Manage.Words.howItIs,
-            "whatItCanDo": Manage.Words.whatItCanDo,
+            "whatItCanDo": Manage.Words.whatItCanDo, "oneOfYours": Manage.Words.oneOfYours,
         ]
         for (key, value) in fixed { XCTAssertEqual(value, str(key), key) }
 
@@ -240,12 +259,17 @@ final class ManageParityTests: XCTestCase {
             "connecting": Manage.Words.connecting, "plainPool": Manage.Words.plainPool, "noToken": Manage.Words.noToken,
             "wrongCertificate": Manage.Words.wrongCertificate, "limitedUser": Manage.Words.limitedUser,
             "typePrompt": Manage.Words.typePrompt, "refused": Manage.Words.refused, "lost": Manage.Words.lost,
+            "askingFleet": Manage.Words.askingFleet,
         ]
         for (key, say) in single { XCTAssertEqual(say(arg(key, 0)), arg(key, 1), key) }
 
         XCTAssertEqual(Manage.Words.expired(arg("expired", 0), on: arg("expired", 1)), arg("expired", 2))
         XCTAssertEqual(Manage.Words.signInRefused(arg("signInRefused", 0), arg("signInRefused", 1)), arg("signInRefused", 2))
         XCTAssertEqual(Manage.Words.unreachable(arg("unreachable", 0), arg("unreachable", 1)), arg("unreachable", 2))
+        XCTAssertEqual(Manage.Words.through(arg("through", 0), at: arg("through", 1)), arg("through", 2))
+        XCTAssertEqual(Manage.Words.throughLost(arg("throughLost", 0), arg("throughLost", 1)), arg("throughLost", 2))
+        XCTAssertEqual(Manage.Words.unreachableEverywhere(arg("unreachableEverywhere", 0), arg("unreachableEverywhere", 1),
+                                                          arg("unreachableEverywhere", 2)), arg("unreachableEverywhere", 3))
         for c in one("resizeButton").compactMap({ $0 as? [Any] }) {
             let cpus = (c[0] as? NSNumber)?.intValue ?? 0
             let gib = (c[1] as? NSNumber)?.intValue ?? 0
@@ -262,7 +286,8 @@ final class ManageParityTests: XCTestCase {
         // EVERY KEY IS CHECKED: a sentence added to the table and to neither
         // phone would otherwise sit there proving nothing.
         let checked = Set(fixed.keys).union(single.keys)
-            .union(["expired", "signInRefused", "unreachable", "resizeButton", "growButton", "heading", "kindTitle"])
+            .union(["expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere",
+                    "resizeButton", "growButton", "heading", "kindTitle"])
         XCTAssertEqual(Set(words.keys), checked)
     }
 }

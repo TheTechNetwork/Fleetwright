@@ -22,12 +22,22 @@ import Observation
 /// when the page goes or the app leaves the foreground. Nothing watches while
 /// the app is closed, so what is kept is when it was last looked at, and the
 /// screen says that time rather than implying the picture is current.
+///
+/// FROM AWAY, THROUGH A MACHINE. On 5G the phone reaches no pool, and the
+/// page used to stop there. When the socket cannot open, the page is read
+/// instead by one of the person's machines that holds the pool's token
+/// (`xolook`, docs/manage.md "From away"), sealed to a key made here for the
+/// one look, and read again every 20 seconds while the page is open, since
+/// nothing pushes changes that way. Its actions go the same way (`xoact`).
+/// The screen says which machine and when, never "Watching now" (C-5).
 @MainActor
 @Observable
 final class PoolWatch {
     enum Phase: Equatable {
         case idle
         case connecting
+        /// The phone could not reach the pool and is asking a machine to.
+        case relaying
         case live
         /// Not connected, a sentence saying why, and whether looking again
         /// could change the answer: a lost connection can, a pool set up over
@@ -46,6 +56,18 @@ final class PoolWatch {
     private(set) var user: String?
     /// Bumped on every change, for the one animation that carries it.
     private(set) var revision = 0
+    /// The machine the page is read through, while this phone cannot reach
+    /// the pool itself. Nil is read directly, over the socket.
+    private(set) var via: String?
+
+    /// How a page read through a machine is asked for again, and how often.
+    static let throughEvery: Duration = .seconds(20)
+    private let fleet: Fleet?
+    /// Holds this watch weakly, so letting go of the page ends it on its next turn.
+    @ObservationIgnored private var polling: Task<Void, Never>?
+    /// Bumped whenever the page is let go of, so an answer from the fleet
+    /// that arrives after it is not drawn on a page that has moved on.
+    @ObservationIgnored private var generation = 0
 
     /// Whether this attempt's socket opened. Until it has, a failure is a pool
     /// this phone could not reach, not a connection that ended.
@@ -58,8 +80,9 @@ final class PoolWatch {
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var held: [(String, XOLink.Answer)] = []
 
-    init(address: String) {
+    init(address: String, fleet: Fleet? = nil) {
         self.address = address
+        self.fleet = fleet
         lookedAt = Manage.lastLooked(address)
     }
 
@@ -72,7 +95,7 @@ final class PoolWatch {
     /// Connect, sign in with the token, read the method list and the pool.
     /// A second call while connecting or connected does nothing.
     func start() async {
-        if phase == .connecting || phase == .live { return }
+        if phase == .connecting || phase == .relaying || phase == .live { return }
         guard let raw = Keychain.get(XOSetupHandoff.tokenAccount(address)), let record = Manage.record(raw, address: address) else {
             phase = .stopped(Manage.Words.noToken(address), retry: false)
             return
@@ -129,7 +152,7 @@ final class PoolWatch {
         } catch {
             if stale() { return }
             drop(link)
-            phase = .stopped(Manage.Words.unreachable(address, error.localizedDescription), retry: true)
+            await readThrough(after: error.localizedDescription)
             return
         }
         reached = true
@@ -177,13 +200,20 @@ final class PoolWatch {
         touch()
     }
 
-    /// Close the socket, keeping what was seen and when.
+    /// Close the socket, or stop reading through a machine, keeping what was
+    /// seen and when.
     func stop() {
-        guard let link = holder.take() else { return }
-        link.close()
+        generation += 1
+        polling?.cancel()
+        polling = nil
+        let link = holder.take()
+        let through = via != nil || phase == .relaying
+        guard link != nil || through else { return }
+        link?.close()
         if phase == .live { touch() }
         loading = false
         held = []
+        via = nil
         phase = .idle
     }
 
@@ -199,6 +229,9 @@ final class PoolWatch {
     /// Xen Orchestra answers once it is done, so a yes is done, and the
     /// change itself arrives as a notification.
     func run(_ method: String, _ params: [String: Any], done: String) async -> (ok: Bool, text: String) {
+        if via != nil, let fleet, phase == .live {
+            return await runThrough(fleet, method, params, done: done)
+        }
         guard let link = holder.peek(), phase == .live else {
             return (false, Manage.Words.lost("this phone is not connected"))
         }
@@ -226,8 +259,88 @@ final class PoolWatch {
         return Manage.Words.lookedAt("\(time), \(relativeTime(lookedAt.timeIntervalSince1970 * 1000))")
     }
 
-    /// How current what is shown is: watching, or when it was last looked at.
-    var currentLine: String { phase == .live ? Manage.Words.watching : lookedLine }
+    /// How current what is shown is: watching, read through a machine at a
+    /// time, or when it was last looked at.
+    var currentLine: String {
+        guard phase == .live else { return lookedLine }
+        guard let via else { return Manage.Words.watching }
+        return Manage.Words.through(via, at: (lookedAt ?? Date()).formatted(date: .omitted, time: .shortened))
+    }
+
+    // MARK: Through one of your machines
+
+    /// Read the page through a machine that holds the pool's token, after
+    /// this phone could not reach it (`why`). Again on the timer while the
+    /// page is open; a failure then keeps what was shown and says so.
+    private func readThrough(after why: String) async {
+        guard let fleet else {
+            phase = .stopped(Manage.Words.unreachable(address, why), retry: true)
+            return
+        }
+        let first = via == nil
+        if first { phase = .relaying }
+        let asked = generation
+        let key = Seal.newKey()
+        do {
+            let r = try await fleet.xolook(address, reply: key.publicKey)
+            guard r.ok != false, let sealed = r.sealed else {
+                throw FleetError.message(r.text ?? "the fleet sent no page")
+            }
+            let page = try Seal.open(key, aad: Seal.xolookAAD(address: address), sealed: sealed)
+            if asked != generation { return }
+            // NULL IS CANNOT TELL, as over the socket: no action is drawn.
+            let listed = (page["methods"] as? [String]).map { Set($0) }
+            if let listed, !listed.contains("xo.getAllObjects") {
+                phase = .stopped(Manage.Words.noObjects, retry: false)
+                return
+            }
+            var next = Manage.Snapshot()
+            next.take(page["objects"])
+            methods = listed
+            if next != snapshot || first { revision += 1 }
+            snapshot = next
+            via = r.hostId ?? Manage.Words.oneOfYours
+            phase = .live
+            touch()
+            if polling == nil { poll() }
+        } catch {
+            if asked != generation { return }
+            polling?.cancel()
+            polling = nil
+            if let host = via {
+                via = nil
+                phase = .stopped(Manage.Words.throughLost(host, error.localizedDescription), retry: true)
+            } else {
+                phase = .stopped(Manage.Words.unreachableEverywhere(address, why, error.localizedDescription), retry: true)
+            }
+        }
+    }
+
+    private func poll() {
+        polling = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: PoolWatch.throughEvery)
+                guard !Task.isCancelled, let self, self.via != nil else { return }
+                await self.readThrough(after: "")
+            }
+        }
+    }
+
+    /// An action, asked of the machine the page is read through, then the
+    /// page read again so the change shows without waiting for the timer.
+    private func runThrough(_ fleet: Fleet, _ method: String, _ params: [String: Any], done: String) async -> (ok: Bool, text: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: params), let args = String(data: data, encoding: .utf8) else {
+            return (false, Manage.Words.refused("the action could not be written down"))
+        }
+        do {
+            let r = try await fleet.xoact(address, method: method, args: args)
+            if r.ok == false { return (false, r.text ?? Manage.Words.refused("the fleet refused it")) }
+            await readThrough(after: "")
+            return (true, done)
+        } catch {
+            return (false, Manage.Words.throughLost(via ?? Manage.Words.oneOfYours, error.localizedDescription))
+        }
+    }
 
     // MARK: Inside
 
@@ -254,7 +367,11 @@ final class PoolWatch {
         loading = false
         held = []
         if phase == .live || phase == .connecting {
-            phase = .stopped(reached ? Manage.Words.lost(reason) : Manage.Words.unreachable(address, reason), retry: true)
+            if reached {
+                phase = .stopped(Manage.Words.lost(reason), retry: true)
+            } else {
+                Task { await readThrough(after: reason) }
+            }
         }
     }
 

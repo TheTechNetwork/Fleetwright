@@ -100,6 +100,24 @@ class ManageParityTest {
         assertEquals(pin.getString("sha256"), Manage.fingerprint(Base64.getDecoder().decode(pin.getString("der"))))
     }
 
+    /** A page one of your machines read for this phone opens under the additional data the machine sealed it with (xolookAad in seal.js). */
+    @Test
+    fun `a page read through a machine opens under the machine's AAD`() {
+        val row = table.getJSONArray("xolookAad")
+        assertEquals(row.getString(1), Seal.xolookAad(row.getString(0)))
+    }
+
+    /** A page as the machine sends it (a flat list of objects) is read into the same rows as the socket's keyed answer. */
+    @Test
+    fun `a page read through a machine becomes the same rows`() {
+        val objects = table.getJSONArray("objects")
+        val keyed = JSONObject()
+        for (i in 0 until objects.length()) objects.getJSONObject(i).let { keyed.put(it.getString("id"), it) }
+        val listed = Manage.Snapshot().taking(objects)
+        assertFalse(listed.isEmpty)
+        assertEquals(Manage.Snapshot().taking(keyed), listed)
+    }
+
     @Test
     fun `every object becomes the row the table says`() {
         val s = snapshot()
@@ -247,7 +265,7 @@ class ManageParityTest {
             "tuneNeedsStopped" to Manage.Words.tuneNeedsStopped, "growNote" to Manage.Words.growNote, "slow" to Manage.Words.slow,
             "actionsFooter" to Manage.Words.actionsFooter, "gone" to Manage.Words.gone, "lookAgain" to Manage.Words.lookAgain,
             "changePolicy" to Manage.Words.changePolicy, "whatItIs" to Manage.Words.whatItIs, "howItIs" to Manage.Words.howItIs,
-            "whatItCanDo" to Manage.Words.whatItCanDo,
+            "whatItCanDo" to Manage.Words.whatItCanDo, "oneOfYours" to Manage.Words.oneOfYours,
         )
         for ((key, value) in fixed) assertEquals(key, words.getString(key), value)
 
@@ -255,12 +273,19 @@ class ManageParityTest {
             "connecting" to Manage.Words::connecting, "plainPool" to Manage.Words::plainPool, "noToken" to Manage.Words::noToken,
             "wrongCertificate" to Manage.Words::wrongCertificate, "limitedUser" to Manage.Words::limitedUser,
             "typePrompt" to Manage.Words::typePrompt, "refused" to Manage.Words::refused, "lost" to Manage.Words::lost,
+            "askingFleet" to Manage.Words::askingFleet,
         )
         for ((key, say) in single) assertEquals(key, arg(key, 1), say(arg(key, 0)))
 
         assertEquals(arg("expired", 2), Manage.Words.expired(arg("expired", 0), arg("expired", 1)))
         assertEquals(arg("signInRefused", 2), Manage.Words.signInRefused(arg("signInRefused", 0), arg("signInRefused", 1)))
         assertEquals(arg("unreachable", 2), Manage.Words.unreachable(arg("unreachable", 0), arg("unreachable", 1)))
+        assertEquals(arg("through", 2), Manage.Words.through(arg("through", 0), arg("through", 1)))
+        assertEquals(arg("throughLost", 2), Manage.Words.throughLost(arg("throughLost", 0), arg("throughLost", 1)))
+        assertEquals(
+            arg("unreachableEverywhere", 3),
+            Manage.Words.unreachableEverywhere(arg("unreachableEverywhere", 0), arg("unreachableEverywhere", 1), arg("unreachableEverywhere", 2)),
+        )
         val resize = words.getJSONArray("resizeButton")
         for (i in 0 until resize.length()) {
             val c = resize.getJSONArray(i)
@@ -277,7 +302,8 @@ class ManageParityTest {
 
         // EVERY KEY IS CHECKED: a sentence added to the table and to neither
         // phone would otherwise sit there proving nothing.
-        val checked = fixed.keys + single.keys + setOf("expired", "signInRefused", "unreachable", "resizeButton", "growButton", "heading", "kindTitle")
+        val checked = fixed.keys + single.keys +
+            setOf("expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere", "resizeButton", "growButton", "heading", "kindTitle")
         assertEquals(checked, words.keys().asSequence().toSet())
         assertFalse(checked.isEmpty())
     }

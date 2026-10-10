@@ -155,8 +155,9 @@ test('iOS: the page is under Machines, on the row that names the pool, and says 
   assert.match(IOS_SCREEN, /if settings\.showsAdmin \{\s*NavigationLink \{\s*AddHypervisorView\(settings: settings, policyFor: pool\.address\)/);
   // The row says how current the page will be: when, or never.
   assert.match(IOS_MACHINES, /Manage\.lastLooked\(pool\.address\)\.map \{ Manage\.Words\.rowLooked\([^\n]*\n\s*\?\? Manage\.Words\.never\)/);
-  // And the page: watching, or the last time, and that nothing watches while closed.
-  assert.match(bare(IOS_SCREEN), /case \.live: return Manage\.Words\.watching/);
+  // And the page: watching (or read through a machine, at a time), or the
+  // last time, and that nothing watches while closed.
+  assert.match(bare(IOS_SCREEN), /case \.live: return watch\.currentLine/);
   assert.match(IOS_MODEL, /static func lookedAt\(_ when: String\) -> String \{ "Last looked at \\\(when\)\. \\\(closed\)" \}/);
   assert.ok(TABLE.words.closed === 'Nothing watches while the app is closed.');
   // The socket closes when the app leaves the foreground, said as such.
@@ -263,7 +264,7 @@ test('Android: notifications are applied in the order they arrived', () => {
 test('Android: the page is under Machines, on the row that names the pool, and says when it was last looked at', () => {
   assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}\)/);
   assert.match(KT_MACHINES, /looked\?\.let \{ Manage\.Words\.rowLooked\(relative\(it\)\.toString\(\)\) \} \?: Manage\.Words\.never/);
-  assert.match(bare(KT_SCREEN), /PoolWatch\.Phase\.Live -> Manage\.Words\.watching/);
+  assert.match(bare(KT_SCREEN), /PoolWatch\.Phase\.Live -> watch\.currentLine/);
   assert.match(KT_MODEL, /fun lookedAt\(time: String\) = "Last looked at \$time\. \$closed"/);
   // The socket closes when the app stops, said as such.
   assert.match(bare(KT_SCREEN), /if \(event == Lifecycle\.Event\.ON_STOP\) watch\.stop\(\)/);
@@ -292,17 +293,35 @@ test('both phones: the same sections, in the same order', () => {
   assert.match(kt, /if \(admin == true\) \{[\s\S]{0,200}?OpenRow\(Manage\.Words\.changePolicy\)/);
 });
 
-test('both phones: a pool the phone could not reach says so, and what still works from where it is', () => {
+test('both phones: a pool the phone could not reach is read through one of your machines, and says which and when', () => {
   // ON 5G the page sat at "Connecting to 10.10.10.230…" and then gave a bare
-  // network error. A socket that never opened is a pool this phone could not
-  // reach from its network; one that opened and then went is still "ended".
+  // network error; then it said why; now ("Both, in that order") it loads
+  // through a machine that holds the pool's token. A socket that never
+  // opened is a pool this phone could not reach, and goes to the fleet; one
+  // that opened and then went is still "ended". docs/manage.md, "From away".
   const ios = bare(IOS_WATCH);
-  assert.match(ios, /try await link\.open\(\)\s*\} catch XOLink\.Failure\.wrongCertificate \{[\s\S]{0,200}?\} catch \{[\s\S]{0,80}?phase = \.stopped\(Manage\.Words\.unreachable\(address, error\.localizedDescription\), retry: true\)[\s\S]{0,40}?\}\s*reached = true/);
-  assert.match(ios, /phase = \.stopped\(reached \? Manage\.Words\.lost\(reason\) : Manage\.Words\.unreachable\(address, reason\), retry: true\)/);
+  assert.match(ios, /try await link\.open\(\)\s*\} catch XOLink\.Failure\.wrongCertificate \{[\s\S]{0,200}?\} catch \{[\s\S]{0,80}?await readThrough\(after: error\.localizedDescription\)[\s\S]{0,40}?\}\s*reached = true/);
+  assert.match(ios, /if reached \{\s*phase = \.stopped\(Manage\.Words\.lost\(reason\), retry: true\)\s*\} else \{\s*Task \{ await readThrough\(after: reason\) \}/);
   // Its own deadline, and only while the socket is still opening.
   assert.match(bare(IOS_LINK), /asyncAfter\(deadline: \.now\(\) \+ timeout\) \{ \[weak self\] in\s*guard let self, self\.lock\.withLock\(\{ self\.opening != nil \}\) else \{ return \}/);
   const kt = bare(KT_WATCH);
-  assert.equal((kt.match(/Phase\.Stopped\(Manage\.Words\.unreachable\(address, e\.message \?: "it did not answer"\), retry = true\)/g) ?? []).length, 2);
-  assert.ok(kt.indexOf('Manage.Words.unreachable(') < kt.indexOf('link = opened'), 'only before the socket is open');
-  assert.match(TABLE.words.unreachable[2], /works from anywhere, through one of your machines\.$/);
+  assert.equal((kt.match(/readThrough\(e\.message \?: "it did not answer"\)/g) ?? []).length, 2);
+  assert.ok(kt.indexOf('readThrough(e.message') < kt.indexOf('link = opened'), 'only before the socket is open');
+
+  // SEALED TO A KEY MADE FOR THE ONE LOOK, under the AAD the host seals with;
+  // the table's row is checked against seal.js above and on both phones.
+  assert.match(ios, /let key = Seal\.newKey\(\)[\s\S]{0,120}?fleet\.xolook\(address, reply: key\.publicKey\)[\s\S]{0,300}?Seal\.open\(key, aad: Seal\.xolookAAD\(address: address\)/);
+  assert.match(kt, /val key = Seal\.newKey\(\)[\s\S]{0,120}?xolook\(address, key\.publicKey\)[\s\S]{0,300}?Seal\.open\(key, Seal\.xolookAad\(address\), sealed\)/);
+  // NEVER "WATCHING NOW" THROUGH A MACHINE: it is read on a timer (C-5).
+  assert.match(ios, /guard let via else \{ return Manage\.Words\.watching \}\s*return Manage\.Words\.through\(via/);
+  assert.match(kt, /val host = via \?: return Manage\.Words\.watching[\s\S]{0,200}?return Manage\.Words\.through\(host, time\)/);
+  // Its actions go the same way, and are never held for later.
+  assert.match(ios, /if via != nil, let fleet, phase == \.live \{\s*return await runThrough\(fleet, method, params, done: done\)/);
+  assert.match(kt, /if \(via != null && phase == Phase\.Live\) return runThrough\(method, params, done\)/);
+  assert.match(bare(read('apps/ios/Fleetwright/Fleet.swift')), /intent\("xoact", params: \["address": address, "method": method, "args": args\],\s*idempotencyKey: "app-/);
+});
+
+test('a page read through a machine opens under the AAD the machine seals it with', async () => {
+  const { xolookAad } = await import('../src/fleet/seal.js');
+  assert.deepEqual(TABLE.xolookAad, ['xo.lan', xolookAad('xo.lan')]);
 });

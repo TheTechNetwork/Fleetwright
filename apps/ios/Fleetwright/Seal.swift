@@ -62,6 +62,12 @@ enum Seal {
     /// never opened as a setup's sign-in (xodeployAad in src/fleet/seal.js).
     static func xodeployAAD(job: String, address: String) -> String { "fleetwright-xodeploy/v1:\(job):\(address)" }
 
+    /// A pool's page read by one of your machines for this phone away from
+    /// it, on its way back to the key made here for that one look: bound to
+    /// the address, so one pool's page cannot be shown as another's
+    /// (xolookAad in src/fleet/seal.js; PoolWatch).
+    static func xolookAAD(address: String) -> String { "fleetwright-xolook/v1:\(address)" }
+
     enum Failure: LocalizedError {
         case notAKey, notSealed
         var errorDescription: String? {

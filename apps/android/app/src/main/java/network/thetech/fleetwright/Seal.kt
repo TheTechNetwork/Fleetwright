@@ -64,6 +64,14 @@ internal object Seal {
     /** A Claude token one of your machines made with `claude setup-token`, on its way back to this phone's key. */
     const val SETUP_TOKEN_AAD = "fleetwright-setup-token/v1"
 
+    /**
+     * A pool's page read by one of your machines for this phone away from it,
+     * on its way back to the key made here for that one look: bound to the
+     * address, so one pool's page cannot be shown as another's (xolookAad in
+     * src/fleet/seal.js; PoolWatch).
+     */
+    fun xolookAad(address: String) = "fleetwright-xolook/v1:$address"
+
     /** An uncompressed P-256 public key, base64url without padding: 87 characters. */
     val KEY_RE = Regex("^[A-Za-z0-9_-]{87}$")
 
