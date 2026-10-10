@@ -1170,6 +1170,22 @@
                         },
                         "starting": {
                           "type": "integer"
+                        },
+                        "since": {
+                          "type": "integer",
+                          "description": "when the oldest machine still being made was asked for, in epoch milliseconds; absent when none is"
+                        },
+                        "failed": {
+                          "type": "object",
+                          "description": "why the last machine asked for did not come, kept until one does; absent when nothing has failed",
+                          "properties": {
+                            "at": {
+                              "type": "integer"
+                            },
+                            "text": {
+                              "type": "string"
+                            }
+                          }
                         }
                       }
                     }
