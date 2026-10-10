@@ -537,7 +537,7 @@ test('the image’s cloud-init installs the signed package without a fleet or a 
   const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test/anything' });
   assert.match(config, /signed-by=\/usr\/share\/keyrings\/fleetwright.gpg\] https:\/\/fleet-apt.thetech.network stable main/);
   assert.ok(!config.includes('trusted=yes'), 'an unsigned repository');
-  assert.match(config, /echo 'fleetwright fleetwright\/user string fleetwright' \| debconf-set-selections/);
+  assert.match(config, /debconf-set-selections <<<'fleetwright fleetwright\/user string fleetwright'/);
   assert.ok(!config.includes('fleetwright/coordinator-url'), 'the image would join a fleet before it is a clone');
   assert.ok(!/ENROL_PIN/.test(config), 'never enrolled');
   for (const wiped of ['truncate -s 0 /etc/machine-id', 'rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*', 'host-key.json', 'cloud-init clean']) {
