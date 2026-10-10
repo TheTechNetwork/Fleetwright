@@ -217,7 +217,7 @@ hold the same Xen Orchestra.
 
 | Action | What the box does |
 |---|---|
-| **Restart** | `vm.restart`: clean where the machine reports its guest agent, hard where it does not or refuses the clean one (Xen Orchestra's clean reboot needs the guest tools, which the image installs only where the distribution has them). A session running on it ends; the machine is back in the fleet in a minute or so. |
+| **Restart** | `vm.restart`: clean where the machine reports its guest agent, hard where it does not or refuses the clean one (Xen Orchestra's clean reboot needs the guest agent, which every image carries: see "It carries the guest agent"). A session running on it ends; the machine is back in the fleet in a minute or so. |
 | **Give it longer** | Moves the end in its tag, never past 350 minutes from when it was made, so asking again and again does not keep a machine alive for ever. |
 | **Restart with this size** | Marks it busy so the sweep does not take the stop for done, stops it (clean or hard, as Restart), sets vCPUs and memory, and starts it again whatever the pool said. Xen Orchestra holds the size to the resource set; a refusal restarts it at its old size and says why. |
 | **End it now** | Force-stops it and removes it with its disk. |
@@ -904,6 +904,30 @@ admin sign-in for as long as it runs:
   once. The steps run in a subshell of their own, so the first one that fails
   stops the rest; they used to run where bash ignores `set -e`, and a broken
   install could power off and become the template.
+
+  **It carries the guest agent.** XCP-ng's `xen-guest-agent` 0.4.0,
+  upstream's own release build, pinned by size and SHA-256 like the images:
+  the box downloads it once into its state directory, writes it into the
+  cloud-init drive with upstream's systemd unit, and the build VM starts it
+  before anything else, so Xen Orchestra shows the build VM's address even
+  when its network is what is wrong. It stays in the image, so every machine
+  made from it has it too. Debian has no package for any Xen guest agent, so
+  before this a Debian machine never showed an address. A download that fails
+  or does not match is not written: the build goes on without it, says so,
+  and installs the distribution's agent where there is one (Ubuntu). It is
+  AGPL-3.0, unmodified, and fetched by your box onto your VM; this repository
+  carries only its address and digest.
+
+  **Renovate keeps it current, in two halves.** It proposes the next
+  upstream release by moving the version in `GUEST_AGENT`, and nothing more:
+  the file's address is a CI job number rather than the version, and
+  upstream publishes no digest, so no datasource can say what the new file
+  is. `node scripts/pin-guest-agent.mjs` on that pull request's branch writes
+  the other half from the release's own asset link, after checking the build
+  is an x86-64 executable needing no newer glibc than the oldest image's
+  (Ubuntu 24.04, 2.39) and that upstream's systemd unit has not changed.
+  Until it has run, the pull request is red and says why, and a box given the
+  mismatch builds without the agent rather than trust the old digest.
 
   **It says where it has got to.** The box running the job asks the
   coordinator for a report token for it, and the script posts each step to

@@ -60,7 +60,7 @@ jobs:
       - name: Renovate config is valid
         env:
           # renovate: datasource=npm depName=renovate
-          RENOVATE_VERSION: '44.138.0'
+          RENOVATE_VERSION: '44.140.0'
         run: |
           npx --yes --package "renovate@$RENOVATE_VERSION" -- renovate-config-validator --version
           npx --yes --package "renovate@$RENOVATE_VERSION" -- renovate-config-validator --strict
