@@ -2006,7 +2006,7 @@ class Fleet(
                 starting = o.optInt("starting", 0),
                 since = o.optLong("since", 0L).takeIf { it > 0 },
                 failed = o.optJSONObject("failed")?.let { f ->
-                    f.optString("text").takeIf { it.isNotBlank() }?.let { Failure(at = f.optLong("at", 0L), text = it) }
+                    f.optString("text").takeIf { it.isNotBlank() }?.let { VmStandby.Failure(at = f.optLong("at", 0L), text = it) }
                 },
             )
         }
