@@ -754,6 +754,9 @@ export class Sidecar {
       // A LAB IS A VM in a lab of its own (xo-pools.js, make), never a runner.
       if (intent.verb === 'provision' && (intent.params?.platform === 'vm' || intent.params?.platform === 'lab')) return reply(await this.#makeVm(intent));
       if (intent.verb === 'vmctl') return reply(await this.#vmctl(intent));
+      // A POOL'S PAGE FOR A PHONE AWAY FROM IT, under the token in this
+      // process's memory (xo-pools.js, look and act).
+      if (intent.verb === 'xolook' || intent.verb === 'xoact') return reply(await this.#poolPage(intent));
 
       // A session on a runner waits for the answer about its owner's Claude
       // login, which is bounded by the mint timeout and never throws.
@@ -1253,6 +1256,25 @@ export class Sidecar {
     });
     if (r.ok) setImmediate(() => void this.#pushHealth());
     return r;
+  }
+
+  /**
+   * A pool's page read or worked here for its owner's phone, which cannot
+   * reach the pool from where it is (docs/manage.md, "From away"). The
+   * coordinator chose this box because it reported holding their token for
+   * that address; the pools check that again, and the answer to a look is
+   * sealed to the phone, so it passes the coordinator as ciphertext.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   */
+  async #poolPage(intent) {
+    if (!this.pools) return { ok: false, notHere: true, text: 'This box asks no vault, so it holds no hypervisor.' };
+    const owner = intent.actor ? String(intent.actor).toLowerCase() : '';
+    if (!owner) return { ok: false, text: 'A pool\u2019s page is read by the person whose pool it is.' };
+    const p = intent.params || {};
+    const address = String(p.address || '');
+    if (intent.verb === 'xolook') return this.pools.look({ owner, address, reply: String(p.reply || '') });
+    return this.pools.act({ owner, address, method: String(p.method || ''), args: p.args });
   }
 
   /** @param {number} ms */

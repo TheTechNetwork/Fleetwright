@@ -37,6 +37,8 @@ import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain } from './xo-ws.js';
 import { EDGE, GROUP_PREFIX, LAB, labsEachOf } from './edge-router.js';
 import { VM_IMAGE } from './vm-image.js';
+import { seal, xolookAad } from '../seal.js';
+import { xoActionArgs } from '../protocol/intents.js';
 
 /** The prefix a pool's item carries in a vault answer. */
 export const HYPERVISOR_ITEM = 'hypervisor:';
@@ -176,6 +178,71 @@ async function machinesOnNetworks(rpc, vms) {
   } catch {
     return null;
   }
+}
+
+/** The object types a pool's page reads, in the phones' order (Manage.objectTypes). */
+export const PAGE_TYPES = Object.freeze(['pool', 'host', 'VM', 'SR', 'VBD', 'VDI']);
+
+/** The most a pool's page may be before sealing: under the fleet's one-megabyte message once sealed and framed. */
+export const MAX_PAGE_BYTES = 512 * 1024;
+
+/**
+ * WHAT THE PAGE SHOWS OF EACH OBJECT, and nothing else of it: the fields the
+ * phones decode (Manage.component, attachment and disk in both apps). A
+ * VM's record in Xen Orchestra carries its boot order, its other config and
+ * every tag; none of that is drawn, so none of it travels. A nested field
+ * keeps only the keys named.
+ */
+const PAGE_FIELDS = Object.freeze({
+  common: ['id', 'type', 'name_label', '$pool', '$container', 'power_state', 'enabled'],
+  VM: ['mainIpAddress', 'managementAgentDetected', 'pvDriversDetected'],
+  host: ['productBrand', 'version', 'address'],
+  SR: ['size', 'physical_usage', 'SR_type', 'shared'],
+  VBD: ['VM', 'VDI', 'is_cd_drive', 'position'],
+  VDI: ['size', '$SR'],
+});
+
+/**
+ * One object as the page needs it, or null for one that is not a page's.
+ *
+ * @param {any} o
+ * @returns {Record<string, any>|null}
+ */
+export function pageObject(o) {
+  if (!o || typeof o !== 'object' || typeof o.id !== 'string' || !PAGE_TYPES.includes(o.type)) return null;
+  /** @type {Record<string, any>} */
+  const out = {};
+  const scalar = (/** @type {unknown} */ v) => (typeof v === 'string' ? v.slice(0, 200) : typeof v === 'number' || typeof v === 'boolean' ? v : undefined);
+  for (const k of [...PAGE_FIELDS.common, ...(/** @type {Record<string, string[]>} */ (PAGE_FIELDS)[o.type] || [])]) {
+    const v = scalar(o[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  /** @param {unknown} v @param {string[]} keys */
+  const nested = (v, keys) => {
+    if (!v || typeof v !== 'object') return undefined;
+    /** @type {Record<string, number>} */
+    const kept = {};
+    for (const k of keys) if (typeof (/** @type {any} */ (v)[k]) === 'number') kept[k] = /** @type {any} */ (v)[k];
+    return Object.keys(kept).length ? kept : undefined;
+  };
+  if (o.type === 'VM') {
+    const cpus = nested(o.CPUs, ['number']);
+    if (cpus) out.CPUs = cpus;
+    // The guest's addresses, by Xen Orchestra's own keys ("0/ipv4/0"), a few.
+    if (o.addresses && typeof o.addresses === 'object') {
+      const pairs = Object.entries(o.addresses).filter(([, v]) => typeof v === 'string').slice(0, 16);
+      if (pairs.length) out.addresses = Object.fromEntries(pairs.map(([k, v]) => [String(k).slice(0, 40), String(v).slice(0, 45)]));
+    }
+  }
+  if (o.type === 'host') {
+    const cpus = nested(o.cpus, ['cores']);
+    if (cpus) out.cpus = cpus;
+  }
+  if (o.type === 'VM' || o.type === 'host') {
+    const memory = nested(o.memory, o.type === 'host' ? ['size', 'usage'] : ['size']);
+    if (memory) out.memory = memory;
+  }
+  return out;
 }
 
 /**
@@ -662,6 +729,118 @@ export class XoPools {
     }
     if (unreachable.length === mine.length) return { ok: false, unreachable: true, text: `Your pools could not be reached from here: ${unreachable.join('; ')}` };
     return { ok: false, notHere: true, text: `${name} is not on any of your pools this box holds.` };
+  }
+
+  /**
+   * A POOL'S PAGE, read here for a phone that cannot reach the pool from
+   * where it is (`xolook`; docs/manage.md, "From away"). The same reads the
+   * phone makes on the pool's own network, under the same person's token:
+   * the methods it may call, then each object type the page draws, cut to
+   * the fields the page shows (PAGE_FIELDS), sealed to the key the phone
+   * made for this look.
+   *
+   * Answers `notHere` when this box holds no token of theirs for that
+   * address, and `unreachable` when it could not sign in there: either way
+   * the coordinator asks the next box that holds one.
+   *
+   * @param {{ owner: string, address: string, reply: string }} ask
+   * @returns {Promise<{ ok: boolean, text: string, notHere?: boolean, unreachable?: boolean, sealed?: { epk: string, iv: string, ct: string } }>}
+   */
+  async look({ owner, address, reply }) {
+    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    if (!held) return { ok: false, notHere: true, text: `This box holds no token of yours for ${address}.` };
+    /** @type {any} */
+    let rpc = null;
+    try {
+      try {
+        rpc = await this.#signIn(held.record);
+      } catch (e) {
+        return { ok: false, unreachable: true, text: `${address} could not be reached from here: ${/** @type {Error} */ (e).message}` };
+      }
+      // A LIST THAT COULD NOT BE READ IS NOT AN EMPTY ONE, here as on the
+      // phone: null offers no action, an empty list would say there are none.
+      /** @type {string[]|null} */
+      let methods = null;
+      try {
+        const listed = await rpc.call('system.getMethodsInfo');
+        if (listed && typeof listed === 'object') methods = Object.keys(listed).slice(0, 2000);
+      } catch {
+        /* cannot tell */
+      }
+      /** @type {Record<string, any>[]} */
+      const objects = [];
+      if (!methods || methods.includes('xo.getAllObjects')) {
+        for (const type of PAGE_TYPES) {
+          const got = await rpc.call('xo.getAllObjects', { filter: { type } });
+          for (const o of Object.values(got || {})) {
+            const kept = pageObject(o);
+            if (kept) objects.push(kept);
+          }
+        }
+      }
+      const page = { v: 1, methods, objects };
+      // WHAT THE FLEET CARRIES IN ONE MESSAGE is a megabyte, and a sealed
+      // answer is a third larger than what it seals. A pool this size is
+      // said to be one, rather than cut short and shown as if it were whole.
+      const bytes = new TextEncoder().encode(JSON.stringify(page)).length;
+      if (bytes > MAX_PAGE_BYTES) {
+        return { ok: false, text: `${address}\u2019s page is ${Math.round(bytes / 1024)} KB, more than the fleet carries in one answer (${MAX_PAGE_BYTES / 1024} KB). Open it from the pool\u2019s own network.` };
+      }
+      const sealed = await seal({ to: reply, aad: xolookAad(address), payload: page });
+      return { ok: true, text: `Read ${address} through this machine.`, sealed };
+    } catch (e) {
+      return { ok: false, text: `${address} would not show its page: ${/** @type {Error} */ (e).message}` };
+    } finally {
+      try {
+        rpc?.close();
+      } catch {
+        /* closing */
+      }
+    }
+  }
+
+  /**
+   * One of the page's actions, done here for a phone away from the pool
+   * (`xoact`). The method and its arguments are held to the shape the page
+   * sends (XO_ACTION_ARGS) again, whatever the coordinator checked, and
+   * called under the person's own token, so Xen Orchestra decides what that
+   * token may do, as it would for the phone.
+   *
+   * @param {{ owner: string, address: string, method: string, args: unknown }} ask
+   * @returns {Promise<{ ok: boolean, text: string, notHere?: boolean, unreachable?: boolean }>}
+   */
+  async act({ owner, address, method, args }) {
+    const checked = xoActionArgs(method, args);
+    if (!checked.ok) return { ok: false, text: checked.error };
+    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    if (!held) return { ok: false, notHere: true, text: `This box holds no token of yours for ${address}.` };
+    /** @type {any} */
+    let rpc = null;
+    try {
+      try {
+        rpc = await this.#signIn(held.record);
+      } catch (e) {
+        return { ok: false, unreachable: true, text: `${address} could not be reached from here: ${/** @type {Error} */ (e).message}` };
+      }
+      await rpc.call(method, checked.args);
+      this.log.info(`sidecar: ${method} on ${address} for ${held.owner}, from away`);
+      return { ok: true, text: `${address} did it.` };
+    } catch (e) {
+      // AN ANSWER THAT DID NOT COME IN TIME is not a no. A clean shutdown can
+      // take longer than the minute a call waits, and Xen Orchestra goes on
+      // with it either way, so this says so rather than that it failed.
+      const why = /** @type {Error} */ (e).message;
+      if (/did not answer .* in time/.test(why)) {
+        return { ok: false, text: `${address} had not finished within a minute. It may still be doing it; the page shows it when it has.` };
+      }
+      return { ok: false, text: `${address} refused it: ${why}` };
+    } finally {
+      try {
+        rpc?.close();
+      } catch {
+        /* closing */
+      }
+    }
   }
 
   /**

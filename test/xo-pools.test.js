@@ -23,6 +23,7 @@ import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, removeImage
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
+import { newSealKey, open as openSealed, xolookAad } from '../src/fleet/seal.js';
 
 const ELI = 'eli@example.com';
 const PIN = 'a'.repeat(64);
@@ -35,9 +36,9 @@ const record = (extra = {}) => JSON.stringify({ v: 1, address: 'xo.lan', pin: PI
 
 /**
  * A Xen Orchestra stand-in: objects by type, every call recorded.
- * @param {{ objects?: any[], fail?: Record<string, string>, stats?: Record<string, any> }} [opts]
+ * @param {{ objects?: any[], fail?: Record<string, string>, stats?: Record<string, any>, methods?: string[] }} [opts]
  */
-function xo({ objects = [], fail = {}, stats = {} } = {}) {
+function xo({ objects = [], fail = {}, stats = {}, methods } = {}) {
   /** @type {Array<{ method: string, params: any }>} */
   const calls = [];
   const rpc = {
@@ -53,6 +54,7 @@ function xo({ objects = [], fail = {}, stats = {} } = {}) {
         const f = params.filter || {};
         return Object.fromEntries(objects.filter((o) => Object.entries(f).every(([k, v]) => o[k] === v)).map((o) => [o.id, o]));
       }
+      if (method === 'system.getMethodsInfo' && methods) return Object.fromEntries(methods.map((m) => [m, { description: m }]));
       if (method === 'vm.create') return 'new-vm-id';
       if (method === 'vm.stats') return stats[params.id] ?? true;
       return true;
@@ -935,4 +937,112 @@ test('cancelled mid-build, what was made is removed', async () => {
   args.sleep = async () => { abort.abort(); };
   await assert.rejects(ensureImage({ ...args, signal: abort.signal }));
   assert.ok(p.calls.some((c) => c.method === 'vm.delete' && c.params.id === 'build-vm'));
+});
+
+// A POOL'S PAGE FROM AWAY: the box reads what the phone would have, for a
+// phone that cannot reach the pool. docs/manage.md, "From away".
+
+const PAGE_VM = {
+  type: 'VM',
+  id: '2d3e4f50-6172-4384-9596-a7b8c9d0e1f2',
+  name_label: 'web',
+  $pool: 'pool-1',
+  $container: 'host-1',
+  power_state: 'Running',
+  CPUs: { number: 2, max: 4 },
+  memory: { size: 4 * 2 ** 30, static: [1, 2] },
+  addresses: { '0/ipv4/0': '10.0.0.5', '0/ipv6/0': 'fe80::1' },
+  managementAgentDetected: true,
+  tags: ['private'],
+  boot: { order: 'cd' },
+  other: { secret_note: 'kept off the page' },
+};
+
+/** @param {Parameters<typeof xo>[0]} [opts] */
+function pageHolder(opts) {
+  const stand = xo({ objects: [pool, PAGE_VM, image], methods: ['xo.getAllObjects', 'vm.start', 'vm.restart'], ...opts });
+  const pools = holder(stand);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  return { stand, pools };
+}
+
+test('a pool’s page is read under its owner’s token and sealed to the phone’s key, with only what the page draws', async () => {
+  const { stand, pools } = pageHolder();
+  const key = await newSealKey();
+  const r = await pools.look({ owner: ELI, address: 'xo.lan', reply: key.publicKey });
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(stand.calls[0], { method: 'session.signIn', params: { token: 'xo-limited-token' } });
+  const page = await openSealed({ privateKey: key.privateKey, publicKey: key.publicKey, aad: xolookAad('xo.lan'), sealed: /** @type {any} */ (r.sealed) });
+  assert.deepEqual(page.methods, ['xo.getAllObjects', 'vm.start', 'vm.restart']);
+  assert.deepEqual(page.objects, [
+    { id: 'pool-1', type: 'pool', name_label: 'rack' },
+    {
+      id: PAGE_VM.id,
+      type: 'VM',
+      name_label: 'web',
+      $pool: 'pool-1',
+      $container: 'host-1',
+      power_state: 'Running',
+      managementAgentDetected: true,
+      CPUs: { number: 2 },
+      addresses: { '0/ipv4/0': '10.0.0.5', '0/ipv6/0': 'fe80::1' },
+      memory: { size: 4 * 2 ** 30 },
+    },
+  ], 'the pool and the VM as the page reads them; not the image, its tags, boot order or other config');
+  await assert.rejects(
+    openSealed({ privateKey: key.privateKey, publicKey: key.publicKey, aad: xolookAad('other.lan'), sealed: /** @type {any} */ (r.sealed) }),
+    'the answer for one pool does not open as another’s',
+  );
+  assert.equal(stand.rpc.closed, true);
+});
+
+test('a page whose methods cannot be read says cannot tell, and one too large for the fleet says so', async () => {
+  let { pools } = pageHolder({ methods: undefined, fail: { 'system.getMethodsInfo': 'no such method' } });
+  const key = await newSealKey();
+  const r = await pools.look({ owner: ELI, address: 'xo.lan', reply: key.publicKey });
+  const page = await openSealed({ privateKey: key.privateKey, publicKey: key.publicKey, aad: xolookAad('xo.lan'), sealed: /** @type {any} */ (r.sealed) });
+  assert.equal(page.methods, null, 'null, which offers no action, and not an empty list');
+  assert.equal(page.objects.length, 2, 'the objects are still read');
+
+  const many = Array.from({ length: 4000 }, (_, i) => ({ ...PAGE_VM, id: `vm-${i}`, name_label: `machine ${i} `.repeat(12) }));
+  ({ pools } = pageHolder({ objects: many }));
+  const big = await pools.look({ owner: ELI, address: 'xo.lan', reply: key.publicKey });
+  assert.equal(big.ok, false);
+  assert.equal(big.sealed, undefined);
+  assert.match(big.text, /^xo\.lan\u2019s page is \d+ KB, more than the fleet carries in one answer \(512 KB\)\. Open it from the pool\u2019s own network\.$/);
+});
+
+test('a page action is called under the owner’s token in the shape it takes, and nothing else is', async () => {
+  const { stand, pools } = pageHolder();
+  const args = JSON.stringify({ id: PAGE_VM.id, force: false });
+  assert.deepEqual(await pools.act({ owner: ELI, address: 'xo.lan', method: 'vm.restart', args }), { ok: true, text: 'xo.lan did it.' });
+  assert.deepEqual(stand.calls.map((c) => c.method), ['session.signIn', 'vm.restart']);
+  assert.deepEqual(stand.calls[1].params, { id: PAGE_VM.id, force: false });
+
+  // Held to the shape again here, whatever the coordinator checked.
+  const extra = await pools.act({ owner: ELI, address: 'xo.lan', method: 'vm.restart', args: JSON.stringify({ id: PAGE_VM.id, deleteDisks: true }) });
+  assert.deepEqual(extra, { ok: false, text: 'vm.restart takes no deleteDisks' });
+  assert.deepEqual(stand.calls.length, 2, 'refused before signing in');
+
+  // Xen Orchestra's own refusal is the answer, and a slow one is not a no.
+  const refused = pageHolder({ fail: { 'vm.restart': 'not enough permissions' } });
+  assert.deepEqual(await refused.pools.act({ owner: ELI, address: 'xo.lan', method: 'vm.restart', args }), { ok: false, text: 'xo.lan refused it: not enough permissions' });
+  const slow = pageHolder({ fail: { 'vm.stop': 'Xen Orchestra did not answer vm.stop in time' } });
+  const late = await slow.pools.act({ owner: ELI, address: 'xo.lan', method: 'vm.stop', args });
+  assert.match(late.text, /had not finished within a minute\. It may still be doing it/);
+});
+
+test('a pool’s page is only its owner’s, and a box that cannot reach it sends the coordinator to the next', async () => {
+  const { stand, pools } = pageHolder();
+  const key = await newSealKey();
+  assert.equal((await pools.look({ owner: 'sam@example.com', address: 'xo.lan', reply: key.publicKey })).notHere, true);
+  assert.equal((await pools.act({ owner: 'sam@example.com', address: 'xo.lan', method: 'vm.start', args: JSON.stringify({ id: PAGE_VM.id }) })).notHere, true);
+  assert.equal((await pools.look({ owner: ELI, address: 'other.lan', reply: key.publicKey })).notHere, true);
+  assert.deepEqual(stand.calls, [], 'no sign-in with Eli’s token for anybody else');
+
+  const down = new XoPools({ connect: /** @type {any} */ (async () => { throw new Error('ECONNREFUSED'); }) });
+  down.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  const r = await down.look({ owner: ELI, address: 'xo.lan', reply: key.publicKey });
+  assert.equal(r.unreachable, true);
+  assert.equal(r.text, 'xo.lan could not be reached from here: ECONNREFUSED');
 });
