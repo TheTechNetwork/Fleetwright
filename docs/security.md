@@ -470,6 +470,15 @@ machine of the fleet, through the coordinator.
   that person could, and nothing to anybody else's. The console is Xen
   Orchestra's own page, signed in to there; the phone never holds the pool's
   token for it.
+- **A pool's page from away** (`xolook`, `xoact`, `docs/manage.md`, "From
+  away"). A box that holds a person's pool token reads the page for their
+  phone and seals it to a key the phone made for that one look, so the
+  coordinator relays a map of the pool it cannot read. An action names a
+  method from the page's own list and an object id, held to that method's
+  shape by the coordinator and the box, and runs under that person's token:
+  what a compromised coordinator gains is what it already has by starting a
+  session on that box, and the box picks the token by the person asked for,
+  never another's.
 - **Machines kept ready** (`/api/vm-standby`) are made exactly as one asked
   for by hand: a single-use ticket bound to the person, a box holding their
   pool, inside the resource set's limits. What changes is time: a kept
