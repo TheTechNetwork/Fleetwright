@@ -46,6 +46,20 @@ test('iOS: the setting is offered only where an image is, and the image with one
   assert.match(I_LIST, /m\.standby == true \? "kept ready" : m\.image/);
 });
 
+test('iOS: the count moves while it is open, says when the one being made was asked for, and why the last did not come', () => {
+  // A person looked an hour later and was told "0 being made" and nothing
+  // else: two machines had failed to join and were forgotten in silence.
+  assert.match(I_FLEET, /var since: Double\? = nil/);
+  assert.match(I_FLEET, /var failed: Failure\? = nil\s*struct Failure: Codable, Hashable \{\s*let at: Double\s*let text: String\s*\}/);
+  assert.match(I_VIEW, /if let failed = kept\?\.failed \{\s*Text\("\\\(Self\.clock\(failed\.at\)\): \\\(failed\.text\)"\)[\s\S]{0,120}?Design\.Palette\.bad/);
+  assert.match(I_VIEW, /while !Task\.isCancelled \{\s*try\? await Task\.sleep\(for: \.seconds\(15\)\)\s*await refresh\(\)/);
+  // The reply to the tap goes once the count has moved on; a refusal stays.
+  assert.match(I_VIEW, /if got != kept, !failed \{ message = "" \}/);
+  // The coordinator's own field names.
+  const core = read('src/fleet/coordinator/core.js');
+  assert.match(core, /\.\.\.\(since === null \? \{\} : \{ since \}\), \.\.\.\(failed \? \{ failed \} : \{\}\)/);
+});
+
 test('iOS says it in the shared words', () => {
   const ios = [I_FLEET, I_VIEW, I_LIST, I_SHEET].join('\n');
   for (const words of SHARED) assert.ok(ios.includes(words), words);

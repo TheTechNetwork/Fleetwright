@@ -31,6 +31,14 @@ struct VMStandbyView: View {
                 Text(stateLine)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
+                // WHY THE LAST ONE DID NOT COME. The count alone went from "1
+                // being made" to "0 being made" and said nothing about the
+                // machine that had failed in between.
+                if let failed = kept?.failed {
+                    Text("\(Self.clock(failed.at)): \(failed.text)")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.bad)
+                }
                 Picker("Image", selection: $template) {
                     ForEach(images) { image in Text(image.label).tag(image.template) }
                 }
@@ -58,13 +66,29 @@ struct VMStandbyView: View {
         .background(Design.Palette.bg)
         .listRowBackground(Design.Palette.card)
         .navigationTitle("Keep machines ready")
-        .task { await load() }
+        .task {
+            await load()
+            // WHILE IT IS OPEN IT MOVES: a machine takes minutes to be made,
+            // and a count read once on arrival said "being made" long after
+            // the machine had joined, or failed.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                await refresh()
+            }
+        }
     }
 
-    /// "2 ready, 1 being made", or that none are kept.
+    /// "2 ready, 1 being made", or that none are kept, with when the one
+    /// being made was asked for.
     private var stateLine: String {
         guard let kept else { return "None kept ready." }
-        return "\(kept.ready) ready now, \(kept.starting) being made, of \(kept.count) kept."
+        let asked = kept.starting > 0 ? kept.since.map { " The one being made was asked for at \(Self.clock($0))." } ?? "" : ""
+        return "\(kept.ready) ready now, \(kept.starting) being made, of \(kept.count) kept.\(asked)"
+    }
+
+    /// A time today, as the phone tells it. @param ms epoch milliseconds
+    private static func clock(_ ms: Double) -> String {
+        Date(timeIntervalSince1970: ms / 1000).formatted(date: .omitted, time: .shortened)
     }
 
     @MainActor
@@ -78,6 +102,17 @@ struct VMStandbyView: View {
         } else if template.isEmpty, let first = images.first {
             template = first.template
         }
+    }
+
+    /// The count again. The reply to Keep them ready ("the first is being made
+    /// now") goes once the count has moved on from when it was said, since the
+    /// count is now the better account of it. A refusal stays until the next
+    /// tap: it is the reason nothing is happening.
+    @MainActor
+    private func refresh() async {
+        guard let got = try? await fleet.vmStandby() else { return }
+        if got != kept, !failed { message = "" }
+        kept = got
     }
 
     @MainActor
