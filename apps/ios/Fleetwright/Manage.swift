@@ -707,6 +707,14 @@ enum Manage {
         }
         static let noObjects = "This Xen Orchestra does not offer xo.getAllObjects, so nothing can be listed."
         static func lost(_ why: String) -> String { "The connection ended: \(why). Look again to reconnect." }
+        /// AWAY FROM THE POOL'S NETWORK, said as that rather than as a
+        /// connection that ended: on 5G the page sat at "Connecting…" and
+        /// then gave a bare network error, with nothing to say why or what
+        /// still works from where the phone is.
+        static func unreachable(_ address: String, _ why: String) -> String {
+            "This phone could not reach \(address): \(why). The pool’s page works from the pool’s own network or over a VPN to it; "
+                + "changing what the fleet may use works from anywhere, through one of your machines."
+        }
         static let methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         static let nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
         static let seesNothing = "This token sees nothing on the pool."

@@ -260,6 +260,7 @@ class ManageParityTest {
 
         assertEquals(arg("expired", 2), Manage.Words.expired(arg("expired", 0), arg("expired", 1)))
         assertEquals(arg("signInRefused", 2), Manage.Words.signInRefused(arg("signInRefused", 0), arg("signInRefused", 1)))
+        assertEquals(arg("unreachable", 2), Manage.Words.unreachable(arg("unreachable", 0), arg("unreachable", 1)))
         val resize = words.getJSONArray("resizeButton")
         for (i in 0 until resize.length()) {
             val c = resize.getJSONArray(i)
@@ -276,7 +277,7 @@ class ManageParityTest {
 
         // EVERY KEY IS CHECKED: a sentence added to the table and to neither
         // phone would otherwise sit there proving nothing.
-        val checked = fixed.keys + single.keys + setOf("expired", "signInRefused", "resizeButton", "growButton", "heading", "kindTitle")
+        val checked = fixed.keys + single.keys + setOf("expired", "signInRefused", "unreachable", "resizeButton", "growButton", "heading", "kindTitle")
         assertEquals(checked, words.keys().asSequence().toSet())
         assertFalse(checked.isEmpty())
     }
