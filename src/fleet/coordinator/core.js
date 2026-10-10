@@ -3938,7 +3938,9 @@ export class CoordinatorCore {
       }
       let answer;
       try {
-        answer = explainUnknownVerb(await this.send(host, { ...spec, params }), host);
+        // AS THE OWNER CHECKED ABOVE: the box picks the token by the actor,
+        // so the actor is the person this was checked for, whatever came in.
+        answer = explainUnknownVerb(await this.send(host, { ...spec, actor: owner, params }), host);
       } catch (e) {
         skipped.push(`${host.hostId} (${/** @type {Error} */ (e).message})`);
         continue;

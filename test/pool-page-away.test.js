@@ -38,11 +38,15 @@ function fleet(boxes, reply) {
   const asked = [];
   core.send = /** @type {any} */ (async (/** @type {any} */ host, /** @type {any} */ spec) => {
     asked.push(host.hostId);
+    // The box picks the token by the actor, so it is the person checked.
+    assert.equal(spec.actor, ELI);
     return reply(host.hostId, spec);
   });
   return { core, asked };
 }
 
+// The actor as a caller might send it, unlike the requester's email: the
+// requester is who was verified, and is what the box is told.
 const look = (/** @type {any} */ requester, address = 'xo.lan') => ({ verb: 'xolook', params: { address, reply: KEY }, actor: requester ? `fleet:${requester.email}` : undefined, requester });
 
 test('a look goes to the boxes holding this person’s token for this pool, the one that last reached it first, until one answers', async () => {
