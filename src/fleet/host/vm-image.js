@@ -354,7 +354,9 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     // run user preseeded, which is the one question it would otherwise guess.
     "  curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg",
     `  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" >/etc/apt/sources.list.d/fleetwright.list`,
-    `  echo 'fleetwright fleetwright/user string ${RUN_USER}' | debconf-set-selections`,
+    // A here-string and not a pipe: under pipefail an echo into a reader that
+    // has already exited fails the step for nothing.
+    `  debconf-set-selections <<<'fleetwright fleetwright/user string ${RUN_USER}'`,
     '  apt-get update',
     '  apt-get install -y fleetwright',
     '  test -x /opt/fleetwright/current/install/fleetwright-vm-join',
