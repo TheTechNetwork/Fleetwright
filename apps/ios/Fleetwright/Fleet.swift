@@ -1779,6 +1779,16 @@ struct Fleet {
         let network: String?
         let ready: Int
         let starting: Int
+        /// When the oldest one being made was asked for, in epoch
+        /// milliseconds; nil when none is, and from an older coordinator.
+        var since: Double? = nil
+        /// Why the last one did not come, kept until one does.
+        var failed: Failure? = nil
+
+        struct Failure: Codable, Hashable {
+            let at: Double
+            let text: String
+        }
     }
 
     /// What you keep ready: the `vmStandby` field of /api/hosts. Nil is
