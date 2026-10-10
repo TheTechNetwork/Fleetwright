@@ -533,9 +533,12 @@ test('a refused ticket is spent too, and says why', async (t) => {
 
 // --- the image ---------------------------------------------------------------
 
-test('the image’s cloud-init installs from this fleet without a pin, leaves nothing that makes two clones one, and says how it ended', () => {
+test('the image’s cloud-init installs the signed package without a fleet or a pin, leaves nothing that makes two clones one, and says how it ended', () => {
   const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test/anything' });
-  assert.match(config, /curl -fsSL 'https:\/\/fleet.test\/install' \| FLEETWRIGHT_COORDINATOR_URL='https:\/\/fleet.test' FLEETWRIGHT_USER=fleetwright sh -s -- --yes/);
+  assert.match(config, /signed-by=\/usr\/share\/keyrings\/fleetwright.gpg\] https:\/\/fleet-apt.thetech.network stable main/);
+  assert.ok(!config.includes('trusted=yes'), 'an unsigned repository');
+  assert.match(config, /echo 'fleetwright fleetwright\/user string fleetwright' \| debconf-set-selections/);
+  assert.ok(!config.includes('fleetwright/coordinator-url'), 'the image would join a fleet before it is a clone');
   assert.ok(!/ENROL_PIN/.test(config), 'never enrolled');
   for (const wiped of ['truncate -s 0 /etc/machine-id', 'rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*', 'host-key.json', 'cloud-init clean']) {
     assert.ok(config.includes(wiped), wiped);
@@ -585,7 +588,7 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
   const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
   const dir = mkdtempSync(join(tmpdir(), 'image-script-'));
   try {
-    const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent', 'sleep', 'resolvectl'].map((c) => {
+    const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent', 'sleep', 'resolvectl', 'dpkg', 'debconf-set-selections'].map((c) => {
       const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : '';
       return `${c}() { echo "${c} $*" >>"$CALLS"; ${fails}${fails ? '; ' : ''}return 0; }`;
     });
@@ -595,6 +598,7 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
     const body = script
       .replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`)
       .replace("screens='/dev/console /dev/tty1'", "screens=''")
+      .replace('/etc/apt/sources.list.d/fleetwright.list', `${dir}/fleetwright.list`)
       .replace('#!/bin/bash', '');
     const run = spawnSync('bash', ['-c', `${stubs.join('\n')}\n${body}`], { env: { CALLS: join(dir, 'calls'), PATH: process.env.PATH }, encoding: 'utf8' });
     assert.equal(run.status, 0, run.stderr);
@@ -622,10 +626,14 @@ test('the install script reports each step to the fleet and powers off when ever
   // first thing it puts on its screen is whether it has one.
   assert.ok(calls.indexOf('ip -4 -br addr') < calls.indexOf('apt-get update'));
   assert.ok(calls.includes('getent hosts deb.debian.org'));
-  // Node 24 before the installer, which refuses the distributions' older one.
-  const prereq = calls.findIndex((c) => c.startsWith('curl -fsSL https://fleet.test/prereq'));
-  assert.ok(prereq > 0 && prereq < calls.findIndex((c) => c.startsWith('curl -fsSL https://fleet.test/install')), 'the installer runs without a new-enough node');
-  assert.ok(calls.some((c, i) => i >= prereq - 1 && c.trim() === 'sh'), 'the prerequisite step is fetched and not run');
+  // Fleetwright from apt, whose package carries the Node the installer
+  // needs: the distributions' own is older, and the installer refuses it.
+  const key = calls.indexOf('curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg');
+  const user = calls.indexOf('debconf-set-selections ');
+  const install = calls.indexOf('apt-get install -y fleetwright');
+  assert.ok(key > 0 && key < install && user > 0 && user < install, 'installed before its key or its run user');
+  assert.equal(calls.filter((c) => c === 'apt-get update').length, 2, 'apt is not told about the repository it was just given');
+  assert.ok(!calls.some((c) => c.includes('fleet.test/install') || c.includes('/prereq')), 'the installer is still fetched by hand');
 });
 
 test('the install script stops at the first step that fails, says so with its log, and reboots rather than becoming the template', () => {

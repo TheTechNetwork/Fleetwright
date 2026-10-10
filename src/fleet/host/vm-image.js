@@ -344,14 +344,19 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     // when they are missing, at the cost of a minute.
     '  apt-get install -y nftables avahi-daemon libnss-mdns || true',
     '  report installer',
-    // NODE 24 FIRST, THE DOCUMENTED WAY. The installer needs the node
-    // package.json names and refuses an older one rather than add an apt
-    // repository; the distributions' own are older (Debian 13 ships 20), so a
-    // build that went straight to it stopped with "too old". The prerequisite
-    // step puts nvm and that node in the run user's home, and is a no-op on an
-    // image whose own node is already new enough.
-    `  curl -fsSL '${origin}/prereq' | FLEETWRIGHT_USER=${RUN_USER} sh`,
-    `  curl -fsSL '${origin}/install' | FLEETWRIGHT_COORDINATOR_URL='${origin}' FLEETWRIGHT_USER=${RUN_USER} sh -s -- --yes`,
+    // FROM APT, AS ONE PACKAGE. The installer needs the node package.json
+    // names and refuses an older one; the distributions' own are older
+    // (Debian 13 ships 20), so a build that ran it straight away stopped with
+    // "too old". The package carries Node's own build in /usr/lib/fleetwright,
+    // so nothing else is needed, and its postinst is the installer with no
+    // fleet named: laid out, units written, left stopped for the clone to
+    // join (docs/packaging.md, "Joining a fleet under apt"). Signed, and the
+    // run user preseeded, which is the one question it would otherwise guess.
+    "  curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg",
+    `  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" >/etc/apt/sources.list.d/fleetwright.list`,
+    `  echo 'fleetwright fleetwright/user string ${RUN_USER}' | debconf-set-selections`,
+    '  apt-get update',
+    '  apt-get install -y fleetwright',
     '  test -x /opt/fleetwright/current/install/fleetwright-vm-join',
     '  report cleaning',
     // Started by each clone once it has enrolled, never by the image.
