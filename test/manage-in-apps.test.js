@@ -325,3 +325,20 @@ test('a page read through a machine opens under the AAD the machine seals it wit
   const { xolookAad } = await import('../src/fleet/seal.js');
   assert.deepEqual(TABLE.xolookAad, ['xo.lan', xolookAad('xo.lan')]);
 });
+
+test('both phones keep the routers’ key a policy job seals back, beside the pool’s token, and show the routers on the pool’s page', async () => {
+  // docs/hypervisors.md, "Watching the edge routers". Asked for: "Why is
+  // there no live info of opnsense in the app to help trouble shoot this?"
+  const { xosetupWatchAad } = await import('../src/fleet/seal.js');
+  assert.deepEqual(TABLE.xosetupWatchAad, ['0123456789ab', 'xo.lan', xosetupWatchAad('0123456789ab', 'xo.lan')]);
+  const iosPolicy = bare(read('apps/ios/Fleetwright/AddHypervisorView.swift'));
+  assert.match(iosPolicy, /state\.state == "done", let sealed = state\.watch, let policyJob,\s*XOSetupHandoff\.keepEdgeKey\(sealed, job: job, address: policyJob\.address, key: policyJob\.reply\) \{\s*_ = await XOSetupHandoff\.keepInFleet/);
+  const ktPolicy = bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/HypervisorSheet.kt'));
+  assert.match(ktPolicy, /XoHandoff\.keepEdgeKey\(settings, watch, id, address\.trim\(\), key\)\s*\) \{\s*XoHandoff\.keepInFleet\(settings, fleet, address\.trim\(\)\)/);
+  // Kept under `edge` in the record, the name the box reads (xo-pools.js, edgeKey).
+  assert.match(bare(read('apps/ios/Fleetwright/XOSetupHandoff.swift')), /record\["edge"\] = \["key": edgeKey, "secret": secret, "pin": pin, "routers": routers\]/);
+  assert.match(bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/XoHandoff.kt')), /record\.put\("edge", JSONObject\(\)\.put\("key", edgeKey\)\.put\("secret", secret\)\.put\("pin", pin\)\.put\("routers", routers\)\)/);
+  // The card, under the status, on both; only once the fleet was asked, and not from a coordinator too old to say.
+  assert.match(bare(IOS_SCREEN), /statusCard\s*\.fleetRow\(\)\s*if edgesAsked && edgesKnown \{\s*edgeCard/);
+  assert.match(bare(KT_SCREEN), /StatusCard\(watch\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, edgesFailed\)/);
+});

@@ -88,6 +88,8 @@ final class ManageParityTests: XCTestCase {
     func testAPageReadThroughAMachineOpensUnderTheMachinesAAD() throws {
         let row = try XCTUnwrap(try table()["xolookAad"] as? [String])
         XCTAssertEqual(Seal.xolookAAD(address: row[0]), row[1])
+        let watch = try XCTUnwrap(try table()["xosetupWatchAad"] as? [String])
+        XCTAssertEqual(Seal.xosetupWatchAAD(job: watch[0], address: watch[1]), watch[2])
     }
 
     /// A page as the machine sends it (a flat list of objects) is read into
@@ -252,6 +254,8 @@ final class ManageParityTests: XCTestCase {
             "actionsFooter": Manage.Words.actionsFooter, "gone": Manage.Words.gone, "lookAgain": Manage.Words.lookAgain,
             "changePolicy": Manage.Words.changePolicy, "whatItIs": Manage.Words.whatItIs, "howItIs": Manage.Words.howItIs,
             "whatItCanDo": Manage.Words.whatItCanDo, "oneOfYours": Manage.Words.oneOfYours,
+            "edgeHeading": Manage.Words.edgeHeading, "edgeNobody": Manage.Words.edgeNobody,
+            "edgeUnasked": Manage.Words.edgeUnasked, "edgeEvents": Manage.Words.edgeEvents,
         ]
         for (key, value) in fixed { XCTAssertEqual(value, str(key), key) }
 
@@ -259,7 +263,7 @@ final class ManageParityTests: XCTestCase {
             "connecting": Manage.Words.connecting, "plainPool": Manage.Words.plainPool, "noToken": Manage.Words.noToken,
             "wrongCertificate": Manage.Words.wrongCertificate, "limitedUser": Manage.Words.limitedUser,
             "typePrompt": Manage.Words.typePrompt, "refused": Manage.Words.refused, "lost": Manage.Words.lost,
-            "askingFleet": Manage.Words.askingFleet,
+            "askingFleet": Manage.Words.askingFleet, "edgeUnreached": Manage.Words.edgeUnreached,
         ]
         for (key, say) in single { XCTAssertEqual(say(arg(key, 0)), arg(key, 1), key) }
 
@@ -270,6 +274,20 @@ final class ManageParityTests: XCTestCase {
         XCTAssertEqual(Manage.Words.throughLost(arg("throughLost", 0), arg("throughLost", 1)), arg("throughLost", 2))
         XCTAssertEqual(Manage.Words.unreachableEverywhere(arg("unreachableEverywhere", 0), arg("unreachableEverywhere", 1),
                                                           arg("unreachableEverywhere", 2)), arg("unreachableEverywhere", 3))
+        XCTAssertEqual(Manage.Words.edgeRead(arg("edgeRead", 0), arg("edgeRead", 1)), arg("edgeRead", 2))
+        let role = words["edgeRole"] as? [String: Any] ?? [:]
+        for (key, want) in role { XCTAssertEqual(Manage.Words.edgeRole(key == "none" ? nil : key), want as? String, key) }
+        let flags: [String: Bool?] = ["true": true, "false": false, "null": nil]
+        for (key, value) in flags {
+            XCTAssertEqual(Manage.Words.edgeDns(value), (words["edgeDns"] as? [String: String])?[key], key)
+            XCTAssertEqual(Manage.Words.edgeGateway(value), (words["edgeGateway"] as? [String: String])?[key], key)
+        }
+        for c in one("edgeLeases").compactMap({ $0 as? [Any] }) {
+            XCTAssertEqual(Manage.Words.edgeLeases((c[0] as? NSNumber)?.intValue ?? 0), c[1] as? String)
+        }
+        for (key, want) in words["edgeHeard"] as? [String: String] ?? [:] {
+            XCTAssertEqual(Manage.Words.edgeHeard(key == "null" ? nil : key), want, key)
+        }
         for c in one("resizeButton").compactMap({ $0 as? [Any] }) {
             let cpus = (c[0] as? NSNumber)?.intValue ?? 0
             let gib = (c[1] as? NSNumber)?.intValue ?? 0
@@ -287,6 +305,7 @@ final class ManageParityTests: XCTestCase {
         // phone would otherwise sit there proving nothing.
         let checked = Set(fixed.keys).union(single.keys)
             .union(["expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere",
+                    "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard",
                     "resizeButton", "growButton", "heading", "kindTitle"])
         XCTAssertEqual(Set(words.keys), checked)
     }

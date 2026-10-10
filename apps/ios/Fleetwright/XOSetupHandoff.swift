@@ -146,6 +146,33 @@ enum XOSetupHandoff {
         return String(data: json, encoding: .utf8)
     }
 
+    /// THE KEY TO THE POOL'S EDGE ROUTERS, which a policy job seals back
+    /// once it is done (src/fleet/host/edge-credentials.js), put in this
+    /// phone's record for the pool beside its token, so keeping the record
+    /// in the fleet hands it to the boxes this person approved for the pool
+    /// and they read the routers from then on. False for anything that does
+    /// not open under this job and address, or a pool this phone holds no
+    /// record for.
+    static func keepEdgeKey(_ sealed: String, job: String, address: String, key: Seal.OneUseKey) -> Bool {
+        let parts = sealed.split(separator: ".").map(String.init)
+        guard parts.count == 3,
+              let opened = try? Seal.open(key, aad: Seal.xosetupWatchAAD(job: job, address: address),
+                                          sealed: ["epk": parts[0], "iv": parts[1], "ct": parts[2]]),
+              (opened["v"] as? NSNumber)?.intValue == 1, opened["address"] as? String == address,
+              let edgeKey = opened["key"] as? String, let secret = opened["secret"] as? String, let pin = opened["pin"] as? String,
+              let raw = Keychain.get(tokenAccount(address)), !raw.isEmpty,
+              var record = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+        else { return false }
+        let routers: [[String: Any]] = (opened["routers"] as? [[String: Any]] ?? []).compactMap { r in
+            guard let name = r["name"] as? String else { return nil }
+            return ["name": name, "address": (r["address"] as? String).map { $0 as Any } ?? NSNull()]
+        }
+        record["edge"] = ["key": edgeKey, "secret": secret, "pin": pin, "routers": routers]
+        guard let data = try? JSONSerialization.data(withJSONObject: record), let text = String(data: data, encoding: .utf8) else { return false }
+        Keychain.set(text, for: tokenAccount(address))
+        return true
+    }
+
     /// Collect a finished job's token and, once it is kept, keep it in the
     /// fleet as well, so the boxes this person approved can make machines on
     /// the pool. Answers what collecting came to, and what the fleet said,

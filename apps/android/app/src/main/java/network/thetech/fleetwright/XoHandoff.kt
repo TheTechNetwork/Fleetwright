@@ -205,6 +205,36 @@ internal object XoHandoff {
      * only, to make machines on the pool. Answers the sentence to show: what
      * the fleet said, or what stood in the way.
      */
+    /**
+     * THE KEY TO THE POOL'S EDGE ROUTERS, which a policy job seals back once
+     * it is done (src/fleet/host/edge-credentials.js), put in this phone's
+     * record for the pool beside its token, so keeping the record in the
+     * fleet hands it to the boxes this person approved for the pool. False
+     * for anything that does not open under this job and address, or a pool
+     * this phone holds no record for.
+     */
+    fun keepEdgeKey(settings: Settings, sealed: String, job: String, address: String, key: Seal.OneUseKey): Boolean = runCatching {
+        val parts = sealed.split(".")
+        if (parts.size != 3) return@runCatching false
+        val opened = Seal.open(key, Seal.xosetupWatchAad(job, address), JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2]))
+        if (opened.optInt("v") != 1 || opened.optString("address") != address) return@runCatching false
+        val edgeKey = opened.optString("key").takeIf { it.isNotBlank() } ?: return@runCatching false
+        val secret = opened.optString("secret").takeIf { it.isNotBlank() } ?: return@runCatching false
+        val pin = opened.optString("pin").takeIf { it.isNotBlank() } ?: return@runCatching false
+        val record = JSONObject(settings.secret(tokenName(address))?.takeIf { it.isNotBlank() } ?: return@runCatching false)
+        val routers = org.json.JSONArray()
+        opened.optJSONArray("routers")?.let { a ->
+            for (i in 0 until a.length()) {
+                val r = a.optJSONObject(i) ?: continue
+                val name = r.optString("name").takeIf { it.isNotBlank() } ?: continue
+                routers.put(JSONObject().put("name", name).put("address", r.optString("address").takeIf { r.has("address") && !r.isNull("address") && it.isNotBlank() } ?: JSONObject.NULL))
+            }
+        }
+        record.put("edge", JSONObject().put("key", edgeKey).put("secret", secret).put("pin", pin).put("routers", routers))
+        settings.putSecret(tokenName(address), record.toString())
+        true
+    }.getOrDefault(false)
+
     suspend fun keepInFleet(settings: Settings, fleet: Fleet, address: String): String {
         val record = settings.secret(tokenName(address))
         if (record.isNullOrBlank()) return "This phone holds no token for $address to keep in the fleet."
