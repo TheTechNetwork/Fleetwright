@@ -28,7 +28,7 @@ import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src
 import { standIn, PASSWORD, skip } from './helpers/xo-stand-in.js';
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine(/** @type {{ policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, dropImage?: any, holderPin?: any, imageReporter?: any, relay?: any }} */ opts = {}) {
+async function machine(/** @type {{ log?: any, policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, dropImage?: any, holderPin?: any, imageReporter?: any, relay?: any }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -169,7 +169,9 @@ test('a sign-in with nowhere to hand the token back is refused before anything i
 
 test('a server with a different certificate is never sent a byte of the sign-in', { skip }, async (t) => {
   const xo = await standIn(t);
-  const { setups, events } = await machine();
+  /** @type {string[]} */
+  const journal = [];
+  const { setups, events } = await machine({ log: { info() {}, warn: (/** @type {string} */ m) => journal.push(m) } });
   const actor = 'eli@example.com';
   const otherPin = 'f'.repeat(64);
   const begun = await setups.begin({ address: xo.address, pin: otherPin, trust: 'accepted', actor });
@@ -181,6 +183,10 @@ test('a server with a different certificate is never sent a byte of the sign-in'
   assert.match(end.text, /different certificate/);
   assert.equal(xo.calls.length, 0, 'not even a handshake reached the API');
   assert.ok(!JSON.stringify(events).includes(PASSWORD));
+  // The journal says why as well, which is what the box's owner can read
+  // once the phone has let the job go.
+  assert.ok(journal.some((m) => m.includes('stopped at connect') && /different certificate/.test(m)), journal.join('\n'));
+  assert.ok(!journal.join('\n').includes(PASSWORD));
 });
 
 test('an account that is not an admin is told so, and nothing is made', { skip }, async (t) => {

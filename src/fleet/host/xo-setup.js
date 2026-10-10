@@ -938,7 +938,10 @@ export class XoSetups {
         rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
       }
       this.#report(rec);
-      this.log.warn(`xosetup: ${rec.job} stopped at ${rec.phase}`);
+      // AND WHY, in the journal too: the phone's copy goes when the job does,
+      // and an image build that failed on a pool nobody else can see was
+      // otherwise "stopped at apply" and nothing more. Scrubbed above.
+      this.log.warn(`xosetup: ${rec.job} stopped at ${rec.phase}${rec.state === 'failed' ? `: ${rec.text}` : ''}`);
     } finally {
       // A policy job's key, its waiter and what it showed the phone go with
       // it, whichever way it ended.
