@@ -42,6 +42,9 @@ struct FleetApp: View {
     /// Machines tab pushes its page once its list has it.
     @State private var openHost: String?
 
+    /// How a hypervisor setup ended, when its notification was tapped.
+    @State private var setupResult: SetupResult?
+
     /// The tab a screenshot run asked for, if this launch is one. The old
     /// names still work, so a screenshot plan written before the rename does
     /// not silently land on the wrong tab.
@@ -69,15 +72,24 @@ struct FleetApp: View {
                 NavigationStack { YouView(settings: settings) }
             }
         }
-        // A tapped notification lands where it is about: a machine's page for
-        // a host event, the sessions for everything else.
+        // A tapped notification lands where it is about: how a hypervisor
+        // setup ended, a machine's page for a host event, the sessions for
+        // everything else.
         .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { note in
-            if let host = note.userInfo?["host"] as? String, !host.isEmpty {
+            if let setup = note.userInfo?["setup"] as? SetupResult {
+                setupResult = setup
+            } else if let host = note.userInfo?["host"] as? String, !host.isEmpty {
                 openHost = host
                 tab = .machines
             } else {
                 tab = .sessions
             }
+        }
+        .sheet(item: $setupResult) { result in
+            SetupResultView(result: result, openHost: { host in
+                openHost = host
+                tab = .machines
+            })
         }
         // The content is the point; the chrome is not. On the way down the
         // tab bar shrinks to a pill and gives the list its height back.

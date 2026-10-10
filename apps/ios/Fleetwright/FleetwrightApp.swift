@@ -327,11 +327,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             // scroll from the page that could do something about it.
             let event = info["event"] as? String ?? ""
             let host = info["hostId"] as? String ?? ""
-            // A HYPERVISOR SETUP ENDING is news about the machine that ran
-            // it, and lands on that machine's page for the same reason.
+            // A HYPERVISOR SETUP ENDING opens how it ended. It used to land
+            // on the page of the machine that ran it, which says nothing
+            // about the job: the reason it stopped, and the end of an image
+            // build's log with it, were on the Lock Screen and nowhere else.
             let kind = info["kind"] as? String ?? ""
+            let content = response.notification.request.content
             await MainActor.run {
-                if event.hasPrefix("host.") || kind == "xosetup", !host.isEmpty { open(host: host) } else { open(name) }
+                if kind == "xosetup", !content.body.isEmpty {
+                    open(setup: SetupResult(title: content.title, text: content.body,
+                                            state: info["state"] as? String ?? "", host: host))
+                } else if event.hasPrefix("host.") || kind == "xosetup", !host.isEmpty { open(host: host) } else { open(name) }
             }
         }
     }
@@ -392,5 +398,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func open(host: String) {
         NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["host": host])
+    }
+
+    /// And for a setup's end: FleetApp shows how it ended (SetupResultView).
+    @MainActor
+    private func open(setup: SetupResult) {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["setup": setup])
     }
 }

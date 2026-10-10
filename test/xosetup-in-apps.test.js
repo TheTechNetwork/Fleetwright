@@ -245,6 +245,22 @@ test('iOS: every step has words, in the product’s voice, and an unknown step s
   }
 });
 
+test('iOS: tapping how a setup ended opens how it ended, in the words it was sent', () => {
+  // It opened the page of the machine that ran the job, so an image build that
+  // stopped with the end of its install log on the Lock Screen landed on a
+  // health line and the log was gone. The words are the notification's own:
+  // the coordinator puts the host's text in the body (#onSetupProgress).
+  assert.match(read('src/fleet/coordinator/core.js'), /const body = progress\.text \|\|/);
+  assert.match(IOS, /if kind == "xosetup", !content\.body\.isEmpty \{\s*open\(setup: SetupResult\(title: content\.title, text: content\.body,/);
+  assert.match(IOS, /\.sheet\(item: \$setupResult\) \{ result in\s*SetupResultView\(result: result/);
+  // The log is set apart by the two phrases vm-image.js writes around it.
+  const image = read('src/fleet/host/vm-image.js');
+  for (const phrase of ['The end of its log:\\n', 'Its build VM was kept']) {
+    assert.ok(image.includes(phrase), `vm-image.js no longer writes "${phrase}"`);
+  }
+  assert.ok(IOS.includes('"The end of its log:\\n"') && IOS.includes('"\\nIts build VM was kept"'));
+});
+
 test('iOS: the Live Activity decodes exactly what the coordinator pushes, and tells it where to push', () => {
   // The field names ARE the server's content-state keys. Read from the
   // coordinator's source rather than retyped: the object literal it hands to
