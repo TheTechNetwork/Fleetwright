@@ -202,6 +202,9 @@ struct AddHypervisorView: View {
         /// It builds an edge that drops what its threat rules match
         /// (`can` holds "edge-block"); an older one only one that logs.
         var canEdgeBlock = false
+        /// It builds the edge as two routers sharing their addresses
+        /// (`can` holds "edge-ha"); an older one builds one.
+        var canEdgeHa = false
         /// It makes labs on the edge (`can` holds "labs"); an older one cannot.
         var canLabs = false
         /// It keeps how many labs one person may hold (`can` holds "labs-each").
@@ -942,6 +945,7 @@ struct AddHypervisorView: View {
                 if way == nil { choice.edge = false; choice.image = false; choice.images = []; choice.holder = false }
                 // Another pool's router filters its own way.
                 choice.edgeBlock = inv.edge(on: way)?.blocks ?? false
+                choice.edgeHa = inv.edge(on: way)?.ha ?? false
                 // Another pool has its own group networks to start from.
                 choice.groups = XOPolicy.clamp(inv.groupCount(on: way), choice.groupRange(in: inv))
                 // And its own labs.
@@ -968,6 +972,17 @@ struct AddHypervisorView: View {
             if choice.edgeBlockChoice, canEdge, choice.edge, choice.egress != nil {
                 Toggle(isOn: $choice.edgeBlock) {
                     policyRow("Drop what the threat rules match", edgeBlockLine(there))
+                }
+                .tint(Design.Palette.accent)
+                .frame(minHeight: 44)
+                .disabled(busy)
+            }
+            // TWO ROUTERS OR ONE, offered only by a machine that builds a
+            // pair, and only with the router asked for. Asked for: "do ha
+            // will allow maintenance".
+            if choice.edgeHaChoice, canEdge, choice.edge, choice.egress != nil {
+                Toggle(isOn: $choice.edgeHa) {
+                    policyRow("Two edge routers", edgeHaLine(there))
                 }
                 .tint(Design.Palette.accent)
                 .frame(minHeight: 44)
@@ -1040,6 +1055,18 @@ struct AddHypervisorView: View {
             : "Off: Suricata logs it by machine and lets it through."
         guard let there, (there.blocks ?? false) != choice.edgeBlock else { return what }
         return "\(what) Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up."
+    }
+
+    /// What a pair does, and what changing it costs on a router that is
+    /// there. The same words on Android.
+    private func edgeHaLine(_ there: XOPolicy.Inventory.Edge?) -> String {
+        let what = choice.edgeHa
+            ? "On: they share the way out, so one carries the machines while the other restarts for an update."
+            : "Off: one router, and when it restarts for an update, machines behind it have no way out for those minutes."
+        guard let there, (there.ha ?? false) != choice.edgeHa else { return what }
+        return choice.edgeHa
+            ? "\(what) Apply makes the second and hands over to it: machines behind it have no way out while it starts."
+            : "\(what) Apply removes the second and rebuilds the first: machines behind it have no way out until it is up."
     }
 
     private func edgeLine(_ there: XOPolicy.Inventory.Edge?) -> String {
@@ -1857,6 +1884,7 @@ struct AddHypervisorView: View {
                                   canGroups: begun.can.contains("groups"),
                                   canHolder: begun.can.contains("holder"),
                                   canEdgeBlock: begun.can.contains("edge-block"),
+                                  canEdgeHa: begun.can.contains("edge-ha"),
                                   canLabs: begun.can.contains("labs"),
                                   canLabsEach: begun.can.contains("labs-each"),
                                   canImageManage: begun.can.contains("image-manage"))
@@ -1889,6 +1917,7 @@ struct AddHypervisorView: View {
                     choice.groupsChoice = policyJob.canGroups && opened.groups != nil
                     choice.holderChoice = policyJob.canHolder && opened.holders != nil
                     choice.edgeBlockChoice = policyJob.canEdgeBlock
+                    choice.edgeHaChoice = policyJob.canEdgeHa
                     choice.labsChoice = policyJob.canLabs && opened.labMax != nil
                     choice.labsEachChoice = choice.labsChoice && policyJob.canLabsEach
                     choice.imageManageChoice = choice.imagesChoice && policyJob.canImageManage

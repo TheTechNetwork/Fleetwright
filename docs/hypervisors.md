@@ -525,7 +525,7 @@ offering one, and that one is free again when its machine ends.
 
 **Booted in QEMU**, from the pinned 26.7 image patched this way with four
 labs, two of them closed, and blocking on: the whole configuration was read
-(the file is 8,192 bytes, below), each lab's interface came up at its
+(the file has a whole 32 KiB block, below), each lab's interface came up at its
 address, dnsmasq had a range on each, Suricata's home network was the uplink
 and the four labs, and `pfctl -sr` showed, per interface and in this order,
 DNS to the edge, no other resolver, nothing private, the way out (the uplink
@@ -551,21 +551,31 @@ until it is rebuilt, because nothing rebuilds an edge whose labs did not
 change. Changing its labs, or how it filters, rebuilds it with the new
 rules.
 
-**It did not fit, so the file grew.** The edge's configuration with labs is
-up to 8,033 bytes (four closed labs, blocking, a short coordinator name), and
-the file it replaces is 5,234. The image's file
-system has 4 KiB fragments, so `config.xml` already owns 8,192 bytes on the
-disk (its inode counts 16 sectors) and the 2,958 after its end are zeros. The
-build changes one more field: the file's size in its inode, from 5,234 to
-8,192. Nothing is allocated, moved or freed, and the file system keeps no
-check-hashes (its superblock's `fs_metackhash` is 0). It is pinned and
-checked like the configuration: the field must read 5,234 and the slack must
-be zeros, or nothing is written. Every edge grows the file now, labs or not:
-blocking with the daily update ("It keeps itself up to date") no longer fits
-the 5,234 bytes either. The bound that matters is the coordinator's name,
-which a closed lab's configuration carries twice (the alias and the names it
-may resolve): with four closed labs and blocking, a name of up to 101
-characters fits, and a longer one is refused before anything is downloaded.
+**It did not fit, so the file moved.** The file the build replaces is 5,234
+bytes in two 4 KiB fragments, and the first way past that was to let it fill
+the 8,192 bytes those fragments already own, changing nothing but its size.
+Two routers' rules (below) needed more, and the fragments cannot grow where
+they are: `makefs` packed their cylinder group full. So the build gives
+`config.xml` a **whole 32 KiB block** of its own, the first wholly free one
+on the disk (in cylinder group 4), and marks its old fragments free, with
+every count that records either changed with it: the inode's size, sectors
+and first block, both groups' bitmaps, free counts and run sums, group 4's
+cluster map, the per-group summaries and the superblock's totals. That is
+twelve small edits and the block itself, planned by the file system's own
+rules (`src/fleet/host/ufs-room.js`, run against the pinned image by
+`scripts/opnsense-room.mjs`) and pinned in the code as each byte and what
+must be there before it. The build checks every one, and that the block is
+zeros, before writing anything, as it checks the configuration.
+
+**Checked as fsck checks it.** `fsck_ffs -n` on a copy patched this way and
+never booted was clean, with the same free counts the plan says. The patched
+image booted in QEMU and read the file back whole: inode 6523, 32,768 bytes,
+the SHA-256 of what was written, and came up with 46 pf rules and its three
+cron jobs. The file system keeps no check-hashes (its superblock's
+`fs_metackhash` is 0), so there is nothing else to agree with. The bound
+that was the coordinator's name is gone: four closed labs, blocking and two
+routers fit with a name as long as DNS allows, and a configuration that did
+not fit would be refused before anything is downloaded.
 
 ### Seeing what crossed a lab: designed, not built
 
@@ -686,6 +696,57 @@ and the machines behind it have no way out while it runs. A new edge is tagged
 **Not yet run** on a real pool: that the first update installs `os-xen` on the
 nano image, and that Xen Orchestra then reads the WAN address as interface 0's.
 
+### Two of them
+
+> And enable HA which would drop the issue of it dying on reboot
+
+The daily update restarts the edge, and with one router every machine behind
+it has no way out for those minutes. With **Two edge routers** on, there are
+two, `fleetwright-edge` and `fleetwright-edge-b`, and the uplink's gateway
+address, 10.254.0.1, and each lab's `.1` are **CARP** addresses they share:
+the one that is master answers them, and when it stops answering, the other
+takes them within seconds. Each router has its own address beside it, `.2`
+for the first and `.3` for the second.
+
+- **The second updates an hour after the first**, at 11:00 UTC, so the two
+  never restart together, and the first is master whenever it is up (its
+  advertisement skew is 0, the second's 100).
+- **Each hands out half of the DHCP range** (`.100` to `.174`, and `.175`
+  to `.250`), naming the shared address as gateway and resolver, so a
+  machine's lease outlives the router that gave it.
+- **Names are asked of the router itself**, which in pf includes the CARP
+  addresses, so a closed lab's rules hold on whichever one is master.
+- **Their advertisements carry an HMAC** of a password made for the pair,
+  so a machine on the uplink cannot claim the gateway. OPNsense passes CARP's
+  own packets before any rule here ("CARP defaults"), so the private-ranges
+  rule does not stop them. The password is kept on the two VMs in Xen
+  Orchestra (their `xenStoreData`), where the admin sign-in can read it and
+  the fleet's token cannot, since neither is in the resource set; a rebuilt
+  router is given the same one, so the old and the new agree.
+
+**Changing anything rebuilds them one at a time.** The second is replaced
+while the first carries the machines, then the first while the second does,
+so the machines behind them keep their way out apart from a moment as each
+hands over. Going **from one to two** makes the second without starting it
+(the old router has the gateway address as its own), stops the old one,
+starts the second, and rebuilds the first beside it: the machines have no
+way out only while the second starts. If the first then fails to build, the
+second carries the machines alone and applying again finishes the pair.
+Going **back to one** removes the second and rebuilds the first on its own,
+and the machines have no way out until it is up. Before Apply, the phone
+says what going to two or back to one costs.
+
+A phone that predates the switch sends nothing, and the edge is left as one
+or two as it is. Each router is tagged `fleetwright-edge-node:0` or `:1`.
+
+**Booted in QEMU**, the two from the pinned image patched this way, with
+their uplinks joined by a socket: the first came up master holding
+10.254.0.1, the second backup, and the second had counted 203 advertisements
+and no bad authentication. With the first powered off, the second became
+master and held 10.254.0.1. **Not yet run** on a real pool: CARP over Xen's
+netfront driver, which needs the uplink to carry multicast between the two
+VMs, and `xenStoreData` set through Xen Orchestra's `vm.set`.
+
 ### What the edge filters
 
 > Network filtering/dns filtering to prevent malware and other security
@@ -762,11 +823,11 @@ It all but filled the 5,234 bytes the configuration has to fit in, so what
 OPNsense does anyway was cut to make room: the web interface's theme, pf's
 default optimization, sticky load balancing (which needs source tracking,
 which is off), and the policy's priority and description. The daily update
-then needed more than was left, so the file grows to its 8,192 bytes for
-every edge, the aliases lose their descriptions (OPNsense does not require
-them and nobody can log in to read them), and the private rule's label is
-shorter. The comment on `edgeConfig` lists each one and why it changes
-nothing.
+then needed more than was left, so the aliases lost their descriptions
+(OPNsense does not require them and nobody can log in to read them) and the
+private rule's label got shorter. The file now has a whole block ("It did
+not fit, so the file moved"), and the cuts stay because they cost nothing.
+The comment on `edgeConfig` lists each one and why it changes nothing.
 
 **Booted in QEMU** from the pinned 26.7 image patched this way. The two cron
 jobs were in the crontab, Unbound was listening with its blocklist module
