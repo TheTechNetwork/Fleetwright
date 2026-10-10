@@ -41,6 +41,10 @@ test('the installer refuses exactly what the manifest refuses', () => {
   );
   // And the gate uses it rather than a literal beside it.
   assert.match(sh, /\[ "\$NODE_MAJOR" -ge "\$NODE_FLOOR" \]/);
+  // As does the choice of the service's node, which read 18 and so settled on
+  // a distribution's older one beside the new node from the prerequisite step.
+  assert.match(sh, /\[ "\$candidate_major" -ge "\$NODE_FLOOR" \]/);
+  assert.equal(/-ge 1[0-9]\b/.test(sh.replace(/^\s*#.*$/gm, '')), false, 'a node major compared against a literal');
 });
 
 test('the message it prints names the same version it enforces', () => {

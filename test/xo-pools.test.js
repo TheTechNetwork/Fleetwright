@@ -622,6 +622,10 @@ test('the install script reports each step to the fleet and powers off when ever
   // first thing it puts on its screen is whether it has one.
   assert.ok(calls.indexOf('ip -4 -br addr') < calls.indexOf('apt-get update'));
   assert.ok(calls.includes('getent hosts deb.debian.org'));
+  // Node 24 before the installer, which refuses the distributions' older one.
+  const prereq = calls.findIndex((c) => c.startsWith('curl -fsSL https://fleet.test/prereq'));
+  assert.ok(prereq > 0 && prereq < calls.findIndex((c) => c.startsWith('curl -fsSL https://fleet.test/install')), 'the installer runs without a new-enough node');
+  assert.ok(calls.some((c, i) => i >= prereq - 1 && c.trim() === 'sh'), 'the prerequisite step is fetched and not run');
 });
 
 test('the install script stops at the first step that fails, says so with its log, and reboots rather than becoming the template', () => {
