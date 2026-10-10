@@ -283,7 +283,7 @@ final class PhoneRelay: @unchecked Sendable {
         }, queue)
         let connection = NWConnection(host: target.host, port: target.port, using: NWParameters(tls: tls, tcp: NWProtocolTCP.Options()))
         return await withCheckedContinuation { continuation in
-            let end: () -> Void = {
+            let end: @Sendable () -> Void = {
                 guard !seen.done else { return }
                 seen.done = true
                 connection.cancel()
