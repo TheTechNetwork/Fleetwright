@@ -84,6 +84,86 @@ export const IMAGE_REPORT_TOKEN_RE = /^fwi_([0-9a-f]{12})_([0-9a-f]{48})$/;
  */
 export const XO_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * WHAT A POOL'S PAGE CAN ASK A BOX TO DO FOR IT (`xoact`), by Xen Orchestra
+ * method, and the arguments each takes beside `id`, in the shapes the phones
+ * send them (Manage.params, resizeParams and growParams in both apps). Each
+ * one is something the page offers; nothing here makes, signs in, or reaches
+ * outside the pool. A key not listed is refused, not passed through, because
+ * an argument a method does not need is an argument somebody chose to send.
+ *
+ * @type {Readonly<Record<string, Readonly<Record<string, { type: 'boolean'|'name'|'count'|'bytes', required?: boolean }>>>>}
+ */
+export const XO_ACTION_ARGS = Object.freeze({
+  'vm.start': {},
+  'vm.resume': {},
+  'vm.unpause': {},
+  'vm.pause': {},
+  'vm.suspend': {},
+  'vm.stop': { force: { type: 'boolean' } },
+  'vm.restart': { force: { type: 'boolean' } },
+  'vm.snapshot': { name: { type: 'name', required: true } },
+  'vm.clone': { name: { type: 'name', required: true }, full_copy: { type: 'boolean' } },
+  'vm.delete': { deleteDisks: { type: 'boolean' } },
+  'vm.set': { CPUs: { type: 'count' }, memory: { type: 'bytes' } },
+  'disk.resize': { size: { type: 'bytes', required: true } },
+  'vdi.set': { size: { type: 'bytes', required: true } },
+  'host.setMaintenanceMode': { maintenance: { type: 'boolean', required: true } },
+  'host.disable': {},
+  'host.enable': {},
+  'host.restart': {},
+});
+export const XO_ACTIONS = Object.freeze(Object.keys(XO_ACTION_ARGS));
+
+/**
+ * `xoact`'s `args`, read and held to its method's shape: a JSON object with a
+ * Xen Orchestra id and only the keys that method takes. Checked by the
+ * coordinator before it sends one and by the box again before it calls one,
+ * so neither trusts the other with the shape.
+ *
+ * @param {string} method
+ * @param {unknown} raw  the JSON text
+ * @returns {{ ok: true, args: Record<string, string|number|boolean> } | { ok: false, error: string }}
+ */
+export function xoActionArgs(method, raw) {
+  const shape = Object.hasOwn(XO_ACTION_ARGS, method) ? XO_ACTION_ARGS[/** @type {keyof typeof XO_ACTION_ARGS} */ (method)] : null;
+  if (!shape) return { ok: false, error: `${method} is not something a pool\u2019s page does` };
+  /** @type {any} */
+  let a;
+  try {
+    a = JSON.parse(String(raw));
+  } catch {
+    return { ok: false, error: 'xoact.args is not JSON' };
+  }
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return { ok: false, error: 'xoact.args must be a JSON object' };
+  if (typeof a.id !== 'string' || !XO_UUID_RE.test(a.id)) return { ok: false, error: 'xoact.args.id is not a Xen Orchestra id' };
+  /** @type {Record<string, string|number|boolean>} */
+  const args = { id: a.id };
+  for (const [k, v] of Object.entries(a)) {
+    if (k === 'id') continue;
+    const want = Object.hasOwn(shape, k) ? /** @type {Record<string, { type: string }>} */ (shape)[k] : null;
+    if (!want) return { ok: false, error: `${method} takes no ${k}` };
+    if (want.type === 'boolean' && typeof v !== 'boolean') return { ok: false, error: `xoact.args.${k} must be true or false` };
+    if (want.type === 'name' && (typeof v !== 'string' || !v.trim() || v.length > 300 || /[\u0000-\u001f\u007f]/.test(v))) {
+      return { ok: false, error: `xoact.args.${k} must be a name` };
+    }
+    if (want.type === 'count' && !(Number.isSafeInteger(v) && /** @type {number} */ (v) >= 1 && /** @type {number} */ (v) <= 64)) {
+      return { ok: false, error: `xoact.args.${k} must be a whole number from 1 to 64` };
+    }
+    // UP TO 64 TiB: a disk on a Xen pool cannot be larger, and memory far
+    // less, so anything above it is a number nobody meant.
+    if (want.type === 'bytes' && !(Number.isSafeInteger(v) && /** @type {number} */ (v) > 0 && /** @type {number} */ (v) <= 2 ** 46)) {
+      return { ok: false, error: `xoact.args.${k} must be a size in bytes` };
+    }
+    args[k] = /** @type {string|number|boolean} */ (v);
+  }
+  for (const [k, want] of Object.entries(shape)) {
+    if (/** @type {{ required?: boolean }} */ (want).required && !(k in args)) return { ok: false, error: `${method} needs ${k}` };
+  }
+  if (method === 'vm.set' && !('CPUs' in args) && !('memory' in args)) return { ok: false, error: 'vm.set needs CPUs or memory' };
+  return { ok: true, args };
+}
+
 /** A certificate fingerprint: SHA-256, lowercase hex. */
 export const CERT_PIN_RE = /^[0-9a-f]{64}$/;
 
@@ -259,8 +339,16 @@ export const XODEPLOY_STEPS = Object.freeze([
 // machine's own network and `begin` would make a job that cannot connect, so
 // the coordinator refuses instead, and places a relay only on a host that
 // speaks 12.
+//
+// v13, 10 Oct 2026: A POOL'S PAGE FROM AWAY FROM HOME. The phone reads Xen
+// Orchestra itself, on the pool's own network; on 5G it reaches nothing.
+// `xolook` asks a box holding that pool's token to read what the page
+// shows, sealed to a key the phone made for the one look, and `xoact` asks
+// it to do one of the things the page offers. New verbs, so an older host
+// answers `unknown_verb`; the coordinator sends them only to a box that
+// speaks 13 and reported holding the pool. docs/manage.md, "From away".
 /** @type {number} */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -1330,6 +1418,91 @@ export const VERBS = Object.freeze({
     summary:
       'Work a machine from your own hypervisor: reboot it, extend it (up to six hours from when it was made), resize ' +
       'it (vCPUs and memory, which restarts it), or stop it, which removes it and everything on it. Yours only.',
+  },
+
+  // A POOL'S PAGE THROUGH A BOX THAT HOLDS ITS TOKEN, for a phone that cannot
+  // reach Xen Orchestra from where it is. docs/manage.md, "From away".
+  //
+  // `xolook` is what the page reads, done on the box: the methods the token
+  // may call, and the pool's hosts, VMs, storage and disks, cut to the fields
+  // the page shows. It comes back SEALED to `reply`, a key the phone made for
+  // this look, because a map of somebody's network is not the coordinator's
+  // to read (the reason the policy job seals its inventory). A fresh key each
+  // time is also what makes an old answer worthless: the phone holds only the
+  // private half of the one it is waiting for.
+  //
+  // `xoact` is one of the page's actions, by its Xen Orchestra method and the
+  // arguments the page would have sent. Only those methods, and the box checks
+  // each argument against the shape that method takes before calling it, under
+  // the person's own token: it can do what that token can, which is what the
+  // page could do from home, and nothing a box's own sign-in could.
+  //
+  // What a compromised coordinator gains from forging one is bounded by the
+  // same token: it already reaches that box with `start`, and a session there
+  // runs where the token is kept. An action is not sealed for that reason, and
+  // because what it names (a VM's id and "restart") is less than `status`
+  // already tells the coordinator about the machines this fleet made.
+  //
+  // Only the pool's owner, checked here against the box's report and again by
+  // the box against the tokens it holds.
+  xolook: {
+    params: {
+      address: {
+        type: 'text',
+        required: true,
+        max: 260,
+        pattern: XO_ADDRESS_RE,
+        shapeName: 'a host name or IP address, with an optional port',
+        since: 13,
+        describe: 'The pool, by the address its token is kept under in your vault.',
+      },
+      reply: {
+        type: 'text',
+        required: true,
+        max: 87,
+        pattern: SEAL_KEY_RE,
+        shapeName: 'a P-256 public key',
+        since: 13,
+        describe: 'What the answer is sealed to: a key the asking phone made for this look.',
+      },
+    },
+    mutating: false,
+    summary:
+      'Read a pool\u2019s page through a machine that holds its token: the methods your token may call and the ' +
+      'pool\u2019s hosts, VMs, storage and disks, sealed to a key of yours. For a phone away from the pool\u2019s ' +
+      'network. Yours only; changes nothing.',
+  },
+  xoact: {
+    params: {
+      address: {
+        type: 'text',
+        required: true,
+        max: 260,
+        pattern: XO_ADDRESS_RE,
+        shapeName: 'a host name or IP address, with an optional port',
+        since: 13,
+        describe: 'The pool, by the address its token is kept under in your vault.',
+      },
+      method: {
+        type: 'enum',
+        required: true,
+        values: [...XO_ACTIONS],
+        since: 13,
+        describe: 'The Xen Orchestra method the pool\u2019s page would have called.',
+      },
+      args: {
+        type: 'raw',
+        required: true,
+        max: 1024,
+        since: 13,
+        describe: 'Its arguments as a JSON object, as the page sends them: `id` always, and what that method takes beside it.',
+      },
+    },
+    mutating: true,
+    summary:
+      'Do one of the things a pool\u2019s page offers (start, stop, restart, snapshot, clone, delete or resize a VM, ' +
+      'grow a disk, a host into or out of maintenance) through a machine that holds its token, for a phone away ' +
+      'from the pool\u2019s network. Under your own token, so it can do what that token can. Yours only.',
   },
 
   // CHECKING A RUNNER REPOSITORY BEFORE ANYBODY RELIES ON IT, with the asking

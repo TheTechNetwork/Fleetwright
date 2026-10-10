@@ -2167,7 +2167,9 @@ const OPENAPI = JSON.stringify({
                       "writefile",
                       "xoprobe",
                       "xosetup",
-                      "vmctl"
+                      "vmctl",
+                      "xolook",
+                      "xoact"
                     ]
                   },
                   "params": {

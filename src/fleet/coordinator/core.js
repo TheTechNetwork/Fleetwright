@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
@@ -88,6 +88,8 @@ const SETUP_TTL_MS = 24 * 60 * 60_000;
 const ENDED_SETUP = new Set(['done', 'failed', 'cancelled']);
 /** The protocol a machine must speak to be handed a relay through a phone (intents.js, v12). */
 const RELAY_PROTOCOL = 12;
+/** The protocol a box speaks to read or work a pool's page for a phone away from it (`xolook`, `xoact`). */
+const POOL_PAGE_PROTOCOL = 13;
 /**
  * How long a probe through a phone may take. Longer than the fan-out's ten
  * seconds: every round trip of the TLS handshake crosses the coordinator twice
@@ -1839,6 +1841,7 @@ export class CoordinatorCore {
     }
     if (spec.verb === 'provision' && (shaped.params.platform === 'vm' || shaped.params.platform === 'lab')) return this.#provisionVm(spec, shaped.params);
     if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
+    if (spec.verb === 'xolook' || spec.verb === 'xoact') return this.#poolPage(spec, shaped.params);
     if (spec.verb === 'provision') {
       const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null);
       if (minted.ok === false) return minted;
@@ -2994,6 +2997,19 @@ export class CoordinatorCore {
           `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${RELAY_PROTOCOL}. Update it and ask again.`,
       };
     }
+    // A POOL'S PAGE, which an older box would answer `unknown_verb` to: true,
+    // and said as which box and what it needs, the way the others are.
+    if (spec.verb === 'xolook' || spec.verb === 'xoact') {
+      const speaks = Number(host?.health?.protocol);
+      if (Number.isInteger(speaks) && speaks >= POOL_PAGE_PROTOCOL) return null;
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text:
+          `${host?.hostId} is too old to show a pool\u2019s page from away \u2014 it speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${POOL_PAGE_PROTOCOL}. Update it and ask again.`,
+      };
+    }
     // A TASK, for the same reason: dropped, the session starts idle — the thing
     // `task` exists to end — and the reply says it started.
     if (spec.verb === 'start' && typeof spec.params?.task === 'string' && spec.params.task) {
@@ -3875,6 +3891,70 @@ export class CoordinatorCore {
       return { ...answer, hostId: host.hostId };
     }
     return { ok: false, error: { code: 'not_found' }, text: `No box holding your pools could find ${name}: ${skipped.join(', ')}.` };
+  }
+
+  /**
+   * A pool's page for a phone that cannot reach it (`xolook`, `xoact`), asked
+   * of the boxes that reported holding THIS person's token for THIS address:
+   * the ones that last reached it first, then the rest, until one answers.
+   * docs/manage.md, "From away".
+   *
+   * ONLY THE POOL'S OWNER, and only a pool by the address it is kept under:
+   * a box answers for the token it holds, so asking a box that holds somebody
+   * else's would be asking it to read their pool. The box checks again.
+   *
+   * @param {any} spec @param {Record<string, any>} params
+   */
+  async #poolPage(spec, params) {
+    const owner = String(spec.requester?.email || '').toLowerCase();
+    if (!owner) return { ok: false, error: { code: 'not_signed_in' }, text: 'A pool\u2019s page is read by the person whose pool it is, so this needs a signed-in identity.' };
+    const address = String(params.address || '');
+    if (spec.verb === 'xoact') {
+      const checked = xoActionArgs(String(params.method || ''), params.args);
+      if (!checked.ok) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+    }
+    /** @type {Array<{ host: any, reached: boolean }>} */
+    const holders = [];
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      const entry = host.health.xo.find((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === owner && String(e?.address || '') === address);
+      if (entry) holders.push({ host, reached: entry.reachable === true });
+    }
+    if (!holders.length) {
+      return {
+        ok: false,
+        error: { code: 'no_hosts' },
+        text: `No connected machine holds your token for ${address}, so the fleet cannot reach it for you. A machine you approved in your vault for it holds one once it is connected.`,
+      };
+    }
+    holders.sort((a, b) => Number(b.reached) - Number(a.reached) || a.host.hostId.localeCompare(b.host.hostId));
+    if (spec.verb === 'xoact') this.record({ event: 'xo.act', actor: spec.actor ?? null, text: `${owner} asked for ${params.method} on ${address}` });
+    /** @type {string[]} */
+    const skipped = [];
+    for (const { host } of holders) {
+      if (this.#cannotCarry(host, spec)) {
+        skipped.push(`${host.hostId} (needs updating)`);
+        continue;
+      }
+      let answer;
+      try {
+        // AS THE OWNER CHECKED ABOVE: the box picks the token by the actor,
+        // so the actor is the person this was checked for, whatever came in.
+        answer = explainUnknownVerb(await this.send(host, { ...spec, actor: owner, params }), host);
+      } catch (e) {
+        skipped.push(`${host.hostId} (${/** @type {Error} */ (e).message})`);
+        continue;
+      }
+      // THIS BOX COULD NOT REACH THE POOL EITHER, or no longer holds the
+      // token: the next one may. Anything else is the answer, a refusal from
+      // Xen Orchestra included, because another box would be refused the same.
+      if (answer?.ok === false && (answer.unreachable === true || answer.notHere === true)) {
+        skipped.push(`${host.hostId} (${answer.text || 'not there'})`);
+        continue;
+      }
+      return { ...answer, hostId: host.hostId };
+    }
+    return { ok: false, error: { code: 'unreachable' }, text: `None of the machines holding your token could reach ${address}: ${skipped.join('; ')}.` };
   }
 
   /**

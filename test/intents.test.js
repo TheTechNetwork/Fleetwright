@@ -124,6 +124,10 @@ test('the verb set is exactly what is documented', () => {
     // `provision { network }` beside it. docs/hypervisors.md.
     'vmctl',
     'writefile',
+    // v13: a pool's page through a box holding its token, for a phone away
+    // from the pool's network. New verbs. docs/manage.md, "From away".
+    'xoact',
+    'xolook',
     // Adding a hypervisor: can a machine reach it, and onboarding run on the
     // one that can. New verbs, so an older host answers `unknown_verb`.
     // docs/hypervisors.md.
@@ -264,8 +268,10 @@ test('only state-changing verbs are marked mutating', () => {
     // retries on a slow answer is exactly the case.
     // vmctl reboots, resizes or removes a machine, and the idempotency key is
     // what stops a retried stop reporting "not found" for one it just removed.
+    // xoact deletes, stops and resizes VMs on a pool; a retried delete must
+    // not come back as "no such VM" for the one it just removed.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xosetup'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xoact', 'xosetup'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

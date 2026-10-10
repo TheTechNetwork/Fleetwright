@@ -172,6 +172,20 @@ export function xodeployAad(job, address) {
 }
 
 /**
+ * What a pool's page is sealed under on its way from the box that read it to
+ * the phone away from home that asked (`xolook`): the address, so the answer
+ * for one pool cannot be shown as another's. There is no job to bind to; the
+ * key is the phone's, made for this one look and thrown away after it, which
+ * is what makes an old answer unopenable. src/fleet/host/xo-pools.js, `look`;
+ * the phones build the same string.
+ *
+ * @param {string} address
+ */
+export function xolookAad(address) {
+  return `fleetwright-xolook/v1:${address}`;
+}
+
+/**
  * The additional data a Claude login is kept under AT REST in the minter: the
  * GitHub account it belongs to. A stored row moved under another account does
  * not open, so storage that could be rearranged still could not hand one
