@@ -586,45 +586,105 @@ that was the coordinator's name is gone: four closed labs, blocking and two
 routers fit with a name as long as DNS allows, and a configuration that did
 not fit would be refused before anything is downloaded.
 
-### Seeing what crossed a lab: designed, not built
+### Watching the edge routers
 
-What a lab adds over a group network was meant to be inspection as well as
-rules: the edge's firewall log and Suricata's alerts for that lab's interface,
-handed to its session. **That needs a way into the edge, and there is none.**
-The edge has no API and no login on purpose (root's password is `*`), its
-WAN takes an address from DHCP on your network that Xen Orchestra sees only
-once its first update has brought the guest agent ("It keeps itself up to
-date"), and no box is behind it. A
-key to the edge would control every lab and the edge itself, so the session
-must never hold one; that is the line not to cross.
+Asked for: "Why is there no live info of opnsense in the app to help trouble
+shoot this?", during a failure where image builds behind two routers got no
+answer for names from the address DHCP named, 10.254.0.1. Which router held
+that address, whether either was answering names and what DHCP handed out
+were in the routers and nowhere else: they had no login and no API, on
+purpose.
 
-The shape that holds that line:
+**What a router built by a policy job now also has**
+(`src/fleet/host/edge-credentials.js`):
 
-1. **A network for the edge's management alone**, `fleetwright-edge-admin`,
-   made by the policy job, with no interface off the pool and **not** in the
-   resource set, so no fleet machine can be attached to it. The edge gets an
-   interface on it, and its web interface and API listen there and nowhere
-   else.
-2. **The pool's own machine** (A machine of its own) gets a second interface
-   on it. It is the one Fleetwright box that the same admin job makes and
-   that sits outside the resource set.
-3. **An API key for the edge**, made by the policy job and written into the
-   edge's configuration (OPNsense keeps a key as its secret's SHA-512 crypt),
-   and handed to the pool's own machine on its cloud-init drive. A rebuilt
-   edge must be given the same key, so the job keeps it where only the admin
-   sign-in can read it (on the edge VM in Xen Orchestra), or makes the pool's
-   own machine again.
-4. **The pool's own machine reads** the filter log and Suricata's alerts,
-   keeps the lines whose interface is a lab's, and the coordinator relays
-   each lab's lines to that lab's machine, where the session reads them as a
-   file. No key leaves the pool's own machine.
+- **A user, `fleetwright-watch`, with no password and one API key.** OPNsense
+  keeps the key as `KEY|<SHA-512-crypt of the secret>` and checks it with
+  `password_verify`. Its privileges are the four status pages troubleshooting
+  needs: `page-status-carp`, `page-services-unbound`, `page-system-gateways`
+  and `page-services-dnsforwarder`. **OPNsense has no read-only form of any of
+  them**: each covers its whole page, service control included. So the user
+  also has `user-config-readonly`, which refuses every change to the
+  configuration. The log pages are not granted (each can also clear its
+  log); logs come by syslog instead. What the key can do is in
+  `security.md`.
+- **A certificate made by the job**, ECDSA P-256 for 20 years, which the web
+  interface and API serve. The box that reads the router pins its SHA-256 and
+  sends the key only once the handshake matches. Checked against OpenSSL with
+  OPNsense's own cipher string (TLS 1.2, ECDHE-ECDSA-AES256-GCM).
+- **One rule on the WAN**: HTTPS to the router's WAN address from private
+  addresses. Every inside network already blocks private destinations, the
+  router's own addresses among them, so nothing behind it reaches the API.
+- **Syslog**, from the kernel (CARP's changes of master), Unbound, dnsmasq,
+  dpinger and Suricata, to UDP 5514 on the pool's own machine and on the
+  machine that ran the job: what happened before anybody looked, which the
+  router's memory-backed `/var` loses on a restart.
 
-**What it costs:** seeing inside a lab needs a pool's own machine; the edge
-gains an API it does not have today; an edge rebuilt for any reason has to
-keep its key; and the coordinator gains a relay of log lines. Until that is
-decided, what a session can see of its lab is what any machine's page shows:
-the hypervisor's own count of what it sent and received ("What a machine did
-on the network"), which nothing inside it can change.
+**Where the key is kept.** On each router in Xen Orchestra, beside the pair's
+CARP password: Xen Orchestra's admins can read it, and the fleet's token
+cannot see the routers at all. A rebuild finds it there and keeps it. A router
+without the job's key (one from before this, or one whose key was lost) is
+**rebuilt once** to get it, one at a time for a pair. Each router now also
+**keeps its WAN MAC across rebuilds** (the old router's own, or one made from
+the pool and which router it is), so the DHCP server on the way out hands the
+new router the address the old one had.
+
+**How a box gets it.** When a policy job ends, the key goes to the phone that
+ran it, sealed under `fleetwright-xosetup-watch/v1:<job>:<address>`. The phone
+puts it in its record for the pool under `edge`, beside the token, and keeps
+the record in the vault again. Every box the person approved for the pool then
+holds it in memory with the token, and none other. Every policy job hands it
+back, so a phone that missed it once has it from the next.
+
+**What the box reads** (`src/fleet/host/edge-watch.js`), every 30 seconds,
+for each router:
+
+- its CARP role on the uplink's shared address (master, backup, starting, or
+  none for one router alone);
+- whether Unbound is running;
+- whether its way out is up (a gateway dpinger has no data on reads "Online"
+  in OPNsense's own API; here it is cannot tell);
+- how many DHCP leases it holds.
+
+It listens for their syslog as it arrives and keeps forty lines a pool, DHCP's
+chatter held to twelve of them. A line's source address is where that router
+is read next, so a router Xen Orchestra had not seen yet is still found; the
+pinned certificate is what stops a line from somewhere else sending the key
+anywhere. Firewall log lines are not read.
+
+**What the phone shows.** The pool's page gains an Edge routers card under its
+status, refreshed every 30 seconds while it is open:
+
+- which machine read them, and when;
+- for each router: whether it holds the gateway address or stands by, answers
+  names, has its way out, its leases, and its last log line, or why it could
+  not be read;
+- the last eight lines they logged, newest first.
+
+Cannot tell is said as cannot tell, and what is wrong is the one line in the
+attention tone. A pool nothing reads says so ("No machine reads this pool's
+edge routers yet"), never as fine.
+
+**What it needs:** a release with this in it on the boxes holding the pool,
+then one policy apply from the phone. That apply rebuilds the routers once.
+Syslog reaches only the pool's own machine and the machine that ran the job;
+another box holding the pool reads the API and sees no log lines.
+
+**Not yet run** on real OPNsense: the user, the key, the certificate and the
+syslog destinations were written from OPNsense 26.7.6's own models and
+controllers (`Auth/User.xml`, `ApiKeyField`, `Trust/Cert.xml`, `Syslog.xml`,
+the ACL files), and the generated configuration fits the block with room to
+spare, but no router has booted with it yet.
+
+### Seeing what crossed a lab: not built
+
+The edge's firewall log and Suricata's alerts for a lab's interface, handed
+to its session, are still not built. The way in now exists (above), but a log
+of what a session's machines tried to reach is that session's, and the key
+the box reads the router with must never reach the session. What a session
+can see of its lab is still what any machine's page shows: the hypervisor's
+own count of what it sent and received ("What a machine did on the
+network"), which nothing inside it can change.
 
 **So a lab is, as built, a group network with rules and its own way out**,
 on the router that was already there, rather than a parallel mechanism.
