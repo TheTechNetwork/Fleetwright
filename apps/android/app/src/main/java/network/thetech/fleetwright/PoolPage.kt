@@ -33,7 +33,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
@@ -91,8 +93,29 @@ internal fun PoolPage(settings: Settings, pool: XoHandoff.Held, admin: Boolean?,
         }
     }
 
+    // THE ROUTERS, every half minute while the page is open: the machine
+    // reading them does so on the same beat. Null until the fleet was asked.
+    var edges by remember { mutableStateOf<Fleet.VmEdges?>(null) }
+    var edgesAsked by remember { mutableStateOf(false) }
+    var edgesFailed by remember { mutableStateOf(false) }
+    var edgesKnown by remember { mutableStateOf(true) }
+    LaunchedEffect(pool.address) {
+        while (true) {
+            Fleet(settings).vmEdges()
+                .onSuccess { all ->
+                    edgesKnown = all != null
+                    edges = all?.firstOrNull { it.address == pool.address }
+                    edgesFailed = false
+                }
+                .onFailure { edgesFailed = true }
+            edgesAsked = true
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
+
     FullScreen(pool.address, onDismiss) {
         StatusCard(watch)
+        if (edgesAsked && edgesKnown) EdgeCard(edges, edgesFailed)
         if (watch.phase == PoolWatch.Phase.Live && watch.snapshot.isEmpty) Hint(Manage.Words.seesNothing)
         for (kind in Manage.Kind.values()) {
             val rows = watch.snapshot.list(kind)
@@ -151,6 +174,64 @@ private fun StatusCard(watch: PoolWatch) {
                 Text(Manage.Words.lookAgain)
             }
         }
+    }
+}
+
+/** How the pool's edge routers are, as the machine reading them last did. */
+@Composable
+private fun EdgeCard(e: Fleet.VmEdges?, failed: Boolean) {
+    Column(
+        Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(Design.Space.groupTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+    ) {
+        Text(Manage.Words.edgeHeading, style = Design.Style.section, color = Design.Palette.ink.now, modifier = Modifier.semantics { heading() })
+        if (e == null) {
+            Text(if (failed) Manage.Words.edgeUnasked else Manage.Words.edgeNobody, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        } else {
+            EdgeReport(e)
+        }
+    }
+}
+
+/** What the machine read: when, each router, and what they logged lately. */
+@Composable
+private fun EdgeReport(e: Fleet.VmEdges) {
+    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+        Text(Manage.Words.edgeRead(e.hostId, relative(e.at).toString()), style = Design.Style.label, color = Design.Palette.inkDim.now)
+        e.routers.forEach { r -> RouterRows(r) }
+        if (e.events.isNotEmpty()) {
+            Text(Manage.Words.edgeEvents, style = Design.Style.label, color = Design.Palette.inkDim.now)
+            // Newest first, eight of them: what changed last is read first.
+            val fmt = java.text.DateFormat.getTimeInstance(java.text.DateFormat.MEDIUM)
+            e.events.takeLast(8).reversed().forEach { ev ->
+                Text(
+                    "${fmt.format(java.util.Date(ev.at))}  ${ev.router}  ${ev.text}",
+                    style = Design.Style.label,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (ev.kind == "carp") Design.Palette.ink.now else Design.Palette.inkDim.now,
+                )
+            }
+        }
+    }
+}
+
+/** One router: its name, then each thing known of it. What is wrong is the one thing in the attention tone. */
+@Composable
+private fun RouterRows(r: Fleet.VmEdges.Router) {
+    Column(Modifier.semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+        Text(r.name, style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+        val problem = r.problem
+        when {
+            r.reached == false && problem != null -> Text(Manage.Words.edgeUnreached(problem), style = Design.Style.label, color = Design.Palette.attention.now)
+            r.reached == null && problem != null -> Text(problem, style = Design.Style.label, color = Design.Palette.inkDim.now)
+            else -> {
+                Manage.Words.edgeRole(r.role)?.let { Text(it, style = Design.Style.label, color = Design.Palette.ink.now) }
+                Text(Manage.Words.edgeDns(r.dns), style = Design.Style.label, color = if (r.dns == false) Design.Palette.attention.now else Design.Palette.ink.now)
+                Text(Manage.Words.edgeGateway(r.gateway), style = Design.Style.label, color = if (r.gateway == false) Design.Palette.attention.now else Design.Palette.ink.now)
+                r.leases?.let { Text(Manage.Words.edgeLeases(it), style = Design.Style.label, color = Design.Palette.inkDim.now) }
+            }
+        }
+        Text(Manage.Words.edgeHeard(r.heardAt?.let { relative(it).toString() }), style = Design.Style.micro, color = Design.Palette.inkDim.now)
     }
 }
 

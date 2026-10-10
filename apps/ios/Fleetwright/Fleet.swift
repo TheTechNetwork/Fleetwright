@@ -1234,6 +1234,9 @@ struct Fleet {
         /// key this phone sent inside the sign-in, as epk.iv.ct. The machine
         /// keeps no copy (XOSetupHandoff).
         var handoff: String?
+        /// Once a policy job is done: the key the fleet reads the pool's edge
+        /// routers with, sealed the same way (XOSetupHandoff.keepEdgeKey).
+        var watch: String?
         /// In `begin`'s answer: what else a job on this machine can be, so a
         /// policy change is sent only to a machine that knows what one is.
         /// Nil is a machine older than the question, and is read as no.
@@ -1700,6 +1703,40 @@ struct Fleet {
     /// saw it (docs/hypervisors.md, "Working a machine"). Every field but the
     /// name may be nil, and nil is CANNOT TELL: Xen Orchestra had not said,
     /// or the box had not looked since.
+    /// One pool's edge routers, as the machine reading them last did
+    /// (src/fleet/host/edge-watch.js). Every flag is true, false or nil, and
+    /// nil is cannot tell.
+    struct VMEdges: Codable, Hashable {
+        let address: String
+        /// The machine that read them.
+        let hostId: String
+        /// When, ms since the epoch.
+        let at: Double
+        let routers: [Router]
+        /// What they logged lately, oldest first.
+        let events: [Event]
+
+        struct Router: Codable, Hashable {
+            let name: String
+            let address: String?
+            let reached: Bool?
+            /// master, backup or init on the uplink's shared address; nil for one router alone.
+            let role: String?
+            let dns: Bool?
+            let gateway: Bool?
+            let leases: Int?
+            let heardAt: Double?
+            let problem: String?
+        }
+
+        struct Event: Codable, Hashable {
+            let at: Double
+            let router: String
+            let kind: String
+            let text: String
+        }
+    }
+
     struct VMMachine: Codable, Hashable, Identifiable {
         let name: String
         /// Its id in Xen Orchestra, for the console link.
@@ -1807,6 +1844,15 @@ struct Fleet {
         if let template { body["template"] = template }
         body["network"] = network.map { $0 as Any } ?? NSNull()
         return try JSONDecoder().decode(Reply.self, from: try await send("PUT", "/api/vm-standby", body: body))
+    }
+
+    /// How your pools' edge routers are: the `vmEdges` field of /api/hosts.
+    /// Empty is an answer (no machine reads any of them); nil is a
+    /// coordinator from before it, which can tell nothing.
+    func vmEdges() async throws -> [VMEdges]? {
+        let data = try await get("/api/hosts")
+        struct Reply: Codable { let vmEdges: [VMEdges]? }
+        return try JSONDecoder().decode(Reply.self, from: data).vmEdges
     }
 
     /// The machines on your pools: the `vmMachines` field of /api/hosts.

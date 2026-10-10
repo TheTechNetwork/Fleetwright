@@ -1932,6 +1932,12 @@ struct AddHypervisorView: View {
                 cancelRequested = true
             }
         }
+        // THE ROUTERS' KEY, kept with the pool's token and in the fleet, so
+        // the machines holding the pool read the routers from now on.
+        if state.state == "done", let sealed = state.watch, let policyJob,
+           XOSetupHandoff.keepEdgeKey(sealed, job: job, address: policyJob.address, key: policyJob.reply) {
+            _ = await XOSetupHandoff.keepInFleet(settings: settings, address: policyJob.address)
+        }
         if let now = state.state, !XOSetupWords.isLive(now), now != "choosing" {
             policyJob = nil
             inventory = nil

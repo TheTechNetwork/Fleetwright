@@ -912,6 +912,8 @@ class Fleet(
          * keeps no copy (XoHandoff).
          */
         val handoff: String? = null,
+        /** Once a policy job is done: the key the fleet reads the pool's edge routers with, sealed the same way (XoHandoff.keepEdgeKey). */
+        val watch: String? = null,
         /**
          * What else a job on this machine can be, from `begin`: "policy" on a
          * machine that can change what the fleet may use on a pool. EMPTY IS
@@ -1940,6 +1942,67 @@ class Fleet(
      * The machines on your pools: the `vmMachines` field of /api/hosts.
      * Empty is an answer (none); an older coordinator omits the field.
      */
+    /**
+     * One pool's edge routers, as the machine reading them last did
+     * (src/fleet/host/edge-watch.js). Every flag is true, false or null, and
+     * null is cannot tell.
+     */
+    data class VmEdges(val address: String, val hostId: String, val at: Long, val routers: List<Router>, val events: List<Event>) {
+        data class Router(
+            val name: String,
+            val address: String?,
+            val reached: Boolean?,
+            /** master, backup or init on the uplink's shared address; null for one router alone. */
+            val role: String?,
+            val dns: Boolean?,
+            val gateway: Boolean?,
+            val leases: Int?,
+            val heardAt: Long?,
+            val problem: String?,
+        )
+        data class Event(val at: Long, val router: String, val kind: String, val text: String)
+    }
+
+    /**
+     * How your pools' edge routers are: the `vmEdges` field of /api/hosts.
+     * Empty is an answer (no machine reads any of them); null is a
+     * coordinator from before it, which can tell nothing.
+     */
+    suspend fun vmEdges(): Result<List<VmEdges>?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val list = get("/api/hosts").optJSONArray("vmEdges") ?: return@runCatching null
+            fun JSONObject.str(k: String) = optString(k).takeIf { has(k) && !isNull(k) && it.isNotBlank() }
+            fun JSONObject.flag(k: String) = if (has(k) && !isNull(k)) optBoolean(k) else null
+            fun JSONObject.num(k: String) = if (has(k) && !isNull(k)) optDouble(k).takeIf { !it.isNaN() } else null
+            (0 until list.length()).mapNotNull { i ->
+                val o = list.optJSONObject(i) ?: return@mapNotNull null
+                val routers = o.optJSONArray("routers")?.let { a ->
+                    (0 until a.length()).mapNotNull { j ->
+                        val r = a.optJSONObject(j) ?: return@mapNotNull null
+                        VmEdges.Router(
+                            name = r.str("name") ?: return@mapNotNull null,
+                            address = r.str("address"),
+                            reached = r.flag("reached"),
+                            role = r.str("role"),
+                            dns = r.flag("dns"),
+                            gateway = r.flag("gateway"),
+                            leases = r.num("leases")?.toInt(),
+                            heardAt = r.num("heardAt")?.toLong(),
+                            problem = r.str("problem"),
+                        )
+                    }
+                } ?: emptyList()
+                val events = o.optJSONArray("events")?.let { a ->
+                    (0 until a.length()).mapNotNull { j ->
+                        val e = a.optJSONObject(j) ?: return@mapNotNull null
+                        VmEdges.Event(e.num("at")?.toLong() ?: return@mapNotNull null, e.str("router") ?: return@mapNotNull null, e.str("kind") ?: "system", e.str("text") ?: return@mapNotNull null)
+                    }
+                } ?: emptyList()
+                VmEdges(o.str("address") ?: return@mapNotNull null, o.str("hostId") ?: "", o.num("at")?.toLong() ?: return@mapNotNull null, routers, events)
+            }
+        }
+    }
+
     suspend fun vmMachines(): Result<List<VmMachine>> = withContext(Dispatchers.IO) {
         runCatching {
             val list = get("/api/hosts").optJSONArray("vmMachines") ?: return@runCatching emptyList()
@@ -2563,6 +2626,7 @@ class Fleet(
                             hostKey = s.optJSONObject("hostKey"),
                             fingerprint = s.optString("fingerprint").takeIf { it.isNotBlank() && it != "null" },
                             handoff = s.optString("handoff").takeIf { it.split(".").size == 3 },
+                            watch = s.optString("watch").takeIf { it.split(".").size == 3 },
                             can = s.optJSONArray("can")?.let { a ->
                                 (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { it.isNotBlank() && !a.isNull(i) } }
                             } ?: emptyList(),

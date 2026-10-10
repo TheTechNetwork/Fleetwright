@@ -105,6 +105,8 @@ class ManageParityTest {
     fun `a page read through a machine opens under the machine's AAD`() {
         val row = table.getJSONArray("xolookAad")
         assertEquals(row.getString(1), Seal.xolookAad(row.getString(0)))
+        val watch = table.getJSONArray("xosetupWatchAad")
+        assertEquals(watch.getString(2), Seal.xosetupWatchAad(watch.getString(0), watch.getString(1)))
     }
 
     /** A page as the machine sends it (a flat list of objects) is read into the same rows as the socket's keyed answer. */
@@ -266,6 +268,8 @@ class ManageParityTest {
             "actionsFooter" to Manage.Words.actionsFooter, "gone" to Manage.Words.gone, "lookAgain" to Manage.Words.lookAgain,
             "changePolicy" to Manage.Words.changePolicy, "whatItIs" to Manage.Words.whatItIs, "howItIs" to Manage.Words.howItIs,
             "whatItCanDo" to Manage.Words.whatItCanDo, "oneOfYours" to Manage.Words.oneOfYours,
+            "edgeHeading" to Manage.Words.edgeHeading, "edgeNobody" to Manage.Words.edgeNobody,
+            "edgeUnasked" to Manage.Words.edgeUnasked, "edgeEvents" to Manage.Words.edgeEvents,
         )
         for ((key, value) in fixed) assertEquals(key, words.getString(key), value)
 
@@ -273,7 +277,7 @@ class ManageParityTest {
             "connecting" to Manage.Words::connecting, "plainPool" to Manage.Words::plainPool, "noToken" to Manage.Words::noToken,
             "wrongCertificate" to Manage.Words::wrongCertificate, "limitedUser" to Manage.Words::limitedUser,
             "typePrompt" to Manage.Words::typePrompt, "refused" to Manage.Words::refused, "lost" to Manage.Words::lost,
-            "askingFleet" to Manage.Words::askingFleet,
+            "askingFleet" to Manage.Words::askingFleet, "edgeUnreached" to Manage.Words::edgeUnreached,
         )
         for ((key, say) in single) assertEquals(key, arg(key, 1), say(arg(key, 0)))
 
@@ -286,6 +290,23 @@ class ManageParityTest {
             arg("unreachableEverywhere", 3),
             Manage.Words.unreachableEverywhere(arg("unreachableEverywhere", 0), arg("unreachableEverywhere", 1), arg("unreachableEverywhere", 2)),
         )
+        assertEquals(arg("edgeRead", 2), Manage.Words.edgeRead(arg("edgeRead", 0), arg("edgeRead", 1)))
+        val role = words.getJSONObject("edgeRole")
+        for (key in role.keys()) {
+            assertEquals(key, if (role.isNull(key)) null else role.getString(key), Manage.Words.edgeRole(if (key == "none") null else key))
+        }
+        val flags = mapOf("true" to true, "false" to false, "null" to null)
+        for ((key, value) in flags) {
+            assertEquals(key, words.getJSONObject("edgeDns").getString(key), Manage.Words.edgeDns(value))
+            assertEquals(key, words.getJSONObject("edgeGateway").getString(key), Manage.Words.edgeGateway(value))
+        }
+        val leases = words.getJSONArray("edgeLeases")
+        for (i in 0 until leases.length()) {
+            val c = leases.getJSONArray(i)
+            assertEquals(c.getString(1), Manage.Words.edgeLeases(c.getInt(0)))
+        }
+        val heard = words.getJSONObject("edgeHeard")
+        for (key in heard.keys()) assertEquals(key, heard.getString(key), Manage.Words.edgeHeard(if (key == "null") null else key))
         val resize = words.getJSONArray("resizeButton")
         for (i in 0 until resize.length()) {
             val c = resize.getJSONArray(i)
@@ -303,7 +324,11 @@ class ManageParityTest {
         // EVERY KEY IS CHECKED: a sentence added to the table and to neither
         // phone would otherwise sit there proving nothing.
         val checked = fixed.keys + single.keys +
-            setOf("expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere", "resizeButton", "growButton", "heading", "kindTitle")
+            setOf(
+                "expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere",
+                "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard",
+                "resizeButton", "growButton", "heading", "kindTitle",
+            )
         assertEquals(checked, words.keys().asSequence().toSet())
         assertFalse(checked.isEmpty())
     }

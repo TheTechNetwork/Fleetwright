@@ -774,6 +774,15 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 val (outcome, inFleet) = XoHandoff.collectAndKeep(settings, fleet, id, r.xosetup)
                 outcome?.let { handedBack = it }
                 inFleet?.let { fleetNote = it }
+                // THE ROUTERS' KEY, kept with the pool's token and in the
+                // fleet, so the machines holding the pool read the routers.
+                val watch = r.xosetup.watch
+                val key = policyKey
+                if (policy && r.xosetup.state == "done" && watch != null && key != null &&
+                    XoHandoff.keepEdgeKey(settings, watch, id, address.trim(), key)
+                ) {
+                    XoHandoff.keepInFleet(settings, fleet, address.trim())
+                }
                 if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
                 // CHOOSING IS NOT AN END: the loop goes on asking, so this
                 // screen hears when the machine lets go. The pool is opened

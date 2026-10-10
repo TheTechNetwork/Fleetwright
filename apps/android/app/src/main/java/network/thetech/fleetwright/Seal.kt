@@ -72,6 +72,9 @@ internal object Seal {
      */
     fun xolookAad(address: String) = "fleetwright-xolook/v1:$address"
 
+    /** The key to a pool's edge routers, on its way back from a policy job (xosetupWatchAad in src/fleet/seal.js). */
+    fun xosetupWatchAad(job: String, address: String) = "fleetwright-xosetup-watch/v1:$job:$address"
+
     /** An uncompressed P-256 public key, base64url without padding: 87 characters. */
     val KEY_RE = Regex("^[A-Za-z0-9_-]{87}$")
 

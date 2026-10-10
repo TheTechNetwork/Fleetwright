@@ -675,6 +675,33 @@ internal object Manage {
             "This phone could not reach $address: $why. None of your machines could read it for the phone either: $fleetWhy"
         /** When the fleet did not say which machine read it. */
         const val oneOfYours = "one of your machines"
+
+        // The edge routers, as the machine reading them last did (src/fleet/host/edge-watch.js). Cannot tell is said as that.
+        const val edgeHeading = "Edge routers"
+        const val edgeNobody = "No machine reads this pool’s edge routers yet. Change what the fleet may use from this phone once, and the machines holding this pool read them from then on."
+        const val edgeUnasked = "Could not ask the fleet how the edge routers are."
+        const val edgeEvents = "What they logged lately"
+        fun edgeRead(host: String, time: String) = "Read by $host $time."
+        /** The router's part in the uplink's shared address, when there are two. */
+        fun edgeRole(role: String?): String? = when (role) {
+            "master" -> "Holds the gateway address, 10.254.0.1"
+            "backup" -> "Standing by for the other router"
+            "init" -> "Starting its share of the gateway address"
+            else -> null
+        }
+        fun edgeDns(answering: Boolean?) = when (answering) {
+            true -> "Answering names"
+            false -> "Not answering names"
+            null -> "Cannot tell whether it answers names"
+        }
+        fun edgeGateway(up: Boolean?) = when (up) {
+            true -> "Its way out is up"
+            false -> "Its way out is down"
+            null -> "Cannot tell whether its way out is up"
+        }
+        fun edgeLeases(n: Int) = if (n == 1) "1 DHCP lease" else "$n DHCP leases"
+        fun edgeUnreached(why: String) = "Could not read it: $why"
+        fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log lines from it yet"
         const val methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         const val nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
         const val seesNothing = "This token sees nothing on the pool."

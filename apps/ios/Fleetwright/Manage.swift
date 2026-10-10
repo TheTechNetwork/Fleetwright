@@ -732,6 +732,40 @@ enum Manage {
         }
         /// When the fleet did not say which machine read it.
         static let oneOfYours = "one of your machines"
+
+        // THE EDGE ROUTERS, as the machine reading them last did
+        // (src/fleet/host/edge-watch.js). Cannot tell is said as that.
+        static let edgeHeading = "Edge routers"
+        static let edgeNobody = "No machine reads this pool’s edge routers yet. Change what the fleet may use from this phone once, and the machines holding this pool read them from then on."
+        static let edgeUnasked = "Could not ask the fleet how the edge routers are."
+        static let edgeEvents = "What they logged lately"
+        static func edgeRead(_ host: String, _ when: String) -> String { "Read by \(host) \(when)." }
+        /// The router's part in the uplink's shared address, when there are two.
+        static func edgeRole(_ role: String?) -> String? {
+            switch role {
+            case "master"?: return "Holds the gateway address, 10.254.0.1"
+            case "backup"?: return "Standing by for the other router"
+            case "init"?: return "Starting its share of the gateway address"
+            default: return nil
+            }
+        }
+        static func edgeDns(_ answering: Bool?) -> String {
+            switch answering {
+            case true?: return "Answering names"
+            case false?: return "Not answering names"
+            case nil: return "Cannot tell whether it answers names"
+            }
+        }
+        static func edgeGateway(_ up: Bool?) -> String {
+            switch up {
+            case true?: return "Its way out is up"
+            case false?: return "Its way out is down"
+            case nil: return "Cannot tell whether its way out is up"
+            }
+        }
+        static func edgeLeases(_ n: Int) -> String { n == 1 ? "1 DHCP lease" : "\(n) DHCP leases" }
+        static func edgeUnreached(_ why: String) -> String { "Could not read it: \(why)" }
+        static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log lines from it yet" }
         static let methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         static let nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
         static let seesNothing = "This token sees nothing on the pool."
