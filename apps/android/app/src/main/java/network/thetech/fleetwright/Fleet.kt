@@ -1977,7 +1977,19 @@ class Fleet(
      * kept ready"): an image, how many, its network, and how many are ready
      * now and being made.
      */
-    data class VmStandby(val template: String, val count: Int, val network: String?, val ready: Int, val starting: Int)
+    data class VmStandby(
+        val template: String,
+        val count: Int,
+        val network: String?,
+        val ready: Int,
+        val starting: Int,
+        /** When the oldest one being made was asked for, epoch ms; null when none is, and from an older coordinator. */
+        val since: Long? = null,
+        /** Why the last one did not come, kept until one does. */
+        val failed: Failure? = null,
+    ) {
+        data class Failure(val at: Long, val text: String)
+    }
 
     /**
      * What you keep ready: the `vmStandby` field of /api/hosts. Null is
@@ -1992,6 +2004,10 @@ class Fleet(
                 network = o.optString("network").takeIf { o.has("network") && !o.isNull("network") && it.isNotBlank() },
                 ready = o.optInt("ready", 0),
                 starting = o.optInt("starting", 0),
+                since = o.optLong("since", 0L).takeIf { it > 0 },
+                failed = o.optJSONObject("failed")?.let { f ->
+                    f.optString("text").takeIf { it.isNotBlank() }?.let { VmStandby.Failure(at = f.optLong("at", 0L), text = it) }
+                },
             )
         }
     }

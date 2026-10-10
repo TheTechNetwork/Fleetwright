@@ -26,6 +26,7 @@ const SHARED = [
   'None kept ready.',
   ' ready now, ',
   ' being made, of ',
+  ' The one being made was asked for at ',
   'Stop keeping any',
   'Keep them ready',
   'kept ready',
@@ -85,6 +86,14 @@ test('Android: the setting is offered only where an image is, and the image with
   assert.match(A_LIST, /if \(poolImages\.isNotEmpty\(\)\) \{/);
   assert.match(A_SHEET, /val ready = standby\?\.template == image\.template && \(standby\?\.ready \?: 0\) > 0/);
   assert.match(A_LIST, /if \(m\.standby\) "kept ready" else m\.image/);
+});
+
+test('Android: the count moves while it is open, says when the one being made was asked for, and why the last did not come', () => {
+  assert.match(A_FLEET, /since = o\.optLong\("since", 0L\)\.takeIf \{ it > 0 \}/);
+  assert.match(A_FLEET, /failed = o\.optJSONObject\("failed"\)/);
+  assert.match(A_VIEW, /kept\?\.failed\?\.let \{ Hint\("\$\{clock\(it\.at\)\}: \$\{it\.text\}", Design\.Palette\.bad\.now\) \}/);
+  assert.match(A_VIEW, /while \(true\) \{\s*delay\(15_000\)\s*Fleet\(settings\)\.vmStandby\(\)/);
+  assert.match(A_VIEW, /if \(got != kept && !failed\) message = ""/);
 });
 
 test('Android says it in the shared words', () => {
