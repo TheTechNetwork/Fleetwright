@@ -11,6 +11,51 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.6 — 2026-10-10
+
+**Your own XCP-ng pool, from the phone: add it through one of your machines,
+start sessions on machines made on it, and put an edge router in front of
+them. A new session can also be told what to do.**
+
+- **New session asks what the session should do.** What you type is its first
+  message, so it starts working instead of waiting at an empty prompt. A box
+  older than this release says it cannot, rather than starting idle.
+- **Add a hypervisor.** XCP-ng through Xen Orchestra 6.5 or newer, added from
+  the phone through one of your machines, with its progress on the Lock Screen
+  or in a notification. A pool with no Xen Orchestra can have one installed
+  first, and a pool none of your machines can reach is added through the phone
+  itself. The pool's token is kept encrypted on your phone and in your vault,
+  not on the machine that set it up. A Xen Orchestra on plain HTTP, or with a
+  certificate that does not check out, is set up only once you accept what the
+  phone shows you.
+- **Machines from your pool.** Start a session on a machine made for it, from
+  Debian 13, Ubuntu 24.04 or Ubuntu 26.04. Each machine has its own page:
+  restart it, give it more time or a different size, end it, log in over SSH
+  with your own keys, and see what it sent and received. Machines can be kept
+  ready so a session starts at once, put on a group network to work together,
+  or given a lab of their own. Each image can be kept, rebuilt or removed from
+  the policy screen, and is installed from the Fleetwright apt package, which
+  brings its own Node.
+- **The edge router.** An OPNsense router, built from the policy screen, sits
+  between those machines and the way out. It filters names against threat
+  lists and can drop what its threat rules match, updates itself daily, and can
+  be two routers sharing the gateway so that an update never takes the way out
+  away.
+- **What a session cost.** How long it has waited on you, how long it worked,
+  and what it spent.
+- **Linked repositories.** Link a repository for each role: a private archive
+  a session is pushed to before it goes, the runners, and the templates.
+- **Face ID or a fingerprint begins by itself** once it opens the kept sign-in,
+  and the phone tries the machine it reached last first.
+- **Fixes.**
+  - Running sessions keep their GitHub access across a hub restart.
+  - A runner session is never started with Remote Control and says so at once,
+    and an idle one says to start it again with a task.
+  - `verify claude` tests the login a runner's sessions actually run on.
+  - A box without a sandbox keeps its updates, and the hub follows a revert.
+  - A machine without the guest agent can still be restarted and resized.
+  - The compiler warnings in both apps' builds are gone.
+
 ## 0.4.5 — 2026-10-04
 
 **The apps are now three places, Sessions, Machines and You. One of your
