@@ -106,6 +106,21 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertNil(c.payload(in: older)["edgeBlock"], "sent with no router asked for")
     }
 
+    func testAPairStartsAsTheRouterIsAndIsSentOnlyToAMachineThatBuildsOne() throws {
+        // As it is, so Apply makes or removes no second router unasked.
+        let pair = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true,"ha":true}]"#))
+        XCTAssertTrue(XOPolicy.Choice.initial(for: pair).edgeHa)
+        let older = try inventory(inventoryJSON(edges: #"[{"pool":"pool-1","running":true}]"#))
+        var c = XOPolicy.Choice.initial(for: older)
+        XCTAssertFalse(c.edgeHa, "a router from a machine that predates pairs is one")
+        c.edgeHa = true
+        XCTAssertNil(c.payload(in: older)["edgeHa"], "an older machine is not sent it")
+        c.edgeHaChoice = true
+        XCTAssertEqual(c.payload(in: older)["edgeHa"] as? Bool, true)
+        c.edge = false
+        XCTAssertNil(c.payload(in: older)["edgeHa"], "sent with no router asked for")
+    }
+
     func testTheEdgeRouterGoesWithItsWayOut() throws {
         let inv = try inventory(inventoryJSON(edges: "[]"))
         var c = XOPolicy.Choice.initial(for: inv)
