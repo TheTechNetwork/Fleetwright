@@ -63,18 +63,21 @@ the credential is on the device in somebody's hand and nowhere else.
 What it costs, said plainly:
 
 - **It works only where the phone can reach the provider.** Cloudflare and
-  GitHub, anywhere. Xen Orchestra, on its network or a VPN to it.
+  GitHub, anywhere. Xen Orchestra, on its network or a VPN to it; away from
+  both, through one of your machines ("From away", below).
 - **Nothing watches while the app is closed.** A phone-direct component has no
   server to push from, so an alert for a failed backup or a host going down
   needs the fleet path below. The app does not pretend otherwise: a
   phone-direct component says when it was last looked at.
 
-**Through the fleet, later and per component, opted into.** The credential is a
-vault item granted to one machine that can reach the provider, and the phone
-reaches it through the coordinator the way it reaches sessions today. That is
-what makes it work away from home and what makes alerts possible, and the cost
-is the one `security.md` already writes down for every vault item: that
-machine holds it.
+**Through the fleet, per component.** The credential is a vault item granted
+to a machine that can reach the provider, and the phone reaches it through the
+coordinator the way it reaches sessions today. That is what makes it work away
+from home and what makes alerts possible, and the cost is the one
+`security.md` already writes down for every vault item: that machine holds
+it. Xen Orchestra is the first: a pool's token is already a vault item
+(`hypervisor:<address>`), so the page reaches it through the machines that
+hold it ("From away"). Alerts are not built.
 
 ## The first slice: Xen Orchestra, phone-direct
 
@@ -230,6 +233,62 @@ closed." and changes to "Watching now. Changes arrive as Xen Orchestra makes
 them." once it is connected. The time is kept per address, and is the only
 thing these screens write.
 
+### From away, through your machines
+
+On 5G the page sat at "Connecting to 10.10.10.230…" and then gave a bare
+network error: the phone talks to Xen Orchestra itself, and away from the
+pool's network it reaches nothing. Asked for: "Direct line of sight vs on
+5g", then "Both, in that order": first say why, then load it anyway.
+
+**What happens.** When the socket cannot open (it never opened, as opposed to
+opening and then dropping, which still says "The connection ended"), the page
+says "This phone cannot reach xo.lan from here, so it is asking one of your
+machines that can." and asks the fleet with `xolook`:
+
+1. The phone makes a P-256 key for this one look and sends its public half
+   as `reply`, with the pool's address.
+2. The coordinator sends it only to a permanent machine that reported, in its
+   health, holding **this person's** token for **this address**, the one that
+   last reached the pool first, and on to the next while one says it cannot
+   reach it or holds no token. A machine that speaks a protocol older than 13
+   is skipped and named. Only the pool's owner may ask.
+3. The machine signs in with the token from its memory
+   (`src/fleet/host/xo-pools.js`, `look`), reads `system.getMethodsInfo` and
+   the six object types the page draws, keeps only the fields the phones
+   decode (`PAGE_FIELDS`: no tags, boot order or other config), and seals it
+   to `reply` under `fleetwright-xolook/v1:<address>`. A page larger than
+   512 KB is refused in words rather than cut short, because the fleet carries
+   a megabyte at most in one message and a cut page would look whole.
+4. The phone opens it and draws the same rows the socket would have.
+
+**It is read, not watched.** Nothing pushes Xen Orchestra's notifications this
+way, so the page is read again every 20 seconds while it is open, and the
+status says so with the machine and the time: "Read through rpi-7550 at
+14:02. This phone cannot reach the pool from here, so the page is read there
+again every 20 seconds while it is open." Never "Watching now" (C-5). Leaving
+the page or the app stops the reads.
+
+**Its actions go the same way** (`xoact`): the method and the JSON the page
+would have sent, which the coordinator and then the machine each hold to the
+shape that method takes (`XO_ACTION_ARGS` in `src/fleet/protocol/intents.js`)
+before Xen Orchestra is called with the person's own token. The page is read
+again straight after, so the change shows without waiting for the timer. A
+call that has not answered within a minute says it may still be happening,
+rather than that it failed. Each carries an idempotency key, so neither phone
+holds one to send later.
+
+**When no machine can read it either**, the page says both: "This phone could
+not reach xo.lan: ‹why›. None of your machines could read it for the phone
+either: ‹what the fleet said›." "Look again" tries the phone's own connection
+first, then the fleet.
+
+**What it costs**, in `security.md`'s terms: the page passes the coordinator
+sealed, so it carries a ciphertext it cannot read; the actions do not, and
+name a method and an object id. A compromised coordinator can forge an action
+with the person's token on a machine that holds it, which is what it can
+already do by starting a session there; it cannot use one person's token for
+another, because the machine picks the token by the person it was asked for.
+
 ### How it is held to the design
 
 - **One table, both phones.** `test/fixtures/parity/manage.json` holds the
@@ -309,5 +368,6 @@ merged, because both edit the Machines screens:
   that provider's own console.
 - **It does not add a theme.** One palette, on purpose, with a test that fails
   a colour written outside it.
-- **It does not reach a component from away from home, yet.** That is the
-  fleet path, which comes after.
+- **It does not watch a pool from away.** Through a machine the page is read
+  every 20 seconds while it is open; nothing is read while it is closed, and
+  no alert is sent. Alerts are the fleet path's next piece.
