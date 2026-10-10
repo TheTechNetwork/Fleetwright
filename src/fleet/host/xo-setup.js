@@ -100,7 +100,7 @@ import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOSETUP_JOB_RE, IMAGE_RE
 import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
-import { EDGE, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName } from './edge-router.js';
+import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName } from './edge-router.js';
 import { VM_IMAGE, IMAGES, ensureImage, removeImage, imageKeyOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
@@ -519,8 +519,10 @@ export class XoSetups {
         // without a word, so a phone offers it only where this is said.
         // `image-manage`: it rebuilds or removes an image that is there
         // (`rebuild`, `remove`). An older one keeps every image as it is.
+        // `edge-ha`: it builds the edge as a pair sharing its addresses
+        // (`edgeHa`, edge-router.js EDGE_HA). An older one builds one.
         can: [
-          'policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'groups',
+          'policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
           ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder'] : []),
         ],
@@ -1341,6 +1343,7 @@ export class XoSetups {
       fleetSrs: p.srs,
       sr: p.edgeSr,
       block: p.edgeBlock,
+      ha: p.edgeHa,
       labs,
       fleet: fleetHosts(this.coordinatorUrl),
       rebuilding: () => {
@@ -1621,7 +1624,7 @@ export function inventoryOf(ctx, set) {
   const objects = new Set(Array.isArray(set?.objects) ? set.objects.map(String) : []);
   // Each pool's edge router, by pool, and whether it is running: what the
   // phone needs to say "it is there" rather than offer to build another.
-  const edges = (ctx.edges || []).map((/** @type {any} */ v) => {
+  const edges = (ctx.edges || []).filter((/** @type {any} */ v) => !v.tags?.includes?.(`${EDGE_HA.nodeTag}1`)).map((/** @type {any} */ v) => {
     const disk = (ctx.edgeDisks || []).find((/** @type {any} */ d) => d?.$pool === v.$pool && Array.isArray(d?.$VBDs) && d.$VBDs.length);
     const sr = disk ? (ctx.srs || []).find((/** @type {any} */ x) => x?.id === disk.$SR) : null;
     return {
@@ -1631,6 +1634,8 @@ export function inventoryOf(ctx, set) {
       sr: sr ? srName(sr) : null,
       // Whether it drops what its threat rules match, or only logs it.
       blocks: Array.isArray(v.tags) && v.tags.includes(EDGE.blocksTag),
+      // And whether it is one of a pair sharing its addresses (EDGE_HA).
+      ha: (ctx.edges || []).some((/** @type {any} */ x) => x?.$pool === v.$pool && x.tags?.includes?.(`${EDGE_HA.nodeTag}1`)),
       // And the labs it was built with, by kind.
       labs: { open: [...edgeLabsOf(v)].filter((c) => c === 'o').length, closed: [...edgeLabsOf(v)].filter((c) => c === 'c').length },
       // And how many of them one person may hold at once, from the labs'
@@ -1737,6 +1742,9 @@ export function currentLimits(set) {
  * pool; it is built behind the edge router, so it needs one there or asked
  * for with it. `holder` asks for the pool's own machine (xo-holder.js) on
  * the way out, cloned from the pool's machine image, there or asked for.
+ * `edgeHa` is whether the edge is two routers sharing its addresses, so
+ * one carries the machines while the other restarts (true), or one (false);
+ * absent, the edge is left as many as it is.
  * `edgeBlock` is whether the edge router drops what its threat rules match
  * (true) or only logs it (false); absent, an edge that is there is left as it
  * is and a new one only logs (edge-router.js, ensureEdge).
@@ -1747,7 +1755,7 @@ export function currentLimits(set) {
  * limit, or a whole number from 1 to the labs asked for, and only with them;
  * absent, from a phone that predates it, the labs keep the one they have.
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, image: boolean, images: string[], rebuild: string[], remove: string[], groups: number, holder: boolean, labs: { open: number, closed: number }|null, labsEach?: number|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, edgeHa: boolean|null, image: boolean, images: string[], rebuild: string[], remove: string[], groups: number, holder: boolean, labs: { open: number, closed: number }|null, labsEach?: number|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1771,6 +1779,8 @@ export function checkPolicy(p, choices) {
   if (edgeSr !== null && !choices.srs.has(edgeSr)) return { ok: false, text: 'The edge router’s disk has to go on storage this pool listed. Nothing was changed.' };
   if (p.edgeBlock !== undefined && p.edgeBlock !== null && typeof p.edgeBlock !== 'boolean') return { ok: false, text: 'Whether the edge blocks is yes or no. Nothing was changed.' };
   const edgeBlock = edge && typeof p.edgeBlock === 'boolean' ? p.edgeBlock : null;
+  if (p.edgeHa !== undefined && p.edgeHa !== null && typeof p.edgeHa !== 'boolean') return { ok: false, text: 'Whether the edge is a pair is yes or no. Nothing was changed.' };
+  const edgeHa = edge && typeof p.edgeHa === 'boolean' ? p.edgeHa : null;
   // WHICH IMAGES: a list of the catalogue's keys, or `image: true` from a
   // phone that predates the choice, which is Debian.
   const asked = Array.isArray(p.images) ? [...new Set(p.images.map(String))] : p.image === true ? ['debian-13'] : [];
@@ -1846,7 +1856,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, image, images: asked, rebuild, remove, groups, holder, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, edgeHa, image, images: asked, rebuild, remove, groups, holder, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
 }
 
 /**
