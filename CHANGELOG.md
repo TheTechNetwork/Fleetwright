@@ -11,6 +11,26 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.7 — 2026-10-10
+
+**Machines from your pool start again after a change to what the fleet may
+use, and when something goes wrong the phone now says what.**
+
+- **"Not enough permissions" when starting a session is fixed.** Changing what
+  the fleet may use took the machine images out of the fleet's own set in Xen
+  Orchestra, so the next machine from one was refused. A change now keeps them,
+  and puts back any image an earlier change took out.
+- **Tapping a setup's notification opens how it ended**: the whole message,
+  the end of the install log set apart and selectable, a Copy button, and the
+  machine that ran it. It used to open that machine's page and nothing about
+  the job. On iPhone; Android already opened the setup.
+- **Machines kept ready say what is happening.** The screen updates while it is
+  open, says when the one being made was asked for, and says in red why the
+  last one did not come, for example that it did not join the fleet within 15
+  minutes. One kept ready is now asked for once, not twice.
+- **Why a setup stopped is in the machine's own log** as well as on the phone,
+  so it can still be read after the phone has let the job go.
+
 ## 0.4.6 — 2026-10-10
 
 **Your own XCP-ng pool, from the phone: add it through one of your machines,
