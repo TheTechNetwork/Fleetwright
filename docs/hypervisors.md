@@ -1071,10 +1071,14 @@ block written into it. That is a few MiB where today's build sends 3 GiB.
 Xen Orchestra has the call for it, `disk.importContent`, which imports into
 an existing disk. In its source as of October 2026, though, the handler
 never receives the `format` it advertises, and the XAPI import underneath
-asserts that a format was given, so the call fails. Until that is fixed
-upstream, the edge router is still built by sending its whole disk. A
-sparse upload that skipped the empty parts would save less than a third:
-1,060 of the image's 1,536 2 MiB blocks hold data.
+asserts that a format was given, so the call fails. The Xen Orchestra that
+Fleetwright deploys ("A pool without Xen Orchestra") carries the fix: the pinned
+installer applies it to the source each time it installs or updates Xen
+Orchestra, and builds without it once upstream has the same change. A Xen
+Orchestra installed any other way still has the bug, so until the edge
+router's build tries the call and falls back, it is still built by sending
+its whole disk. A sparse upload that skipped the empty parts would save less
+than a third: 1,060 of the image's 1,536 2 MiB blocks hold data.
 
 **Keep, rebuild or remove.** Each image a pool has is a choice on the policy
 screen, Keep unless the person says otherwise (`rebuild` and `remove` in the
