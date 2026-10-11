@@ -616,3 +616,28 @@ test('how a pool’s edge routers are reaches its owner from the freshest box wa
   assert.deepEqual(core.snapshot(sam).vmEdges.map((/** @type {any} */ v) => v.address), ['other.lan']);
   assert.deepEqual(core.snapshot(null).vmEdges, []);
 });
+
+test('a box that saw the edge routers wins over a fresher one that could not reach them', () => {
+  // SEEN ON A REAL POOL: the card said "Read by vnic-runner-oci", a cloud
+  // runner holding the pool's key with no way to the routers, so both read
+  // as cannot tell, while the box on the routers' network was the one their
+  // logs went to.
+  const blind = [
+    { name: 'fleetwright-edge', address: null, reached: null, heardAt: null, problem: 'did not know its address' },
+    { name: 'fleetwright-edge-b', address: null, reached: null, heardAt: null, problem: 'did not know its address' },
+  ];
+  const heard = [
+    { name: 'fleetwright-edge', address: '10.10.10.41', reached: true, role: 'master', heardAt: 1_700_000_090_000 },
+    { name: 'fleetwright-edge-b', address: null, reached: null, heardAt: null },
+  ];
+  const report = (/** @type {number} */ at, /** @type {any[]} */ routers) => ({ xo: [{ ...holding(ELI)[0], edges: { at, routers, events: [] } }] });
+  const { core } = fleet({ cloud: report(1_700_000_120_000, blind), lan: report(1_700_000_100_000, heard) });
+  const [e] = core.snapshot(eli).vmEdges;
+  assert.equal(e.hostId, 'lan');
+  assert.equal(e.routers[0].address, '10.10.10.41');
+  assert.ok(!('seen' in e), 'how it was chosen stays here');
+
+  // Saw as much: the fresher one, as before.
+  const both = fleet({ cloud: report(1_700_000_120_000, blind), other: report(1_700_000_100_000, blind) }).core.snapshot(eli).vmEdges;
+  assert.equal(both[0].hostId, 'cloud');
+});

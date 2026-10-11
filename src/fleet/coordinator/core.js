@@ -3978,7 +3978,17 @@ export class CoordinatorCore {
   /**
    * How a person's pools' edge routers are, by what the boxes watching them
    * reported (health `xo[].edges`, src/fleet/host/edge-watch.js): one entry a
-   * pool, the freshest report of it when two boxes watch the same one.
+   * pool. When two boxes watch the same one, the report from the box that saw
+   * more of its routers wins, and the fresher of two that saw as much.
+   *
+   * SEEN, NOT FRESHEST, FIRST. A box that holds the pool's key but has no way
+   * to the routers (a cloud runner, a box on another network) reports both as
+   * cannot tell every thirty seconds, and the freshest report used to be
+   * that one, hiding the box on the routers' network that read them and was
+   * sent their logs. Seen a router is reached or not (its API answered, or
+   * it refused something that showed it was there) or heard from (its syslog
+   * reached the box). Only connected boxes report here, so a box that saw
+   * them and then went away stops counting.
    *
    * CANNOT TELL STAYS CANNOT TELL. Every flag is true, false or null, and a
    * router the box could not read says so in `problem` rather than coming
@@ -3994,7 +4004,7 @@ export class CoordinatorCore {
     const flag = (/** @type {unknown} */ v) => (typeof v === 'boolean' ? v : null);
     const when = (/** @type {unknown} */ v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
     const text = (/** @type {unknown} */ v, /** @type {number} */ max) => (typeof v === 'string' && v.trim() ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max) : null);
-    /** @type {Map<string, { address: string, hostId: string, at: number, routers: Array<Record<string, any>>, events: Array<Record<string, any>> }>} */
+    /** @type {Map<string, { address: string, hostId: string, at: number, routers: Array<Record<string, any>>, events: Array<Record<string, any>>, seen: number }>} */
     const found = new Map();
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
@@ -4003,8 +4013,6 @@ export class CoordinatorCore {
         const address = String(e.address || '');
         const at = when(e.edges.at);
         if (!address || at === null) continue;
-        const have = found.get(address);
-        if (have && have.at >= at) continue;
         const routers = (Array.isArray(e.edges.routers) ? e.edges.routers : [])
           .filter((/** @type {any} */ r) => EDGE_REPORT.name.test(String(r?.name || '')))
           .slice(0, 2)
@@ -4023,10 +4031,13 @@ export class CoordinatorCore {
           .slice(-EDGE_REPORT.events)
           .filter((/** @type {any} */ v) => when(v?.at) !== null && EDGE_REPORT.name.test(String(v?.router || '')) && EDGE_REPORT.kinds.includes(v?.kind) && text(v?.text, EDGE_REPORT.text))
           .map((/** @type {any} */ v) => ({ at: /** @type {number} */ (when(v.at)), router: String(v.router), kind: String(v.kind), text: /** @type {string} */ (text(v.text, EDGE_REPORT.text)) }));
-        found.set(address, { address, hostId: host.hostId, at, routers, events });
+        const seen = routers.filter((r) => r.reached !== null || r.heardAt !== null).length;
+        const have = found.get(address);
+        if (have && (have.seen > seen || (have.seen === seen && have.at >= at))) continue;
+        found.set(address, { address, hostId: host.hostId, at, routers, events, seen });
       }
     }
-    return [...found.values()].sort((a, b) => a.address.localeCompare(b.address));
+    return [...found.values()].map(({ seen: _, ...e }) => e).sort((a, b) => a.address.localeCompare(b.address));
   }
 
   /**
