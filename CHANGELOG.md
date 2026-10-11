@@ -11,6 +11,25 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.9 — 2026-10-11
+
+**Applying the policy leaves the edge routers alone when nothing changed, and
+rebuilding a machine image copies the disk already on the pool.**
+
+- **The edge routers are no longer rebuilt on every policy run.** The key your
+  machines read them with and the pair's password were kept where the next run
+  never found them, so each run rebuilt both, and machines behind them had no
+  way out while the second started. A run that asks nothing new now leaves them
+  as they are.
+- **Rebuilding a machine image copies its disk on the pool** instead of
+  downloading the cloud image and uploading 3 GiB again. The first build after
+  updating keeps the disk; every build after copies it, and says so.
+- **A Xen Orchestra the fleet deploys has a fix in `disk.importContent`**, which
+  rebuilding the edge routers from a kept disk will need. One already running
+  keeps its old installer until it is updated with the new one.
+- **The edge card names the machine that actually reached the routers**, not
+  whichever reported last.
+
 ## 0.4.8 — 2026-10-10
 
 **The pool's page shows how its edge routers are, opens over mobile data
