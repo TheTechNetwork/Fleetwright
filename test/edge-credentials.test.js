@@ -14,6 +14,7 @@ import { X509Certificate } from 'node:crypto';
 
 import { EDGE_WATCH, newWatch, sha512Crypt, watchConfig, watchOf } from '../src/fleet/host/edge-credentials.js';
 import { connectPinnedTls } from '../src/fleet/host/xo-ws.js';
+import { xenStoreAsXo } from './helpers/xo-stand-in.js';
 
 test('a secret is kept as OPNsense checks it: SHA-512-crypt, matching glibc and openssl', () => {
   // The specification's own vector, and `openssl passwd -6` for a secret as
@@ -56,8 +57,8 @@ test('what a router is given: one user with only the status pages and the key’
 
 test('the key is found again where a router keeps it, and anything else is no key', () => {
   const w = newWatch();
-  assert.deepEqual(watchOf({ xenStoreData: { [EDGE_WATCH.key]: JSON.stringify(w) } }), w);
+  assert.deepEqual(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: JSON.stringify(w) }) }), w);
   for (const bad of [undefined, '', 'not json', JSON.stringify({ ...w, key: 'a|b' }), JSON.stringify({ ...w, pin: 'short' }), JSON.stringify({ ...w, v: 2 })]) {
-    assert.equal(watchOf({ xenStoreData: { [EDGE_WATCH.key]: bad } }), null, String(bad).slice(0, 40));
+    assert.equal(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: bad }) }), null, String(bad).slice(0, 40));
   }
 });

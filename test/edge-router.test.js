@@ -24,6 +24,7 @@ import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LA
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 import { EDGE_WATCH, newWatch, watchOf } from '../src/fleet/host/edge-credentials.js';
+import { xenStoreAsXo } from './helpers/xo-stand-in.js';
 
 const DEFAULT = readFileSync(new URL('./fixtures/opnsense-26.7-config.xml', import.meta.url));
 
@@ -730,8 +731,8 @@ test('one edge becomes a pair with the way out gone only while the second starts
 
 test('a pair is rebuilt one at a time with the password it has, and the second goes first', async () => {
   const password = 'ab'.repeat(16);
-  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
-  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
+  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
   const admin = pairXo([a, b]);
   const { args, said } = edgeArgs(admin, { block: true });
   const done = await ensureEdge(args);
@@ -751,8 +752,8 @@ test('a pair is rebuilt one at a time with the password it has, and the second g
 
 test('a rebuild of one of the pair that fails starts the old one again, and the other was never touched', async () => {
   const password = 'cd'.repeat(16);
-  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
-  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
+  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
   const admin = xo({ VM: [a, b], 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } });
   await assert.rejects(ensureEdge(edgeArgs(admin, { block: true }).args), /no memory left on the host\. fleetwright-edge-b, which it was replacing, was started again/);
   assert.ok(!admin.calls.some((/** @type {any} */ c) => (c[0] === 'vm.stop' || c[0] === 'vm.delete') && c[1].id === 'vm-a'), 'the first carried the machines throughout');
@@ -760,8 +761,8 @@ test('a rebuild of one of the pair that fails starts the old one again, and the 
 
 test('going back to one removes the second and rebuilds the first on its own', async () => {
   const password = 'ef'.repeat(16);
-  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
-  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: { [EDGE_HA.passwordKey]: password } };
+  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
+  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
   const admin = pairXo([a, b]);
   const done = await ensureEdge(edgeArgs(admin, { ha: false }).args);
   const order = admin.calls.filter((/** @type {any} */ c) => ['vm.stop', 'vm.delete', 'vm.create'].includes(c[0])).map((/** @type {any} */ c) => `${c[0]} ${c[1].id ?? c[1].name_label}`);
@@ -918,11 +919,11 @@ test('a router without the key the job brings is rebuilt once, keeping its WAN M
   assert.ok(said.includes('Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it have no way out until it is up.'), said.join('\n'));
   assert.deepEqual(params['vm.create'].VIFs[0], { network: 'net-wan', mac: '02:aa:bb:cc:dd:ee' }, 'the new router is not where the old one was on the way out');
   assert.ok(params['vm.create'].tags.includes(EDGE_WATCH.tag));
-  assert.deepEqual(watchOf({ xenStoreData: params['vm.set'].xenStoreData }), w, 'the key is not kept where the next rebuild finds it');
+  assert.deepEqual(watchOf({ xenStoreData: xenStoreAsXo(params['vm.set'].xenStoreData) }), w, 'the key is not kept where the next rebuild finds it');
   assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
 
   // Built with this key: nothing done. With another (a lost one, a tag and no key): rebuilt.
-  const watched = { ...old, tags: [...old.tags, EDGE_WATCH.tag], xenStoreData: { [EDGE_WATCH.key]: JSON.stringify(w) } };
+  const watched = { ...old, tags: [...old.tags, EDGE_WATCH.tag], xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: JSON.stringify(w) }) };
   const same = xo({ VM: [watched], VIF: [wanVif] });
   await ensureEdge(edgeArgs(same, { watch: w }).args);
   assert.deepEqual(same.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects'), []);
