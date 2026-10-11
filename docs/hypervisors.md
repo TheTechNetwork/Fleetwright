@@ -1040,6 +1040,42 @@ Rebuilding is the same script with the newest image, so a template is
 replaced rather than patched, and the old one is deleted once nothing was
 cloned from it.
 
+**The disk as published is kept on the pool, so a rebuild sends nothing.**
+Asked for: "Rebuilding machines why don't we have cached copies?" The
+download was already kept, but only on the box that ran the policy job. What
+every build did again was write the whole disk, 3 to 3.5 GiB, from that box
+through Xen Orchestra to the pool's storage. On NFS that is the same amount
+across the network once more.
+
+- **The first build keeps the disk.** It goes on the pool as a template that
+  never boots, `Fleetwright base: Debian 13 (<build>)`, tagged
+  `fleetwright-base` and `fleetwright-base:<image>:<build>`.
+- **Every build after that copies it.** The build VM is made from that
+  template, which on storage XCP-ng keeps as VHD files (NFS, ext, LVM) is a
+  copy-on-write clone that takes seconds, the same way a session's machine is
+  made from the image. The build skips the download and the upload, and says
+  so.
+- **One is kept per image, build and storage.** A clone is fast only on the
+  storage the template's disk is on, so a build put on other storage keeps
+  its own copy there. A newer pinned build replaces the older one's copy.
+  Removing the image removes its copies too. A machine image or session
+  machine made from a copy keeps working, because XCP-ng keeps a clone's
+  parent disk while anything still reads from it.
+- **The fleet can't use them.** No box offers them for sessions, because
+  they don't carry the `fleetwright-image` tag, and they stay out of the
+  resource set, so the fleet's token can't clone them.
+
+**The edge router does not use this yet.** Its configuration is written into
+its disk (above, "OPNsense"), so a copy would also need its configuration
+block written into it. That is a few MiB where today's build sends 3 GiB.
+Xen Orchestra has the call for it, `disk.importContent`, which imports into
+an existing disk. In its source as of October 2026, though, the handler
+never receives the `format` it advertises, and the XAPI import underneath
+asserts that a format was given, so the call fails. Until that is fixed
+upstream, the edge router is still built by sending its whole disk. A
+sparse upload that skipped the empty parts would save less than a third:
+1,060 of the image's 1,536 2 MiB blocks hold data.
+
 **Keep, rebuild or remove.** Each image a pool has is a choice on the policy
 screen, Keep unless the person says otherwise (`rebuild` and `remove` in the
 policy, offered by a machine that says `image-manage`). Apply removes first,
