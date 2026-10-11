@@ -93,15 +93,6 @@ const NOT_A_CLIENT_ROUTE = {
     'a MACHINE IMAGE\u2019S BUILD VM reports each step of its install here, from the script its cloud-init runs, with the token the box running the build gave it. The phone sees the step as that box\u2019s progress, never by calling this.',
   '/api/holder/join':
     'a POOL\u2019S OWN MACHINE asks to join here, from its sidecar on first start, with the key it made and the proof its cloud-init drive let it make. The phone reads the request from /api/holders and answers it there.',
-  // TEMPORARY, the way /api/vm-standby landed (#862): the coordinator layer
-  // of the holder join round. The iOS and Android layers call these and
-  // remove the three entries.
-  '/api/holders':
-    'TEMPORARY: the coordinator layer of letting a pool\u2019s own machine in from the phone. The phone layers of the same round call it and remove this.',
-  '/api/holders/{hostId}/approve':
-    'TEMPORARY: the coordinator layer of letting a pool\u2019s own machine in from the phone. The phone layers of the same round call it and remove this.',
-  '/api/holders/{hostId}/decline':
-    'TEMPORARY: the coordinator layer of letting a pool\u2019s own machine in from the phone. The phone layers of the same round call it and remove this.',
 };
 
 /**

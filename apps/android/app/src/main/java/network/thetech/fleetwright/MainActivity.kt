@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
         notifiedSession.value = sessionNamedBy(intent)
         notifiedHost.value = hostNamedBy(intent)
         notifiedSetup.value = setupNamedBy(intent)
+        notifiedHolder.value = holderNamedBy(intent)
     }
 
     /**
@@ -199,6 +200,19 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * A pool's own machine asking to join, by name, from a tapped
+     * notification: Machines opens, where it is the first card and Let it in
+     * is (HolderAskingCard). It carries no `event`, so it is never taken for
+     * a session above.
+     */
+    private val notifiedHolder = mutableStateOf<String?>(null)
+
+    private fun holderNamedBy(intent: Intent?): String? {
+        if (intent?.getStringExtra("kind") != "holder-join") return null
+        return intent.getStringExtra("hostId")?.takeIf { it.isNotBlank() }
+    }
+
+    /**
      * Android 13+ shows nothing until this is granted. Asked once there is a
      * fleet to be notified about: asking on a first launch, before anything is
      * set up, is asking for a permission nobody can yet see a reason for.
@@ -231,6 +245,7 @@ class MainActivity : ComponentActivity() {
         notifiedSession.value = sessionNamedBy(intent)
         notifiedHost.value = hostNamedBy(intent)
         notifiedSetup.value = setupNamedBy(intent)
+        notifiedHolder.value = holderNamedBy(intent)
 
         // A fleet app that cannot tell you a session is waiting has lost its
         // main reason to exist, so this is asked as soon as there is a fleet.
@@ -263,6 +278,7 @@ class MainActivity : ComponentActivity() {
                     notifiedSession = notifiedSession.value,
                     notifiedHost = notifiedHost.value,
                     notifiedSetup = notifiedSetup.value,
+                    notifiedHolder = notifiedHolder.value,
                 )
             }
         }
@@ -293,6 +309,7 @@ fun FleetScreen(
     notifiedSession: String? = null,
     notifiedHost: String? = null,
     notifiedSetup: String? = null,
+    notifiedHolder: String? = null,
 ) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -495,6 +512,10 @@ fun FleetScreen(
             openHost = notifiedHost
             tab = "machines"
         }
+    }
+    // A pool's own machine asking to join, tapped: Machines, where it is first.
+    LaunchedEffect(notifiedHolder) {
+        if (notifiedHolder != null) tab = "machines"
     }
     // A hypervisor setup's progress notification, tapped: Machines, with the
     // job's progress open, rather than whatever was on screen last.
