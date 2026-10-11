@@ -73,6 +73,16 @@ box ──── signed by the box key: { hostKey, at, reply } ──┐        
                           gh:<github id>  the Claude login, as runners read it
 ```
 
+**An approval can name what it holds.** A grant carries `only`, at most eight
+item names, and the box is then given those items and nothing else of that
+person's; the Claude login only when it is named. The phone writes one when it
+lets a pool's own machine in: `only: ["hypervisor:<address>"]`, so the one
+approval that lets it join lets it hold that pool's record and none of the
+person's other credentials ([hypervisors.md](./hypervisors.md), "A machine of
+its own"). The fingerprint step above is done by the phone there, against a
+secret it made, because nobody can run a command on that machine to compare.
+A grant without `only` is every item, as before.
+
 ## On the box
 
 The sidecar asks (`Sidecar#syncVault`) and hands the answer to fleetwright,

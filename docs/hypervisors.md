@@ -296,21 +296,59 @@ machine stays up.
 Asking for one where the pool has no image also asks for Debian's image, and
 for the router the image is built behind.
 
-**It joins with a pin, not a ticket.** Just before it clones, the box running
-the job asks the coordinator for one (a `holder-pin` frame). The coordinator
-gives a pin only to the box running that person's policy job, at most three
-times a job. The pin is bound to a name the coordinator chooses: `holder-`
-and six hex, never a name a host already has, because re-enrolling a name
-replaces its key. It is the ordinary enrolment pin otherwise: single use, ten
-minutes, and it enrols a permanent host of nobody's. The machine boots with
-the pin, the name and the pool it holds on its cloud-init drive. The join
-script wipes the drive, schedules no end, and writes `FLEETWRIGHT_HOLDER_FOR`.
-The sidecar enrols at `/api/enroll/host` and spends the pin either way.
+**It asks to join, and your phone lets it in.** A first boot can take longer
+than the ten minutes an enrolment pin lasts, and a holder that missed its pin
+used to sit running outside the fleet for good. So when the box running the
+job says `holder-ask` in `can`, Apply also makes a **secret**: 32 random bytes,
+made on the phone, kept there behind its owner (the Keychain with
+`.userPresence` on iOS; on Android, encrypted to an RSA key in the Keystore
+whose private half opens only after a strong biometric or the screen lock).
+The phone seals the secret to the job with the rest of the choice
+(`holderSecret`), and the box puts it on the machine's cloud-init drive.
 
-**It holds nothing until you approve it.** It joins the fleet like any box,
-and the pool's token reaches it only as the `hypervisor:` vault item, once
-you approve its key on its page under Machines. The job's last line says so.
-Nothing the box or the coordinator does can approve it.
+1. **The name is held for a day.** The box asks the coordinator for a pin as
+   before (a `holder-pin` frame, at most three a job, only from the box running
+   that person's policy job). With the pool's address in the frame, the
+   coordinator also holds the name it chose (`holder-` and six hex, never one a
+   host has) for that person for 24 hours (`src/fleet/coordinator/holder-joins.js`).
+2. **The machine asks.** Its sidecar makes its key, and POSTs
+   `/api/holder/join` with the name, the key, and a proof: HMAC-SHA-256 under
+   the secret over `fleetwright-holder-join/1`, the name, the address and the
+   whole SHA-256 of the key (`src/fleet/protocol/holder-join.js`). It asks
+   again every ten minutes while the name is held, checks every minute whether
+   it is in, and wipes the secret once it is. The coordinator keeps at most
+   three requests a name, pushes `<name> asks to join` to its owner, and never
+   sees the secret.
+3. **The phone checks it, not the coordinator.** Machines shows the name first,
+   with the attention ring and **Let it in**. Face ID (or the fingerprint, or
+   the screen lock) opens the secrets this phone made for that address, and the
+   phone looks for a request one of them proves, made over the key the request
+   carries. A coordinator that offered a key of its own under the holder's name
+   has no proof to offer with it. A request no secret proves is said as such,
+   and nothing is let in. A phone that did not make the machine says it cannot
+   check it.
+4. **One approval does both.** The phone lets that key into the fleet
+   (`POST /api/holders/<name>/approve`), and approves the same key in the vault
+   with a grant scoped to `hypervisor:<address>` and nothing else (`only`, in
+   docs/vault.md). The secret that proved it is deleted. **Decline** drops the
+   requests and keeps the name held for the right one.
+
+A box older than `holder-ask` still makes a machine that joins with its pin
+alone, as a permanent host of nobody's. The pin is on the drive of one that
+asks too, for an image whose join script predates the asking: a script that
+reads the secret drops the pin unused and is not in the fleet at all until it
+is let in.
+
+**Make it again** is on the policy screen for the one there, from a box that
+says `holder-ask`: Apply stops it, removes it with its disk, and makes a new one
+that asks to join (`holderAgain`). It is for a holder that never joined. One
+that has joined does not need it.
+
+**It holds nothing until you approve it.** Without the asking, it joins the
+fleet like any box, and the pool's token reaches it only as the `hypervisor:`
+vault item, once you approve its key on its page under Machines. With it, the
+approval is the Let it in above, and holds that one item. Nothing the box or
+the coordinator does can approve it.
 
 **Once approved, it is asked first.** Its health marks that pool's entry
 `holder`. The coordinator then asks it before the other boxes holding your

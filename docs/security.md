@@ -462,6 +462,23 @@ machine of the fleet, through the coordinator.
   outside the resource set, so the limited token cannot remove it. Being
   asked first (`xo[].holder` in its health) only reorders boxes the person
   already gave the token to.
+- **Or it asks to join, and the phone checks it.** From a box that says
+  `holder-ask`, the person's phone makes a 32-byte secret, keeps it behind
+  its owner, and seals it to the policy job; it reaches the machine on the
+  same cloud-init drive as the pin. The machine asks at `/api/holder/join`
+  with its key and an HMAC of the name, the pool and the key's whole hash
+  under the secret. The route is open, and bounded: only a name the
+  coordinator holds for somebody, for a day, three requests a name, and a
+  name nobody asked for is refused (`src/fleet/coordinator/holder-joins.js`).
+  **The coordinator never has the secret**, so it cannot make a proof, and
+  a coordinator that listed a key of its own under the holder's name is
+  refused by the phone, which checks the proof before anything is let in.
+  Somebody who read the drive in the window it exists could make a proof
+  for a key of their own; that is the same reach as reading the pin, and
+  it ends the same way: one approval, which the person gives only to a
+  machine they just made, and which holds **one item**, the vault grant
+  being scoped to `hypervisor:<address>` (`only`, `docs/vault.md`), never
+  the person's other credentials.
 - **Working a machine** (`vmctl`, `docs/hypervisors.md`, "Working a
   machine"). The box works only a machine it tagged as made for the person
   asking, under that person's pool token: restart, a size within the
