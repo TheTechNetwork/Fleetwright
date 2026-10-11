@@ -46,7 +46,7 @@ test('iOS: the inventory and the choice travel under the bindings the host seals
   // Opened with the key this phone sent, under the inventory's binding; the
   // choice sealed to the job's key, under the policy's.
   assert.match(POLICY, /Seal\.open\(key, aad: Seal\.xosetupInventoryAAD\(job: job, address: address\)/);
-  assert.match(fn(SCREEN, 'applyPolicy'), /Seal\.seal\(\s*to: policyJob\.key,\s*aad: Seal\.xosetupPolicyAAD\(job: job, address: policyJob\.address\),\s*payload: choice\.payload\(in: inv\)/);
+  assert.match(fn(SCREEN, 'applyPolicy'), /Seal\.seal\(\s*to: policyJob\.key,\s*aad: Seal\.xosetupPolicyAAD\(job: job, address: policyJob\.address\),\s*payload: choice\.payload\(in: inv, holderSecret: secret\)/);
 });
 
 test('iOS: the key the inventory comes back to is made for the screen and kept nowhere', () => {

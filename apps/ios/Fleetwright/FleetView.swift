@@ -81,6 +81,8 @@ struct FleetApp: View {
             } else if let host = note.userInfo?["host"] as? String, !host.isEmpty {
                 openHost = host
                 tab = .machines
+            } else if note.userInfo?["machines"] as? Bool == true {
+                tab = .machines
             } else {
                 tab = .sessions
             }

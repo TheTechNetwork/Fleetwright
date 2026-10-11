@@ -25,9 +25,11 @@ final class XOPolicyTests: XCTestCase {
                                images: String? = nil,
                                imageKinds: String? = nil,
                                groups: String? = nil,
+                               holders: String? = nil,
                                extraNetworks: String = "") -> Data {
         let tail = (edges.map { ",\"edges\":" + $0 } ?? "") + (images.map { ",\"images\":" + $0 } ?? "")
             + (imageKinds.map { ",\"imageKinds\":" + $0 } ?? "") + (groups.map { ",\"groups\":" + $0 } ?? "")
+            + (holders.map { ",\"holders\":" + $0 } ?? "")
         return Data("""
         {"v":1,"address":"\(address)",
          "pools":[{"id":"pool-1","name":"rack"}],
@@ -322,6 +324,31 @@ final class XOPolicyTests: XCTestCase {
         c.imageActions = [:]
         XCTAssertNil(c.payload(in: inv)["rebuild"], "kept is nothing sent")
         XCTAssertNil(c.payload(in: inv)["remove"])
+    }
+
+    func testTheHoldersSecretAndMakingItAgainGoOnlyToAMachineThatReadsThem() throws {
+        let image = #"[{"pool":"pool-1","name":"Fleetwright Debian 13","key":"debian-13"}]"#
+        let none = try inventory(inventoryJSON(images: image, holders: "[]"))
+        var c = XOPolicy.Choice.initial(for: none)
+        c.holderChoice = true
+        c.holder = true
+        let secret = String(repeating: "ab", count: 32)
+        XCTAssertFalse(c.makesHolder(in: none), "a machine that does not read the secret is made none")
+        XCTAssertNil(c.payload(in: none, holderSecret: secret)["holderSecret"])
+        c.holderAskChoice = true
+        XCTAssertTrue(c.makesHolder(in: none), "none there, so one is made, and asks")
+        XCTAssertEqual(c.payload(in: none, holderSecret: secret)["holderSecret"] as? String, secret)
+        XCTAssertNil(c.payload(in: none, holderSecret: secret)["holderAgain"], "nothing there to make again")
+
+        let stuck = try inventory(inventoryJSON(images: image, holders: #"[{"pool":"pool-1","name":"holder-c09fcd","running":true}]"#))
+        var d = XOPolicy.Choice.initial(for: stuck)
+        d.holderChoice = true
+        d.holderAskChoice = true
+        XCTAssertTrue(d.holder, "the one there is kept by Apply")
+        XCTAssertFalse(d.makesHolder(in: stuck), "kept, so nothing is made and no secret")
+        d.holderAgain = true
+        XCTAssertTrue(d.makesHolder(in: stuck))
+        XCTAssertEqual(d.payload(in: stuck, holderSecret: secret)["holderAgain"] as? Bool, true)
     }
 
     func testEachLimitIsHeldToTheMachinesBounds() throws {

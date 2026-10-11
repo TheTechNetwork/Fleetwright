@@ -381,6 +381,11 @@ enum XOPolicy {
         /// The machine makes one (`holder` in begin's `can`). An older one
         /// cannot, so it is neither offered nor sent.
         var holderChoice = false
+        /// The one it makes asks to join with a secret from this phone, and
+        /// it makes one again (`holder-ask`). An older one ignores both.
+        var holderAskChoice = false
+        /// Remove the one there and make a new one: for one that never joined.
+        var holderAgain = false
 
         /// An image is asked for, in whichever form this machine reads.
         var wantsImage: Bool { imagesChoice ? !images.isEmpty : image }
@@ -475,7 +480,15 @@ enum XOPolicy {
                 self.egress = nil
                 edge = false
                 holder = false
+                holderAgain = false
             }
+        }
+
+        /// Apply makes a pool's own machine that asks to join: asked for,
+        /// from a machine that makes it so, where there is none or it is made
+        /// again. Only then is a secret made for it (HolderJoin).
+        func makesHolder(in inv: Inventory) -> Bool {
+            holderChoice && holderAskChoice && holder && egress != nil && (inv.holder(on: egress) == nil || holderAgain)
         }
 
         /// Why the machine would refuse this, in its own words
@@ -540,7 +553,7 @@ enum XOPolicy {
 
         /// What is sealed to the job's key: `checkPolicy`'s input exactly.
         /// Ids in the inventory's order, so the same choice is the same bytes.
-        func payload(in inv: Inventory) -> [String: Any] {
+        func payload(in inv: Inventory, holderSecret: String? = nil) -> [String: Any] {
             let limits: [String: Any] = [
                 "cpus": cpus,
                 "memory": Int64(memoryGiB) * XOPolicy.gib,
@@ -569,7 +582,13 @@ enum XOPolicy {
             if !rebuild.isEmpty { out["rebuild"] = rebuild }
             if !remove.isEmpty { out["remove"] = remove }
             // Only to a machine that makes one, and only when asked.
-            if holderChoice, holder { out["holder"] = true }
+            if holderChoice, holder {
+                out["holder"] = true
+                // The secret it asks to join with, and making it again, only to
+                // a machine that reads them.
+                if holderAskChoice, let holderSecret { out["holderSecret"] = holderSecret }
+                if holderAskChoice, holderAgain, inv.holder(on: egress) != nil { out["holderAgain"] = true }
+            }
             // Only to a machine that makes them, and only with a way out.
             if groupsChoice, egress != nil { out["groups"] = groups }
             // Only to a machine that makes them, and only where there is a router, there or asked for.

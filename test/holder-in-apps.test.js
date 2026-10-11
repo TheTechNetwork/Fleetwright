@@ -52,7 +52,7 @@ test('offered only by a machine whose `can` says so, and only where the inventor
 });
 
 test('sent only to a machine that reads it, only when asked, as the key checkPolicy reads', () => {
-  assert.match(I_POLICY, /if holderChoice, holder \{ out\["holder"\] = true \}/);
+  assert.match(I_POLICY, /if holderChoice, holder \{\s*out\["holder"\] = true/);
   assert.match(A_POLICY, /if \(c\.holderChoice && c\.holder\) put\("holder", true\)/);
   assert.ok(HOST.includes('const holder = p.holder === true;'));
 });
