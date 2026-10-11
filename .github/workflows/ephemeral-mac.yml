@@ -82,7 +82,7 @@ jobs:
         run: echo "::add-mask::${{ inputs.pin }}"
 
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: '24.21.0'
       - run: npm ci --omit=dev --no-audit --no-fund
