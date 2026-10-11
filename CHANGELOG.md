@@ -13,8 +13,9 @@ reaches TestFlight, Play and the GitHub release.
 
 ## 0.4.9 — 2026-10-11
 
-**Applying the policy leaves the edge routers alone when nothing changed, and
-rebuilding a machine image copies the disk already on the pool.**
+**Applying the policy leaves the edge routers alone when nothing changed,
+rebuilding a machine image copies the disk already on the pool, and a pool's
+own machine asks to join instead of racing a pin.**
 
 - **The edge routers are no longer rebuilt on every policy run.** The key your
   machines read them with and the pair's password were kept where the next run
@@ -29,6 +30,20 @@ rebuilding a machine image copies the disk already on the pool.**
   keeps its old installer until it is updated with the new one.
 - **The edge card names the machine that actually reached the routers**, not
   whichever reported last.
+- **A pool's own machine asks to join, and one approval lets it in and lets it
+  hold the pool.** It used to join with a pin that lasted ten minutes, and one
+  whose first boot took longer ran outside the fleet for good. Now Apply makes
+  a secret on your phone, the machine asks with a proof of it, and Machines
+  shows it first with **Let it in**. Face ID (or the fingerprint or screen lock
+  on Android) checks the proof, lets it into the fleet, and approves it in your
+  vault for that pool's record and nothing else. The policy screen also offers
+  **Make it again** for one that never joined. A machine made from an image
+  built before this release still joins with its pin: rebuild the pool's image
+  first, then make it again.
+- **Machines that went away without saying so no longer stay listed as not
+  reporting.** A temporary machine whose close the coordinator missed, on a
+  deploy or a save that came late, is retired ten minutes after it was first
+  seen gone.
 
 ## 0.4.8 — 2026-10-10
 
