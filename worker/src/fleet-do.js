@@ -164,6 +164,8 @@ export class Fleet {
         // Hypervisor setups: begun, then run a minute later, then reporting
         // for several more — every gap one this object is evicted across.
         this.state.storage.put('xosetups', this.core.serialiseSetups()),
+        // A pool's own machine asking to join, waiting on its owner for a day.
+        this.state.storage.put('holderJoins', this.core.serialiseHolderJoins()),
       ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
@@ -232,6 +234,7 @@ export class Fleet {
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.restoreStandby(await this.state.storage.get('vmStandby'));
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
+      this.core.restoreHolderJoins(await this.state.storage.get('holderJoins'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
       // MCP clients that registered themselves. A Durable Object is evicted
@@ -598,6 +601,14 @@ export class Fleet {
       return json(answer.body, answer.status);
     }
 
+    // A POOL'S OWN MACHINE ASKING TO JOIN, before the client check for the
+    // same reason: it has no credential yet, and its request admits nothing.
+    // Its owner lets it in from their phone. See CoordinatorCore#holderJoin.
+    if (url.pathname === '/api/holder/join' && request.method === 'POST') {
+      const answer = await this.core.holderJoin(await readJson(request));
+      return json(answer.body, answer.status);
+    }
+
     if (url.pathname === '/api/enroll/host' && request.method === 'POST') {
       const body = await readJson(request);
       const wanted = String(body?.hostId || '');
@@ -856,6 +867,27 @@ export class Fleet {
         const body = await readJson(request);
         const r = await this.core.setVmStandby(requesterFor(client), body);
         return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
+      }
+    }
+
+    // THE POOL'S OWN MACHINES WAITING ON YOU: which have asked to join (GET),
+    // and your answer to one request, named by its key (POST
+    // /{hostId}/approve or /decline). The phone checks each request's proof
+    // and your face before it approves. See CoordinatorCore#approveHolder.
+    if (url.pathname === '/api/holders' || url.pathname.startsWith('/api/holders/')) {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first \u2014 a pool\u2019s own machine waits on the person who made it.' }, 403);
+      }
+      if (url.pathname === '/api/holders' && request.method === 'GET') {
+        return json({ ok: true, holders: this.core.holdersFor(requesterFor(client)) });
+      }
+      const m = /^\/api\/holders\/([^/]+)\/(approve|decline)$/.exec(url.pathname);
+      if (m && request.method === 'POST') {
+        const body = await readJson(request);
+        const hostId = decodeURIComponent(m[1]);
+        const answer = m[2] === 'approve' ? await this.core.approveHolder(requesterFor(client), hostId, body) : this.core.declineHolder(requesterFor(client), hostId, body);
+        if (m[2] === 'approve' && answer.status === 200) await this.#saveHosts();
+        return json(answer.body, answer.status);
       }
     }
 
