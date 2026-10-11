@@ -525,10 +525,14 @@ export class XoSetups {
         // (`rebuild`, `remove`). An older one keeps every image as it is.
         // `edge-ha`: it builds the edge as a pair sharing its addresses
         // (`edgeHa`, edge-router.js EDGE_HA). An older one builds one.
+        // `holder-ask`: the pool's own machine it makes asks to join with the
+        // phone's secret (`holderSecret`), and it makes one again
+        // (`holderAgain`). An older one ignores both, so a phone offers
+        // Make it again only where this is said.
         can: [
           'policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
           ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage'] : []),
-          ...(this.coordinatorUrl && this.holderPin ? ['holder'] : []),
+          ...(this.coordinatorUrl && this.holderPin ? ['holder', 'holder-ask'] : []),
         ],
       },
     };
