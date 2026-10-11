@@ -26,7 +26,7 @@ import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventory
 import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
-import { standIn, PASSWORD, skip } from './helpers/xo-stand-in.js';
+import { standIn, PASSWORD, skip, xenStoreAsXo } from './helpers/xo-stand-in.js';
 
 /** A machine with an enrolment key, collecting what it reports. */
 async function machine(/** @type {{ log?: any, policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, dropImage?: any, holderPin?: any, imageReporter?: any, relay?: any }} */ opts = {}) {
@@ -787,7 +787,7 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
     sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'net-l1'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
     nets: { 'net-l1': 'fleetwright-lab-1', 'net-l2': 'fleetwright-lab-2' },
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch', 'fleetwright-edge-labs:oc'], power_state: 'Running', xenStoreData: { [EDGE_WATCH.key]: JSON.stringify(WATCH) } } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch', 'fleetwright-edge-labs:oc'], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: JSON.stringify(WATCH) }) } },
     vifs: {
       w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' },
       a: { id: 'a', type: 'VIF', $VM: 'edge', device: '2', $network: 'net-l1' },

@@ -50,7 +50,7 @@ import { pipeline } from 'node:stream/promises';
 
 import { REQUIRED_HOSTS } from '../../core/egress.js';
 import { connectPinnedTls, splitAddress } from './xo-ws.js';
-import { EDGE_WATCH, watchConfig, watchOf } from './edge-credentials.js';
+import { EDGE_WATCH, keptOn, watchConfig, watchOf } from './edge-credentials.js';
 
 /**
  * The image, pinned. A new OPNsense release is a new entry here, with the
@@ -1173,7 +1173,7 @@ export async function ensureEdge(opts) {
  * @param {any} v @returns {string|null}
  */
 function pairPassword(v) {
-  const p = v?.xenStoreData?.[EDGE_HA.passwordKey];
+  const p = keptOn(v, EDGE_HA.passwordKey);
   return typeof p === 'string' && /^[0-9a-f]{16,64}$/.test(p) ? p : null;
 }
 

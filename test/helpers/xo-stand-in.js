@@ -31,6 +31,18 @@ const openssl = spawnSync('openssl', ['version']).status === 0;
 export const skip = !openssl && 'needs openssl to make a certificate for the stand-in';
 export const PASSWORD = 'correct-horse-battery-staple-9';
 
+/**
+ * A VM's xenStoreData as Xen Orchestra hands it back after `vm.set` was given
+ * `data`: every key under `vm-data/`, which its vm.set prefixes and its VM
+ * objects keep (xo-server's api/vm.mjs and xapi-object-to-xo.mjs). Fixtures
+ * that seeded the bare names hid that a router's key was never read back.
+ *
+ * @param {Record<string, string>} data
+ */
+export function xenStoreAsXo(data) {
+  return Object.fromEntries(Object.entries(data).map(([k, v]) => [`vm-data/${k}`, v]));
+}
+
 /** A certificate and key for this run only, and the pin a phone would accept. */
 export function certificate() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'xo-cert-'));

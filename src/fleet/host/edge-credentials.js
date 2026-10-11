@@ -178,12 +178,29 @@ export function newWatch({ now = Date.now() } = {}) {
 }
 
 /**
+ * What buildEdge kept on a router with `vm.set`'s xenStoreData, read back, or
+ * null.
+ *
+ * UNDER `vm-data/`: Xen Orchestra files every key it is given there (its
+ * vm.set prefixes them) and hands xenstore_data back as XAPI holds it, prefix
+ * and all. Read by the name it was set with, the key was never there, so every
+ * policy run found neither the routers' key nor the pair's CARP password, made
+ * new ones, and rebuilt both routers the way a pair that lost its password is.
+ *
+ * @param {any} vm @param {string} key @returns {string|null}
+ */
+export function keptOn(vm, key) {
+  const raw = vm?.xenStoreData?.[`vm-data/${key}`];
+  return typeof raw === 'string' ? raw : null;
+}
+
+/**
  * The key a router was built with, where buildEdge kept it, or null.
  *
  * @param {any} vm @returns {Watch|null}
  */
 export function watchOf(vm) {
-  const raw = vm?.xenStoreData?.[EDGE_WATCH.key];
+  const raw = keptOn(vm, EDGE_WATCH.key);
   if (typeof raw !== 'string') return null;
   try {
     const w = JSON.parse(raw);
