@@ -50,7 +50,7 @@ packages:
 # overrides CURRENT_PROJECT_VERSION from the command line, for every target.
 settings:
   base:
-    MARKETING_VERSION: "0.4.7"
+    MARKETING_VERSION: "0.4.8"
     CURRENT_PROJECT_VERSION: "1"
 
 targets:

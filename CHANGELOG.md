@@ -11,6 +11,27 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.8 — 2026-10-10
+
+**The pool's page shows how its edge routers are, opens over mobile data
+through one of your machines, and an image build that cannot find names says
+which servers it asked.**
+
+- **The edge routers on the pool's page.** Which router holds the gateway,
+  whether each answers names and has its way out, how many leases it gave, and
+  what they logged lately: a change of master, DNS, DHCP, a gateway alarm,
+  Suricata. Apply the policy once after updating: it rebuilds each router once
+  to give it a key that reads its status, and machines behind them have no way
+  out until they are back. The key can also stop names or the gateway, and
+  cannot change the routers' rules; `docs/security.md` says what it can do.
+- **A pool's page from away.** When the phone cannot reach Xen Orchestra, on
+  mobile data for instance, the page loads through one of your machines that
+  holds the pool, and its buttons work the same way. When it can reach neither,
+  it says so and what still works.
+- **An image build that cannot find names says why.** The build VM asks each
+  name server itself and the failure names which answered, instead of one line
+  that a download failed.
+
 ## 0.4.7 — 2026-10-10
 
 **Machines from your pool start again after a change to what the fleet may
