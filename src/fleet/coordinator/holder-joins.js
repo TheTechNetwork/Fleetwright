@@ -18,7 +18,7 @@
 // APPROVING is the owner's, on the phone, after the phone has checked the
 // proof and Face ID. Nothing here can do it on their behalf.
 
-import { HOLDER_ID_RE, HOLDER_PROOF_RE, KEY_HASH_RE } from '../protocol/holder-join.js';
+import { HOLDER_ID_RE, HOLDER_PROOF_RE, KEY_HASH_RE, keyHashOf } from '../protocol/holder-join.js';
 
 /** How long a reservation waits for its machine to ask and its owner to answer. */
 export const HOLDER_JOIN_TTL_MS = 24 * 60 * 60_000;
@@ -41,18 +41,6 @@ export function holderKey(jwk) {
   const k = /** @type {any} */ (jwk);
   if (!k || k.kty !== 'EC' || k.crv !== 'P-256' || !B64_COORD_RE.test(String(k.x)) || !B64_COORD_RE.test(String(k.y))) return null;
   return { kty: 'EC', crv: 'P-256', x: String(k.x), y: String(k.y) };
-}
-
-/**
- * The whole SHA-256 of a key, hex: what the vault files a grant under and the
- * proof is made over, its first sixteen the fingerprint a person reads.
- *
- * @param {Jwk} key
- */
-export async function keyHashOf(key) {
-  const canonical = JSON.stringify({ crv: key.crv, kty: key.kty, x: key.x, y: key.y });
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical)));
-  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export class HolderJoins {

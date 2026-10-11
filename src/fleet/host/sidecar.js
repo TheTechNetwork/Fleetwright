@@ -563,7 +563,7 @@ export class Sidecar {
         coordinatorUrl: this.transport?.origin ?? null,
         // And how it asks the fleet for the pin a pool's own machine joins
         // with, for the job it is running (xo-holder.js).
-        holderPin: (/** @type {string} */ job) => this.#askHolderPin(job),
+        holderPin: (/** @type {string} */ job, /** @type {string} */ address) => this.#askHolderPin(job, address),
         // And for the token its machine image's build VM reports its
         // install with (vm-image.js), for the job it is running.
         imageReporter: (/** @type {string} */ job) => this.#askForJob('image-reporter', job),
@@ -1342,11 +1342,13 @@ export class Sidecar {
    * job, bound to a name it chose (core.js, #onHolderPin). Never rejects:
    * no answer is null.
    *
-   * @param {string} job
+   * @param {string} job @param {string} address
    * @returns {Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>}
    */
-  async #askHolderPin(job) {
-    return this.#askForJob('holder-pin', job);
+  async #askHolderPin(job, address) {
+    // The Xen Orchestra it will hold, so the coordinator keeps its name for
+    // that pool while it asks to join (core.js, #onHolderPin).
+    return this.#askForJob('holder-pin', job, { address });
   }
 
   /**
@@ -1357,9 +1359,10 @@ export class Sidecar {
    *
    * @param {'holder-pin'|'image-reporter'} kind
    * @param {string} job
+   * @param {Record<string, string>} [extra]
    * @returns {Promise<any>}
    */
-  async #askForJob(kind, job) {
+  async #askForJob(kind, job, extra = {}) {
     const id = `${kind}-${crypto.randomUUID()}`;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -1370,7 +1373,7 @@ export class Sidecar {
       this.mintWaiters.set(id, { resolve, timer });
       let sent;
       try {
-        sent = this.transport.send({ v: PROTOCOL_VERSION, kind, id, hostId: this.hostId, job });
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind, id, hostId: this.hostId, job, ...extra });
       } catch {
         sent = false;
       }
