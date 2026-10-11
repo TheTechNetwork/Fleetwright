@@ -2060,7 +2060,7 @@ class Fleet(
      * the ones your policy jobs made, each with the requests made under it
      * (HolderJoin). An older coordinator has no such route; that is none.
      */
-    suspend fun holders(): Result<List<HolderJoin.Waiting>> = withContext(Dispatchers.IO) {
+    internal suspend fun holders(): Result<List<HolderJoin.Waiting>> = withContext(Dispatchers.IO) {
         runCatching {
             // A FAILED REQUEST IS NOT NOBODY WAITING: it fails, and Machines keeps what it had.
             val list = get("/api/holders").optJSONArray("holders") ?: JSONArray()
