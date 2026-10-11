@@ -420,7 +420,7 @@ jobs:
       # Installed under its UUID like the app's profile, and its NAME is what
       # the archive passes to the extension target, read out of the profile
       # for the reason the app's is.
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         if: steps.creds.outputs.have == 'true'
         with:
           node-version: '24.21.0'
@@ -620,7 +620,7 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: '24.21.0'
       - name: Assign the build to the internal group
@@ -669,7 +669,7 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: '24.21.0'
       - name: Assign the build to the external group and submit it for review
@@ -736,7 +736,7 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: '24.21.0'
       - name: Create the App Store version and submit it for review

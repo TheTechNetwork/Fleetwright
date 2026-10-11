@@ -90,7 +90,7 @@ jobs:
     name: test (node ${{ matrix.node }})
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: ${{ matrix.node }}
           # The only dependency is the TypeScript used to check the JSDoc, but
@@ -150,12 +150,12 @@ jobs:
           # nothing and passes — a lint that silently checks zero commits is
           # worse than no lint, because the green tick says it looked.
           fetch-depth: 0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           # The current release, not the floor. These checks are about this
           # repository rather than about the range it supports, and the floor is
           # exercised by the matrix above.
-          node-version: '26.10.0'
+          node-version: '26.11.1'
           cache: npm
       - run: npm install --no-audit --no-fund
       # The Worker's, because verify.sh bundles it and the bundle resolves its

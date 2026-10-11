@@ -160,9 +160,9 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '26.10.0'
+          node-version: '26.11.1'
       # The dry-run IS the portability test, so there is no separate lint for
       # it. wrangler resolves every import the Worker actually pulls in: if
       # something in the shared coordinator code starts importing from `node:`
@@ -259,9 +259,9 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '26.10.0'
+          node-version: '26.11.1'
       # The ROOT dependencies only: the sidecar that enrols against the
       # container imports `jose` from here. The image builds its own inside
       # the build stage and needs nothing from the runner.
@@ -282,9 +282,9 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '26.10.0'
+          node-version: '26.11.1'
 
       # A step's own `env:` is not visible to that step's `if:` — the guard has
       # to be a separate step that writes an output. Doing it the other way is
@@ -600,9 +600,9 @@ jobs:
     environment: github-app-key
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '26.10.0'
+          node-version: '26.11.1'
       - name: Sync the minting Worker's keys
         working-directory: worker
         env:
