@@ -13,8 +13,10 @@
 // cloud-init from the config drive Xen Orchestra makes for a VM. The machine
 // running the policy job downloads its qcow2 once, checks it against that
 // digest, reads the raw disk out of it into Xen Orchestra's disk import as it
-// goes (qcow2.js, Node's own zlib, nothing to install), grows the disk to
-// the size a session needs, and boots a VM from it on the uplink, behind the
+// goes (qcow2.js, Node's own zlib, nothing to install), and keeps that disk
+// on the pool as it was published (baseOf, below), so a rebuild starts from a
+// copy of it and sends nothing. Then it grows a copy of the disk to the size
+// a session needs, and boots a VM from it on the uplink, behind the
 // edge router, with a cloud-init that installs Fleetwright from this fleet's
 // own /install without a pin, wipes everything that would make two clones
 // the same machine (the machine id, SSH host keys, any host key), cleans
@@ -211,6 +213,12 @@ export const VM_IMAGE = Object.freeze({
   /** On the VM while it is being built, so a build left by an earlier try is found and removed. */
   buildTag: 'fleetwright-image-build',
   buildName: 'fleetwright-image-build',
+  /**
+   * On a base disk's template (baseOf, below), and as
+   * `fleetwright-base:<image key>:<build>` beside it, saying which pinned
+   * download it holds.
+   */
+  baseTag: 'fleetwright-base',
   /** On every machine cloned from it. */
   sessionTag: 'fleetwright-session',
   /** And when each must be gone by, as `fleetwright-until:<epoch seconds>`. */
@@ -536,6 +544,67 @@ const SILENT_MS = 5 * 60_000;
 const logEnd = (log) => String(log || '').trim().split('\n').slice(-12).join('\n').slice(-1000);
 
 /**
+ * THE BASE DISK: the pinned cloud image's disk as it was published, kept on
+ * the pool as a template that has never booted, so a rebuild starts from a
+ * copy of it instead of downloading it here and sending it through Xen
+ * Orchestra again.
+ *
+ * ASKED FOR: "Rebuilding machines why don’t we have cached copies?" The
+ * download was already kept, on the one box that ran the policy; what every
+ * build did again was write the whole disk (3 to 3.5 GiB) from that box,
+ * through Xen Orchestra, to the pool's storage, which on NFS is that much
+ * across the network once more. A VM made from a template with a disk is a
+ * clone of that disk, copy-on-write on the storage XCP-ng keeps as VHD files
+ * (NFS, ext, LVM): seconds, and what sessions' machines are already made by.
+ *
+ * One per image, build and storage: a clone is fast only on the storage the
+ * template's disk is on, so a build asked onto other storage makes a base
+ * there. Tagged `fleetwright-base` and not `fleetwright-image`, so no box
+ * offers it, and kept out of the resource set, so the fleet's token cannot
+ * clone it.
+ *
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin
+ * @param {any[]} templates  every VM-template, as xo.getAllObjects gave them
+ * @param {string} pool @param {string} tag  `${VM_IMAGE.baseTag}:<key>:<build>` @param {string} sr
+ * @returns {Promise<any|null>}
+ */
+async function baseOf(admin, templates, pool, tag, sr) {
+  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(tag))) {
+    if ((await diskOf(admin, t.id))?.$SR === sr) return t;
+  }
+  return null;
+}
+
+/**
+ * A VM's or template's disk: the first that is not a CD drive or a cloud-init
+ * drive.
+ *
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin @param {string} vm
+ * @returns {Promise<any|null>}
+ */
+async function diskOf(admin, vm) {
+  const vbds = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VBD', VM: vm } })) || {}));
+  for (const vbd of vbds) {
+    if (!vbd?.VDI || vbd.is_cd_drive) continue;
+    const vdi = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', id: vbd.VDI } })) || {})[0]);
+    if (vdi && vdi.name_label !== CONFIG_DRIVE_NAME) return vdi;
+  }
+  return null;
+}
+
+/**
+ * The bases kept for `key`: every build's, on every storage. An older build's
+ * is removed once a newer one is made, and all of them with the image itself
+ * (removeImage). Removing one never touches a machine image or a session's
+ * machine made from it: XCP-ng keeps a clone's parent on disk while anything
+ * still reads from it.
+ *
+ * @param {any[]} templates @param {string} pool @param {string} key
+ */
+const basesFor = (templates, pool, key) =>
+  templates.filter((t) => t?.$pool === pool && (t?.tags || []).some((/** @type {string} */ x) => x.startsWith(`${VM_IMAGE.baseTag}:${key}:`)));
+
+/**
  * The coordinator's IPv4 addresses as this box's resolver has them, for a
  * build VM whose own names do not work (buildCloudConfig). None, rather than
  * an error, when they cannot be had: the VM then reports by name alone.
@@ -638,62 +707,89 @@ export async function ensureImage({
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: IMAGE_STAGES, fill });
   const os = spec.os;
-  say(`Downloading ${os} for the machine image.`, stage(1, 0));
-  let downloaded = 0;
-  const file = await getImage({
-    dir: imageDir,
-    url: spec.url,
-    size: spec.compressedSize,
-    algorithm: spec.algorithm,
-    digest: digestOf(spec),
-    label: spec.label,
-    signal,
-    onProgress: (d, t) => {
-      downloaded = d;
-      say(`Downloading ${os} for the machine image: ${mb(d)} of ${mb(t)} MB.`, stage(1, imageFill(d, 0, spec)));
-    },
-  });
-  signal?.throwIfAborted();
-  if (!downloaded) say(`${os} was already downloaded and checked.`, stage(1, imageFill(spec.compressedSize, 0, spec)));
+  const baseTag = `${VM_IMAGE.baseTag}:${spec.key}:${spec.build}`;
+  /** @type {any} */
+  let from = await baseOf(admin, templates, pool, baseTag, sr.id);
 
   /** @type {string|null} */
   let vdi = null;
   /** @type {string|null} */
   let vm = null;
+  /** @type {string|null} */
+  let making = null;
   let keep = false;
-  // THE LENGTH SENT is the disk the qcow2's header holds: Content-Length goes
-  // ahead of the bytes, and the download it is read from is the pinned one.
-  const holds = await qcow2Size(file);
   try {
-    say(`Writing the machine image’s disk to ${on}.`, stage(2, imageFill(spec.compressedSize, 0, spec)));
-    const { $sendTo } = await admin.call('disk.import', {
-      sr: sr.id,
-      // RAW, EXPANDED HERE AS IT GOES. The pool cannot take the qcow2 as it
-      // is published: XCP-ng's qcow-stream-tool refused it on a real pool
-      // with Compressed_unsupported, and every distribution compresses its
-      // clusters. A raw disk is what it takes, so qcow2.js reads the raw disk
-      // out of the checked download into the upload, nothing written here.
-      type: 'iso',
-      name: VM_IMAGE.buildName,
-      description: `${os} (${spec.build}), becoming Fleetwright's machine image`,
-    });
-    vdi = await upload({
-      address,
-      pin,
-      plain,
-      sendTo: $sendTo,
-      body: qcow2Raw(file, { signal }),
-      size: holds,
-      filename: `${spec.key}.raw`,
-      signal,
-      onProgress: (d, t) => say(`Writing the machine image’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, imageFill(spec.compressedSize, d, spec))),
-    });
-    signal?.throwIfAborted();
-    // ROOM FOR A SESSION. cloud-init grows the partition to fill it on the
-    // first boot, the build's and every clone's alike. Through whichever
-    // call the server offers (RESIZE_METHODS in xo-setup.js): both take the
-    // disk's id and its new size in bytes.
-    await admin.call(resize === 'vdi.set' ? 'vdi.set' : 'disk.resize', { id: vdi, size: VM_IMAGE.diskSize });
+    if (from) {
+      say(`${os} is already on ${on}, kept from an earlier build, so the machine image starts from a copy of it.`, stage(2, imageFill(spec.compressedSize, spec.rawSize, spec)));
+    } else {
+      say(`Downloading ${os} for the machine image.`, stage(1, 0));
+      let downloaded = 0;
+      const file = await getImage({
+        dir: imageDir,
+        url: spec.url,
+        size: spec.compressedSize,
+        algorithm: spec.algorithm,
+        digest: digestOf(spec),
+        label: spec.label,
+        signal,
+        onProgress: (d, t) => {
+          downloaded = d;
+          say(`Downloading ${os} for the machine image: ${mb(d)} of ${mb(t)} MB.`, stage(1, imageFill(d, 0, spec)));
+        },
+      });
+      signal?.throwIfAborted();
+      if (!downloaded) say(`${os} was already downloaded and checked.`, stage(1, imageFill(spec.compressedSize, 0, spec)));
+
+      // THE LENGTH SENT is the disk the qcow2's header holds: Content-Length goes
+      // ahead of the bytes, and the download it is read from is the pinned one.
+      const holds = await qcow2Size(file);
+      say(`Writing ${os}’s disk to ${on}, where it is kept for the next build.`, stage(2, imageFill(spec.compressedSize, 0, spec)));
+      const { $sendTo } = await admin.call('disk.import', {
+        sr: sr.id,
+        // RAW, EXPANDED HERE AS IT GOES. The pool cannot take the qcow2 as it
+        // is published: XCP-ng's qcow-stream-tool refused it on a real pool
+        // with Compressed_unsupported, and every distribution compresses its
+        // clusters. A raw disk is what it takes, so qcow2.js reads the raw disk
+        // out of the checked download into the upload, nothing written here.
+        type: 'iso',
+        name: `${os} (${spec.build})`,
+        description: `${os}'s cloud image as published, kept by Fleetwright so a machine image is built from a copy of it`,
+      });
+      vdi = await upload({
+        address,
+        pin,
+        plain,
+        sendTo: $sendTo,
+        body: qcow2Raw(file, { signal }),
+        size: holds,
+        filename: `${spec.key}.raw`,
+        signal,
+        onProgress: (d, t) => say(`Writing ${os}’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, imageFill(spec.compressedSize, d, spec))),
+      });
+      signal?.throwIfAborted();
+
+      // KEPT AS IT WAS PUBLISHED, never booted, so every build starts from the
+      // same disk the digest vouched for (baseOf, above).
+      making = await admin.call('vm.create', {
+        template: base.id,
+        name_label: `Fleetwright base: ${os} (${spec.build})`,
+        name_description: `${os}'s cloud image as published, never booted. Fleetwright builds the machine image from a copy of it, so a rebuild sends nothing; it is not offered for sessions.`,
+        VIFs: [],
+        VDIs: [],
+        CPUs: VM_IMAGE.cpus,
+        memory: VM_IMAGE.memory,
+        tags: [VM_IMAGE.baseTag, baseTag],
+        bootAfterCreate: false,
+      });
+      await admin.call('vm.attachDisk', { vm: making, vdi, bootable: true, position: '0' });
+      vdi = null; // the base's now, and deleted with it
+      await admin.call('vm.convertToTemplate', { id: making });
+      from = { id: making };
+      making = null; // kept from here, whatever happens to this build
+      for (const old of basesFor(templates, pool, spec.key).filter((t) => !t.tags.includes(baseTag))) {
+        await admin.call('vm.delete', { id: old.id, deleteDisks: true }).catch(() => {});
+      }
+    }
 
     // THE GUEST AGENT, or the build goes on without it and says so: an
     // image without one works, Xen Orchestra just cannot see its address.
@@ -707,22 +803,28 @@ export async function ensureImage({
       noAgent = ` It goes without the Xen guest agent, so Xen Orchestra will not show its address: ${String(/** @type {any} */ (e)?.message || e).slice(0, 160)}.`;
     }
     say(`Installing Fleetwright on the machine image, its disk on ${on}.${noAgent}`, stage(3, installFill(0)));
+    // A COPY OF THE BASE'S DISK comes with the VM, as a session's machine
+    // gets a copy of the image's.
     vm = await admin.call('vm.create', {
-      template: base.id,
+      template: from.id,
       name_label: VM_IMAGE.buildName,
       name_description: 'Becoming the machine image sessions are cloned from. Made by Fleetwright; it powers off when the install is done.',
       VIFs: [{ network: uplink }],
-      VDIs: [],
       CPUs: VM_IMAGE.cpus,
       memory: VM_IMAGE.memory,
       tags: [VM_IMAGE.buildTag],
       bootAfterCreate: false,
     });
-    await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
-    vdi = null; // the VM's now, and deleted with it
+    const disk = await diskOf(admin, /** @type {string} */ (vm));
+    if (!disk) throw new Error(`the machine image’s build VM was made from the kept ${os} without a disk`);
+    // ROOM FOR A SESSION. cloud-init grows the partition to fill it on the
+    // first boot, the build's and every clone's alike. Through whichever
+    // call the server offers (RESIZE_METHODS in xo-setup.js): both take the
+    // disk's id and its new size in bytes.
+    await admin.call(resize === 'vdi.set' ? 'vdi.set' : 'disk.resize', { id: disk.id, size: VM_IMAGE.diskSize });
     // THE CLOUD-INIT DRIVE AFTER THE DISK, by its own call and on the disk's
     // storage. vm.create with `cloudConfig` puts the drive on the storage of
-    // the VM's first disk, and this VM has none until the line above: Xen
+    // the VM's first disk, and a VM made with no disk of its own has none: Xen
     // Orchestra refused it with "Can't create cloud init config drive for VM
     // without disks", which is how the first build on a real pool ended.
     // A TOKEN FOR ITS REPORTS, when the fleet gives one (core.js,
@@ -806,7 +908,9 @@ export async function ensureImage({
     await admin.call('vm.convertToTemplate', { id: vm });
     await admin.call('resourceSet.addObject', { id: setId, object: vm });
   } catch (e) {
-    // Nothing half-made is left, except a failed install's VM, kept on purpose.
+    // Nothing half-made is left, except a failed install's VM, kept on purpose,
+    // and a base that was finished, kept for the next build.
+    if (making) await admin.call('vm.delete', { id: making, deleteDisks: true }).catch(() => {});
     if (vm && !keep) await admin.call('vm.delete', { id: vm, deleteDisks: true }).catch(() => {});
     if (vdi) await admin.call('vdi.delete', { id: vdi }).catch(() => {});
     throw e;
@@ -879,6 +983,9 @@ export async function removeImage({ admin, pool, poolName = 'this pool', image: 
   if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was removed`);
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
   const there = templates.filter((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key);
+  // ITS KEPT DISKS GO WITH IT (baseOf): asked to remove the image is asked
+  // for the room back, and a machine made from it keeps the disk it reads.
+  for (const b of basesFor(templates, pool, key)) await admin.call('vm.delete', { id: b.id, deleteDisks: true }).catch(() => {});
   if (!there.length) return `The ${spec.os} machine image was already gone from ${poolName}.`;
   /** @type {number[]} */
   const kept = [];
