@@ -471,3 +471,33 @@ test('a hypervisor’s token is kept as its own kind, checked against its addres
   assert.equal((await m.phone({ op: 'forget', name: 'hypervisor:xo.lan' })).ok, true);
   assert.ok(!(await m.box(office)).answer.accounts[0]?.items.some((/** @type {any} */ i) => i.name === 'hypervisor:xo.lan'));
 });
+
+test('a pool’s own machine approved for its pool is given that record and nothing else of the person’s', async (t) => {
+  // ASKED FOR: "If I approve why shouldn't it approve both?" One approval
+  // lets the holder join and hold its pool; it is not one of the boxes a
+  // person works on, so it is not given the rest of their vault.
+  const m = await minter();
+  t.after(m.restore);
+  const holder = await generateKeyPair();
+  const record = JSON.stringify({ v: 1, address: 'xo.lan', pin: 'a'.repeat(64), user: 'fleetwright', resourceSet: 'set-1', token: 'xo-limited-token', plain: false });
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan', value: record })).ok, true);
+  assert.equal((await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' })).ok, true);
+  assert.equal((await m.phone({ op: 'put', name: 'claude', value: `sk-ant-oat01-${'c'.repeat(40)}` })).ok, true);
+
+  // Named items, by their names, or refused.
+  for (const only of [[], ['not an item'], 'hypervisor:xo.lan', Array.from({ length: 9 }, (_, i) => `secret:S${i}`)]) {
+    assert.equal((await m.phone({ op: 'grant', hostKey: holder.publicJwk, label: 'holder-0a0b0c', only })).error?.code, 'bad_params', JSON.stringify(only));
+  }
+  const granted = await m.phone({ op: 'grant', hostKey: holder.publicJwk, label: 'holder-0a0b0c', only: ['hypervisor:xo.lan'] });
+  assert.equal(granted.ok, true, granted.text);
+  assert.match(granted.text, /to hold the hypervisor at xo\.lan\./, 'the phone is told what it approved');
+  assert.deepEqual((await m.phone({ op: 'list' })).answer.grants.map((/** @type {any} */ g) => [g.label, g.only]), [['holder-0a0b0c', ['hypervisor:xo.lan']]]);
+
+  const given = await m.box(holder);
+  assert.deepEqual(given.answer.accounts[0].items.map((/** @type {any} */ i) => i.name), ['hypervisor:xo.lan'], 'not the Claude login, not a secret');
+  assert.equal(JSON.parse(given.answer.accounts[0].items[0].value).token, 'xo-limited-token');
+
+  // Approved again without `only`, as an ordinary box is, it holds the vault.
+  assert.equal((await m.phone({ op: 'grant', hostKey: holder.publicJwk, label: 'holder-0a0b0c' })).ok, true);
+  assert.deepEqual((await m.box(holder)).answer.accounts[0].items.map((/** @type {any} */ i) => i.name).sort(), ['claude', 'hypervisor:xo.lan', 'secret:NPM_TOKEN']);
+});
