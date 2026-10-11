@@ -639,7 +639,14 @@ jobs:
           INTERNAL_BETA_GROUP_NAME: ${{ vars.INTERNAL_BETA_GROUP_NAME }}
           # The commit is the honest answer to "what changed" for an internal
           # build that ships on every commit.
-          WHATS_NEW: ${{ github.event.head_commit.message || github.sha }}
+          #
+          # NOTHING ON A RELEASE. A release has no head_commit, so this fell
+          # through to the bare SHA, and it wrote that into the same per-build
+          # "What to Test" the external job writes the changelog into, at the
+          # same moment, so whichever wrote second won. The build is one build
+          # with one note, and on a release the external job owns it. Empty
+          # skips the write.
+          WHATS_NEW: ${{ github.event_name != 'release' && (github.event.head_commit.message || github.sha) || '' }}
         run: node tools/testflight-distribute.mjs
 
   # External testers are the public, so this is NOT every commit on main. A
@@ -674,6 +681,9 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
           AUDIENCE: external
           EXTERNAL_BETA_GROUP_NAME: ${{ vars.EXTERNAL_BETA_GROUP_NAME }}
+          # In the environment, not spliced into the script: a release body
+          # with a quote or a backtick in it would otherwise be shell.
+          FALLBACK_NOTES: ${{ github.event.release.body || github.event.release.name }}
         run: |
           # THE NOTES COME FROM CHANGELOG.md, not from the release box.
           #
@@ -691,7 +701,7 @@ jobs:
           WHATS_NEW="$(node scripts/release-notes.mjs --max 4000 2>/dev/null)" || true
           if [ -z "$WHATS_NEW" ]; then
             echo "::warning::CHANGELOG.md had no notes for this build — falling back to the release body."
-            WHATS_NEW="${{ github.event.release.body || github.event.release.name }}"
+            WHATS_NEW="$FALLBACK_NOTES"
           fi
           export WHATS_NEW
           node tools/testflight-distribute.mjs
@@ -736,8 +746,17 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           BUNDLE_ID: network.thetech.fleetwright
           BUILD_NUMBER: ${{ github.run_number }}
-          # The public "What's New in This Version", verbatim — the release
-          # body is the one text somebody wrote knowing the public would read
-          # it.
-          WHATS_NEW: ${{ github.event.release.body || github.event.release.name }}
-        run: node tools/appstore-release.mjs
+          FALLBACK_NOTES: ${{ github.event.release.body || github.event.release.name }}
+        # The public "What's New in This Version" comes from CHANGELOG.md, the
+        # same section TestFlight and Play show, so one version has one set of
+        # notes everywhere. It used to be the release body, which is whatever
+        # was pasted when the release was cut. The body is the fallback, as
+        # above.
+        run: |
+          WHATS_NEW="$(node scripts/release-notes.mjs --max 4000 2>/dev/null)" || true
+          if [ -z "$WHATS_NEW" ]; then
+            echo "::warning::CHANGELOG.md had no notes for this build — falling back to the release body."
+            WHATS_NEW="$FALLBACK_NOTES"
+          fi
+          export WHATS_NEW
+          node tools/appstore-release.mjs
