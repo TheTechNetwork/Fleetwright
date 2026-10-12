@@ -33,7 +33,7 @@ import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
 import { loadMinter } from '../src/fleet/host/minter-config.js';
 import { sign } from '../src/fleet/crypto.js';
 import { actionsJobToken, serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
-import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
+import { enrolVmOnce, vmLogin, forgetJoin, waitToBeLetIn } from '../src/fleet/host/vm-join.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
 // systemd supplies this file with EnvironmentFile=; a shell does not, which is
@@ -161,6 +161,12 @@ async function run() {
       }
     } catch (e) {
       log.error(`this machine could not enrol itself: ${/** @type {Error} */ (e).message}`);
+    }
+    // A POOL'S OWN MACHINE THAT ASKED, rather than spent a pin, dials once its
+    // owner has let it in from the phone, so it is not refused on every dial
+    // until then (src/fleet/host/vm-join.js, waitToBeLetIn).
+    if (cfg.holderFor) {
+      await waitToBeLetIn({ file: cfg.vmJoin, origin: cfg.coordinatorUrl, hostId: cfg.hostId, publicJwk: key.publicJwk, privateJwk: key.privateJwk, log });
     }
     fromVm = vmLogin(cfg.vmJoin);
   }

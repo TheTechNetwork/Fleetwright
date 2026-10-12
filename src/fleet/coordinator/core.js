@@ -33,6 +33,7 @@ import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
+import { HolderJoins } from './holder-joins.js';
 
 /**
  * How long a start waits for a host that has connected and not yet reported
@@ -84,6 +85,12 @@ const LAB_HOLD_MS = 15 * 60_000;
 const isLabName = (/** @type {unknown} */ name) => /^fleetwright-lab-\d+$/.test(String(name || ''));
 /** @typedef {{ id: string, name: string, open: boolean, free: boolean }} LabOffer */
 const SETUP_TTL_MS = 24 * 60 * 60_000;
+/**
+ * How long a temporary machine may be missing before it is retired as if it
+ * had disconnected: long enough for one that is only reconnecting after a
+ * deploy, far shorter than the hours a stranded one sat in the list.
+ */
+const STRANDED_MS = 10 * 60_000;
 /** The states a setup job does not leave. */
 const ENDED_SETUP = new Set(['done', 'failed', 'cancelled']);
 /** The protocol a machine must speak to be handed a relay through a phone (intents.js, v12). */
@@ -270,6 +277,10 @@ export class CoordinatorCore {
   } = {}) {
     this.now = now;
     this.newId = newId;
+    /** A pool's own machine asking to join, kept until its owner answers (holder-joins.js). */
+    this.holderJoins = new HolderJoins({ now: () => this.now() });
+    /** @type {Map<string, number>} temporary hosts seen missing, and since when (retireStranded) */
+    this.missingSince = new Map();
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.firstHealthWaitMs = firstHealthWaitMs;
@@ -513,8 +524,53 @@ export class CoordinatorCore {
    */
   ephemeralHostRetired(hostId, reason) {
     this.hostIds.revoke(hostId);
+    this.missingSince.delete(hostId);
     this.record({ event: 'host.retired', hostId, text: `temporary host went away (${reason})` });
     this.log.info(`coordinator: retired temporary host ${hostId} (${reason})`);
+    // WRITTEN NOW, not at the next host's connect, which is when the key store
+    // used to be saved: an eviction in between brought the key back, and the
+    // machine with it, as a row that said "not reporting" for ever.
+    this.onStateChanged?.();
+  }
+
+  /**
+   * TEMPORARY MACHINES THE COORDINATOR NEVER SAW GO, retired as a disconnect
+   * would have retired them. A deploy or an eviction drops every socket at
+   * once, and no close reaches the coordinator that comes up after it, so a
+   * session machine that went in that window kept its key and sat under
+   * Machines as "not reporting", one row per machine, for good.
+   *
+   * MISSING SINCE IT WAS FIRST SEEN MISSING, not since it last connected:
+   * after a restart every machine is missing at once, and one connected for
+   * hours would be retired before it had a chance to dial back in. A machine
+   * missing for STRANDED_MS from this coordinator's point of view has had
+   * that chance. Called on the coordinator's timer.
+   *
+   * @returns {string[]} the hosts retired
+   */
+  retireStranded() {
+    const now = this.now();
+    /** @type {string[]} */
+    const retired = [];
+    const enrolled = new Set();
+    for (const h of this.hostIds?.serialise?.() ?? []) {
+      if (!h?.ephemeral || h.revokedAt) continue;
+      enrolled.add(h.hostId);
+      if (this.registry.get(h.hostId)?.connected) {
+        this.missingSince.delete(h.hostId);
+        continue;
+      }
+      const since = this.missingSince.get(h.hostId);
+      if (since === undefined) {
+        this.missingSince.set(h.hostId, now);
+        continue;
+      }
+      if (now - since < STRANDED_MS) continue;
+      this.ephemeralHostRetired(h.hostId, `not back within ${STRANDED_MS / 60_000} minutes of the coordinator last hearing from it`);
+      retired.push(h.hostId);
+    }
+    for (const id of this.missingSince.keys()) if (!enrolled.has(id)) this.missingSince.delete(id);
+    return retired;
   }
 
   /**
@@ -3565,9 +3621,133 @@ export class CoordinatorCore {
       return;
     }
     const pin = this.enrollment.mint({ purpose: 'host', label: `Holds a pool for ${rec.owner}`, actor: rec.owner, hostId: name });
+    // AND THE NAME HELD FOR A DAY, so a machine whose first boot outlasts the
+    // pin can still ask to join and be let in from the phone (holder-joins.js).
+    // The pin stays for machines made from an image older than the asking.
+    const address = typeof msg.address === 'string' && XO_ADDRESS_RE.test(msg.address) ? msg.address : '';
+    const held = address ? this.holderJoins.reserve({ hostId: name, owner: rec.owner, address, job }) : null;
     this.record({ event: 'holder.pin', actor: rec.owner, text: `${hostId} was given a pin for ${name}, the pool's own machine` });
     this.onStateChanged?.();
-    answer({ ok: true, pin: pin.code, hostId: name, expiresAt: pin.expiresAt });
+    answer({ ok: true, pin: pin.code, hostId: name, expiresAt: pin.expiresAt, ...(held ? { until: held.until } : {}) });
+  }
+
+  /**
+   * A POOL'S OWN MACHINE ASKING TO JOIN, from the machine itself, which has no
+   * credential yet: the name it was booted with, the key it made, and a proof
+   * made with the secret the person's phone gave the policy job
+   * (src/fleet/protocol/holder-join.js). Kept for its owner, who is told on
+   * their phone; the coordinator never has the secret, so it cannot check the
+   * proof and does not try. The phone does, before it asks for Face ID.
+   *
+   * @param {unknown} body
+   * @returns {Promise<{ status: number, body: any }>}
+   */
+  async holderJoin(body) {
+    const r = await this.holderJoins.ask(body);
+    if (!r.ok) return { status: r.code === 'bad_request' ? 400 : 404, body: { ok: false, error: { code: r.code }, text: r.text } };
+    const rec = r.reservation;
+    if (this.#holderJoined(rec.hostId)) {
+      this.onStateChanged?.();
+      return { status: 409, body: { ok: false, error: { code: 'already_joined' }, text: `${rec.hostId} has joined already.` } };
+    }
+    this.onStateChanged?.();
+    if (r.fresh) {
+      this.record({ event: 'holder.asked', actor: rec.owner, hostId: rec.hostId, text: `${rec.hostId} asked to join, to hold ${rec.address}` });
+      await this.#pushHolderAsk(rec);
+    }
+    return { status: 202, body: { ok: true, text: `Asked. ${rec.hostId} joins once whoever made it lets it in from their phone.`, until: rec.until } };
+  }
+
+  /**
+   * The pool's own machines waiting on this person, each with the requests
+   * made under its name, for the phone to check and answer.
+   *
+   * @param {{ email?: string|null }|null} requester
+   */
+  holdersFor(requester) {
+    const owner = String(requester?.email || '').toLowerCase();
+    if (!owner) return [];
+    for (const r of this.holderJoins.forOwner(owner)) this.#holderJoined(r.hostId);
+    return this.holderJoins.forOwner(owner);
+  }
+
+  /**
+   * LET IT IN: the owner, from the phone that checked the request's proof and
+   * then their face, names the key they are admitting. It enrols as a
+   * permanent host of nobody's, as a pin would have enrolled it. Holding the
+   * pool is the phone's next call, to the vault, for this key alone.
+   *
+   * @param {{ email?: string|null }|null} requester @param {string} hostId @param {unknown} body
+   * @returns {Promise<{ status: number, body: any }>}
+   */
+  async approveHolder(requester, hostId, body) {
+    const owner = String(requester?.email || '').toLowerCase();
+    const found = this.holderJoins.find(owner, hostId, String(/** @type {any} */ (body)?.key || ''));
+    if (!found.ok) return { status: found.code === 'bad_request' ? 400 : 404, body: { ok: false, error: { code: found.code }, text: found.text } };
+    if (this.#holderJoined(hostId)) {
+      this.onStateChanged?.();
+      return { status: 409, body: { ok: false, error: { code: 'already_joined' }, text: `${hostId} has joined already.` } };
+    }
+    const result = await this.hostIds.enrol({ hostId, publicJwk: found.request.publicJwk, enrolledBy: `holder:${owner}` });
+    if (!result.ok || !result.host) {
+      const full = 'code' in result && result.code === 'hosts_full';
+      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error } };
+    }
+    this.holderJoins.joined(hostId);
+    this.record({ event: 'host.enrolled', hostId, fingerprint: result.host.fingerprint });
+    this.record({ event: 'holder.approved', actor: owner, hostId, text: `${owner} let ${hostId} join, to hold ${found.reservation.address}` });
+    this.onStateChanged?.();
+    return {
+      status: 200,
+      body: { ok: true, hostId, address: found.reservation.address, fingerprint: result.host.fingerprint, text: `${hostId} has joined.` },
+    };
+  }
+
+  /**
+   * Not this one. The name stays held, since the request declined may have
+   * been a stranger's beside the real machine's.
+   *
+   * @param {{ email?: string|null }|null} requester @param {string} hostId @param {unknown} body
+   */
+  declineHolder(requester, hostId, body) {
+    const r = this.holderJoins.decline(String(requester?.email || ''), hostId, String(/** @type {any} */ (body)?.key || ''));
+    if (!r.ok) return { status: /** @type {any} */ (r).code === 'bad_request' ? 400 : 404, body: { ok: false, error: { code: /** @type {any} */ (r).code }, text: /** @type {any} */ (r).text } };
+    this.record({ event: 'holder.declined', actor: String(requester?.email || '').toLowerCase(), hostId });
+    this.onStateChanged?.();
+    return { status: 200, body: { ok: true, text: 'Declined. It is still waited on, in case the right one asks.' } };
+  }
+
+  /** Enrolled already, by its pin: not waited on any more. @param {string} hostId */
+  #holderJoined(hostId) {
+    const live = this.hostIds?.get(hostId);
+    if (!live || live.revokedAt) return false;
+    this.holderJoins.joined(hostId);
+    return true;
+  }
+
+  /** @param {import('./holder-joins.js').Reservation} rec */
+  async #pushHolderAsk(rec) {
+    if (!this.push) return;
+    const devices = this.#devicesOf(rec.owner);
+    if (!devices.length) return;
+    try {
+      await this.push.send(devices, {
+        title: `${rec.hostId} asks to join`,
+        body: `The pool\u2019s own machine for ${rec.address}. Open Fleetwright to check it is the one you made and let it in.`,
+        data: { kind: 'holder-join', name: `holder-join-${rec.hostId}`, hostId: rec.hostId, address: rec.address },
+      });
+    } catch (e) {
+      this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  serialiseHolderJoins() {
+    return this.holderJoins.serialise();
+  }
+
+  /** @param {unknown} saved */
+  restoreHolderJoins(saved) {
+    this.holderJoins.restore(saved);
   }
 
   /**

@@ -129,6 +129,13 @@ struct PhoneVault {
         return try await ask(fleet, op: "grant", extra: ["hostKey": jwk, "label": host.hostId]).text
     }
 
+    /// A pool's own machine, approved for its pool's record and nothing else
+    /// of this person's: the vault's `only` (src/fleet/minter/vault.js).
+    func approveHolder(_ fleet: Fleet, hostId: String, key: Fleet.Host.PublicKey, address: String) async throws -> String {
+        let jwk: [String: Any] = ["kty": key.kty, "crv": key.crv, "x": key.x, "y": key.y]
+        return try await ask(fleet, op: "grant", extra: ["hostKey": jwk, "label": hostId, "only": ["hypervisor:\(address)"]]).text
+    }
+
     func remove(_ fleet: Fleet, grant: Grant) async throws -> String {
         try await ask(fleet, op: "revoke", extra: ["key": grant.key]).text
     }

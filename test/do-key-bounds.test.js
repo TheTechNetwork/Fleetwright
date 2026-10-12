@@ -77,6 +77,9 @@ const BOUNDED = {
   // Machines kept ready: a refusal past MAX_PEOPLE, a count per person, and a
   // window on the ones being made.
   vmStandby: 'src/fleet/coordinator/vm-standby.js',
+  // A pool's own machine asking to join: a refusal past MAX_RESERVATIONS, a
+  // day's window, and MAX_REQUESTS per name.
+  holderJoins: 'src/fleet/coordinator/holder-joins.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */

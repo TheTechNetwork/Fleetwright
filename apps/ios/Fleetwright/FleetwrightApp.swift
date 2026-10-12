@@ -334,6 +334,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             let kind = info["kind"] as? String ?? ""
             let content = response.notification.request.content
             await MainActor.run {
+                // A POOL'S OWN MACHINE ASKING TO JOIN opens Machines, where it
+                // is the first card and Let it in is (HoldersAskingView).
+                if kind == "holder-join" { return openMachines() }
                 if kind == "xosetup", !content.body.isEmpty {
                     open(setup: SetupResult(title: content.title, text: content.body,
                                             state: info["state"] as? String ?? "", host: host))
@@ -398,6 +401,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func open(host: String) {
         NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["host": host])
+    }
+
+    /// And for a pool's own machine asking to join: FleetApp opens Machines.
+    @MainActor
+    private func openMachines() {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["machines": true])
     }
 
     /// And for a setup's end: FleetApp shows how it ended (SetupResultView).

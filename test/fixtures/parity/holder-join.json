@@ -1,0 +1,15 @@
+{
+  "why": "One holder join proof made the way src/fleet/protocol/holder-join.js makes it, with the secret written down, so the two phones can show they check a pool's own machine's request the way the machine proves it. test/holder-join.test.js checks it with holder-join.js itself.",
+  "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "hostId": "holder-c09fcd",
+  "address": "10.10.10.230",
+  "publicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "WKn-ZIGevcwGIyyrzFoZNBdaq9_TsqzGl96oc0CWuis",
+    "y": "y77t-RvAHRKTsSGdIYUfweuOvwrvDD-Q3Hv5J0fSKbE"
+  },
+  "keyHash": "a93e72291a348aca0408b19ed3e84926ec7888c44e6b055fb3c2c5710d80bdea",
+  "message": "fleetwright-holder-join/1\nholder-c09fcd\n10.10.10.230\na93e72291a348aca0408b19ed3e84926ec7888c44e6b055fb3c2c5710d80bdea",
+  "proof": "4263cf410741281b16228c92577c2b6e5e9b7b9882bf526051396a9ddc2a00e7"
+}

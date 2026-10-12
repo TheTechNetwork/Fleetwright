@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -2055,6 +2056,35 @@ class Fleet(
     }
 
     /**
+     * The pools' own machines waiting on you: the names the fleet holds for
+     * the ones your policy jobs made, each with the requests made under it
+     * (HolderJoin). An older coordinator has no such route; that is none.
+     */
+    internal suspend fun holders(): Result<List<HolderJoin.Waiting>> = withContext(Dispatchers.IO) {
+        runCatching {
+            // A FAILED REQUEST IS NOT NOBODY WAITING: it fails, and Machines keeps what it had.
+            val list = get("/api/holders").optJSONArray("holders") ?: JSONArray()
+            (0 until list.length()).mapNotNull { i -> list.optJSONObject(i)?.let(HolderJoin::waitingFrom) }
+        }
+    }
+
+    /** Let one in, by the key of the request this phone checked. Holding its pool is the vault's, next. */
+    suspend fun approveHolder(hostId: String, key: String): Result<Reply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = post("/api/holders/${URLEncoder.encode(hostId, "UTF-8")}/approve", JSONObject().put("key", key))
+            Reply(ok = json.optBoolean("ok", false), text = json.optString("text", ""), sessions = emptyList())
+        }
+    }
+
+    /** Not this request. The name stays held for the right one. */
+    suspend fun declineHolder(hostId: String, key: String): Result<Reply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = post("/api/holders/${URLEncoder.encode(hostId, "UTF-8")}/decline", JSONObject().put("key", key))
+            Reply(ok = json.optBoolean("ok", false), text = json.optString("text", ""), sessions = emptyList())
+        }
+    }
+
+    /**
      * What you keep ready: the `vmStandby` field of /api/hosts. Null is
      * keeping none, and so is an older coordinator, which omits it.
      */
@@ -3205,6 +3235,22 @@ class Settings(context: Context) {
 
     fun putXoSaved(address: String, sealed: String) {
         prefs.edit().apply { if (sealed.isEmpty()) remove("xoSaved.$address") else putString("xoSaved.$address", sealed) }.apply()
+    }
+
+    /**
+     * The secrets this phone gave policy jobs for pools' own machines at
+     * [address], newest first, each encrypted to HolderJoin's Keystore key:
+     * ciphertext here, and nothing this class can open.
+     */
+    fun holderSecrets(address: String): List<String> = runCatching {
+        val a = JSONArray(prefs.getString("holderSecrets.$address", "[]") ?: "[]")
+        (0 until a.length()).map { a.getString(it) }
+    }.getOrDefault(emptyList())
+
+    fun putHolderSecrets(address: String, sealed: List<String>) {
+        prefs.edit().apply {
+            if (sealed.isEmpty()) remove("holderSecrets.$address") else putString("holderSecrets.$address", JSONArray(sealed).toString())
+        }.apply()
     }
 
     /** Who this device is signed in as. Not a secret — it is displayed. */

@@ -62,6 +62,8 @@ export const OAUTH_PROVIDERS = Object.freeze({
 
 /** A named secret's name, as a box already names them (src/core/secret-store.js). */
 export const SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+/** Items a box approved for part of a vault may be named for (`grant` with `only`). */
+export const MAX_GRANT_ONLY = 8;
 
 /** The prefix a named secret's item carries, so it cannot be mistaken for a provider. */
 export const SECRET_PREFIX = 'secret:';
@@ -372,14 +374,23 @@ async function runDeviceOp(inside, config, key, who, email, at) {
     const prior = row.grants[hash];
     if (prior && Number(prior.at) >= at) return refuse('stale', 'That box has a newer approval or removal than this one. Nothing was changed.');
     const boxLabel = String(inside.label ?? '').replace(/[^\w.@:-]/g, '').slice(0, 64);
-    row.grants[hash] = { at, jwk, email, label: boxLabel };
+    // ONLY THESE, when named: a pool's own machine is approved for its pool's
+    // record and nothing else of the person's (docs/vault.md). Absent is the
+    // whole vault, as approving a box always was.
+    /** @type {string[]|null} */
+    const only = inside.only === undefined ? null : Array.isArray(inside.only) ? inside.only.map(String) : [];
+    if (only && (!only.length || only.length > MAX_GRANT_ONLY || only.some((n) => !itemKind(n)))) {
+      return refuse('bad_params', 'A box approved for some of your vault is approved for items it names, by their names.');
+    }
+    row.grants[hash] = { at, jwk, email, label: boxLabel, ...(only ? { only: [...new Set(only)] } : {}) };
     await save();
     await withLock(`box:${hash}`, async () => {
       const index = (await store.get(`box:${hash}`)) || { accounts: {} };
       index.accounts = { ...(index.accounts || {}), [who.userId]: { at } };
       await store.put(`box:${hash}`, index);
     });
-    return { ok: true, answer: { fingerprint: hash.slice(0, 16) }, text: `Approved ${boxLabel || 'that box'} (${hash.slice(0, 16)}) to hold your credentials.` };
+    const what = only ? only.map(label).join(', ') : 'your credentials';
+    return { ok: true, answer: { fingerprint: hash.slice(0, 16) }, text: `Approved ${boxLabel || 'that box'} (${hash.slice(0, 16)}) to hold ${what}.` };
   }
 
   if (inside.op === 'revoke') {
@@ -448,7 +459,7 @@ async function describe(row, store, userId) {
   items.sort((x, y) => (x.name < y.name ? -1 : 1));
   const grants = Object.entries(row.grants)
     .filter(([, g]) => g && !g.revoked && g.jwk)
-    .map(([hash, g]) => ({ key: hash, fingerprint: hash.slice(0, 16), label: String(g.label || ''), email: String(g.email || ''), at: Number(g.at) }))
+    .map(([hash, g]) => ({ key: hash, fingerprint: hash.slice(0, 16), label: String(g.label || ''), email: String(g.email || ''), at: Number(g.at), ...(Array.isArray(g.only) ? { only: g.only.map(String) } : {}) }))
     .sort((x, y) => (x.label < y.label ? -1 : 1));
   return { login: row.login, items, grants };
 }
@@ -513,8 +524,10 @@ async function itemsFor(userId, hash, jwk, store, key, config) {
   /** @type {string[]} */
   const problems = [];
   let changed = false;
+  const only = Array.isArray(grant.only) ? new Set(grant.only.map(String)) : null;
   for (const [name, item] of Object.entries(row.items)) {
     if (!item?.sealed || item.forgotten) continue;
+    if (only && !only.has(name)) continue;
     const kind = itemKind(name);
     /** @type {any} */
     let inside;
@@ -556,7 +569,7 @@ async function itemsFor(userId, hash, jwk, store, key, config) {
     }
   }
   if (changed) await store.put(`v:${userId}`, row);
-  const claude = await store.get(`gh:${userId}`);
+  const claude = only && !only.has('claude') ? null : await store.get(`gh:${userId}`);
   if (claude?.sealed && !claude.forgotten) {
     try {
       const inside = /** @type {any} */ (await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad(userId), sealed: claude.sealed }));

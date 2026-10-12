@@ -207,6 +207,7 @@ export class Coordinator {
     this.core.linkedRepos.restore(state.linkedRepos);
     this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.restoreStandby(state.vmStandby);
+    this.core.restoreHolderJoins(state.holderJoins);
     this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
     // MCP clients that registered themselves. Codes are not persisted and
@@ -310,6 +311,7 @@ export class Coordinator {
         linkedRepos: this.core.linkedRepos.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
         vmStandby: this.core.serialiseStandby(),
+        holderJoins: this.core.serialiseHolderJoins(),
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         mcpClients: this.core.mcpAuthorizations.serialise(),
@@ -616,6 +618,13 @@ export class Coordinator {
     // same function. See CoordinatorCore#imageReport.
     if (p === '/api/xosetup/report' && req.method === 'POST') {
       const answer = await this.core.imageReport(await readJson(req));
+      return json(res, answer.status, answer.body);
+    }
+
+    // A pool's own machine asking to join — see the Worker's copy.
+    if (p === '/api/holder/join' && req.method === 'POST') {
+      const answer = await this.core.holderJoin(await readJson(req));
+      this.saveState();
       return json(res, answer.status, answer.body);
     }
 
@@ -1174,6 +1183,22 @@ export class Coordinator {
         const body = await readJson(req);
         const r = await this.core.setVmStandby(requesterFor(client), body);
         return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+      }
+    }
+
+    // The pool's own machines waiting on you — see the Worker's copy.
+    if (p === '/api/holders' || p.startsWith('/api/holders/')) {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first \u2014 a pool\u2019s own machine waits on the person who made it.' });
+      }
+      if (p === '/api/holders' && req.method === 'GET') return json(res, 200, { ok: true, holders: this.core.holdersFor(requesterFor(client)) });
+      const m = /^\/api\/holders\/([^/]+)\/(approve|decline)$/.exec(p);
+      if (m && req.method === 'POST') {
+        const body = await readJson(req);
+        const hostId = decodeURIComponent(m[1]);
+        const answer = m[2] === 'approve' ? await this.core.approveHolder(requesterFor(client), hostId, body) : this.core.declineHolder(requesterFor(client), hostId, body);
+        this.saveState();
+        return json(res, answer.status, answer.body);
       }
     }
 

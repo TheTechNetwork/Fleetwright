@@ -86,6 +86,8 @@ fun MachinesScreen(
     // The images a machine can come from, for keeping some ready.
     var poolImages by remember { mutableStateOf(listOf<Fleet.VmImage>()) }
     var keepingReady by remember { mutableStateOf(false) }
+    // The pools' own machines waiting on you (HolderAskingCard).
+    var waitingHolders by remember { mutableStateOf(listOf<HolderJoin.Waiting>()) }
     // HAS THE FIRST ANSWER ARRIVED? "No machines yet" before the fleet has
     // replied is a confident statement about a question nobody has asked.
     var loaded by remember { mutableStateOf(false) }
@@ -124,11 +126,13 @@ fun MachinesScreen(
             val members = async { runCatching { Fleet(settings).enrolledHosts() } }
             val onPools = async { Fleet(settings).vmMachines() }
             val images = async { Fleet(settings).vmImages() }
+            val asking = async { Fleet(settings).holders() }
             // A FAILED REQUEST IS NOT AN EMPTY FLEET: keep what was there.
             reporting.await().onSuccess { fleetHosts = it }
             members.await().onSuccess { hosts = it }
             onPools.await().onSuccess { poolMachines = it }
             images.await().onSuccess { poolImages = it }
+            asking.await().onSuccess { waitingHolders = it }
         }
         loaded = true
     }
@@ -210,6 +214,15 @@ fun MachinesScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                         Text("No machines yet", style = Design.Style.section, color = Design.Palette.ink.now)
                         Hint("A machine joins with a pin from Add a machine and one line typed on it.")
+                    }
+                }
+            }
+            // FIRST, THE ONES ASKING. A pool's own machine that has asked to
+            // join is a machine wanting something, and only you can answer.
+            if (settings.configured && loaded) {
+                items(waitingHolders, key = { "holder/" + it.hostId }) { waiting ->
+                    Box(Modifier.animateItem(fadeInSpec = Design.Motion.change(), placementSpec = Design.Motion.settle(reduced), fadeOutSpec = Design.Motion.change())) {
+                        HolderAskingCard(settings, waiting, onChanged = { loadHosts() })
                     }
                 }
             }

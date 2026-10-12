@@ -52,7 +52,7 @@ test('Android: the session list and the machine list move their cards, unless an
   // for one arriving or leaving. The spring is null with "Remove animations"
   // on, which turns placement off rather than shortening it.
   const items = ANDROID.match(/animateItem\(\s*fadeInSpec = Design\.Motion\.change\(\),\s*placementSpec = Design\.Motion\.settle\(reduced\),\s*fadeOutSpec = Design\.Motion\.change\(\),?\s*\)/g) ?? [];
-  assert.equal(items.length, 3, 'sessions, reporting machines and silent machines each move');
+  assert.equal(items.length, 4, 'sessions, the pools\u2019 own machines asking to join, reporting machines and silent machines each move');
   assert.match(ANDROID, /Settings\.Global\.ANIMATOR_DURATION_SCALE/);
 });
 

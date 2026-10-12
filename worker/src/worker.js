@@ -457,7 +457,11 @@ curl -fsSL '${target}' | sh
       (request.method === 'POST' && url.pathname === '/api/enroll/vm') ||
       // A machine image's build VM reporting on its install: its token is
       // the credential (CoordinatorCore#imageReport).
-      (request.method === 'POST' && url.pathname === '/api/xosetup/report')
+      (request.method === 'POST' && url.pathname === '/api/xosetup/report') ||
+      // A pool's own machine asking to join: it has no credential yet, and
+      // the request admits nothing until its owner approves it from their
+      // phone (CoordinatorCore#holderJoin).
+      (request.method === 'POST' && url.pathname === '/api/holder/join')
     ) {
       return callFleet(env, request);
     }
@@ -3053,6 +3057,142 @@ const OPENAPI = JSON.stringify({
         }
       }
     },
+    "/api/holders": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "The pool\u2019s own machines waiting on you",
+        "description": "Each name reserved for a pool\u2019s own machine you made, with the requests made under it: `holders` is `[{ hostId, address, madeAt, until, requests: [{ key, publicJwk, proof, at }] }]`. A name with no requests after its first boot is a machine that never asked. The phone checks each proof with the secret it made before it offers to approve. See docs/hypervisors.md.",
+        "responses": {
+          "200": {
+            "description": "`holders`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          }
+        }
+      }
+    },
+    "/api/holders/{hostId}/approve": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Let a pool\u2019s own machine join",
+        "description": "`{ key }`, the whole SHA-256 of the key in the request being approved. Enrols that key under the reserved name as a permanent host. Holding the pool is a separate call, to the vault, for this key alone. Only the person who made it, and only a request still waiting.",
+        "parameters": [
+          {
+            "name": "hostId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "key"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "64 hex characters"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "joined: `{ hostId, address, fingerprint }`"
+          },
+          "400": {
+            "description": "no key named"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "404": {
+            "description": "not waiting on you, or no request with that key"
+          },
+          "409": {
+            "description": "`already_joined`"
+          },
+          "507": {
+            "description": "`hosts_full`"
+          }
+        }
+      }
+    },
+    "/api/holders/{hostId}/decline": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Decline one request to join",
+        "description": "`{ key }`. That request is dropped and the name stays reserved, since the declined request may have been a stranger\u2019s beside the real machine\u2019s.",
+        "parameters": [
+          {
+            "name": "hostId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "key"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "64 hex characters"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "declined"
+          },
+          "400": {
+            "description": "no key named"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "404": {
+            "description": "not waiting on you, or no request with that key"
+          }
+        }
+      }
+    },
     "/api/runners/dispatch": {
       "post": {
         "tags": [
@@ -3329,6 +3469,59 @@ const OPENAPI = JSON.stringify({
           },
           "507": {
             "description": "the fleet has no room for another host \u2014 `hosts_full`"
+          }
+        }
+      }
+    },
+    "/api/holder/join": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "security": [],
+        "summary": "A pool\u2019s own machine asking to join",
+        "description": "Reachable without a credential BECAUSE it admits nothing: a request is kept only for a name the fleet reserved for a pool\u2019s own machine when its policy job made it, for a day, and the machine joins only once the person who made it approves the request from their phone. `proof` is HMAC-SHA-256 over `fleetwright-holder-join/1\\n<hostId>\\n<address>\\n<key hash>` with the secret that person\u2019s phone gave the policy job; the coordinator never has the secret and does not check it, the phone does. See src/fleet/protocol/holder-join.js and docs/hypervisors.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "hostId",
+                  "publicJwk",
+                  "proof"
+                ],
+                "properties": {
+                  "hostId": {
+                    "type": "string",
+                    "description": "the `holder-` name the machine was booted with"
+                  },
+                  "publicJwk": {
+                    "type": "object",
+                    "description": "the machine\u2019s own P-256 public key, made on it"
+                  },
+                  "proof": {
+                    "type": "string",
+                    "description": "64 hex characters"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "kept for its owner, who is told on their phone; `until` is when the name stops being held"
+          },
+          "400": {
+            "description": "not a holder name, a P-256 key and a proof"
+          },
+          "404": {
+            "description": "`not_reserved`: no name like it is waited on"
+          },
+          "409": {
+            "description": "`already_joined`"
           }
         }
       }

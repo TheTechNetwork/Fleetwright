@@ -48,12 +48,12 @@ test('offered only by a machine whose `can` says so, and only where the inventor
   assert.match(A_SHEET, /holderChoice = canHolder && opened\.holders != null/);
   assert.match(A_FORM, /if \(choice\.holderChoice && choice\.egress != null\) \{/);
   // The machine offers it on the same terms.
-  assert.ok(HOST.includes("...(this.coordinatorUrl && this.holderPin ? ['holder'] : [])"));
+  assert.ok(HOST.includes("...(this.coordinatorUrl && this.holderPin ? ['holder', 'holder-ask'] : [])"));
 });
 
 test('sent only to a machine that reads it, only when asked, as the key checkPolicy reads', () => {
-  assert.match(I_POLICY, /if holderChoice, holder \{ out\["holder"\] = true \}/);
-  assert.match(A_POLICY, /if \(c\.holderChoice && c\.holder\) put\("holder", true\)/);
+  assert.match(I_POLICY, /if holderChoice, holder \{\s*out\["holder"\] = true/);
+  assert.match(A_POLICY, /if \(c\.holderChoice && c\.holder\) \{\s*put\("holder", true\)/);
   assert.ok(HOST.includes('const holder = p.holder === true;'));
 });
 
