@@ -34,6 +34,8 @@ struct MachinesView: View {
     @State private var poolMachines: [Fleet.VMMachine] = []
     /// The images a machine can come from, for keeping some ready.
     @State private var poolImages: [Fleet.VMImage] = []
+    /// The pools' own machines waiting on you (HoldersAskingView).
+    @State private var waitingHolders: [HolderJoin.Waiting] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Enrolled, and not saying anything: membership with no report.
@@ -62,6 +64,12 @@ struct MachinesView: View {
                     Text("A machine joins with a pin from Add a machine and one line typed on it.")
                 }
                 .fleetRow()
+            }
+
+            // THE POOLS' OWN MACHINES WAITING ON YOU, first: one that asks to
+            // join is a machine wanting something, and only you can answer.
+            if settings.configured && loaded {
+                HoldersAskingView(settings: settings, waiting: waitingHolders, reload: { await loadHosts() })
             }
 
             ForEach(fleetHosts) { host in
@@ -395,6 +403,7 @@ struct MachinesView: View {
         async let enrolled = fleet.enrolledHosts()
         async let onPools = fleet.vmMachines()
         async let images = fleet.vmImages()
+        async let asking = fleet.holders()
         // A FAILED REQUEST IS NOT AN EMPTY FLEET. A list that was right ten
         // seconds ago is a better answer than nothing, and the next refresh
         // corrects it.
@@ -404,11 +413,13 @@ struct MachinesView: View {
         let gotEnrolled = try? await enrolled
         let gotPools = try? await onPools
         let gotImages = try? await images
+        let gotAsking = try? await asking
         withAnimation(Design.Motion.settle(reduceMotion)) {
             if let got = gotReporting { fleetHosts = got }
             if let got = gotEnrolled { hosts = got }
             if let got = gotPools { poolMachines = got }
             if let got = gotImages { poolImages = got }
+            if let got = gotAsking { waitingHolders = got }
         }
         loaded = true
         openAsked()

@@ -199,6 +199,9 @@ struct AddHypervisorView: View {
         /// It makes the pool a machine of its own (`can` holds "holder");
         /// an older one cannot.
         var canHolder = false
+        /// And that machine asks to join with this phone's secret, and is
+        /// made again when asked (`can` holds "holder-ask").
+        var canHolderAsk = false
         /// It builds an edge that drops what its threat rules match
         /// (`can` holds "edge-block"); an older one only one that logs.
         var canEdgeBlock = false
@@ -1015,6 +1018,16 @@ struct AddHypervisorView: View {
             if choice.holderChoice, choice.egress != nil {
                 if let mine = inv.holder(on: choice.egress) {
                     policyRow("The pool’s own machine", holderThereLine(mine))
+                    // MAKE IT AGAIN, for one that never joined: offered only
+                    // by a machine that makes the new one ask (C-2).
+                    if choice.holderAskChoice {
+                        Toggle(isOn: $choice.holderAgain) {
+                            policyRow("Make it again", againLine(mine))
+                        }
+                        .tint(Design.Palette.accent)
+                        .frame(minHeight: 44)
+                        .disabled(busy)
+                    }
                 } else {
                     Toggle(isOn: $choice.holder) {
                         policyRow("Make the pool a machine of its own", holderLine)
@@ -1149,9 +1162,13 @@ struct AddHypervisorView: View {
     /// What the pool's own machine is, before it is asked for. The same words
     /// as Android (PolicyForm.kt).
     private var holderLine: String {
-        "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the "
-            + "fleet may use, so the pool does not need \(hostId) to be awake. Once it joins, approve it under Machines and it "
-            + "holds the pool."
+        choice.holderAskChoice
+            ? "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the "
+                + "fleet may use, so the pool does not need \(hostId) to be awake. Once it is up it asks to join, and this phone "
+                + "asks you to let it in and hold the pool."
+            : "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the "
+                + "fleet may use, so the pool does not need \(hostId) to be awake. Once it joins, approve it under Machines and it "
+                + "holds the pool."
     }
 
     /// The one there, and what Apply does to it. The same words as Android.
@@ -1159,6 +1176,11 @@ struct AddHypervisorView: View {
         mine.running
             ? "\(mine.name) is there and running. It holds the pool once you have approved it under Machines."
             : "\(mine.name) is there and stopped. Apply starts it."
+    }
+
+    /// What making it again does. The same words as Android.
+    private func againLine(_ mine: XOPolicy.Inventory.Holder) -> String {
+        "Removes \(mine.name), disk and all, and makes a new one that asks to join. For one that never joined the fleet."
     }
 
     /// What making the image costs, before it is asked for. The same words as
@@ -1883,6 +1905,7 @@ struct AddHypervisorView: View {
                                   canImage: begun.can.contains("image"), canImages: begun.can.contains("images"),
                                   canGroups: begun.can.contains("groups"),
                                   canHolder: begun.can.contains("holder"),
+                                  canHolderAsk: begun.can.contains("holder-ask"),
                                   canEdgeBlock: begun.can.contains("edge-block"),
                                   canEdgeHa: begun.can.contains("edge-ha"),
                                   canLabs: begun.can.contains("labs"),
@@ -1916,6 +1939,7 @@ struct AddHypervisorView: View {
                     choice.imagesChoice = policyJob.canImages && opened.imageKinds != nil
                     choice.groupsChoice = policyJob.canGroups && opened.groups != nil
                     choice.holderChoice = policyJob.canHolder && opened.holders != nil
+                    choice.holderAskChoice = choice.holderChoice && policyJob.canHolderAsk
                     choice.edgeBlockChoice = policyJob.canEdgeBlock
                     choice.edgeHaChoice = policyJob.canEdgeHa
                     choice.labsChoice = policyJob.canLabs && opened.labMax != nil
@@ -1954,12 +1978,16 @@ struct AddHypervisorView: View {
         defer { busy = false }
         result = ""
         failed = false
+        // THE SECRET THE NEW MACHINE ASKS TO JOIN WITH, made and kept here
+        // before it is sent (HolderJoin). Nil when nothing is made, or the
+        // Keychain would not keep it, and then the machine joins with its pin.
+        let secret = choice.makesHolder(in: inv) ? HolderJoin.newSecret(for: policyJob.address) : nil
         let sealed: [String: String]
         do {
             sealed = try Seal.seal(
                 to: policyJob.key,
                 aad: Seal.xosetupPolicyAAD(job: job, address: policyJob.address),
-                payload: choice.payload(in: inv)
+                payload: choice.payload(in: inv, holderSecret: secret)
             )
         } catch {
             refuse(error.localizedDescription)

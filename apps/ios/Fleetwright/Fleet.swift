@@ -1828,6 +1828,28 @@ struct Fleet {
         }
     }
 
+    /// The pools' own machines waiting on you: the names the fleet holds for
+    /// the ones your policy jobs made, each with the requests made under it
+    /// (HolderJoin). An older coordinator has no such route; that is none.
+    func holders() async throws -> [HolderJoin.Waiting] {
+        let data = try await get("/api/holders")
+        struct Reply: Decodable { let holders: [HolderJoin.Waiting]? }
+        return (try? JSONDecoder().decode(Reply.self, from: data))?.holders ?? []
+    }
+
+    /// Let one in, by the key of the request this phone checked: it joins
+    /// the fleet. Holding its pool is the vault's, next (PhoneVault).
+    func approveHolder(_ hostId: String, key: String) async throws -> Reply {
+        let path = "/api/holders/\(hostId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? hostId)/approve"
+        return try JSONDecoder().decode(Reply.self, from: try await post(path, body: ["key": key]))
+    }
+
+    /// Not this request. The name stays held for the right one.
+    func declineHolder(_ hostId: String, key: String) async throws -> Reply {
+        let path = "/api/holders/\(hostId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? hostId)/decline"
+        return try JSONDecoder().decode(Reply.self, from: try await post(path, body: ["key": key]))
+    }
+
     /// What you keep ready: the `vmStandby` field of /api/hosts. Nil is
     /// keeping none, and so is an older coordinator, which omits it.
     func vmStandby() async throws -> VMStandby? {
