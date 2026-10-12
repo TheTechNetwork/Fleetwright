@@ -164,6 +164,9 @@ export class Fleet {
         // Hypervisor setups: begun, then run a minute later, then reporting
         // for several more — every gap one this object is evicted across.
         this.state.storage.put('xosetups', this.core.serialiseSetups()),
+        // Enrolled machines: a temporary one retired between two connects
+        // was otherwise revoked only in memory (core.js ephemeralHostRetired).
+        this.state.storage.put('hostIds', this.core.hostIds.serialise()),
       ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
@@ -1452,6 +1455,10 @@ export class Fleet {
    * gone quiet. A DO alarm is far too coarse to poll on.
    */
   async alarm() {
+    // Temporary machines a deploy or an eviction dropped without a close
+    // (core.js retireStranded): first, so a fleet with no sockets left still
+    // gets the one pass this alarm makes before it stops re-arming.
+    this.core.retireStranded();
     const sockets = this.state.getWebSockets();
     if (!sockets.length) return;
     for (const host of this.core.registry.schedulable()) {
