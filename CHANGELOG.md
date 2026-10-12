@@ -40,6 +40,11 @@ own machine asks to join instead of racing a pin.**
   **Make it again** for one that never joined. A machine made from an image
   built before this release still joins with its pin: rebuild the pool's image
   first, then make it again.
+- **A pool's own machine no longer offers buttons that fail.** Its page used
+  to offer Shut down and the rest, which Xen Orchestra refused with "not
+  enough permissions": it is made with the admin sign-in, outside what the
+  fleet's token may change. Its page now says so and points to Make it again
+  in the pool's policy.
 - **Machines that went away without saying so no longer stay listed as not
   reporting.** A temporary machine whose close the coordinator missed, on a
   deploy or a save that came late, is retired ten minutes after it was first
