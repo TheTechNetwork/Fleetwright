@@ -23,6 +23,7 @@ import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, removeImage
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
+import { HOLDER } from '../src/fleet/host/xo-holder.js';
 import { newSealKey, open as openSealed, xolookAad } from '../src/fleet/seal.js';
 
 const ELI = 'eli@example.com';
@@ -1051,6 +1052,17 @@ test('a pool’s page is read under its owner’s token and sealed to the phone�
     'the answer for one pool does not open as another’s',
   );
   assert.equal(stand.rpc.closed, true);
+});
+
+test('the pool’s own machine keeps the one tag that says so on its page, and no other', async () => {
+  const own = { ...PAGE_VM, id: 'vm-holder', name_label: 'holder-c09fcd', tags: ['private', HOLDER.tag, `${HOLDER.forPrefix}xo.lan`] };
+  const { pools } = pageHolder({ objects: [pool, PAGE_VM, own] });
+  const key = await newSealKey();
+  const r = await pools.look({ owner: ELI, address: 'xo.lan', reply: key.publicKey });
+  const page = await openSealed({ privateKey: key.privateKey, publicKey: key.publicKey, aad: xolookAad('xo.lan'), sealed: /** @type {any} */ (r.sealed) });
+  const byId = Object.fromEntries(page.objects.map((/** @type {any} */ o) => [o.id, o]));
+  assert.deepEqual(byId['vm-holder'].tags, [HOLDER.tag], 'the phones offer it nothing, which they can tell only from this');
+  assert.equal(byId[PAGE_VM.id].tags, undefined, 'any other VM still carries none');
 });
 
 test('a page whose methods cannot be read says cannot tell, and one too large for the fleet says so', async () => {

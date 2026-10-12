@@ -432,6 +432,8 @@ struct ComponentView: View {
         Section {
             if watch.phase != .live {
                 note(Manage.Words.lost("this phone is not connected"))
+            } else if c.holder {
+                note(Manage.Words.holder(c.name))
             } else if methods == nil {
                 note(Manage.Words.methodsUnknown)
             } else if offered.isEmpty && !resize && !needsStopped && disks.isEmpty {

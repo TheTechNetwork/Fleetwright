@@ -388,6 +388,7 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
         val disks = if (grow == null) emptyList() else s.attachedDisks(c.id).filter { it.size != null }
         when {
             watch.phase != PoolWatch.Phase.Live -> Hint(Manage.Words.lost("this phone is not connected"))
+            c.holder -> Hint(Manage.Words.holder(c.name))
             methods == null -> Hint(Manage.Words.methodsUnknown)
             offered.isEmpty() && !resize && !needsStopped && disks.isEmpty() -> Hint(Manage.Words.nothingOffered)
             else -> {
