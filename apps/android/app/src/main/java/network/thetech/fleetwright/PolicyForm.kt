@@ -118,7 +118,7 @@ internal fun PolicyForm(
         title = "None yet",
         line = if (!anyWayOut && choice.networks.isEmpty()) "Choose a network above to offer it here." else null,
         // No way out, no router and no image: the switches go off with it.
-        onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false)) },
+        onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false, holderAgain = false)) },
     )
     // THE EDGE ROUTER, offered only by a machine that can build it and only
     // with a way out (C-2): built when the pool has none, kept in step when
@@ -264,15 +264,32 @@ internal fun PolicyForm(
                     "${mine.name} is there and stopped. Apply starts it."
                 },
             )
+            // MAKE IT AGAIN, for one that never joined: offered only by a
+            // machine that makes the new one ask (C-2). The same words as iOS.
+            if (choice.holderAskChoice) {
+                CheckRow(
+                    checked = choice.holderAgain,
+                    enabled = enabled,
+                    title = "Make it again",
+                    line = "Removes ${mine.name}, disk and all, and makes a new one that asks to join. For one that never joined the fleet.",
+                    onChange = { on -> onChange(choice.copy(holderAgain = on)) },
+                )
+            }
         } else {
             val router = XoPolicy.edgeOn(inv, choice.egress)
             CheckRow(
                 checked = choice.holder,
                 enabled = enabled,
                 title = "Make the pool a machine of its own",
-                line = "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
-                    "fleet may use, so the pool does not need $machine to be awake. Once it joins, approve it under Machines and it " +
-                    "holds the pool.",
+                line = if (choice.holderAskChoice) {
+                    "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
+                        "fleet may use, so the pool does not need $machine to be awake. Once it is up it asks to join, and this phone " +
+                        "asks you to let it in and hold the pool."
+                } else {
+                    "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
+                        "fleet may use, so the pool does not need $machine to be awake. Once it joins, approve it under Machines and it " +
+                        "holds the pool."
+                },
                 // Made from the image: asking for it asks for Debian's, and the
                 // router that is built behind, when the pool has neither.
                 onChange = { on ->

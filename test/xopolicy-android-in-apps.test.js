@@ -42,7 +42,7 @@ test('Android: the pool and the choice are sealed under the machine’s own bind
   assert.ok(policy.includes(`fun policyAad(job: String, address: String): String = "${choice}"`), choice);
   // Opened and sealed with the app's one seal, under those bindings.
   assert.ok(policy.includes('Seal.open(key, inventoryAad(job, address), box)'));
-  assert.ok(policy.includes('Seal.seal(key, policyAad(job, address), payload(inv, c))'));
+  assert.ok(policy.includes('Seal.seal(key, policyAad(job, address), payload(inv, c, holderSecret))'));
   // The sign-in goes under setup's binding: it is `run`, and the machine
   // opens it before it knows which kind of job it is.
   assert.equal(xosetupAad('J', 'A'), 'fleetwright-xosetup/v1:J:A');
@@ -107,7 +107,7 @@ test('Android: the choice goes to the key `begin` gave and the phone checked, ne
   assert.match(runPolicy, /val key = p\.setup\.key \?: return[\s\S]*?jobKey = key/);
   const apply = fn(sheet, 'fun applyChoice(');
   assert.match(apply, /val key = jobKey \?: return/);
-  assert.ok(apply.includes('XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c)'));
+  assert.ok(apply.includes('XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c, secret)'));
   assert.ok(apply.includes('fleet.xosetup("policy", job = setup.job, sealed = sealed)'));
   assert.ok(!apply.includes('host ='), '`policy` names the job alone');
   // Apply is offered only for a choice the machine would take.
@@ -168,7 +168,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   assert.match(form, /if \(canEdge && choice\.egress != null\) \{/);
   assert.ok(form.includes('title = if (there == null) "Build the edge router on it" else "Keep the edge router on it"'));
   assert.ok(form.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
-  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false)) }'));
+  assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false, holderAgain = false)) }'));
   assert.match(sheet, /canEdge = "edge" in p\.setup\.can/);
   assert.match(policy, /\.put\("edge", c\.edge\)/);
   assert.ok(policy.includes('The edge router needs a way out: choose the network its WAN goes on.'));

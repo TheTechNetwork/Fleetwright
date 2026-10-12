@@ -257,6 +257,31 @@ class XoPolicyTest {
     }
 
     @Test
+    fun theHoldersSecretAndMakingItAgainGoOnlyToAMachineThatReadsThem() {
+        val image = JSONArray().put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Debian 13").put("key", "debian-13"))
+        val none = inventory(inventoryJson().put("images", image).put("holders", JSONArray()))
+        val secret = "ab".repeat(32)
+        val c = XoPolicy.defaults(none).copy(holderChoice = true, holder = true)
+        assertFalse("a machine that does not read the secret is made none", XoPolicy.makesHolder(none, c))
+        assertFalse(XoPolicy.payload(none, c, secret).has("holderSecret"))
+        val asking = c.copy(holderAskChoice = true)
+        assertTrue("none there, so one is made, and asks", XoPolicy.makesHolder(none, asking))
+        assertEquals(secret, XoPolicy.payload(none, asking, secret).getString("holderSecret"))
+        assertFalse("nothing there to make again", XoPolicy.payload(none, asking.copy(holderAgain = true), secret).has("holderAgain"))
+
+        val stuck = inventory(
+            inventoryJson().put("images", image)
+                .put("holders", JSONArray().put(JSONObject().put("pool", "pool-1").put("name", "holder-c09fcd").put("running", true))),
+        )
+        val d = XoPolicy.defaults(stuck).copy(holderChoice = true, holderAskChoice = true)
+        assertTrue("the one there is kept by Apply", d.holder)
+        assertFalse("kept, so nothing is made and no secret", XoPolicy.makesHolder(stuck, d))
+        val again = d.copy(holderAgain = true)
+        assertTrue(XoPolicy.makesHolder(stuck, again))
+        assertTrue(XoPolicy.payload(stuck, again, secret).getBoolean("holderAgain"))
+    }
+
+    @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in
         // src/fleet/seal.js, and neither is setup's or the token's.

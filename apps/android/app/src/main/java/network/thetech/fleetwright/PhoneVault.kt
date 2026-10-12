@@ -1,6 +1,7 @@
 package network.thetech.fleetwright
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 
@@ -119,6 +120,12 @@ internal class PhoneVault(private val settings: Settings) {
     suspend fun approve(fleet: Fleet, host: Fleet.Host): Result<String> = runCatching {
         val key = host.publicJwk ?: error("The fleet did not list ${host.hostId}'s key, so it cannot be approved from here. Update the fleet.")
         ask(fleet, "grant", JSONObject().put("hostKey", key).put("label", host.hostId)).first
+    }
+
+    /** A pool's own machine, approved for its pool's record and nothing else of this person's (the vault's `only`). */
+    suspend fun approveHolder(fleet: Fleet, hostId: String, key: JSONObject, address: String): Result<String> = runCatching {
+        val jwk = JSONObject().put("kty", key.optString("kty")).put("crv", key.optString("crv")).put("x", key.optString("x")).put("y", key.optString("y"))
+        ask(fleet, "grant", JSONObject().put("hostKey", jwk).put("label", hostId).put("only", JSONArray().put("hypervisor:$address"))).first
     }
 
     suspend fun remove(fleet: Fleet, grant: Grant): Result<String> = runCatching {

@@ -375,6 +375,10 @@ internal object XoPolicy {
         val holder: Boolean = false,
         /** The machine makes one (`holder` in begin's `can`). An older one cannot, so it is neither offered nor sent. */
         val holderChoice: Boolean = false,
+        /** The one it makes asks to join with a secret from this phone, and it makes one again (`holder-ask`). An older one ignores both. */
+        val holderAskChoice: Boolean = false,
+        /** Remove the one there and make a new one: for one that never joined. */
+        val holderAgain: Boolean = false,
     ) {
         /** An image is asked for, in whichever form this machine reads. */
         val wantsImage: Boolean get() = if (imagesChoice) images.isNotEmpty() else image
@@ -564,7 +568,7 @@ internal object XoPolicy {
     fun withNetwork(c: Choice, id: String, on: Boolean): Choice {
         val networks = if (on) c.networks + id else c.networks - id
         val egress = c.egress?.takeIf { c.anyWayOut || it in networks }
-        return c.copy(networks = networks, egress = egress, edge = c.edge && egress != null, holder = c.holder && egress != null)
+        return c.copy(networks = networks, egress = egress, edge = c.edge && egress != null, holder = c.holder && egress != null, holderAgain = c.holderAgain && egress != null)
     }
 
     /**
@@ -648,7 +652,7 @@ internal object XoPolicy {
      * The choice as the machine reads it: ids in the order the pool listed
      * them, the way out or JSON null, and the limits in bytes.
      */
-    fun payload(inv: Inventory, c: Choice): JSONObject =
+    fun payload(inv: Inventory, c: Choice, holderSecret: String? = null): JSONObject =
         JSONObject()
             .put("v", 1)
             .put("srs", JSONArray(inv.srs.map { it.id }.filter { it in c.srs }))
@@ -680,15 +684,31 @@ internal object XoPolicy {
             .apply { imageKeys(inv, c, REBUILD).takeIf { it.isNotEmpty() }?.let { put("rebuild", JSONArray(it)) } }
             .apply { imageKeys(inv, c, REMOVE).takeIf { it.isNotEmpty() }?.let { put("remove", JSONArray(it)) } }
             // Only to a machine that makes one, and only when asked.
-            .apply { if (c.holderChoice && c.holder) put("holder", true) }
+            .apply {
+                if (c.holderChoice && c.holder) {
+                    put("holder", true)
+                    // The secret it asks to join with, and making it again, only
+                    // to a machine that reads them.
+                    if (c.holderAskChoice && holderSecret != null) put("holderSecret", holderSecret)
+                    if (c.holderAskChoice && c.holderAgain && holderOn(inv, c.egress) != null) put("holderAgain", true)
+                }
+            }
             // Only to a machine that reads it, and only with something to build.
             .apply { if (c.edgeBlockChoice && c.edge) put("edgeBlock", c.edgeBlock) }
             .apply { if (c.edgeHaChoice && c.edge) put("edgeHa", c.edgeHa) }
             .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage) || imageKeys(inv, c, REBUILD).isNotEmpty())) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
-    fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice): String =
-        joined(Seal.seal(key, policyAad(job, address), payload(inv, c)))
+    fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice, holderSecret: String? = null): String =
+        joined(Seal.seal(key, policyAad(job, address), payload(inv, c, holderSecret)))
+
+    /**
+     * Apply makes a pool's own machine that asks to join: asked for, from a
+     * machine that makes it so, where there is none or it is made again. Only
+     * then is a secret made for it (HolderJoin).
+     */
+    fun makesHolder(inv: Inventory, c: Choice): Boolean =
+        c.holderChoice && c.holderAskChoice && c.holder && c.egress != null && (holderOn(inv, c.egress) == null || c.holderAgain)
 
     /** Bytes as a person reads a size here: whole GiB, rounded, as the machine says them. */
     fun gib(bytes: Long): String = "${gibRounded(bytes)} GiB"

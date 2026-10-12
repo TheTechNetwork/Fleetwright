@@ -42,9 +42,11 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Machines, Add a hypervisor: a Xen Orchestra pool onboarded by one machine
@@ -200,6 +202,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canGroups by remember { mutableStateOf(false) }
     // It makes the pool a machine of its own (`can` holds "holder"); an older one cannot.
     var canHolder by remember { mutableStateOf(false) }
+    // And that machine asks to join with this phone's secret, and is made again when asked (`can` holds "holder-ask").
+    var canHolderAsk by remember { mutableStateOf(false) }
     // It builds an edge that drops what its threat rules match (`can` holds "edge-block"); an older one only one that logs.
     var canEdgeBlock by remember { mutableStateOf(false) }
     // It builds the edge as two routers sharing their addresses (`can` holds "edge-ha"); an older one builds one.
@@ -510,6 +514,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canImages = "images" in p.setup.can
         canGroups = "groups" in p.setup.can
         canHolder = "holder" in p.setup.can
+        canHolderAsk = "holder-ask" in p.setup.can
         canEdgeBlock = "edge-block" in p.setup.can
         canEdgeHa = "edge-ha" in p.setup.can
         canLabs = "labs" in p.setup.can
@@ -721,7 +726,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         scope.launch {
             applying = true
             choiceRefusal = ""
-            val sealed = XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c)
+            // THE SECRET THE NEW MACHINE ASKS TO JOIN WITH, made and kept here
+            // before it is sent (HolderJoin). Null when nothing is made, or the
+            // Keystore would not keep it, and then the machine joins with its pin.
+            val secret = if (XoPolicy.makesHolder(inv, c)) withContext(Dispatchers.IO) { HolderJoin.newSecret(settings, address.trim()) } else null
+            val sealed = XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c, secret)
             val r = fleet.xosetup("policy", job = setup.job, sealed = sealed)
             if (r.ok) {
                 // Nothing left to open or choose: the key and the pool go.
@@ -800,6 +809,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             imageManageChoice = canImages && opened.imageKinds != null && canImageManage,
                             groupsChoice = canGroups && opened.groups != null,
                             holderChoice = canHolder && opened.holders != null,
+                            holderAskChoice = canHolder && opened.holders != null && canHolderAsk,
                             edgeBlockChoice = canEdgeBlock,
                             edgeHaChoice = canEdgeHa,
                             labsChoice = canLabs && opened.labMax != null,
