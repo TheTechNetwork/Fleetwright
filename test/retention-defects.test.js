@@ -14,6 +14,11 @@
 //   5. an Actions runner enrolled under the coordinator's name and dialled
 //      under the workflow's, because the enrol step set an env var in a process
 //      that had already exited
+//   6. a temporary machine whose socket went while the coordinator was being
+//      deployed or evicted kept its key, because no close reached the
+//      coordinator that came up after; and one that was retired was revoked
+//      only in memory until the next host connected, so an eviction in between
+//      brought it back. Both sat under Machines as "not reporting" for good
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -51,6 +56,7 @@ function workerFleet() {
   const env = { FLEET: { idFromName: () => 'id', get: () => fleet }, FLEETWRIGHT_API_TOKEN: ADMIN };
   return {
     core: fleet.core,
+    storage,
     call: (/** @type {string} */ p, /** @type {string} */ method, /** @type {any} */ body, /** @type {Record<string,string>} */ headers = {}) =>
       worker.fetch(
         new Request(`https://fleet.example${p}`, { method, headers: { 'content-type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) }),
@@ -246,4 +252,38 @@ test('a plain `enrol <pin>` records the name beside the key, like the Actions pa
   // After the enrol succeeded and before afterEnrol, so a refused pin records nothing.
   assert.ok(body.indexOf('await enrol(') < body.indexOf('recordAssignedName('), 'recorded before the coordinator answered');
   assert.ok(body.indexOf('recordAssignedName(') < body.indexOf('await afterEnrol()'), 'recorded after the sidecar was already told to start');
+});
+
+test('6. a temporary machine missing ten minutes is retired, counted from when it went missing, not from when it connected', async () => {
+  let now = Date.UTC(2026, 9, 11, 6, 0);
+  const core = new CoordinatorCore({ logger: silent, now: () => now });
+  core.hostIds.now = () => now;
+  for (const [hostId, ephemeral] of /** @type {const} */ ([['vm-gone', true], ['vm-back', true], ['real-box', false]])) {
+    const { publicJwk } = await generateKeyPair();
+    await core.hostIds.enrol({ hostId, publicJwk, ephemeral });
+  }
+  // Connected hours ago, and then the coordinator was deployed: nothing is in
+  // the registry, and every last-seen time is old.
+  now += 3 * 3_600_000;
+  assert.deepEqual(core.retireStranded(), [], 'nobody has yet had the chance to dial back in');
+  now += 5 * 60_000;
+  core.hostConnected('vm-back', () => {});
+  now += 6 * 60_000;
+  assert.deepEqual(core.retireStranded(), ['vm-gone']);
+  assert.ok(core.hostIds.get('vm-gone')?.revokedAt, 'its key is refused from here on');
+  assert.equal(core.hostIds.list().some((h) => h.hostId === 'vm-gone'), false, 'and it is no longer a row under Machines');
+  assert.equal(core.hostIds.get('vm-back')?.revokedAt, null, 'the one that came back is kept');
+  assert.equal(core.hostIds.get('real-box')?.revokedAt, null, 'a permanent box may be away as long as it likes');
+  assert.ok(core.events.some((e) => e.event === 'host.retired' && e.hostId === 'vm-gone'));
+});
+
+test('6. on the Worker, a retired temporary machine is revoked in storage at once, not at the next host\'s connect', async () => {
+  const fleet = workerFleet();
+  const { publicJwk } = await generateKeyPair();
+  await fleet.core.hostIds.enrol({ hostId: 'vm-done', publicJwk, ephemeral: true, owner: 'eli@example.com' });
+  fleet.core.hostConnected('vm-done', () => {});
+  fleet.core.hostDisconnected('vm-done', 'socket closed: 1000');
+  await new Promise((r) => setImmediate(r));
+  const stored = /** @type {any[]} */ (fleet.storage.get('hostIds') || []).find((h) => h.hostId === 'vm-done');
+  assert.ok(stored?.revokedAt, 'an eviction now would bring the key back, and the row with it');
 });

@@ -85,6 +85,12 @@ const LAB_HOLD_MS = 15 * 60_000;
 const isLabName = (/** @type {unknown} */ name) => /^fleetwright-lab-\d+$/.test(String(name || ''));
 /** @typedef {{ id: string, name: string, open: boolean, free: boolean }} LabOffer */
 const SETUP_TTL_MS = 24 * 60 * 60_000;
+/**
+ * How long a temporary machine may be missing before it is retired as if it
+ * had disconnected: long enough for one that is only reconnecting after a
+ * deploy, far shorter than the hours a stranded one sat in the list.
+ */
+const STRANDED_MS = 10 * 60_000;
 /** The states a setup job does not leave. */
 const ENDED_SETUP = new Set(['done', 'failed', 'cancelled']);
 /** The protocol a machine must speak to be handed a relay through a phone (intents.js, v12). */
@@ -273,6 +279,8 @@ export class CoordinatorCore {
     this.newId = newId;
     /** A pool's own machine asking to join, kept until its owner answers (holder-joins.js). */
     this.holderJoins = new HolderJoins({ now: () => this.now() });
+    /** @type {Map<string, number>} temporary hosts seen missing, and since when (retireStranded) */
+    this.missingSince = new Map();
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.firstHealthWaitMs = firstHealthWaitMs;
@@ -516,8 +524,53 @@ export class CoordinatorCore {
    */
   ephemeralHostRetired(hostId, reason) {
     this.hostIds.revoke(hostId);
+    this.missingSince.delete(hostId);
     this.record({ event: 'host.retired', hostId, text: `temporary host went away (${reason})` });
     this.log.info(`coordinator: retired temporary host ${hostId} (${reason})`);
+    // WRITTEN NOW, not at the next host's connect, which is when the key store
+    // used to be saved: an eviction in between brought the key back, and the
+    // machine with it, as a row that said "not reporting" for ever.
+    this.onStateChanged?.();
+  }
+
+  /**
+   * TEMPORARY MACHINES THE COORDINATOR NEVER SAW GO, retired as a disconnect
+   * would have retired them. A deploy or an eviction drops every socket at
+   * once, and no close reaches the coordinator that comes up after it, so a
+   * session machine that went in that window kept its key and sat under
+   * Machines as "not reporting", one row per machine, for good.
+   *
+   * MISSING SINCE IT WAS FIRST SEEN MISSING, not since it last connected:
+   * after a restart every machine is missing at once, and one connected for
+   * hours would be retired before it had a chance to dial back in. A machine
+   * missing for STRANDED_MS from this coordinator's point of view has had
+   * that chance. Called on the coordinator's timer.
+   *
+   * @returns {string[]} the hosts retired
+   */
+  retireStranded() {
+    const now = this.now();
+    /** @type {string[]} */
+    const retired = [];
+    const enrolled = new Set();
+    for (const h of this.hostIds?.serialise?.() ?? []) {
+      if (!h?.ephemeral || h.revokedAt) continue;
+      enrolled.add(h.hostId);
+      if (this.registry.get(h.hostId)?.connected) {
+        this.missingSince.delete(h.hostId);
+        continue;
+      }
+      const since = this.missingSince.get(h.hostId);
+      if (since === undefined) {
+        this.missingSince.set(h.hostId, now);
+        continue;
+      }
+      if (now - since < STRANDED_MS) continue;
+      this.ephemeralHostRetired(h.hostId, `not back within ${STRANDED_MS / 60_000} minutes of the coordinator last hearing from it`);
+      retired.push(h.hostId);
+    }
+    for (const id of this.missingSince.keys()) if (!enrolled.has(id)) this.missingSince.delete(id);
+    return retired;
   }
 
   /**
