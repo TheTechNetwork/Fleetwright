@@ -337,7 +337,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -528,11 +528,11 @@ test('the pool’s own machine is made last, from its image, with a pin asked fo
     vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
   });
-  /** @type {string[]} */
+  /** @type {Array<[string, string]>} */
   const pinsFor = [];
   const { setups } = await machine({
     coordinatorUrl: 'https://fleet.test',
-    holderPin: async (/** @type {string} */ job) => (pinsFor.push(job), { ok: true, pin: '123456', hostId: 'holder-0a1b2c' }),
+    holderPin: async (/** @type {string} */ job, /** @type {string} */ address) => (pinsFor.push([job, address]), { ok: true, pin: '123456', hostId: 'holder-0a1b2c' }),
   });
   const actor = 'eli@example.com';
   const { begun, reply, state } = await choosing(xo, setups, actor);
@@ -540,14 +540,17 @@ test('the pool’s own machine is made last, from its image, with a pin asked fo
   const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
   assert.deepEqual(inventory.holders, [], 'none yet, so the phone offers one');
   const job = begun.xosetup.job;
-  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', holder: true, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  // The secret the phone made, sealed with the rest of the choice.
+  const secret = 'ab'.repeat(32);
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', holder: true, holderSecret: secret, limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
   const took = await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor });
   assert.equal(took.ok, true, took.text);
   const end = await finished(setups, job, actor);
   assert.equal(end.state, 'done', end.text);
-  assert.match(end.text, /holder-0a1b2c is starting on dmz\. Approve it under Machines/);
-  assert.deepEqual(pinsFor, [job], 'one pin, for this job');
+  assert.match(end.text, /holder-0a1b2c is starting on dmz\. Once it is up it asks to join/);
+  assert.deepEqual(pinsFor, [[job, xo.address]], 'one pin, for this job, naming the pool its name is held for');
   const made = xo.calls.find((/** @type {any} */ c) => c.method === 'vm.create');
+  assert.ok(made.params.cloudConfig.includes(`"secret":"${secret}"`), 'it boots with the secret to ask with');
   assert.equal(made.as, 'admin@admin.net', 'with the admin sign-in, outside the fleet’s set');
   assert.equal(made.params.template, 'tpl');
   assert.deepEqual(made.params.VIFs, [{ network: 'net-dmz' }]);

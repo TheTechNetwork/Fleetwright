@@ -14,8 +14,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
-import { HOLDER_JOIN_TTL_MS, MAX_REQUESTS, keyHashOf } from '../src/fleet/coordinator/holder-joins.js';
-import { proofOf, proofMessage } from '../src/fleet/protocol/holder-join.js';
+import { HOLDER_JOIN_TTL_MS, MAX_REQUESTS } from '../src/fleet/coordinator/holder-joins.js';
+import { keyHashOf, proofOf, proofMessage } from '../src/fleet/protocol/holder-join.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
 import { Fleet } from '../worker/src/fleet-do.js';
 import worker from '../worker/src/worker.js';

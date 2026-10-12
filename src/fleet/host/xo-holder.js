@@ -23,6 +23,7 @@
 // (`holder` in its health, core.js #vmHolders).
 
 import { VM_IMAGE, imageKeyOf } from './vm-image.js';
+import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 
 export const HOLDER = Object.freeze({
   /** On the VM, which is how the next policy job finds it rather than making another. */
@@ -38,15 +39,18 @@ export const HOLDER = Object.freeze({
 /**
  * The cloud-init a pool's own machine boots with: its name, and one file
  * holding the coordinator, the pin, the name the pin is bound to and the
- * Xen Orchestra it holds. The same join script as a session's machine reads
- * it (install/fleetwright-vm-join), and does not power this one off.
+ * Xen Orchestra it holds, and the secret the person's phone gave the job when
+ * there is one, which it asks to join with instead of spending the pin
+ * (src/fleet/host/vm-join.js). The same join script as a session's machine
+ * reads it (install/fleetwright-vm-join), and does not power this one off.
  *
- * @param {{ hostId: string, pin: string, coordinatorUrl: string, address: string }} spec
+ * @param {{ hostId: string, pin: string, coordinatorUrl: string, address: string, secret?: string|null }} spec
  */
-export function holderCloudConfig({ hostId, pin, coordinatorUrl, address }) {
+export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret = null }) {
   if (!HOLDER.id.test(hostId)) throw new Error(`${hostId} is not a name the coordinator gives a pool's own machine`);
   if (!/^\d{6}$/.test(pin)) throw new Error('that is not an enrolment pin');
-  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, pin, hostId, holder: address });
+  if (secret !== null && !HOLDER_SECRET_RE.test(secret)) throw new Error('that is not the secret a phone makes for a pool’s own machine');
+  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, pin, hostId, holder: address, ...(secret ? { secret } : {}) });
   return [
     '#cloud-config',
     `hostname: ${hostId}`,
@@ -64,7 +68,10 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address }) {
 
 /**
  * The pool's own machine on `pool`: the one there, started if it was off, or
- * a new one cloned from the pool's machine image onto the way out.
+ * a new one cloned from the pool's machine image onto the way out. `again`
+ * removes the one there first and makes a new one: asked for from the phone
+ * for a machine that never joined. `secret`, from the person's phone, is what
+ * the new one asks to join with.
  *
  * @param {{
  *   admin: { call: (method: string, params?: any) => Promise<any> },
@@ -73,19 +80,29 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address }) {
  *   address: string,
  *   coordinatorUrl: string,
  *   askPin: () => Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>,
+ *   secret?: string|null,
+ *   again?: boolean,
  *   say?: (text: string) => void,
  * }} spec
  * @returns {Promise<string>} what was done, in a sentence for the phone
  */
-export async function ensureHolder({ admin, pool, egress, address, coordinatorUrl, askPin, say = () => {} }) {
+export async function ensureHolder({ admin, pool, egress, address, coordinatorUrl, askPin, secret = null, again = false, say = () => {} }) {
   const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
-  const there = vms.find((v) => v?.$pool === pool && Array.isArray(v.tags) && v.tags.includes(HOLDER.tag));
-  if (there) {
+  const theirs = vms.filter((v) => v?.$pool === pool && Array.isArray(v.tags) && v.tags.includes(HOLDER.tag));
+  const there = theirs[0];
+  if (there && !again) {
     if (there.power_state === 'Halted') {
       await admin.call('vm.start', { id: there.id });
       return `The pool’s own machine, ${String(there.name_label).slice(0, 40)}, was off and has been started.`;
     }
     return `The pool’s own machine, ${String(there.name_label).slice(0, 40)}, is already there.`;
+  }
+  // MADE AGAIN: the one that never joined goes, disk and all, before its
+  // replacement is cloned, so the pool never has two answering for it.
+  for (const v of again ? theirs : []) {
+    say(`Removing ${String(v.name_label).slice(0, 40)} to make the pool’s own machine again.`);
+    if (v.power_state !== 'Halted') await admin.call('vm.stop', { id: v.id, force: true });
+    await admin.call('vm.delete', { id: v.id, deleteDisks: true });
   }
   // FROM THE POOL'S MACHINE IMAGE: Debian where there is one, else any.
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}))
@@ -104,11 +121,13 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
     name_description: `This pool’s own Fleetwright machine. It holds the pool for the fleet once its owner approves it, and stays up. Made by Fleetwright.`,
     VIFs: [{ network: egress.id }],
     tags: [HOLDER.tag, `${HOLDER.forPrefix}${address}`],
-    cloudConfig: holderCloudConfig({ hostId: given.hostId, pin: given.pin, coordinatorUrl, address }),
+    cloudConfig: holderCloudConfig({ hostId: given.hostId, pin: given.pin, coordinatorUrl, address, secret }),
     // The drive holds the pin: gone once the machine has booted, and wiped
     // from inside before that (the join script), whichever comes first.
     destroyCloudConfigVdiAfterBoot: true,
     bootAfterCreate: true,
   });
-  return `${given.hostId} is starting on ${egress.name}. Approve it under Machines once it joins, and it holds this pool from then on.`;
+  return secret
+    ? `${given.hostId} is starting on ${egress.name}. Once it is up it asks to join, and your phone asks you to let it in and hold this pool.`
+    : `${given.hostId} is starting on ${egress.name}. Approve it under Machines once it joins, and it holds this pool from then on.`;
 }

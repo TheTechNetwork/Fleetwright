@@ -53,3 +53,16 @@ export async function proofOf(secretHex, parts) {
   const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(proofMessage(parts))));
   return [...mac].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/**
+ * The whole SHA-256 of a P-256 key, hex, over `{"crv","kty","x","y"}` in that
+ * order: what the vault files a grant under and the proof is made over, its
+ * first sixteen the fingerprint a person reads (src/fleet/crypto.js).
+ *
+ * @param {{ kty: string, crv: string, x: string, y: string }} key
+ */
+export async function keyHashOf(key) {
+  const canonical = JSON.stringify({ crv: key.crv, kty: key.kty, x: key.x, y: key.y });
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical)));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
