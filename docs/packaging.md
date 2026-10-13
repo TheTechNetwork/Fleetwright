@@ -472,7 +472,10 @@ sudo fleetwright grant                  # what this box allows now
 It writes or removes the sudoers rule, installs the units the upgrade rule
 names, records the answer in `/etc/fleetwright.env` and restarts the service;
 sessions keep running. On a deb box `sudo dpkg-reconfigure fleetwright` asks
-the two questions again and does the same. The refusal a phone or a chat gets
+the two questions again and does the same. A machine the fleet makes on your
+pool is born with the answers chosen on the pool's policy, which its first
+boot applies with this same command (`docs/hypervisors.md`, "Machines made
+here"). The refusal a phone or a chat gets
 when a grant is off names this line rather than the rule to type by hand.
 There is deliberately no way to do it from the app: the grant is a root-owned
 rule that lets an unprivileged service run `systemctl reboot`, and a service

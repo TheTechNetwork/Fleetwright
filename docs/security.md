@@ -487,6 +487,15 @@ machine of the fleet, through the coordinator.
   that person could, and nothing to anybody else's. The console is Xen
   Orchestra's own page, signed in to there; the phone never holds the pool's
   token for it.
+- **What a pool's machines may do from chat** (`docs/hypervisors.md`,
+  "Machines made here"). The two grants, updates and reboot, are applied by
+  the machine's own join script, as root, on its first boot, from the file
+  the box that made it wrote, and never by a running service. The answer is
+  the owner's: sealed in the policy for the pool's own machine, and kept in
+  the pool's record in their vault for the rest, which the coordinator
+  cannot write. A box that makes the machine already writes its whole first
+  boot with the pool's sign-in, so the answer gives it nothing it did not
+  have. A compromised coordinator cannot turn either grant on.
 - **The edge routers' key** (`docs/hypervisors.md`, "Watching the edge
   routers"). Each router has one API user with no password and a key whose
   privileges are the CARP, Unbound, gateway and dnsmasq status pages, plus
