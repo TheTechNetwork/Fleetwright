@@ -173,6 +173,32 @@ enum XOSetupHandoff {
         return true
     }
 
+    /// WHAT THE POOL'S MACHINES MAY DO FROM THE APP, as this phone last kept
+    /// it beside the pool's token, or nil when it never chose. Each machine
+    /// made from the record is born with it (src/core/grants.js).
+    static func machineGrants(address: String) -> (upgrades: Bool, reboot: Bool)? {
+        guard let raw = Keychain.get(tokenAccount(address)), !raw.isEmpty,
+              let record = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any],
+              let grants = record["grants"] as? [String: Any],
+              let upgrades = grants["upgrades"] as? Bool, let reboot = grants["reboot"] as? Bool
+        else { return nil }
+        return (upgrades, reboot)
+    }
+
+    /// Keep what the pool's machines may do in this phone's record for the
+    /// pool, beside its token, so keeping the record in the fleet hands it
+    /// to every box that makes machines there. False for a pool this phone
+    /// holds no record for.
+    static func keepMachineGrants(address: String, upgrades: Bool, reboot: Bool) -> Bool {
+        guard let raw = Keychain.get(tokenAccount(address)), !raw.isEmpty,
+              var record = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+        else { return false }
+        record["grants"] = ["upgrades": upgrades, "reboot": reboot]
+        guard let data = try? JSONSerialization.data(withJSONObject: record), let text = String(data: data, encoding: .utf8) else { return false }
+        Keychain.set(text, for: tokenAccount(address))
+        return true
+    }
+
     /// Collect a finished job's token and, once it is kept, keep it in the
     /// fleet as well, so the boxes this person approved can make machines on
     /// the pool. Answers what collecting came to, and what the fleet said,

@@ -47,6 +47,10 @@ enum XOPolicy {
     /// pool (GROUP_PREFIX and MAX_GROUPS in edge-router.js).
     static let groupPrefix = "fleetwright-group-"
     static let maxGroups = 4
+    /// Under Machines made here: who it reaches, and the one line that
+    /// changes a machine already running, which nothing from here can.
+    static let machineGrantsFooter = "Each machine made on this pool from now on starts with these answers, the pool’s own machine included. "
+        + "One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine."
     /// What a lab network is called, and the most labs an edge has room for
     /// (LAB.prefix and LAB.max in edge-router.js).
     static let labPrefix = "fleetwright-lab-"
@@ -387,6 +391,17 @@ enum XOPolicy {
         /// Remove the one there and make a new one: for one that never joined.
         var holderAgain = false
 
+        /// WHAT THE MACHINES MADE ON THIS POOL MAY DO FROM THE APP: update
+        /// their system, and reboot (src/core/grants.js). Each one is born
+        /// with these, the pool's own included; one already running keeps
+        /// what it has. The defaults are the image's own answers.
+        var machineUpdates = true
+        var machineReboot = false
+        /// The machine applies them (`machine-grants` in begin's `can`). An
+        /// older one leaves every machine the image's answers, so they are
+        /// neither offered nor sent.
+        var grantsChoice = false
+
         /// An image is asked for, in whichever form this machine reads.
         var wantsImage: Bool { imagesChoice ? !images.isEmpty : image }
 
@@ -589,6 +604,8 @@ enum XOPolicy {
                 if holderAskChoice, let holderSecret { out["holderSecret"] = holderSecret }
                 if holderAskChoice, holderAgain, inv.holder(on: egress) != nil { out["holderAgain"] = true }
             }
+            // Only to a machine that applies them.
+            if grantsChoice { out["grants"] = ["upgrades": machineUpdates, "reboot": machineReboot] }
             // Only to a machine that makes them, and only with a way out.
             if groupsChoice, egress != nil { out["groups"] = groups }
             // Only to a machine that makes them, and only where there is a router, there or asked for.
