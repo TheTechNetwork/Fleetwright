@@ -18,6 +18,16 @@
 // the machine, which is the same rule docs/task-at-start.md gives for the
 // words a session starts with. The app's part is to SAY the state, and the
 // one line that changes it.
+//
+// EXCEPT WHERE A MACHINE IS BORN. A machine the fleet makes on somebody's pool
+// (src/fleet/host/xo-pools.js, xo-holder.js) is made by a box that already
+// writes its whole first boot, as root, with the pool's own sign-in: what it
+// may do from chat is one more answer in that file, and the join script runs
+// this same command with it before anything starts (install/fleetwright-vm-join).
+// The answer is its owner's, chosen on the pool's policy and kept in the pool's
+// record in their vault, which the coordinator cannot write. Nothing running
+// is asked to change a rule, and a machine that is already up keeps what it
+// has: the command above, on it, is still the only way to change that.
 
 /**
  * The grants, by the name a person types.
@@ -61,6 +71,29 @@ export function grantCommand(name, to = 'on') {
  */
 export function grantsOf(cfg) {
   return { upgrades: Boolean(cfg.systemUpgrade), reboot: Boolean(cfg.systemReboot) };
+}
+
+/**
+ * What a machine made on a pool may do from chat, as its owner chose it on
+ * the pool's policy: `upgrades` and `reboot`, each yes or no, and either one
+ * left out for the machine image's own answer. Null for anything else, and
+ * for an empty choice, so a field nobody set never reaches a machine.
+ *
+ * @param {unknown} v
+ * @returns {{ upgrades?: boolean, reboot?: boolean }|null}
+ */
+export function machineGrantsOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = /** @type {Record<string, unknown>} */ (v);
+  if (Object.keys(o).some((k) => !(k in GRANTS))) return null;
+  /** @type {{ upgrades?: boolean, reboot?: boolean }} */
+  const out = {};
+  for (const name of /** @type {GrantName[]} */ (Object.keys(GRANTS))) {
+    if (o[name] === undefined) continue;
+    if (typeof o[name] !== 'boolean') return null;
+    out[name] = /** @type {boolean} */ (o[name]);
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /**
