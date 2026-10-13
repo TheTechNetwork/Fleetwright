@@ -156,6 +156,9 @@ internal object XoPolicy {
     /** What a group network is called, and the most a policy makes on one pool (edge-router.js). */
     const val GROUP_PREFIX = "fleetwright-group-"
     const val MAX_GROUPS = 4
+    /** Under Machines made here: who it reaches, and the one line that changes a machine already running, which nothing from here can. */
+    const val MACHINE_GRANTS_FOOTER = "Each machine made on this pool from now on starts with these answers, the pool’s own machine included. " +
+        "One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine."
 
     /** The networks a person chooses among: the pool's, less its group networks, which are this policy's to make. */
     fun choosable(inv: Inventory): List<Network> = inv.networks.filterNot { it.name.startsWith(GROUP_PREFIX) || it.name.startsWith(LAB_PREFIX) }
@@ -379,6 +382,16 @@ internal object XoPolicy {
         val holderAskChoice: Boolean = false,
         /** Remove the one there and make a new one: for one that never joined. */
         val holderAgain: Boolean = false,
+        /**
+         * WHAT THE MACHINES MADE ON THIS POOL MAY DO FROM THE APP: update
+         * their system, and reboot (src/core/grants.js). Each one is born
+         * with these, the pool's own included; one already running keeps
+         * what it has. The defaults are the image's own answers.
+         */
+        val machineUpdates: Boolean = true,
+        val machineReboot: Boolean = false,
+        /** The machine applies them (`machine-grants` in begin's `can`). An older one leaves every machine the image's answers, so they are neither offered nor sent. */
+        val grantsChoice: Boolean = false,
     ) {
         /** An image is asked for, in whichever form this machine reads. */
         val wantsImage: Boolean get() = if (imagesChoice) images.isNotEmpty() else image
@@ -670,6 +683,8 @@ internal object XoPolicy {
                     }
                 }
             }
+            // Only to a machine that applies them.
+            .apply { if (c.grantsChoice) put("grants", JSONObject().put("upgrades", c.machineUpdates).put("reboot", c.machineReboot)) }
             // Only to a machine that makes them, and only with a way out.
             .apply { if (c.groupsChoice && c.egress != null) put("groups", c.groups) }
             // Only to a machine that makes them, and only where there is a router, there or asked for.

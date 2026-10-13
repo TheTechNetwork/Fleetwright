@@ -282,6 +282,18 @@ class XoPolicyTest {
     }
 
     @Test
+    fun whatThePoolsMachinesMayDoIsSentOnlyToAMachineThatAppliesIt() {
+        val inv = inventory()
+        val c = XoPolicy.defaults(inv)
+        assertFalse("an older machine leaves them the image’s answers", XoPolicy.payload(inv, c).has("grants"))
+        val offered = c.copy(grantsChoice = true)
+        val sent = XoPolicy.payload(inv, offered).getJSONObject("grants")
+        assertTrue("the image’s own answers, until changed", sent.getBoolean("upgrades") && !sent.getBoolean("reboot"))
+        val changed = XoPolicy.payload(inv, offered.copy(machineUpdates = false, machineReboot = true)).getJSONObject("grants")
+        assertTrue(!changed.getBoolean("upgrades") && changed.getBoolean("reboot"))
+    }
+
+    @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in
         // src/fleet/seal.js, and neither is setup's or the token's.

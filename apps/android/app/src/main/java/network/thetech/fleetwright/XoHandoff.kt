@@ -235,6 +235,32 @@ internal object XoHandoff {
         true
     }.getOrDefault(false)
 
+    /**
+     * WHAT THE POOL'S MACHINES MAY DO FROM THE APP, as this phone last kept
+     * it beside the pool's token, or null when it never chose. Each machine
+     * made from the record is born with it (src/core/grants.js).
+     */
+    fun machineGrants(settings: Settings, address: String): Pair<Boolean, Boolean>? = runCatching {
+        val grants = JSONObject(settings.secret(tokenName(address))?.takeIf { it.isNotBlank() } ?: return@runCatching null).optJSONObject("grants")
+            ?: return@runCatching null
+        val upgrades = grants.opt("upgrades") as? Boolean ?: return@runCatching null
+        val reboot = grants.opt("reboot") as? Boolean ?: return@runCatching null
+        upgrades to reboot
+    }.getOrNull()
+
+    /**
+     * Keep what the pool's machines may do in this phone's record for the
+     * pool, beside its token, so keeping the record in the fleet hands it to
+     * every box that makes machines there. False for a pool this phone holds
+     * no record for.
+     */
+    fun keepMachineGrants(settings: Settings, address: String, upgrades: Boolean, reboot: Boolean): Boolean = runCatching {
+        val record = JSONObject(settings.secret(tokenName(address))?.takeIf { it.isNotBlank() } ?: return@runCatching false)
+        record.put("grants", JSONObject().put("upgrades", upgrades).put("reboot", reboot))
+        settings.putSecret(tokenName(address), record.toString())
+        true
+    }.getOrDefault(false)
+
     suspend fun keepInFleet(settings: Settings, fleet: Fleet, address: String): String {
         val record = settings.secret(tokenName(address))
         if (record.isNullOrBlank()) return "This phone holds no token for $address to keep in the fleet."

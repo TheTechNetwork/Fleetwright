@@ -214,6 +214,10 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canLabsEach by remember { mutableStateOf(false) }
     // It rebuilds and removes an image that is there (`can` holds "image-manage"); an older one keeps every image.
     var canImageManage by remember { mutableStateOf(false) }
+    // The machines it makes are born allowed what the person chose (`can` holds "machine-grants"); an older one leaves them the image's answers.
+    var canMachineGrants by remember { mutableStateOf(false) }
+    // What the machines may do, as Apply sent it, kept with the pool once the job is done.
+    var sentGrants by remember { mutableStateOf<Pair<Boolean, Boolean>?>(null) }
     // What the fleet said when the token was kept there too, or what stood in
     // the way (XoHandoff.keepInFleet).
     var fleetNote by remember { mutableStateOf("") }
@@ -520,6 +524,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canLabs = "labs" in p.setup.can
         canLabsEach = "labs-each" in p.setup.can
         canImageManage = "image-manage" in p.setup.can
+        canMachineGrants = "machine-grants" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -733,6 +738,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             val sealed = XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c, secret)
             val r = fleet.xosetup("policy", job = setup.job, sealed = sealed)
             if (r.ok) {
+                sentGrants = if (c.grantsChoice) c.machineUpdates to c.machineReboot else null
                 // Nothing left to open or choose: the key and the pool go.
                 applied = true
                 policyKey = null
@@ -792,6 +798,16 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 ) {
                     XoHandoff.keepInFleet(settings, fleet, address.trim())
                 }
+                // WHAT ITS MACHINES MAY DO, kept with the pool's token and in
+                // the fleet once the job is done, so every machine made from
+                // the pool's record from now on is born with it.
+                val grants = sentGrants
+                if (policy && r.xosetup.state == "done" && grants != null &&
+                    XoHandoff.keepMachineGrants(settings, address.trim(), grants.first, grants.second)
+                ) {
+                    sentGrants = null
+                    XoHandoff.keepInFleet(settings, fleet, address.trim())
+                }
                 if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
                 // CHOOSING IS NOT AN END: the loop goes on asking, so this
                 // screen hears when the machine lets go. The pool is opened
@@ -814,7 +830,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             edgeHaChoice = canEdgeHa,
                             labsChoice = canLabs && opened.labMax != null,
                             labsEachChoice = canLabs && opened.labMax != null && canLabsEach,
-                        )
+                            grantsChoice = canMachineGrants,
+                        ).let { c ->
+                            // Where they were left: the answers this phone kept for the pool, or the image's own.
+                            XoHandoff.machineGrants(settings, address.trim())?.let { (upgrades, reboot) -> c.copy(machineUpdates = upgrades, machineReboot = reboot) } ?: c
+                        }
                     } else {
                         unopened = true
                     }
