@@ -37,6 +37,7 @@ import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain } from './xo-ws.js';
 import { EDGE, GROUP_PREFIX, LAB, labsEachOf } from './edge-router.js';
 import { VM_IMAGE } from './vm-image.js';
+import { HOLDER } from './xo-holder.js';
 import { seal, xolookAad } from '../seal.js';
 import { xoActionArgs } from '../protocol/intents.js';
 
@@ -191,7 +192,9 @@ export const MAX_PAGE_BYTES = 512 * 1024;
  * WHAT THE PAGE SHOWS OF EACH OBJECT, and nothing else of it: the fields the
  * phones decode (Manage.component, attachment and disk in both apps). A
  * VM's record in Xen Orchestra carries its boot order, its other config and
- * every tag; none of that is drawn, so none of it travels. A nested field
+ * every tag; none of that is drawn, so none of it travels, but one: the tag
+ * that marks the pool's own machine, which the page draws as made with the
+ * admin sign-in and offers nothing for (docs/manage.md). A nested field
  * keeps only the keys named.
  */
 const PAGE_FIELDS = Object.freeze({
@@ -229,6 +232,7 @@ export function pageObject(o) {
   if (o.type === 'VM') {
     const cpus = nested(o.CPUs, ['number']);
     if (cpus) out.CPUs = cpus;
+    if (Array.isArray(o.tags) && o.tags.includes(HOLDER.tag)) out.tags = [HOLDER.tag];
     // The guest's addresses, by Xen Orchestra's own keys ("0/ipv4/0"), a few.
     if (o.addresses && typeof o.addresses === 'object') {
       const pairs = Object.entries(o.addresses).filter(([, v]) => typeof v === 'string').slice(0, 16);

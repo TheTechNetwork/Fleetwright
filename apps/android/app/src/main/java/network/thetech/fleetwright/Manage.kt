@@ -84,7 +84,17 @@ internal object Manage {
         val shared: Boolean?,
         /** A host's "XCP-ng 8.3.0". */
         val software: String?,
+        /**
+         * A VM that is the pool's own Fleetwright machine (tagged
+         * `fleetwright-holder`, xo-holder.js). It is made with the admin
+         * sign-in, outside the resource set, so the limited user's token this
+         * page signs in with can change nothing about it.
+         */
+        val holder: Boolean = false,
     )
+
+    /** The tag a pool's own machine carries (HOLDER.tag in src/fleet/host/xo-holder.js). */
+    const val HOLDER_TAG = "fleetwright-holder"
 
     /** A VM's disk, for growing it. */
     data class Disk(val id: String, val name: String, val size: Long?, val storageId: String?)
@@ -164,6 +174,7 @@ internal object Manage {
             storageType = if (storage) text(o.opt("SR_type")) else null,
             shared = if (storage) flag(o.opt("shared")) else null,
             software = if (kind == Kind.HOST && software.isNotEmpty()) software else null,
+            holder = kind == Kind.VM && o.optJSONArray("tags")?.let { t -> (0 until t.length()).any { t.optString(it) == HOLDER_TAG } } == true,
         )
     }
 
@@ -439,6 +450,9 @@ internal object Manage {
      */
     fun offered(c: Component, methods: Set<String>?): List<Action> {
         if (methods == null) return emptyList()
+        // NOT THIS TOKEN'S TO WORK: Xen Orchestra lists the method, and
+        // refuses it for this machine with "not enough permissions" (C-2).
+        if (c.holder) return emptyList()
         val state = c.state ?: return emptyList()
         val out = mutableListOf<Action>()
         fun add(verb: Verb, label: String, method: String, cost: Cost, ok: Boolean) {
@@ -572,18 +586,18 @@ internal object Manage {
      * and a change that might be refused is not offered as one.
      */
     fun canResize(c: Component, methods: Set<String>?): Boolean =
-        c.kind == Kind.VM && c.state == State.STOPPED && methods?.contains("vm.set") == true
+        c.kind == Kind.VM && !c.holder && c.state == State.STOPPED && methods?.contains("vm.set") == true
 
     /** The sentence in its place on a VM that could be resized if stopped. */
     fun resizeNeedsStopped(c: Component, methods: Set<String>?): Boolean =
-        c.kind == Kind.VM && c.state != null && c.state != State.STOPPED && methods?.contains("vm.set") == true
+        c.kind == Kind.VM && !c.holder && c.state != null && c.state != State.STOPPED && methods?.contains("vm.set") == true
 
     /** How a disk is grown, in the host's order (RESIZE_METHODS in src/fleet/host/xo-setup.js). */
     val growMethods = listOf("disk.resize", "vdi.set")
 
     /** Running or not; null when neither method is listed or the VM's state is not known. */
     fun growMethod(c: Component, methods: Set<String>?): String? {
-        if (c.kind != Kind.VM || c.state == null || methods == null) return null
+        if (c.kind != Kind.VM || c.holder || c.state == null || methods == null) return null
         return growMethods.firstOrNull { it in methods }
     }
 
@@ -704,6 +718,11 @@ internal object Manage {
         fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log lines from it yet"
         const val methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         const val nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
+
+        /** In place of the actions on the pool's own machine. The same words as iOS. */
+        fun holder(name: String) =
+            "$name is this pool’s own Fleetwright machine. It was made with the admin sign-in, outside what the limited user may " +
+                "change, so nothing can be done to it from here. To replace it, use Make it again in the pool’s policy."
         const val seesNothing = "This token sees nothing on the pool."
         fun limitedUser(user: String) =
             "Signed in as $user, the limited user setup made, so only what its resource set allows is listed."

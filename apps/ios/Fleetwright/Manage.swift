@@ -76,6 +76,11 @@ enum Manage {
         let shared: Bool?
         /// A host's "XCP-ng 8.3.0".
         let software: String?
+        /// A VM that is the pool's own Fleetwright machine (tagged
+        /// `fleetwright-holder`, xo-holder.js). It is made with the admin
+        /// sign-in, outside the resource set, so the limited user's token
+        /// this page signs in with can change nothing about it.
+        var holder = false
     }
 
     /// A VM's disk, for growing it.
@@ -165,6 +170,8 @@ enum Manage {
         }
         let sized = kind == .vm || kind == .host
         let storage = kind == .sr
+        let tagged = (o["tags"] as? [Any])?.contains { ($0 as? String) == holderTag } ?? false
+        let holder = kind == .vm && tagged
         return Component(
             id: id,
             kind: kind,
@@ -181,9 +188,13 @@ enum Manage {
             toolsRunning: kind == .vm ? tools : nil,
             storageType: storage ? text(o["SR_type"]) : nil,
             shared: storage ? flag(o["shared"]) : nil,
-            software: kind == .host && !software.isEmpty ? software : nil
+            software: kind == .host && !software.isEmpty ? software : nil,
+            holder: holder
         )
     }
+
+    /// The tag a pool's own machine carries (HOLDER.tag in src/fleet/host/xo-holder.js).
+    static let holderTag = "fleetwright-holder"
 
     static func state(_ kind: Kind, _ o: [String: Any]) -> State? {
         let power = o["power_state"] as? String
@@ -444,7 +455,9 @@ enum Manage {
     /// Nothing when the methods could not be read, and nothing when its state
     /// is not known, because every one of these depends on it.
     static func offered(_ c: Component, methods: Set<String>?) -> [Action] {
-        guard let methods, let state = c.state else { return [] }
+        // NOT THIS TOKEN'S TO WORK: Xen Orchestra lists the method, and
+        // refuses it for this machine with "not enough permissions" (C-2).
+        guard let methods, let state = c.state, !c.holder else { return [] }
         var out: [Action] = []
         func add(_ verb: Verb, _ label: String, _ method: String, _ cost: Cost, when ok: Bool) {
             if ok, methods.contains(method) { out.append(Action(verb: verb, label: label, method: method, cost: cost)) }
@@ -584,12 +597,12 @@ enum Manage {
     /// Orchestra changes a running VM's only within limits set while it was
     /// stopped, and a change that might be refused is not offered as one.
     static func canResize(_ c: Component, methods: Set<String>?) -> Bool {
-        c.kind == .vm && c.state == .stopped && methods?.contains("vm.set") == true
+        c.kind == .vm && !c.holder && c.state == .stopped && methods?.contains("vm.set") == true
     }
 
     /// The sentence in its place on a VM that could be resized if stopped.
     static func resizeNeedsStopped(_ c: Component, methods: Set<String>?) -> Bool {
-        c.kind == .vm && c.state != nil && c.state != .stopped && methods?.contains("vm.set") == true
+        c.kind == .vm && !c.holder && c.state != nil && c.state != .stopped && methods?.contains("vm.set") == true
     }
 
     /// How a disk is grown, in the host's order (RESIZE_METHODS in
@@ -599,7 +612,7 @@ enum Manage {
     /// Running or not; nil when neither method is listed or the VM's state
     /// is not known.
     static func growMethod(_ c: Component, methods: Set<String>?) -> String? {
-        guard c.kind == .vm, c.state != nil, let methods else { return nil }
+        guard c.kind == .vm, !c.holder, c.state != nil, let methods else { return nil }
         return growMethods.first { methods.contains($0) }
     }
 
@@ -768,6 +781,11 @@ enum Manage {
         static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log lines from it yet" }
         static let methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         static let nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
+        /// In place of the actions on the pool's own machine. The same words as Android.
+        static func holder(_ name: String) -> String {
+            "\(name) is this pool’s own Fleetwright machine. It was made with the admin sign-in, outside what the limited user may "
+                + "change, so nothing can be done to it from here. To replace it, use Make it again in the pool’s policy."
+        }
         static let seesNothing = "This token sees nothing on the pool."
         static func limitedUser(_ user: String) -> String {
             "Signed in as \(user), the limited user setup made, so only what its resource set allows is listed."
