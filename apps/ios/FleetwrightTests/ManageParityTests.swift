@@ -263,7 +263,7 @@ final class ManageParityTests: XCTestCase {
             "connecting": Manage.Words.connecting, "plainPool": Manage.Words.plainPool, "noToken": Manage.Words.noToken,
             "wrongCertificate": Manage.Words.wrongCertificate, "limitedUser": Manage.Words.limitedUser,
             "typePrompt": Manage.Words.typePrompt, "refused": Manage.Words.refused, "lost": Manage.Words.lost,
-            "askingFleet": Manage.Words.askingFleet, "edgeUnreached": Manage.Words.edgeUnreached,
+            "askingFleet": Manage.Words.askingFleet, "edgeUnreached": Manage.Words.edgeUnreached, "holder": Manage.Words.holder,
         ]
         for (key, say) in single { XCTAssertEqual(say(arg(key, 0)), arg(key, 1), key) }
 

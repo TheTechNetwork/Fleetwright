@@ -58,6 +58,7 @@
     },
     { "type": "VM", "id": "vm-6", "name_label": "elsewhere", "power_state": "Running", "$container": "host-9", "$pool": "pool-9" },
     { "type": "VM", "id": "vm-7", "name_label": "", "$pool": "pool-1" },
+    { "type": "VM", "id": "vm-8", "name_label": "holder-c09fcd", "power_state": "Running", "$container": "host-9", "$pool": "pool-9", "CPUs": { "number": 2, "max": 2 }, "memory": { "size": 2147483648 }, "mainIpAddress": "10.10.10.230", "managementAgentDetected": true, "tags": ["fleetwright-holder", "fleetwright-holder-for:xo.lan"] },
     {
       "type": "SR", "id": "sr-1", "name_label": "Local storage", "SR_type": "lvm", "$container": "host-1", "$pool": "pool-1",
       "shared": false, "size": 536870912000, "physical_usage": 214748364800
@@ -86,6 +87,7 @@
     { "id": "vm-5", "kind": "vm", "name": "asleep", "state": "suspended", "what": "VM in pool Home, not on a host", "numbers": "1 vCPU · 1 GiB" },
     { "id": "vm-6", "kind": "vm", "name": "elsewhere", "state": "running", "what": "VM on a host this token cannot see", "numbers": "vCPUs: cannot tell · memory: cannot tell" },
     { "id": "vm-7", "kind": "vm", "name": "Unnamed VM vm-7", "state": "cannot tell", "what": "VM in pool Home, not on a host", "numbers": "vCPUs: cannot tell · memory: cannot tell" },
+    { "id": "vm-8", "kind": "vm", "name": "holder-c09fcd", "state": "running", "what": "VM on a host this token cannot see", "numbers": "2 vCPUs · 2 GiB · 10.10.10.230" },
     { "id": "sr-1", "kind": "sr", "name": "Local storage", "state": null, "what": "Storage, lvm, on xcp1", "numbers": "300 GiB free of 500 GiB" },
     { "id": "sr-2", "kind": "sr", "name": "NAS", "state": null, "what": "Storage, nfs, shared by pool Home", "numbers": "1 TiB free of 2 TiB" },
     { "id": "sr-3", "kind": "sr", "name": "Unnamed storage sr-3", "state": null, "what": "Storage, shared by pool Home", "numbers": "space: cannot tell" }
@@ -93,7 +95,7 @@
   "lists": {
     "pool": ["pool-1"],
     "host": ["0f1e2d3c4b5a", "host-1", "host-2"],
-    "vm": ["vm-5", "vm-1", "vm-6", "vm-4", "vm-3", "vm-7", "vm-2"],
+    "vm": ["vm-5", "vm-1", "vm-6", "vm-4", "vm-8", "vm-3", "vm-7", "vm-2"],
     "sr": ["sr-1", "sr-2", "sr-3"]
   },
   "disks": [
@@ -117,6 +119,7 @@
     { "why": "a paused VM is unpaused, or forced", "component": "vm-4", "methods": "all", "offered": ["unpause", "snapshot", "forceReboot", "forceShutdown"] },
     { "why": "a suspended VM is resumed, or forced off", "component": "vm-5", "methods": "all", "offered": ["resume", "snapshot", "forceShutdown"] },
     { "why": "a VM whose state is not known is offered nothing, because every action depends on the state", "component": "vm-7", "methods": "all", "offered": [] },
+    { "why": "the pool’s own machine was made with the admin sign-in, outside what the limited user may change: Xen Orchestra lists every method and refuses each one for it, so none is drawn", "component": "vm-8", "methods": "all", "offered": [] },
     { "why": "a running host can go into maintenance mode or reboot", "component": "host-1", "methods": "all", "offered": ["maintenanceOn", "hostReboot"] },
     { "why": "an older Xen Orchestra has disable and enable instead of setMaintenanceMode", "component": "host-1", "methods": ["host.disable", "host.enable"], "offered": ["maintenanceOn"] },
     { "why": "a host in maintenance mode can leave it, or reboot", "component": "host-2", "methods": "all", "offered": ["maintenanceOff", "hostReboot"] },
@@ -223,6 +226,7 @@
     { "why": "nothing listed, nothing offered, and nothing said about stopping", "component": "vm-2", "methods": [], "resize": false, "needsStopped": false, "grow": null },
     { "why": "vm.set alone on a running VM: the sentence, no button", "component": "vm-1", "methods": ["vm.set"], "resize": false, "needsStopped": true, "grow": null },
     { "why": "a VM whose state is not known is offered no change at all", "component": "vm-7", "methods": "all", "resize": false, "needsStopped": false, "grow": null },
+    { "why": "nor is the pool’s own machine, whatever its state, for the same reason it is offered no action", "component": "vm-8", "methods": "all", "resize": false, "needsStopped": false, "grow": null },
     { "why": "a host is not resized here", "component": "host-1", "methods": "all", "resize": false, "needsStopped": false, "grow": null }
   ],
   "resize": [
@@ -281,6 +285,7 @@
     { "why": "not JSON", "address": "xo.lan", "text": "tok-abc", "ok": false }
   ],
   "words": {
+    "holder": ["holder-c09fcd", "holder-c09fcd is this pool’s own Fleetwright machine. It was made with the admin sign-in, outside what the limited user may change, so nothing can be done to it from here. To replace it, use Make it again in the pool’s policy."],
     "watching": "Watching now. Changes arrive as Xen Orchestra makes them.",
     "connecting": ["xo.lan", "Connecting to xo.lan…"],
     "never": "Not looked at from this phone yet.",

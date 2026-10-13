@@ -142,6 +142,17 @@ this token cannot see" rather than naming none. In practice this lists the
 storage and the VMs in the set, and probably not the hosts, which is the
 decision recorded under "Left from the first slice".
 
+**The pool's own machine is listed and not worked.** It is made with the admin
+sign-in, outside the resource set ("A machine of its own" in
+[hypervisors.md](./hypervisors.md)), so Xen Orchestra lists every method and
+refuses each one for it with "not enough permissions". Its page draws no
+action, no size and no disk for it, and says where it is replaced instead:
+Make it again, in the pool's policy, which signs in as admin. The VM is known
+by its `fleetwright-holder` tag, the one tag a machine reading the pool for a
+phone away from it keeps on the page (`pageObject` in
+`src/fleet/host/xo-pools.js`). The rule is in the table both phones run
+(`test/fixtures/parity/manage.json`, vm-8).
+
 ### Talking
 
 Xen Orchestra's JSON-RPC over a WebSocket at `/api/`, the same calls

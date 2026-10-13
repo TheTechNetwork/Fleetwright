@@ -277,7 +277,7 @@ class ManageParityTest {
             "connecting" to Manage.Words::connecting, "plainPool" to Manage.Words::plainPool, "noToken" to Manage.Words::noToken,
             "wrongCertificate" to Manage.Words::wrongCertificate, "limitedUser" to Manage.Words::limitedUser,
             "typePrompt" to Manage.Words::typePrompt, "refused" to Manage.Words::refused, "lost" to Manage.Words::lost,
-            "askingFleet" to Manage.Words::askingFleet, "edgeUnreached" to Manage.Words::edgeUnreached,
+            "askingFleet" to Manage.Words::askingFleet, "edgeUnreached" to Manage.Words::edgeUnreached, "holder" to Manage.Words::holder,
         )
         for ((key, say) in single) assertEquals(key, arg(key, 1), say(arg(key, 0)))
 
