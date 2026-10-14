@@ -351,6 +351,17 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(d.payload(in: stuck, holderSecret: secret)["holderAgain"] as? Bool, true)
     }
 
+    func testWhatThePoolsMachinesMayDoIsSentOnlyToAMachineThatAppliesIt() throws {
+        let inv = try inventory()
+        var c = XOPolicy.Choice.initial(for: inv)
+        XCTAssertNil(c.payload(in: inv)["grants"], "an older machine leaves them the image’s answers")
+        c.grantsChoice = true
+        XCTAssertEqual(c.payload(in: inv)["grants"] as? [String: Bool], ["upgrades": true, "reboot": false], "the image’s own answers, until changed")
+        c.machineUpdates = false
+        c.machineReboot = true
+        XCTAssertEqual(c.payload(in: inv)["grants"] as? [String: Bool], ["upgrades": false, "reboot": true])
+    }
+
     func testEachLimitIsHeldToTheMachinesBounds() throws {
         let inv = try inventory()
         XCTAssertEqual(inv.cpuRange, 1...16)

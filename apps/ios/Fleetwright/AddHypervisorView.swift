@@ -133,6 +133,9 @@ struct AddHypervisorView: View {
     /// What the machine read, opened, while it waits on the person.
     @State private var inventory: XOPolicy.Inventory?
     @State private var choice = XOPolicy.Choice()
+    /// What the machines may do, as Apply sent it, kept with the pool once
+    /// the job is done.
+    @State private var sentGrants: (upgrades: Bool, reboot: Bool)?
     /// What this phone kept for this address, once Face ID has opened it.
     @State private var remembered: XOSaved.Entry?
     /// "Keep on this phone": on when what is on screen came from what was
@@ -215,6 +218,10 @@ struct AddHypervisorView: View {
         /// It rebuilds and removes an image that is there (`can` holds
         /// "image-manage"); an older one keeps every image as it is.
         var canImageManage = false
+        /// The machines it makes are born allowed what the person chose
+        /// from the app (`can` holds "machine-grants"); an older one leaves
+        /// them the image's answers.
+        var canMachineGrants = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -864,6 +871,7 @@ struct AddHypervisorView: View {
         wayOutSection(inv)
         if choice.groupsChoice, choice.egress != nil { groupsSection(inv) }
         if choice.labsChoice, choice.egress != nil, choice.edge || inv.edge(on: choice.egress) != nil { labsSection(inv) }
+        if choice.grantsChoice { machineGrantsSection() }
         limitsSection(inv)
         applySection(inv, job: job)
     }
@@ -1303,6 +1311,31 @@ struct AddHypervisorView: View {
         if choice.groups == 0 { return "None, so every machine is on its own" }
         if more <= 0 { return count }
         return there == 0 ? "\(count), made when you apply" : "\(count): \(there) there now, \(more) made when you apply"
+    }
+
+    /// WHAT THE MACHINES MADE HERE MAY DO FROM THE APP, offered only by a
+    /// machine that applies it (C-2). Each machine is born with it; nothing
+    /// running is asked to change, so the one line that does is said.
+    /// Asked for: "Should be a toggle where we can either enable it on vms or not".
+    private func machineGrantsSection() -> some View {
+        Section {
+            Toggle(isOn: $choice.machineUpdates) {
+                policyRow("Update their system from the app", "Sessions keep running while it updates.")
+            }
+            .tint(Design.Palette.accent)
+            .frame(minHeight: 44)
+            .disabled(busy)
+            Toggle(isOn: $choice.machineReboot) {
+                policyRow("Reboot from the app", "A reboot ends every session on that machine.")
+            }
+            .tint(Design.Palette.accent)
+            .frame(minHeight: 44)
+            .disabled(busy)
+        } header: {
+            sectionHead("Machines made here")
+        } footer: {
+            Text(XOPolicy.machineGrantsFooter)
+        }
     }
 
     private func limitsSection(_ inv: XOPolicy.Inventory) -> some View {
@@ -1910,7 +1943,8 @@ struct AddHypervisorView: View {
                                   canEdgeHa: begun.can.contains("edge-ha"),
                                   canLabs: begun.can.contains("labs"),
                                   canLabsEach: begun.can.contains("labs-each"),
-                                  canImageManage: begun.can.contains("image-manage"))
+                                  canImageManage: begun.can.contains("image-manage"),
+                                  canMachineGrants: begun.can.contains("machine-grants"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1945,6 +1979,13 @@ struct AddHypervisorView: View {
                     choice.labsChoice = policyJob.canLabs && opened.labMax != nil
                     choice.labsEachChoice = choice.labsChoice && policyJob.canLabsEach
                     choice.imageManageChoice = choice.imagesChoice && policyJob.canImageManage
+                    choice.grantsChoice = policyJob.canMachineGrants
+                    // Where they were left: the answers this phone kept for
+                    // the pool, or the image's own.
+                    if let kept = XOSetupHandoff.machineGrants(address: policyJob.address) {
+                        choice.machineUpdates = kept.upgrades
+                        choice.machineReboot = kept.reboot
+                    }
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
@@ -1960,6 +2001,14 @@ struct AddHypervisorView: View {
         // the machines holding the pool read the routers from now on.
         if state.state == "done", let sealed = state.watch, let policyJob,
            XOSetupHandoff.keepEdgeKey(sealed, job: job, address: policyJob.address, key: policyJob.reply) {
+            _ = await XOSetupHandoff.keepInFleet(settings: settings, address: policyJob.address)
+        }
+        // WHAT ITS MACHINES MAY DO, kept with the pool's token and in the
+        // fleet once the job is done, so every machine made from the pool's
+        // record from now on is born with it.
+        if state.state == "done", let sentGrants, let policyJob,
+           XOSetupHandoff.keepMachineGrants(address: policyJob.address, upgrades: sentGrants.upgrades, reboot: sentGrants.reboot) {
+            self.sentGrants = nil
             _ = await XOSetupHandoff.keepInFleet(settings: settings, address: policyJob.address)
         }
         if let now = state.state, !XOSetupWords.isLive(now), now != "choosing" {
@@ -1995,7 +2044,11 @@ struct AddHypervisorView: View {
         }
         let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
         do {
+            // Before the answer, which can already say done.
+            sentGrants = nil
+            if choice.grantsChoice { sentGrants = (upgrades: choice.machineUpdates, reboot: choice.machineReboot) }
             let answer = try await fleet.setupPolicy(job: job, sealed: joined)
+            if answer.ok == false { sentGrants = nil }
             if answer.ok != false {
                 // ON THE LOCK SCREEN FROM HERE, while it applies and builds,
                 // at the step it is on: the last, `apply`, of however many
