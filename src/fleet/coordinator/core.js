@@ -12,7 +12,7 @@
 // Nothing in here imports from `node:` — if that stops being true, the Worker
 // build breaks, which is the check that keeps it honest.
 
-import { HostRegistry } from './registry.js';
+import { HostRegistry, runsNoSessions } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
@@ -3927,7 +3927,16 @@ export class CoordinatorCore {
   snapshot(requester = null) {
     return {
       protocol: PROTOCOL_VERSION,
-      hosts: this.registry.list().map((h) => visibleHost(h, requester)),
+      // WHETHER EACH CAN TAKE A NEW SESSION FROM THIS PERSON NOW, by the rule
+      // placement uses, so New session › Where offers only the machines a
+      // start would reach (C-2): not one that is not reporting or degraded,
+      // not somebody else's temporary machine, and never a pool's own
+      // machine, which runs no sessions and says so (`holder`).
+      hosts: this.registry.list().map((h) => ({
+        ...visibleHost(h, requester),
+        takesSessions: takesSessions(h, requester),
+        ...(runsNoSessions(h.hostId) ? { holder: true } : {}),
+      })),
       devices: this.devices.size,
       events: visibleEvents(this.events.slice(-20), requester),
       // WHETHER THIS FLEET CAN START A MACHINE, so a phone offers the button
@@ -5072,6 +5081,18 @@ function sessionLabel(s) {
   const title = s?.title ? String(s.title).split('\n')[0].trim() : '';
   const short = title.length > 48 ? `${title.slice(0, 47)}…` : title;
   return short ? `${s.name} · ${short}` : String(s?.name ?? '');
+}
+
+/**
+ * Whether a host would take a new session from this person now: the filter
+ * placement applies (registry.js `schedulable`, scheduler.js) before it ranks.
+ *
+ * @param {any} host
+ * @param {{ email?: string|null }|null} requester
+ */
+function takesSessions(host, requester) {
+  if (!host?.connected || host.state !== 'healthy' || !host.health || runsNoSessions(host.hostId)) return false;
+  return !(host.ephemeral && host.owner && host.owner !== requester?.email);
 }
 
 /**

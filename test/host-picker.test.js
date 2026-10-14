@@ -72,3 +72,23 @@ test('the preference never touches pinned or fan-out verbs', () => {
   assert.equal(fan.kind, 'fanout');
   assert.equal(fan.hosts.length, 2);
 });
+
+test('a pool’s own machine runs no sessions: never placed, refused by name, and not degraded for having no Claude account', () => {
+  // Asked for: "Should the pool's own machine ever run sessions? No". It
+  // showed degraded for nobody having linked an account, and New session ›
+  // Where offered it.
+  const r = new HostRegistry();
+  r.connect('holder-e8309c', () => {});
+  r.recordHealth('holder-e8309c', { hub: { reachable: true }, maxSessions: 4, running: 0, free: 4, labels: [], claudeAccounts: 0 });
+  assert.equal(r.get('holder-e8309c')?.state, 'healthy', 'it holds the pool; no account is a fault only where sessions run');
+  assert.equal(place(r, start).kind, 'refused', 'wherever fits is never there');
+  const named = place(r, start, { preferHost: 'holder-e8309c' });
+  assert.equal(named.kind, 'refused');
+  assert.match(/** @type {any} */ (named).reason, /holder-e8309c is a pool's own machine\. It holds the pool for the fleet and runs no sessions\./);
+  // Another box with no account is still degraded, and says the remedy as a
+  // phone draws it: no backticks, no <email> placeholder.
+  r.connect('deb13', () => {});
+  r.recordHealth('deb13', { hub: { reachable: true }, maxSessions: 4, running: 0, free: 4, labels: [], claudeAccounts: 0 });
+  assert.equal(r.get('deb13')?.state, 'degraded');
+  assert.doesNotMatch(r.get('deb13')?.reason || '', /[`<>]/);
+});

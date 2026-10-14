@@ -20,6 +20,24 @@
 // why it skipped it.
 
 import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
+import { HOLDER_ID_RE } from '../protocol/holder-join.js';
+
+/**
+ * A POOL'S OWN MACHINE RUNS NO SESSIONS. It is made to stay up and hold the
+ * pool's token for the fleet (docs/hypervisors.md, "A machine of its own"),
+ * on 2 vCPUs and 4 GiB, and nobody links a Claude account to it. It is never
+ * degraded for having none, never chosen for new work, and refused by name;
+ * asked for: "Should the pool's own machine ever run sessions? No".
+ *
+ * Known by its name, which only the coordinator gives (`holder-` and six hex,
+ * core.js #onHolderPin): a box that called itself that would only lose the
+ * sessions it could have run.
+ *
+ * @param {string} hostId
+ */
+export function runsNoSessions(hostId) {
+  return HOLDER_ID_RE.test(String(hostId || ''));
+}
 
 /**
  * @typedef {object} HostHealth
@@ -255,7 +273,7 @@ export class HostRegistry {
       // degraded with the runner's own remedy.
       host.state = 'unknown';
       host.reason = 'a new runner, still fetching the Claude login its sessions will run on';
-    } else if (health.claudeAccounts === 0 && health.runnerAuth !== 'owner' && health.runnerAuth !== 'key') {
+    } else if (health.claudeAccounts === 0 && health.runnerAuth !== 'owner' && health.runnerAuth !== 'key' && !runsNoSessions(hostId)) {
       // NOBODY CAN START A SESSION HERE, which is a different question from the
       // one this used to ask. It read `loggedIn === false` — the box's own
       // Claude login — and that rule outlived its model: since
@@ -291,7 +309,9 @@ export class HostRegistry {
         // message a beta tester's first run ended at — the one the comment
         // above calls "a reason without a remedy is half of it" — and half of
         // the remedy it gave was a surface the product no longer has.
-        'Link one from the app, or on the box with `fleetwright login for <email>`';
+        // SAID AS A PHONE SHOWS IT: this is the line under the machine's name,
+        // and backticks and an <email> placeholder were drawn there literally.
+        'Link one from the app. On the box itself, fleetwright login for and your email address does the same.';
     } else if (health.credential?.state === 'expired' && health.credential.refreshable === false) {
       // A DIFFERENT FAILURE FROM `loggedIn === false`, and the one that was
       // invisible. `loggedIn` reports on the box's own home directory; this
@@ -369,7 +389,7 @@ export class HostRegistry {
    */
   schedulable() {
     this.sweep();
-    return [...this.hosts.values()].filter((h) => h.connected && h.state === 'healthy' && h.health);
+    return [...this.hosts.values()].filter((h) => h.connected && h.state === 'healthy' && h.health && !runsNoSessions(h.hostId));
   }
 
   /**

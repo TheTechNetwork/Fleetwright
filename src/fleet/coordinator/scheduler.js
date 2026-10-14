@@ -46,6 +46,8 @@
 // somebody else got as far as trying to mount its container and failed on an
 // unrelated runtime error. The access control never ran; a mount permission
 // was doing its job.
+import { runsNoSessions } from './registry.js';
+
 const PINNED = new Set([
   'resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge',
   'files', 'readfile', 'writefile', 'copyfile', 'deletefile',
@@ -508,6 +510,15 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   }
 
   // --- new work: filter, rank, tie-break ------------------------------------
+  // THE POOL'S OWN MACHINE, named: refused as what it is, before anything
+  // about the rest of the fleet (registry.js, runsNoSessions).
+  if (preferHost && runsNoSessions(preferHost)) {
+    return {
+      kind: 'refused',
+      code: 'host_unavailable',
+      reason: `${preferHost} is a pool's own machine. It holds the pool for the fleet and runs no sessions.`,
+    };
+  }
   const candidates = registry.schedulable();
   if (!candidates.length) {
     return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
