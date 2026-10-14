@@ -355,6 +355,36 @@ the coordinator does can approve it.
 token, both to make your machines and to work them, after the box that last
 saw the machine. The other boxes are the fallback.
 
+### Machines made here
+
+**What the pool's machines may do from the app is chosen on its policy**,
+under Machines made here: update their system, and reboot. They are the
+same two grants `sudo fleetwright grant upgrades on` and `grant reboot on`
+set on a box you installed yourself (`docs/packaging.md`), chosen once for
+every machine made on the pool from then on, the pool's own included. The
+switches start from the image's own answers, updates yes and reboot no, or
+from what this phone last kept for the pool, and only a box whose setup says
+`machine-grants` in `can` offers them.
+
+**A machine is born with them.** Apply sends them for the pool's own machine
+it makes now (`grants` in the policy, `checkPolicy`). Once the job is done
+the phone keeps the same answers in the pool's record, beside its token, and
+keeps the record in the fleet, so the box that makes a session's machine
+reads them where it reads the token (`poolRecord`, `src/fleet/host/xo-pools.js`).
+Either box writes them into the machine's first-boot file, and the join
+script runs `fleetwright grant` with each before it starts anything
+(`install/fleetwright-vm-join`). Only a yes or a no is ever applied; a pool
+whose phone never chose leaves its machines the image's answers.
+
+**A machine already running keeps what it has.** Nothing running is asked
+to change a rule, for the reason in `src/core/grants.js`: a service that
+could write its own sudoers rule would hold the privilege already. On a
+machine that is up, `sudo fleetwright grant upgrades on`, or `reboot on`, is
+still the way. Make it again replaces the pool's own machine with one born
+with the new answers, which asks to join and is let in again.
+A machine image built before this keeps a join script that does not read
+them; rebuild it to have them applied.
+
 ### What a machine did on the network
 
 **Its page has a section, On the network**, on both phones. It shows the last
