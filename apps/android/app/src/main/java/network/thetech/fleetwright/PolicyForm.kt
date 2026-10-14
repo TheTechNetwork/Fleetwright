@@ -421,6 +421,30 @@ internal fun PolicyForm(
         }
     }
 
+    // WHAT THE MACHINES MADE HERE MAY DO FROM THE APP, offered only by a
+    // machine that applies it (C-2). Each machine is born with it; nothing
+    // running is asked to change, so the one line that does is said. The
+    // same words as iOS. Asked for: "Should be a toggle where we can either
+    // enable it on vms or not".
+    if (choice.grantsChoice) {
+        SectionHead("Machines made here")
+        CheckRow(
+            checked = choice.machineUpdates,
+            enabled = enabled,
+            title = "Update their system from the app",
+            line = "Sessions keep running while it updates.",
+            onChange = { on -> onChange(choice.copy(machineUpdates = on)) },
+        )
+        CheckRow(
+            checked = choice.machineReboot,
+            enabled = enabled,
+            title = "Reboot from the app",
+            line = "A reboot ends every session on that machine.",
+            onChange = { on -> onChange(choice.copy(machineReboot = on)) },
+        )
+        Hint(XoPolicy.MACHINE_GRANTS_FOOTER)
+    }
+
     SectionHead("Limits")
     Hint("The most the fleet's machines may use between them. Xen Orchestra holds them to it.")
     val maxCpus = XoPolicy.maxCpus(inv).toLong()
