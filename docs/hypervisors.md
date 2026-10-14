@@ -355,6 +355,24 @@ the coordinator does can approve it.
 token, both to make your machines and to work them, after the box that last
 saw the machine. The other boxes are the fallback.
 
+**It runs no sessions.** It holds the pool for the fleet, and a session on it
+would share the one machine every other start on that pool goes through. The
+coordinator knows it by its name, which only the coordinator gives out
+(`holder-` and six hex, `HOLDER_ID_RE`), and asked for: "Should the pool's own
+machine ever run sessions? No".
+
+- **It is never placed.** Wherever fits passes it over, and a start named at
+  it is refused with that reason (`src/fleet/coordinator/scheduler.js`).
+- **It is never degraded for having no Claude account.** Nobody links one
+  there, so the zero is its ordinary state (`registry.js`, `runsNoSessions`).
+  The phones say "This pool’s own machine. It holds the pool for the fleet and
+  runs no sessions." where another machine says who can start one, never in
+  the attention colour.
+- **New session › Where does not offer it**, and offers no machine a start
+  would not reach: the snapshot says `takesSessions` for each host, by the
+  rule placement uses, and `holder` for this one. Against a coordinator too
+  old to say, the phones offer the healthy machines, as before.
+
 ### Machines made here
 
 **What the pool's machines may do from the app is chosen on its policy**,
