@@ -41,6 +41,8 @@ struct HostView: View {
     let initialReason: String?
     /// The membership record: fingerprint and whether it has been revoked.
     let enrolled: Fleet.Host?
+    /// A pool's own machine, as the list last said (Fleet.FleetHost.holder).
+    var initialHolder: Bool = false
     /// Called when this page changes something the list should know about.
     var onChange: () async -> Void = {}
 
@@ -57,6 +59,7 @@ struct HostView: View {
     @State private var health: Fleet.HostHealth?
     @State private var state: String?
     @State private var reason: String?
+    @State private var holder = false
     @State private var busy = false
     @State private var result = ""
     @State private var channel: String?
@@ -195,6 +198,7 @@ struct HostView: View {
             health = initialHealth
             state = initialState
             reason = initialReason
+            holder = initialHolder
             channel = initialHealth?.channel
             channelPinned = initialHealth?.channelPinned ?? false
             sandbox = initialHealth?.sandbox
@@ -224,11 +228,11 @@ struct HostView: View {
             if let reason, !reason.isEmpty, state != "healthy" {
                 Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
             }
-            if let accounts = health?.claudeAccounts {
+            if let accounts = health?.claudeAccounts, whoCanStartIsNews(accounts, state: state) {
                 let runner = enrolled?.ephemeral == true
-                Text(describeWhoCanStart(accounts, account: health?.account, runnerAuth: health?.runnerAuth, runner: runner))
+                Text(describeWhoCanStart(accounts, account: health?.account, runnerAuth: health?.runnerAuth, runner: runner, holder: holder))
                     .fleetType(.label)
-                    .foregroundStyle(whoCanStartIsFault(accounts, runnerAuth: health?.runnerAuth, runner: runner)
+                    .foregroundStyle(whoCanStartIsFault(accounts, runnerAuth: health?.runnerAuth, runner: runner, holder: holder)
                                      ? Design.Palette.attention : Design.Palette.inkDim)
             }
             if let version = health?.version?.head, !version.isEmpty {
@@ -789,6 +793,7 @@ struct HostView: View {
         health = mine.health
         state = mine.state
         reason = mine.reason
+        holder = mine.holder == true
         if let now = mine.health?.channel { channel = now }
         channelPinned = mine.health?.channelPinned ?? channelPinned
         // KEPT IF THE SNAPSHOT DOES NOT CARRY IT, rather than cleared. A host
