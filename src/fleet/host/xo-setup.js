@@ -1078,7 +1078,7 @@ export class XoSetups {
         const rest = (ctx.setObjects || []).filter((/** @type {string} */ id) => !chosenKinds.has(id));
         const images = (ctx.images || []).map((/** @type {any} */ t) => String(t.id));
         await ctx.admin.call('resourceSet.set', { id: ctx.setId, objects: [...new Set([...p.srs, ...p.networks, ...own, ...rest, ...images])], limits: p.limits });
-        const said = [`It may use ${plural(p.srs.length, 'storage repository')}, ${plural(p.networks.length, 'network')}, ${p.limits.cpus} vCPUs, ${gib(p.limits.memory)} of memory and ${gib(p.limits.disk)} of disk.`];
+        const said = [`It may use ${plural(p.srs.length, 'storage repository', 'storage repositories')}, ${plural(p.networks.length, 'network')}, ${p.limits.cpus} vCPUs, ${gib(p.limits.memory)} of memory and ${gib(p.limits.disk)} of disk.`];
         // THE EGRESS, as a tag on that network, so the edge router is built
         // on the network the person named and the choice can be seen in Xen
         // Orchestra itself. Moved, never doubled: one network carries it.
@@ -2026,9 +2026,9 @@ function isPrivateV4(ip) {
   return a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b < 128);
 }
 
-/** @param {number} n @param {string} word */
-function plural(n, word) {
-  return `${n} ${word}${n === 1 ? '' : 's'}`;
+/** @param {number} n @param {string} word @param {string} [many] the word for more than one, where an s will not do */
+function plural(n, word, many = `${word}s`) {
+  return `${n} ${n === 1 ? word : many}`;
 }
 
 /** @param {number} bytes */
