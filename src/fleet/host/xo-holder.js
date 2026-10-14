@@ -24,6 +24,7 @@
 
 import { VM_IMAGE, imageKeyOf } from './vm-image.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
+import { machineGrantsOf } from '../../core/grants.js';
 
 export const HOLDER = Object.freeze({
   /** On the VM, which is how the next policy job finds it rather than making another. */
@@ -43,14 +44,17 @@ export const HOLDER = Object.freeze({
  * there is one, which it asks to join with instead of spending the pin
  * (src/fleet/host/vm-join.js). The same join script as a session's machine
  * reads it (install/fleetwright-vm-join), and does not power this one off.
+ * `grants` is what it may do from chat, as its owner chose on the pool's
+ * policy, which the join script applies before anything starts.
  *
- * @param {{ hostId: string, pin: string, coordinatorUrl: string, address: string, secret?: string|null }} spec
+ * @param {{ hostId: string, pin: string, coordinatorUrl: string, address: string, secret?: string|null, grants?: { upgrades?: boolean, reboot?: boolean }|null }} spec
  */
-export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret = null }) {
+export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret = null, grants = null }) {
   if (!HOLDER.id.test(hostId)) throw new Error(`${hostId} is not a name the coordinator gives a pool's own machine`);
   if (!/^\d{6}$/.test(pin)) throw new Error('that is not an enrolment pin');
   if (secret !== null && !HOLDER_SECRET_RE.test(secret)) throw new Error('that is not the secret a phone makes for a pool’s own machine');
-  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, pin, hostId, holder: address, ...(secret ? { secret } : {}) });
+  const allowed = machineGrantsOf(grants);
+  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, pin, hostId, holder: address, ...(secret ? { secret } : {}), ...(allowed ? { grants: allowed } : {}) });
   return [
     '#cloud-config',
     `hostname: ${hostId}`,
@@ -71,7 +75,8 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret
  * a new one cloned from the pool's machine image onto the way out. `again`
  * removes the one there first and makes a new one: asked for from the phone
  * for a machine that never joined. `secret`, from the person's phone, is what
- * the new one asks to join with.
+ * the new one asks to join with, and `grants` what it may do from chat. The
+ * one there is left as it is: a running machine's grants are changed on it.
  *
  * @param {{
  *   admin: { call: (method: string, params?: any) => Promise<any> },
@@ -82,11 +87,12 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret
  *   askPin: () => Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>,
  *   secret?: string|null,
  *   again?: boolean,
+ *   grants?: { upgrades?: boolean, reboot?: boolean }|null,
  *   say?: (text: string) => void,
  * }} spec
  * @returns {Promise<string>} what was done, in a sentence for the phone
  */
-export async function ensureHolder({ admin, pool, egress, address, coordinatorUrl, askPin, secret = null, again = false, say = () => {} }) {
+export async function ensureHolder({ admin, pool, egress, address, coordinatorUrl, askPin, secret = null, again = false, grants = null, say = () => {} }) {
   const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
   const theirs = vms.filter((v) => v?.$pool === pool && Array.isArray(v.tags) && v.tags.includes(HOLDER.tag));
   const there = theirs[0];
@@ -121,7 +127,7 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
     name_description: `This pool’s own Fleetwright machine. It holds the pool for the fleet once its owner approves it, and stays up. Made by Fleetwright.`,
     VIFs: [{ network: egress.id }],
     tags: [HOLDER.tag, `${HOLDER.forPrefix}${address}`],
-    cloudConfig: holderCloudConfig({ hostId: given.hostId, pin: given.pin, coordinatorUrl, address, secret }),
+    cloudConfig: holderCloudConfig({ hostId: given.hostId, pin: given.pin, coordinatorUrl, address, secret, grants }),
     // The drive holds the pin: gone once the machine has booted, and wiped
     // from inside before that (the join script), whichever comes first.
     destroyCloudConfigVdiAfterBoot: true,

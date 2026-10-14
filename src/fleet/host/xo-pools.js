@@ -40,6 +40,7 @@ import { VM_IMAGE } from './vm-image.js';
 import { HOLDER } from './xo-holder.js';
 import { seal, xolookAad } from '../seal.js';
 import { xoActionArgs } from '../protocol/intents.js';
+import { machineGrantsOf } from '../../core/grants.js';
 
 /** The prefix a pool's item carries in a vault answer. */
 export const HYPERVISOR_ITEM = 'hypervisor:';
@@ -115,7 +116,7 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
 
 /**
  * @typedef {{ key: string, secret: string, pin: string, routers: Array<{ name: string, address: string|null }> }} EdgeKey
- * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, edge?: EdgeKey }} PoolRecord
+ * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, edge?: EdgeKey, grants?: { upgrades?: boolean, reboot?: boolean } }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null, perPerson?: number }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
@@ -326,7 +327,8 @@ export function poolRecord(name, value) {
   // HTTP, recorded at setup, goes without one.
   if (!plain && !pin) return null;
   const edge = edgeKey(r.edge);
-  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(edge ? { edge } : {}) };
+  const grants = machineGrantsOf(r.grants);
+  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(edge ? { edge } : {}), ...(grants ? { grants } : {}) };
 }
 
 /**
@@ -653,6 +655,9 @@ export class XoPools {
           // of the person's choosing, or alone in a lab, left as it is.
           isolate: !chosenNet && !labNet && on ? { subnet: UPLINK_SUBNET, gateway: EDGE.lan.address } : null,
           group: joined ? { mac: joined.mac, address: `${joined.address}/16` } : null,
+          // WHAT IT MAY DO FROM CHAT, as its owner chose on the pool's
+          // policy and kept in the pool's record (src/core/grants.js).
+          grants: record.grants ?? null,
         }),
         // The drive holds the ticket and the Claude login: gone once the
         // machine has booted, and wiped from inside before that (the join
@@ -999,13 +1004,19 @@ export function groupPlace(id, taken) {
  * and the file it reads, run at every boot by a unit of its own and first at
  * this one, before the join script starts anything that listens.
  *
+ * WHAT IT MAY DO FROM CHAT, when its owner chose on the pool's policy: the
+ * join script runs `fleetwright grant` with each answer before the services
+ * start (src/core/grants.js). Left out, it keeps the machine image's.
+ *
  * @param {{
  *   name: string, coordinatorUrl: string, ticket: string, owner: string, claude: string|null, minutes: number, sshKeys?: string[],
  *   isolate?: { subnet: string, gateway: string }|null, group?: { mac: string, address: string }|null,
+ *   grants?: { upgrades?: boolean, reboot?: boolean }|null,
  * }} opts
  */
-export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, claude, minutes, sshKeys: keys = [], isolate = null, group = null }) {
-  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, ticket, owner, claude, minutes });
+export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, claude, minutes, sshKeys: keys = [], isolate = null, group = null, grants = null }) {
+  const allowed = machineGrantsOf(grants);
+  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, ticket, owner, claude, minutes, ...(allowed ? { grants: allowed } : {}) });
   const net = isolate || group ? JSON.stringify({ v: 1, ...(isolate ? { isolate } : {}), ...(group ? { group } : {}) }) : null;
   const block = (/** @type {string} */ text) => text.replace(/\n$/, '').split('\n').map((l) => (l ? `      ${l}` : ''));
   return [

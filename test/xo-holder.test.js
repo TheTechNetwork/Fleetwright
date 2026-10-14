@@ -187,6 +187,27 @@ test('the policy asks for one only on a way out, from an image there or built wi
   assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n1', holder: true, holderSecret: 'short' }, /** @type {any} */ (choices))).text, /not a secret/);
   assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n1', holderSecret: SECRET }, /** @type {any} */ (choices))).text, /not a secret/);
   assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n1', holderAgain: true }, /** @type {any} */ (choices))).text, /made again only while it is asked for/);
+  // WHAT IT MAY DO FROM CHAT: yes or no for each, and nothing from a phone
+  // that predates the choice.
+  const allowed = checkPolicy({ ...base, egress: 'n1', holder: true, grants: { upgrades: true, reboot: false } }, /** @type {any} */ (choices));
+  assert.deepEqual(allowed.ok && allowed.policy.grants, { upgrades: true, reboot: false });
+  assert.equal(ok.ok && ok.policy.grants, null, 'the image’s own answer');
+  for (const grants of [{ reboot: 'yes' }, { sudo: true }, ['upgrades']]) {
+    assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n1', holder: true, grants }, /** @type {any} */ (choices))).text, /yes or no for updates and for reboot/, JSON.stringify(grants));
+  }
+});
+
+test('a new one is born allowed what its owner chose, and one already there is left as it is', async () => {
+  const xo = admin([debian]);
+  await ensureHolder({ ...spec(xo, pinner().askPin), grants: { upgrades: true, reboot: true } });
+  const [, made] = /** @type {[string, any]} */ (xo.calls.find(([m]) => m === 'vm.create'));
+  const join = JSON.parse(/** @type {string} */ (/content: \|\n {6}(\{.*\})/.exec(made.cloudConfig)?.[1]));
+  assert.deepEqual(join.grants, { upgrades: true, reboot: true });
+  const plain = JSON.parse(/** @type {string} */ (/content: \|\n {6}(\{.*\})/.exec(holderCloudConfig({ hostId: NAME, pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan', grants: { reboot: 'yes' } }))?.[1]));
+  assert.equal('grants' in plain, false, 'anything but a yes or no reaches no machine');
+  const there = admin([debian, { type: 'VM', id: 'vm-1', name_label: NAME, $pool: 'p1', power_state: 'Running', tags: [HOLDER.tag] }]);
+  await ensureHolder({ ...spec(there, pinner().askPin), grants: { reboot: true } });
+  assert.ok(!there.calls.some(([m]) => m === 'vm.create' || m === 'vm.delete'), 'a running machine’s grants are changed on it');
 });
 
 test('made again, the one there goes first, disk and all, and the new one boots with the phone’s secret', async () => {

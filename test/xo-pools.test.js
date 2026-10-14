@@ -124,6 +124,22 @@ test('a look reports the pool’s machine images, and sweeps machines that are d
   assert.ok(stand.rpc.closed);
 });
 
+test('a machine is born allowed what its owner chose for the pool’s machines, and an answer that is not one reaches none', async () => {
+  const joinOf = async (/** @type {any} */ grants) => {
+    const stand = xo({ objects: [pool, image, uplink] });
+    const pools = holder(stand);
+    pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record(grants === undefined ? {} : { grants }) }] }]);
+    await pools.refresh();
+    const r = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, coordinatorUrl: 'https://fleet.test' });
+    assert.equal(r.ok, true, r.text);
+    const made = /** @type {any} */ (stand.calls.find((c) => c.method === 'vm.create')).params;
+    return JSON.parse(/** @type {string} */ (made.cloudConfig.split('\n').find((/** @type {string} */ l) => l.trim().startsWith('{"v":1,"coordinator"'))).trim());
+  };
+  assert.deepEqual((await joinOf({ upgrades: true, reboot: false })).grants, { upgrades: true, reboot: false });
+  assert.equal('grants' in (await joinOf(undefined)), false, 'the image’s own answer, from a phone that never chose');
+  assert.equal('grants' in (await joinOf({ reboot: 'on' })), false);
+});
+
 test('a pool that cannot be reached is reported so, and asking it for a machine says so for the next box', async () => {
   const pools = new XoPools({ connect: /** @type {any} */ (async () => { throw new Error('connect ECONNREFUSED'); }) });
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);

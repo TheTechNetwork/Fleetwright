@@ -17,14 +17,18 @@
 #      and names it in the sidecar's environment. The sidecar enrols itself
 #      with the ticket on its first start and hands the login to the hub
 #      (src/fleet/host/vm-join.js), then deletes the file.
-#   3. Starts the services, which the image left off so that no machine ever
+#   3. Applies what the machine may do from chat, when its owner chose on the
+#      pool's policy (`grants` in the file, src/core/grants.js): the same
+#      `fleetwright grant` a person runs on a box, once per answer, before
+#      anything starts. Left out, the machine keeps the image's answer.
+#   4. Starts the services, which the image left off so that no machine ever
 #      dials the fleet before it has a name of its own.
-#   4. Powers the machine off at its end. The box that made it removes it
+#   5. Powers the machine off at its end. The box that made it removes it
 #      once it is off (xo-pools.js, sweep), so the end needs nobody.
 #
 # A POOL'S OWN MACHINE (src/fleet/host/xo-holder.js) is booted with a pin and
 # the name it is bound to instead of a ticket, and the Xen Orchestra it holds.
-# It has no end: step 4 is skipped, and the address it holds goes in the
+# It has no end: step 5 is skipped, and the address it holds goes in the
 # sidecar's environment, so its health says it is that pool's own machine.
 set -euo pipefail
 
@@ -80,7 +84,29 @@ set_env FLEETWRIGHT_COORDINATOR_URL "$COORDINATOR"
 set_env FLEETWRIGHT_VM_JOIN "$STATE/vm-join.json"
 [ -z "$HOLDER" ] || set_env FLEETWRIGHT_HOLDER_FOR "$HOLDER"
 
-# --- 3. the services ----------------------------------------------------------
+# --- 3. what it may do from chat ---------------------------------------------
+# "on" or "off" for a grant its owner answered, and nothing for one they did
+# not: only a real yes or no in the file is ever applied.
+grant_answer() {
+  python3 -I -c 'import json, sys
+g = json.load(open(sys.argv[1])).get("grants")
+v = g.get(sys.argv[2]) if isinstance(g, dict) else None
+print({True: "on", False: "off"}.get(v, "") if isinstance(v, bool) else "")' "$STATE/vm-join.json" "$1"
+}
+FLEETWRIGHT_CLI="$(command -v fleetwright || echo /usr/local/bin/fleetwright)"
+for grant in upgrades reboot; do
+  to="$(grant_answer "$grant")"
+  [ -n "$to" ] || continue
+  # A grant that does not take is said and the machine still joins: it is
+  # then a machine that asks for less, and its page says which.
+  if "$FLEETWRIGHT_CLI" grant "$grant" "$to"; then
+    say "$grant from chat is $to, as its owner chose for the pool's machines"
+  else
+    say "could not turn $grant from chat $to; on this machine: sudo fleetwright grant $grant $to"
+  fi
+done
+
+# --- 4. the services ----------------------------------------------------------
 systemctl enable --now fleetwright.service fleetwright-sidecar.service
 if [ -n "$HOLDER" ]; then
   say "started; this machine joins $COORDINATOR as the machine of its own that holds $HOLDER"
@@ -89,6 +115,6 @@ if [ -n "$HOLDER" ]; then
 fi
 say "started; this machine joins $COORDINATOR as its owner's temporary host"
 
-# --- 4. its end ---------------------------------------------------------------
+# --- 5. its end ---------------------------------------------------------------
 shutdown -P "+$MINUTES" "This temporary machine has reached the end it was made for."
 say "powers off in $MINUTES minutes"

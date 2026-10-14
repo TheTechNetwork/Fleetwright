@@ -209,3 +209,25 @@ test('put_env replaces a recorded answer, appends a missing one, and leaves a co
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a machine made on a pool applies its owner’s answers with this same command, before anything starts', (t) => {
+  // install/fleetwright-vm-join, run as root by cloud-init on the machine's
+  // first boot (src/fleet/host/xo-pools.js, xo-holder.js write the file).
+  const JOIN = readFileSync(here('install/fleetwright-vm-join'), 'utf8');
+  const granted = JOIN.indexOf('"$FLEETWRIGHT_CLI" grant "$grant" "$to"');
+  assert.ok(granted > 0 && granted < JOIN.indexOf('systemctl enable --now'), 'granted before the services start');
+  // Only a real yes or no in the file is ever applied.
+  const fn = /grant_answer\(\) \{\n[\s\S]*?\n\}\n/.exec(JOIN)?.[0];
+  assert.ok(fn, 'the reader is one function');
+  const dir = mkdtempSync(path.join(tmpdir(), 'fw-vm-grants-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const answer = (/** @type {any} */ grants, /** @type {string} */ name) => {
+    writeFileSync(path.join(dir, 'vm-join.json'), JSON.stringify({ v: 1, ...(grants === undefined ? {} : { grants }) }));
+    return execFileSync('bash', ['-c', `${fn}\ngrant_answer "$1"`, 'x', name], { env: { ...process.env, STATE: dir }, encoding: 'utf8' }).trim();
+  };
+  assert.equal(answer({ upgrades: true, reboot: false }, 'upgrades'), 'on');
+  assert.equal(answer({ upgrades: true, reboot: false }, 'reboot'), 'off');
+  assert.equal(answer(undefined, 'reboot'), '', 'nobody chose: the image’s own answer');
+  assert.equal(answer({ reboot: 'on' }, 'reboot'), '');
+  assert.equal(answer(['reboot'], 'reboot'), '');
+});
