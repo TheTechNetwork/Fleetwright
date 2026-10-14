@@ -442,7 +442,7 @@ private fun SilentCard(host: Fleet.Host, onClick: () -> Unit) {
 private fun HealthLines(host: Fleet.FleetHost) {
     // WHO CAN START A SESSION HERE, AND AS WHOM. Zero is the real fault and the
     // only thing worth colouring; null is an older host and says nothing.
-    host.claudeAccounts?.let { accounts ->
+    host.claudeAccounts?.takeIf { whoCanStartIsNews(it, host.state) }?.let { accounts ->
         Text(
             describeWhoCanStart(accounts, host),
             style = Design.Style.micro,

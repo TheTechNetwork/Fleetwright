@@ -586,6 +586,14 @@ class Fleet(
          * send it, and null from a host that could not find out.
          */
         val appPendingReported: Boolean? = null,
+        /**
+         * Whether a new session from this person would reach it now, by the
+         * rule placement uses (core.js, takesSessions). Null from a coordinator
+         * too old to say, and then a healthy machine is offered as before.
+         */
+        val takesSessions: Boolean? = null,
+        /** A pool's own machine: it holds the pool and runs no sessions. */
+        val holder: Boolean = false,
     ) {
         /**
          * Two separate answers, because they are two actions on two things.
@@ -2791,6 +2799,10 @@ class Fleet(
                     // collapse this field exists to prevent — "no file" drawn
                     // as "a file that is not in use".
                     houseRules = health?.takeIf { it.has("houseRules") && !it.isNull("houseRules") }?.optInt("houseRules"),
+                    // `has` first, for the same reason as appPending: a
+                    // coordinator too old to say is not one that said no.
+                    takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
+                    holder = o.optBoolean("holder", false),
                 )
             }
         }.getOrDefault(emptyList())

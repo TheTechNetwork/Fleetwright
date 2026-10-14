@@ -52,7 +52,7 @@ test('Android: a runner row says what its sessions run on, in the same words', (
 });
 
 test('Android: the attention colour and ring are for a machine nothing can start on', () => {
-  assert.match(ANDROID, /fun whoCanStartIsFault\(accounts: Int\?, host: Fleet\.FleetHost\): Boolean \{\s*if \(accounts != 0\) return false/);
+  assert.match(ANDROID, /fun whoCanStartIsFault\(accounts: Int\?, host: Fleet\.FleetHost\): Boolean \{\s*if \(accounts != 0 \|\| host\.holder\) return false/);
   assert.match(ANDROID, /"owner", "key" -> false\s*"none" -> true\s*else -> !host\.ephemeral/);
   assert.match(ANDROID, /val wants = [^\n]*whoCanStartIsFault\(host\.claudeAccounts, host\)/);
   assert.doesNotMatch(ANDROID, /color = if \(accounts == 0\) Design\.Palette\.attention/);

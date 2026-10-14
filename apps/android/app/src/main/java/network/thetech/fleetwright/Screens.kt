@@ -123,12 +123,25 @@ fun Quoted(text: String) {
  * is guaranteed noise.
  */
 /**
+ * What a pool's own machine is, in place of who can start sessions on it.
+ * The same words on both phones (test/holder-sessions-in-apps.test.js).
+ */
+const val HOLDER_LINE = "This pool’s own machine. It holds the pool for the fleet and runs no sessions."
+
+/**
+ * Whether the who-can-start line adds anything. A box degraded with nobody's
+ * account on it already says so in the fleet's reason above the line, and the
+ * line said it a second time in other words.
+ */
+fun whoCanStartIsNews(accounts: Int, state: String?): Boolean = !(accounts == 0 && state == "degraded")
+
+/**
  * Whether that line is a fault: nobody can start a session here. A runner with
  * its owner's login or its repository's key can, and one that has not heard
  * back yet cannot be judged.
  */
 fun whoCanStartIsFault(accounts: Int?, host: Fleet.FleetHost): Boolean {
-    if (accounts != 0) return false
+    if (accounts != 0 || host.holder) return false
     return when (host.runnerAuth) {
         "owner", "key" -> false
         "none" -> true
@@ -137,6 +150,9 @@ fun whoCanStartIsFault(accounts: Int?, host: Fleet.FleetHost): Boolean {
 }
 
 fun describeWhoCanStart(accounts: Int, host: Fleet.FleetHost): String {
+    // A POOL'S OWN MACHINE RUNS NO SESSIONS, so nobody's account on it is not
+    // a fault, and saying "sessions will not start" there was a false alarm.
+    if (host.holder) return HOLDER_LINE
     // A RUNNER IS ASKED A DIFFERENT QUESTION. Nobody links an account on a
     // GitHub job; its sessions run on the login its owner keeps for runners or
     // on the runner repository's key, and the host says which. This line said
