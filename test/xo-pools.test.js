@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -597,26 +597,55 @@ test('the guest agent goes in the cloud-init drive and starts before anything th
  * and how it ends. Functions, not stubs on PATH, because `test` is a builtin
  * and `rm` must not touch this machine.
  *
- * @param {{ fail?: string, token?: string|null, addresses?: string[], offline?: boolean }} [o]
+ * Its processes and network counters are directories of its own, never this
+ * machine's. With `pull`, the installer's `apt-get install fleetwright` holds
+ * a `podman pull` among them while 4000 bytes arrive, and ends it.
+ *
+ * @param {{ fail?: string, token?: string|null, addresses?: string[], offline?: boolean, pull?: boolean }} [o]
  *   a command that fails; and, offline, a VM that cannot look up a name, so
  *   curl gets nowhere by name and only by an address it is given
  */
-function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false } = {}) {
+function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false, pull = false } = {}) {
   const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token, addresses });
   const lines = config.split('\n');
   const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
   const dir = mkdtempSync(join(tmpdir(), 'image-script-'));
   try {
+    for (const nic of ['eth0', 'lo']) {
+      mkdirSync(join(dir, 'net', nic, 'statistics'), { recursive: true });
+      writeFileSync(join(dir, 'net', nic, 'statistics', 'rx_bytes'), '1000\n');
+    }
+    mkdirSync(join(dir, 'proc', '17'), { recursive: true });
+    writeFileSync(join(dir, 'proc', '17', 'cmdline'), 'bash\0-lc\0podman pull ghcr.io/x/y:latest\0', 'utf8');
+    // The pull, while apt-get installs: seen, bytes arrive (and some on the
+    // loopback, which is not a download), reported, and then it is gone.
+    const until = (/** @type {string} */ seen) => `for _ in $(seq 400); do grep -q '${seen}' "$CALLS" && break; command sleep 0.05; done`;
+    const holdPull = [
+      'if [ "$*" = "install -y fleetwright" ]; then',
+      `  mkdir -p '${dir}/proc/4242'; printf 'podman\\0pull\\0ghcr.io/x/y:latest\\0' >'${dir}/proc/4242/cmdline'`,
+      `  ${until('image:0/262144000')}`,
+      `  echo 5000 >'${dir}/net/eth0/statistics/rx_bytes'; echo 9000000 >'${dir}/net/lo/statistics/rx_bytes'`,
+      `  ${until('image:4000/262144000')}`,
+      `  rm -rf '${dir}/proc/4242'`,
+      `  for _ in $(seq 400); do [ "$(grep -c 'image:4000/262144000' "$CALLS")" -ge 2 ] && break; command sleep 0.05; done`,
+      'fi',
+    ].join('\n');
     const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent', 'sleep', 'resolvectl', 'dpkg', 'debconf-set-selections'].map((c) => {
       const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : '';
-      return `${c}() { echo "${c} $*" >>"$CALLS"; ${fails}${fails ? '; ' : ''}return 0; }`;
+      const held = pull && c === 'apt-get' ? `${holdPull}\n` : '';
+      return `${c}() { echo "${c} $*" >>"$CALLS"; ${held}${fails}${fails ? '; ' : ''}return 0; }`;
     });
     // python3 builds a report's body, whose fourth argument is the step and
-    // all the body need be here (curl is what sends it), and asks a server
-    // for a name when names do not work, with three.
-    stubs.push('python3() { echo "${4-}"; }');
+    // all the body need be here (curl is what sends it), with the pull's
+    // counts after it as `:got/of`; and asks a server for a name when names
+    // do not work, with three; and, read from stdin, asks a registry how big
+    // an image is, which here is 250 MiB.
+    stubs.push('python3() { if [ "${1-}" = - ]; then cat >/dev/null; echo 262144000; else echo "${4-}${6:+:$6}${7:+/$7}"; fi; }');
     const body = script
       .replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`)
+      .replace('procs=/proc', `procs='${dir}/proc'`)
+      .replace('nets=/sys/class/net', `nets='${dir}/net'`)
+      .replace('every=15', 'every=0')
       .replace("screens='/dev/console /dev/tty1'", "screens=''")
       .replace('/etc/apt/sources.list.d/fleetwright.list', `${dir}/fleetwright.list`)
       .replace('#!/bin/bash', '');
@@ -654,6 +683,25 @@ test('the install script reports each step to the fleet and powers off when ever
   assert.ok(key > 0 && key < install && user > 0 && user < install, 'installed before its key or its run user');
   assert.equal(calls.filter((c) => c === 'apt-get update').length, 2, 'apt is not told about the repository it was just given');
   assert.ok(!calls.some((c) => c.includes('fleet.test/install') || c.includes('/prereq')), 'the installer is still fetched by hand');
+});
+
+test('the session image’s pull is watched from beside the installer: its size, the bytes since it began, and nothing once it is gone', () => {
+  // ASKED FOR: "What's it doing here I feel like we can give a better sense
+  // of status". The pull is inside apt-get install fleetwright and was most
+  // of the build, and the VM said nothing through it.
+  const calls = runImageScript({ pull: true });
+  const sent = calls.filter((c) => c.startsWith('report '));
+  const pulls = sent.filter((c) => c.startsWith('report image'));
+  assert.equal(pulls[0], 'report image:0/262144000', 'its size, as soon as the pull is seen, and no bytes yet');
+  const firstBytes = pulls.indexOf('report image:4000/262144000');
+  assert.ok(firstBytes > 0, `the bytes, once they arrive: ${pulls.join(', ')}`);
+  assert.ok(pulls.every((c, i) => c === (i < firstBytes ? 'report image:0/262144000' : 'report image:4000/262144000')), `bytes off the network since the pull began, not the loopback: ${pulls.join(', ')}`);
+  assert.ok(pulls.length >= 3, 'reported while it runs, and once more as it ends');
+  assert.ok(sent.indexOf('report installer') < sent.indexOf(pulls[0]) && sent.lastIndexOf(pulls.at(-1)) < sent.indexOf('report cleaning'), 'inside the install, never after it');
+  assert.deepEqual(sent.slice(sent.indexOf('report cleaning')), ['report cleaning', 'report done'], 'nothing more from the watcher once the pull is over');
+  assert.equal(calls.at(-1), 'systemctl poweroff');
+  // And no pull, no reports of one: what the other runs here show.
+  assert.ok(!runImageScript().some((c) => c.startsWith('report image')));
 });
 
 test('the install script stops at the first step that fails, says so with its log, and reboots rather than becoming the template', () => {
@@ -934,7 +982,16 @@ test('a build VM’s reports are what the phone is told, and a failure it report
   // ASKED FOR: "Or script call back something so we get it in the app",
   // after a real build sat at "18 min so far, usually about 8".
   const p = buildPool({ then: 'Running' });
-  const reports = [null, { step: 'packages', detail: null, at: 0 }, { step: 'installer', detail: null, at: 0 }, { step: 'failed', detail: 'Get:1 deb.debian.org\nE: Unable to fetch some archives', at: 0 }];
+  const MB = 1024 ** 2;
+  const reports = [
+    null,
+    { step: 'packages', detail: null, at: 0 },
+    { step: 'installer', detail: null, at: 0 },
+    { step: 'image', detail: null, got: 0, of: 262 * MB, at: 0 },
+    { step: 'image', detail: null, got: 131 * MB, of: 262 * MB, at: 0 },
+    { step: 'image', detail: null, got: 268 * MB, of: 262 * MB, at: 0 },
+    { step: 'failed', detail: 'Get:1 deb.debian.org\nE: Unable to fetch some archives', at: 0 },
+  ];
   let looks = 0;
   /** @type {Array<{ text: string, fill: number }>} */
   const shown = [];
@@ -951,8 +1008,15 @@ test('a build VM’s reports are what the phone is told, and a failure it report
   assert.ok(config.includes(`    content: ${gzipSync(AGENT).toString('base64')}`), 'and the guest agent the box fetched');
   const install = shown.filter((s) => s.text.startsWith('Installing Fleetwright on the machine image:'));
   assert.match(install[0].text, /installing Debian’s packages, 1 min so far\./);
-  assert.match(install[1].text, /installing Fleetwright and fetching the session image/);
-  assert.ok(install[1].fill > install[0].fill, 'a later step moves the bar on');
+  assert.match(install[1].text, /: installing Fleetwright, 1 min so far\./);
+  // ASKED FOR: "What's it doing here I feel like we can give a better sense
+  // of status", of a phone that said "installing Fleetwright and fetching
+  // the session image, 10 min so far" over a bar pinned at 91%.
+  assert.match(install[2].text, /: fetching the session image: 0 of 262 MB, 1 min so far\./, 'its size, before a byte of it');
+  assert.match(install[3].text, /: fetching the session image: 131 of 262 MB, 1 min so far\./);
+  assert.match(install[4].text, /: fetching the session image: all 262 MB are in and being unpacked, 1 min so far\./, 'past its size is the network’s overhead, and done');
+  for (let i = 1; i < install.length; i++) assert.ok(install[i].fill > install[i - 1].fill, `${install[i].text} moves the bar on`);
+  assert.ok(install[3].fill - install[2].fill > install[1].fill - install[0].fill, 'the pull, most of the time, is most of the bar');
   assert.match(String(err), /did not install on the machine image\. The end of its log:\nGet:1 deb\.debian\.org\nE: Unable to fetch some archives\n/);
   assert.ok(p.calls.some((c) => c.method === 'vm.set' && /install failed/.test(c.params.name_label)));
   assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept');

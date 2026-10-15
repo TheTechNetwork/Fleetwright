@@ -750,14 +750,25 @@ export class XoSetups {
    * (vm-image.js), never shown as it came: a step is a word from
    * IMAGE_REPORT_STEPS and the sentence for it is the build's.
    *
-   * @param {any} msg  `{ job, step, detail? }`
+   * @param {any} msg  `{ job, step, detail?, got?, of? }`
    */
   imageReport(msg) {
     const job = String(msg?.job || '');
     const rec = XOSETUP_JOB_RE.test(job) ? this.jobs.get(job) : undefined;
     const step = String(msg?.step || '');
     if (!rec || rec.building !== 'image' || !IMAGE_REPORT_STEPS.includes(step)) return;
-    rec.vmReport = { step, detail: step === 'failed' && typeof msg.detail === 'string' ? msg.detail.slice(-2000) : null, at: this.now() };
+    // The pull's two counts, as the coordinator checked them; whole bytes or
+    // nothing, so the sentence the build makes of them is the build's.
+    const count = (/** @type {unknown} */ n) => (step === 'image' && typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null);
+    const got = count(msg.got);
+    const of = count(msg.of);
+    rec.vmReport = {
+      step,
+      detail: step === 'failed' && typeof msg.detail === 'string' ? msg.detail.slice(-2000) : null,
+      ...(got !== null ? { got } : {}),
+      ...(of ? { of } : {}),
+      at: this.now(),
+    };
   }
 
   /** @param {{ job: string, actor: string|null }} args */
