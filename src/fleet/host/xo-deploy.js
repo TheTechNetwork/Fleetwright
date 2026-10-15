@@ -105,12 +105,12 @@ import { splitAddress } from './xo-ws.js';
  */
 export const INSTALLER = Object.freeze({
   repository: '00o-sh/XenOrchestraInstallerUpdater',
-  // renovate: datasource=git-refs depName=https://github.com/00o-sh/XenOrchestraInstallerUpdater branch=master
-  commit: '90562aaa111fe115f46a55fa491798e4ed2885bd',
-  base: 'https://raw.githubusercontent.com/00o-sh/XenOrchestraInstallerUpdater/90562aaa111fe115f46a55fa491798e4ed2885bd/',
+  // renovate: datasource=git-refs depName=xo-installer packageName=https://github.com/00o-sh/XenOrchestraInstallerUpdater branch=master
+  commit: '6030009a1d04fcb3ba6e11a3f4a74a8c10eba4e5',
+  base: 'https://raw.githubusercontent.com/00o-sh/XenOrchestraInstallerUpdater/6030009a1d04fcb3ba6e11a3f4a74a8c10eba4e5/',
   files: Object.freeze({
     'xo-remote-deploy.sh': 'e5f234bae9c6eb9e65d3793c54f151ebfb0271c0b07929a4394ff00cd1ce47c3',
-    'xo-install.sh': '7a1b19bb533fec8eaaba075916335d10e879550f638426b337f8939164aa0273',
+    'xo-install.sh': '73a52dc7241a74fd39effed54fa339a7f8e84225717781fc1c139963bf15ca59',
     'plugins/xo-server-installer-updates/index.js': 'f53b7c95495bc3b2bc0de185f70e8ec65f491487cf3c99df31507cd4085a55bd',
     'plugins/xo-server-installer-updates/package.json': '7466da2f7895ead652a7088062f705aaf891ba553a0a4450fe1d945cb0ba7982',
     'plugins/xo-server-installer-updates/README.md': '8fc76a9b32de83b0b799d691a870f03fef61f97634d896dfb56255ba2dfa9a5c',

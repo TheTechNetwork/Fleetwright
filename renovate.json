@@ -199,8 +199,8 @@
       "matchDatasources": [
         "git-refs"
       ],
-      "matchPackageNames": [
-        "https://github.com/00o-sh/XenOrchestraInstallerUpdater"
+      "matchDepNames": [
+        "xo-installer"
       ],
       "minimumReleaseAgeBehaviour": "timestamp-optional",
       "prBodyNotes": [
@@ -382,14 +382,16 @@
       "description": [
         "The Xen Orchestra installer an XO deploy runs, INSTALLER in src/fleet/host/xo-deploy.js: a commit of the fork that carries the disk.importContent fix, following its master.",
         "",
-        "Renovate moves the commit and nothing else. The deploy checks every file it reads against a SHA-256 pinned beside the commit, and those follow from the commit, so scripts/pin-xo-installer.mjs writes them, and `base`. Until it has run `base` names another commit and test/pin-xo-installer.test.js is red."
+        "Renovate moves the commit and nothing else. The deploy checks every file it reads against a SHA-256 pinned beside the commit, and those follow from the commit, so scripts/pin-xo-installer.mjs writes them, and `base`. Until it has run `base` names another commit and test/pin-xo-installer.test.js is red.",
+        "",
+        "Named `xo-installer`, with the git URL as packageName, because Renovate puts the name in its commit subject and the URL made it 92 characters, which commitlint rejects at 80."
       ],
       "customType": "regex",
       "managerFilePatterns": [
         "/^src/fleet/host/xo-deploy\\.js$/"
       ],
       "matchStrings": [
-        "// renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+) branch=(?<currentValue>\\S+)\\s+commit: '(?<currentDigest>[0-9a-f]{40})'"
+        "// renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+) packageName=(?<packageName>\\S+) branch=(?<currentValue>\\S+)\\s+commit: '(?<currentDigest>[0-9a-f]{40})'"
       ]
     },
     {
