@@ -443,6 +443,8 @@ test('a policy is chosen on the phone from the pool it was shown, sealed both wa
   assert.deepEqual(xo.tags.get('net-mgmt'), []);
   assert.deepEqual(xo.tags.get('net-dmz'), ['fleetwright-egress']);
   assert.match(end.text, /Labs leave through dmz\./);
+  // Said as a person writes it: two storage repositories, not repositorys.
+  assert.match(end.text, /It may use 2 storage repositories, 2 networks,/);
   // Nothing about the fleet's user or token changed, and the password is
   // nowhere. What reached a Lock Screen is the applying and the end, said as
   // a policy job's, and not the steps the person watched on the open screen.
