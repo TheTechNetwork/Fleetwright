@@ -20,8 +20,10 @@ test('Renovate can see the guest agent’s release, and it is the one the build 
   // Silent both ways otherwise: the regex stops matching and the pin quietly
   // stops moving, or it matches a line the build does not read.
   const config = JSON.parse(read('renovate.json'));
-  const managers = config.customManagers.filter((/** @type {any} */ m) => m.managerFilePatterns.some((/** @type {string} */ p) => p.includes('vm-image')));
-  assert.equal(managers.length, 1, 'renovate.json does not read src/fleet/host/vm-image.js');
+  // The one that reads the guest agent's release, beside the one that reads
+  // the cloud images' builds (test/pin-images.test.js).
+  const managers = config.customManagers.filter((/** @type {any} */ m) => m.managerFilePatterns.some((/** @type {string} */ p) => p.includes('vm-image')) && m.matchStrings.some((/** @type {string} */ r) => r.includes("release: '")));
+  assert.equal(managers.length, 1, 'renovate.json does not read the guest agent in src/fleet/host/vm-image.js');
   const m = new RegExp(managers[0].matchStrings[0]).exec(SOURCE);
   assert.ok(m?.groups, 'the custom manager matches nothing in vm-image.js');
   assert.equal(m.groups.datasource, 'gitlab-releases');

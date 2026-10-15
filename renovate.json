@@ -137,6 +137,87 @@
       "prBodyNotes": [
         "**Before merging:** run `node scripts/pin-guest-agent.mjs` on this branch and commit what it writes. Renovate moved the version; that script pins the file (address, size, SHA-256) and refuses a build that will not run on the images here. CI stays red until it has."
       ]
+    },
+    {
+      "description": [
+        "The cloud images the machine images are made of, and OPNsense, read from their vendors' directory listings: what a build looks like in each, and how two compare.",
+        "",
+        "THE SOAK IS KEPT, ONE STEP LATER. A listing carries no release dates, and Renovate 42 and later hold an update with no date back for good under minimumReleaseAge, so these would never be proposed. They are proposed at once instead, and what the soak protects against is held at the pin: scripts/pin-images.mjs refuses a cloud image whose checksum file is younger than three days, and an OPNsense release is pinned by a person (the note below). Nothing reaches a machine before CI is green, and CI is red until the pin is written."
+      ],
+      "matchDatasources": [
+        "custom.debian-cloud",
+        "custom.ubuntu-cloud",
+        "custom.opnsense"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
+      "description": "Debian's builds are <date>-<number>.",
+      "matchDatasources": [
+        "custom.debian-cloud"
+      ],
+      "extractVersion": "^(?<version>\\d{8}-\\d+)/$",
+      "versioning": "regex:^(?<major>\\d{8})-(?<minor>\\d+)$"
+    },
+    {
+      "description": "Ubuntu's releases are release-<date>, with a .<n> when one was published twice in a day.",
+      "matchDatasources": [
+        "custom.ubuntu-cloud"
+      ],
+      "extractVersion": "^(?<version>release-\\d{8}(?:\\.\\d+)?)/$",
+      "versioning": "regex:^release-(?<major>\\d{8})(?:\\.(?<minor>\\d+))?$"
+    },
+    {
+      "description": "OPNsense's releases are named by its nano image, the one the edge is built from.",
+      "matchDatasources": [
+        "custom.opnsense"
+      ],
+      "extractVersion": "^OPNsense-(?<version>\\d+\\.\\d+(?:\\.\\d+)?)-nano-amd64\\.img\\.bz2$",
+      "versioning": "loose"
+    },
+    {
+      "description": "The cloud images' pull request needs the rest of the pin written, so it says how.",
+      "matchDatasources": [
+        "custom.debian-cloud",
+        "custom.ubuntu-cloud"
+      ],
+      "prBodyNotes": [
+        "**Before merging:** run `node scripts/pin-images.mjs` on this branch and commit what it writes. Renovate moved the build; that script pins its address, digest and sizes from the vendor's own checksum file, and refuses a build published less than three days ago, saying when it can be pinned. CI stays red until it has."
+      ]
+    },
+    {
+      "description": "A new OPNsense release is a new file system under the edge router's configuration, so its pull request is a person's work, and it says what that is.",
+      "matchDatasources": [
+        "custom.opnsense"
+      ],
+      "prBodyNotes": [
+        "**A person pins this, after three days.** For the new release, in `src/fleet/host/edge-router.js` `OPNSENSE_IMAGE`: the nano image's `url`, its `sha256` from `OPNsense-<release>-checksums-amd64.sha256`, `compressedSize`, and `rawSize` (the unpacked size). Then unpack it (`bzip2 -dc \u2026 > nano.img`), find `/usr/local/etc/config.xml` and write its `config` offset, length and SHA-256, and run `node scripts/opnsense-room.mjs nano.img <inode>` for `grow`. Read `EDGE_FILTER`'s blocklist keys and rule file names again from the release's own models. Set `checked` to the release last. CI stays red until the address and `checked` both name it."
+      ]
+    },
+    {
+      "description": "The installer follows the fork's master by commit, and git-refs gives no dates, so it is proposed at once and its soak is kept by scripts/pin-xo-installer.mjs, which refuses a commit younger than three days. Its pull request needs that script run.",
+      "matchDatasources": [
+        "git-refs"
+      ],
+      "matchPackageNames": [
+        "https://github.com/00o-sh/XenOrchestraInstallerUpdater"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional",
+      "prBodyNotes": [
+        "**Before merging:** run `node scripts/pin-xo-installer.mjs` on this branch and commit what it writes. Renovate moved the commit; that script pins `base` and the SHA-256 of every file the deploy reads at it, and refuses a commit younger than three days. CI stays red until it has. Read what changed upstream too: this script is run as root in a VM made with the pool's admin sign-in."
+      ]
+    },
+    {
+      "description": "The sandbox's Node major: whole LTS lines only, the even majors, read from the node-version datasource as a major alone.",
+      "matchDepNames": [
+        "node-major"
+      ],
+      "matchDatasources": [
+        "node-version"
+      ],
+      "extractVersion": "^v?(?<version>\\d+)\\.",
+      "versioning": "regex:^(?<major>\\d+)$",
+      "allowedVersions": "/^\\d*[02468]$/"
     }
   ],
   "vulnerabilityAlerts": {
@@ -154,6 +235,23 @@
     ]
   },
   "rangeStrategy": "pin",
+  "customDatasources": {
+    "debian-cloud": {
+      "description": "Debian's cloud images, one directory per build (20261001-2618/), as the listing at cloud.debian.org links them. depName is the release's codename.",
+      "defaultRegistryUrlTemplate": "https://cloud.debian.org/images/cloud/{{packageName}}/",
+      "format": "html"
+    },
+    "ubuntu-cloud": {
+      "description": "Ubuntu's cloud images, one directory per release (release-20260926/), as cloud-images.ubuntu.com links them. depName is the release's codename.",
+      "defaultRegistryUrlTemplate": "https://cloud-images.ubuntu.com/releases/{{packageName}}/",
+      "format": "html"
+    },
+    "opnsense": {
+      "description": "OPNsense's installer images on its own mirror, whose nano image the edge router is built from.",
+      "defaultRegistryUrlTemplate": "https://pkg.opnsense.org/releases/mirror/",
+      "format": "html"
+    }
+  },
   "customManagers": [
     {
       "description": [
@@ -186,12 +284,15 @@
         "The three host installs were worse: unpinned, so every runner build took",
         "whatever was latest that morning and the fleet ran a different version",
         "from the image it is supposed to mirror. Two of them now live in",
-        "TheTechNetwork/Fleetwright-Runners-Template, whose renovate.json pins them."
+        "TheTechNetwork/Fleetwright-Runners-Template, whose renovate.json pins them.",
+        "",
+        "mac-host.yml carried the same comment and was not in this list, so it sat at 2.1.283 while the image moved on."
       ],
       "customType": "regex",
       "managerFilePatterns": [
         "/^sandbox/Containerfile$/",
-        "/^\\.github/workflows/ephemeral-mac\\.yml$/"
+        "/^\\.github/workflows/ephemeral-mac\\.yml$/",
+        "/^\\.github/workflows/mac-host\\.yml$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG CLAUDE_VERSION=(?<currentValue>\\S+)",
@@ -252,6 +353,103 @@
       "matchStrings": [
         "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+release: '(?<currentValue>[^']+)'"
       ]
+    },
+    {
+      "description": [
+        "The cloud images' builds, DEBIAN_IMAGE and UBUNTU_* in src/fleet/host/vm-image.js, and the OPNsense release in src/fleet/host/edge-router.js, each annotated in place.",
+        "",
+        "Renovate moves the name and nothing else: the address, digest and sizes are the build's, and no datasource gives them. scripts/pin-images.mjs writes them for the cloud images; OPNsense's are a person's (the package rule above says what). Until then the name and the address disagree and test/pin-images.test.js is red, which is the point: a moved name with an old digest would download the old image, or refuse the new one, and nobody would be told why."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/fleet/host/vm-image\\.js$/"
+      ],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>custom\\.\\S+) depName=(?<depName>\\S+)\\s+build: '(?<currentValue>[^']+)'"
+      ]
+    },
+    {
+      "description": "The OPNsense release the edge router is built from, OPNSENSE_IMAGE.release in src/fleet/host/edge-router.js.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/fleet/host/edge-router\\.js$/"
+      ],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+release: '(?<currentValue>[^']+)'"
+      ]
+    },
+    {
+      "description": [
+        "The Xen Orchestra installer an XO deploy runs, INSTALLER in src/fleet/host/xo-deploy.js: a commit of the fork that carries the disk.importContent fix, following its master.",
+        "",
+        "Renovate moves the commit and nothing else. The deploy checks every file it reads against a SHA-256 pinned beside the commit, and those follow from the commit, so scripts/pin-xo-installer.mjs writes them, and `base`. Until it has run `base` names another commit and test/pin-xo-installer.test.js is red."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/fleet/host/xo-deploy\\.js$/"
+      ],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+) branch=(?<currentValue>\\S+)\\s+commit: '(?<currentDigest>[0-9a-f]{40})'"
+      ]
+    },
+    {
+      "description": [
+        "The Node every workflow sets up, `node-version:` under actions/setup-node. The github-actions manager reads `uses:` and not an action's inputs, so these sat where they were written while install/deb/node.env moved. Exact versions only: the CI matrix's bare majors are a person's choice of which lines to test."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "node-version: '(?<currentValue>\\d+\\.\\d+\\.\\d+)'"
+      ],
+      "datasourceTemplate": "node-version",
+      "depNameTemplate": "node",
+      "versioningTemplate": "node"
+    },
+    {
+      "description": "The JDK setup-java installs, in Adoptium's own version format, which is what the java-version datasource reads.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "java-version: '(?<currentValue>[^']+)'"
+      ],
+      "datasourceTemplate": "java-version",
+      "depNameTemplate": "java-jdk"
+    },
+    {
+      "description": "Images a workflow runs with `docker run`, which no manager reads: only `container:` and `services:` are. By number, never by codename, so a new release is a version Renovate can see.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "docker run [^\\n]*?\\s(?<depName>debian):(?<currentValue>[0-9][A-Za-z0-9._-]*)\\s"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "description": "The Swift packages the iOS app builds with, under `packages:` in apps/ios/project.yml. XcodeGen writes the project from it, and no manager reads XcodeGen's spec.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^apps/ios/project\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+exactVersion: (?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "description": "The Node line the sandbox image takes from nodesource, a major alone, because nodesource's setup script is named by one.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^sandbox/Containerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG NODE_MAJOR=(?<currentValue>\\d+)"
+      ],
+      "packageNameTemplate": "node"
     }
   ]
 }
