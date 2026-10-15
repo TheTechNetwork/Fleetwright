@@ -11,6 +11,47 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.10 — 2026-10-15
+
+**You choose on a pool's policy what the machines made there may do from the
+app and whether its images are built from main, the pool's own machine stops
+being offered for sessions, and New session offers only machines a session
+can start on.**
+
+- **Machines made here, on the pool's policy.** Two switches: *Update their
+  system from the app* and *Reboot from the app*. Every machine made on the
+  pool from then on starts with those answers, the pool's own machine
+  included. One already running keeps what it has; on it, run
+  `sudo fleetwright grant upgrades on`, or `reboot on`. The machine image is
+  what applies the answers, so rebuild the pool's image after updating to
+  this release.
+- **A pool's machine images can be built from main.** Under the images on the
+  pool's policy, *Built from*: Released versions, as before, or Every merge
+  to main. An image built from main installs Fleetwright from apt's new
+  rolling suite, and the machines made from it update on every merge, so a
+  change reaches a test pool without waiting for a release. It applies to an
+  image built or rebuilt then; one that is there keeps what it was built from.
+- **The pool's own machine runs no sessions.** It was marked degraded for
+  having no Claude account, which nobody links there, and Wherever fits could
+  pick it. Now it is never picked, a start named at it is refused with the
+  reason, and Machines says what it is instead of a fault.
+- **New session › Where lists only machines a session can start on.** It
+  listed every enrolled machine, offline ones and the pool's own included, and
+  a start sent to any of them was refused.
+- **A machine with no Claude account says so once**, in plain words, rather
+  than twice and with a placeholder in angle brackets.
+- **On Android, letting a pool's own machine in now needs the check itself,
+  not just its answer.** The secret that proves the machine is yours opens
+  only through the fingerprint, face or screen lock asked for it, so a
+  tampered app cannot open it after the phone was unlocked. A pool's own
+  machine made from an Android phone before this, and not yet let in, is
+  made again from the pool's policy.
+- **On Android, the edge routers' key is kept after a policy run.** It was
+  dropped as soon as Apply was accepted, so the machines that hold the pool
+  never got it and the Edge card had nothing to show. Run the policy once more
+  to keep it.
+- **"It may use 2 storage repositories"**, not "repositorys".
+
 ## 0.4.9 — 2026-10-11
 
 **Applying the policy leaves the edge routers alone when nothing changed,
