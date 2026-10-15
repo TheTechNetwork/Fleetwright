@@ -5,6 +5,7 @@ import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
 import android.os.CancellationSignal
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -46,12 +47,26 @@ import kotlin.coroutines.resume
  * asking, read only after a fingerprint, face or the screen lock. A Keystore
  * key that needs a check for every use needs one to encrypt as well, so they
  * are encrypted to the public half of an RSA key pair kept in the Keystore,
- * which anybody may use, and opened with its private half, which works for
- * thirty seconds after the check. A few are kept per Xen Orchestra, because
- * one address can have a pool's own machine on each of its pools.
+ * which anybody may use, and opened with its private half. A few are kept per
+ * Xen Orchestra, because one address can have a pool's own machine on each of
+ * its pools.
+ *
+ * THE CHECK UNLOCKS THE KEY, NOT THE APP. The private half needs the owner for
+ * each use, and the prompt is handed the cipher that uses it (a CryptoObject):
+ * only the cipher the system gives back after a real check can open a secret.
+ * It used to be usable for thirty seconds after any check, and the prompt was
+ * a yes or no the app believed, so a hooked callback (Frida, or a privileged
+ * app) could skip it after the phone was unlocked and still open them. One use
+ * is one secret, so the newest is opened first and the rest only while none
+ * has proved the request, which is one check in the ordinary case.
  */
 internal object HolderJoin {
-    private const val KEY_ALIAS = "fleetwright.holder-join"
+    /** The key whose private half needs the owner for every use. */
+    private const val KEY_ALIAS = "fleetwright.holder-join.2"
+    /** The one that was usable for thirty seconds after any check; deleted, and nothing sealed to it is read. */
+    private const val OLD_KEY_ALIAS = "fleetwright.holder-join"
+    /** What a secret sealed to [KEY_ALIAS] is kept as: one sealed to the old key has no such mark. */
+    private const val SEALED = "2:"
     const val KEPT_PER_ADDRESS = 4
 
     /** One name the fleet holds for a pool's own machine, and the requests made under it. */
@@ -115,30 +130,45 @@ internal object HolderJoin {
         val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val secret = bytes.joinToString("") { "%02x".format(it) }
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding").apply { init(Cipher.ENCRYPT_MODE, publicKey(), OAEP) }
-        val sealed = Base64.encodeToString(cipher.doFinal(secret.toByteArray(Charsets.US_ASCII)), Base64.NO_WRAP)
-        settings.putHolderSecrets(address, (listOf(sealed) + settings.holderSecrets(address)).take(KEPT_PER_ADDRESS))
+        val sealed = SEALED + Base64.encodeToString(cipher.doFinal(secret.toByteArray(Charsets.US_ASCII)), Base64.NO_WRAP)
+        settings.putHolderSecrets(address, (listOf(sealed) + kept(settings, address)).take(KEPT_PER_ADDRESS))
         secret
     }.getOrNull()
+
+    /** The secrets kept for [address] that this phone will open: sealed to the current key, newest first. */
+    private fun kept(settings: Settings, address: String) = settings.holderSecrets(address).filter { it.startsWith(SEALED) }
 
     /** One kept secret, and the sealed form it is kept as. */
     data class Secret(val sealed: String, val value: String)
 
     /**
-     * The secrets kept for [address], after the system's check with [title]
-     * on it. Null when the person cancels or the check fails; empty when this
-     * phone keeps none for it.
+     * The secrets kept for [waiting]'s address, each opened by its own check
+     * with [title] on it, newest first, until one proves a request [waiting]
+     * holds. Null when the person cancels or a check fails; empty when this
+     * phone keeps none it can open.
      */
-    suspend fun unlock(context: Context, settings: Settings, address: String, title: String): List<Secret>? {
-        val kept = settings.holderSecrets(address)
+    suspend fun unlock(context: Context, settings: Settings, waiting: Waiting, title: String): List<Secret>? {
+        val kept = kept(settings, waiting.address)
         if (kept.isEmpty()) return emptyList()
-        if (!authenticate(context, title, address)) return null
         val key = privateKey() ?: return emptyList()
-        return kept.mapNotNull { sealed ->
-            runCatching {
-                val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding").apply { init(Cipher.DECRYPT_MODE, key, OAEP) }
-                Secret(sealed, String(cipher.doFinal(Base64.decode(sealed, Base64.NO_WRAP)), Charsets.US_ASCII))
-            }.getOrNull()
+        val opened = mutableListOf<Secret>()
+        for (sealed in kept) {
+            val cipher = runCatching {
+                Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding").apply { init(Cipher.DECRYPT_MODE, key, OAEP) }
+            }.getOrElse {
+                // A new fingerprint or face, or the screen lock removed: the
+                // key is gone for good, and so is every secret sealed to it.
+                if (it is KeyPermanentlyInvalidatedException) dropKey(KEY_ALIAS)
+                return opened
+            }
+            val unlocked = authenticate(context, cipher, title, waiting.address) ?: return null
+            val value = runCatching {
+                String(unlocked.doFinal(Base64.decode(sealed.removePrefix(SEALED), Base64.NO_WRAP)), Charsets.US_ASCII)
+            }.getOrNull() ?: continue
+            opened += Secret(sealed, value)
+            if (proven(waiting, listOf(value)) != null) break
         }
+        return opened
     }
 
     /** The one that let a machine in, gone: it proves nothing it should. */
@@ -152,6 +182,8 @@ internal object HolderJoin {
     /** The public half, as a software key: encrypting needs no check. */
     private fun publicKey(): PublicKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        // The old key goes the first time a secret is kept under the new one.
+        if (store.containsAlias(OLD_KEY_ALIAS)) dropKey(OLD_KEY_ALIAS)
         val cert = store.getCertificate(KEY_ALIAS) ?: run {
             KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore").apply {
                 initialize(
@@ -160,10 +192,10 @@ internal object HolderJoin {
                         .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA1)
                         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)
                         // THE PRIVATE HALF ONLY AFTER THE PHONE'S OWNER, for
-                        // thirty seconds: long enough to open every secret
-                        // kept for one address after one check.
+                        // each use: 0 is per operation, so a check is good for
+                        // the one cipher the prompt was handed and nothing else.
                         .setUserAuthenticationRequired(true)
-                        .setUserAuthenticationParameters(30, KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL)
+                        .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL)
                         .build(),
                 )
             }.generateKeyPair()
@@ -177,8 +209,16 @@ internal object HolderJoin {
         store.getKey(KEY_ALIAS, null) as? PrivateKey
     }.getOrNull()
 
-    /** The system's own check: a strong fingerprint or face, or the screen lock. */
-    private suspend fun authenticate(context: Context, title: String, address: String): Boolean =
+    private fun dropKey(alias: String) {
+        runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(alias) }
+    }
+
+    /**
+     * The system's own check, a strong fingerprint or face or the screen lock,
+     * with the cipher it authorises: the one the system hands back, or null
+     * for cancelled or failed. Never a yes or no; see the top of this file.
+     */
+    private suspend fun authenticate(context: Context, cipher: Cipher, title: String, address: String): Cipher? =
         suspendCancellableCoroutine { cont ->
             val signal = CancellationSignal()
             cont.invokeOnCancellation { signal.cancel() }
@@ -189,19 +229,20 @@ internal object HolderJoin {
                 .build()
             runCatching {
                 prompt.authenticate(
+                    BiometricPrompt.CryptoObject(cipher),
                     signal,
                     context.mainExecutor,
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                            if (cont.isActive) cont.resume(true)
+                            if (cont.isActive) cont.resume(result.cryptoObject?.cipher)
                         }
 
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                            if (cont.isActive) cont.resume(false)
+                            if (cont.isActive) cont.resume(null)
                         }
                     },
                 )
-            }.onFailure { if (cont.isActive) cont.resume(false) }
+            }.onFailure { if (cont.isActive) cont.resume(null) }
         }
 
     // What both phones say
