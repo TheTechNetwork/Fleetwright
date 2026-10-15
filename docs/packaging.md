@@ -355,8 +355,10 @@ A box can also be installed with `apt install fleetwright`, and then apt is
 the only thing that updates it. The repository is `fleet-apt.thetech.network`, a
 Cloudflare Worker that serves the signed metadata and streams each package from
 Cloudflare's cache, filled from its GitHub release asset (`apt/`, and
-docs/ci.md for why not Pages). It carries
-**stable releases whose rollout is complete, and nothing else**.
+docs/ci.md for why not Pages). Its `stable`
+suite carries **stable releases whose rollout is complete, and nothing else**,
+and that is the line every box is installed with; the `rolling` suite is for
+machine images built from main (below).
 
 ```sh
 curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg \
@@ -376,6 +378,33 @@ has, and makes whoever serves the URL root on every box that trusts it: less
 than the manifest, which at least verifies a digest. The key is fetched from
 the same host the first time, which is trust on first use; every update after
 that is checked against it. `tools/build-apt-repo.sh` has no unsigned mode.
+
+### A rolling suite for machine images
+
+**The repository has a second suite, `rolling`: the newest builds of main.**
+Nothing installed by hand uses it. It is for a pool's machine image whose owner
+chose to build it from main (docs/hypervisors.md, "Built from main"), so a
+change merged reaches the pool's machines without a release being cut first.
+
+- **Built on every merge.** The deb job already built a package on every push
+  to main; the rolling job now uploads it to the `rolling` release beside the
+  tarball (`host-release.yml`), named the way GitHub keeps it (a `~` becomes
+  `.`). The previous build's pair stays, because a box may have read the index
+  that names it a moment before the suite is republished.
+- **Published on every merge.** `apt-repo.yml` runs when a merge's build
+  finishes as well as a release's, collects the rolling release's debs and
+  writes them as `dists/rolling` beside `dists/stable`
+  (`tools/build-apt-repo.sh`). Stable is still drawn only from published,
+  non-prerelease releases whose rollout is complete; a run with no rolling
+  debs writes stable alone.
+- **Kept apart by suite, never by version.** A build of main is
+  `0.0.0~main.<run>`, which sorts below every release, so a box with both lines
+  would take stable and never see main. Each `<run>` is higher than the last,
+  so a box on rolling takes every build in turn.
+- **Each suite dated by its own Release.** The Worker's Last-Modified for a
+  file under `dists/<suite>/` comes from that suite's signed Release, so a
+  rolling index republished on a merge is never answered "not modified" with
+  stable's date.
 
 ### The deb is a courier, not the layout
 
@@ -414,8 +443,10 @@ So on such a box:
   package for its run and lets it go afterwards (a hold the operator set
   themselves is kept). The OS count leaves the package out too, so one release
   is not reported twice. Two buttons, two disjoint sets of packages.
-- **`/channel`** is `stable` and pinned. There is no rolling address in apt;
-  a box that wants main builds uses the one-liner.
+- **`/channel`** is the suite its apt line names, and pinned: `stable` for a
+  box installed from the package, `rolling` for a machine made from an image
+  built from main. A box installed by hand that wants main builds uses the
+  one-liner.
 - **The one-liner refuses**, and names the apt commands for each thing it
   would have done.
 - **Removing the package** and re-running the installer clears the source line,

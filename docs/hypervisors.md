@@ -403,6 +403,40 @@ with the new answers, which asks to join and is let in again.
 A machine image built before this keeps a join script that does not read
 them; rebuild it to have them applied.
 
+### Built from main
+
+> Or should we build a path for the images to use main/rolling?
+
+**What a pool's machine images are built from is chosen on its policy**, under
+the images: *Released versions* or *Every merge to main*. It is the apt suite
+the image installs Fleetwright from, `stable` or `rolling`
+(`docs/packaging.md`, "A rolling suite for machine images"), and only a box
+whose setup says `image-channel` in `can` offers it. The choice starts from
+what the pool's image was built from, so Apply changes nothing nobody chose.
+
+**It decides what the machines update along, not only what they start with.**
+The image writes the suite into its apt line, and every machine cloned from it
+keeps that line. A machine made from a rolling image takes each build of main
+in turn, if it may update itself (Machines made here), and says `rolling` in
+`/channel` and in its health, read from that line (`aptSuite`,
+`src/core/channel.js`). Pinned either way: apt is its only updater.
+
+**Chosen per build.** An image built or rebuilt by that Apply uses it
+(`imageChannel` in the policy, `ensureImage`), and the template is tagged
+`fleetwright-channel:<suite>`, which is how the policy screen knows to say
+"It was built from main." beside one. An image that is there keeps what it
+was built from until it is rebuilt, and asked for the other suite without a
+rebuild, Apply says so. A rebuild from a phone that predates the choice keeps
+the suite the image had.
+
+**A rolling image is still a snapshot.** It is main at the moment it was
+built. A machine made from it then updates on its own; the image itself does
+not, so rebuild it to start new machines from a newer main.
+
+**For a test pool, not the default.** Every merge reaches a rolling machine
+before anybody released it. Released versions is what a new image is built
+from unless somebody chooses otherwise.
+
 ### What a machine did on the network
 
 **Its page has a section, On the network**, on both phones. It shows the last

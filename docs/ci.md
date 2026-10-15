@@ -25,7 +25,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `host-release.yml` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the host tarball and manifest |
 | `host-release.yml` — `deb` | every run the host package builds | none — builds amd64 and arm64 debs twice and compares, installs and purges one on `debian:bookworm` |
 | `host-release.yml` — `attach-deb` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the debs |
-| `apt-repo.yml` | a release's build finishing, or manual | `APT_SIGNING_KEY`, Cloudflare — skips with a notice without either. See [apt](#apt--a-signed-repository-on-a-worker) |
+| `apt-repo.yml` | a release's or a merge to main's build finishing, or manual | `APT_SIGNING_KEY`, Cloudflare — skips with a notice without either. See [apt](#apt--a-signed-repository-on-a-worker) |
 | `tail.yml` | manual | Cloudflare |
 | `ephemeral-mac.yml` | manual | `FLEETWRIGHT_RUNNER_TOKEN` — see [`ephemeral-hosts.md`](./ephemeral-hosts.md) |
 | `mac-host.yml` | PRs and pushes touching `install/`, `bin/` or the files the installer's macOS path leans on; manual | none — installs for real on a macOS runner: both launchd daemons up, the hub answering, the key's owner and mode, `/logs` on the plists' files, `--upgrade`, `uninstall.sh` |
@@ -896,8 +896,10 @@ worse than a red one.
 ## apt — a signed repository on a Worker
 
 `apt-repo.yml` publishes the stable releases whose rollout is complete to
-`https://fleet-apt.thetech.network`, signed. `docs/packaging.md`, "Stable releases
-through apt", says why only those. Without the signing key or the Cloudflare
+`https://fleet-apt.thetech.network`, signed, as the `stable` suite, and the
+newest builds of main as the `rolling` suite, on every merge. `docs/packaging.md`,
+"Stable releases through apt", says why stable carries only those, and "A
+rolling suite for machine images" what the other is for. Without the signing key or the Cloudflare
 token it skips with a notice, like every other secret-dependent job here.
 
 **A Worker, `fleetwright-apt` (`apt/`), not Pages.** A deb is about 29 MB,
