@@ -12,6 +12,10 @@ import { parseAptPolicy, checkAptRelease } from '../src/core/apt-release.js';
 import { checkRelease } from '../src/core/release-check.js';
 import { dispatch } from '../src/adapters/commands.js';
 import { aptBox, POLICY } from './helpers/apt-box.js';
+import { readChannel } from '../src/core/channel.js';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const ok = (stdout) => () => ({ status: 0, stdout, stderr: '' });
 
@@ -111,4 +115,28 @@ test('/channel on an apt box: stable, pinned, and rolling refused with the way t
   const rolling = await dispatch({ cfg }, '/channel rolling');
   assert.equal(rolling.ok, false);
   assert.match(rolling.text, /one-line installer/);
+});
+
+test('/channel on a machine made from an image built from main: rolling, pinned, read from its apt line', async () => {
+  // The machine image writes the suite into the apt line every clone keeps
+  // (vm-image.js), so that line is what the next upgrade installs from and the
+  // one place the answer cannot drift from it.
+  const dir = mkdtempSync(path.join(tmpdir(), 'fw-apt-'));
+  try {
+    const list = path.join(dir, 'fleetwright.list');
+    writeFileSync(list, 'deb [arch=amd64 signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network rolling main\n');
+    const cfg = /** @type {any} */ ({ releaseSource: 'apt', aptSources: list });
+    const asked = await dispatch({ cfg }, '/channel');
+    assert.equal(asked.channel, 'rolling');
+    assert.equal(asked.channelPinned, true);
+    assert.match(asked.text, /rolling suite: the newest build of main/);
+    assert.equal(readChannel(cfg), 'rolling', 'health says what /channel says');
+    const back = await dispatch({ cfg }, '/channel stable');
+    assert.equal(back.ok, false);
+    assert.match(back.text, /make it again from an image built from released versions/);
+    // An unreadable line is stable, the only suite the package itself writes.
+    assert.equal(readChannel(/** @type {any} */ ({ releaseSource: 'apt', aptSources: path.join(dir, 'missing') })), 'stable');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

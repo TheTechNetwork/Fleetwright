@@ -43,6 +43,34 @@ export const CHANNELS = Object.freeze(['stable', 'rolling']);
  */
 const ALIASES = Object.freeze({ prerelease: 'rolling' });
 
+/**
+ * Where a box apt updates is told which suite to take. The machine image
+ * writes it (vm-image.js), and every machine cloned from the image keeps it.
+ */
+export const APT_SOURCES = '/etc/apt/sources.list.d/fleetwright.list';
+
+/**
+ * On a box apt updates, which suite its sources line names: `rolling` for a
+ * machine made from an image built from main, `stable` for everything else.
+ *
+ * READ FROM THE LINE, NOT REMEMBERED. The line is what apt reads, so it is the
+ * one place the answer cannot drift from what the next upgrade installs. A
+ * line that cannot be read is stable: the package's own install never writes
+ * anything else, and claiming rolling about a box that is not would be the
+ * wrong one of the two.
+ *
+ * @param {{ aptSources?: string }} [cfg]
+ * @returns {'stable'|'rolling'}
+ */
+export function aptSuite(cfg = {}) {
+  try {
+    const text = readFileSync(cfg.aptSources || APT_SOURCES, 'utf8');
+    return /^\s*deb\s+(?:\[[^\]]*\]\s+)?\S+\s+rolling\s/m.test(text) ? 'rolling' : 'stable';
+  } catch {
+    return 'stable';
+  }
+}
+
 /** @param {import('../config.js').Config} cfg */
 function channelFile(cfg) {
   return path.join(cfg.stateDir, 'release-channel');
@@ -59,6 +87,9 @@ function channelFile(cfg) {
  * @returns {'stable'|'rolling'}
  */
 export function readChannel(cfg) {
+  // AN APT BOX TAKES WHAT ITS SUITE CARRIES, whatever the file or the
+  // environment say: apt is its only updater.
+  if (cfg.releaseSource === 'apt') return aptSuite(/** @type {any} */ (cfg));
   const fromEnv = canonical(cfg.releaseChannel);
   if (fromEnv) return fromEnv;
   try {
@@ -89,6 +120,9 @@ function canonical(value) {
  * @param {import('../config.js').Config} cfg
  */
 export function pinnedByEnv(cfg) {
+  // And on an apt box, where the suite is set by its sources line and
+  // /channel cannot move it, so a picker would offer a choice that is refused.
+  if (cfg.releaseSource === 'apt') return true;
   return canonical(cfg.releaseChannel) !== null;
 }
 

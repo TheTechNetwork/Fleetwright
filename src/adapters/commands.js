@@ -109,7 +109,7 @@ import { applyRelease, currentVersion, versionDrift } from '../core/release-appl
 import { armConfirmation } from '../core/update-confirm.js';
 import { PROTOCOL_VERSION, LINK_ROLES, REPO_RE } from '../fleet/protocol/intents.js';
 import { listSecretNames } from '../core/secret-store.js';
-import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
+import { readChannel, writeChannel, pinnedByEnv, aptSuite } from '../core/channel.js';
 import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
 import { readLabels, addLabel, removeLabel, describeLabels } from '../core/labels.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
@@ -925,17 +925,24 @@ export const COMMANDS = {
       'itself — it decides what the next update is allowed to be.',
     run: (ctx, args) => {
       const [wanted] = args;
-      // NO CHANNEL ON AN APT BOX. The apt repository carries stable releases
-      // whose rollout is complete, and nothing else; there is no rolling
-      // address to move to. Pinned, so the picker does not render a choice
-      // that cannot be made.
+      // NO CHANNEL TO MOVE ON AN APT BOX. Its suite is the one its sources
+      // line names: stable for every box installed from the package, rolling
+      // for a machine made from an image built from main (vm-image.js). Pinned
+      // either way, so the picker does not render a choice that is refused.
       if (ctx.cfg.releaseSource === 'apt') {
+        const suite = aptSuite(/** @type {any} */ (ctx.cfg));
         return {
-          ok: !wanted || wanted === 'stable',
+          ok: !wanted || wanted === suite,
           text:
-            'This box takes Fleetwright from apt, which carries stable releases only — each one once its rollout is complete.' +
-            (wanted && wanted !== 'stable' ? '\n\nTo take rolling builds, install with the one-line installer instead of the package.' : ''),
-          channel: 'stable',
+            (suite === 'rolling'
+              ? 'This box takes Fleetwright from apt’s rolling suite: the newest build of main, on every merge. It was made from a machine image built from main.'
+              : 'This box takes Fleetwright from apt, which carries stable releases only — each one once its rollout is complete.') +
+            (wanted && wanted !== suite
+              ? suite === 'rolling'
+                ? '\n\nTo take released versions, make it again from an image built from released versions.'
+                : '\n\nTo take rolling builds, install with the one-line installer instead of the package.'
+              : ''),
+          channel: suite,
           channelPinned: true,
         };
       }
