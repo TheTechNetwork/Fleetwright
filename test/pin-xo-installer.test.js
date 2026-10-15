@@ -24,10 +24,14 @@ test('Renovate can see the installer’s commit, and it is the one the deploy fe
   assert.equal(managers.length, 1, 'renovate.json does not read src/fleet/host/xo-deploy.js');
   const m = new RegExp(managers[0].matchStrings[0]).exec(SOURCE);
   assert.ok(m?.groups, 'the custom manager matches nothing in xo-deploy.js');
-  assert.deepEqual([m.groups.datasource, m.groups.depName, m.groups.currentValue], ['git-refs', `https://github.com/${INSTALLER.repository}`, 'master']);
+  assert.deepEqual([m.groups.datasource, m.groups.packageName, m.groups.currentValue], ['git-refs', `https://github.com/${INSTALLER.repository}`, 'master']);
+  // Renovate writes the name into its commit subject. Named by its URL it was
+  // 92 characters, and commitlint (header-max-length, 80) failed every bump.
+  const subject = `chore(deps): update ${m.groups.depName} digest to ${INSTALLER.commit.slice(0, 7)}`;
+  assert.ok(subject.length <= 80, `Renovate's subject for the installer would be ${subject.length} characters: ${subject}`);
   assert.equal(m.groups.currentDigest, INSTALLER.commit, 'Renovate would move a commit the deploy does not read');
   // Proposed without a date, which git-refs never has; the script keeps the soak.
-  const rule = config.packageRules.find((/** @type {any} */ r) => r.matchPackageNames?.includes(`https://github.com/${INSTALLER.repository}`));
+  const rule = config.packageRules.find((/** @type {any} */ r) => r.matchDepNames?.includes(m.groups?.depName));
   assert.equal(rule?.minimumReleaseAgeBehaviour, 'timestamp-optional');
   assert.match(rule.prBodyNotes.join('\n'), /node scripts\/pin-xo-installer\.mjs/);
 });
