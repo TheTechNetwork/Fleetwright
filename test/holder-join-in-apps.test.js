@@ -126,3 +126,23 @@ test('the policy form offers to make it again, and says what the new one does, i
     assert.match(p.form, p.name === 'iOS' ? /if choice\.holderAskChoice \{\s*Toggle\(isOn: \$choice\.holderAgain\)/ : /if \(choice\.holderAskChoice\) \{\s*CheckRow\(\s*checked = choice\.holderAgain/);
   }
 });
+
+test('on Android the check unlocks the key itself, never a yes or no the app believes', () => {
+  // REPORTED BY A SCANNER at HolderJoin.kt's prompt: biometric authentication
+  // that does not use a Keystore-backed key can be bypassed by a privileged app
+  // or by hooking (Frida). The key needed the owner, but for thirty seconds
+  // after ANY check, and the prompt had no CryptoObject: a hooked callback
+  // after the phone was unlocked opened every secret. Now the private half
+  // needs the owner per use, the prompt is handed the cipher, and only the
+  // cipher the system gives back opens a secret.
+  const kt = A('HolderJoin.kt');
+  assert.match(kt, /\.setUserAuthenticationRequired\(true\)\s*\.setUserAuthenticationParameters\(0, KeyProperties\.AUTH_BIOMETRIC_STRONG or KeyProperties\.AUTH_DEVICE_CREDENTIAL\)/, 'the key is usable without a check of its own');
+  assert.doesNotMatch(kt, /setUserAuthenticationParameters\([1-9]/, 'a time-bound key is opened by any recent unlock');
+  assert.match(kt, /prompt\.authenticate\(\s*BiometricPrompt\.CryptoObject\(cipher\),/, 'the prompt is not bound to the key');
+  assert.match(kt, /cont\.resume\(result\.cryptoObject\?\.cipher\)/, 'the app decrypts with something other than what the check authorised');
+  assert.match(kt, /val unlocked = authenticate\(context, cipher, title, waiting\.address\) \?: return null\s*val value = runCatching \{\s*String\(unlocked\.doFinal\(/, 'a secret is opened with a cipher the check did not hand back');
+  // Nothing sealed to the old key is read, and the old key goes.
+  assert.match(kt, /private const val KEY_ALIAS = "fleetwright\.holder-join\.2"/);
+  assert.match(kt, /if \(store\.containsAlias\(OLD_KEY_ALIAS\)\) dropKey\(OLD_KEY_ALIAS\)/);
+  assert.match(kt, /settings\.holderSecrets\(address\)\.filter \{ it\.startsWith\(SEALED\) \}/);
+});

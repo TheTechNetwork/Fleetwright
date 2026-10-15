@@ -302,7 +302,9 @@ used to sit running outside the fleet for good. So when the box running the
 job says `holder-ask` in `can`, Apply also makes a **secret**: 32 random bytes,
 made on the phone, kept there behind its owner (the Keychain with
 `.userPresence` on iOS; on Android, encrypted to an RSA key in the Keystore
-whose private half opens only after a strong biometric or the screen lock).
+whose private half opens only after a strong biometric or the screen lock, for
+each use, through the cipher the system's prompt hands back, so a hooked
+prompt opens nothing).
 The phone seals the secret to the job with the rest of the choice
 (`holderSecret`), and the box puts it on the machine's cloud-init drive.
 

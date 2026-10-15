@@ -48,7 +48,7 @@ internal fun HolderAskingCard(settings: Settings, waiting: HolderJoin.Waiting, o
     fun letIn() = scope.launch {
         busy = true
         try {
-            val secrets = HolderJoin.unlock(context, settings, waiting.address, HolderJoin.reason(waiting.hostId, waiting.address)) ?: return@launch
+            val secrets = HolderJoin.unlock(context, settings, waiting, HolderJoin.reason(waiting.hostId, waiting.address)) ?: return@launch
             if (secrets.isEmpty()) {
                 said = HolderJoin.notThisPhone(waiting.hostId)
                 return@launch
