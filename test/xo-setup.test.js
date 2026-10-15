@@ -337,7 +337,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
+    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -518,6 +518,7 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   // part: the phones once called every build's part the edge router's.
   assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy' && e.build === 'image' && e.stage === 3 && e.stages === 4), JSON.stringify(events.at(-1)));
   assert.equal(asked[0].image, 'debian-13', 'a phone from before the choice asked for Debian');
+  assert.equal(asked[0].channel, null, 'and said nothing about the suite, which builds it as before');
   assert.equal(asked[0].resize, 'disk.resize', 'the long-standing name, where the server offers it');
   assert.deepEqual(inventory.imageKinds.map((/** @type {any} */ k) => k.key), ['debian-13', 'ubuntu-24.04', 'ubuntu-26.04']);
 });
@@ -598,24 +599,32 @@ test('an image that is there is rebuilt or removed when the person asks, removed
     vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: {
       deb: { id: 'deb', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] },
-      u24: { id: 'u24', type: 'VM-template', name_label: 'Fleetwright Ubuntu 24.04 LTS', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04'] },
+      u24: { id: 'u24', type: 'VM-template', name_label: 'Fleetwright Ubuntu 24.04 LTS', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04', 'fleetwright-channel:rolling'] },
     },
   });
   /** @type {string[]} */
   const done = [];
+  /** @type {any[]} */
+  const channels = [];
   const { setups } = await machine({
     coordinatorUrl: 'https://fleet.test',
-    buildImage: async (/** @type {any} */ o) => (done.push(`${o.replace ? 'rebuild' : 'build'} ${o.image}`), `Rebuilt ${o.image}.`),
+    buildImage: async (/** @type {any} */ o) => (done.push(`${o.replace ? 'rebuild' : 'build'} ${o.image}`), channels.push(o.channel), `Rebuilt ${o.image}.`),
     dropImage: async (/** @type {any} */ o) => (done.push(`remove ${o.image} on ${o.pool}`), `Removed ${o.image}.`),
   });
   const actor = 'eli@example.com';
-  const { begun } = await choosing(xo, setups, actor);
-  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', rebuild: ['debian-13'], remove: ['ubuntu-24.04'], limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  const { begun, reply, state } = await choosing(xo, setups, actor);
+  // WHICH SUITE EACH IMAGE WAS BUILT FROM, so the phone can say it and offer
+  // the other: by its tag, and stable for one from before there was a choice.
+  const [epk, iv, ct] = state.inventory.split('.');
+  const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(inventory.images.map((/** @type {any} */ i) => [i.key, i.channel]), [['debian-13', 'stable'], ['ubuntu-24.04', 'rolling']]);
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', rebuild: ['debian-13'], remove: ['ubuntu-24.04'], imageChannel: 'rolling', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
   const took = await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor });
   assert.equal(took.ok, true, took.text);
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'done', end.text);
   assert.deepEqual(done, ['remove ubuntu-24.04 on p1', 'rebuild debian-13']);
+  assert.deepEqual(channels, ['rolling'], 'the rebuild is told the suite the phone chose');
   assert.match(end.text, /Removed ubuntu-24\.04\. Rebuilt debian-13\./);
 });
 
@@ -737,6 +746,11 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   const both = /** @type {any} */ (checkPolicy({ ...ok, images: ['ubuntu-24.04', 'debian-13', 'ubuntu-24.04'], edge: true }, pooled));
   assert.deepEqual(both.policy.images, ['ubuntu-24.04', 'debian-13']);
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, images: ['windows-11'], edge: true }, pooled)).text, /cannot build/);
+  // BUILT FROM MAIN OR FROM RELEASES, the apt suite an image built now
+  // installs from; absent is as before, and nothing else is a suite.
+  assert.equal(/** @type {any} */ (checkPolicy({ ...ok, image: true, edge: true, imageChannel: 'rolling' }, pooled)).policy.imageChannel, 'rolling');
+  assert.equal(/** @type {any} */ (checkPolicy({ ...ok, image: true, edge: true }, pooled)).policy.imageChannel, null);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true, edge: true, imageChannel: 'nightly' }, pooled)).text, /released versions or from the newest build of main/);
   const imaged = /** @type {any} */ (checkPolicy({ ...ok, image: true, edge: true, edgeSr: 'b' }, pooled));
   assert.equal(imaged.policy.image, true);
   assert.equal(imaged.policy.edgeSr, 'b', 'where the disks go');

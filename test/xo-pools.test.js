@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
-import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, removeImage, imageStorage, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
+import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, removeImage, imageStorage, imageChannelOf, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
@@ -808,7 +808,7 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   const text = await ensureImage({ ...buildArgs(p), say: (t) => said.push(t) });
   assert.match(text, /machine image is ready on rack/);
   const order = p.calls.map((c) => c.method).filter((m) => m !== 'xo.getAllObjects');
-  assert.deepEqual(order, ['disk.import', 'vm.create', 'vm.attachDisk', 'vm.convertToTemplate', 'vm.create', 'disk.resize', 'vm.createCloudInitConfigDrive', 'vm.start', 'vdi.delete', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
+  assert.deepEqual(order, ['disk.import', 'vm.create', 'vm.attachDisk', 'vm.convertToTemplate', 'vm.create', 'disk.resize', 'vm.createCloudInitConfigDrive', 'vm.start', 'vdi.delete', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
   // THE DISK AS PUBLISHED IS KEPT, never booted and offered to nothing, and
   // the build is a copy of it.
   const [keptCreate, create] = p.calls.filter((c) => c.method === 'vm.create').map((c) => c.params);
@@ -830,13 +830,48 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.equal(p.uploaded.size, DOWNLOADED_RAW.size);
   assert.equal(p.uploaded.body.length, DOWNLOADED_RAW.size);
   assert.equal(createHash('sha256').update(p.uploaded.body).digest('hex'), DOWNLOADED_RAW.sha256);
-  assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }]);
+  assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }, { id: 'build-vm', tag: 'fleetwright-channel:stable' }]);
   assert.deepEqual(p.calls.filter((c) => c.method === 'resourceSet.addObject').map((c) => c.params), [{ id: 'set-1', object: 'build-vm' }], 'the kept disk is not the fleet’s to clone');
   assert.ok(said.some((s) => /Installing Fleetwright on the machine image/.test(s)));
 
   const there = buildPool({ then: 'Halted', existing: [{ type: 'VM-template', id: 'img', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag] }] });
   assert.match(await ensureImage(buildArgs(there)), /already there on rack/);
   assert.ok(!there.calls.some((c) => c.method === 'disk.import'));
+});
+
+// BUILT FROM MAIN. ASKED FOR: "Or should we build a path for the images to
+// use main/rolling?" The suite is written into the apt line every clone keeps,
+// so it decides what the pool's machines update along, not only what the image
+// starts with (docs/hypervisors.md, "Built from main").
+test('an image built from main installs from the rolling suite, is tagged so, and says so', async () => {
+  const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', channel: 'rolling' });
+  assert.match(config, /https:\/\/fleet-apt.thetech.network rolling main" >\/etc\/apt\/sources.list.d\/fleetwright.list/);
+  assert.ok(!config.includes('fleet-apt.thetech.network stable main'), 'both suites in one line set');
+  assert.throws(() => buildCloudConfig({ coordinatorUrl: 'https://fleet.test', channel: 'main; reboot' }), /not a suite/, 'the suite is never a way into the script');
+
+  const p = buildPool({ then: 'Halted' });
+  const text = await ensureImage({ ...buildArgs(p), channel: 'rolling' });
+  assert.ok(p.calls.some((c) => c.method === 'tag.add' && c.params.tag === 'fleetwright-channel:rolling'));
+  assert.match(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params.config, / rolling main"/);
+  assert.match(text, /with Fleetwright installed from the newest build of main/);
+  await assert.rejects(ensureImage({ ...buildArgs(buildPool({ then: 'Halted' })), channel: 'nightly' }), /not a suite/);
+});
+
+test('the suite is chosen per build: an image kept says what it was built from, and a rebuild not told keeps it', async () => {
+  const rolling = { type: 'VM-template', id: 'img', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag, 'fleetwright-image:debian-13', 'fleetwright-channel:rolling'] };
+  // Kept, asked for the other: nothing is built, and it says how to change it.
+  const kept = buildPool({ then: 'Halted', existing: [rolling] });
+  const text = await ensureImage({ ...buildArgs(kept), channel: 'stable' });
+  assert.match(text, /already there on rack: Fleetwright Debian 13\. It was built from the newest build of main; rebuild it to build it from released versions\./);
+  assert.ok(!kept.calls.some((c) => c.method === 'vm.createCloudInitConfigDrive'));
+  // Kept, asked for the same, or not asked: no second sentence.
+  assert.doesNotMatch(await ensureImage({ ...buildArgs(buildPool({ then: 'Halted', existing: [rolling] })), channel: 'rolling' }), /rebuild it/);
+  // A rebuild from a phone that predates the choice keeps the suite it had.
+  const again = buildPool({ then: 'Halted', existing: [rolling] });
+  await ensureImage({ ...buildArgs(again), replace: true });
+  assert.match(/** @type {any} */ (again.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params.config, / rolling main"/);
+  // And an image from before the choice was built from stable, the only suite.
+  assert.equal(imageChannelOf({ tags: [VM_IMAGE.tag] }), 'stable');
 });
 
 test('a Xen Orchestra without disk.resize grows the image’s disk through vdi.set, with the same id and size', async () => {

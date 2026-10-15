@@ -132,6 +132,31 @@ const digestOf = (spec) => (spec.algorithm === 'sha512' ? spec.sha512 : spec.sha
 export const imageTag = (key) => `fleetwright-image:${key}`;
 
 /**
+ * Which apt suite an image installs Fleetwright from, and so which one every
+ * machine cloned from it updates along: `stable`, published releases once their
+ * rollout is complete, or `rolling`, the newest build of main (apt-repo.yml).
+ * Chosen on the pool's policy, per build; docs/hypervisors.md, "Built from main".
+ */
+export const IMAGE_CHANNELS = Object.freeze(['stable', 'rolling']);
+
+/** The tag saying which suite a template was built from. @param {string} channel */
+export const channelTag = (channel) => `fleetwright-channel:${channel}`;
+
+/**
+ * Which suite a template was built from: by its tag, or `stable` for an image
+ * built before there was a choice, which is the only suite there was.
+ *
+ * @param {any} t @returns {'stable'|'rolling'}
+ */
+export function imageChannelOf(t) {
+  const tags = Array.isArray(t?.tags) ? t.tags : [];
+  return tags.includes(channelTag('rolling')) ? 'rolling' : 'stable';
+}
+
+/** How a person reads a suite, in a sentence about an image. @param {string} channel */
+const builtFrom = (channel) => (channel === 'rolling' ? 'the newest build of main' : 'released versions');
+
+/**
  * Which catalogue entry a template is: by its key tag, or, for an image
  * built before there was more than one, Debian by its name.
  *
@@ -270,11 +295,15 @@ const RUN_USER = 'fleetwright';
  * in base64): written by cloud-init and started first, so Xen Orchestra
  * shows the build VM's address whatever its network does.
  *
- * @param {{ coordinatorUrl: string, token?: string|null, addresses?: string[], agent?: string|null }} opts
+ * AND FROM WHICH SUITE, `channel`: one of IMAGE_CHANNELS, checked before it is
+ * written into the apt line, which every clone keeps.
+ *
+ * @param {{ coordinatorUrl: string, token?: string|null, addresses?: string[], agent?: string|null, channel?: string }} opts
  */
-export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [], agent = null }) {
+export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [], agent = null, channel = 'stable' }) {
   const url = new URL(coordinatorUrl);
   const origin = url.origin;
+  if (!IMAGE_CHANNELS.includes(channel)) throw new Error('that is not a suite an image is built from');
   if (token !== null && !IMAGE_REPORT_TOKEN_RE.test(token)) throw new Error('that is not a report token');
   if (agent !== null && !/^[A-Za-z0-9+/]+=*$/.test(agent)) throw new Error('that is not the guest agent');
   // Addresses as the box's own resolver gave them, and nothing else: each is
@@ -385,8 +414,10 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     // fleet named: laid out, units written, left stopped for the clone to
     // join (docs/packaging.md, "Joining a fleet under apt"). Signed, and the
     // run user preseeded, which is the one question it would otherwise guess.
+    // The suite is the one the policy chose, and the line stays on every clone,
+    // so a machine made from a rolling image updates along rolling.
     "  curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg",
-    `  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" >/etc/apt/sources.list.d/fleetwright.list`,
+    `  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network ${channel} main" >/etc/apt/sources.list.d/fleetwright.list`,
     // A here-string and not a pipe: under pipefail an echo into a reader that
     // has already exited fails the step for nothing.
     `  debconf-set-selections <<<'fleetwright fleetwright/user string ${RUN_USER}'`,
@@ -668,6 +699,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   getAgent?: (imageDir: string, signal?: AbortSignal) => Promise<Buffer>,
  *   vmReport?: () => ({ step: string, detail: string|null, at: number }|null),
  *   replace?: boolean,
+ *   channel?: string|null,
  * }} opts
  */
 export async function ensureImage({
@@ -677,9 +709,11 @@ export async function ensureImage({
   getImage = fetchPinned, upload = uploadDisk, now = () => Date.now(), sleep = sleepFor, pollMs = 10_000,
   reporter = null, vmReport = () => null, addressesOf = addressesFor, getAgent = fetchAgent,
   replace = false,
+  channel: asked = null,
 }) {
   const spec = IMAGES[key];
   if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was built`);
+  if (asked !== null && !IMAGE_CHANNELS.includes(asked)) throw new Error(`${asked} is not a suite an image is built from. Nothing was built`);
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
   const there = templates.find((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key);
   // REBUILT WHEN ASKED: the new one is built beside it and the one there is
@@ -689,8 +723,17 @@ export async function ensureImage({
     // IN THE SET, whatever else: an image made before the set existed, or
     // taken out of it in Xen Orchestra, is one the fleet can see and not use.
     await admin.call('resourceSet.addObject', { id: setId, object: there.id }).catch(() => {});
-    return `The ${spec.os} machine image was already there on ${poolName}: ${String(there.name_label || spec.name)}.`;
+    // KEPT AS IT WAS BUILT, and said so when that is not what was asked: the
+    // suite is chosen per build, and changing the choice changes nothing until
+    // the image is rebuilt.
+    const was = imageChannelOf(there);
+    return `The ${spec.os} machine image was already there on ${poolName}: ${String(there.name_label || spec.name)}.` +
+      (asked !== null && asked !== was ? ` It was built from ${builtFrom(was)}; rebuild it to build it from ${builtFrom(asked)}.` : '');
   }
+  // NOT SAID IS AS BEFORE: a rebuild keeps the suite the image was built from,
+  // and a new image is built from released versions, which is all a policy
+  // from before the choice can have meant.
+  const channel = asked ?? (there ? imageChannelOf(there) : 'stable');
 
   // A BUILD AN EARLIER TRY LEFT, failed or cut off, is removed first so two
   // never exist at once.
@@ -832,7 +875,7 @@ export async function ensureImage({
     // alone, as it was before reports existed.
     const token = reporter ? await reporter() : null;
     const addresses = token ? await addressesOf(new URL(coordinatorUrl).hostname) : [];
-    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token, addresses, agent }) });
+    await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token, addresses, agent, channel }) });
     signal?.throwIfAborted();
     await admin.call('vm.start', { id: vm });
 
@@ -900,11 +943,12 @@ export async function ensureImage({
     await admin.call('vm.set', {
       id: vm,
       name_label: spec.name,
-      name_description: `${os} with Fleetwright installed and not enrolled. Sessions' machines are cloned from this. Made by Fleetwright.`,
+      name_description: `${os} with Fleetwright installed from ${builtFrom(channel)} and not enrolled. Sessions' machines are cloned from this. Made by Fleetwright.`,
     });
     await admin.call('tag.remove', { id: vm, tag: VM_IMAGE.buildTag }).catch(() => {});
     await admin.call('tag.add', { id: vm, tag: VM_IMAGE.tag });
     await admin.call('tag.add', { id: vm, tag: imageTag(spec.key) });
+    await admin.call('tag.add', { id: vm, tag: channelTag(channel) });
     await admin.call('vm.convertToTemplate', { id: vm });
     await admin.call('resourceSet.addObject', { id: setId, object: vm });
   } catch (e) {
@@ -918,14 +962,14 @@ export async function ensureImage({
   if (there) {
     const retired = await retireImage(admin, there);
     return (
-      `The ${os} machine image was rebuilt on ${poolName}, its disk on ${on}. ` +
+      `The ${os} machine image was rebuilt on ${poolName} from ${builtFrom(channel)}, its disk on ${on}. ` +
       (retired.removed
         ? 'The one that was there was removed.'
         : `The one that was there was kept as "${retired.name}", because ${machines(retired.clones)} made from it still ${retired.clones === 1 ? 'exists' : 'exist'}; New session no longer offers it, and it can be removed once ${retired.clones === 1 ? 'that machine is' : 'they are'} gone.`)
     );
   }
   return (
-    `The machine image is ready on ${poolName}: ${spec.name}, ${os} with Fleetwright installed, its disk on ${on}. ` +
+    `The machine image is ready on ${poolName}: ${spec.name}, ${os} with Fleetwright installed from ${builtFrom(channel)}, its disk on ${on}. ` +
     'Start a session on a new machine from it under New session › Where.'
   );
 }

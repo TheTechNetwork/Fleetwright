@@ -102,7 +102,7 @@ import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { machineGrantsOf } from '../../core/grants.js';
 import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName, wanAddressOf } from './edge-router.js';
-import { VM_IMAGE, IMAGES, ensureImage, removeImage, imageKeyOf } from './vm-image.js';
+import { VM_IMAGE, IMAGES, IMAGE_CHANNELS, ensureImage, removeImage, imageKeyOf, imageChannelOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { newWatch, watchOf } from './edge-credentials.js';
@@ -535,9 +535,13 @@ export class XoSetups {
         // and so is every machine it makes from the pool's record. An older
         // one leaves them the image's answer, so a phone offers the choice
         // only where this is said.
+        // `image-channel`: it builds an image from the apt suite chosen
+        // (`imageChannel`, `stable` or `rolling`, vm-image.js IMAGE_CHANNELS)
+        // and says which each image was built from. An older one builds
+        // every image from stable.
         can: [
           'policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
-          ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants'] : []),
+          ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder', 'holder-ask'] : []),
         ],
       },
@@ -1169,6 +1173,7 @@ export class XoSetups {
             return this.buildImage({
               image: key,
               replace,
+              channel: p.imageChannel,
               admin: ctx.admin,
               resize: RESIZE_METHODS.find((m) => Object.hasOwn(ctx.methods, m)),
               pool: way.$pool,
@@ -1723,6 +1728,9 @@ export function inventoryOf(ctx, set) {
     pool: t.$pool ? String(t.$pool) : null,
     name: String(t.name_label || VM_IMAGE.name).slice(0, 80),
     key: imageKeyOf(t),
+    // Which apt suite it was built from, and so which its machines update
+    // along: `stable` or `rolling`.
+    channel: imageChannelOf(t),
   }));
   // Each pool's own machine, by pool and name, and whether it is up.
   const holders = (ctx.holders || []).map((/** @type {any} */ v) => ({
@@ -1830,7 +1838,10 @@ export function currentLimits(set) {
  * `grants` is what the pool's own machine may do from chat once it is made:
  * `{ upgrades, reboot }`, each yes or no (src/core/grants.js, machineGrantsOf).
  *
- * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, edgeHa: boolean|null, image: boolean, images: string[], rebuild: string[], remove: string[], groups: number, holder: boolean, holderSecret: string|null, holderAgain: boolean, grants: { upgrades?: boolean, reboot?: boolean }|null, labs: { open: number, closed: number }|null, labsEach?: number|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
+ * `imageChannel` is the apt suite an image built or rebuilt now installs
+ * Fleetwright from: `stable` or `rolling`, or null for as before.
+ *
+ * @returns {{ ok: true, policy: { srs: string[], networks: string[], egress: string|null, edge: boolean, edgeSr: string|null, edgeBlock: boolean|null, edgeHa: boolean|null, image: boolean, images: string[], rebuild: string[], remove: string[], groups: number, holder: boolean, holderSecret: string|null, holderAgain: boolean, grants: { upgrades?: boolean, reboot?: boolean }|null, imageChannel: string|null, labs: { open: number, closed: number }|null, labsEach?: number|null, limits: { cpus: number, memory: number, disk: number } } } | { ok: false, text: string }}
  */
 export function checkPolicy(p, choices) {
   if (!choices || p?.v !== 1) return { ok: false, text: 'That is not a choice this job can take.' };
@@ -1930,6 +1941,12 @@ export function checkPolicy(p, choices) {
   // machine image's own answer.
   const grants = p.grants === undefined || p.grants === null ? null : machineGrantsOf(p.grants);
   if (p.grants !== undefined && p.grants !== null && !grants) return { ok: false, text: 'What the pool’s machines may do from chat is yes or no for updates and for reboot. Nothing was changed.' };
+  // WHAT AN IMAGE BUILT OR REBUILT NOW INSTALLS FLEETWRIGHT FROM: released
+  // versions or the newest build of main. Absent, from a phone that predates
+  // it, a rebuild keeps what the image was built from and a new one is built
+  // from released versions (vm-image.js, ensureImage).
+  const imageChannel = p.imageChannel === undefined || p.imageChannel === null ? null : String(p.imageChannel);
+  if (imageChannel !== null && !IMAGE_CHANNELS.includes(imageChannel)) return { ok: false, text: 'A machine image is built from released versions or from the newest build of main. Nothing was changed.' };
   if (holder && remove.includes('debian-13')) return { ok: false, text: 'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for. Nothing was changed.' };
   if (holder && egress === null) return { ok: false, text: 'The pool’s own machine goes on the way out: choose the network it is on.' };
   if (holder && !image && !choices.imagePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
@@ -1945,7 +1962,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, edgeHa, image, images: asked, rebuild, remove, groups, holder, holderSecret, holderAgain, grants, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, edgeHa, image, images: asked, rebuild, remove, groups, holder, holderSecret, holderAgain, grants, imageChannel, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
 }
 
 /**
