@@ -191,7 +191,8 @@
         "custom.opnsense"
       ],
       "prBodyNotes": [
-        "**A person pins this, after three days.** For the new release, in `src/fleet/host/edge-router.js` `OPNSENSE_IMAGE`: the nano image's `url`, its `sha256` from `OPNsense-<release>-checksums-amd64.sha256`, `compressedSize`, and `rawSize` (the unpacked size). Then unpack it (`bzip2 -dc \u2026 > nano.img`), find `/usr/local/etc/config.xml` and write its `config` offset, length and SHA-256, and run `node scripts/opnsense-room.mjs nano.img <inode>` for `grow`. Read `EDGE_FILTER`'s blocklist keys and rule file names again from the release's own models. Set `checked` to the release last. CI stays red until the address and `checked` both name it."
+        "**A person pins this, after three days.** For the new release, in `src/fleet/host/edge-router.js` `OPNSENSE_IMAGE`: the nano image's `url`, its `sha256` from `OPNsense-<release>-checksums-amd64.sha256`, `compressedSize`, and `rawSize` (the unpacked size). Then unpack it (`bzip2 -dc \u2026 > nano.img`), find `/usr/local/etc/config.xml` and write its `config` offset, length and SHA-256, and run `node scripts/opnsense-room.mjs nano.img <inode>` for `grow`. Read `EDGE_FILTER`'s blocklist keys and rule file names again from the release's own models. Set `checked` to the release last. CI stays red until the address and `checked` both name it.",
+        "**What changed upstream:** [OPNsense {{{newMajor}}}.{{{newMinor}}} release notes](https://docs.opnsense.org/releases/CE_{{{newMajor}}}.{{{newMinor}}}.html), which also cover its point releases. The mirror the version is read from lists files and nothing else, so Renovate cannot find these by itself."
       ]
     },
     {
@@ -204,7 +205,8 @@
       ],
       "minimumReleaseAgeBehaviour": "timestamp-optional",
       "prBodyNotes": [
-        "**Before merging:** run `node scripts/pin-xo-installer.mjs` on this branch and commit what it writes. Renovate moved the commit; that script pins `base` and the SHA-256 of every file the deploy reads at it, and refuses a commit younger than three days. CI stays red until it has. Read what changed upstream too: this script is run as root in a VM made with the pool's admin sign-in."
+        "**Before merging:** run `node scripts/pin-xo-installer.mjs` on this branch and commit what it writes. Renovate moved the commit; that script pins `base` and the SHA-256 of every file the deploy reads at it, and refuses a commit younger than three days. CI stays red until it has. Read what changed upstream too: this script is run as root in a VM made with the pool's admin sign-in.",
+        "**What changed upstream:** [{{{currentDigestShort}}}…{{{newDigestShort}}}](https://github.com/00o-sh/XenOrchestraInstallerUpdater/compare/{{{currentDigest}}}...{{{newDigest}}}). The fork has no tags, releases or changelog, so these commits are the whole record."
       ]
     },
     {

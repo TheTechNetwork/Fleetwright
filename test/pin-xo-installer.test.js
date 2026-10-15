@@ -34,6 +34,9 @@ test('Renovate can see the installer’s commit, and it is the one the deploy fe
   const rule = config.packageRules.find((/** @type {any} */ r) => r.matchDepNames?.includes(m.groups?.depName));
   assert.equal(rule?.minimumReleaseAgeBehaviour, 'timestamp-optional');
   assert.match(rule.prBodyNotes.join('\n'), /node scripts\/pin-xo-installer\.mjs/);
+  // The fork has no releases, so Renovate finds no notes: the diff is linked
+  // instead, and it is what has to be read before a root script is pinned.
+  assert.ok(rule.prBodyNotes.join('\n').includes(`https://github.com/${INSTALLER.repository}/compare/{{{currentDigest}}}...{{{newDigest}}}`), 'the installer\u2019s pull request does not link what changed upstream');
 });
 
 test('the pinned files are the named commit’s', () => {
