@@ -66,7 +66,7 @@ RUN cd worker && ./node_modules/.bin/esbuild src/worker.js --bundle --format=esm
       --external:node:* --external:cloudflare:* --outfile=dist/worker.mjs
 
 # --- run: workerd, the bundle, a volume ---------------------------------------
-FROM docker.io/library/debian:12-slim
+FROM docker.io/library/debian:13-slim
 # The workerd binary the npm package ships for this platform is the runtime;
 # it is a static glibc binary and needs nothing else installed.
 COPY --from=build /src/worker/node_modules/workerd/bin/workerd /usr/local/bin/workerd
