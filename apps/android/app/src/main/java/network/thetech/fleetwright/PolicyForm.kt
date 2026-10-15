@@ -201,6 +201,8 @@ internal fun PolicyForm(
         val there = XoPolicy.edgeOn(inv, choice.egress)
         val present = XoPolicy.imageKeysOn(inv, choice.egress)
         kinds.forEach { kind ->
+            // Said beside an image that is there when it was built from main.
+            val builtFrom = if (XoPolicy.imageChannelOn(inv, choice.egress, kind.key) == XoPolicy.CHANNEL_ROLLING) XoPolicy.BUILT_FROM_MAIN else ""
             if (kind.key in present && choice.imageManageChoice) {
                 Text("${kind.os} machine image", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
                 val action = choice.imageActions[kind.key]
@@ -209,14 +211,14 @@ internal fun PolicyForm(
                         selected = action == value,
                         enabled = enabled,
                         title = title,
-                        line = imageThereLine(value),
+                        line = imageThereLine(value) + builtFrom,
                         onClick = {
                             onChange(choice.copy(imageActions = if (value == null) choice.imageActions - kind.key else choice.imageActions + (kind.key to value)))
                         },
                     )
                 }
             } else if (kind.key in present) {
-                Hint("${kind.os} machine image. ${imageThereLine(null)}")
+                Hint("${kind.os} machine image. ${imageThereLine(null)}$builtFrom")
             } else {
                 CheckRow(
                     checked = kind.key in choice.images,
@@ -230,6 +232,21 @@ internal fun PolicyForm(
                             edge = choice.edge || (on && there == null),
                         ))
                     },
+                )
+            }
+        }
+        // WHAT AN IMAGE BUILT NOW IS BUILT FROM, offered only by a machine
+        // that builds from either (C-2). Asked for: "Or should we build a path
+        // for the images to use main/rolling?"
+        if (choice.imageChannelChoice) {
+            Text("Built from", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+            listOf(XoPolicy.CHANNEL_STABLE to "Released versions", XoPolicy.CHANNEL_ROLLING to "Every merge to main").forEach { (value, title) ->
+                RadioRow(
+                    selected = choice.imageChannel == value,
+                    enabled = enabled,
+                    title = title,
+                    line = XoPolicy.imageChannelLine(value, present.isNotEmpty()),
+                    onClick = { onChange(choice.copy(imageChannel = value)) },
                 )
             }
         }
