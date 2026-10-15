@@ -3025,7 +3025,7 @@
       "post": {
         "security": [],
         "summary": "A machine image's build VM reports a step of its install",
-        "description": "Reachable without a credential BECAUSE the token is the credential: the box running a policy job asks the coordinator for it over its own socket (`image-reporter`, answered by `minted`), one live token per job, held as a hash, gone when the job ends or after an hour, good for 24 reports. The box writes it into the build VM's cloud-init drive, which the build deletes before the VM becomes the template. The step is passed to that box, whose sentence for it is what the phone shows. See docs/hypervisors.md.",
+        "description": "Reachable without a credential BECAUSE the token is the credential: the box running a policy job asks the coordinator for it over its own socket (`image-reporter`, answered by `minted`), one live token per job, held as a hash, gone when the job ends or after an hour, good for 140 reports, enough for the session image's pull to be reported every 15 seconds. The box writes it into the build VM's cloud-init drive, which the build deletes before the VM becomes the template. The step is passed to that box, whose sentence for it is what the phone shows. See docs/hypervisors.md.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3047,6 +3047,7 @@
                       "started",
                       "packages",
                       "installer",
+                      "image",
                       "cleaning",
                       "done",
                       "failed"
@@ -3055,6 +3056,16 @@
                   "detail": {
                     "type": "string",
                     "description": "with `failed` only: the end of the install log, cut to 2000 characters"
+                  },
+                  "got": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "with `image` only: bytes received since the session image's pull began. Dropped when it is not a whole count up to 64 GiB"
+                  },
+                  "of": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "with `image` only: the session image's size as its registry gives it, when the build VM could ask"
                   }
                 }
               }

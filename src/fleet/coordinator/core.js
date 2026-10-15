@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
@@ -73,8 +73,12 @@ export const MAX_IMAGE_REPORTERS = 3;
  * the install's own 25 minutes, with room. The job ending takes it back sooner.
  */
 const IMAGE_REPORT_TTL_MS = 60 * 60_000;
-/** Reports one token carries: one per step, and room for a retry of each. */
-const MAX_IMAGE_REPORTS = 24;
+/**
+ * Reports one token carries: one per step and a retry of each, and the
+ * session image's pull reported every 15 seconds through the install's whole
+ * 25 minutes. It was 24 when only steps were reported.
+ */
+export const MAX_IMAGE_REPORTS = 140;
 /** The end of the install log a failed build sends back, at most. */
 const IMAGE_REPORT_DETAIL = 2000;
 /** The name a pool's own machine enrols under: `holder-` and six hex. */
@@ -3803,12 +3807,14 @@ export class CoordinatorCore {
    *
    * REACHABLE WITHOUT A CREDENTIAL because the token is one: minted for one
    * job, held as a hash, gone when the job ends or after an hour, and good for
-   * a couple of dozen reports. A step is a word from IMAGE_REPORT_STEPS and
+   * MAX_IMAGE_REPORTS reports. A step is a word from IMAGE_REPORT_STEPS and
    * nothing else; only `failed` carries text, the end of the install log,
-   * cut short and stripped of control characters. Every refusal is the same
-   * 403, so a guess learns nothing about which part was wrong.
+   * cut short and stripped of control characters, and only `image` carries
+   * numbers, its bytes, passed on when each is a whole count in range and
+   * dropped when it is not. Every refusal is the same 403, so a guess learns
+   * nothing about which part was wrong.
    *
-   * @param {any} body  `{ token, step, detail? }`
+   * @param {any} body  `{ token, step, detail?, got?, of? }`
    * @returns {Promise<{ status: number, body: Record<string, any> }>}
    */
   async imageReport(body) {
@@ -3828,12 +3834,16 @@ export class CoordinatorCore {
     const detail = step === 'failed' && typeof body?.detail === 'string'
       ? body.detail.replace(/[^\P{C}\n\t]/gu, '').slice(-IMAGE_REPORT_DETAIL)
       : null;
+    const bytes = (/** @type {unknown} */ n) => Number.isSafeInteger(n) && /** @type {number} */ (n) >= 0 && /** @type {number} */ (n) <= IMAGE_REPORT_BYTES_MAX;
+    const counts = step === 'image'
+      ? { ...(bytes(body?.got) ? { got: body.got } : {}), ...(bytes(body?.of) && body.of > 0 ? { of: body.of } : {}) }
+      : {};
     const host = this.registry.hosts.get(rec.hostId);
     if (!host?.connected || typeof host.send !== 'function') {
       return { status: 503, body: { ok: false, error: { code: 'host_away' }, text: 'The machine running this build is not connected just now.' } };
     }
     try {
-      host.send({ v: PROTOCOL_VERSION, kind: 'image-report', job, step, ...(detail ? { detail } : {}) });
+      host.send({ v: PROTOCOL_VERSION, kind: 'image-report', job, step, ...(detail ? { detail } : {}), ...counts });
     } catch {
       return { status: 503, body: { ok: false, error: { code: 'host_away' }, text: 'The machine running this build is not connected just now.' } };
     }

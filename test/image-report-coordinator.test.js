@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CoordinatorCore, MAX_IMAGE_REPORTERS } from '../src/fleet/coordinator/core.js';
+import { CoordinatorCore, MAX_IMAGE_REPORTERS, MAX_IMAGE_REPORTS } from '../src/fleet/coordinator/core.js';
 import { IMAGE_REPORT_TOKEN_RE } from '../src/fleet/protocol/intents.js';
 
 const ELI = 'eli@example.com';
@@ -103,11 +103,32 @@ test('a step is a word from the list, and only a failure carries the log, stripp
   assert.ok(failed.detail.endsWith('E: Unable to locate package nope[0m\n'), 'control and direction characters are dropped');
 });
 
-test('a token carries a couple of dozen reports, and none when its box is away', async () => {
+test('the session image’s pull carries its bytes, and only whole counts on that step get through', async () => {
+  const { core, ask, reports } = fleet();
+  const token = (await ask('laptop')).token;
+  const GB = 1024 ** 3;
+  assert.equal((await core.imageReport({ token, step: 'image', got: 412 * 1024 ** 2, of: 1.3 * GB | 0 })).status, 202);
+  assert.deepEqual(reports('laptop')[0], { v: reports('laptop')[0].v, kind: 'image-report', job: JOB, step: 'image', got: 412 * 1024 ** 2, of: 1.3 * GB | 0 });
+
+  // Before the registry answered, or when it never does: a count and no size.
+  assert.equal((await core.imageReport({ token, step: 'image', got: 0 })).status, 202);
+  assert.deepEqual([reports('laptop')[1].got, 'of' in reports('laptop')[1]], [0, false]);
+
+  for (const [got, of] of [['412 MB', '1 GB'], [-1, 0], [1.5, 2.5], [65 * GB, 65 * GB], [Number.MAX_VALUE, Infinity]]) {
+    assert.equal((await core.imageReport({ token, step: 'image', got, of })).status, 202, 'a bad count is dropped, the step still counts');
+    const r = reports('laptop').at(-1);
+    assert.equal('got' in r || 'of' in r, false, `${got} of ${of} is not a count`);
+  }
+  assert.equal((await core.imageReport({ token, step: 'packages', got: 5, of: 10 })).status, 202);
+  assert.equal('got' in reports('laptop').at(-1), false, 'numbers ride on the pull only');
+});
+
+test('a token carries the pull reported every 15 seconds through the whole install, and none when its box is away', async () => {
   const { core, ask } = fleet();
   const token = (await ask('laptop')).token;
+  assert.ok(MAX_IMAGE_REPORTS >= (25 * 60) / 15 + 12, 'the install’s 25 minutes at one report per 15 seconds, and its steps');
   let last;
-  for (let i = 0; i < 25; i++) last = await core.imageReport({ token, step: 'packages' });
+  for (let i = 0; i <= MAX_IMAGE_REPORTS; i++) last = await core.imageReport({ token, step: 'image', got: i });
   assert.equal(last?.status, 429);
 
   const fresh = (await ask('laptop')).token;

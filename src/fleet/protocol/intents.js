@@ -72,7 +72,15 @@ export const XOSETUP_JOB_RE = /^[0-9a-f]{12}$/;
  * end of the install log, because that is the one thing nobody can read
  * anywhere else (the VM has no password to log in with).
  */
-export const IMAGE_REPORT_STEPS = Object.freeze(['started', 'packages', 'installer', 'cleaning', 'done', 'failed']);
+export const IMAGE_REPORT_STEPS = Object.freeze(['started', 'packages', 'installer', 'image', 'cleaning', 'done', 'failed']);
+/**
+ * `image` alone carries numbers: `got`, the bytes the build VM has received
+ * since the session image's pull began, and `of`, that image's size as its
+ * registry gives it, when it could be asked. Whole bytes, at most this many,
+ * so a count is a count and never a sentence. The pull is most of a build's
+ * time, and a step with no number in it was a bar that moved by the clock.
+ */
+export const IMAGE_REPORT_BYTES_MAX = 64 * 1024 ** 3;
 /** The token a build VM reports with: `fwi_`, the job it belongs to, and 24 random bytes. */
 export const IMAGE_REPORT_TOKEN_RE = /^fwi_([0-9a-f]{12})_([0-9a-f]{48})$/;
 
