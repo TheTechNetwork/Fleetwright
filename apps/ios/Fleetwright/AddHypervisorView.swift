@@ -222,6 +222,8 @@ struct AddHypervisorView: View {
         /// from the app (`can` holds "machine-grants"); an older one leaves
         /// them the image's answers.
         var canMachineGrants = false
+        /// It builds an image from main as well as from releases.
+        var canImageChannel = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -1004,6 +1006,7 @@ struct AddHypervisorView: View {
             // Asked for: "Still can't run sessions on it".
             if policyJob?.canImage == true, choice.egress != nil, choice.imagesChoice, let kinds = inv.imageKinds {
                 imageRows(kinds, inv: inv, router: there)
+                imageChannelRow(inv: inv)
             } else if policyJob?.canImage == true, choice.egress != nil {
                 if let image = inv.image(on: choice.egress) {
                     policyRow("Machine image", "\(image.name) is there. New session › Where offers machines from it.")
@@ -1119,13 +1122,13 @@ struct AddHypervisorView: View {
                     Text("Rebuild").tag(XOPolicy.ImageAction.rebuild)
                     Text("Remove").tag(XOPolicy.ImageAction.remove)
                 } label: {
-                    policyRow("\(kind.os) machine image", imageThereLine(action))
+                    policyRow("\(kind.os) machine image", imageThereLine(action) + builtFromNote(kind.key, inv: inv))
                 }
                 .tint(Design.Palette.accent)
                 .frame(minHeight: 44)
                 .disabled(busy)
             } else if present.contains(kind.key) {
-                policyRow("\(kind.os) machine image", imageThereLine(.keep))
+                policyRow("\(kind.os) machine image", imageThereLine(.keep) + builtFromNote(kind.key, inv: inv))
             } else {
                 Toggle(isOn: Binding(
                     get: { choice.images.contains(kind.key) },
@@ -1141,6 +1144,29 @@ struct AddHypervisorView: View {
                 .disabled(busy)
             }
         }
+    }
+
+    /// WHAT AN IMAGE BUILT NOW IS BUILT FROM, offered only by a machine that
+    /// builds from either (C-2). Asked for: "Or should we build a path for the
+    /// images to use main/rolling?"
+    @ViewBuilder
+    private func imageChannelRow(inv: XOPolicy.Inventory) -> some View {
+        if choice.imageChannelChoice {
+            Picker(selection: $choice.imageChannel) {
+                Text("Released versions").tag(XOPolicy.channelStable)
+                Text("Every merge to main").tag(XOPolicy.channelRolling)
+            } label: {
+                policyRow("Built from", XOPolicy.imageChannelLine(choice.imageChannel, anyThere: !inv.imageKeys(on: choice.egress).isEmpty))
+            }
+            .tint(Design.Palette.accent)
+            .frame(minHeight: 44)
+            .disabled(busy)
+        }
+    }
+
+    /// Said beside an image that is there when it was built from main.
+    private func builtFromNote(_ key: String, inv: XOPolicy.Inventory) -> String {
+        inv.imageChannel(on: choice.egress, key: key) == XOPolicy.channelRolling ? XOPolicy.builtFromMain : ""
     }
 
     /// What Apply does to an image that is there. The same words as Android
@@ -1944,7 +1970,8 @@ struct AddHypervisorView: View {
                                   canLabs: begun.can.contains("labs"),
                                   canLabsEach: begun.can.contains("labs-each"),
                                   canImageManage: begun.can.contains("image-manage"),
-                                  canMachineGrants: begun.can.contains("machine-grants"))
+                                  canMachineGrants: begun.can.contains("machine-grants"),
+                                  canImageChannel: begun.can.contains("image-channel"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
@@ -1980,6 +2007,7 @@ struct AddHypervisorView: View {
                     choice.labsEachChoice = choice.labsChoice && policyJob.canLabsEach
                     choice.imageManageChoice = choice.imagesChoice && policyJob.canImageManage
                     choice.grantsChoice = policyJob.canMachineGrants
+                    choice.imageChannelChoice = choice.imagesChoice && policyJob.canImageChannel
                     // Where they were left: the answers this phone kept for
                     // the pool, or the image's own.
                     if let kept = XOSetupHandoff.machineGrants(address: policyJob.address) {

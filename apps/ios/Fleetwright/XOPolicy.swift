@@ -51,6 +51,21 @@ enum XOPolicy {
     /// changes a machine already running, which nothing from here can.
     static let machineGrantsFooter = "Each machine made on this pool from now on starts with these answers, the pool’s own machine included. "
         + "One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine."
+    /// What a machine image is built from: the apt suite it installs
+    /// Fleetwright from, which every machine made from it then updates along
+    /// (IMAGE_CHANNELS in vm-image.js). Asked for: "Or should we build a path
+    /// for the images to use main/rolling?" The same words as Android
+    /// (XoPolicy.kt).
+    static let channelStable = "stable"
+    static let channelRolling = "rolling"
+    static func imageChannelLine(_ channel: String, anyThere: Bool) -> String {
+        (channel == channelRolling
+            ? "Fleetwright from the newest build of main. Machines made from the image update on every merge, to builds nobody released."
+            : "Fleetwright from the newest release. Machines made from the image update to each release.")
+            + (anyThere ? " An image that is there keeps what it was built from until it is rebuilt." : "")
+    }
+    /// Beside an image that is there and was built from main.
+    static let builtFromMain = " It was built from main."
     /// What a lab network is called, and the most labs an edge has room for
     /// (LAB.prefix and LAB.max in edge-router.js).
     static let labPrefix = "fleetwright-lab-"
@@ -165,6 +180,9 @@ enum XOPolicy {
             /// Which of the catalogue's images it is; nil from a machine that
             /// predates saying, which only ever built Debian.
             var key: String? = nil
+            /// Which apt suite it was built from, `stable` or `rolling`; nil
+            /// from a machine that predates saying, which only built stable.
+            var channel: String? = nil
         }
 
         /// A pool's own machine: a permanent fleet host on the pool that
@@ -205,6 +223,13 @@ enum XOPolicy {
         func imageKeys(on network: String?) -> Set<String> {
             guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return [] }
             return Set((images ?? []).filter { $0.pool == pool }.map { $0.key ?? XOPolicy.debianKey })
+        }
+
+        /// Which suite the image of that kind on this network's pool was
+        /// built from: stable for one that predates saying.
+        func imageChannel(on network: String?, key: String) -> String {
+            guard let network, let pool = networks.first(where: { $0.id == network })?.pool else { return XOPolicy.channelStable }
+            return (images ?? []).first { $0.pool == pool && ($0.key ?? XOPolicy.debianKey) == key }?.channel ?? XOPolicy.channelStable
         }
 
         /// The machine image on the pool this network is in, if it has one.
@@ -402,6 +427,15 @@ enum XOPolicy {
         /// neither offered nor sent.
         var grantsChoice = false
 
+        /// WHAT AN IMAGE BUILT OR REBUILT NOW IS BUILT FROM: released versions
+        /// or the newest build of main. Starts from what the pool's image was
+        /// built from, so Apply changes nothing nobody chose.
+        var imageChannel = XOPolicy.channelStable
+        /// The machine builds from either (`image-channel` in begin's `can`).
+        /// An older one builds every image from released versions, so the
+        /// choice is neither offered nor sent.
+        var imageChannelChoice = false
+
         /// An image is asked for, in whichever form this machine reads.
         var wantsImage: Bool { imagesChoice ? !images.isEmpty : image }
 
@@ -464,6 +498,9 @@ enum XOPolicy {
             c.edgeHa = inv.edge(on: c.egress)?.ha ?? false
             // The same for the pool's own machine: Apply keeps it, or starts it.
             c.holder = inv.holder(on: c.egress) != nil
+            // Built from what the image there was, so a rebuild changes nothing
+            // about where its machines take Fleetwright from unless asked.
+            c.imageChannel = inv.image(on: c.egress)?.channel ?? XOPolicy.channelStable
             // As many as there are: Apply asks for none it does not show.
             c.groups = inv.groupCount(on: c.egress)
             // The labs the edge has: Apply rebuilds nothing nobody changed.
@@ -606,6 +643,7 @@ enum XOPolicy {
             }
             // Only to a machine that applies them.
             if grantsChoice { out["grants"] = ["upgrades": machineUpdates, "reboot": machineReboot] }
+            if imageChannelChoice { out["imageChannel"] = imageChannel }
             // Only to a machine that makes them, and only with a way out.
             if groupsChoice, egress != nil { out["groups"] = groups }
             // Only to a machine that makes them, and only where there is a router, there or asked for.
