@@ -183,9 +183,17 @@ fun StartSheet(
     }
 
     LaunchedEffect(Unit) {
-        // The enrolled list the settings screen already uses. Loaded here so
-        // the sheet works from every entry point, launcher shortcuts included.
-        hosts = runCatching { Fleet(settings).enrolledHosts().map { it.hostId } }.getOrDefault(emptyList())
+        // Only the machines a start would reach (C-2): not one that is
+        // offline, not one that is degraded, and never a pool's own machine,
+        // which runs no sessions. A start named at any of them is refused,
+        // and a picker that offers a refusal is the bug this replaced. Asked
+        // for: "Should the pool's own machine ever run sessions? No". A
+        // coordinator too old to say takesSessions leaves it null, and then
+        // healthy is the rule placement used. Loaded here so the sheet works
+        // from every entry point, launcher shortcuts included.
+        hosts = Fleet(settings).fleetHosts()
+            .filter { !it.holder && (it.takesSessions ?: (it.state == "healthy")) }
+            .map { it.hostId }
         // Nullable all the way through: Fleet.profiles() answers null when
         // nobody could say — an old coordinator, or hosts that refuse the verb
         // by name — and that is not the same as a fleet with no profiles.
