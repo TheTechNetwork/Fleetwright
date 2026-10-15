@@ -106,7 +106,7 @@ import { splitAddress } from './xo-ws.js';
 export const INSTALLER = Object.freeze({
   repository: '00o-sh/XenOrchestraInstallerUpdater',
   // renovate: datasource=git-refs depName=https://github.com/00o-sh/XenOrchestraInstallerUpdater branch=master
-  commit: '90562aaa111fe115f46a55fa491798e4ed2885bd',
+  commit: '6030009a1d04fcb3ba6e11a3f4a74a8c10eba4e5',
   base: 'https://raw.githubusercontent.com/00o-sh/XenOrchestraInstallerUpdater/90562aaa111fe115f46a55fa491798e4ed2885bd/',
   files: Object.freeze({
     'xo-remote-deploy.sh': 'e5f234bae9c6eb9e65d3793c54f151ebfb0271c0b07929a4394ff00cd1ce47c3',
