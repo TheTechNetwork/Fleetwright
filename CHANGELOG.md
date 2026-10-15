@@ -14,8 +14,9 @@ reaches TestFlight, Play and the GitHub release.
 ## 0.4.10 — 2026-10-15
 
 **You choose on a pool's policy what the machines made there may do from the
-app, the pool's own machine stops being offered for sessions, and New session
-offers only machines a session can start on.**
+app and whether its images are built from main, the pool's own machine stops
+being offered for sessions, and New session offers only machines a session
+can start on.**
 
 - **Machines made here, on the pool's policy.** Two switches: *Update their
   system from the app* and *Reboot from the app*. Every machine made on the
@@ -24,6 +25,12 @@ offers only machines a session can start on.**
   `sudo fleetwright grant upgrades on`, or `reboot on`. The machine image is
   what applies the answers, so rebuild the pool's image after updating to
   this release.
+- **A pool's machine images can be built from main.** Under the images on the
+  pool's policy, *Built from*: Released versions, as before, or Every merge
+  to main. An image built from main installs Fleetwright from apt's new
+  rolling suite, and the machines made from it update on every merge, so a
+  change reaches a test pool without waiting for a release. It applies to an
+  image built or rebuilt then; one that is there keeps what it was built from.
 - **The pool's own machine runs no sessions.** It was marked degraded for
   having no Claude account, which nobody links there, and Wherever fits could
   pick it. Now it is never picked, a start named at it is refused with the
