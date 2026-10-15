@@ -340,13 +340,17 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     "  body=$(python3 -c '",
     'import json, sys',
     'body = {"token": sys.argv[1], "step": sys.argv[2]}',
+    'if sys.argv[2] == "image":',
+    '    body["got"] = int(sys.argv[4] or 0)',
+    '    if sys.argv[5:] and sys.argv[5]:',
+    '        body["of"] = int(sys.argv[5])',
     'if sys.argv[2] == "failed":',
     '    try:',
     '        body["detail"] = open(sys.argv[3], errors="replace").read()[-2000:]',
     '    except OSError:',
     '        pass',
     'print(json.dumps(body))',
-    `' "$token" "$1" "$log" 2>/dev/null) || return 0`,
+    `' "$token" "$1" "$log" "\${2-}" "\${3-}" 2>/dev/null) || return 0`,
     '  if command -v curl >/dev/null 2>&1; then',
     `    curl -fsS -m 10 -A fleetwright-image -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1 ||`,
     `      { [ -n "$pinned" ] && curl -fsS -m 10 -A fleetwright-image --resolve "$pinned" -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1; } || true`,
@@ -357,6 +361,86 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     'urllib.request.urlopen(req, timeout=10).read()',
     `' "$origin" "$body" >/dev/null 2>&1 || true`,
     '  fi',
+    '}',
+    // THE SESSION IMAGE'S PULL, WATCHED FROM BESIDE IT. The installer pulls
+    // it inside `apt-get install fleetwright` (install.sh, 5b), and it is
+    // most of a build: one step said nothing for ten minutes and the phone's
+    // bar moved by the clock. This finds the `podman pull` among the VM's
+    // processes, asks the image's registry how big it is, and reports the
+    // bytes the VM has received since, every 15 seconds, until the pull is
+    // gone. Counted off the network, so nothing in the installer changes.
+    'procs=/proc',
+    'nets=/sys/class/net',
+    'every=15',
+    'received() {',
+    '  local n=0 f',
+    '  for f in "$nets"/*/statistics/rx_bytes; do',
+    '    [ "$f" = "$nets/lo/statistics/rx_bytes" ] && continue',
+    '    n=$(( n + $(cat "$f" 2>/dev/null || echo 0) ))',
+    '  done',
+    '  echo "$n"',
+    '}',
+    // The size the registry gives: the config and every layer of the
+    // manifest for this machine's architecture, as podman will fetch them.
+    // Anonymous, as the pull is; nothing printed when it cannot tell.
+    'image_size() {',
+    "  python3 - \"$1\" <<'PY'",
+    'import json, platform, re, sys, urllib.parse, urllib.request, urllib.error',
+    'host, _, rest = sys.argv[1].partition("/")',
+    'if "@" in rest:',
+    '    name, want = rest.split("@", 1)',
+    'elif ":" in rest.rsplit("/", 1)[-1]:',
+    '    name, want = rest.rsplit(":", 1)',
+    'else:',
+    '    name, want = rest, "latest"',
+    'kinds = ["application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"]',
+    'token = None',
+    'def get(ref):',
+    '    global token',
+    '    while True:',
+    '        h = {"Accept": ", ".join(kinds), "User-Agent": "fleetwright-image"}',
+    '        if token:',
+    '            h["Authorization"] = "Bearer " + token',
+    '        try:',
+    '            return json.load(urllib.request.urlopen(urllib.request.Request("https://%s/v2/%s/manifests/%s" % (host, name, ref), headers=h), timeout=10))',
+    '        except urllib.error.HTTPError as e:',
+    '            ask = e.headers.get("WWW-Authenticate", "")',
+    '            if e.code != 401 or token is not None or not ask.startswith("Bearer "):',
+    '                raise',
+    '            f = dict(re.findall(r\'(\\w+)="([^"]*)"\', ask))',
+    '            q = urllib.parse.urlencode({k: f[k] for k in ("service", "scope") if k in f})',
+    '            t = json.load(urllib.request.urlopen(f["realm"] + "?" + q, timeout=10))',
+    '            token = t.get("token") or t.get("access_token") or ""',
+    'm = get(want)',
+    'if "manifests" in m:',
+    '    arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), platform.machine())',
+    '    m = get(next(x["digest"] for x in m["manifests"] if x.get("platform", {}).get("architecture") == arch and x.get("platform", {}).get("os", "linux") == "linux"))',
+    'print(m["config"]["size"] + sum(l["size"] for l in m["layers"]))',
+    'PY',
+    '}',
+    'watch_pull() {',
+    '  set +e',
+    '  local f c image= pid= base= of= last=0',
+    '  while sleep 3; do',
+    '    if [ -z "$pid" ]; then',
+    '      for f in "$procs"/[0-9]*/cmdline; do',
+    "        c=$(tr '\\0' ' ' <\"$f\" 2>/dev/null) || continue",
+    '        case "$c" in "podman pull "*) read -r _ _ image _ <<<"$c"; pid=${f%/cmdline}; break ;; esac',
+    '      done',
+    '      [ -n "$pid" ] || continue',
+    '      base=$(received)',
+    '      of=$(image_size "$image" 2>/dev/null)',
+    '      [[ "$of" =~ ^[0-9]+$ ]] || of=',
+    '      report image 0 "$of"',
+    '      last=$SECONDS',
+    '    elif [ ! -e "$pid" ]; then',
+    '      report image $(( $(received) - base )) "$of"',
+    '      return 0',
+    '    elif (( SECONDS - last >= every )); then',
+    '      report image $(( $(received) - base )) "$of"',
+    '      last=$SECONDS',
+    '    fi',
+    '  done',
     '}',
     'steps() {',
     '  set -eo pipefail',
@@ -432,7 +516,12 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     // has already exited fails the step for nothing.
     `  debconf-set-selections <<<'fleetwright fleetwright/user string ${RUN_USER}'`,
     '  apt-get update',
+    // Stopped however this step ends: a pull it outlives is no pull at all.
+    '  watch_pull &',
+    '  watcher=$!',
+    `  trap 'kill "$watcher" 2>/dev/null || true' EXIT`,
     '  apt-get install -y fleetwright',
+    '  kill "$watcher" 2>/dev/null || true',
     '  test -x /opt/fleetwright/current/install/fleetwright-vm-join',
     '  report cleaning',
     // Started by each clone once it has enrolled, never by the image.
@@ -537,6 +626,12 @@ const mb = (n) => Math.round(n / 1024 ** 2);
 export const IMAGE_STAGES = 4;
 /** Thousandths of the bar the bytes take; the install has most of the rest. */
 const BYTES_SHARE = 450;
+/**
+ * The same, when the disk is a copy of one kept from an earlier build: that
+ * takes seconds, and at 450 a rebuild opened at 45% and spent its whole
+ * install, nearly all of its time, in the half of the bar that was left.
+ */
+const KEPT_SHARE = 50;
 const INSTALLED = 970;
 /** The qcow2 downloaded, then the raw disk written. @param {number} downloaded @param {number} written @param {any} [spec] */
 export function imageFill(downloaded, written, spec = DEBIAN_IMAGE) {
@@ -547,34 +642,67 @@ export function imageFill(downloaded, written, spec = DEBIAN_IMAGE) {
 /**
  * Where each step the build VM reports puts the install's share of the bar:
  * at least the first number, and time moves it no further than the second.
- * The session image is fetched inside `installer`, which is most of it.
+ * The session image's pull is most of it, and `image` is moved by its bytes
+ * when the VM could say how many there are to come.
  */
 const STEP_SHARE = Object.freeze({
-  started: [0.05, 0.1], packages: [0.1, 0.25], installer: [0.25, 0.9], cleaning: [0.9, 0.95], done: [0.95, 0.95], failed: [0, 0.95],
+  started: [0.05, 0.1], packages: [0.1, 0.2], installer: [0.2, 0.3], image: [0.3, 0.9], cleaning: [0.9, 0.95], done: [0.95, 0.95], failed: [0, 0.95],
 });
 
 /**
  * How far through the install: by the step the build VM last reported when
  * it has said one, and by time against what it usually takes when it has
- * not. Never quite done; the VM powering off is done.
+ * not; within the pull, by its bytes, when it said how many. Never quite
+ * done; the VM powering off is done. `head` is what the disk took of the bar.
  *
- * @param {number} elapsed @param {string|null} [step]
+ * @param {number} elapsed @param {string|null} [step] @param {number|null} [part]  0 to 1 of the pull
+ * @param {number} [head]
  */
-export function installFill(elapsed, step = null) {
+export function installFill(elapsed, step = null, part = null, head = BYTES_SHARE) {
   const [least, most] = step && Object.hasOwn(STEP_SHARE, step) ? STEP_SHARE[/** @type {keyof typeof STEP_SHARE} */ (step)] : [0, 0.95];
-  const share = Math.min(most, Math.max(least, elapsed / VM_IMAGE.installTypicalMs));
-  return BYTES_SHARE + Math.floor((INSTALLED - BYTES_SHARE) * share);
+  const share = part === null
+    ? Math.min(most, Math.max(least, elapsed / VM_IMAGE.installTypicalMs))
+    : least + (most - least) * Math.min(1, Math.max(0, part));
+  return head + Math.floor((INSTALLED - head) * share);
 }
 
 /** What the phone says the build VM is doing, for each step it reports. */
 const STEP_WORDS = Object.freeze({
   started: 'its VM is up and has started the install',
   packages: 'installing Debian’s packages',
-  installer: 'installing Fleetwright and fetching the session image',
+  installer: 'installing Fleetwright',
+  image: 'fetching the session image',
   cleaning: 'clearing what would make two machines cloned from it the same',
   done: 'the install is done and its VM is powering off',
   failed: 'the install failed',
 });
+
+/**
+ * How much of the session image is in, 0 to 1, when the build VM is pulling
+ * it and said how big it is; null otherwise. A count a little past the size
+ * is the network's own overhead, and is all of it.
+ *
+ * @param {{ step: string, got?: number, of?: number }|null} report
+ */
+function pullPart(report) {
+  return report?.step === 'image' && Number.isFinite(report.got) && Number(report.of) > 0 ? Math.min(1, Number(report.got) / Number(report.of)) : null;
+}
+
+/**
+ * The pull's bytes, for the phone's sentence: so many of so many, then that
+ * they are in and being unpacked, which rootless podman does layer by layer
+ * after it has them and which is not counted anywhere. Nothing before the
+ * VM has said a number.
+ *
+ * @param {{ step: string, got?: number, of?: number }|null} report
+ */
+function pulled(report) {
+  if (report?.step !== 'image' || !Number.isFinite(report.got)) return '';
+  const got = Number(report.got);
+  const part = pullPart(report);
+  if (part === null) return got > 0 ? `: ${mb(got)} MB received` : '';
+  return part >= 0.98 ? `: all ${mb(Number(report.of))} MB are in and being unpacked` : `: ${mb(got)} of ${mb(Number(report.of))} MB`;
+}
 
 /** How long a build VM with a token may say nothing before the phone says so. */
 const SILENT_MS = 5 * 60_000;
@@ -707,7 +835,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   reporter?: (() => Promise<string|null>)|null,
  *   addressesOf?: (host: string) => Promise<string[]>,
  *   getAgent?: (imageDir: string, signal?: AbortSignal) => Promise<Buffer>,
- *   vmReport?: () => ({ step: string, detail: string|null, at: number }|null),
+ *   vmReport?: () => ({ step: string, detail: string|null, got?: number, of?: number, at: number }|null),
  *   replace?: boolean,
  *   channel?: string|null,
  * }} opts
@@ -771,9 +899,10 @@ export async function ensureImage({
   /** @type {string|null} */
   let making = null;
   let keep = false;
+  const head = from ? KEPT_SHARE : BYTES_SHARE;
   try {
     if (from) {
-      say(`${os} is already on ${on}, kept from an earlier build, so the machine image starts from a copy of it.`, stage(2, imageFill(spec.compressedSize, spec.rawSize, spec)));
+      say(`${os} is already on ${on}, kept from an earlier build, so the machine image starts from a copy of it.`, stage(2, KEPT_SHARE));
     } else {
       say(`Downloading ${os} for the machine image.`, stage(1, 0));
       let downloaded = 0;
@@ -855,7 +984,7 @@ export async function ensureImage({
       signal?.throwIfAborted();
       noAgent = ` It goes without the Xen guest agent, so Xen Orchestra will not show its address: ${String(/** @type {any} */ (e)?.message || e).slice(0, 160)}.`;
     }
-    say(`Installing Fleetwright on the machine image, its disk on ${on}.${noAgent}`, stage(3, installFill(0)));
+    say(`Installing Fleetwright on the machine image, its disk on ${on}.${noAgent}`, stage(3, installFill(0, null, null, head)));
     // A COPY OF THE BASE'S DISK comes with the VM, as a session's machine
     // gets a copy of the image's.
     vm = await admin.call('vm.create', {
@@ -935,11 +1064,11 @@ export async function ensureImage({
         throw new Error(`the install on the machine image did not finish within ${Math.round(VM_IMAGE.installMs / 60_000)} minutes${last}. ${await giveUp('install timed out')}`);
       }
       const words = report
-        ? `${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}, ${minutes} min so far.`
+        ? `${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}${pulled(report)}, ${minutes} min so far.`
         : token && elapsed > SILENT_MS
           ? `${minutes} min so far, and its VM has not reported in. It may have no network, or its start-up script did not run.`
           : `${minutes} min so far, usually about ${Math.round(VM_IMAGE.installTypicalMs / 60_000)}.`;
-      say(`Installing Fleetwright on the machine image: ${words}`, stage(3, installFill(elapsed, report?.step ?? null)));
+      say(`Installing Fleetwright on the machine image: ${words}`, stage(3, installFill(elapsed, report?.step ?? null, pullPart(report), head)));
     }
 
     say(`Making the machine image a template on ${poolName}.`, stage(4, INSTALLED));
