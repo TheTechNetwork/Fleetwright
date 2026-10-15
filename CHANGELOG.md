@@ -40,6 +40,12 @@ can start on.**
   a start sent to any of them was refused.
 - **A machine with no Claude account says so once**, in plain words, rather
   than twice and with a placeholder in angle brackets.
+- **On Android, letting a pool's own machine in now needs the check itself,
+  not just its answer.** The secret that proves the machine is yours opens
+  only through the fingerprint, face or screen lock asked for it, so a
+  tampered app cannot open it after the phone was unlocked. A pool's own
+  machine made from an Android phone before this, and not yet let in, is
+  made again from the pool's policy.
 - **On Android, the edge routers' key is kept after a policy run.** It was
   dropped as soon as Apply was accepted, so the machines that hold the pool
   never got it and the Edge card had nothing to show. Run the policy once more
