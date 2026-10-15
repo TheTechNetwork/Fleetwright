@@ -1,8 +1,11 @@
 name: apt repository
 
-# THE APT REPOSITORY: stable releases whose rollout is complete, and nothing
-# else, at https://fleet-apt.thetech.network. docs/packaging.md, "Stable releases
-# through apt", says why apt only ever gets these.
+# THE APT REPOSITORY, at https://fleet-apt.thetech.network: the `stable` suite,
+# stable releases whose rollout is complete, which every box is installed from;
+# and the `rolling` suite, the newest builds of main, which only a machine image
+# built from main uses. docs/packaging.md, "Stable releases through apt", says
+# why stable only ever gets released versions, and "A rolling suite for machine
+# images" why the other exists at all.
 #
 # A CLOUDFLARE WORKER, NOT PAGES (apt/wrangler.toml). A deb is ~29 MB and both
 # Pages and Workers static assets cap a file at 25 MiB, so the Worker serves
@@ -44,11 +47,13 @@ concurrency:
 
 jobs:
   publish:
-    # A release's build that succeeded, or somebody asking. A merge to main
-    # also completes Host release, and changes nothing apt carries.
+    # A release's build that succeeded, a merge to main's (which republishes
+    # the rolling suite, and leaves stable as it was), or somebody asking.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success')
+      (github.event.workflow_run.conclusion == 'success' && (
+        github.event.workflow_run.event == 'release' ||
+        (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')))
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -104,6 +109,23 @@ jobs:
           done
           [ "$taken" -gt 0 ] || { echo "::error::no stable release is ready for apt"; exit 1; }
 
+      # THE ROLLING SUITE: whatever debs the rolling release holds, which is
+      # the newest build of main and the one before it (host-release.yml keeps
+      # both, so a box that read the last index can still fetch what it named).
+      # None is a notice and no rolling suite, never a failed stable publish.
+      - name: Collect the rolling build
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p rolling
+          gh release download rolling -D rolling -p '*.deb' 2>/dev/null || true
+          if ls rolling/*.deb >/dev/null 2>&1; then
+            ls -1 rolling
+          else
+            echo "::notice::the rolling release has no debs yet, so this publish has no rolling suite"
+          fi
+
       - name: Build and sign the repository
         if: steps.key.outputs.present == 'true'
         run: |
@@ -111,7 +133,7 @@ jobs:
           export GNUPGHOME="$(mktemp -d)"
           printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
           key="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')"
-          tools/build-apt-repo.sh debs apt/public "$key"
+          tools/build-apt-repo.sh debs apt/public "$key" rolling
           rm -rf "$GNUPGHOME"
           # Metadata only, by construction: a deb in the asset set would be
           # refused at 25 MiB; packages are streamed by the Worker instead.

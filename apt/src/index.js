@@ -27,6 +27,7 @@
 const POOL = /^\/pool\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(fleetwright_[0-9][A-Za-z0-9.+~]*_(?:amd64|arm64)\.deb)$/;
 
 const FRONT = `Fleetwright apt repository — stable releases whose rollout is complete.
+The rolling suite carries the newest builds of main, for machine images built from it.
 
   curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg \\
     | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
@@ -71,34 +72,45 @@ export async function handle(request, env, ctx = { waitUntil: () => {} }) {
     // An apt update, as near as the Worker can tell: every one fetches this.
     console.log(JSON.stringify({ event: 'update', ua: request.headers.get('user-agent') || '' }));
   }
-  if (asset.ok && url.pathname.startsWith('/dists/')) return dated(request, env, url.origin, asset);
+  const suite = SUITE.exec(url.pathname);
+  if (asset.ok && suite) return dated(request, env, url.origin, suite[1], asset);
   return asset;
 }
 
+/** A file under one suite's dists/, and which suite. */
+const SUITE = /^\/dists\/([a-z]+)\//;
+
 /**
- * When the repository was published, read from the signed Release's own Date,
- * once per isolate: the assets deploy with the code, so what InRelease says
- * cannot change under a running Worker.
+ * When a suite was published, read from its signed Release's own Date, once
+ * per isolate and suite: the assets deploy with the code, so what InRelease
+ * says cannot change under a running Worker.
  *
- * @type {WeakMap<object, Promise<Date|null>>}
+ * PER SUITE, because each has a Release of its own. A file under
+ * dists/rolling/ dated by stable's Release would carry a date that is not its
+ * own, and a box could be told "not modified" about an index that was.
+ *
+ * @type {WeakMap<object, Map<string, Promise<Date|null>>>}
  */
 const published = new WeakMap();
 
 /**
  * @param {Env} env
  * @param {string} origin
+ * @param {string} suite
  */
-function publishedAt(env, origin) {
-  let p = published.get(env.ASSETS);
+function publishedAt(env, origin, suite) {
+  let suites = published.get(env.ASSETS);
+  if (!suites) published.set(env.ASSETS, (suites = new Map()));
+  let p = suites.get(suite);
   if (!p) {
     p = (async () => {
-      const r = await env.ASSETS.fetch(new Request(`${origin}/dists/stable/InRelease`));
+      const r = await env.ASSETS.fetch(new Request(`${origin}/dists/${suite}/InRelease`));
       if (!r.ok) return null;
       const m = /^Date:\s*(.+)$/m.exec(await r.text());
       const d = m ? new Date(m[1].trim()) : null;
       return d && !Number.isNaN(d.getTime()) ? d : null;
     })();
-    published.set(env.ASSETS, p);
+    suites.set(suite, p);
   }
   return p;
 }
@@ -113,17 +125,18 @@ function publishedAt(env, origin) {
  * asking every fifteen minutes should cost the edge a 304 each, and a person
  * reading `apt update` should see the same word Debian's mirrors give.
  *
- * The date is the one in the signed Release file — the repository's own
- * account of when it was built — rounded to the second, which is all the
+ * The date is the one in the suite's signed Release file — the repository's
+ * own account of when it was built — rounded to the second, which is all the
  * header can carry. Assets keep their ETag; this adds the header apt uses.
  *
  * @param {Request} request
  * @param {Env} env
  * @param {string} origin
+ * @param {string} suite
  * @param {Response} asset
  */
-async function dated(request, env, origin, asset) {
-  const at = await publishedAt(env, origin);
+async function dated(request, env, origin, suite, asset) {
+  const at = await publishedAt(env, origin, suite);
   if (!at) return asset;
   const modified = Math.floor(at.getTime() / 1000) * 1000;
   const headers = new Headers(asset.headers);

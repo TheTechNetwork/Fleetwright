@@ -153,7 +153,7 @@ test('metadata carries the signed Release date, and a box that has it gets a 304
   assert.equal(fresh.status, 200);
   assert.equal(fresh.headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
   assert.equal(await fresh.text(), RELEASE);
-  // Every file under dists/ carries the same date: one build, one Release.
+  // Every file under the suite carries the same date: one suite, one Release.
   const pkgs = await w.get('/dists/stable/main/binary-arm64/Packages');
   assert.equal(pkgs.headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
   assert.equal(await pkgs.text(), 'pkgs');
@@ -174,6 +174,32 @@ test('metadata carries the signed Release date, and a box that has it gets a 304
   const head = await w.get('/dists/stable/InRelease', { method: 'HEAD' });
   assert.equal(head.headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
   assert.equal(await head.text(), '');
+});
+
+test('each suite is dated by its own Release, so a rolling index is never "not modified" by stable\'s date', async () => {
+  // The rolling suite is republished on every merge to main and stable only
+  // on a release. Dated by stable's Release, a box holding last week's rolling
+  // index would be told it had the current one.
+  const ROLLING = RELEASE.replace('Tue, 29 Sep 2026 04:16:25', 'Thu, 15 Oct 2026 01:00:00');
+  const w = world({ assets: {
+    '/dists/stable/InRelease': RELEASE,
+    '/dists/rolling/InRelease': ROLLING,
+    '/dists/rolling/main/binary-amd64/Packages': 'rolling pkgs',
+  } });
+  assert.equal((await w.get('/dists/stable/InRelease')).headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
+  const pkgs = await w.get('/dists/rolling/main/binary-amd64/Packages', { headers: { 'if-modified-since': 'Tue, 29 Sep 2026 04:16:25 GMT' } });
+  assert.equal(pkgs.status, 200, 'a rolling index newer than stable answered 304');
+  assert.equal(pkgs.headers.get('last-modified'), 'Thu, 15 Oct 2026 01:00:00 GMT');
+  assert.equal(await pkgs.text(), 'rolling pkgs');
+});
+
+test('a rolling package is fetched from the rolling release, under the name GitHub gave it', async () => {
+  // host-release.yml uploads 0.0.0~main.<run> as 0.0.0.main.<run>, because
+  // GitHub renames an asset with a `~`; the Packages file names what is there.
+  const w = world();
+  const r = await w.get('/pool/rolling/fleetwright_0.0.0.main.12_amd64.deb');
+  assert.equal(r.status, 200);
+  assert.deepEqual(w.fetched, ['https://github.com/TheTechNetwork/Fleetwright/releases/download/rolling/fleetwright_0.0.0.main.12_amd64.deb']);
 });
 
 test('no date in the Release, or no Release: the metadata is served as it is', async () => {

@@ -60,8 +60,10 @@ export function pinnedNodeVersion(text = readFileSync(path.join(DEB_SRC, 'node.e
  * main — that is what makes the pipeline one that has run before the day it
  * matters. `0.0.0~main.<run>` starts with a digit and sorts below every real
  * release, so a rolling deb somebody installs by hand is upgraded by the first
- * stable one. It is never in the apt repository: apt-repo.yml takes only
- * published, non-prerelease releases.
+ * stable one. It is never in the stable suite, which apt-repo.yml draws only
+ * from published, non-prerelease releases; it is in the rolling suite, which
+ * only a machine image built from main reads. Each `<run>` is higher than the
+ * last, so a box on that suite takes every build in turn.
  */
 export function debVersion(version) {
   const rolling = /^main-(\d+)$/.exec(String(version));
