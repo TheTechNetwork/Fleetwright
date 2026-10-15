@@ -362,6 +362,23 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(c.payload(in: inv)["grants"] as? [String: Bool], ["upgrades": false, "reboot": true])
     }
 
+    func testWhatAnImageIsBuiltFromStartsAsItWasAndIsSentOnlyToAMachineThatBuildsFromEither() throws {
+        // Asked for: "Or should we build a path for the images to use main/rolling?"
+        let inv = try inventory(inventoryJSON(images: #"[{"pool":"pool-1","name":"Fleetwright Debian 13","key":"debian-13","channel":"rolling"}]"#))
+        var c = XOPolicy.Choice.initial(for: inv)
+        XCTAssertEqual(c.imageChannel, "rolling", "a rebuild changes nothing nobody chose")
+        XCTAssertEqual(inv.imageChannel(on: "net-wan", key: "debian-13"), "rolling")
+        XCTAssertNil(c.payload(in: inv)["imageChannel"], "an older machine builds every image from releases")
+        c.imageChannelChoice = true
+        XCTAssertEqual(c.payload(in: inv)["imageChannel"] as? String, "rolling")
+        c.imageChannel = XOPolicy.channelStable
+        XCTAssertEqual(c.payload(in: inv)["imageChannel"] as? String, "stable")
+        // An image from a machine that predates saying was built from releases.
+        let older = try inventory(inventoryJSON(images: #"[{"pool":"pool-1","name":"Fleetwright Debian 13"}]"#))
+        XCTAssertEqual(XOPolicy.Choice.initial(for: older).imageChannel, "stable")
+        XCTAssertEqual(older.imageChannel(on: "net-wan", key: "debian-13"), "stable")
+    }
+
     func testEachLimitIsHeldToTheMachinesBounds() throws {
         let inv = try inventory()
         XCTAssertEqual(inv.cpuRange, 1...16)
