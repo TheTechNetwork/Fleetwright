@@ -469,7 +469,8 @@ test('GET /api/hosts describes the host and never the socket carrying it', async
     // `ephemeral` and `owner` are descriptions of the host — is it expected to
     // vanish, and whose runner is it — so they belong here. The pin exists to
     // catch the OTHER kind of addition: a socket, a server, a process handle.
-    ['connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'owner', 'reason', 'state'],
+    // `takesSessions` is the same: whether a start would reach it.
+    ['connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'owner', 'reason', 'state', 'takesSessions'],
     'the entry is a description of the host, not a window onto the process serving it',
   );
 
@@ -477,6 +478,23 @@ test('GET /api/hosts describes the host and never the socket carrying it', async
   for (const leak of ['_connectionKey', '_readableState', 'maxMessageBytes', 'httpAllowHalfOpen']) {
     assert.ok(!serialised.includes(leak), `/api/hosts leaked ${leak}`);
   }
+});
+
+test('the host list says which machines a start would reach, and which is a pool’s own', async () => {
+  // New session › Where offers exactly these (C-2): not one that is not
+  // reporting or degraded, not a pool's own machine.
+  const core = new CoordinatorCore({ registry: new HostRegistry() });
+  for (const [id, accounts] of [['deb13', 1], ['bare', 0], ['holder-e8309c', 0]]) {
+    core.registry.connect(id, () => {});
+    core.registry.recordHealth(id, health({ claudeAccounts: accounts }));
+  }
+  core.registry.connect('gone', () => {});
+  core.registry.disconnect('gone');
+  const hosts = Object.fromEntries(core.snapshot().hosts.map((h) => [h.hostId, h]));
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(hosts).map(([id, h]) => [id, [h.takesSessions, h.holder === true]])),
+    { deb13: [true, false], bare: [false, false], 'holder-e8309c': [false, true], gone: [false, false] },
+  );
 });
 
 test('an intent travels coordinator → websocket → sidecar → fleetwright and back', async (t) => {
