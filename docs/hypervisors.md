@@ -1122,10 +1122,20 @@ admin sign-in for as long as it runs:
 
   **It says where it has got to.** The box running the job asks the
   coordinator for a report token for it, and the script posts each step to
-  `/api/xosetup/report` with it: started, packages, installer (Fleetwright and
-  the session image, most of the time), cleaning, done. The coordinator passes
-  each step to the box, and the phone shows it in place of a guess against
-  time. A VM that has said nothing after five minutes is named as the likely
+  `/api/xosetup/report` with it: started, packages, installer (Fleetwright),
+  image (the session image's pull, most of the time), cleaning, done. The
+  coordinator passes each step to the box, and the phone shows it in place
+  of a guess against time. **The pull is counted in bytes.** It runs inside
+  `apt-get install fleetwright`, so the script watches it from beside that
+  one command: it finds the `podman pull` among the VM's processes, asks the
+  image's registry for its size (the layers for the VM's architecture,
+  anonymously, as the pull does), and reports the bytes the VM has received
+  since, every 15 seconds, until the pull is gone. The phone reads "fetching
+  the session image: 131 of 262 MB", then that all of it is in and being
+  unpacked, which rootless podman does after the download and which nothing
+  counts; the bar moves by those bytes. A rebuild that starts from a kept
+  disk spends seconds on the disk, so it gives the disk 5% of the bar and
+  the install the rest, where it used to open at 45%. A VM that has said nothing after five minutes is named as the likely
   problem: no network behind the edge router, or a start-up script that did
   not run. Its screen shows its address, its route and a name looked up
   first; a VM that cannot look up a name for half a minute stops there and

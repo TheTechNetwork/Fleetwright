@@ -437,14 +437,17 @@ machine of the fleet, through the coordinator.
   without a fleet credential, because its token is one: minted by the
   coordinator only for the box running that policy job (`image-reporter`),
   one live token per job and three per job at most, kept as a SHA-256 hash,
-  gone when the job ends or after an hour, and good for 24 reports. What it
-  admits is a word from a fixed list of steps, passed to that box and no
-  other; only a failure carries text, the end of the install log, stripped of
-  control and direction characters and cut to 2000. The token is written into
+  gone when the job ends or after an hour, and good for 140 reports (the
+  session image's pull every 15 seconds through the install's 25 minutes).
+  What it admits is a word from a fixed list of steps, passed to that box
+  and no other; only a failure carries text, the end of the install log,
+  stripped of control and direction characters and cut to 2000, and only the
+  pull carries numbers, two whole byte counts up to 64 GiB, dropped when
+  they are anything else. The token is written into
   the build VM's cloud-init drive, which the build deletes, and the script
   that holds it deletes itself and runs `cloud-init clean` before the VM
   becomes the template, so no clone carries it. Somebody who read the drive
-  while the build ran could report a step that is not true, or end the build
+  while the build ran could report a step or a count that is not true, or end the build
   early with a made-up failure, and nothing more. Every refusal is the same
   403.
 - **The pool's own machine is admitted by a pin** (`docs/hypervisors.md`,
