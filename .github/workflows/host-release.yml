@@ -453,7 +453,7 @@ jobs:
       # behind under /opt.
       - name: Install it on Debian, then remove it
         run: |
-          docker run --rm -v "$PWD:/w" -w /w debian:12 bash -euo pipefail -c '
+          docker run --rm -v "$PWD:/w" -w /w debian:13 bash -euo pipefail -c '
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
             apt-get install -y -qq --no-install-recommends ./dist/deb/fleetwright_*_amd64.deb > /tmp/install.log 2>&1 \
