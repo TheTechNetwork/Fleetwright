@@ -223,6 +223,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var fleetNote by remember { mutableStateOf("") }
     var keepingInFleet by remember { mutableStateOf(false) }
     var policyKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
+    // THE SAME KEY, KEPT PAST APPLY, for the one thing still sealed to it: the
+    // routers' key the job sends back once it is done (edge-credentials.js).
+    // Apply let go of policyKey with the pool, and the done job then had no
+    // key to open the routers' key with, so it was never kept on Android.
+    var watchKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
     var inventory by remember { mutableStateOf<XoPolicy.Inventory?>(null) }
     var choice by remember { mutableStateOf<XoPolicy.Choice?>(null) }
     // The machine sent the pool and it did not open here: the key went with
@@ -692,6 +697,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         pollGone = false
         jobKey = null
         policyKey = null
+        watchKey = null
         inventory = null
         choice = null
         unopened = false
@@ -739,8 +745,10 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
             val r = fleet.xosetup("policy", job = setup.job, sealed = sealed)
             if (r.ok) {
                 sentGrants = if (c.grantsChoice) c.machineUpdates to c.machineReboot else null
-                // Nothing left to open or choose: the key and the pool go.
+                // Nothing left to open or choose: the key and the pool go,
+                // but for the routers' key the done job seals back to it.
                 applied = true
+                watchKey = policyKey
                 policyKey = null
                 inventory = null
                 choice = null
@@ -792,12 +800,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 // THE ROUTERS' KEY, kept with the pool's token and in the
                 // fleet, so the machines holding the pool read the routers.
                 val watch = r.xosetup.watch
-                val key = policyKey
+                val key = watchKey
                 if (policy && r.xosetup.state == "done" && watch != null && key != null &&
                     XoHandoff.keepEdgeKey(settings, watch, id, address.trim(), key)
                 ) {
                     XoHandoff.keepInFleet(settings, fleet, address.trim())
                 }
+                if (r.xosetup.state == "done" || r.xosetup.state == "failed" || r.xosetup.state == "cancelled") watchKey = null
                 // WHAT ITS MACHINES MAY DO, kept with the pool's token and in
                 // the fleet once the job is done, so every machine made from
                 // the pool's record from now on is born with it.

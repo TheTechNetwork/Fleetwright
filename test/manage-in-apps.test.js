@@ -335,6 +335,15 @@ test('both phones keep the routers’ key a policy job seals back, beside the po
   assert.match(iosPolicy, /state\.state == "done", let sealed = state\.watch, let policyJob,\s*XOSetupHandoff\.keepEdgeKey\(sealed, job: job, address: policyJob\.address, key: policyJob\.reply\) \{\s*_ = await XOSetupHandoff\.keepInFleet/);
   const ktPolicy = bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/HypervisorSheet.kt'));
   assert.match(ktPolicy, /XoHandoff\.keepEdgeKey\(settings, watch, id, address\.trim\(\), key\)\s*\) \{\s*XoHandoff\.keepInFleet\(settings, fleet, address\.trim\(\)\)/);
+  // AND THE KEY IT OPENS WITH OUTLIVES APPLY. Apply let go of the key it read
+  // the pool with, the done job reached for that same key, found none, and the
+  // routers' key was never kept on Android. Whatever the done job reads, Apply
+  // must not clear it.
+  const doneKey = /val key = (\w+)\s*if \(policy && r\.xosetup\.state == "done"/.exec(ktPolicy)?.[1];
+  assert.ok(doneKey, 'the done job names the key it opens the routers’ key with');
+  const applied = /if \(r\.ok\) \{[^}]*?applied = true[^}]*\}/.exec(ktPolicy)?.[0] ?? '';
+  assert.ok(applied, 'Apply’s success branch');
+  assert.ok(!new RegExp(`\\b${doneKey} = null`).test(applied), `Apply clears ${doneKey}, which the done job needs`);
   // Kept under `edge` in the record, the name the box reads (xo-pools.js, edgeKey).
   assert.match(bare(read('apps/ios/Fleetwright/XOSetupHandoff.swift')), /record\["edge"\] = \["key": edgeKey, "secret": secret, "pin": pin, "routers": routers\]/);
   assert.match(bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/XoHandoff.kt')), /record\.put\("edge", JSONObject\(\)\.put\("key", edgeKey\)\.put\("secret", secret\)\.put\("pin", pin\)\.put\("routers", routers\)\)/);
