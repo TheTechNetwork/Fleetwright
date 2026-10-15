@@ -11,6 +11,34 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.10 — 2026-10-15
+
+**You choose on a pool's policy what the machines made there may do from the
+app, the pool's own machine stops being offered for sessions, and New session
+offers only machines a session can start on.**
+
+- **Machines made here, on the pool's policy.** Two switches: *Update their
+  system from the app* and *Reboot from the app*. Every machine made on the
+  pool from then on starts with those answers, the pool's own machine
+  included. One already running keeps what it has; on it, run
+  `sudo fleetwright grant upgrades on`, or `reboot on`. The machine image is
+  what applies the answers, so rebuild the pool's image after updating to
+  this release.
+- **The pool's own machine runs no sessions.** It was marked degraded for
+  having no Claude account, which nobody links there, and Wherever fits could
+  pick it. Now it is never picked, a start named at it is refused with the
+  reason, and Machines says what it is instead of a fault.
+- **New session › Where lists only machines a session can start on.** It
+  listed every enrolled machine, offline ones and the pool's own included, and
+  a start sent to any of them was refused.
+- **A machine with no Claude account says so once**, in plain words, rather
+  than twice and with a placeholder in angle brackets.
+- **On Android, the edge routers' key is kept after a policy run.** It was
+  dropped as soon as Apply was accepted, so the machines that hold the pool
+  never got it and the Edge card had nothing to show. Run the policy once more
+  to keep it.
+- **"It may use 2 storage repositories"**, not "repositorys".
+
 ## 0.4.9 — 2026-10-11
 
 **Applying the policy leaves the edge routers alone when nothing changed,
