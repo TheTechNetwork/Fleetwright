@@ -82,3 +82,8 @@ should be deleted with it.
   new test answers, the junk patterns, and what this repository keeps that
   looks like one. Adapted from openclaw's, under MIT, so unlike the antislop
   skills it is committed here.
+- [`.claude/skills/security-audit/SKILL.md`](.claude/skills/security-audit/SKILL.md) —
+  Cloudflare's security-audit skill, under MIT and committed for the same
+  reason: guidance for a focused security question, and a six-phase audit
+  with independent verification when one is asked for by name. Its
+  validators run with `node` alone.
