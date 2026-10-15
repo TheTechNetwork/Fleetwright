@@ -2342,6 +2342,12 @@ struct Fleet {
         let health: HostHealth?
         /// A runner: a machine somebody started for an hour, expected to vanish.
         var ephemeral: Bool?
+        /// Whether a new session from this person would reach it now, by the
+        /// rule placement uses (core.js, takesSessions). Nil from a coordinator
+        /// too old to say, and then a healthy machine is offered as before.
+        var takesSessions: Bool?
+        /// A pool's own machine: it holds the pool and runs no sessions.
+        var holder: Bool?
         var id: String { hostId }
 
         /// Is there anything of ours to apply? Asked once, so the version line

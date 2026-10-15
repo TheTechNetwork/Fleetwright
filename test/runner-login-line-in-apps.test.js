@@ -33,12 +33,13 @@ test('iOS: a runner row says what its sessions run on', () => {
   assert.match(IOS, /let runnerAuth: String\?/);
   assert.match(IOS, /var ephemeral: Bool\?/);
   // Both places a machine is described pass what the host said.
-  const passes = IOS.match(/describeWhoCanStart\(accounts, account: [^)]*runnerAuth: [^)]*runner: runner\)/g) ?? [];
+  const passes = IOS.match(/describeWhoCanStart\(accounts, account: [^)]*runnerAuth: [^)]*runner: runner[,)]/g) ?? [];
   assert.equal(passes.length, 2, 'the machine list and the machine page');
 });
 
 test('iOS: the attention colour and ring are for a machine nothing can start on', () => {
-  assert.match(IOS, /func whoCanStartIsFault\(_ accounts: Int, runnerAuth: String\?, runner: Bool\) -> Bool \{\s*guard accounts == 0 else \{ return false \}/);
+  // A pool's own machine is never the fault: test/holder-sessions-in-apps.test.js.
+  assert.match(IOS, /func whoCanStartIsFault\(_ accounts: Int, runnerAuth: String\?, runner: Bool, holder: Bool = false\) -> Bool \{\s*guard accounts == 0, !holder else \{ return false \}/);
   assert.match(IOS, /case "owner", "key": return false\s*case "none": return true\s*default: return !runner/);
   assert.match(IOS, /let unusable = whoCanStartIsFault\(/);
   assert.doesNotMatch(IOS, /\.foregroundStyle\(accounts == 0 \? Design\.Palette\.attention/);

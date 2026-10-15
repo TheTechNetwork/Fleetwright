@@ -1019,7 +1019,10 @@ private func describeBinned(_ item: Fleet.Binned) -> String {
 // NOT file-private: HostView renders the same sentence, and a second copy of
 // it is how two screens start describing one fact differently.
 func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?,
-                         runnerAuth: String? = nil, runner: Bool = false) -> String {
+                         runnerAuth: String? = nil, runner: Bool = false, holder: Bool = false) -> String {
+    // A POOL'S OWN MACHINE RUNS NO SESSIONS, so nobody's account on it is not
+    // a fault, and saying "sessions will not start" there was a false alarm.
+    if holder { return holderLine }
     // A RUNNER IS ASKED A DIFFERENT QUESTION. Nobody links an account on a
     // GitHub job; its sessions run on the login its owner keeps for runners or
     // on the runner repository's key, and the host says which. This line said
@@ -1048,6 +1051,17 @@ func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?,
         parts.append(org)
     }
     return parts.joined(separator: " · ")
+}
+
+/// What a pool's own machine is, in place of who can start sessions on it.
+/// The same words on both phones (test/holder-sessions-in-apps.test.js).
+let holderLine = "This pool’s own machine. It holds the pool for the fleet and runs no sessions."
+
+/// Whether the who-can-start line adds anything. A box degraded with nobody's
+/// account on it already says so in the fleet's reason above the line, and
+/// the line said it a second time in other words.
+func whoCanStartIsNews(_ accounts: Int, state: String?) -> Bool {
+    !(accounts == 0 && state == "degraded")
 }
 
 /// Where this person's machines come from, in one sentence. The same words
@@ -1158,8 +1172,8 @@ func describeRunning(_ host: Fleet.FleetHost) -> String {
 /// Whether that line is a fault: nobody can start a session here. A runner
 /// with its owner's login or its repository's key can, and one that has not
 /// heard back yet cannot be judged.
-func whoCanStartIsFault(_ accounts: Int, runnerAuth: String?, runner: Bool) -> Bool {
-    guard accounts == 0 else { return false }
+func whoCanStartIsFault(_ accounts: Int, runnerAuth: String?, runner: Bool, holder: Bool = false) -> Bool {
+    guard accounts == 0, !holder else { return false }
     switch runnerAuth {
     case "owner", "key": return false
     case "none": return true

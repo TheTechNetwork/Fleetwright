@@ -280,6 +280,7 @@ struct MachinesView: View {
                 ? "Its key was revoked. Readmit mints the pin that brings it back."
                 : "Not connected to the fleet. Reinstalled? Replace key mints the pin its new key needs."),
             enrolled: member,
+            initialHolder: reporting?.holder == true,
             onChange: { await loadHosts() },
         )
     }
@@ -345,12 +346,13 @@ struct MachinesView: View {
     private func healthLines(for host: Fleet.FleetHost) -> some View {
         // WHO CAN START A SESSION HERE, and as whom. Zero is the real fault and
         // the only thing worth colouring; nil is an older host and says nothing.
-        if let accounts = host.health?.claudeAccounts {
+        if let accounts = host.health?.claudeAccounts, whoCanStartIsNews(accounts, state: host.state) {
             let auth = host.health?.runnerAuth
             let runner = host.ephemeral == true
-            Text(describeWhoCanStart(accounts, account: host.health?.account, runnerAuth: auth, runner: runner))
+            let holder = host.holder == true
+            Text(describeWhoCanStart(accounts, account: host.health?.account, runnerAuth: auth, runner: runner, holder: holder))
                 .fleetType(.micro)
-                .foregroundStyle(whoCanStartIsFault(accounts, runnerAuth: auth, runner: runner)
+                .foregroundStyle(whoCanStartIsFault(accounts, runnerAuth: auth, runner: runner, holder: holder)
                                  ? Design.Palette.attention : Design.Palette.inkDim)
         }
         // THE SECOND WAY TO BE SIGNED OUT: the credential file a session is
@@ -380,7 +382,7 @@ struct MachinesView: View {
         let unwell = (host.state ?? "unknown") != "healthy"
         let waiting = host.updatePending
         let unusable = whoCanStartIsFault(host.health?.claudeAccounts ?? 1, runnerAuth: host.health?.runnerAuth,
-                                          runner: host.ephemeral == true)
+                                          runner: host.ephemeral == true, holder: host.holder == true)
         return unwell || waiting || unusable ? Design.Palette.attention.opacity(0.55) : Design.Palette.ring
     }
 

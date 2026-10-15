@@ -452,11 +452,19 @@ struct StartSheet: View {
             .background(Design.Palette.bg)
             .listRowBackground(Design.Palette.card)
             .task {
-                // The enrolled list, which the settings screen already uses.
+                // Only the machines a start would reach (C-2): not one that is
+                // offline, not one that is degraded, and never a pool's own
+                // machine, which runs no sessions. A start named at any of them
+                // is refused, and a picker that offers a refusal is the bug
+                // this replaced. Asked for: "Should the pool's own machine ever
+                // run sessions? No". A coordinator too old to say takesSessions
+                // leaves it nil, and then healthy is the rule placement used.
                 // Loaded here rather than passed in so the sheet works from
                 // every place that presents it, App Intents included.
                 let fleet = Fleet(settings: settings)
-                hosts = (try? await fleet.enrolledHosts().map(\.hostId)) ?? []
+                hosts = ((try? await fleet.fleetHosts()) ?? [])
+                    .filter { $0.holder != true && ($0.takesSessions ?? ($0.state == "healthy")) }
+                    .map(\.hostId)
                 // A THROW IS NOT AN EMPTY FLEET. Hosts too old to know the verb
                 // refuse it by name, and so does a coordinator that has not been
                 // updated — treating either as "no profiles" would quietly hide
