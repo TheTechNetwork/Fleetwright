@@ -216,6 +216,8 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     var canImageManage by remember { mutableStateOf(false) }
     // The machines it makes are born allowed what the person chose (`can` holds "machine-grants"); an older one leaves them the image's answers.
     var canMachineGrants by remember { mutableStateOf(false) }
+    // It builds an image from main as well as from releases (`can` holds "image-channel"); an older one builds from releases.
+    var canImageChannel by remember { mutableStateOf(false) }
     // What the machines may do, as Apply sent it, kept with the pool once the job is done.
     var sentGrants by remember { mutableStateOf<Pair<Boolean, Boolean>?>(null) }
     // What the fleet said when the token was kept there too, or what stood in
@@ -530,6 +532,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         canLabsEach = "labs-each" in p.setup.can
         canImageManage = "image-manage" in p.setup.can
         canMachineGrants = "machine-grants" in p.setup.can
+        canImageChannel = "image-channel" in p.setup.can
         policyKey = reply
         job = p.setup.job
         runningOn = r.hostId ?: p.hostId
@@ -840,6 +843,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             labsChoice = canLabs && opened.labMax != null,
                             labsEachChoice = canLabs && opened.labMax != null && canLabsEach,
                             grantsChoice = canMachineGrants,
+                            imageChannelChoice = canImages && opened.imageKinds != null && canImageChannel,
                         ).let { c ->
                             // Where they were left: the answers this phone kept for the pool, or the image's own.
                             XoHandoff.machineGrants(settings, address.trim())?.let { (upgrades, reboot) -> c.copy(machineUpdates = upgrades, machineReboot = reboot) } ?: c

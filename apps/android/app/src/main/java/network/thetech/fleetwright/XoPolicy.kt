@@ -160,6 +160,23 @@ internal object XoPolicy {
     const val MACHINE_GRANTS_FOOTER = "Each machine made on this pool from now on starts with these answers, the pool’s own machine included. " +
         "One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine."
 
+    /**
+     * What a machine image is built from: the apt suite it installs
+     * Fleetwright from, which every machine made from it then updates along
+     * (IMAGE_CHANNELS in vm-image.js). Asked for: "Or should we build a path
+     * for the images to use main/rolling?" The same words as iOS (XOPolicy.swift).
+     */
+    const val CHANNEL_STABLE = "stable"
+    const val CHANNEL_ROLLING = "rolling"
+    fun imageChannelLine(channel: String, anyThere: Boolean): String =
+        (if (channel == CHANNEL_ROLLING) {
+            "Fleetwright from the newest build of main. Machines made from the image update on every merge, to builds nobody released."
+        } else {
+            "Fleetwright from the newest release. Machines made from the image update to each release."
+        }) + (if (anyThere) " An image that is there keeps what it was built from until it is rebuilt." else "")
+    /** Beside an image that is there and was built from main. */
+    const val BUILT_FROM_MAIN = " It was built from main."
+
     /** The networks a person chooses among: the pool's, less its group networks, which are this policy's to make. */
     fun choosable(inv: Inventory): List<Network> = inv.networks.filterNot { it.name.startsWith(GROUP_PREFIX) || it.name.startsWith(LAB_PREFIX) }
 
@@ -199,9 +216,11 @@ internal object XoPolicy {
     /**
      * A pool's machine image: the template sessions' machines are cloned
      * from. [key] is which of the catalogue's it is; null from a machine that
-     * predates saying, which only ever built Debian.
+     * predates saying, which only ever built Debian. [channel] is which apt
+     * suite it was built from, `stable` or `rolling`; null from a machine that
+     * predates saying, which only built stable.
      */
-    data class Image(val pool: String?, val name: String, val key: String? = null)
+    data class Image(val pool: String?, val name: String, val key: String? = null, val channel: String? = null)
 
     /** One operating system an image can be made of. */
     data class ImageKind(val key: String, val os: String)
@@ -219,6 +238,12 @@ internal object XoPolicy {
     fun imagesToBuild(inv: Inventory, c: Choice): Set<String> {
         if (!c.imageChoice || !c.wantsImage) return emptySet()
         return (if (c.imagesChoice) c.images else setOf(DEBIAN_KEY)) - imageKeysOn(inv, c.egress)
+    }
+
+    /** Which suite the image of that kind on this network's pool was built from: stable for one that predates saying. */
+    fun imageChannelOn(inv: Inventory, network: String?, key: String): String {
+        val pool = inv.networks.firstOrNull { it.id == network }?.pool ?: return CHANNEL_STABLE
+        return inv.images?.firstOrNull { it.pool == pool && (it.key ?: DEBIAN_KEY) == key }?.channel ?: CHANNEL_STABLE
     }
 
     /** The machine image on the pool this network is in, if it has one. */
@@ -392,6 +417,14 @@ internal object XoPolicy {
         val machineReboot: Boolean = false,
         /** The machine applies them (`machine-grants` in begin's `can`). An older one leaves every machine the image's answers, so they are neither offered nor sent. */
         val grantsChoice: Boolean = false,
+        /**
+         * WHAT AN IMAGE BUILT OR REBUILT NOW IS BUILT FROM: released versions
+         * or the newest build of main. Starts from what the pool's image was
+         * built from, so Apply changes nothing nobody chose.
+         */
+        val imageChannel: String = CHANNEL_STABLE,
+        /** The machine builds from either (`image-channel` in begin's `can`). An older one builds every image from released versions, so the choice is neither offered nor sent. */
+        val imageChannelChoice: Boolean = false,
     ) {
         /** An image is asked for, in whichever form this machine reads. */
         val wantsImage: Boolean get() = if (imagesChoice) images.isNotEmpty() else image
@@ -494,7 +527,7 @@ internal object XoPolicy {
             },
             images = json.optJSONArray("images")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
-                    a.optJSONObject(i)?.let { m -> Image(text(m, "pool"), text(m, "name") ?: "Fleetwright Debian 13", text(m, "key")) }
+                    a.optJSONObject(i)?.let { m -> Image(text(m, "pool"), text(m, "name") ?: "Fleetwright Debian 13", text(m, "key"), text(m, "channel")) }
                 }
             },
             holders = json.optJSONArray("holders")?.let { a ->
@@ -557,6 +590,9 @@ internal object XoPolicy {
             edgeBlock = edgeOn(inv, egress)?.blocks ?: false,
             edgeHa = edgeOn(inv, egress)?.ha ?: false,
             holder = holderOn(inv, egress) != null,
+            // Built from what the image there was, so a rebuild changes nothing
+            // about where its machines take Fleetwright from unless asked.
+            imageChannel = imageOn(inv, egress)?.channel ?: CHANNEL_STABLE,
             // The labs the edge has: Apply rebuilds nothing nobody changed.
             labsOpen = edgeOn(inv, egress)?.labs?.open ?: 0,
             labsClosed = edgeOn(inv, egress)?.labs?.closed ?: 0,
@@ -685,6 +721,8 @@ internal object XoPolicy {
             }
             // Only to a machine that applies them.
             .apply { if (c.grantsChoice) put("grants", JSONObject().put("upgrades", c.machineUpdates).put("reboot", c.machineReboot)) }
+            // Only to a machine that builds from either.
+            .apply { if (c.imageChannelChoice) put("imageChannel", c.imageChannel) }
             // Only to a machine that makes them, and only with a way out.
             .apply { if (c.groupsChoice && c.egress != null) put("groups", c.groups) }
             // Only to a machine that makes them, and only where there is a router, there or asked for.

@@ -294,6 +294,22 @@ class XoPolicyTest {
     }
 
     @Test
+    fun whatAnImageIsBuiltFromStartsAsItWasAndIsSentOnlyToAMachineThatBuildsFromEither() {
+        // Asked for: "Or should we build a path for the images to use main/rolling?"
+        val inv = inventory(inventoryJson().put("images", JSONArray().put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Debian 13").put("key", "debian-13").put("channel", "rolling"))))
+        val c = XoPolicy.defaults(inv)
+        assertEquals("a rebuild changes nothing nobody chose", "rolling", c.imageChannel)
+        assertEquals("rolling", XoPolicy.imageChannelOn(inv, c.egress, "debian-13"))
+        assertFalse("an older machine builds every image from releases", XoPolicy.payload(inv, c).has("imageChannel"))
+        val offered = c.copy(imageChannelChoice = true)
+        assertEquals("rolling", XoPolicy.payload(inv, offered).getString("imageChannel"))
+        assertEquals("stable", XoPolicy.payload(inv, offered.copy(imageChannel = XoPolicy.CHANNEL_STABLE)).getString("imageChannel"))
+        // An image from a machine that predates saying was built from releases.
+        val older = inventory(inventoryJson().put("images", JSONArray().put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Debian 13"))))
+        assertEquals("stable", XoPolicy.defaults(older).imageChannel)
+    }
+
+    @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in
         // src/fleet/seal.js, and neither is setup's or the token's.
