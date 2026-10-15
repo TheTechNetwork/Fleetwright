@@ -60,7 +60,14 @@ import { fetchPinned, uploadDisk, srName } from './edge-router.js';
 import { qcow2Raw, qcow2Size } from './qcow2.js';
 import { IMAGE_REPORT_TOKEN_RE } from '../protocol/intents.js';
 
-/** Debian 13's cloud image, pinned. A newer build is a new entry here. */
+/**
+ * Debian 13's cloud image, pinned. KEPT CURRENT BY RENOVATE IN TWO HALVES:
+ * Renovate moves each image's `build` from its vendor's directory listing
+ * (renovate.json, customDatasources), and `node scripts/pin-images.mjs`
+ * writes the address, digest and sizes that build has, once it has soaked
+ * three days. Until it has run the build and the address disagree, and
+ * test/pin-images.test.js fails naming the command.
+ */
 export const DEBIAN_IMAGE = Object.freeze({
   key: 'debian-13',
   os: 'Debian 13',
@@ -69,6 +76,7 @@ export const DEBIAN_IMAGE = Object.freeze({
   label: 'Debian',
   algorithm: /** @type {'sha512'} */ ('sha512'),
   release: '13',
+  // renovate: datasource=custom.debian-cloud depName=trixie
   build: '20261001-2618',
   url: 'https://cloud.debian.org/images/cloud/trixie/20261001-2618/debian-13-genericcloud-amd64-20261001-2618.qcow2',
   /** As published in that build's SHA512SUMS, and as downloaded. */
@@ -90,6 +98,7 @@ export const UBUNTU_2404_IMAGE = Object.freeze({
   format: 'qcow2',
   label: 'Ubuntu',
   algorithm: /** @type {'sha256'} */ ('sha256'),
+  // renovate: datasource=custom.ubuntu-cloud depName=noble
   build: 'release-20260926',
   url: 'https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.img',
   /** As published in that release's SHA256SUMS, and as downloaded. */
@@ -105,6 +114,7 @@ export const UBUNTU_2604_IMAGE = Object.freeze({
   format: 'qcow2',
   label: 'Ubuntu',
   algorithm: /** @type {'sha256'} */ ('sha256'),
+  // renovate: datasource=custom.ubuntu-cloud depName=resolute
   build: 'release-20260927',
   url: 'https://cloud-images.ubuntu.com/releases/resolute/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img',
   sha256: '8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2',

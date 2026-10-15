@@ -204,6 +204,46 @@ job. Just know that rebuilding is what it does, and that the worker's tree may
 need the network even when the root's does not: a lockfile bump merged by a bot
 is a version nothing has ever fetched onto this machine.
 
+## Everything else that is downloaded, and what keeps it current
+
+> Ensure anything we download is in renovate following our renovate policies.
+> Debian images or anything.
+
+Every download is pinned, and every pin is Renovate's to move, under the same
+rules as the packages above: exact versions, three days of soak, and a
+security fix that does not wait. Where a version alone is not the whole pin
+(an image or a file checked against a digest), Renovate moves the version and
+a script writes the rest; until it has run, a test names it and CI is red.
+
+| What | Where | Renovate reads it with | The rest of the pin |
+|---|---|---|---|
+| Debian 13 and Ubuntu 24.04 / 26.04 cloud images | `DEBIAN_IMAGE`, `UBUNTU_*` in `src/fleet/host/vm-image.js` | each vendor's directory listing (`custom.debian-cloud`, `custom.ubuntu-cloud`) | `node scripts/pin-images.mjs`: address, digest from the vendor's own SHA256SUMS or SHA512SUMS, both sizes |
+| OPNsense nano image | `OPNSENSE_IMAGE` in `src/fleet/host/edge-router.js` | OPNsense's mirror listing (`custom.opnsense`) | a person: a new release is a new file system under the configuration (the pull request says what), and `checked` is set last |
+| Xen guest agent | `GUEST_AGENT` in `vm-image.js` | GitLab releases | `node scripts/pin-guest-agent.mjs` |
+| Xen Orchestra installer | `INSTALLER` in `src/fleet/host/xo-deploy.js` | git-refs, the fork's master | `node scripts/pin-xo-installer.mjs`: `base` and every file's SHA-256 |
+| Node bundled in the deb | `install/deb/node.env` | node-version, LTS lines | checked against nodejs.org's SHASUMS256.txt when the deb is built |
+| Node and the JDK in CI | `node-version:`, `java-version:` in `.github/workflows/` | node-version, java-version | none |
+| Images CI runs | `docker run … debian:<n>` in workflows, `FROM` in each Containerfile | docker | none; tags by number, never codename |
+| Claude Code, nvm, Renovate itself | annotated where they are written | npm, GitHub releases | none |
+| The sandbox's Node line | `ARG NODE_MAJOR` in `sandbox/Containerfile` | node-version, even majors only | none |
+| Sentry for iOS | `packages:` in `apps/ios/project.yml` | GitHub releases | none |
+| Gradle | the wrapper's properties | gradle-wrapper | `distributionSha256Sum`, which Renovate moves with it |
+
+**The soak, where a source has no dates.** A directory listing and git-refs
+carry no release dates, and Renovate holds an update with none back for good
+under `minimumReleaseAge`. Those few are proposed at once
+(`minimumReleaseAgeBehaviour: timestamp-optional`, matched to those datasources
+alone), and their pin scripts refuse a build or commit younger than three days,
+read from the vendor's own Last-Modified or the commit's date. So nothing
+reaches a machine sooner than anything else does.
+
+**Not pinned, on purpose.** Packages from a distribution's own repository (apt
+on the images and in the sandbox, apk in the egress proxy, Homebrew on the Mac
+runners) come signed from that distribution and are kept current by it; a pin
+would hold back its security updates. `compileSdk`, `minSdk` and the Android
+SDK platform and build-tools move by hand, for the reason the rule in
+`renovate.json` gives.
+
 ## What was deliberately NOT taken
 
 **A JOSE library for our own signing.** `src/fleet/crypto.js` calls

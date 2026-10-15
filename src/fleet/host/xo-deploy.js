@@ -96,9 +96,16 @@ import { splitAddress } from './xo-ws.js';
  * reads from it. `xo-remote-deploy.sh` looks for `xo-install.sh` beside itself
  * and copies its `plugins/` directory into the VM; the update plugin's test
  * directory is the one thing it leaves out, so it is not fetched.
+ *
+ * KEPT CURRENT BY RENOVATE IN TWO HALVES, like the guest agent: Renovate moves
+ * `commit` to the fork's master (renovate.json, git-refs), and
+ * `node scripts/pin-xo-installer.mjs` writes `base` and each file's SHA-256
+ * at that commit, once it is three days old. Until it has run, `base` names
+ * another commit and test/pin-xo-installer.test.js fails naming the command.
  */
 export const INSTALLER = Object.freeze({
   repository: '00o-sh/XenOrchestraInstallerUpdater',
+  // renovate: datasource=git-refs depName=https://github.com/00o-sh/XenOrchestraInstallerUpdater branch=master
   commit: '90562aaa111fe115f46a55fa491798e4ed2885bd',
   base: 'https://raw.githubusercontent.com/00o-sh/XenOrchestraInstallerUpdater/90562aaa111fe115f46a55fa491798e4ed2885bd/',
   files: Object.freeze({

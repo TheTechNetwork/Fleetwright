@@ -56,9 +56,20 @@ import { EDGE_WATCH, keptOn, watchConfig, watchOf } from './edge-credentials.js'
  * The image, pinned. A new OPNsense release is a new entry here, with the
  * offset found again in its image: nothing is worked out at run time that
  * could disagree with what was checked.
+ *
+ * RENOVATE NAMES THE RELEASE; A PERSON DOES THE REST. Renovate moves
+ * `release` from OPNsense's mirror listing (renovate.json). A new release is
+ * a new file system, so the address, digest and sizes, the configuration's
+ * offset, length and digest, and `grow` are all found again in its image
+ * (scripts/opnsense-room.mjs), and EDGE_FILTER's names are read again from its
+ * models. `checked` is the release that was done for, written last; until the
+ * address and `checked` both name `release`, test/pin-images.test.js fails.
  */
 export const OPNSENSE_IMAGE = Object.freeze({
+  // renovate: datasource=custom.opnsense depName=opnsense
   release: '26.7',
+  /** The release everything below was worked out against. */
+  checked: '26.7',
   url: 'https://pkg.opnsense.org/releases/mirror/OPNsense-26.7-nano-amd64.img.bz2',
   /** As published in OPNsense-26.7-checksums-amd64.sha256, and as downloaded. */
   sha256: '28d5e2f37e40d87468a924e3006ef10e2ddc6de485b85333d9e3958c84d0cb9d',
