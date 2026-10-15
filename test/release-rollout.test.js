@@ -188,6 +188,16 @@ test('the rolling channel is main, and it is published somewhere a host can poll
   // promise is that its contents are replaced.
   assert.match(job, /gh release delete-asset rolling/);
 
+  // AND THE DEBS, which the rolling apt suite is made of (apt-repo.yml). They
+  // are named the way GitHub keeps them, or the keep list would compare the
+  // name on disk with the renamed asset and delete what was just uploaded; and
+  // the previous build's pair stays, because a box may have read the index
+  // that names it a moment before the suite is republished.
+  assert.match(job, /needs: \[package, deb\]/, 'the rolling release has no deb to publish');
+  assert.match(job, /gh release upload rolling [^\n]*dist\/deb\/\*\.deb/);
+  assert.match(job, /tr '~' '\.'/, 'a `~` in a deb name goes to GitHub as it is');
+  assert.match(job, /keep="\$keep \$\{prev\}_amd64\.deb \$\{prev\}_arm64\.deb"/, 'the previous build is deleted as soon as the next uploads');
+
   // NOT A TAG CALLED `main`, which is what this shipped as for one afternoon.
   // A tag and a branch of the same name make every bare `main` ambiguous, and
   // git resolves refs/tags/ first — so `git checkout main` silently used the
@@ -244,4 +254,21 @@ test('a stable host pointed at main by hand is still refused', () => {
     decideRelease({ manifest: fromMain, installed: 'v1', protocol: 3, channel: 'rolling', hostKey: 'box' }).act,
     true,
   );
+});
+
+test('the rolling apt suite is republished on every merge to main, and stable is still releases only', () => {
+  // The machine image a pool's owner chose to build from main reads the
+  // rolling suite; nothing republished it, so it would stay at whatever the
+  // last release run left.
+  const yml = readFileSync(new URL('../.github/workflows/apt-repo.yml', import.meta.url), 'utf8');
+  assert.match(yml, /github\.event\.workflow_run\.event == 'push' && github\.event\.workflow_run\.head_branch == 'main'/);
+  assert.match(yml, /gh release download rolling -D rolling -p '\*\.deb'/);
+  assert.match(yml, /tools\/build-apt-repo\.sh debs apt\/public "\$key" rolling/);
+  // Stable is still drawn only from published, non-prerelease releases.
+  assert.match(yml, /gh release list --exclude-drafts --exclude-pre-releases/);
+  // And the builder keeps the two apart by suite: a box with both lines would
+  // take stable, since a build of main sorts below every release.
+  const builder = readFileSync(new URL('../tools/build-apt-repo.sh', import.meta.url), 'utf8');
+  assert.match(builder, /rolling\) echo "skipping \$dir: rolling is its own suite/);
+  assert.match(builder, /suite rolling "Fleetwright host, the newest builds of main" pool\/rolling/);
 });
