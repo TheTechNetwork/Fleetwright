@@ -237,6 +237,13 @@ alone), and their pin scripts refuse a build or commit younger than three days,
 read from the vendor's own Last-Modified or the commit's date. So nothing
 reaches a machine sooner than anything else does.
 
+**What changed, where a source has no notes.** Renovate's release notes come
+from a project's releases between two versions, and these sources have none to
+find. The installer's pull request links the diff between the two commits
+instead, which is what has to be read before a script run as root is pinned,
+and OPNsense's links that release series' notes from its own documentation. The
+cloud images publish nothing per build, so theirs links nothing.
+
 **Not pinned, on purpose.** Packages from a distribution's own repository (apt
 on the images and in the sandbox, apk in the egress proxy, Homebrew on the Mac
 runners) come signed from that distribution and are kept current by it; a pin
