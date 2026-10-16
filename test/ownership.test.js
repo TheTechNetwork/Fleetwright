@@ -40,6 +40,13 @@ function fleet() {
         { name: 'mine', title: 'my work', cwd: '/work/mine', createdBy: 'fleet:member@example.com' },
         { name: 'nobodys', title: 'from the CLI', cwd: '/work/x', createdBy: null },
       ],
+      // Forgotten sessions, as the sidecar reports them: whose they were
+      // travels so the coordinator can filter on it.
+      bin: [
+        { name: 'their-old', title: 'the admin’s old work', createdBy: 'fleet:admin@example.com', deletedAt: 1, expiresAt: 2 },
+        { name: 'my-old', title: 'my old work', createdBy: 'fleet:member@example.com', deletedAt: 1, expiresAt: 2 },
+        { name: 'nobodys-old', title: 'from the CLI', createdBy: null, deletedAt: 1, expiresAt: 2 },
+      ],
     },
   });
   return core;
@@ -60,6 +67,10 @@ test('a member’s fleet snapshot does not carry other people’s sessions', () 
   // An unattributed session belongs to the fleet, which is to say the admin —
   // erring open here would break the exact promise this exists for.
   assert.equal(seen.sessions.some((s) => s.name === 'nobodys'), false);
+
+  // THE BIN IS SOMEBODY'S TOO. It reached every member through the spread of
+  // the rest of the health frame: names, titles and who forgot them.
+  assert.deepEqual(seen.bin.map((b) => b.name), ['my-old']);
 });
 
 /**

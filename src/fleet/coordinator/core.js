@@ -5284,6 +5284,13 @@ function visibleHost(host, requester) {
       resumable: Array.isArray(host.health.resumable)
         ? host.health.resumable.filter((/** @type {any} */ n) => mine.has(n))
         : host.health.resumable,
+      // THE BIN IS SOMEBODY'S TOO: the names and titles of forgotten
+      // sessions and who forgot them. The sidecar sends `createdBy` so this
+      // could filter on it, and nothing did, so every member saw everyone's.
+      // The same rule as the live list, unattributed entries included.
+      ...(Array.isArray(host.health.bin)
+        ? { bin: host.health.bin.filter((/** @type {any} */ b) => ownedBy(b?.createdBy, requester)) }
+        : {}),
     },
   };
 }
