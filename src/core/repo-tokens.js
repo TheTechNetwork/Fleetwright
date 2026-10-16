@@ -28,7 +28,9 @@
 //  1. GitHub's own signature on the runner's job token, whose audience is a
 //     hash of this exact request (src/fleet/seal.js). Not the coordinator's
 //     word — the box checks it.
-//  2. The job is one of the four runner workflows, started by workflow_dispatch.
+//  2. The job is one of the four runner workflows, started by workflow_dispatch,
+//     in the starter's own repository or one owned by an account on the list
+//     below (runnerJobRepoProblem says why the job's repository matters).
 //  3. The repository's owner is on FLEETWRIGHT_GITHUB_MINT_OWNERS. The App is
 //     installable by any account, so "this key never mints into somebody else's
 //     account" is kept by what the fleet does rather than by what GitHub allows
@@ -185,6 +187,36 @@ export function runnerJobProblem(job) {
     return `That job runs ${job.workflowRef || 'an unknown workflow'}, which is not one of the runner workflows.`;
   }
   return null;
+}
+
+/**
+ * Did this runner job run where a runner repository legitimately is: a
+ * repository of the account that started it, or one owned by an account this
+ * minter mints into?
+ *
+ * Asked by every hand-out that gives a job's code something of the person's
+ * (a repository token, from the minting Worker or a minting box, and a Claude
+ * login), because that code is what receives it, and for a repository token it
+ * also chose the repository and the sealing key, through the audience it asked
+ * GitHub for. runnerJobProblem knows a runner by its file name in whatever
+ * repository the job ran in, so without this a `runner-linux.yml` in anybody's
+ * repository that the person could be got to dispatch would be served: the
+ * dispatch makes them the job's actor, and the actor's reach is what is handed
+ * out. Their own repository is known by account id, which a rename cannot move.
+ *
+ * ONE CHECK FOR ALL OF THEM, because the Claude hand-out had it and the
+ * repository token, which came first, did not.
+ *
+ * @param {{ repository: string, repositoryOwner: string, repositoryOwnerId: string, actor: string, actorId: string }} job
+ * @param {string[]} owners  the accounts this minter mints into
+ * @param {string} given  what is withheld, for the sentence: "a Claude login"
+ * @returns {string|null} why not, or null when it may
+ */
+export function runnerJobRepoProblem(job, owners, given) {
+  const ownRepo = job.repositoryOwnerId !== '' && job.repositoryOwnerId === job.actorId;
+  const fleetRepo = owners.some((o) => o.toLowerCase() === job.repositoryOwner.toLowerCase());
+  if (ownRepo || fleetRepo) return null;
+  return `That runner ran in ${job.repository}, which is neither ${job.actor}’s own nor one this fleet mints for, so it is not given ${given}.`;
 }
 
 /**

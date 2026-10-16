@@ -372,7 +372,8 @@ coordinator ─── adds whose runner this is, and relays the ask to
 the minting Worker — its own script, no public route, holding the App key
    │  checks GitHub's signature on the job token, and that its audience
    │    binds exactly this repo to exactly this key
-   │  checks it is a runner workflow, started by a dispatch
+   │  checks it is a runner workflow, started by a dispatch, in the
+   │    starter's own repository or one on FLEETWRIGHT_GITHUB_MINT_OWNERS
    │  checks acme is an account it may mint into
    │  asks GitHub, with a metadata-only probe token for acme/app: what can
    │    the account that started this job do here — by account id

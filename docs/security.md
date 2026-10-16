@@ -174,7 +174,13 @@ asks in ten minutes. What it cannot do is get a token it can use:
   that started the job can do** in that repository — asked by account id, by
   the minting Worker with a metadata-only probe token, or by a box with that
   person's own connection. Nothing the coordinator claims about the owner is
-  read.
+  read;
+- and the job must have run in **that account's own repository or one on
+  `FLEETWRIGHT_GITHUB_MINT_OWNERS`**, as the Claude hand-out below requires.
+  The job's code chose the repository and the key, so without this a
+  `runner-linux.yml` in a stranger's repository that the person was got to
+  dispatch would be minted their push on a fleet repository, sealed to a key
+  that stranger holds.
 
 To obtain such a job token it would need code of its choosing running inside a
 runner the person started. `provision` cannot express one — no workflow file,
