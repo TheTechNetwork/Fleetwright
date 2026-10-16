@@ -58,6 +58,19 @@ issued their own, and hosts never have it at all. Once sign-in is configured
 you may run without it — the trade is having no way back when sign-in itself
 is what broke.
 
+**A coordinator deployed before the rename holds its secrets twice.** Its
+first secrets were put as `AGENT_FLEET_*`, and CI has since put the same ones
+as `FLEETWRIGHT_*`. The Worker still reads the old names, for a deploy that
+has only those (`src/fleet/legacy-names.js`), and it reads an old name whenever
+the new one is missing or empty. So with both present, deleting or blanking
+`FLEETWRIGHT_API_TOKEN` does not leave the fleet without a break-glass token:
+it brings back the `AGENT_FLEET_API_TOKEN` it replaced, and blanking
+`FLEETWRIGHT_AUTH_ALLOW` brings back the old allowlist. A rotation put under
+the old name does nothing at all. `npx wrangler secret list` shows which names
+the Worker holds; once each old one has a new one beside it, delete the old one
+with `npx wrangler secret delete`, and the same in the repository's Actions
+secrets, which the deploy falls back to.
+
 ### The Deploy to Cloudflare button
 
 The product page carries one. It clones this repository into your own GitHub
@@ -203,7 +216,7 @@ fleetwright-sidecar enrol 123456
 ```
 
 The line appears only when this coordinator publishes an installer
-(`AGENT_FLEET_INSTALL_URL`); without one the app shows the two-step form.
+(`FLEETWRIGHT_INSTALL_URL`); without one the app shows the two-step form.
 
 #### Break-glass: minting a pin with the admin token
 
@@ -214,7 +227,7 @@ up there:
 
 ```sh
 curl -sX POST https://your-coordinator/api/enroll \
-     -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
+     -H "authorization: Bearer $FLEETWRIGHT_API_TOKEN" \
      -H 'content-type: application/json' -d '{"kind":"host"}'
 # {"ok":true,"code":"123456","install":"curl -fsSL https://your-coordinator/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh",…}
 ```
