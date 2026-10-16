@@ -11,12 +11,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { LIMITS, MAX_ITEMS, answerRelay, quiet } from '../src/fleet/relay/relay.js';
+import { IDLE, LIMITS, MAX_BODY, MAX_ITEMS, answerRelay, quiet } from '../src/fleet/relay/relay.js';
 import { fcmPusher } from '../src/fleet/push.js';
 import { openWith, toBase64Url } from '../src/fleet/push-crypto.js';
 
 const ORIGIN = 'https://fleet.test';
 
+/** Durable Object storage as the relay uses it, `list` included, keys in order. */
 function memory() {
   /** @type {Map<string, any>} */
   const rows = new Map();
@@ -25,6 +26,10 @@ function memory() {
     get: async (/** @type {string} */ k) => structuredClone(rows.get(k)),
     put: async (/** @type {string} */ k, /** @type {any} */ v) => void rows.set(k, structuredClone(v)),
     delete: async (/** @type {string} */ k) => void rows.delete(k),
+    list: async (/** @type {{ prefix: string, startAfter?: string, limit: number }} */ { prefix, startAfter, limit }) => new Map(
+      [...rows.keys()].filter((k) => k.startsWith(prefix) && (startAfter === undefined || k > startAfter)).sort().slice(0, limit)
+        .map((k) => [k, structuredClone(rows.get(k))]),
+    ),
   };
 }
 
@@ -47,14 +52,29 @@ async function keypair() {
   return { privateKey: pair.privateKey, publicKey: toBase64Url(raw) };
 }
 
-/** @param {any} deps @param {string} path @param {any} [body] @param {{ method?: string, auth?: string }} [opts] */
-async function call(deps, path, body, { method = 'POST', auth } = {}) {
+/** @param {any} deps @param {string} path @param {any} [body] @param {{ method?: string, auth?: string, cookie?: string }} [opts] */
+async function call(deps, path, body, { method = 'POST', auth, cookie } = {}) {
   const res = await answerRelay(new Request(`${ORIGIN}/relay/v1${path}`, {
     method,
-    headers: { 'content-type': 'application/json', ...(auth ? { authorization: `Bearer ${auth}` } : {}) },
+    headers: { 'content-type': 'application/json', ...(auth ? { authorization: `Bearer ${auth}` } : {}), ...(cookie ? { cookie } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }), deps);
   return { status: res.status, headers: res.headers, body: res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text() };
+}
+
+/**
+ * A sign-in started the way a browser starts one: the relay's page, then its
+ * button, posted from that page. The response, and the cookie it set.
+ *
+ * @param {any} deps @param {string} state @param {string} [origin]
+ */
+async function startSignIn(deps, state, origin = ORIGIN) {
+  const res = await answerRelay(new Request(`${ORIGIN}/relay/v1/github/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin },
+    body: new URLSearchParams({ state }).toString(),
+  }), deps);
+  return { res, cookie: res.headers.get('set-cookie')?.split(';')[0] ?? '' };
 }
 
 const wire = (/** @type {string} */ e) => ({ encrypted: true, title: 'Fleetwright', body: 'Something needs you. Open to see.', data: { e } });
@@ -144,6 +164,64 @@ test('registering is open and capped across everybody', async () => {
   assert.equal((await call(deps, '/fleets', {})).status, 429);
 });
 
+test('a body over the cap is refused having read no more than the cap, counted in bytes', async () => {
+  // Every POST is read before anybody is authorised, inside the one object
+  // every fleet shares, so a body read whole and measured afterwards is
+  // memory any stranger can spend there.
+  const store = memory();
+  const deps = { store, env: {}, pusher: recorder() };
+  const chunk = new Uint8Array(16 * 1024).fill(0x20);
+  /** 8 MiB that counts what was taken from it. @param {{ pulled: number }} seen */
+  const big = (seen) => new ReadableStream({
+    pull(c) {
+      if (seen.pulled >= 8 * 1024 * 1024) return c.close();
+      seen.pulled += chunk.byteLength;
+      c.enqueue(chunk);
+    },
+  });
+  const post = (/** @type {any} */ body, /** @type {Record<string, string>} */ headers = {}) =>
+    answerRelay(new Request(`${ORIGIN}/relay/v1/fleets`, { method: 'POST', headers, body, ...(body instanceof ReadableStream ? { duplex: 'half' } : {}) }), deps);
+  // No length declared: the reader stops at the cap, not at the end.
+  const chunked = { pulled: 0 };
+  assert.equal((await post(big(chunked))).status, 413);
+  assert.ok(chunked.pulled <= MAX_BODY + 2 * chunk.byteLength, `read ${chunked.pulled} bytes of a body over the cap`);
+  // A length over the cap is refused before anything is read.
+  const declared = { pulled: 0 };
+  assert.equal((await post(big(declared), { 'content-length': String(8 * 1024 * 1024) })).status, 413);
+  assert.ok(declared.pulled <= chunk.byteLength, `read ${declared.pulled} bytes of a body declared over the cap`);
+  // Bytes, not UTF-16 units: 30,000 three-byte characters is 90,000 bytes.
+  assert.equal((await post(JSON.stringify({ pad: '中'.repeat(30_000) }))).status, 413);
+  assert.equal(store.rows.size, 0, 'something was kept from a refused body');
+});
+
+test('a fleet row is small, and is not kept after its fleet stops using it or forgets itself', async () => {
+  const store = memory();
+  let now = Date.UTC(2026, 9, 7, 12, 0, 0);
+  const deps = { store, env: {}, pusher: recorder(), now: () => now };
+  const { publicKey } = await keypair();
+  // THE CALLBACK IS MEASURED AS KEPT: a path of non-ASCII characters is
+  // stored percent-encoded, nine bytes for every one that arrived.
+  const long = await call(deps, '/fleets', { callback: `https://c.example/${'中'.repeat(300)}`, key: publicKey });
+  assert.equal(long.status, 400, 'a callback of 2.7 KB was kept');
+  assert.ok(![...store.rows.keys()].some((k) => k.startsWith('f:')));
+
+  const item = { token: 't', platform: 'android', wire: wire('x') };
+  const idle = (await call(deps, '/fleets', {})).body;
+  const busy = (await call(deps, '/fleets', {})).body;
+  for (const f of [idle, busy]) assert.equal((await call(deps, '/push', { items: [item] }, { auth: `${f.fleet}.${f.secret}` })).status, 200);
+  // One keeps sending and one goes quiet, until the quiet one is past IDLE.
+  now += IDLE - 24 * 3600_000;
+  assert.equal((await call(deps, '/push', { items: [item] }, { auth: `${busy.fleet}.${busy.secret}` })).status, 200);
+  now += 2 * 24 * 3600_000;
+  const late = (await call(deps, '/fleets', {})).body;
+  assert.equal(store.rows.has(`f:${idle.fleet}`), false, 'a fleet idle past IDLE is still kept');
+  assert.equal(store.rows.has(`n:push:${idle.fleet}`), false, 'its counter outlived it');
+  assert.equal((await call(deps, '/push', { items: [item] }, { auth: `${busy.fleet}.${busy.secret}` })).status, 200, 'a fleet in use was forgotten');
+  // Forgetting itself takes its counters with it.
+  assert.equal((await call(deps, '/fleets/self', undefined, { method: 'DELETE', auth: `${busy.fleet}.${busy.secret}` })).status, 200);
+  assert.deepEqual([...store.rows.keys()].sort(), [`f:${late.fleet}`, 'n:register:all']);
+});
+
 test('a GitHub sign-in is exchanged here with the secret and goes back to its coordinator sealed, and nothing about it is kept', async () => {
   const store = memory();
   const { privateKey, publicKey } = await keypair();
@@ -155,7 +233,8 @@ test('a GitHub sign-in is exchanged here with the secret and goes back to its co
   });
   const deps = { store, env: { FLEETWRIGHT_GITHUB_CLIENT_ID: 'Iv-client', FLEETWRIGHT_GITHUB_CLIENT_SECRET: 'the-secret' }, pusher: recorder(), fetchImpl };
   const { fleet } = (await call(deps, '/fleets', { callback: 'https://their.coordinator/oauth/github/relayed', key: publicKey })).body;
-  const res = await call(deps, `/github/callback?code=c0de&state=${fleet}.inner-state-1`, undefined, { method: 'GET' });
+  const { cookie } = await startSignIn(deps, `${fleet}.inner-state-1`);
+  const res = await call(deps, `/github/callback?code=c0de&state=${fleet}.inner-state-1`, undefined, { method: 'GET', cookie });
   assert.equal(res.status, 303);
   const back = new URL(/** @type {string} */ (res.headers.get('location')));
   assert.equal(`${back.origin}${back.pathname}`, 'https://their.coordinator/oauth/github/relayed');
@@ -178,17 +257,73 @@ test('a sign-in that went wrong goes back in one word, and one that is not a fle
   const failing = /** @type {any} */ (async () => new Response('{"error":"bad_verification_code"}', { status: 200 }));
   const deps = { store: memory(), env: { FLEETWRIGHT_GITHUB_CLIENT_ID: 'Iv', FLEETWRIGHT_GITHUB_CLIENT_SECRET: 's' }, pusher: recorder(), fetchImpl: failing };
   const { fleet } = (await call(deps, '/fleets', { callback: 'https://c.example/back', key: publicKey })).body;
-  const errorOf = async (/** @type {string} */ q) => new URL(/** @type {string} */ ((await call(deps, `/github/callback?${q}`, undefined, { method: 'GET' })).headers.get('location'))).searchParams.get('error');
-  assert.equal(await errorOf(`state=${fleet}.state-one-1&error=access_denied&error_description=%3Cscript%3E`), 'denied');
-  assert.equal(await errorOf(`state=${fleet}.state-two-2&code=c`), 'exchange');
+  const errorOf = async (/** @type {string} */ state, /** @type {string} */ q) => {
+    const { cookie } = await startSignIn(deps, state);
+    const res = await call(deps, `/github/callback?state=${state}&${q}`, undefined, { method: 'GET', cookie });
+    return new URL(/** @type {string} */ (res.headers.get('location'))).searchParams.get('error');
+  };
+  assert.equal(await errorOf(`${fleet}.state-one-1`, 'error=access_denied&error_description=%3Cscript%3E'), 'denied');
+  assert.equal(await errorOf(`${fleet}.state-two-2`, 'code=c'), 'exchange');
   for (const state of ['nofleet', `${'A'.repeat(22)}.s3`, `${fleet}.`, `${fleet}.d.device-state`]) {
+    assert.equal((await startSignIn(deps, state)).res.status, 400, `a sign-in was started for ${state}`);
     const page = await call(deps, `/github/callback?code=c&state=${encodeURIComponent(state)}`, undefined, { method: 'GET' });
     assert.equal(page.status, 400, state);
-    assert.match(page.body, /did not come from a fleet this relay knows/);
+    assert.match(page.body, /cannot tell that this sign-in started here/);
   }
   // Both or neither: a callback with nowhere sealed to go is refused.
   assert.equal((await call(deps, '/fleets', { callback: 'https://c.example/back' })).status, 400);
   assert.equal((await call(deps, '/fleets', { callback: 'http://c.example/back', key: publicKey })).status, 400);
+});
+
+test('a sign-in reaches a fleet only when it was started on the relay’s page for that fleet, in the same browser', async () => {
+  // Registering is open, so a stranger can register a callback and key of
+  // their own and hand somebody a real github.com link naming that fleet.
+  // The App's consent screen says Fleetwright either way; what tells the
+  // person where the token goes is the relay's page, so a code reaches a
+  // fleet only through it.
+  const { publicKey } = await keypair();
+  /** @type {string[]} */
+  const exchanged = [];
+  const fetchImpl = /** @type {any} */ (async (/** @type {string} */ url, /** @type {any} */ init) => {
+    exchanged.push(new URLSearchParams(init.body).get('code') ?? '');
+    return new Response(JSON.stringify({ access_token: 'ghu_t', expires_in: 28800 }), { status: 200 });
+  });
+  const deps = { store: memory(), env: { FLEETWRIGHT_GITHUB_CLIENT_ID: 'Iv-client', FLEETWRIGHT_GITHUB_CLIENT_SECRET: 's' }, pusher: recorder(), fetchImpl };
+  const { fleet } = (await call(deps, '/fleets', { callback: 'https://their.coordinator/oauth/github/relayed', key: publicKey })).body;
+  const state = `${fleet}.inner-state-1`;
+
+  // A link straight to GitHub, never started here: no exchange, nowhere sent.
+  const direct = await call(deps, `/github/callback?code=victim-code&state=${state}`, undefined, { method: 'GET' });
+  assert.equal(direct.status, 400);
+  assert.equal(direct.headers.get('location'), null, 'sent on to the fleet’s callback');
+  assert.deepEqual(exchanged, [], 'a code was exchanged for a sign-in nobody started here');
+
+  // The page names where the token goes, before anything leaves for GitHub.
+  const shown = await call(deps, `/github/start?state=${state}`, undefined, { method: 'GET' });
+  assert.equal(shown.status, 200);
+  assert.match(shown.body, /their\.coordinator/);
+  assert.equal(shown.headers.get('set-cookie'), null, 'the page alone started a sign-in');
+  // Its button, posted from another site, starts nothing.
+  const forged = await startSignIn(deps, state, 'https://elsewhere.example');
+  assert.equal(forged.res.status, 403);
+  assert.equal(forged.cookie, '');
+  // Posted from the page: on to GitHub, with the relay's own client and callback.
+  const { res, cookie } = await startSignIn(deps, state);
+  assert.equal(res.status, 303);
+  const authorize = new URL(/** @type {string} */ (res.headers.get('location')));
+  assert.equal(`${authorize.origin}${authorize.pathname}`, 'https://github.com/login/oauth/authorize');
+  assert.equal(authorize.searchParams.get('client_id'), 'Iv-client');
+  assert.equal(authorize.searchParams.get('redirect_uri'), `${ORIGIN}/relay/v1/github/callback`);
+  assert.equal(authorize.searchParams.get('state'), state);
+  // That browser's cookie is for that sign-in and no other.
+  const other = await call(deps, `/github/callback?code=other-code&state=${fleet}.inner-state-2`, undefined, { method: 'GET', cookie });
+  assert.equal(other.status, 400);
+  assert.deepEqual(exchanged, []);
+  const back = await call(deps, `/github/callback?code=c0de&state=${state}`, undefined, { method: 'GET', cookie });
+  assert.equal(back.status, 303);
+  assert.ok(new URL(/** @type {string} */ (back.headers.get('location'))).searchParams.get('sealed'));
+  assert.deepEqual(exchanged, ['c0de']);
+  assert.match(/** @type {string} */ (back.headers.get('set-cookie')), /Max-Age=0/, 'the cookie outlived its sign-in');
 });
 
 test('the only words a provider’s answer leaves in the log are its status', () => {

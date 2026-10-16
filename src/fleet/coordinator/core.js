@@ -2212,9 +2212,10 @@ export class CoordinatorCore {
     // state, minted into its own store, so one callback cannot redeem the
     // other's flow.
     // THROUGH THE RELAY, for a coordinator with the App's id and not its
-    // secret: GitHub sends the person to the relay, which exchanges the code
-    // and sends them back here with the token sealed to this coordinator's
-    // key. No PKCE on this path, because the exchange is the relay's and the
+    // secret: the person starts on the relay's page, which names this
+    // coordinator, goes on to GitHub, and comes back through the relay, which
+    // exchanges the code and sends them here with the token sealed to this
+    // coordinator's key. No PKCE on this path, because the exchange is the relay's and the
     // verifier is the host's, and they never meet. The state is minted here
     // like any other, and redeemed once, here.
     const relayed = !this.githubApp?.clientSecret && this.githubApp?.clientId && this.oauthRelay;
@@ -2223,7 +2224,7 @@ export class CoordinatorCore {
       const codeChallenge = relayed ? null : challengeFrom('github');
       const clientId = /** @type {string} */ (this.githubApp?.clientId);
       const url = relayed
-        ? relayAuthorizeUrl({ clientId, relay: relayed.url, fleet: relayed.fleet, state })
+        ? relayAuthorizeUrl({ relay: relayed.url, fleet: relayed.fleet, state })
         : authorizeUrl({ clientId, origin, state, codeChallenge });
       if (url) {
         this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge), ...(relayed ? { relayed: true } : {}) });

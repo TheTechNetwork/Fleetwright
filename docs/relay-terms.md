@@ -133,11 +133,21 @@ land, the promise stops being a promise.
 One `redirect_uri` registered on our GitHub App. `state` names the coordinator
 the flow belongs to; the result goes there.
 
+A sign-in starts on the relay's own page, not at GitHub. Registering a fleet is
+open and every fleet shares our App, whose consent screen says Fleetwright
+whichever fleet the `state` names, so a github.com link naming a stranger's
+fleet would send the person's token to that stranger. The page names the
+coordinator the token will go to, and only its button, posted from that page,
+sends the person on to GitHub. It leaves a cookie in that browser holding a
+hash of the `state`, and the callback exchanges a code only when the cookie
+matches; anything else is refused before the code goes anywhere.
+
 ### What is shared
 
 The `state` and the `code` GitHub puts in the callback URL, plus the identifier
-of the coordinator to forward to. Nothing else — the person's browser arrives,
-is redirected, and leaves.
+of the coordinator to forward to, and the cookie the relay's page set in the
+same browser. Nothing else — the person's browser arrives, is redirected, and
+leaves.
 
 ### What is not shared
 
@@ -216,10 +226,15 @@ how a coordinator uses them.
   repository variable `FLEETWRIGHT_RELAY` is `1`, so a fork does not start
   delivering to our apps with credentials it copied.
 - **What it keeps** is one Durable Object's rows: per fleet, a hash of its
-  secret and, if it uses the OAuth relay, its callback and public key; per
-  window, a counter that is overwritten when the window turns. No person, no
-  email, nothing linked to anybody. `test/relay.test.js` reads the store after
-  a push and after a sign-in and finds nothing else.
+  secret, the day it was last used and, if it uses the OAuth relay, its
+  callback (at most 2 KiB) and public key; per window, a counter that is
+  overwritten when the window turns; and the last fleet the idle sweep looked
+  at. No person, no email, nothing linked to anybody. `test/relay.test.js`
+  reads the store after a push and after a sign-in and finds nothing else.
+- **A fleet unused for 180 days is forgotten**, with its counters, by a sweep
+  that each registration advances a page at a time, and a fleet that forgets
+  itself takes its counters with it. A coordinator whose fleet was forgotten
+  is refused with a 401 and registers again with `scripts/relay-register.mjs`.
 - **No log line carries a request.** The senders log a provider's answer, and
   an answer can quote what it was sent, so the relay gives them a logger that
   keeps the HTTP status and drops every other word. An error says the method
