@@ -554,3 +554,30 @@ test('a box changing its health reason every frame is announced once, and holds 
   assert.ok(seeded(f.core.events), 'a box’s health pushed the coordinator’s record out of the ring');
   assert.ok(seeded(state.raw.get('events') ?? []), 'and out of storage');
 });
+
+test('one member’s machines fill their own share of the fleet, not everybody’s', async () => {
+  // HostIdentities refused any new machine once 200 were live, and nothing
+  // bounded how many one person added: a member minting and spending pins one
+  // after another enrolled 200 permanent hosts, and every other enrolment in
+  // the fleet, runners and VMs included, answered 507 hosts_full until an admin
+  // revoked them one at a time (third Workers audit).
+  const { fleet: f } = fleet();
+  await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const { publicJwk } = await generateKeyPair();
+  const enrol = async (/** @type {string|null} */ actor, /** @type {string} */ hostId) => {
+    const { code } = /** @type {any} */ (f.core.enrollment.mint({ purpose: 'host', actor }));
+    return call(f, '/api/enroll/host', 'POST', { code, hostId, publicJwk });
+  };
+  let refused = null;
+  for (let i = 0; i < 40 && !refused; i++) {
+    const res = await enrol('mallory@example.test', `m-${i}`);
+    if (res.status !== 200) refused = { i, status: res.status, body: await res.json() };
+  }
+  assert.ok(refused, 'one member enrolled forty machines with nothing to stop them');
+  assert.equal(refused.status, 507);
+  assert.equal(refused.body.error.code, 'person_full');
+  assert.ok(refused.i >= 20, `refused after only ${refused.i}`);
+  assert.equal((await enrol('alice@example.test', 'alice-box')).status, 200, 'another member was refused for mallory’s machines');
+  // The operator's boxes are the fleet, not one person's share of it.
+  for (let i = 0; i < 40; i++) assert.equal((await enrol(i % 2 ? 'admin@example.test' : null, `op-${i}`)).status, 200, `the operator was refused their ${i + 1}th box`);
+});

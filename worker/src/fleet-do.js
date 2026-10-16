@@ -565,8 +565,9 @@ export class Fleet {
         // to `bad_request` would tell somebody their pin or their key was
         // malformed when what actually happened is that this fleet has no room
         // left, sending them to debug the one thing that was fine.
-        const full = 'code' in result && result.code === 'hosts_full';
-        return json({ ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error }, full ? 507 : 400);
+        // `hosts_full` is the fleet's room, `person_full` this person's share of it.
+        const full = 'code' in result ? result.code : null;
+        return json({ ok: false, error: { code: full ?? 'bad_request' }, text: result.error }, full ? 507 : 400);
       }
       // THE SESSION THEY ASKED FOR WITH IT, if any — started on this host's
       // first health frame, which is the first moment it can take one.
@@ -641,8 +642,8 @@ export class Fleet {
       });
       if (!result.ok) {
         // A full fleet is not a bad request — see the copy above.
-        const full = 'code' in result && result.code === 'hosts_full';
-        return json({ ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error }, full ? 507 : 400);
+        const full = 'code' in result ? result.code : null;
+        return json({ ok: false, error: { code: full ?? 'bad_request' }, text: result.error }, full ? 507 : 400);
       }
       await this.#saveHosts();
 

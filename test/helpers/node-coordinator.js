@@ -749,8 +749,9 @@ export class Coordinator {
         // to `bad_request` would tell somebody their pin or their key was
         // malformed when what actually happened is that this fleet has no room
         // left, sending them to debug the one thing that was fine.
-        const full = 'code' in result && result.code === 'hosts_full';
-        return json(res, full ? 507 : 400, { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error });
+        // `hosts_full` is the fleet's room, `person_full` this person's share of it.
+        const full = 'code' in result ? result.code : null;
+        return json(res, full ? 507 : 400, { ok: false, error: { code: full ?? 'bad_request' }, text: result.error });
       }
       // The session they asked for with it, started on its first health frame.
       if (ticket) this.core.noteRunnerEnrolled(result.host.hostId, ticket);
@@ -800,8 +801,8 @@ export class Coordinator {
         // to `bad_request` would tell somebody their pin or their key was
         // malformed when what actually happened is that this fleet has no room
         // left, sending them to debug the one thing that was fine.
-        const full = 'code' in result && result.code === 'hosts_full';
-        return json(res, full ? 507 : 400, { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error });
+        const full = 'code' in result ? result.code : null;
+        return json(res, full ? 507 : 400, { ok: false, error: { code: full ?? 'bad_request' }, text: result.error });
       }
       this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
 

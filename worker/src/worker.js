@@ -3146,7 +3146,7 @@ const OPENAPI = JSON.stringify({
             "description": "`already_joined`"
           },
           "507": {
-            "description": "`hosts_full`"
+            "description": "`hosts_full`, or `person_full` when the person already has as many machines as one may add"
           }
         }
       }
@@ -3481,7 +3481,7 @@ const OPENAPI = JSON.stringify({
             "description": "not a machine ticket, spent, or expired \u2014 `error.code` is `unclaimed`"
           },
           "507": {
-            "description": "the fleet has no room for another host \u2014 `hosts_full`"
+            "description": "the fleet has no room for another host \u2014 `hosts_full` \u2014 or its owner has as many machines as one person may add \u2014 `person_full`"
           }
         }
       }

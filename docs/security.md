@@ -1144,7 +1144,10 @@ Stated plainly, because omission is where a security document lies.
   and was fixed rather than accepted** (§9-G7): a global lockout let anyone who
   could reach the endpoint keep enrolment shut indefinitely without ever nearly
   guessing a code, so it is a bounded delay now — slow under attack, never
-  closed.
+  closed. Nor closed by one member filling it: the 200 live hosts a fleet can
+  store are shared out at 25 per person (`hosts.js`), the operator's boxes
+  not counted, so a member's own excess is refused with `person_full` and
+  everyone else's enrolment goes on.
 - **Traffic analysis / metadata.** The coordinator sees which member touched which
   host and when; that is not hidden.
 

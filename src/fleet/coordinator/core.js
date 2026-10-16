@@ -460,7 +460,8 @@ export class CoordinatorCore {
     this.mailer = mailer;
     // Which machines are in the fleet. The authority, unlike `registry` above,
     // which is a cache of what those machines say about themselves.
-    this.hostIds = new HostIdentities({ now });
+    // An operator's machines are not counted against anybody's share of it.
+    this.hostIds = new HostIdentities({ now, isAdmin: (email) => this.clients.emailHasAdmin(email) });
     // Codes that admit a new host or device, once.
     this.enrollment = new Enrollment({ now });
     /** @type {Map<string, { resolve: (reply: any) => void, timer: any }>} */
@@ -4072,8 +4073,8 @@ export class CoordinatorCore {
     }
     const result = await this.hostIds.enrol({ hostId, publicJwk: found.request.publicJwk, enrolledBy: `holder:${owner}` });
     if (!result.ok || !result.host) {
-      const full = 'code' in result && result.code === 'hosts_full';
-      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error } };
+      const full = 'code' in result ? result.code : null;
+      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ?? 'bad_request' }, text: result.error } };
     }
     this.holderJoins.joined(hostId);
     this.record({ event: 'host.enrolled', hostId, fingerprint: result.host.fingerprint });
@@ -5178,8 +5179,8 @@ export class CoordinatorCore {
       ephemeral: true,
     });
     if (!result.ok || !result.host) {
-      const full = 'code' in result && result.code === 'hosts_full';
-      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error } };
+      const full = 'code' in result ? result.code : null;
+      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ?? 'bad_request' }, text: result.error } };
     }
     this.noteRunnerEnrolled(hostId, ticket);
     if (this.vmStandby.isKept(hostId)) {
