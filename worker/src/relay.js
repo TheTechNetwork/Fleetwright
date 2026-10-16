@@ -10,7 +10,7 @@
 // object keeps rows in its own storage and nothing else does: no KV, no
 // analytics binding, no queue, and observability off in wrangler.relay.toml.
 
-import { RELAY_PREFIX, answerRelay } from '../../src/fleet/relay/relay.js';
+import { RELAY_PREFIX, answerRelay, readBytes, tooBig } from '../../src/fleet/relay/relay.js';
 
 export class RelayState {
   /** @param {any} state @param {Record<string, string|undefined>} env */
@@ -30,6 +30,8 @@ export class RelayState {
         delete: async (key) => {
           await storage.delete(key);
         },
+        // The idle sweep's page of fleets (relay.js, `sweep`), in key order.
+        list: (options) => storage.list(options),
       },
     });
   }
@@ -40,6 +42,18 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith(`${RELAY_PREFIX}/`)) return new Response('Not found', { status: 404 });
+    // THE BODY IS READ HERE, to the cap and no further, and only what fits is
+    // handed to the object. Streamed through instead, a body over the cap
+    // made the object answer 413 while this Worker was still pumping the rest
+    // into it, and under `wrangler dev` workerd threw "Can't read from request
+    // stream after response has been sent" here instead of passing it on.
+    // The object reads it bounded again (readBytes), which is what keeps a
+    // stranger's upload out of the memory every fleet shares either way.
+    if (request.body) {
+      const bytes = await readBytes(request);
+      if (bytes === undefined) return tooBig();
+      request = new Request(request, { body: bytes });
+    }
     const relay = env.RELAY.get(env.RELAY.idFromName('relay'));
     return relay.fetch(request);
   },

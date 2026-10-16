@@ -34,6 +34,10 @@ function memory() {
     get: async (/** @type {string} */ k) => structuredClone(rows.get(k)),
     put: async (/** @type {string} */ k, /** @type {any} */ v) => void rows.set(k, structuredClone(v)),
     delete: async (/** @type {string} */ k) => void rows.delete(k),
+    list: async (/** @type {{ prefix: string, startAfter?: string, limit: number }} */ { prefix, startAfter, limit }) => new Map(
+      [...rows.keys()].filter((k) => k.startsWith(prefix) && (startAfter === undefined || k > startAfter)).sort().slice(0, limit)
+        .map((k) => [k, structuredClone(rows.get(k))]),
+    ),
   };
 }
 
@@ -106,14 +110,28 @@ test('a GitHub sign-in goes out through the relay and comes back sealed to this 
   core.dispatch = async (/** @type {any} */ spec) => (dispatched.push(spec), { ok: true });
   const reply = { ok: true, connections: { catalogue: [{ provider: 'github', url: 'https://github.com/settings/tokens/new', codeChallenge: 'A'.repeat(43) }], connected: [] } };
   const offered = core.offerOauth(reply, 'box', 'eli@example.com', 'https://their.fleet');
-  const authorize = new URL(offered.connections.catalogue[0].url);
-  assert.equal(authorize.searchParams.get('redirect_uri'), 'https://relay.test/relay/v1/github/callback', 'not sent to the relay');
-  assert.equal(authorize.searchParams.get('code_challenge'), null, 'a challenge whose verifier no exchange here can use');
-  const [fleet, state] = /** @type {string} */ (authorize.searchParams.get('state')).split('.');
+  const start = new URL(offered.connections.catalogue[0].url);
+  assert.equal(`${start.origin}${start.pathname}`, 'https://relay.test/relay/v1/github/start', 'not sent to the relay’s page');
+  const [fleet, state] = /** @type {string} */ (start.searchParams.get('state')).split('.');
   assert.equal(fleet, registered.fleet);
 
+  // The relay's page names this coordinator, and its button sends the person
+  // on to GitHub with the relay's callback, in a browser that now holds the
+  // cookie the callback asks for.
+  assert.match(await (await relayCall(`/github/start${start.search}`, { method: 'GET' })).text(), /their\.fleet/);
+  const sent = await relayCall('/github/start', {
+    method: 'POST',
+    headers: { origin: 'https://relay.test', 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ state: `${fleet}.${state}` }).toString(),
+  });
+  const authorize = new URL(/** @type {string} */ (sent.headers.get('location')));
+  assert.equal(authorize.searchParams.get('client_id'), 'Iv-public');
+  assert.equal(authorize.searchParams.get('redirect_uri'), 'https://relay.test/relay/v1/github/callback', 'not sent to the relay');
+  assert.equal(authorize.searchParams.get('code_challenge'), null, 'a challenge whose verifier no exchange here can use');
+  const cookie = /** @type {string} */ (sent.headers.get('set-cookie')).split(';')[0];
+
   // GitHub sends the person to the relay, which sends them back here.
-  const back = new URL(/** @type {string} */ ((await relayCall(`/github/callback?code=c0de&state=${fleet}.${state}`, { method: 'GET' })).headers.get('location')));
+  const back = new URL(/** @type {string} */ ((await relayCall(`/github/callback?code=c0de&state=${fleet}.${state}`, { method: 'GET', headers: { cookie } })).headers.get('location')));
   assert.equal(back.searchParams.get('state'), state);
   const done = await core.finishRelayedGithubAuthorization({ state: back.searchParams.get('state'), sealed: back.searchParams.get('sealed'), error: back.searchParams.get('error') });
   assert.equal(done.ok, true, done.text);

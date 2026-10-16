@@ -55,7 +55,7 @@ export function scrubUrl(raw) {
 /**
  * Strip everything a request carried that could be a credential.
  *
- * Called on every event and every transaction. It edits in place because Sentry
+ * Called on every event. It edits in place because Sentry
  * hands over its own event object and expects it back.
  *
  * @param {any} event
@@ -85,6 +85,71 @@ export function scrubEvent(event) {
   return event;
 }
 
+/** Span attributes worth keeping, beside the SDK's own `sentry.*`. Everything else is dropped, named or not. */
+const KEEP_ATTRIBUTES = new Set([
+  'http.request.method',
+  'http.method',
+  'http.response.status_code',
+  'http.status_code',
+  'url.path',
+  'url.scheme',
+  'server.address',
+  'cloud.provider',
+]);
+
+/** The attributes that hold a whole URL, kept through scrubUrl. */
+const URL_ATTRIBUTES = new Set(['url.full', 'http.url', 'url']);
+
+/**
+ * Strip a span's attributes, because a span never passes scrubEvent.
+ *
+ * The request span carried the whole URL twice (`url.full`, `url.query`, so
+ * an OAuth callback's code, state and sealed token), every request header as
+ * `http.request.header.*`, the caller's address among them, and the user
+ * agent. So the same rule as the URL, an allowlist: the SDK's own `sentry.*`
+ * bookkeeping, the method, the status and where it happened, and nothing a
+ * later SDK decides to add.
+ *
+ * @param {any} attributes  edited in place
+ */
+function scrubAttributes(attributes) {
+  if (!attributes || typeof attributes !== 'object') return;
+  for (const key of Object.keys(attributes)) {
+    if (URL_ATTRIBUTES.has(key)) attributes[key] = scrubUrl(attributes[key]);
+    else if (key === 'url.path') attributes[key] = String(attributes[key]).replace(/fwk_[A-Za-z0-9_-]+/g, 'fwk_[redacted]');
+    else if (!key.startsWith('sentry.') && !KEEP_ATTRIBUTES.has(key)) delete attributes[key];
+  }
+}
+
+/**
+ * A streamed span, which goes out through beforeSendSpan and nothing else.
+ *
+ * @param {any} span  the SDK's span JSON, edited in place like an event
+ */
+export function scrubSpan(span) {
+  scrubAttributes(span?.attributes);
+  return span;
+}
+
+/**
+ * The same request span when it leaves as a transaction instead.
+ *
+ * STREAMING IS NOT A PROMISE. Under Node 26 the SDK loses its client by the
+ * time the request span ends, takes the transaction path it keeps for
+ * "static", and sends the span as a transaction event: the same attributes,
+ * in `contexts.trace.data` and each `spans[].data`, through
+ * beforeSendTransaction and not beforeSendSpan. Which path a span takes is
+ * the SDK's business; that both are scrubbed is this file's.
+ *
+ * @param {any} event
+ */
+export function scrubTransaction(event) {
+  scrubEvent(event);
+  scrubAttributes(event?.contexts?.trace?.data);
+  if (Array.isArray(event?.spans)) for (const span of event.spans) scrubAttributes(span?.data);
+  return event;
+}
+
 /**
  * The options, from the environment.
  *
@@ -106,15 +171,27 @@ export function sentryOptions(env) {
     tracesSampleRate: Number.isFinite(rate) ? rate : 0.05,
     sendDefaultPii: false,
     dataCollection: {
-      // The two the SDK turns on for you, both off here. See the top of this
-      // file for what a request body on this coordinator contains.
+      // Off here, all of what the SDK collects from a request. See the top
+      // of this file for what a request body on this coordinator contains;
+      // headers and the query are where its credentials travel.
       userInfo: false,
       httpBodies: [],
+      httpHeaders: false,
+      cookies: false,
+      urlQueryParams: false,
     },
+    // WRITTEN OUT, not inherited, so a change of the SDK's default cannot
+    // quietly move spans somewhere else. Both span hooks are wired anyway:
+    // see scrubTransaction for the runtime that sends transactions under
+    // "stream", and the SDK's warning that beforeSendTransaction is ignored
+    // there is true only of the path it meant to take.
+    traceLifecycle: 'stream',
     /** @param {any} event */
     beforeSend: (event) => scrubEvent(event),
+    /** @param {any} span */
+    beforeSendSpan: (span) => scrubSpan(span),
     /** @param {any} event */
-    beforeSendTransaction: (event) => scrubEvent(event),
+    beforeSendTransaction: (event) => scrubTransaction(event),
     /** @param {any} crumb */
     beforeBreadcrumb: (crumb) => {
       if (crumb?.data?.url) crumb.data.url = scrubUrl(crumb.data.url);

@@ -19,11 +19,13 @@
 //
 //   f:<fleet>     a fleet: a hash of its secret, and, if it uses the OAuth
 //                 relay, where its coordinator wants the person sent back and
-//                 the public key the token is sealed to. No person, no email,
-//                 no account: nothing here is linked to anybody.
+//                 the public key the token is sealed to, and the day it was
+//                 last used. No person, no email, no account: nothing here is
+//                 linked to anybody. Forgotten after IDLE unused.
 //   n:<scope>     a counter for the current window, which is overwritten when
 //                 the window turns. Never appended to, so it is not a log of
 //                 when anybody was notified.
+//   s:sweep       the last fleet the idle sweep looked at (`sweep` below).
 //
 // WHAT IS NEVER KEPT: a notification, a device token, an authorization code, a
 // token, a `state`. They arrive in a request and leave in a request, and the
@@ -59,8 +61,34 @@ export const LIMITS = Object.freeze({
   register: Object.freeze({ max: 100, window: 3600_000 }),
 });
 
-/** A request is a page of notifications. Anything bigger is not one. */
+/** A request is a page of notifications, in bytes. Anything bigger is not one. */
 export const MAX_BODY = 64 * 1024;
+
+/**
+ * A callback, in bytes as it is kept. Measured after the URL is serialised,
+ * because a path of non-ASCII characters is kept percent-encoded, nine bytes
+ * for each one that arrived, and a callback is somebody's coordinator, not a
+ * page of text.
+ */
+export const MAX_CALLBACK = 2048;
+
+/**
+ * A fleet nothing has used for this long is forgotten, counters and all.
+ * Registering is open and every row lives in the one object every fleet
+ * shares, so a row that never expires is storage any stranger can fill. A
+ * fleet in use is touched at most once a day; one forgotten registers again
+ * with scripts/relay-register.mjs.
+ */
+export const IDLE = 180 * 24 * 3600_000;
+const TOUCH_EVERY = 24 * 3600_000;
+
+/** Fleets the sweep looks at per registration: rows are only made there, so it keeps pace. */
+const SWEEP_PAGE = 25;
+
+/** The cookie that ties a sign-in to the browser that started it on the relay's page (`githubStart`). */
+const SIGN_IN_COOKIE = '__Host-fleetwright-relay';
+/** As long as the coordinator keeps its own state (oauth.js, STATE_TTL_MS). */
+const SIGN_IN_SECONDS = 600;
 
 /** Notifications in one request: a fleet has tens of phones, not thousands. */
 export const MAX_ITEMS = 100;
@@ -77,6 +105,8 @@ const INNER_STATE_RE = /^[A-Za-z0-9_-]{8,128}$/;
  * @property {(key: string) => Promise<any>} get
  * @property {(key: string, value: any) => Promise<void>} put
  * @property {(key: string) => Promise<void>} delete
+ * @property {(options: { prefix: string, startAfter?: string, limit: number }) => Promise<Map<string, any>>} list
+ *   in key order, as Durable Object storage lists
  */
 
 /**
@@ -99,15 +129,18 @@ export async function answerRelay(request, deps) {
   const url = new URL(request.url);
   const path = url.pathname.startsWith(RELAY_PREFIX) ? url.pathname.slice(RELAY_PREFIX.length) : null;
   try {
-    if (request.method === 'GET' && path === '/github/callback') return await githubCallback(url, deps);
+    if (request.method === 'GET' && path === '/github/callback') return await githubCallback(request, url, deps);
+    if (request.method === 'GET' && path === '/github/start') return await githubStartPage(url, deps);
     if (request.method !== 'POST' && request.method !== 'DELETE') return reply(405, { ok: false, text: 'Not a method this relay answers.' });
-    const body = await readBody(request);
-    if (body === undefined) return reply(413, { ok: false, text: `A request is at most ${MAX_BODY} bytes.` });
+    const text = await readText(request);
+    if (text === undefined) return tooBig();
+    if (request.method === 'POST' && path === '/github/start') return await githubStart(request, url, text, deps);
+    const body = parseJson(text);
     if (request.method === 'POST' && path === '/fleets') return await register(body, deps);
     const fleet = await authorise(request, deps);
     if (!fleet) return reply(401, { ok: false, text: 'That is not a fleet this relay knows, or not its secret.' });
     if (request.method === 'DELETE' && path === '/fleets/self') {
-      await deps.store.delete(`f:${fleet.id}`);
+      await forget(deps, fleet.id);
       return reply(200, { ok: true, text: 'This fleet is forgotten. Nothing about it is kept here any more.' });
     }
     if (request.method === 'POST' && path === '/fleets/self') return await update(fleet, body, deps);
@@ -133,10 +166,12 @@ async function register(body, deps) {
   if (limited) return limited;
   const fields = await oauthFields(body ?? {});
   if (typeof fields === 'string') return reply(400, { ok: false, text: fields });
+  const now = (deps.now ?? Date.now)();
+  await sweep(deps, now);
   const random = deps.random ?? ((/** @type {number} */ n) => crypto.getRandomValues(new Uint8Array(n)));
   const id = toBase64Url(random(16));
   const secret = toBase64Url(random(32));
-  await deps.store.put(`f:${id}`, { secret: await sha256(secret), ...fields, made: (deps.now ?? Date.now)() });
+  await deps.store.put(`f:${id}`, { secret: await sha256(secret), ...fields, made: now, used: now });
   return reply(201, {
     ok: true,
     fleet: id,
@@ -150,7 +185,7 @@ async function update(fleet, body, deps) {
   const fields = await oauthFields(body ?? {});
   if (typeof fields === 'string') return reply(400, { ok: false, text: fields });
   const { secret, made } = fleet.record;
-  await deps.store.put(`f:${fleet.id}`, { secret, made, ...fields });
+  await deps.store.put(`f:${fleet.id}`, { secret, made, used: (deps.now ?? Date.now)(), ...fields });
   return reply(200, { ok: true, text: fields.callback ? 'Changed. Sign-ins come back to the new address.' : 'Changed. This fleet uses the push relay only.' });
 }
 
@@ -174,6 +209,7 @@ async function oauthFields(body) {
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
     return 'The callback is an https address with no query, fragment or credentials.';
   }
+  if (new TextEncoder().encode(parsed.toString()).byteLength > MAX_CALLBACK) return `The callback is at most ${MAX_CALLBACK} bytes as an address.`;
   const checked = await checkPublicKey(key);
   if (!checked.ok) return `The key: ${checked.error}.`;
   return { callback: parsed.toString(), key };
@@ -192,7 +228,49 @@ async function authorise(request, deps) {
   if (!m || !FLEET_RE.test(m[1]) || !SECRET_RE.test(m[2])) return null;
   const record = await deps.store.get(`f:${m[1]}`);
   if (!record?.secret) return null;
-  return (await sha256(m[2])) === record.secret ? { id: m[1], record } : null;
+  return (await sha256(m[2])) === record.secret ? { id: m[1], record: await touch(deps, m[1], record) } : null;
+}
+
+/**
+ * A fleet, marked used today, so the sweep leaves it alone. At most one write
+ * a day, not one a request.
+ *
+ * @param {RelayDeps} deps @param {string} id @param {any} record
+ */
+async function touch(deps, id, record) {
+  const now = (deps.now ?? Date.now)();
+  if (now - (record.used ?? record.made ?? 0) < TOUCH_EVERY) return record;
+  const touched = { ...record, used: now };
+  await deps.store.put(`f:${id}`, touched);
+  return touched;
+}
+
+/** A fleet and its counters, gone. @param {RelayDeps} deps @param {string} id */
+async function forget(deps, id) {
+  await deps.store.delete(`f:${id}`);
+  for (const scope of /** @type {(keyof typeof LIMITS)[]} */ (['push', 'activity', 'oauth'])) await deps.store.delete(`n:${scope}:${id}`);
+}
+
+/**
+ * The next few fleets, and any of them unused for IDLE, forgotten. Run on
+ * every registration, the one place a row is made, and resumed from where
+ * the last one stopped, so the fleets kept never outgrow what a sweep at that
+ * pace keeps up with, and no request lists the whole store.
+ *
+ * @param {RelayDeps} deps @param {number} now
+ */
+async function sweep(deps, now) {
+  const after = await deps.store.get('s:sweep');
+  const page = await deps.store.list({ prefix: 'f:', ...(typeof after === 'string' ? { startAfter: after } : {}), limit: SWEEP_PAGE });
+  for (const [key, row] of page) {
+    if (now - (row?.used ?? row?.made ?? 0) > IDLE) await forget(deps, key.slice(2));
+  }
+  // A short page is the end of the fleets: the next sweep starts again.
+  if (page.size < SWEEP_PAGE) {
+    if (after !== undefined) await deps.store.delete('s:sweep');
+  } else {
+    await deps.store.put('s:sweep', [...page.keys()].at(-1));
+  }
 }
 
 /**
@@ -251,26 +329,104 @@ function isItem(i) {
 }
 
 /**
+ * The fleet a sign-in `state` names, if it is one that can be signed in to:
+ * `<fleet>.<the coordinator's own state>`, a fleet with a callback and a key.
+ *
+ * @param {string} state @param {RelayDeps} deps
+ * @returns {Promise<{ id: string, inner: string, record: any }|null>}
+ */
+async function signInFleet(state, deps) {
+  const dot = state.indexOf('.');
+  const id = dot > 0 ? state.slice(0, dot) : '';
+  const inner = dot > 0 ? state.slice(dot + 1) : '';
+  const record = FLEET_RE.test(id) && INNER_STATE_RE.test(inner) ? await deps.store.get(`f:${id}`) : null;
+  return record?.callback && record?.key ? { id, inner, record } : null;
+}
+
+/** The words for a sign-in this relay will not finish or start. One for every reason, so a stranger learns nothing from which. */
+const NOT_STARTED = 'This relay cannot tell that this sign-in started here, in this browser. Start again from the app.';
+
+/**
+ * WHERE A SIGN-IN STARTS, and the reason it starts here and not at GitHub.
+ * Registering is open, so anybody can register a fleet with a callback and a
+ * key of their own, and every fleet shares our App: its consent screen says
+ * Fleetwright whichever fleet the `state` names, and GitHub skips it for
+ * somebody who has said yes once. A github.com link naming a stranger's fleet
+ * would send that person's token to the stranger. So the coordinator sends a
+ * person here first (oauth.js, relayAuthorizeUrl), this page names the
+ * coordinator the token will go to, and only its button, posted from this
+ * page, sends them on to GitHub.
+ *
+ * @param {URL} url @param {RelayDeps} deps
+ */
+async function githubStartPage(url, deps) {
+  const state = url.searchParams.get('state') ?? '';
+  const flow = await signInFleet(state, deps);
+  if (!flow) return page(400, NOT_STARTED);
+  const host = new URL(flow.record.callback).host;
+  return html(200, `<p>You are connecting GitHub to the coordinator at <strong>${escape(host)}</strong>. The access GitHub grants is sent there and nowhere else.</p>`
+    + `<p>Continue only if ${escape(host)} is the coordinator you are setting up. If a link you did not ask for brought you here, close this page.</p>`
+    + `<form method="post" action="${RELAY_PREFIX}/github/start"><input type="hidden" name="state" value="${escape(state)}"><button type="submit">Continue to GitHub</button></form>`);
+}
+
+/**
+ * The button on that page. Posted from it, or from nowhere: a form on some
+ * other site that posts here would skip the page, so the Origin has to be
+ * the relay's own. The cookie it sets is what the callback asks for, so a
+ * code reaches a fleet only in the browser that saw that fleet named.
+ *
+ * @param {Request} request @param {URL} url @param {string} text @param {RelayDeps} deps
+ */
+async function githubStart(request, url, text, deps) {
+  if (request.headers.get('origin') !== url.origin) return page(403, NOT_STARTED);
+  const state = new URLSearchParams(text).get('state') ?? '';
+  const flow = await signInFleet(state, deps);
+  if (!flow) return page(400, NOT_STARTED);
+  const clientId = deps.env.FLEETWRIGHT_GITHUB_CLIENT_ID;
+  if (!clientId) return page(503, 'Signing in through this relay is not available right now. Nothing was sent to GitHub.');
+  const to = new URL('https://github.com/login/oauth/authorize');
+  to.searchParams.set('client_id', clientId);
+  to.searchParams.set('redirect_uri', `${url.origin}${RELAY_PREFIX}/github/callback`);
+  to.searchParams.set('state', state);
+  // A hash of the state, not the state: the browser holds the binding, and
+  // the relay still holds nothing (relay-terms.md, "What is written down").
+  // Lax, because GitHub sends the person back with a top-level GET.
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location: to.toString(),
+      'set-cookie': `${SIGN_IN_COOKIE}=${await sha256(state)}; Path=/; Max-Age=${SIGN_IN_SECONDS}; Secure; HttpOnly; SameSite=Lax`,
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer',
+    },
+  });
+}
+
+/**
  * GitHub, sending a person back. `state` is `<fleet>.<the coordinator's own
  * state>`: the fleet says where the result goes, and the rest is the
  * coordinator's to redeem, which it does once (oauth.js). The code is
  * exchanged here with the client secret, the answer sealed to the fleet's
  * key, and the person sent on with only ciphertext.
  *
+ * Only for a sign-in this browser started on the relay's page for that
+ * fleet (`githubStart`), checked before the code goes anywhere: a code that
+ * arrives any other way is refused, unexchanged, and nobody is sent on.
+ *
  * Nothing is kept: a replayed callback is refused by GitHub, which takes a
  * code once, and then by the coordinator, which takes a state once.
  *
- * @param {URL} url @param {RelayDeps} deps
+ * @param {Request} request @param {URL} url @param {RelayDeps} deps
  */
-async function githubCallback(url, deps) {
+async function githubCallback(request, url, deps) {
   const state = url.searchParams.get('state') ?? '';
-  const dot = state.indexOf('.');
-  const id = dot > 0 ? state.slice(0, dot) : '';
-  const inner = dot > 0 ? state.slice(dot + 1) : '';
-  const record = FLEET_RE.test(id) && INNER_STATE_RE.test(inner) ? await deps.store.get(`f:${id}`) : null;
+  const started = cookie(request, SIGN_IN_COOKIE);
+  const flow = started && started === (await sha256(state)) ? await signInFleet(state, deps) : null;
   // One page for every way of not being one of ours: telling a stranger
   // which it was is telling them whether a fleet exists.
-  if (!record?.callback || !record?.key) return page(400, 'That sign-in did not come from a fleet this relay knows. Start again from the app.');
+  if (!flow) return page(400, NOT_STARTED);
+  const { id, inner } = flow;
+  const record = await touch(deps, id, flow.record);
   const back = new URL(record.callback);
   back.searchParams.set('state', inner);
   const limited = await count(deps, 'oauth', id, LIMITS.oauth);
@@ -372,16 +528,71 @@ async function count(deps, scope, id, limit, n = 1) {
   return null;
 }
 
-/** The body, parsed, or null for none, or undefined for too big. @param {Request} request */
-async function readBody(request) {
-  const text = await request.text();
-  if (text.length > MAX_BODY) return undefined;
+/**
+ * The body's bytes, or undefined for more than MAX_BODY of them.
+ *
+ * READ NO FURTHER THAN THE CAP. This runs before anybody is authorised, in
+ * the one object every fleet shares, so a body read whole and measured
+ * afterwards is memory any stranger can spend there. A declared length over
+ * the cap is refused unread; anything else is read until it ends or passes
+ * the cap, and counted in bytes, not in UTF-16 units.
+ *
+ * @param {Request} request @returns {Promise<Uint8Array|undefined>}
+ */
+export async function readBytes(request) {
+  if (Number(request.headers.get('content-length')) > MAX_BODY) return undefined;
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  /** @type {Uint8Array[]} */
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY) {
+      await reader.cancel().catch(() => {});
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    bytes.set(c, at);
+    at += c.byteLength;
+  }
+  return bytes;
+}
+
+/** The body as text, or undefined for over the cap. @param {Request} request */
+async function readText(request) {
+  const bytes = await readBytes(request);
+  return bytes && new TextDecoder().decode(bytes);
+}
+
+/** The refusal for a body over MAX_BODY, here and in the Worker in front of this. */
+export function tooBig() {
+  return reply(413, { ok: false, text: `A request is at most ${MAX_BODY} bytes.` });
+}
+
+/** The body, parsed, or null for none or not JSON. @param {string} text */
+function parseJson(text) {
   if (!text) return null;
   try {
     return JSON.parse(text);
   } catch {
     return null;
   }
+}
+
+/** One cookie's value from the request, or null. @param {Request} request @param {string} name */
+function cookie(request, name) {
+  for (const part of (request.headers.get('cookie') ?? '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq > 0 && part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return null;
 }
 
 /** @param {string} value */
@@ -401,14 +612,43 @@ function redirect(back, params) {
   for (const [k, v] of Object.entries(params)) to.searchParams.set(k, v);
   // Referrer-Policy so the coordinator's page is not told the relay's URL
   // with the code still in it.
-  return new Response(null, { status: 303, headers: { location: to.toString(), 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+  // The sign-in is over either way, so its cookie goes with it.
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location: to.toString(),
+      'set-cookie': `${SIGN_IN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`,
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer',
+    },
+  });
+}
+
+/** @param {string} text */
+function escape(text) {
+  return text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
 }
 
 /** @param {number} status @param {string} text */
 function page(status, text) {
-  const safe = text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
-  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fleetwright</title><p>${safe}</p>`, {
+  return html(status, `<p>${escape(text)}</p>`);
+}
+
+/**
+ * Never in a frame: the sign-in page is a button somebody else's page could
+ * lay its own words over.
+ *
+ * @param {number} status @param {string} body  already escaped
+ */
+function html(status, body) {
+  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fleetwright</title>${body}`, {
     status,
-    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer',
+      'x-frame-options': 'DENY',
+      'content-security-policy': "frame-ancestors 'none'",
+    },
   });
 }

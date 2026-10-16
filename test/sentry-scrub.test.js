@@ -13,6 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 
 import { scrubUrl, scrubEvent, sentryOptions } from '../worker/src/sentry.js';
 
@@ -122,6 +123,60 @@ test('breadcrumbs are scrubbed too, because outbound calls carry the credential'
   const flat = JSON.stringify(event);
   assert.equal(flat.includes(CREDENTIAL), false);
   assert.equal(flat.includes('authorization'), false);
+});
+
+test('a request span leaves with no query value, header, address or user agent', async () => {
+  // THE REAL SDK, THE REAL WORKER. The request span carried the callback's
+  // code, state and sealed token in url.full and url.query, and every header,
+  // the caller's address among them, as span attributes, and neither way it
+  // leaves passes beforeSend: streamed, as a span (Node 24), or as a
+  // transaction when the SDK loses its client before the span ends (Node 26).
+  // CI runs both. So this sends sampled requests through the coordinator's
+  // own default export to a DSN on loopback and reads what arrives there.
+  const { default: worker } = await import('../worker/src/worker.js');
+  /** @type {string[]} */
+  const arrived = [];
+  const collector = createServer((req, res) => {
+    /** @type {Buffer[]} */
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => (arrived.push(Buffer.concat(chunks).toString()), res.end('{}')));
+  });
+  await new Promise((done) => collector.listen(0, '127.0.0.1', () => done(undefined)));
+  const { port } = /** @type {import('node:net').AddressInfo} */ (collector.address());
+  const env = {
+    FLEET: { idFromName: () => 'fleet', get: () => ({ fetch: async () => new Response('{}') }) },
+    FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch',
+    SENTRY_DSN: `http://publickey@127.0.0.1:${port}/1`,
+    SENTRY_TRACES_SAMPLE_RATE: '1',
+  };
+  const headers = { 'cf-connecting-ip': '203.0.113.7', 'user-agent': 'MARKER_UA', 'x-fleet-nonce': 'MARKER_NONCE', 'x-fleet-proof': 'MARKER_PROOF', cookie: 'MARKER_COOKIE=1' };
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const path of [
+      '/oauth/github/callback?code=MARKER_CODE&installation_id=1&setup_action=install',
+      '/oauth/github/relayed?state=MARKER_RSTATE&sealed=MARKER_SEALED',
+      '/oauth/cloudflare/callback?code=MARKER_CFCODE&state=MARKER_CFSTATE',
+      '/host/connect',
+    ]) {
+      /** @type {Promise<unknown>[]} */
+      const waits = [];
+      const ctx = { waitUntil: (/** @type {Promise<unknown>} */ p) => void waits.push(p), passThroughOnException() {} };
+      await (await worker.fetch(new Request(`https://fleet.example${path}`, { headers }), env, ctx)).text();
+      await Promise.allSettled(waits);
+    }
+  } finally {
+    console.warn = warn;
+    await new Promise((done) => collector.close(() => done(undefined)));
+  }
+  const sent = arrived.join('\n');
+  assert.match(sent, /"type":"(span|transaction)"/, 'no span arrived, so this proves nothing');
+  // Where it happened is kept: that is the whole diagnostic value.
+  assert.match(sent, /\/oauth\/github\/callback/);
+  for (const marker of ['MARKER_CODE', 'MARKER_RSTATE', 'MARKER_SEALED', 'MARKER_CFCODE', 'MARKER_CFSTATE', '203.0.113.7', 'MARKER_UA', 'MARKER_NONCE', 'MARKER_PROOF', 'MARKER_COOKIE']) {
+    assert.equal(sent.includes(marker), false, `${marker} reached Sentry`);
+  }
 });
 
 test('the iOS breadcrumb scrub removes headers rather than marking them', () => {
@@ -382,7 +437,8 @@ test('the data-collection switches are off, and the sample rate is not 1.0', () 
 
 test('the hooks are wired, not merely defined', () => {
   // scrubEvent could be perfect and never called. beforeSend and
-  // beforeSendTransaction are the only two places it runs.
+  // beforeSendTransaction are the only two places it runs; streamed spans
+  // have their own hook, proven against the real SDK above.
   const opts = sentryOptions({});
   const dirty = () => ({ request: { url: `https://fleet.example/?token=${CREDENTIAL}`, headers: { a: 'b' } } });
   for (const hook of ['beforeSend', 'beforeSendTransaction']) {

@@ -202,19 +202,21 @@ export function authorizeUrl({ clientId, origin, state, codeChallenge = null }) 
  * GitHub through the OAuth relay (src/fleet/relay/relay.js) because it has
  * the App's id and not its secret.
  *
- * The `redirect_uri` is the RELAY'S, which is on the App's registered list
- * where this coordinator's never will be, and the state is `<fleet>.<state>`:
- * the fleet tells the relay where to send the person back, and the rest is
- * this coordinator's own, redeemed once here.
+ * THE RELAY'S PAGE, NOT GITHUB'S. The relay names this coordinator to the
+ * person and then sends them to GitHub with its own client id and its own
+ * `redirect_uri`, which is on the App's registered list where this
+ * coordinator's never will be. It finishes only a sign-in started on that
+ * page, because registering a fleet is open and a github.com link naming a
+ * stranger's fleet would otherwise send somebody's token to the stranger.
+ * The state is `<fleet>.<state>`: the fleet tells the relay where to send the
+ * person back, and the rest is this coordinator's own, redeemed once here.
  *
- * @param {{ clientId: string, relay: string, fleet: string, state: string }} args
+ * @param {{ relay: string, fleet: string, state: string }} args
  */
-export function relayAuthorizeUrl({ clientId, relay, fleet, state }) {
+export function relayAuthorizeUrl({ relay, fleet, state }) {
   const base = normaliseOrigin(relay);
   if (!base) return null;
-  const url = new URL(/** @type {string} */ (GITHUB.authorization_endpoint));
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', `${base}/relay/v1/github/callback`);
+  const url = new URL(`${base}/relay/v1/github/start`);
   url.searchParams.set('state', `${fleet}.${state}`);
   return url.toString();
 }
