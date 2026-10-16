@@ -572,6 +572,8 @@ export class Fleet {
         event: 'host.enrolled',
         hostId: result.host.hostId,
         fingerprint: result.host.fingerprint,
+        // Whose runner, as the actor, so only they and an admin see it (see enrol.minted).
+        actor: claimedOwner,
         text:
           `a runner from ${job.repository} enrolled itself for ${claimedOwner}` +
           `${ticket ? ' (dispatched by this fleet)' : ''}`,
@@ -1112,7 +1114,11 @@ export class Fleet {
         ephemeral: Boolean(body?.ephemeral),
       });
       await this.#saveEnrollment();
-      this.core.record({ event: 'enrol.minted', hostId: null, text: `a ${kind} code was minted by ${actor || 'the admin token'}` });
+      // THE PERSON IS THE ACTOR, not only words in the text. visibleEvents
+      // shows a member every event with no actor and no session name, as fleet
+      // topology, so a minter named only in the text was shown to everyone,
+      // and kept in the ring long after the pin itself expired.
+      this.core.record({ event: 'enrol.minted', hostId: null, actor, text: `a ${kind} code was minted by ${actor || 'the admin token'}` });
       // THE ONE-LINER, when this coordinator can honour it: its /install shim
       // exists only with FLEETWRIGHT_INSTALL_URL set, and the address is the
       // configured public origin or, failing that, the one this request came
@@ -1141,7 +1147,7 @@ export class Fleet {
     }
 
     if (url.pathname === '/api/clients' && request.method === 'GET') {
-      return json({ ok: true, clients: this.core.clients.list() });
+      return json({ ok: true, clients: this.core.clientsFor(requesterFor(client)) });
     }
     if (url.pathname.startsWith('/api/clients/') && request.method === 'DELETE') {
       const id = url.pathname.slice('/api/clients/'.length);
@@ -1391,7 +1397,7 @@ export class Fleet {
     const nonce = request.headers.get('x-fleet-nonce') || '';
     const outcome = await this.core.hostIds.prove(hostId, proof, nonce);
     if (!outcome.ok) {
-      this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
+      this.core.recordRefusal(hostId, outcome.reason);
       // In the reason phrase as well as the body. A refused upgrade is read out
       // of a journal on the box, and some clients only surface the status line
       // — a bare "401 Unauthorized" throws away the one sentence that says
