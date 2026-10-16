@@ -581,3 +581,44 @@ test('one member’s machines fill their own share of the fleet, not everybody�
   // The operator's boxes are the fleet, not one person's share of it.
   for (let i = 0; i < 40; i++) assert.equal((await enrol(i % 2 ? 'admin@example.test' : null, `op-${i}`)).status, 200, `the operator was refused their ${i + 1}th box`);
 });
+
+test('a removed member’s pins go with them, and any pin listed can be cancelled after a restart', async () => {
+  // #forgetPerson took back a removed member's tickets and left their pins:
+  // for the rest of each pin's ten minutes they enrolled a new host in that
+  // person's name, re-keyed a host the pin was bound to and readmitted a
+  // revoked one. And nothing could cancel a pin, before a restart or after:
+  // the admin's DELETE answered 404 (third Workers audit).
+  const { fleet: f, state } = fleet();
+  const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const sam = await f.core.clients.issue('sam phone', { email: 'sam@example.test' });
+  const bob = await f.core.clients.issue('bob phone', { email: 'bob@example.test' });
+  const carol = await f.core.clients.issue('carol phone', { email: 'carol@example.test' });
+  const as = (/** @type {{ token: string }} */ who) => ({ authorization: `Bearer ${who.token}` });
+  const { publicJwk } = await generateKeyPair();
+  const op = /** @type {any} */ (f.core.enrollment.mint({ purpose: 'host', actor: 'admin@example.test' }));
+  assert.equal((await call(f, '/api/enroll/host', 'POST', { code: op.code, hostId: 'op-box', publicJwk })).status, 200);
+
+  const mint = async (/** @type {any} */ who, /** @type {any} */ body) => (await (await call(f, '/api/enroll', 'POST', { kind: 'host', ...body }, as(who))).json()).code;
+  const pins = [await mint(sam, {}), await mint(sam, { hostId: 'op-box' })];
+  assert.equal((await call(f, `/api/clients/${sam.client.id}`, 'DELETE', null, as(admin))).status, 200);
+  await new Promise((r) => setTimeout(r, 0));
+  for (const fleetNow of [f, new Fleet(/** @type {any} */ (state), {})]) {
+    await new Promise((r) => setTimeout(r, 0));
+    const fresh = (await generateKeyPair()).publicJwk;
+    assert.equal((await call(fleetNow, '/api/enroll/host', 'POST', { code: pins[0], hostId: 'sam-box', publicJwk: fresh })).status, 403, 'a removed member’s pin enrolled a host');
+    assert.equal((await call(fleetNow, '/api/enroll/host', 'POST', { code: pins[1], hostId: 'op-box', publicJwk: fresh })).status, 403, 'a removed member’s pin re-keyed a host');
+  }
+
+  // Cancelling: whoever minted the pin, or an admin, by the id the list shows.
+  const bobs = await mint(bob, {});
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  const listed = (await (await call(revived, '/api/enroll', 'GET', null, as(admin))).json()).codes;
+  assert.equal(listed.length, 1);
+  assert.equal((await call(revived, `/api/enroll/${listed[0].id}`, 'DELETE', null, as(carol))).status, 404, 'a member cancelled somebody else’s pin');
+  assert.equal((await call(revived, `/api/enroll/${listed[0].id}`, 'DELETE', null, as(admin))).status, 200, 'the admin could not cancel a listed pin after a restart');
+  assert.equal((await call(revived, '/api/enroll/host', 'POST', { code: bobs, hostId: 'bob-box', publicJwk })).status, 403, 'a cancelled pin still enrolled');
+  const again = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal((await (await call(again, '/api/enroll', 'GET', null, as(admin))).json()).codes.length, 0, 'the cancelled pin came back after a restart');
+});

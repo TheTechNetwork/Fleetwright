@@ -1883,6 +1883,23 @@ export class CoordinatorCore {
   }
 
   /**
+   * Withdraw a waiting pin, by the id pinsFor lists: any of them for an admin
+   * and the shared token, a member's own for a member, so a member cannot
+   * learn that a pin they were not shown exists by cancelling it.
+   *
+   * @param {string} id
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @returns {boolean}
+   */
+  cancelPin(id, requester) {
+    const mine = String(requester?.email || '').toLowerCase();
+    const gone = this.enrollment.cancel(String(id || ''), (p) => !requester || Boolean(requester.admin) || (Boolean(mine) && emailOf(p.actor) === mine));
+    if (!gone) return false;
+    this.record({ event: 'enrol.cancelled', actor: requester?.email ?? null, text: `a ${gone.purpose} pin was cancelled by ${requester?.email || 'the admin token'}` });
+    return true;
+  }
+
+  /**
    * Every enrolled host, to everybody: a phone approving a box for its
    * person's vault needs each host's name, fingerprint and key. Who added a
    * host and whose temporary host it is are emails, and a member is shown
@@ -1953,6 +1970,13 @@ export class CoordinatorCore {
    * temporary hosts are revoked, and their runner tokens, tickets and
    * waiting runner starts with them.
    *
+   * AND THEIR PINS, which admit machines exactly as tickets do. They were
+   * left, so for the rest of each pin's ten minutes a removed member could
+   * enrol a host in their own name, re-key one the pin was bound to and
+   * readmit one an admin had revoked, and nothing could cancel them (third
+   * Workers audit). Saved by onStateChanged, so a restart does not bring
+   * them back.
+   *
    * @param {string} address  lower case
    * @returns {string[]} the hosts revoked, for the caller to disconnect
    */
@@ -1984,6 +2008,12 @@ export class CoordinatorCore {
     for (const [hostId, p] of this.runnerStarts) {
       if (String(p.owner || '').toLowerCase() === address) {
         this.runnerStarts.delete(hostId);
+        changed = true;
+      }
+    }
+    for (const [code, p] of this.enrollment.pending) {
+      if (emailOf(p.actor) === address) {
+        this.enrollment.pending.delete(code);
         changed = true;
       }
     }

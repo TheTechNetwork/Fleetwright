@@ -172,6 +172,9 @@ export class Fleet {
         // Enrolled machines: a temporary one retired between two connects
         // was otherwise revoked only in memory (core.js ephemeralHostRetired).
         this.state.storage.put('hostIds', this.core.hostIds.serialise()),
+        // Pins, which a removed person's go with (core.js #forgetPerson) and
+        // which came back from storage after a restart until this was here.
+        this.state.storage.put('enrollment', this.core.enrollment.serialise()),
       ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
@@ -242,7 +245,9 @@ export class Fleet {
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
       this.core.restoreHolderJoins(await this.state.storage.get('holderJoins'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
-      this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
+      // Written straight back when a pin saved before pins had ids was given
+      // one, so the id a listing shows still cancels it after the next restart.
+      if (this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []))) await this.#saveEnrollment();
       // MCP clients that registered themselves. A Durable Object is evicted
       // between messages as a matter of course, so a registration held only
       // in memory is one that expires whenever traffic goes quiet — and the
@@ -1142,6 +1147,18 @@ export class Fleet {
 
     if (url.pathname === '/api/enroll' && request.method === 'GET') {
       return json({ ok: true, codes: this.core.pinsFor(requesterFor(client)) });
+    }
+
+    // Withdrawing one, by the id that list shows: the minter's own, or any for
+    // an admin (core.js cancelPin). Saved before answering, so a pin reported
+    // cancelled is not back after an eviction.
+    if (url.pathname.startsWith('/api/enroll/') && request.method === 'DELETE') {
+      const gone = this.core.cancelPin(decodeURIComponent(url.pathname.slice('/api/enroll/'.length)), requesterFor(client));
+      if (gone) await this.#saveEnrollment();
+      return json(
+        { ok: gone, text: gone ? 'Cancelled. That pin no longer works.' : 'No such pin waiting: it was used, it expired, or it is not yours.' },
+        gone ? 200 : 404,
+      );
     }
 
     // Which devices can reach this fleet, and dropping one.

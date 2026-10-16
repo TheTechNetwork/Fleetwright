@@ -84,6 +84,7 @@ const MAX_QUEUE_MS = 3 * PENALTY_MAX_MS;
 /**
  * @typedef {object} Pending
  * @property {string} code
+ * @property {string} id         names the pin in a listing, where the code is masked
  * @property {Purpose} purpose
  * @property {string} label      what this will be called once it exists
  * @property {string|null} actor who minted it
@@ -161,6 +162,7 @@ export class Enrollment {
     /** @type {Pending} */
     const entry = {
       code,
+      id: pinId(),
       // EPHEMERAL: this pin enrols a host that is expected to VANISH — a CI
       // runner, a throwaway VM. The property has to be decided when the pin is
       // minted rather than claimed by the host, because a host that could
@@ -255,9 +257,46 @@ export class Enrollment {
     return [...this.pending.values()];
   }
 
-  /** @param {Pending[]} entries */
+  /**
+   * @param {Pending[]} entries
+   * @returns {boolean} whether a pin saved before pins had ids was given one,
+   *   for the caller to write back so it is the same id after the next restart
+   */
   restore(entries) {
-    for (const e of entries || []) if (e?.code && e.expiresAt > this.now()) this.pending.set(e.code, e);
+    let named = false;
+    for (const e of entries || []) {
+      if (!e?.code || !(e.expiresAt > this.now())) continue;
+      if (!e.id) {
+        e.id = pinId();
+        named = true;
+      }
+      this.pending.set(e.code, e);
+    }
+    return named;
+  }
+
+  /**
+   * Withdraw a pin before it is spent, by the id a listing shows.
+   *
+   * Nothing could, and a pin admits a machine for ten minutes in the name of
+   * whoever minted it: a person who handed one to the wrong box, or an admin
+   * who had removed the person who minted it, could only wait (third Workers
+   * audit). By id rather than by code, because a listing masks the code and
+   * the admin cancelling it never saw it.
+   *
+   * @param {string} id
+   * @param {(p: Pending) => boolean} [mayCancel]  whether the caller may cancel this one
+   * @returns {Pending|null} the pin withdrawn
+   */
+  cancel(id, mayCancel = () => true) {
+    this.#sweep();
+    for (const [code, p] of this.pending) {
+      if (p.id === id && mayCancel(p)) {
+        this.pending.delete(code);
+        return p;
+      }
+    }
+    return null;
   }
 
   /** What is outstanding, for a person who wants to know what they left lying around. */
@@ -285,6 +324,11 @@ export class Enrollment {
     const now = this.now();
     for (const [code, entry] of this.pending) if (entry.expiresAt <= now) this.pending.delete(code);
   }
+}
+
+/** An opaque name for a pin, which reveals nothing of its code. */
+function pinId() {
+  return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
