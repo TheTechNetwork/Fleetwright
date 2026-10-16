@@ -126,12 +126,13 @@ test('breadcrumbs are scrubbed too, because outbound calls carry the credential'
 });
 
 test('a request span leaves with no query value, header, address or user agent', async () => {
-  // THE REAL SDK, THE REAL WORKER. Spans are streamed by default, and a
-  // streamed span never passes beforeSend: the request span carried the
-  // callback's code, state and sealed token in url.full and url.query, and
-  // every header, the caller's address among them, as span attributes. So
-  // this sends sampled requests through the coordinator's own default export
-  // to a DSN on loopback and reads what arrives there.
+  // THE REAL SDK, THE REAL WORKER. The request span carried the callback's
+  // code, state and sealed token in url.full and url.query, and every header,
+  // the caller's address among them, as span attributes, and neither way it
+  // leaves passes beforeSend: streamed, as a span (Node 24), or as a
+  // transaction when the SDK loses its client before the span ends (Node 26).
+  // CI runs both. So this sends sampled requests through the coordinator's
+  // own default export to a DSN on loopback and reads what arrives there.
   const { default: worker } = await import('../worker/src/worker.js');
   /** @type {string[]} */
   const arrived = [];
@@ -170,7 +171,7 @@ test('a request span leaves with no query value, header, address or user agent',
     await new Promise((done) => collector.close(() => done(undefined)));
   }
   const sent = arrived.join('\n');
-  assert.match(sent, /"type":"span"/, 'no span arrived, so this proves nothing');
+  assert.match(sent, /"type":"(span|transaction)"/, 'no span arrived, so this proves nothing');
   // Where it happened is kept: that is the whole diagnostic value.
   assert.match(sent, /\/oauth\/github\/callback/);
   for (const marker of ['MARKER_CODE', 'MARKER_RSTATE', 'MARKER_SEALED', 'MARKER_CFCODE', 'MARKER_CFSTATE', '203.0.113.7', 'MARKER_UA', 'MARKER_NONCE', 'MARKER_PROOF', 'MARKER_COOKIE']) {
@@ -435,12 +436,16 @@ test('the data-collection switches are off, and the sample rate is not 1.0', () 
 });
 
 test('the hooks are wired, not merely defined', () => {
-  // scrubEvent could be perfect and never called. beforeSend is the one place
-  // it runs; spans have their own hook, proven against the real SDK above.
+  // scrubEvent could be perfect and never called. beforeSend and
+  // beforeSendTransaction are the only two places it runs; streamed spans
+  // have their own hook, proven against the real SDK above.
   const opts = sentryOptions({});
-  const out = JSON.stringify(opts.beforeSend({ request: { url: `https://fleet.example/?token=${CREDENTIAL}`, headers: { a: 'b' } } }));
-  assert.equal(out.includes(CREDENTIAL), false, 'beforeSend did not scrub');
-  assert.equal(out.includes('headers'), false, 'beforeSend kept headers');
+  const dirty = () => ({ request: { url: `https://fleet.example/?token=${CREDENTIAL}`, headers: { a: 'b' } } });
+  for (const hook of ['beforeSend', 'beforeSendTransaction']) {
+    const out = JSON.stringify(opts[hook](dirty()));
+    assert.equal(out.includes(CREDENTIAL), false, `${hook} did not scrub`);
+    assert.equal(out.includes('headers'), false, `${hook} kept headers`);
+  }
   const crumb = opts.beforeBreadcrumb({ data: { url: `https://x.example/?token=${CREDENTIAL}` } });
   assert.equal(JSON.stringify(crumb).includes(CREDENTIAL), false);
 });
