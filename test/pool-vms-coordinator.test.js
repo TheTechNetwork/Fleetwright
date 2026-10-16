@@ -431,6 +431,38 @@ test('keeping fewer ends the machines no longer wanted, and what may be kept is 
   assert.equal((await core.setVmStandby(null, { template: DEBIAN, count: 1 })).error.code, 'not_signed_in');
 });
 
+test('removing a person stops the fleet making machines in their name and takes back the ones it made', async () => {
+  // Revoking a member's last credential, or revokePerson, left their wish to
+  // keep machines ready in place. The next health frame from a box holding
+  // their pool minted a ticket for them and asked for a machine, which joined
+  // as their temporary host, config frame and all, and was replaced within a
+  // minute whenever one was revoked.
+  const { core, asked } = fleet({ deb14: { xo: holding(SAM), protocol: 9 } });
+  const signedIn = await core.issueClient({ email: SAM }, 'sam phone');
+  assert.ok('token' in signedIn);
+  await core.setVmStandby(sam, { template: DEBIAN, count: 1 });
+  await madeOne(core, asked);
+  const ticket = asked[0].spec.params.ticket;
+  const kept = `vm-${ticket.split('_')[1]}`;
+  assert.equal((await core.enrolVm({ ticket, publicJwk: (await generateKeyPair()).publicJwk })).status, 200);
+  const token = await core.runnerTokens.issue('sam ci', { email: SAM });
+  assert.equal(token.ok, true);
+  asked.length = 0;
+
+  core.revokeClient(signedIn.client.id);
+  assert.equal(core.vmStandby.wishFor(SAM), null, 'the wish outlived the person');
+  assert.ok(core.hostIds.get(kept)?.revokedAt, 'their temporary host is still enrolled');
+  assert.ok(core.runnerTokens.list().every((t) => t.email !== SAM || t.revokedAt), 'their runner token still attributes runs to them');
+  await until(() => asked.some((x) => x.spec.verb === 'vmctl'), 'the kept machine to be ended');
+
+  // And a wish with nobody behind it, however it got here, is not topped up.
+  asked.length = 0;
+  core.vmStandby.set(SAM, { template: DEBIAN, count: 1, network: null });
+  await core.onHostMessage('deb14', { kind: 'health', health: { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [], xo: holding(SAM) } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(asked.filter((x) => x.spec.verb === 'provision').length, 0, 'a machine was asked for in the name of somebody with no credential');
+});
+
 test('what is kept ready survives a restart, and a machine that never joined is forgotten in time', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
   await core.setVmStandby(eli, { template: DEBIAN, count: 2 });

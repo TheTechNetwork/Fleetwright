@@ -862,6 +862,7 @@ export class Coordinator {
         if (isWithdrawal(note.type) && note.email) {
           const r = this.core.revokePerson(note.email, `withdrew consent at Apple (${note.type})`);
           if (r.revoked) this.saveState();
+          for (const hostId of r.hosts) this.connections.get(hostId)?.close(1008, 'revoked');
         }
         return json(res, 200, { ok: true });
       } catch (e) {
@@ -1150,8 +1151,9 @@ export class Coordinator {
 
     if (p.startsWith('/api/clients/') && req.method === 'DELETE') {
       const id = p.slice('/api/clients/'.length);
-      const { revoked, devices } = this.core.revokeClient(id);
+      const { revoked, devices, hosts } = this.core.revokeClient(id);
       if (revoked || devices) this.saveState();
+      for (const hostId of hosts) this.connections.get(hostId)?.close(1008, 'revoked');
       return json(res, revoked ? 200 : 404, {
         ok: revoked,
         text: revoked

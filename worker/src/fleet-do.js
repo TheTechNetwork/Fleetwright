@@ -697,6 +697,7 @@ export class Fleet {
             await this.#saveClients();
             await this.#saveDevices();
           }
+          this.#closeRevoked(r.hosts);
         }
         return json({ ok: true });
       } catch {
@@ -1158,11 +1159,15 @@ export class Fleet {
       // Revoke the credential AND stop notifying the device that held it —
       // otherwise a stolen phone loses the ability to ASK the fleet anything
       // and keeps the ability to be TOLD everything.
-      const { revoked, devices } = this.core.revokeClient(id);
+      const { revoked, devices, hosts } = this.core.revokeClient(id);
       if (revoked || devices) {
         await this.#saveClients();
         await this.#saveDevices();
       }
+      // The person's last credential takes their temporary hosts with it
+      // (core.js, #forgetPerson), and a revoked host with a live socket is
+      // still in the fleet until something closes it.
+      this.#closeRevoked(hosts);
       return json(
         {
           ok: revoked,
@@ -1561,6 +1566,17 @@ export class Fleet {
         await binding.send({ to: message.to, from, subject: message.subject, text: message.text });
       },
     };
+  }
+
+  /** Close the sockets of hosts just revoked. @param {string[]} hostIds */
+  #closeRevoked(hostIds) {
+    if (!hostIds.length) return;
+    for (const socket of this.state.getWebSockets()) {
+      if (!hostIds.includes(/** @type {string} */ (this.#hostIdOf(socket)))) continue;
+      try {
+        socket.close(1008, 'revoked');
+      } catch { /* already gone */ }
+    }
   }
 
   async #saveInvites() {

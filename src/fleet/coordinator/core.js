@@ -1849,7 +1849,71 @@ export class CoordinatorCore {
         text: `${address} ${why}; ${revoked} credential${revoked === 1 ? '' : 's'} revoked`,
       });
     }
-    return { revoked, devices };
+    // Their last credential's revocation did this already; a person with none
+    // left still has their machines taken back.
+    const hosts = this.#forgetPerson(address);
+    return { revoked, devices, hosts };
+  }
+
+  /**
+   * WHAT THE FLEET GOES ON DOING IN SOMEBODY'S NAME, stopped when they are
+   * removed: when they withdraw (revokePerson) and when their last live
+   * credential is revoked, which is how an admin removes a member (invites.js).
+   *
+   * Revoking credentials used to be the whole of it, and the fleet does
+   * things for a person without them asking. A wish to keep machines ready
+   * was topped up by the next health frame from a box holding their pool: a
+   * ticket minted in their name, a machine cloned on their hypervisor, and a
+   * new temporary host of theirs joining with the config frame, replaced
+   * within a minute whenever one was revoked. So the wish goes, the machines
+   * kept for it are ended through vmctl as Keep 0 would end them, their
+   * temporary hosts are revoked, and their runner tokens, tickets and
+   * waiting runner starts with them.
+   *
+   * @param {string} address  lower case
+   * @returns {string[]} the hosts revoked, for the caller to disconnect
+   */
+  #forgetPerson(address) {
+    if (!address) return [];
+    const { extra } = /** @type {{ extra: string[] }} */ (this.vmStandby.set(address, { template: '', count: 0, network: null }));
+    // As setVmStandby ends them: #vmctl refuses a requester without an email,
+    // and its ownership check runs before its first await, so before the
+    // hosts are revoked below.
+    const person = { email: address, admin: false };
+    for (const name of extra) {
+      void this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {});
+    }
+    /** @type {string[]} */
+    const hosts = [];
+    for (const h of this.hostIds.list()) {
+      if (h.ephemeral && String(h.owner || '').toLowerCase() === address && this.revokeHost(h.hostId)) hosts.push(h.hostId);
+    }
+    let changed = extra.length > 0 || hosts.length > 0;
+    for (const t of this.runnerTokens.list()) {
+      if (!t.revokedAt && String(t.email || '').toLowerCase() === address && this.runnerTokens.revoke(t.id)) changed = true;
+    }
+    for (const [id, t] of this.runnerTickets.tickets) {
+      if (t.owner === address) {
+        this.runnerTickets.tickets.delete(id);
+        changed = true;
+      }
+    }
+    for (const [hostId, p] of this.runnerStarts) {
+      if (String(p.owner || '').toLowerCase() === address) {
+        this.runnerStarts.delete(hostId);
+        changed = true;
+      }
+    }
+    if (changed) this.onStateChanged?.();
+    return hosts;
+  }
+
+  /** Does anybody hold a credential for this address that still works? @param {string} address */
+  #hasLiveCredential(address) {
+    for (const c of this.clients.clients.values()) {
+      if (!c.revokedAt && String(c.email || '').toLowerCase() === address) return true;
+    }
+    return false;
   }
 
   /**
@@ -1861,7 +1925,8 @@ export class CoordinatorCore {
    * session asks.
    *
    * @param {string} clientId
-   * @returns {{ revoked: boolean, devices: number }}
+   * @returns {{ revoked: boolean, devices: number, hosts: string[] }}
+   *   `hosts`: temporary hosts revoked with the person's last credential, for the caller to disconnect
    */
   revokeClient(clientId) {
     const revoked = this.clients.revoke(clientId);
@@ -1875,7 +1940,10 @@ export class CoordinatorCore {
     if (revoked || devices) {
       this.record({ event: 'client.revoked', text: `a device credential was revoked, and ${devices} push registration${devices === 1 ? '' : 's'} with it` });
     }
-    return { revoked, devices };
+    // THE PERSON'S LAST ONE is the person removed (#forgetPerson).
+    const email = String(this.clients.clients.get(clientId)?.email || '').toLowerCase();
+    const hosts = revoked && email && !this.#hasLiveCredential(email) ? this.#forgetPerson(email) : [];
+    return { revoked, devices, hosts };
   }
 
   /** Drop a token the provider told us is dead. */
@@ -4935,6 +5003,12 @@ export class CoordinatorCore {
     for (const owner of owners) {
       const wish = this.vmStandby.wishFor(owner);
       if (!wish) continue;
+      // NOBODY BEHIND IT, NOTHING MADE. The background top-up acts for a
+      // person who is not asking, so it asks first whether they are still
+      // here: a wish whose owner holds no live credential is one left behind
+      // (#forgetPerson), and a machine made for it would join as theirs.
+      // `only` is a person acting now, signed in to do it.
+      if (!only && !this.#hasLiveCredential(owner)) continue;
       // ONE AT A TIME PER PERSON, taken before the first await: the count
       // below is read before a ticket exists, so two top-ups at once (the
       // Keep button and a health frame, on a real pool) both found none
