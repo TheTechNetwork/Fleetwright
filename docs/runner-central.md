@@ -505,7 +505,11 @@ fleet. When set, it wins over the lookup.
 
 It also needs a GitHub token of yours — `GH_TOKEN`, or whatever `gh auth
 token` prints. That is how the minter learns whose login this is without
-asking the coordinator: it asks GitHub, once, and does not keep the token.
+asking the coordinator: it asks GitHub, once, and does not keep the token. Not
+a token of this fleet's own GitHub App (`ghu_`), such as the one a box's
+broker holds: the vault hands that one to every box you approve, so the
+minter takes one only from a phone that signed in for it
+([vault.md](./vault.md#who-may-ask-and-how-each-one-is-checked)).
 
 `claude setup-token` needs a Pro, Max, Team or Enterprise plan, and the token
 it prints lasts a year.

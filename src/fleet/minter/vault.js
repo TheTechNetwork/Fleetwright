@@ -13,10 +13,13 @@
 // word:
 //
 //  - A PERSON reaches their vault with a request sealed on their own device
-//    to this Worker's deposit key (the pin they were given), with a GitHub
-//    token of theirs inside. Whose vault it is comes from GitHub, asked with
-//    that token, exactly as a Claude deposit is decided (claude.js). The answer
-//    is sealed to a key the device made for that one request.
+//    to this Worker's deposit key (the pin they were given), with the GitHub
+//    token that device signed in for inside. Whose vault it is comes from
+//    GitHub, asked with that token, and the token must be one this minter
+//    finished a sign-in for on a device (github.js, deviceSignedIn): never
+//    the GitHub token this vault hands the boxes it approves, which GitHub
+//    would also call the person's. The answer is sealed to a key the device
+//    made for that one request.
 //  - A BOX is approved by its person, from their phone: the approval names the
 //    box's own P-256 public key, the one it already proves itself with on every
 //    connect (src/fleet/host/identity.js), and the phone works out the
@@ -28,7 +31,8 @@
 // So a compromised coordinator can drop and delay, and can offer a phone a key
 // of its own to approve, which is why the phone shows a fingerprint and the
 // docs say to compare it. What it cannot do is approve a key, read a vault, or
-// sign as a box. See docs/vault.md and security.md §4.1.
+// sign as a box, short of getting the person to finish a GitHub sign-in it
+// started with a verifier of its own. See docs/vault.md and security.md §4.1.
 //
 // WHAT A BOX IS GIVEN is never a refresh token. An OAuth item is renewed here
 // and only here, under a lock, so one rotation happens however many boxes ask
@@ -53,6 +57,7 @@ import { verify, signingInput } from '../crypto.js';
 import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS } from './claude.js';
+import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
 export const OAUTH_PROVIDERS = Object.freeze({
@@ -202,6 +207,12 @@ async function withLock(key, fn) {
   }
 }
 
+/** Said to a vault request carrying a GitHub token no device signed in for here. */
+const notADevice = refuse(
+  'not_a_device',
+  'That GitHub token is not one this phone signed in for through the fleet, so it opens no vault. If this phone signed in to GitHub before the fleet checked for that, sign out of GitHub under Runners from this phone and sign in again.',
+);
+
 /** @param {VaultConfig} config */
 function notConfigured(config) {
   return !config.depositKey || !config.store
@@ -267,8 +278,13 @@ export async function answerVaultDevice(ask, config) {
   if (!email || normaliseEmail(inside.email) !== email) {
     return refuse('not_you', 'That request was made for a different fleet account than the one sending it, so nothing was changed.');
   }
-  const who = await githubUser({ token: String(inside.github || ''), fetchImpl });
+  const github = String(inside.github || '');
+  const who = await githubUser({ token: github, fetchImpl });
   if (!who.ok) return refuse('not_github', `The minter could not tell whose vault this is: ${who.message}.`);
+  // A DEVICE'S OWN SIGN-IN, or nothing. GitHub calls any token of the
+  // person's theirs, including the one itemsFor hands every box they approve,
+  // which a box they later removed, or a session on it, still holds.
+  if (!(await deviceSignedIn(await config.store?.get(`${SIGNIN_PREFIX}${who.userId}`), github, now()))) return notADevice;
 
   const result = await withLock(`row:${who.userId}`, () => runDeviceOp(inside, { ...config, fetchImpl, now }, key, who, email, at));
   if (!result.ok) return result;

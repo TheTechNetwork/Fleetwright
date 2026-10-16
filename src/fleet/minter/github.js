@@ -19,10 +19,22 @@
 // one-request key the phone sent inside the request. Renewal is the same with
 // the refresh token. The coordinator relays two ciphertexts.
 //
-// NOTHING IS KEPT. The token goes back to the device that asked and is not
-// stored here; this is an exchange desk, not a store. And it hands nobody
-// more than they brought: a code is only exchangeable with its verifier, a
-// refresh token only by whoever already holds it.
+// NOTHING IS KEPT but a hash. The token goes back to the device that asked
+// and is not stored here; this is an exchange desk, not a store. And it hands
+// nobody more than they brought: a code is only exchangeable with its
+// verifier, a refresh token only by whoever already holds it.
+//
+// THE HASH IS WHAT MAKES IT A DEVICE'S. A person's vault and Claude login are
+// changed with a GitHub token sealed inside the request, and the vault hands
+// a GitHub token of this same App to every box the person approves. GitHub
+// says both are the person's, so asking GitHub whose a token is could not
+// tell a phone from a box they removed (minter/vault-identity-any-github-
+// token). What can is where the token came from: a sign-in finished here,
+// from a code and a verifier only the person's device had, is recorded under
+// their account id by the token's SHA-256, and so is its refresh token. A
+// renewal carries the record on only when the refresh token it spent was
+// recorded, so a refresh token from anywhere else still renews and is still
+// not a device's. `deviceSignedIn` is the check (vault.js, claude.js).
 //
 // NEVER THROWS. Every refusal is a code and a sentence.
 
@@ -35,17 +47,78 @@ const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/;
 const REFRESH_RE = /^[A-Za-z0-9_]{20,512}$/;
 const GITHUB_TIMEOUT_MS = 15_000;
 
+/** Where a person's device sign-ins are recorded, under their GitHub account id. */
+export const SIGNIN_PREFIX = 'signin:';
+
+/** How many live sign-ins of each kind one person keeps on record: a few phones, renewing. */
+const MAX_SIGNINS = 16;
+
 /**
  * @typedef {object} GithubConfig
  * @property {(() => Promise<{ privateKey: CryptoKey, publicKey: string }>)|null} depositKey
  * @property {string} clientId
  * @property {string} clientSecret
+ * @property {{ get: (key: string) => Promise<any>, put: (key: string, value: any) => Promise<void> }|null} [store]
+ *   where device sign-ins are recorded; without one, a sign-in still finishes and opens no vault
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {() => number} [now]
  */
 
 /** @param {string} code @param {string} text */
 const refuse = (code, text) => ({ ok: false, error: { code }, text });
+
+/** A token's SHA-256, hex: what is recorded, so the record holds nothing that signs in. @param {string} token */
+async function tokenHash(token) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** The entries of a record that have not run out, newest last, at most MAX_SIGNINS. @param {unknown} kept @param {number} now */
+function live(kept, now) {
+  const entries = Object.entries(kept && typeof kept === 'object' ? kept : {}).filter(([, at]) => at === null || Number(at) > now);
+  return Object.fromEntries(entries.slice(-MAX_SIGNINS));
+}
+
+/**
+ * Is this token one a device signed in for through this minter, for this
+ * account, and not yet expired?
+ *
+ * @param {any} row  what is kept under SIGNIN_PREFIX + the account id
+ * @param {string} token @param {number} now
+ */
+export async function deviceSignedIn(row, token, now) {
+  const at = live(row?.access, now)[await tokenHash(token)];
+  return at !== undefined;
+}
+
+/**
+ * Record a device's sign-in. For a renewal, only when the refresh token it
+ * spent was a device's: that is the whole of what stops a refresh token the
+ * coordinator or a box holds from being renewed here into a device's token.
+ *
+ * Hashed before the read, so nothing but storage runs between it and the
+ * write, and two phones of one person renewing at once both land.
+ *
+ * @param {NonNullable<GithubConfig['store']>} store @param {string} userId
+ * @param {{ accessToken: string, expiresAt: number|null, refreshToken: string|null, refreshExpiresAt: number|null, spent: string|null }} signIn
+ * @param {number} now
+ */
+async function recordSignIn(store, userId, { accessToken, expiresAt, refreshToken, refreshExpiresAt, spent }, now) {
+  const access = await tokenHash(accessToken);
+  const refresh = refreshToken ? await tokenHash(refreshToken) : null;
+  const spentHash = spent ? await tokenHash(spent) : null;
+  const key = `${SIGNIN_PREFIX}${userId}`;
+  const row = (await store.get(key)) || {};
+  const refreshes = live(row.refresh, now);
+  if (spentHash) {
+    if (!Object.hasOwn(refreshes, spentHash)) return;
+    delete refreshes[spentHash];
+  }
+  const accesses = live(row.access, now);
+  accesses[access] = expiresAt;
+  if (refresh) refreshes[refresh] = refreshExpiresAt;
+  await store.put(key, { access: live(accesses, now), refresh: live(refreshes, now) });
+}
 
 /**
  * @param {unknown} ask  `{ sealed }`, opened here to `{ v: 1, grant: 'code'|'refresh',
@@ -153,17 +226,20 @@ export async function answerGithubToken(ask, config) {
   const t = now();
   const expiresIn = Number(body.expires_in);
   const refreshIn = Number(body.refresh_token_expires_in);
-  const sealedBack = await seal({
-    to: reply,
-    aad: GITHUB_REPLY_AAD,
-    payload: {
-      accessToken: body.access_token,
-      expiresAt: Number.isFinite(expiresIn) ? t + expiresIn * 1000 : null,
-      refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
-      refreshExpiresAt: Number.isFinite(refreshIn) ? t + refreshIn * 1000 : null,
-      login,
-      userId,
-    },
-  });
+  const signIn = {
+    accessToken: String(body.access_token),
+    expiresAt: Number.isFinite(expiresIn) ? t + expiresIn * 1000 : null,
+    refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
+    refreshExpiresAt: Number.isFinite(refreshIn) ? t + refreshIn * 1000 : null,
+  };
+  // NOT RECORDED IS NOT REFUSED: GitHub has already spent a renewal's refresh
+  // token, so the device is given what replaced it whatever the storage did,
+  // and the vault refuses that token until the device signs in again.
+  if (config.store && userId) {
+    try {
+      await recordSignIn(config.store, userId, { ...signIn, spent: inside.grant === 'refresh' ? String(inside.refreshToken) : null }, t);
+    } catch { /* see above */ }
+  }
+  const sealedBack = await seal({ to: reply, aad: GITHUB_REPLY_AAD, payload: { ...signIn, login, userId } });
   return { ok: true, sealed: sealedBack, text: login ? `Signed in to GitHub as ${login}.` : 'Signed in to GitHub.' };
 }

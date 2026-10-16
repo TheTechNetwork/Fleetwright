@@ -36,7 +36,16 @@ Every request is sealed on the phone to the minter's key, which the phone asks
 the minter for itself (see [The minter's key](#the-minters-key) below), with
 the phone's own GitHub token inside. The
 minter asks GitHub whose that token is, and that GitHub account is whose vault
-it is. The request also names the fleet account it is for, and the coordinator
+it is. It must also be a token the phone signed in for through the minter
+(Runners from this phone, *Sign in to GitHub*): the minter records each such
+sign-in by the token's hash, and its renewals, and refuses any other token
+with `not_a_device`. That is what keeps out the GitHub token the vault itself
+hands every box you approve, which GitHub would also call yours, so a box you
+removed, or a session on it, cannot approve a key of its own and hold your
+vault again. A phone signed in before this was asked for signs out of GitHub
+there and signs in again, once. A Claude deposit is held to the same rule,
+except for the tokens a person's own command line has (`gho_`, `ghp_`,
+`github_pat_`), which `fleetwright-claude-login` sends. The request also names the fleet account it is for, and the coordinator
 says which signed-in account sent it; the minter refuses unless the two agree.
 The answer comes back sealed to a key the phone made for that one request.
 Each change carries its time and is refused if it is older than ten minutes or
@@ -123,6 +132,13 @@ next ask, and the box deletes what it holds when it asks, within ten minutes.
 An access token it already handed a session lasts until it expires, which for
 GitHub is up to eight hours. Revoke the token at the provider for anything
 faster.
+
+**A sign-in the coordinator started.** A sign-in a phone starts uses the
+phone's own verifier, which the coordinator never sees. A GitHub link the
+coordinator starts for a box is its own page, so a compromised coordinator
+could begin one with a verifier of its own, and if you finished it, have the
+minter record it as a device's sign-in. Closing that needs the phone to sign
+vault requests with a key of its own, which it does not yet.
 
 **A box you did not check.** Approving without comparing the fingerprint trusts
 the coordinator's list for which key that box has, which is the one thing this

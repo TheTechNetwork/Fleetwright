@@ -50,7 +50,7 @@
 
 import { answerMintRequest } from '../../src/fleet/minter/answer.js';
 import { answerDeposit, answerLogin, depositKeyAnswer } from '../../src/fleet/minter/claude.js';
-import { answerGithubToken } from '../../src/fleet/minter/github.js';
+import { answerGithubToken, SIGNIN_PREFIX } from '../../src/fleet/minter/github.js';
 import { answerVaultDevice, answerVaultBox } from '../../src/fleet/minter/vault.js';
 import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
@@ -151,6 +151,23 @@ function loginsFrom(ns) {
 }
 
 /**
+ * The device sign-ins recorded for an account, through the same object, for a
+ * Claude deposit to check its GitHub token against (src/fleet/minter/claude.js).
+ *
+ * @param {any} ns  the LOGINS namespace binding, or undefined
+ * @returns {((userId: string) => Promise<any>)|null}
+ */
+function signInsFrom(ns) {
+  if (!ns) return null;
+  const stub = ns.get(ns.idFromName('logins'));
+  return async (id) => {
+    const res = await stub.fetch('https://logins.internal/signin', { method: 'POST', body: JSON.stringify({ id }) });
+    if (!res.ok) throw new Error(`the login store answered ${res.status}`);
+    return (/** @type {any} */ (await res.json())).row ?? null;
+  };
+}
+
+/**
  * Where the logins are kept: rows of ciphertext, keyed by GitHub account id.
  * It answers this Worker and nothing else, because nothing else is bound to
  * it — and it would give anybody who was nothing they could open.
@@ -209,9 +226,17 @@ export class ClaudeLogins {
       const config = vaultConfig(this.env, this.storage, () => this.depositSecret());
       return json(200, op === 'vault/device' ? await answerVaultDevice(body, config) : await answerVaultBox(body, config));
     }
+    // A DEVICE'S GITHUB SIGN-IN finishes here too, beside the vault, because
+    // it is recorded where the vault reads it (src/fleet/minter/github.js).
+    if (op === 'github/token') {
+      const config = vaultConfig(this.env, this.storage, () => this.depositSecret());
+      const client = /** @type {{ clientId: string, secret: string }} */ (config.clients?.github);
+      return json(200, await answerGithubToken(body, { depositKey: config.depositKey, clientId: client.clientId, clientSecret: client.secret, store: this.storage }));
+    }
     const id = String(body?.id || '');
     if (!/^[0-9]{1,20}$/.test(id)) return json(400, { ok: false });
     if (op === 'get') return json(200, { ok: true, row: (await this.storage.get(`gh:${id}`)) ?? null });
+    if (op === 'signin') return json(200, { ok: true, row: (await this.storage.get(`${SIGNIN_PREFIX}${id}`)) ?? null });
     if (op === 'put') {
       await this.storage.put(`gh:${id}`, body.row);
       return json(200, { ok: true });
@@ -343,14 +368,17 @@ export default {
       const check = await checkRunnerRepoForApp({ repo: String(/** @type {any} */ (ask)?.repo || ''), clientId, key });
       return json(200, { ok: check.ok, runnerRepo: check, text: check.message });
     }
-    if (url.pathname === '/vault/device' || url.pathname === '/vault/box') {
+    // THE VAULT, AND A DEVICE'S SIGN-IN when there is storage to record it
+    // in. Without, a sign-in still finishes here and opens no vault, which a
+    // minter with no storage does not keep anyway.
+    if (url.pathname === '/vault/device' || url.pathname === '/vault/box' || (url.pathname === '/github/token' && env.LOGINS)) {
       if (!env.LOGINS) return json(200, { ok: false, error: { code: 'no_store' }, text: 'The minting Worker has no storage bound, so it keeps no vault.' });
       const stub = env.LOGINS.get(env.LOGINS.idFromName('logins'));
       const res = await stub.fetch(`https://logins.internal${url.pathname}`, { method: 'POST', body: JSON.stringify(ask) });
       return json(200, await res.json());
     }
     /** @type {import('../../src/fleet/minter/claude.js').ClaudeConfig} */
-    const claude = { depositKey: depositKeyFrom(env), logins: loginsFrom(env.LOGINS), owners };
+    const claude = { depositKey: depositKeyFrom(env), logins: loginsFrom(env.LOGINS), owners, signIns: signInsFrom(env.LOGINS) };
     if (url.pathname === '/github/token') {
       return json(200, await answerGithubToken(ask, {
         depositKey: claude.depositKey,
