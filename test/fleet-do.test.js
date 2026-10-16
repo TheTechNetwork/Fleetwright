@@ -431,6 +431,7 @@ test('a member listing pins and enrolled hosts is not shown whose they are', asy
   assert.equal(seenByAlice.enrolledBy, 'alice@example.test', 'and the person who added it still sees that they did');
   assert.equal(seenByAlice.owner, 'alice@example.test');
   assert.equal((await hosts(admin))[0].enrolledBy, 'alice@example.test');
+
 });
 
 test('one member filling a shared store fills only their own share of it', async () => {
@@ -495,4 +496,29 @@ test('an enrolled host cannot erase, outweigh or impersonate the fleet’s own r
   assert.ok(f.core.events.every((e) => String(e.name ?? '').length <= 40), 'a name no session can have was recorded');
   const member = f.core.recentEvents({ email: 'someone@example.test', admin: false });
   assert.ok(!member.some((e) => String(e.hostId).startsWith('mallory')), 'a member was shown an entry a host wrote');
+});
+
+test('one member’s requests displace their own records, never the fleet’s or anybody else’s', async () => {
+  // The coordinator's own records had no share of the ring at all, so 200
+  // pins minted by one member (never more than 20 waiting) replaced every
+  // entry in memory and in storage, and a rebuilt Fleet loaded only those:
+  // the enrolments and revocations before them were gone (third Workers
+  // audit).
+  const { fleet: f, state } = fleet();
+  const { token } = await f.core.clients.issue('mallory phone', { email: 'mallory@example.test' });
+  f.core.record({ event: 'host.revoked', hostId: 'build-server' });
+  f.core.record({ event: 'linked.repo', actor: 'alice@example.test', text: 'alice linked a repository' });
+  for (let i = 0; i < 200; i++) {
+    assert.equal((await call(f, '/api/enroll', 'POST', { kind: 'host' }, { authorization: `Bearer ${token}` })).status, 200);
+  }
+  await new Promise((r) => setTimeout(r, 0));
+
+  const kept = (/** @type {any[]} */ events) =>
+    events.some((e) => e.event === 'host.revoked') && events.some((e) => e.actor === 'alice@example.test');
+  assert.ok(kept(f.core.events), 'a member’s pins pushed other records out of the ring');
+  assert.ok(kept(state.raw.get('events') ?? []), 'and out of storage');
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(kept(revived.core.events), 'and the loss outlived a rebuild');
+  assert.ok(f.core.events.filter((e) => e.actor === 'mallory@example.test').length > 0, 'her own minting is still recorded');
 });

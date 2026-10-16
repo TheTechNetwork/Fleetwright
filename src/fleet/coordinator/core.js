@@ -803,11 +803,8 @@ export class CoordinatorCore {
     // fleet's only history of who enrolled and revoked what. So a host's news
     // displaces its own oldest once it holds HOST_EVENTS_EACH, and hosts' news
     // displaces hosts' once together they hold HOST_EVENTS: whatever hosts
-    // send, the coordinator's records keep the rest of the ring.
-    const mine = this.events.filter((e) => hostReported(e) && e.hostId === hostId);
-    const hosts = this.events.filter(hostReported);
-    const drop = mine.length >= HOST_EVENTS_EACH ? mine[0] : hosts.length >= HOST_EVENTS ? hosts[0] : null;
-    if (drop) this.events.splice(this.events.indexOf(drop), 1);
+    // send, the coordinator's records keep the rest of the ring (#makeRoom).
+    this.#makeRoom(event);
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     // Persisted by whoever owns storage — a file on a box, DO storage in the
@@ -923,11 +920,51 @@ export class CoordinatorCore {
       url: entry.url ?? null,
       at: this.now(),
     };
+    this.#makeRoom(event);
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     this.log.info(`coordinator: ${event.event}${event.hostId !== 'coordinator' ? ` ${event.hostId}` : ''}`);
     this.onEvents?.();
     return event;
+  }
+
+  /**
+   * Make room in the ring for one more entry from whoever this one is from,
+   * at the expense of that writer's own oldest when they hold their share.
+   *
+   * A host's news: its own oldest once it holds HOST_EVENTS_EACH, any host's
+   * once hosts together hold HOST_EVENTS (#onHostEvent says why).
+   *
+   * AND A PERSON'S RECORDS, the same way. The coordinator's own share had no
+   * bound per writer, and several of its records are written at a member's
+   * request: every pin minted is an `enrol.minted`, minting never fails (the
+   * twentieth waiting pin drops the minter's own oldest), so 200 of them
+   * from one member replaced every enrolment, revocation and approval in
+   * memory and in storage, and a rebuilt Fleet loaded only the mints (third
+   * Workers audit). So whoever an entry names as its actor keeps at most
+   * ACTOR_EVENTS_EACH, and what they do next displaces their own. An
+   * operator's records are the fleet's, as an operator's boxes are
+   * (actsFor), and records naming nobody, `client.revoked` and
+   * `host.revoked` among them, are no one person's share to spend.
+   *
+   * The ring is what #saveEvents stores, so a share kept here is kept there.
+   *
+   * @param {{ hostId: string, actor?: string|null }} event
+   */
+  #makeRoom(event) {
+    /** @type {any} */
+    let drop = null;
+    if (hostReported(event)) {
+      const mine = this.events.filter((e) => hostReported(e) && e.hostId === event.hostId);
+      const hosts = this.events.filter(hostReported);
+      drop = mine.length >= HOST_EVENTS_EACH ? mine[0] : hosts.length >= HOST_EVENTS ? hosts[0] : null;
+    } else if (event.actor) {
+      const who = String(event.actor).toLowerCase();
+      if (this.clients.emailHasAdmin(who)) return;
+      const theirs = this.events.filter((e) => !hostReported(e) && String(e.actor || '').toLowerCase() === who);
+      if (theirs.length >= ACTOR_EVENTS_EACH) drop = theirs[0];
+    }
+    if (drop) this.events.splice(this.events.indexOf(drop), 1);
   }
 
   /**
@@ -5488,6 +5525,8 @@ const HOST_EVENT_RE = /^session\.[a-z][a-z-]{0,39}$/;
 /** How much of the 200-entry ring hosts' news may hold, all of them and each. */
 const HOST_EVENTS = 100;
 const HOST_EVENTS_EACH = 25;
+/** And how much one person's records may, as one host's (#makeRoom). */
+const ACTOR_EVENTS_EACH = 25;
 
 /**
  * Did a host write this, rather than the coordinator? See HOST_EVENT_RE.
