@@ -177,6 +177,29 @@ test('naming somebody else’s temporary machine does not put work on it', () =>
   assert.equal(mine.kind, 'host');
 });
 
+test('a box that only says it holds somebody’s pool is not sent their ticket, or anything else of theirs', async () => {
+  // FOUND BY AN AUDIT: bob enrolled a box with a pin he minted and reported
+  // sam's pool in its health with `holder: true`. Sam's machine was asked of
+  // that box, ticket and all, and sam's own box was sent nothing. The box's
+  // word is believed only from a box that may act for the pool's owner.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const { core, asked } = fleet({});
+  await admit(core, 'aaa-bob', { enrolledBy: 'bob@example.com' });
+  await admit(core, 'sam-box', { enrolledBy: SAM });
+  const health = (/** @type {any[]} */ xo) => ({ hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [], xo });
+  core.registry.recordHealth('aaa-bob', health(holding(SAM).map((e) => ({ ...e, holder: true, machines: [{ name: 'vm-0123456789ab' }] }))));
+  core.registry.recordHealth('sam-box', health(holding(SAM)));
+
+  const r = await core.dispatch(ask(sam));
+  assert.equal(r.ok, true, r.text);
+  assert.equal(r.hostId, 'sam-box');
+  assert.match(asked[0].spec.params.ticket, /^fwt_/, 'the ticket went to sam’s own box');
+  assert.deepEqual(core.snapshot(sam).vmImages.map((/** @type {any} */ i) => i.hosts), [['sam-box']]);
+  const vmctl = await core.dispatch({ verb: 'vmctl', params: { name: 'vm-0123456789ab', action: 'stop' }, actor: `fleet:${SAM}`, requester: sam });
+  assert.equal(vmctl.hostId, 'sam-box');
+  assert.deepEqual(asked.map((x) => x.hostId), ['sam-box', 'sam-box'], 'bob’s box was asked nothing');
+});
+
 test('a phone cannot be handed a GitHub dispatch for a VM', async () => {
   const { core } = fleet({});
   core.runnerRepo = 'eli/runners';

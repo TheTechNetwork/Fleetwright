@@ -109,3 +109,36 @@ test('the list is short, and staying short is the point', () => {
   // that seemed harmless in isolation.
   assert.ok(Object.keys(CONFIG_KEYS).length <= 3, 'the config channel is growing — is each key still necessary?');
 });
+
+test('the client secrets go to the fleet’s own boxes, never to a machine a member controls', async () => {
+  // FOUND BY AN AUDIT: a member minted a host pin, enrolled a box of their own
+  // and was sent both of the fleet's OAuth client secrets on connect, and on
+  // every reconnect after their own credential was revoked. A runner was sent
+  // them too. The repository runners come from is not a secret and still goes
+  // everywhere.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit, makeAdmin } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({
+    githubApp: { clientId: 'Iv1.app', clientSecret: SECRET },
+    cloudflareOauth: { clientId: 'cf-app', clientSecret: 'cfsecret000000000000000000' },
+    runnerRepo: 'fleet/runners',
+  });
+  await makeAdmin(core, 'admin@example.test');
+  /** @type {Record<string, any>} */
+  const frames = {};
+  const recorder = (/** @type {string} */ hostId) => (/** @type {any} */ msg) => {
+    if (msg?.kind === 'config') frames[hostId] = msg.values;
+  };
+  await admit(core, 'ops-box', { send: recorder('ops-box') });
+  await admit(core, 'admin-box', { enrolledBy: 'admin@example.test', send: recorder('admin-box') });
+  await admit(core, 'bob-box', { enrolledBy: 'bob@example.test', send: recorder('bob-box') });
+  await admit(core, 'holder-0a1b2c', { enrolledBy: 'holder:bob@example.test', send: recorder('holder-0a1b2c') });
+  await admit(core, 'gha-bob-1', { enrolledBy: 'actions:bob/runners', owner: 'bob@example.test', ephemeral: true, send: recorder('gha-bob-1') });
+
+  const both = { githubClientSecret: SECRET, cloudflareClientSecret: 'cfsecret000000000000000000', runnerRepo: 'fleet/runners' };
+  assert.deepEqual(frames['ops-box'], both);
+  assert.deepEqual(frames['admin-box'], both);
+  for (const id of ['bob-box', 'holder-0a1b2c', 'gha-bob-1']) {
+    assert.deepEqual(frames[id], { runnerRepo: 'fleet/runners' }, id);
+  }
+});

@@ -18,6 +18,7 @@
 
 import { fingerprint, verify, signingInput } from '../crypto.js';
 import { randomInt } from './random.js';
+import { emailOf } from './enrollment.js';
 
 /** How long a challenge is worth answering. Generous for a slow link, far
  *  short of anything worth replaying. */
@@ -90,6 +91,60 @@ const NONCE_SECRET_BYTES = 32;
  * @property {number|null} revokedAt
  * @property {boolean} [ephemeral]  expected to vanish; see docs/ephemeral-hosts.md
  */
+
+/**
+ * WHO A HOST MAY ACT FOR, read from how it was admitted and from nothing it
+ * says about itself.
+ *
+ * Null is a box the fleet's operator runs, which may hold anybody's
+ * credentials and do anybody's errands: one enrolled with the admin token (no
+ * actor, or one that names nobody) or by a person who is an admin. Otherwise
+ * it is the one person the host acts for — the owner of a temporary host, the
+ * member who enrolled a permanent box with a pin they minted, or the person
+ * who let a pool's own machine in (`holder:<email>`).
+ *
+ * "Permanent" never meant "the operator's". Any member can mint a host pin
+ * (POST /api/enroll asks for no admin), so a box another member enrolled was
+ * sent a member's pasted GitHub token, the fleet's OAuth client secrets, the
+ * admin's sealed hypervisor sign-in and another member's VM ticket, because
+ * every one of those paths asked only whether the box was ephemeral. SEC-HOST-1
+ * in docs/security.md: a host holds credentials for nobody but the people who
+ * chose it.
+ *
+ * Decided when a host connects, from the enrolment and the client store, and
+ * carried on its registry entry as `actsFor` (core.js hostConnected), because
+ * placement can see the registry and not the enrolment.
+ *
+ * @param {EnrolledHost|null} enrolled
+ * @param {(email: string) => boolean} isAdmin
+ * @returns {string|null}
+ */
+export function actsFor(enrolled, isAdmin) {
+  if (!enrolled) return null;
+  // Its owner alone, admin or not: a runner is placed only for the person who
+  // asked for it. A temporary host with no owner came from an admin-token pin,
+  // which is the operator's.
+  if (enrolled.ephemeral) return emailOf(enrolled.owner);
+  const by = String(enrolled.enrolledBy || '');
+  const person = emailOf(by.startsWith('holder:') ? by.slice('holder:'.length) : by);
+  return person && !isAdmin(person) ? person : null;
+}
+
+/**
+ * May this host hold what belongs to `email`, or be asked to act with it? An
+ * operator's box may for anyone, any other host only for its one person, and
+ * a caller who names nobody (the break-glass token) reaches the operator's
+ * boxes alone. A registry entry with no `actsFor` is one connected without an
+ * enrolment, which only tests do.
+ *
+ * @param {{ actsFor?: string|null }|null|undefined} host
+ * @param {string|null|undefined} email
+ */
+export function mayActFor(host, email) {
+  const person = host?.actsFor ?? null;
+  if (person === null) return true;
+  return emailOf(email) === person;
+}
 
 export class HostIdentities {
   /** @param {{ now?: () => number }} [opts] */

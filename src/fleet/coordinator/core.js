@@ -15,7 +15,7 @@
 import { HostRegistry, runsNoSessions } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
-import { HostIdentities } from './hosts.js';
+import { HostIdentities, actsFor, mayActFor } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
@@ -200,15 +200,54 @@ export const EDGE_REPORT = Object.freeze({
  */
 
 /**
+ * The hypervisors a box says it holds this person's token for (`xo[]`),
+ * believed only from a box that may act for them (hosts.js mayActFor).
+ *
+ * A health frame is the box's own word, and `owner` in it is whatever the box
+ * wrote. Read as written, a box another member enrolled with a pin they minted
+ * could claim a member's pool, with `holder: true` to be asked first, and was
+ * sent that member's VM ticket, which admits a machine as theirs, while the
+ * member's own box was sent nothing. A box the person could not have given
+ * the token to is not asked to use it.
+ *
+ * @param {any} host @param {string} email
+ * @returns {NonNullable<import('./registry.js').HostHealth['xo']>}
+ */
+function xoFor(host, email) {
+  if (!Array.isArray(host?.health?.xo) || !mayActFor(host, email)) return [];
+  return host.health.xo.filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === email);
+}
+
+/**
  * Whether a box says it is the pool's own machine for one of this person's
  * pools (`xo[].holder`). It decides only the order boxes are asked in, among
- * boxes the person already gave the token to, so a box that claims it wrongly
+ * boxes that may act for the person (xoFor), so a box that claims it wrongly
  * gains nothing it did not have.
  *
  * @param {any} host @param {string} email
  */
 function holds(host, email) {
-  return Array.isArray(host?.health?.xo) && host.health.xo.some((/** @type {any} */ e) => e?.holder === true && String(e?.owner || '').toLowerCase() === email);
+  return xoFor(host, email).some((/** @type {any} */ e) => e?.holder === true);
+}
+
+/**
+ * The same repository, apart from letter case, which GitHub ignores and
+ * corrects. @param {unknown} answered @param {unknown} asked
+ */
+function sameRepo(answered, asked) {
+  return typeof answered === 'string' && answered.toLowerCase() === String(asked ?? '').toLowerCase();
+}
+
+/**
+ * A check that came back about a repository nobody asked about.
+ * @param {unknown} answered @param {unknown} asked @param {'saved'|'linked'} what
+ */
+function checkedSomethingElse(answered, asked, what) {
+  return {
+    ok: false,
+    error: { code: 'check_mismatch' },
+    text: `The check answered for ${String(answered || 'no repository')}, not ${String(asked ?? '')}. Nothing was ${what}.`,
+  };
 }
 
 export class CoordinatorCore {
@@ -463,9 +502,14 @@ export class CoordinatorCore {
     // for a real box. The retirement code could not fire, one layer below the
     // place the flag was already being dropped.
     const enrolled = this.hostIds?.get(hostId) ?? null;
+    // AND WHO IT MAY ACT FOR, which the enrolment also knows and placement did
+    // not: every credential and errand went to any permanent box, a box a
+    // member enrolled for themselves included. See actsFor in hosts.js.
+    const person = actsFor(enrolled, (email) => this.clients.emailHasAdmin(email));
     this.registry.connect(hostId, send, {
       ephemeral: Boolean(enrolled?.ephemeral),
       owner: enrolled?.owner ?? null,
+      actsFor: person,
     });
     this.log.info(`coordinator: ${hostId} connected`);
     // WHAT THIS HOST NEEDS AND MUST NOT KEEP. One frame, a fixed set of named
@@ -476,10 +520,21 @@ export class CoordinatorCore {
     // Failure is not fatal to the connection: a host with no client secret
     // cannot renew a GitHub token and can do everything else, and refusing the
     // socket over it would turn a degraded capability into an offline box.
+    //
+    // THE CLIENT SECRETS ONLY TO AN OPERATOR'S PERMANENT BOX. They are the
+    // fleet's, not anybody's, and they went to every machine that connected:
+    // a box a member enrolled with a pin they minted, and every runner. The
+    // case for a host holding one at all (docs/github-app.md) is that the box
+    // already holds the refresh tokens it renews, which is true of a box the
+    // fleet runs and not of a machine one member controls, and stays true
+    // after that member is revoked. What it costs that member: a GitHub or
+    // Cloudflare connection made by sign-in on their own box is not renewed
+    // there, and says so (#storeAuthorizedToken); on the fleet's boxes it is.
     try {
+      const operator = !enrolled?.ephemeral && person === null;
       const frame = buildConfigFrame({
-        githubClientSecret: this.githubApp?.clientSecret,
-        cloudflareClientSecret: this.cloudflareOauth?.clientSecret,
+        githubClientSecret: operator ? this.githubApp?.clientSecret : undefined,
+        cloudflareClientSecret: operator ? this.cloudflareOauth?.clientSecret : undefined,
         runnerRepo: this.runnerRepo,
       });
       if (frame) send(frame);
@@ -1053,13 +1108,21 @@ export class CoordinatorCore {
    * one of those; otherwise a healthy one first, then by name, so the same
    * fleet offers the same machine.
    *
-   * @param {string|null} prefer
+   * OFFERED ONLY FROM THE MACHINES THAT MAY ACT FOR WHOEVER ASKED (hosts.js
+   * mayActFor), which for an admin is the fleet's own. The setup it carries
+   * ends with the admin's Xen Orchestra sign-in sealed to a key that machine
+   * made, and the offer was the first permanent box by name, so a box a member
+   * enrolled as `aaa-…` was the one both apps put on the button. Named, the
+   * machine is the person's own choice and stands.
+   *
+   * @param {string|null} prefer @param {string|null} who
    */
-  #relayHost(prefer) {
+  #relayHost(prefer, who) {
     const able = this.registry.reachable().filter((h) => !h.ephemeral && Number(h.health?.protocol) >= RELAY_PROTOCOL);
     if (prefer) return able.find((h) => h.hostId === prefer) ?? null;
-    able.sort((a, b) => Number(b.state === 'healthy') - Number(a.state === 'healthy') || a.hostId.localeCompare(b.hostId));
-    return able[0] ?? null;
+    const own = able.filter((h) => mayActFor(h, who));
+    own.sort((a, b) => Number(b.state === 'healthy') - Number(a.state === 'healthy') || a.hostId.localeCompare(b.hostId));
+    return own[0] ?? null;
   }
 
   /**
@@ -1097,14 +1160,14 @@ export class CoordinatorCore {
       return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say where Xen Orchestra answers: a host name or address, with an optional port.' });
     }
     const prefer = typeof ask?.host === 'string' && ask.host ? ask.host : null;
-    const host = this.#relayHost(prefer);
+    const host = this.#relayHost(prefer, owner);
     if (!host) {
       return refuse({
         ok: false,
         error: { code: 'no_hosts' },
         text: prefer
           ? `${prefer} cannot work through a phone now: it is offline, or older than protocol ${RELAY_PROTOCOL}. Update it and try again.`
-          : `No machine in the fleet can work through a phone yet: each is offline, or older than protocol ${RELAY_PROTOCOL}. Update one and try again.`,
+          : `No machine of the fleet’s own can work through a phone yet: each is offline, older than protocol ${RELAY_PROTOCOL}, or a box a member enrolled for themselves. Update one and try again.`,
       });
     }
     const started = this.relays.start({ owner, device, hostId: host.hostId, address, toPhone: phone.send, closePhone: phone.close });
@@ -2164,7 +2227,7 @@ export class CoordinatorCore {
       // there is one that speaks it, so a phone offers it only when it can be
       // done; a coordinator before this never names one, and a phone then
       // offers nothing new.
-      const through = spec.verb === 'xoprobe' && !(probes ?? []).some((p) => p.reachable) ? this.#relayHost(null) : null;
+      const through = spec.verb === 'xoprobe' && !(probes ?? []).some((p) => p.reachable) ? this.#relayHost(null, spec.requester?.email ?? null) : null;
 
       const checked = results.filter((r) => r?.check && typeof r.check === 'object');
       const answered = checked.find((r) => r.check.ok) ?? checked[0];
@@ -2749,7 +2812,11 @@ export class CoordinatorCore {
         preferHost: flow.hostId,
         requester: null,
       });
-      renewable = deposited?.ok !== false;
+      // AND ONLY WHERE IT CAN BE SPENT: a box that is not sent the client
+      // secrets (hostConnected) keeps the material and cannot renew with it,
+      // so the person is told to connect again rather than promised renewal.
+      const there = this.registry.get(flow.hostId);
+      renewable = deposited?.ok !== false && !(there && (there.ephemeral || (there.actsFor ?? null) !== null));
       // Not fatal. The connection works until the token expires either way,
       // and failing the whole flow over the part that makes it last would
       // throw away a credential the person just authorised.
@@ -2835,6 +2902,12 @@ export class CoordinatorCore {
         text: `${reply?.text || 'The check did not pass.'} Nothing was saved.`,
       };
     }
+    // THE REPOSITORY ASKED ABOUT, OR NOTHING. What was saved was the name in
+    // the answer, and a box answering for somebody else could answer with a
+    // repository of its own: their runner tickets were then minted for it.
+    // GitHub's spelling is kept, which differs from what was typed only in
+    // letter case.
+    if (!sameRepo(check.repo, repo)) return checkedSomethingElse(check.repo, repo, 'saved');
     const saved = this.runnerRepos.set(email, check.repo);
     if (saved.ok === false) return { ok: false, error: { code: 'not_saved' }, text: saved.text };
     this.onStateChanged?.();
@@ -2937,6 +3010,8 @@ export class CoordinatorCore {
         text: `${reply?.text || 'The check did not pass.'} Nothing was linked.`,
       };
     }
+    // The repository asked about or nothing, as setRunnerRepo says.
+    if (!sameRepo(check.repo, name)) return { ...checkedSomethingElse(check.repo, name, 'linked'), role: r };
     const saved = this.linkedRepos.set(email, r, check.repo);
     if (saved.ok === false) return { ok: false, role: r, error: { code: 'not_saved' }, text: saved.text };
     this.onStateChanged?.();
@@ -3195,9 +3270,15 @@ export class CoordinatorCore {
    * @param {any} spec
    */
   async #askEachBox(spec) {
+    // ONLY BOXES THAT MAY ACT FOR THIS PERSON. Every permanent box was asked,
+    // so a box another member enrolled with their own pin, named to sort
+    // first or reached after a box that said "not connected", answered a
+    // member's check for them and was handed their runner ticket. The
+    // scheduler applies the same rule when there is one box to ask.
+    const whose = spec.requester?.email ?? null;
     const boxes = this.registry
       .reachable()
-      .filter((h) => !h.ephemeral)
+      .filter((h) => !h.ephemeral && mayActFor(h, whose))
       .sort((a, b) => a.hostId.localeCompare(b.hostId));
     /** @type {string[]} */
     const skipped = [];
@@ -3487,6 +3568,11 @@ export class CoordinatorCore {
         internal: true,
         requester: { email: host.owner, admin: false },
       });
+      // FOR THE REPOSITORY ASKED FOR, as a check is (setRunnerRepo): a box's
+      // answer naming another is not the token this runner asked for.
+      if (reply?.ok && !sameRepo(reply.repo, repo)) {
+        reply = { ok: false, error: { code: 'refused' }, text: `${reply.hostId} answered for ${reply.repo || 'no repository'}, not ${repo}.` };
+      }
     }
     // RECORDED EITHER WAY, by repository and outcome — never the token, which
     // this process could not read if it wanted to. "Whose runner reached which
@@ -4074,8 +4160,8 @@ export class CoordinatorCore {
     };
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
-      for (const e of host.health.xo) {
-        if (String(e?.owner || '').toLowerCase() !== email || !Array.isArray(e?.machines)) continue;
+      for (const e of xoFor(host, email)) {
+        if (!Array.isArray(e?.machines)) continue;
         for (const m of e.machines) {
           const name = String(m?.name || '');
           if (!/^vm-[0-9a-f]{12}$/.test(name) || found.has(name)) continue;
@@ -4134,7 +4220,7 @@ export class CoordinatorCore {
     const holders = [];
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
-      const mine = host.health.xo.filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === owner);
+      const mine = xoFor(host, owner);
       if (!mine.length) continue;
       const seen = mine.some((/** @type {any} */ e) => Array.isArray(e?.machines) && e.machines.some((/** @type {any} */ m) => m?.name === name));
       holders.push({ host, seen });
@@ -4193,7 +4279,7 @@ export class CoordinatorCore {
     const holders = [];
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
-      const entry = host.health.xo.find((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === owner && String(e?.address || '') === address);
+      const entry = xoFor(host, owner).find((/** @type {any} */ e) => String(e?.address || '') === address);
       if (entry) holders.push({ host, reached: entry.reachable === true });
     }
     if (!holders.length) {
@@ -4266,8 +4352,8 @@ export class CoordinatorCore {
     const found = new Map();
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
-      for (const e of host.health.xo) {
-        if (String(e?.owner || '').toLowerCase() !== email || !e?.edges || typeof e.edges !== 'object') continue;
+      for (const e of xoFor(host, email)) {
+        if (!e?.edges || typeof e.edges !== 'object') continue;
         const address = String(e.address || '');
         const at = when(e.edges.at);
         if (!address || at === null) continue;
@@ -4450,8 +4536,8 @@ export class CoordinatorCore {
     const out = [];
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
-      const entries = host.health.xo
-        .filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === email && e?.reachable !== false)
+      const entries = xoFor(host, email)
+        .filter((/** @type {any} */ e) => e?.reachable !== false)
         .map((/** @type {any} */ e) => ({
           address: String(e.address || ''),
           networks: (Array.isArray(e.networks) ? e.networks : [])

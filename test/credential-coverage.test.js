@@ -196,3 +196,49 @@ test('a Claude token is made on the machine somebody picked, busy or not', async
   assert.equal(unnamed.error?.code, 'ambiguous_host');
   assert.match(String(unnamed.text), /rpi-7550/);
 });
+
+test('a pasted token reaches the fleet’s boxes and the person’s own, never a box or runner another member controls', async () => {
+  // FOUND BY AN AUDIT: any member can mint a host pin, so bob enrolled a box of
+  // his own and a runner, and alice's pasted GitHub token arrived on both —
+  // the link fan-out asked only whether a host was connected, while the same
+  // scheduler refused to put alice's work on bob's runner.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit, makeAdmin } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  await makeAdmin(core, 'admin@example.test');
+  await admit(core, 'ops-box');
+  await admit(core, 'admin-box', { enrolledBy: 'admin@example.test' });
+  await admit(core, 'alice-box', { enrolledBy: 'alice@example.test' });
+  await admit(core, 'aaa-bob', { enrolledBy: 'bob@example.test' });
+  await admit(core, 'gha-bob-1', { enrolledBy: 'bob@example.test', owner: 'bob@example.test', ephemeral: true });
+  await admit(core, 'gha-alice-1', { enrolledBy: 'alice@example.test', owner: 'alice@example.test', ephemeral: true });
+  /** @type {Array<{ hostId: string, verb: string }>} */
+  const sent = [];
+  core.send = async (/** @type {any} */ host, /** @type {any} */ spec) => {
+    sent.push({ hostId: host.hostId, verb: spec.verb });
+    return { ok: true, text: 'stored' };
+  };
+  const alice = { email: 'alice@example.test', admin: false };
+  const reached = async (/** @type {any} */ spec) => {
+    sent.length = 0;
+    const reply = await core.dispatch(spec);
+    return { reply, hosts: sent.map((s) => s.hostId).sort() };
+  };
+
+  const pasted = await reached({ verb: 'link', params: { provider: 'github', secret: 'ghp_DUMMY' }, actor: alice.email, requester: alice });
+  assert.deepEqual(pasted.hosts, ['admin-box', 'alice-box', 'gha-alice-1', 'ops-box']);
+  // Unlink, Test and the connected list ask the same set, so coverage is
+  // reported over the boxes the token could have reached.
+  for (const verb of ['unlink', 'verify']) {
+    assert.deepEqual((await reached({ verb, params: { provider: 'github' }, actor: alice.email, requester: alice })).hosts, pasted.hosts, verb);
+  }
+  assert.deepEqual((await reached({ verb: 'connect', params: {}, actor: alice.email, requester: alice })).hosts, pasted.hosts);
+
+  // Naming bob's box does not make it hers.
+  const named = await reached({ verb: 'link', params: { provider: 'github', secret: 'ghp_DUMMY' }, actor: alice.email, requester: alice, preferHost: 'aaa-bob' });
+  assert.equal(named.reply.error?.code, 'host_unavailable');
+  assert.deepEqual(named.hosts, []);
+
+  // The break-glass token names nobody, and reaches the operator's boxes alone.
+  assert.deepEqual((await reached({ verb: 'link', params: { provider: 'github', secret: 'ghp_DUMMY' } })).hosts, ['admin-box', 'ops-box']);
+});
