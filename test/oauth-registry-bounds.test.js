@@ -60,6 +60,25 @@ test('the newest registration survives, and an evicted one can simply register a
   assert.equal(a.knows(first.clientId), false, 'nothing was evicted, so the map is still unbounded');
 });
 
+test('a flood of anonymous registrations does not push out a client somebody has signed in with', () => {
+  // Re-registering is not the free round trip the eviction argument above
+  // assumed: a client whose row is gone is refused on an HTML page in the
+  // person's browser, or after they have signed in. Two hundred anonymous
+  // POSTs did that to every client in the fleet in the second Workers audit.
+  // A client that has had a code issued has had a person sign in for it,
+  // which no anonymous caller can do.
+  const a = new Authorizations();
+  const used = ok(a.register({ redirect_uris: ['https://example.org/used'] }), 'used');
+  ok(a.issueCode({ email: 'eli@example.com', clientId: used.clientId, redirectUri: 'https://example.org/used', challenge: 'c' }), 'code');
+  for (let i = 0; i < 1000; i++) a.register({ redirect_uris: [`https://example.org/cb/${i}`] });
+  assert.equal(a.knows(used.clientId), true, 'a client in use was evicted by anonymous registrations');
+  // And across a save, where an oversized registry is trimmed.
+  for (let i = 0; i < 1000; i++) a.register({ redirect_uris: [`https://example.org/${'x'.repeat(400)}/${i}`, `https://example.org/${'y'.repeat(400)}`] });
+  const b = new Authorizations();
+  b.restore(a.serialise());
+  assert.equal(b.knows(used.clientId), true, 'a client in use was dropped when the registry was saved');
+});
+
 test('a value restored from before the caps is trimmed rather than rewritten out', () => {
   // A box that has been running since before this fix has an oversized value
   // ALREADY on disk. restore() would load it and the next save would throw —

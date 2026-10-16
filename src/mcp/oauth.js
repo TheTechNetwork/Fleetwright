@@ -118,7 +118,7 @@ export class Authorizations {
     this.now = now;
     /** @type {Map<string, { email: string, name: string|null, clientId: string, redirectUri: string, challenge: string, expiresAt: number }>} */
     this.codes = new Map();
-    /** @type {Map<string, { redirectUris: string[], name: string }>} */
+    /** @type {Map<string, { redirectUris: string[], name: string, usedAt?: number|null }>} */
     this.clients = new Map();
   }
 
@@ -165,10 +165,33 @@ export class Authorizations {
     // `invalid_client` and registers again, which is the same round trip it
     // makes the first time. That is why this key can be bounded by dropping
     // and `hostIds` cannot.
+    //
+    // BUT NOT A CLIENT SOMEBODY HAS SIGNED IN WITH. The round trip is not
+    // free in practice: the refusal is an HTML page in a person's browser, or
+    // comes after they have signed in, and two hundred anonymous POSTs did it
+    // to every client in the fleet in the second Workers audit. A client that
+    // has had a code issued (`usedAt`) had a person on the allowlist sign in
+    // for it, which an anonymous caller cannot arrange, so a flood only ever
+    // displaces other registrations nobody has used. Only when every row has
+    // been used does the one used longest ago go, and never the one just made.
     while (this.clients.size > MAX_CLIENTS) {
-      const oldest = this.clients.keys().next().value;
-      if (oldest === undefined) break;
-      this.clients.delete(oldest);
+      /** @type {string|undefined} */
+      let victim;
+      /** @type {number} */
+      let oldestUse = Infinity;
+      for (const [id, c] of this.clients) {
+        if (id === clientId) continue;
+        if (c.usedAt == null) {
+          victim = id;
+          break;
+        }
+        if (/** @type {number} */ (c.usedAt) < oldestUse) {
+          oldestUse = c.usedAt;
+          victim = id;
+        }
+      }
+      if (victim === undefined) break;
+      this.clients.delete(victim);
     }
     return { ok: true, clientId, redirectUris };
   }
@@ -186,6 +209,8 @@ export class Authorizations {
     // code to themselves.
     if (!client || !client.redirectUris.includes(redirectUri)) return { ok: false, error: 'invalid_redirect_uri' };
     if (!challenge) return { ok: false, error: 'invalid_request' };
+    // Somebody signed in for this client: it is in use, and register() keeps it.
+    client.usedAt = this.now();
     const code = randomHex(24);
     this.codes.set(code, { email, name, clientId, redirectUri, challenge, expiresAt: this.now() + CODE_TTL_MS });
     return { ok: true, code };
@@ -245,11 +270,18 @@ export class Authorizations {
     // it: "one number, owned by the serialiser". register() caps what it
     // admits, and this is the backstop for rows that arrived some other way —
     // a restore() from a value written before those caps existed, most
-    // obviously. Oldest first, same rule as above.
-    while (rows.length > 1 && JSON.stringify(rows).length > 100_000) {
-      rows.splice(0, Math.ceil(rows.length / 2));
+    // obviously. The same order as above: registrations nobody has used,
+    // oldest first, then the ones used longest ago. Halving from the front
+    // threw clients in use out with the anonymous ones in front of them.
+    const order = [...rows].sort((a, b) => Number(a.usedAt != null) - Number(b.usedAt != null) || (a.usedAt ?? 0) - (b.usedAt ?? 0));
+    let size = JSON.stringify(rows).length;
+    const dropped = new Set();
+    for (const row of order) {
+      if (size <= 100_000 || rows.length - dropped.size <= 1) break;
+      dropped.add(row);
+      size -= JSON.stringify(row).length + 1;
     }
-    return rows;
+    return rows.filter((row) => !dropped.has(row));
   }
 
   /** @param {any[]} rows */
@@ -260,7 +292,11 @@ export class Authorizations {
       // that admitted it, and isSafeRedirect is the rule.
       const redirectUris = row.redirectUris.map(String).filter((/** @type {string} */ u) => isSafeRedirect(u));
       if (!redirectUris.length) continue;
-      this.clients.set(String(row.clientId), { redirectUris, name: String(row.name || 'an MCP client') });
+      this.clients.set(String(row.clientId), {
+        redirectUris,
+        name: String(row.name || 'an MCP client'),
+        usedAt: Number.isFinite(row.usedAt) ? Number(row.usedAt) : null,
+      });
     }
   }
 }

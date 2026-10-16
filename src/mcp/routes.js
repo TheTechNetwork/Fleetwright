@@ -121,6 +121,10 @@ export async function mcpRoutes(req, deps) {
     const r = deps.authorizations.register(req.body || {});
     if (!r.ok) return { status: 400, json: { error: r.error } };
     deps.authorizations.sweep();
+    // WRITTEN NOW. A registration lived in memory until some other route
+    // happened to save the client stores, so an eviction in between forgot a
+    // client that had just been told its id, and its first sign-in failed.
+    deps.save();
     return {
       status: 201,
       json: {
