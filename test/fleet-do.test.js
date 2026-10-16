@@ -432,6 +432,19 @@ test('a member listing pins and enrolled hosts is not shown whose they are', asy
   assert.equal(seenByAlice.owner, 'alice@example.test');
   assert.equal((await hosts(admin))[0].enrolledBy, 'alice@example.test');
 
+  // And the live host list the apps draw from, which handed every member the
+  // owner of every temporary host (third Workers audit), before its first
+  // health frame and after.
+  f.core.hostConnected('alice-box', () => {});
+  const live = async (/** @type {string} */ token) =>
+    (await (await call(f, '/api/hosts', 'GET', null, as(token))).json()).hosts.find((/** @type {any} */ h) => h.hostId === 'alice-box');
+  for (const when of ['before its health', 'after its health']) {
+    if (when === 'after its health') await f.core.onHostMessage('alice-box', { kind: 'health', health: { sessions: [], claudeAccounts: 1 } });
+    const seen = await live(bob);
+    assert.ok(seen, `a member was not shown the host at all ${when}`);
+    assert.equal(JSON.stringify(seen).includes('alice@'), false, `a member was shown a colleague's email ${when}: ${JSON.stringify(seen)}`);
+    assert.equal((await live(alice)).owner, 'alice@example.test', `the owner was not shown their own ${when}`);
+  }
 });
 
 test('one member filling a shared store fills only their own share of it', async () => {

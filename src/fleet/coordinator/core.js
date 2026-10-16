@@ -5536,13 +5536,20 @@ function takesSessions(host, requester) {
  * @param {{ email?: string|null, admin?: boolean }|null} requester
  */
 function visibleHost(host, requester) {
-  if (!requester || requester.admin || !host?.health) return host;
+  if (!requester || requester.admin || !host) return host;
+  // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only
+  // when it is theirs, as /api/hosts/enrolled already did (enrolledHostsFor).
+  // This route handed every member every runner's owner, before its first
+  // health frame as well as after (third Workers audit).
+  const owner = host.owner && emailOf(host.owner) !== String(requester.email || '').toLowerCase() ? null : host.owner;
+  if (!host.health) return { ...host, ...('owner' in host ? { owner } : {}) };
   const sessions = Array.isArray(host.health.sessions)
     ? host.health.sessions.filter((/** @type {any} */ s) => ownedBy(s?.createdBy, requester))
     : host.health.sessions;
   const mine = new Set((sessions || []).map((/** @type {any} */ s) => s?.name));
   return {
     ...host,
+    ...('owner' in host ? { owner } : {}),
     health: {
       ...host.health,
       sessions,
