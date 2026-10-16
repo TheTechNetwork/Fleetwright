@@ -432,3 +432,32 @@ test('a member listing pins and enrolled hosts is not shown whose they are', asy
   assert.equal(seenByAlice.owner, 'alice@example.test');
   assert.equal((await hosts(admin))[0].enrolledBy, 'alice@example.test');
 });
+
+test('one member filling a shared store fills only their own share of it', async () => {
+  // Pending pins, runner and VM tickets and live credentials were each one
+  // fleet-wide store with a fleet-wide cap. A member minting two hundred pins
+  // or tickets evicted everybody else's oldest, and 149 sign-ins refused
+  // every other person's next one, the admin's included.
+  const { fleet: f } = fleet();
+  const issue = async (/** @type {string} */ name, /** @type {string} */ email) => {
+    const { token } = await f.core.clients.issue(name);
+    const row = [...f.core.clients.clients.values()].find((c) => c.name === name);
+    row.email = email;
+    return { authorization: `Bearer ${token}` };
+  };
+  const alice = await issue('alice phone', 'alice@example.test');
+  const bob = await issue('bob phone', 'bob@example.test');
+
+  const { code } = await (await call(f, '/api/enroll', 'POST', { kind: 'host' }, alice)).json();
+  for (let i = 0; i < 250; i++) await call(f, '/api/enroll', 'POST', { kind: 'host' }, bob);
+  const key = await generateKeyPair();
+  assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: 'alice-box', publicJwk: key.publicJwk })).status, 200, "another member's pins pushed out alice's");
+
+  const ticket = await f.core.runnerTickets.mint({ owner: 'alice@example.test', platform: 'linux' });
+  for (let i = 0; i < 250; i++) await f.core.runnerTickets.mint({ owner: 'bob@example.test', platform: 'linux' });
+  assert.ok(await f.core.runnerTickets.peek(ticket?.token), "another member's tickets pushed out alice's");
+
+  for (let i = 0; i < 160; i++) await f.core.issueClient({ email: 'bob@example.test' }, `bob device ${i}`);
+  const signedIn = await f.core.issueClient({ email: 'alice@example.test' }, 'alice laptop');
+  assert.ok('token' in signedIn, `alice could not sign in after another member's sign-ins: ${JSON.stringify(signedIn)}`);
+});

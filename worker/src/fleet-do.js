@@ -27,7 +27,7 @@ import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fle
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
-import { emailOf, installCommand } from '../../src/fleet/coordinator/enrollment.js';
+import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
@@ -1057,7 +1057,8 @@ export class Fleet {
       const body = await readJson(request);
       const minted = await this.core.runnerTokens.issue(
         body?.name ? String(body.name) : 'a repository',
-        {},
+        // Counted per person, so one member cannot fill the store for everybody.
+        { email: client.email },
       );
       // 507 rather than 400 — see the Node coordinator's copy.
       if (minted.ok === false) return json(minted, 507);
@@ -1113,6 +1114,9 @@ export class Fleet {
         // retirement code that exists to prevent exactly that never ran.
         ephemeral: Boolean(body?.ephemeral),
       });
+      // 507, as for every full store: the fleet holds as many pins as it can
+      // and none of them is this person's to give up (enrollment.js).
+      if (!issued) return json({ ok: false, error: { code: 'pins_full' }, text: PINS_FULL }, 507);
       await this.#saveEnrollment();
       // THE PERSON IS THE ACTOR, not only words in the text. visibleEvents
       // shows a member every event with no actor and no session name, as fleet

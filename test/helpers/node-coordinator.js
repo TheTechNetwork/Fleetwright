@@ -52,7 +52,7 @@ import { resource } from '../../src/core/resources.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { memberRoutes, isMemberPath, signInClients } from '../../src/fleet/coordinator/member-page.js';
-import { emailOf, installCommand } from '../../src/fleet/coordinator/enrollment.js';
+import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -1314,7 +1314,8 @@ export class Coordinator {
       const body = await readJson(req);
       const minted = await this.core.runnerTokens.issue(
         body?.name ? String(body.name) : 'a repository',
-        {},
+        // Counted per person, so one member cannot fill the store for everybody.
+        { email: client.email },
       );
       // 507 rather than 400: the request is well formed and the fleet is out
       // of room, the same distinction the device store draws.
@@ -1412,6 +1413,7 @@ export class Coordinator {
         // retirement code that exists to prevent exactly that never ran.
         ephemeral: Boolean(body?.ephemeral),
       });
+      if (!issued) return json(res, 507, { ok: false, error: { code: 'pins_full' }, text: PINS_FULL });
       this.saveState();
       // No install command: this coordinator publishes no installer (the
       // Worker's /install is the one that does), so the line would 404. Null

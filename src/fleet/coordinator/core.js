@@ -16,7 +16,7 @@ import { HostRegistry, runsNoSessions } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
 import { HostIdentities, actsFor, mayActFor } from './hosts.js';
-import { Enrollment, emailOf } from './enrollment.js';
+import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -26,7 +26,7 @@ import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
-import { RunnerTickets, randomHex, hashSecret, constantTimeEqual } from './runner-tickets.js';
+import { RunnerTickets, randomHex, hashSecret, constantTimeEqual, TICKETS_FULL } from './runner-tickets.js';
 import { RunnerRepos } from './runner-repos.js';
 import { LinkedRepos } from './linked-repos.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
@@ -1543,14 +1543,20 @@ export class CoordinatorCore {
     // Checking live admins reopened it — revoke the owner's lost phone and the
     // next person to sign in, whoever they were, inherited the fleet.
     const admin = !this.clients.everHadAdmin() || this.clients.emailHasAdmin(who.email);
-    const issued = await this.clients.issue(`${label} (${who.email})`, { admin });
+    const issued = await this.clients.issue(`${label} (${who.email})`, { admin, email: who.email });
     // A FULL STORE REFUSES THE SIGN-IN RATHER THAN HALF-COMPLETING IT. The
     // caller already spent their ID token to get here, so this is the one
     // place the refusal has to be legible: minting a credential the save
     // cannot persist is precisely the fleet-wide sign-in failure the ceiling
     // exists to prevent (#351).
     if (issued.ok === false) {
-      this.record({ event: 'clients.full', actor: who.email, text: `${who.email} could not sign in: this fleet is holding as many credentials as it can store` });
+      this.record({
+        event: 'clients.full',
+        actor: who.email,
+        text: issued.code === 'person_full'
+          ? `${who.email} could not sign in: they hold as many credentials as one person may`
+          : `${who.email} could not sign in: this fleet is holding as many credentials as it can store`,
+      });
       return issued;
     }
     const { client, token } = issued;
@@ -3451,6 +3457,7 @@ export class CoordinatorCore {
       repository,
       start,
     });
+    if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
     // Persisted before the dispatch leaves, not after it succeeds: a ticket
     // that is spent by a job but was never written down is an unattributed
     // host, and the window between minting and enrolment is minutes long —
@@ -3826,6 +3833,10 @@ export class CoordinatorCore {
       return;
     }
     const pin = this.enrollment.mint({ purpose: 'host', label: `Holds a pool for ${rec.owner}`, actor: rec.owner, hostId: name });
+    if (!pin) {
+      answer({ ok: false, error: { code: 'pins_full' }, text: PINS_FULL });
+      return;
+    }
     // AND THE NAME HELD FOR A DAY, so a machine whose first boot outlasts the
     // pin can still ask to join and be let in from the phone (holder-joins.js).
     // The pin stays for machines made from an image older than the asking.
@@ -4730,6 +4741,7 @@ export class CoordinatorCore {
     }
     const image = holders[0].entries[0].images[0];
     const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start });
+    if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
     const vmHost = `vm-${ticket.id}`;
     // A MACHINE KEPT READY IS BEING MADE FROM HERE, not from the box's answer.
     // Counted only once the box said yes, a top-up set off by a health frame

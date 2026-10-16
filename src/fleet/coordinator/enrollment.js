@@ -62,6 +62,10 @@ const CODE_TTL_MS = 10 * 60_000;
 const MAX_FAILURES = 10;
 // How many unspent pins may wait at once. See mint() for why there is a bound.
 const MAX_PENDING = 200;
+// And how many of them one person may hold. See mint() for why both.
+const MAX_PENDING_PER_ACTOR = 20;
+/** What a person is told when the fleet-wide backstop refuses their pin. */
+export const PINS_FULL = 'This fleet is holding as many unspent pins as it can store. Each lasts ten minutes, so try again in a few.';
 const FAILURE_WINDOW_MS = 60_000;
 /** How long each failure past the budget adds. */
 const PENALTY_STEP_MS = 500;
@@ -129,12 +133,31 @@ export class Enrollment {
    * choosing.
    *
    * @param {{ purpose: Purpose, label?: string, actor?: string|null, hostId?: string|null, readmit?: boolean, ephemeral?: boolean }} spec
+   * @returns {{ code: string, expiresAt: number, purpose: Purpose, hostId: string|null, readmit: boolean } | null}
+   *   null when the fleet holds as many pins as it can, none of them this person's to give up
    */
   mint({ purpose, label = '', actor = null, hostId = null, readmit = false, ephemeral = false }) {
     this.#sweep();
+    // Bounded like every other transient store here — codes, tickets, the
+    // event ring. Minting needs a credential, so this is not anonymous
+    // growth; it is the one place a careless or captured member credential
+    // could grow a map for as long as it liked.
+    //
+    // PER PERSON FIRST. One fleet-wide cap with the oldest dropped meant one
+    // member minting two hundred pins pushed out everybody else's, the
+    // admin's included, for as long as they kept minting. Now a person's own
+    // oldest pin makes room for their next, and nobody else's ever does; the
+    // fleet-wide cap is the storage backstop behind that, and it refuses.
+    const who = actor ?? null;
+    const mine = [...this.pending.values()].filter((p) => (p.actor ?? null) === who);
+    if (mine.length >= MAX_PENDING_PER_ACTOR) this.pending.delete(mine[0].code);
+    else if (this.pending.size >= MAX_PENDING) return null;
     // 6 digits, shown as two groups of three. randomInt over the whole range
-    // rather than the modulo of random bytes, which is not uniform.
-    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    // rather than the modulo of random bytes, which is not uniform. Never one
+    // already waiting: setting it again would replace somebody else's pin.
+    let code;
+    do code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    while (this.pending.has(code));
     /** @type {Pending} */
     const entry = {
       code,
@@ -151,16 +174,6 @@ export class Enrollment {
       expiresAt: this.now() + this.ttlMs,
     };
     this.pending.set(code, entry);
-    // Bounded like every other transient store here — codes, tickets, the
-    // event ring. Minting needs a credential, so this is not anonymous
-    // growth; it is the one place a careless or captured member credential
-    // could grow a map for as long as it liked. Oldest goes first: a pin that
-    // has waited longest is the one least likely to still be wanted.
-    while (this.pending.size > MAX_PENDING) {
-      const oldest = this.pending.keys().next().value;
-      if (oldest === undefined) break;
-      this.pending.delete(oldest);
-    }
     return { code, expiresAt: entry.expiresAt, purpose, hostId: entry.hostId, readmit: entry.readmit };
   }
 

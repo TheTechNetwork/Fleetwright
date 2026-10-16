@@ -52,6 +52,10 @@ const TICKET_TTL_MS = 45 * 60_000;
 
 /** Bounded, because an unclaimed dispatch costs memory until it expires. */
 const MAX_TICKETS = 200;
+/** And per person, so one person's dispatches are only ever paid for by their own. */
+const MAX_TICKETS_PER_OWNER = 20;
+/** What a person is told when the fleet-wide backstop refuses their ticket. */
+export const TICKETS_FULL = 'This fleet is waiting on as many new machines as it can keep track of. Try again in a few minutes.';
 
 export const TICKET_PREFIX = 'fwt';
 
@@ -121,24 +125,29 @@ export class RunnerTickets {
    * Mint one for a dispatch that is about to happen.
    *
    * @param {{ owner: string, platform: string, repository?: string|null, start?: Ticket['start'] }} spec
-   * @returns {Promise<{ id: string, token: string, expiresAt: number }>}
+   * @returns {Promise<{ id: string, token: string, expiresAt: number } | null>}
+   *   null when the fleet holds as many tickets as it can, none of them this person's
    */
   async mint({ owner, platform, repository = null, start = null }) {
     this.#sweep();
-    // Oldest first, so a flood of abandoned dispatches cannot evict a live
-    // ticket somebody's job is on its way to spend.
-    while (this.tickets.size >= MAX_TICKETS) {
-      const oldest = this.tickets.keys().next().value;
-      if (oldest === undefined) break;
-      this.tickets.delete(oldest);
-    }
+    // A PERSON'S OWN OLDEST TICKET MAKES ROOM FOR THEIR NEXT, AND NOBODY
+    // ELSE'S EVER DOES. This used to drop the fleet's oldest ticket whoever
+    // held it, under a comment saying that stopped a flood of abandoned
+    // dispatches evicting a live ticket; it did the opposite, and a member
+    // minting two hundred dispatches pushed out every job on its way to
+    // enrol. The fleet-wide cap is the storage backstop behind the per-person
+    // one, and it refuses rather than evicting somebody else's.
+    const who = String(owner || '').toLowerCase();
+    const mine = [...this.tickets.values()].filter((t) => t.owner === who);
+    if (mine.length >= MAX_TICKETS_PER_OWNER) this.tickets.delete(mine[0].id);
+    else if (this.tickets.size >= MAX_TICKETS) return null;
     const id = randomHex(ID_BYTES);
     const secret = randomHex(SECRET_BYTES);
     const expiresAt = this.now() + this.ttlMs;
     this.tickets.set(id, {
       id,
       secretHash: await hashSecret(secret),
-      owner: String(owner || '').toLowerCase(),
+      owner: who,
       platform: String(platform || ''),
       repository: repository ? String(repository) : null,
       start: start && typeof start === 'object' ? { ...start } : null,
