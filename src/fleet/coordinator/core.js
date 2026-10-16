@@ -828,7 +828,7 @@ export class CoordinatorCore {
    * A host changed state. Say so, once, in words about what it means.
    *
    * @param {string} hostId
-   * @param {{ from: string, to: string, reason: string }} moved
+   * @param {{ from: string, to: string, reason: string, fault?: string }} moved
    */
   async #onHostState(hostId, moved) {
     // NOT AGAIN, FOR THE SAME REASON, WITHIN THE HOUR.
@@ -875,16 +875,32 @@ export class CoordinatorCore {
       // a notification saying "degraded" sends somebody to find out what this
       // line already knows.
       : `${hostId} cannot start sessions: ${moved.reason}`;
-    const said = this.events.some(
-      (e) => e.hostId === hostId
-        && (e.event === 'host.degraded' || e.event === 'host.recovered')
-        && e.text === text
-        && this.now() - e.at < HOST_STATE_QUIET_MS,
-    );
-    if (said) return;
+    // ONCE PER FAULT, WHATEVER THE BOX SAYS ABOUT IT. This matched the whole
+    // sentence, and the sentence carries the box's own hub reason: a box
+    // sending a new one in every frame was never quiet, and each frame was a
+    // record and a push to the admin's phone (third Workers audit). So the
+    // fault is the coordinator's words alone (`fault`, registry.js), of which
+    // there are a handful: a fault that changes is still news inside the
+    // hour, and the box's words changing is not. They still reach the host's
+    // row, which the apps show; it is the announcement that waits.
+    //
+    // And remembered here as well as in the ring, because the ring is not a
+    // memory the box cannot touch: its own session events displace its own
+    // oldest (#makeRoom), this record among them.
+    const kind = recovered ? 'host.recovered' : 'host.degraded';
+    const said = recovered ? text : `${hostId} cannot start sessions: ${moved.fault ?? moved.reason}`;
+    const key = `${kind}\n${said}`;
+    const now = this.now();
+    const quiet = now - (this.#hostStateSaidAt.get(key) ?? -Infinity) < HOST_STATE_QUIET_MS
+      || this.events.some(
+        (e) => e.hostId === hostId && e.event === kind && String(e.text).startsWith(said) && now - e.at < HOST_STATE_QUIET_MS,
+      );
+    if (quiet) return;
+    for (const [k, at] of this.#hostStateSaidAt) if (now - at >= HOST_STATE_QUIET_MS) this.#hostStateSaidAt.delete(k);
+    this.#hostStateSaidAt.set(key, now);
     const event = this.record({
       hostId,
-      event: recovered ? 'host.recovered' : 'host.degraded',
+      event: kind,
       name: hostId,
       text,
     });
@@ -894,6 +910,9 @@ export class CoordinatorCore {
     // nobody opens.
     if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
   }
+
+  /** When each host's last announcement of each fault was made (#onHostState). */
+  #hostStateSaidAt = new Map();
 
   /**
    * Record something the coordinator itself did, as opposed to something a
@@ -933,7 +952,9 @@ export class CoordinatorCore {
    * at the expense of that writer's own oldest when they hold their share.
    *
    * A host's news: its own oldest once it holds HOST_EVENTS_EACH, any host's
-   * once hosts together hold HOST_EVENTS (#onHostEvent says why).
+   * once hosts together hold HOST_EVENTS (#onHostEvent says why). Its health
+   * changes count here too, written by record() from #onHostState, because
+   * the box chooses how often they happen (hostReported).
    *
    * AND A PERSON'S RECORDS, the same way. The coordinator's own share had no
    * bound per writer, and several of its records are written at a member's
@@ -5531,10 +5552,18 @@ const ACTOR_EVENTS_EACH = 25;
 /**
  * Did a host write this, rather than the coordinator? See HOST_EVENT_RE.
  *
+ * OR CHOOSE WHEN IT WAS WRITTEN. `host.degraded` and `host.recovered` are the
+ * coordinator's words about a box's health frames, and the box decides how
+ * often its health changes: counted as the coordinator's own, a new hub
+ * reason per frame wrote one per frame into the share the audit records keep
+ * (third Workers audit). A host cannot send either itself (HOST_EVENT_RE), so
+ * the name still cannot be forged.
+ *
  * @param {any} e
  */
 export function hostReported(e) {
-  return typeof e?.event === 'string' && e.event.startsWith('session.');
+  return typeof e?.event === 'string'
+    && (e.event.startsWith('session.') || e.event === 'host.degraded' || e.event === 'host.recovered');
 }
 
 /**

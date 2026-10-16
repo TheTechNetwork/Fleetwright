@@ -522,3 +522,35 @@ test('one member’s requests displace their own records, never the fleet’s or
   assert.ok(kept(revived.core.events), 'and the loss outlived a rebuild');
   assert.ok(f.core.events.filter((e) => e.actor === 'mallory@example.test').length > 0, 'her own minting is still recorded');
 });
+
+test('a box changing its health reason every frame is announced once, and holds only its own share', async () => {
+  // A health frame's hub.reason went into host.reason uncapped, every new
+  // reason was a transition, and #onHostState suppressed only the identical
+  // sentence: so a box with a new reason per frame wrote one host.degraded
+  // per frame into the coordinator's records and pushed each one to the
+  // admin's phone. 51 frames displaced the oldest audit record from memory,
+  // storage and a rebuild (third Workers audit).
+  const { fleet: f, state } = fleet();
+  f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
+  for (let i = 0; i < 150; i++) f.core.record({ event: 'audit.seed', text: `seed ${i}` });
+  const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  await f.core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: admin.client.id, actor: 'admin@example.test' });
+  /** @type {any[]} */
+  const sent = [];
+  f.core.push = /** @type {any} */ ({ send: async (/** @type {any[]} */ d) => { sent.push(...d); return { ok: true }; } });
+  f.core.hostConnected('mallory-box', () => {});
+  const socket = /** @type {any} */ ({ deserializeAttachment: () => ({ hostId: 'mallory-box' }) });
+  for (let i = 0; i < 120; i++) {
+    const health = { protocol: 7, labels: [], maxSessions: 4, running: 0, free: 4, sessions: [], loggedIn: true, claudeAccounts: 1, hub: { reachable: false, reason: `DUMMY-REASON-${i} ${'x'.repeat(3_000)}` } };
+    await f.webSocketMessage(socket, JSON.stringify({ kind: 'health', health }));
+  }
+  await new Promise((r) => setTimeout(r, 0));
+
+  const degraded = f.core.events.filter((e) => e.event === 'host.degraded');
+  assert.equal(degraded.length, 1, `one box wrote ${degraded.length} host.degraded records in a quiet window`);
+  assert.ok(sent.length <= 1, `and pushed ${sent.length} of them`);
+  assert.ok(String(f.core.registry.get('mallory-box')?.reason).length < 300, 'a reason the box chose was kept uncapped');
+  const seeded = (/** @type {any[]} */ events) => events.some((e) => e.hostId === 'seed-host');
+  assert.ok(seeded(f.core.events), 'a box’s health pushed the coordinator’s record out of the ring');
+  assert.ok(seeded(state.raw.get('events') ?? []), 'and out of storage');
+});
