@@ -241,4 +241,20 @@ test('a pasted token reaches the fleet’s boxes and the person’s own, never a
 
   // The break-glass token names nobody, and reaches the operator's boxes alone.
   assert.deepEqual((await reached({ verb: 'link', params: { provider: 'github', secret: 'ghp_DUMMY' } })).hosts, ['admin-box', 'ops-box']);
+
+  // A CLAUDE TOKEN MADE ON A MACHINE is in the clear there until it is sealed,
+  // so neither half of `setuptoken` reaches a machine bob controls either. A
+  // later audit had both reach his box and his runner, while a Claude
+  // `connect` there was refused.
+  for (const preferHost of ['aaa-bob', 'gha-bob-1']) {
+    for (const params of [{}, { code: 'dummy-code' }]) {
+      const made = await reached({ verb: 'setuptoken', params, actor: alice.email, requester: alice, preferHost });
+      assert.equal(made.reply.error?.code, 'host_unavailable', `${preferHost} ${JSON.stringify(params)}`);
+      assert.deepEqual(made.hosts, []);
+    }
+  }
+  const unnamed = await reached({ verb: 'setuptoken', params: {}, actor: alice.email, requester: alice });
+  assert.equal(unnamed.reply.error?.code, 'ambiguous_host');
+  assert.doesNotMatch(String(unnamed.reply.text), /bob/, 'offered only machines that may make it');
+  assert.deepEqual((await reached({ verb: 'setuptoken', params: {}, actor: alice.email, requester: alice, preferHost: 'gha-alice-1' })).hosts, ['gha-alice-1']);
 });

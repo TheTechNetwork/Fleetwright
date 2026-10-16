@@ -75,7 +75,7 @@ const PINNED = new Set([
 const FANOUT = new Set(['list', 'profiles', 'secrets']);
 
 /** Verbs that carry, or act with, one person's credential. See `whose` in place(). */
-const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify']);
+const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setuptoken']);
 
 /**
  * @typedef {object} Placement
@@ -294,11 +294,18 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // into THAT pane, so the second half landing on another box would type a
   // code into a machine that never asked for one: pinned, like a Claude
   // `connect`. Not new work either, so a full box can still make one; the
-  // capacity filter below is for sessions. Any connected machine will do,
-  // a runner included, because the token goes back sealed to the phone.
+  // capacity filter below is for sessions.
+  //
+  // ONLY A MACHINE THAT MAY HOLD THE PERSON'S CREDENTIALS, their own runner
+  // included. This said any connected machine would do because the token goes
+  // back sealed to the phone, and the seal protects it only after it leaves:
+  // the token is in the clear in the pane and the hub's memory first, so a box
+  // another member enrolled, where that member has root, could make a
+  // member's year-long Claude token. It is a credential verb, so the named
+  // host is refused at the top of this function like a Claude `connect`.
   if (verb === 'setuptoken') {
-    const hosts = registry.reachable();
-    if (!hosts.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    const hosts = holders();
+    if (!hosts.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHolders(registry) };
     if (preferHost) {
       const chosen = hosts.find((h) => h.hostId === preferHost);
       return chosen

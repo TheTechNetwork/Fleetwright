@@ -215,8 +215,10 @@ carry a credential through the coordinator, so both are accounted for here.
   reach podman volumes only, and a runner has none.
 - **A token made on a machine** (`setuptoken`) is in the clear on that
   machine for the seconds between the CLI printing it and the seal: on its
-  pane, and in the hub's memory. The machine is one of the person's own, which
-  already holds their linked login if they have one, and it keeps nothing: the
+  pane, and in the hub's memory. The machine is one that may hold the person's
+  credentials, an operator's box, one they enrolled or their own runner
+  (`mayActFor`), which already holds their linked login if they have one, and
+  never a box or runner another member controls. It keeps nothing: the
   pane and its config directory are removed before the reply, the code is
   masked in the journal, and the token is in no reply text. The coordinator
   relays the sign-in page and a ciphertext sealed to the phone's one-answer
