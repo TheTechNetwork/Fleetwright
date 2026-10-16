@@ -158,6 +158,31 @@ const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
  */
 const MAX_PUSH_TOKEN = 512;
 const MAX_DEVICES = 150;
+
+/**
+ * A push token in the one spelling its provider issues, or null for anything
+ * that is not one.
+ *
+ * Rows are keyed by the token and ownership is decided on the key, so two
+ * spellings of one delivery address were two rows with two owners. The APNs
+ * sender puts the token in a URL path, where `zz/../<token>` loses its dot
+ * segments and `<token>#zz` its fragment: both were accepted as new rows, and
+ * a member who learned a colleague's token could send that colleague's phone
+ * their own notifications past the not_yours check in registerDevice. An APNs
+ * token is bytes written as hex, kept in the lower case Fleet.swift writes, so
+ * the same bytes in capitals are the same row. FCM's registration tokens and
+ * installation IDs are both base64url plus the colon that separates a
+ * registration token's parts.
+ * Anything else could be a path, a query or a second token, and is refused.
+ *
+ * @param {string} platform @param {unknown} token
+ */
+function canonicalPushToken(platform, token) {
+  if (typeof token !== 'string' || token.length > MAX_PUSH_TOKEN) return null;
+  if (platform === 'ios') return /^[0-9a-fA-F]{64,}$/.test(token) ? token.toLowerCase() : null;
+  return /^[A-Za-z0-9_:-]{8,}$/.test(token) ? token : null;
+}
+
 /** How often one enrolled host's refused connections reach the ring (recordRefusal). */
 export const REFUSAL_EVERY_MS = 10 * 60_000;
 /**
@@ -1626,12 +1651,16 @@ export class CoordinatorCore {
    * @param {{ platform: string, token: string, actor?: string, clientId?: string, pushKey?: string,
    *   requester?: { id?: string, email?: string, admin?: boolean } | null }} reg
    */
-  async registerDevice({ platform, token, actor, clientId, pushKey, requester }) {
+  async registerDevice({ platform, token: given, actor, clientId, pushKey, requester }) {
     if (!['ios', 'android', 'web'].includes(platform)) {
       return { ok: false, error: `unknown platform ${JSON.stringify(platform)}` };
     }
-    if (typeof token !== 'string' || token.length < 8 || token.length > MAX_PUSH_TOKEN) {
-      return { ok: false, error: 'a push token is required' };
+    if (typeof given !== 'string' || !given) return { ok: false, error: 'a push token is required' };
+    // THE KEY IS THE CANONICAL TOKEN, never the string as sent — see
+    // canonicalPushToken for the alias that got past the check below.
+    const token = canonicalPushToken(platform, given);
+    if (!token) {
+      return { ok: false, error: `that is not ${platform === 'ios' ? 'an APNs device token' : 'an FCM token'}` };
     }
     if (pushKey !== undefined && pushKey !== null && pushKey !== '') {
       const checked = await checkPublicKey(pushKey);

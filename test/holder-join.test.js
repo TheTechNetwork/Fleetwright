@@ -49,7 +49,7 @@ async function fleet() {
   core.registry.connect('laptop', (/** @type {any} */ f) => frames.push(f));
   core.registry.recordHealth('laptop', { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [] });
   core.setups.set(JOB, { hostId: 'laptop', owner: ELI, startedAt: now, last: null, activities: [] });
-  await core.registerDevice({ platform: 'ios', token: 'i'.repeat(64), actor: `fleet:${ELI}` });
+  await core.registerDevice({ platform: 'ios', token: '9f'.repeat(32), actor: `fleet:${ELI}` });
   await core.onHostMessage('laptop', { kind: 'holder-pin', id: 'holder-pin-1', job: JOB, address: XO });
   const minted = frames.find((f) => f.id === 'holder-pin-1');
   assert.equal(minted.ok, true, minted.text);

@@ -125,6 +125,14 @@ because re-keying it would send that phone every session in the fleet. A row
 old enough to name nobody is refused to the member whose phone it is, and an
 admin removes it once; nothing can tell it apart from the operator's own.
 
+**A token has one spelling.** Ownership is decided on the row's key, so two
+spellings of one address would be two rows with two owners. An iOS token is
+accepted only as hex (stored lower case) and an Android one only in FCM's
+base64url-and-colon alphabet. Before that, `zz/../<token>` and `<token>#zz` were
+new rows that the APNs sender's URL turned back into a colleague's phone. The
+sender also encodes the token as one path segment, which covers a row stored
+before the check and anything a fleet hands the relay.
+
 ## Android: the token is becoming an installation ID
 
 firebase-messaging **25.1.0** (16 June 2026) deprecated `getToken`,

@@ -42,7 +42,8 @@ export function http2Deliver(host = 'api.push.apple.com') {
     new Promise((resolve, reject) => {
       const request = connect().request({
         ':method': 'POST',
-        ':path': `/3/device/${token}`,
+        // One path segment, for the reason push.js gives at fetchDeliver.
+        ':path': `/3/device/${encodeURIComponent(token)}`,
         ...headers,
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(payload),
