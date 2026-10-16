@@ -911,6 +911,39 @@ test('a notification goes to the person whose session it is, and nobody else', a
   assert.equal(sent.length, 2, 'a host event was withheld from somebody');
 });
 
+test('a notification belongs to the session on the box that sent it, not the first of that name', async (t) => {
+  // #notify took the owner from findSessions(name)[0]: the first box in the
+  // fleet claiming the name, whichever box sent the event. Names are not
+  // unique across a fleet, so one member's question and Remote Control link
+  // went to whoever owned a same-named session on an earlier box, and a box
+  // holding no such session could put its own text on that person's phone.
+  const { coordinator: c } = await coordinator(t);
+  const eli = await c.core.clients.issue('eli phone');
+  const guest = await c.core.clients.issue('guest phone');
+  await c.core.registerDevice({ platform: 'ios', token: 'm'.repeat(64), clientId: eli.client.id, actor: 'eli@thetech.network' });
+  await c.core.registerDevice({ platform: 'android', token: 't'.repeat(64), clientId: guest.client.id, actor: 'guest@example.com' });
+  for (const [hostId, sessions] of /** @type {const} */ ([
+    ['early', [{ name: 'build', status: 'running', createdBy: 'fleet:guest@example.com' }]],
+    ['late', [{ name: 'build', status: 'running', createdBy: 'fleet:eli@thetech.network' }]],
+    ['noisy', []],
+  ])) {
+    c.core.registry.connect(hostId, async () => ({}));
+    await c.core.onHostMessage(hostId, { kind: 'health', hostId, health: { sessions } });
+  }
+  /** @type {any[]} */
+  let sent = [];
+  c.core.push = { send: async (/** @type {any[]} */ d) => { sent.push(...d); return { ok: true }; } };
+
+  await c.core.onHostMessage('late', { kind: 'event', event: 'session.awaiting-input', name: 'build', text: 'a question' });
+  assert.deepEqual(sent.map((d) => d.actor), ['eli@thetech.network'], 'the question went to the owner of a same-named session on another box');
+
+  // A box naming a session it does not hold speaks for nobody's session:
+  // admin devices only, and there are none here.
+  sent = [];
+  await c.core.onHostMessage('noisy', { kind: 'event', event: 'session.awaiting-input', name: 'build', text: 'tap yes' });
+  assert.deepEqual(sent, [], "a box with no such session reached a member's phone");
+});
+
 test('what happened while you were asleep survives a restart', async (t) => {
   // The ring was RAM only, so "a phone that was asleep can catch up" was false
   // the moment anything restarted — and the actor attribution added earlier on

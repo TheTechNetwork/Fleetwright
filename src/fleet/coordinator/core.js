@@ -962,7 +962,18 @@ export class CoordinatorCore {
     // heard of yet, or one nobody is recorded as having started, is
     // unattributed — which everywhere else in this file means "the fleet's,
     // which is to say the admin's".
-    const owner = event.name ? (this.registry.findSessions(event.name)[0]?.createdBy ?? null) : null;
+    //
+    // FROM THE BOX THAT SENT IT. This took the first claim on the name in the
+    // whole fleet, and names are not unique across one: an event from the
+    // second box holding `build` went to whoever owned `build` on the first,
+    // question and Remote Control link included, and a box holding no such
+    // session could put its own words on that person's phone. A box speaks
+    // for its own sessions only; naming one it does not hold leaves the event
+    // unattributed, which is the admin's devices and nobody else's.
+    const claim = event.name
+      ? this.registry.findSessions(event.name).find((c) => c.host?.hostId === event.hostId) ?? null
+      : null;
+    const owner = claim?.createdBy ?? null;
 
     // FILTERED FOR WHOSE PHONE IT IS, which it was not.
     //
