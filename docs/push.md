@@ -116,9 +116,14 @@ another phone's token used to be able to re-register it under their own
 credential — the victim's row replaced, revoking the victim no longer removing
 it, revoking the attacker silently killing the victim's push (#351). That is
 refused now, 403 `not_yours`. The admin token may re-register anything, and the
-row keeps the credential it had, so it stays revocable. Unregistering and the
-test notification follow the same ownership rule, so a member reaches only
-their own phones.
+row keeps the credential it had, so it stays revocable. Registering,
+unregistering and the test notification all ask the same ownership rule, so a
+member reaches only their own phones. A row with no credential is the admin's:
+the admin token made it, and a member cannot claim it any more than remove it.
+An admin's own credential may claim one of those, but not a member's phone,
+because re-keying it would send that phone every session in the fleet. A row
+old enough to name nobody is refused to the member whose phone it is, and an
+admin removes it once; nothing can tell it apart from the operator's own.
 
 ## Android: the token is becoming an installation ID
 
