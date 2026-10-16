@@ -18,9 +18,11 @@
 //    person's computer, and carries a GitHub token of theirs beside the Claude
 //    one. The account is whatever GitHub says that token belongs to — never
 //    what the coordinator says — and the GitHub token is used for that one
-//    call and not kept. A replayed deposit is refused: each carries the time
-//    it was made, and nothing older than ten minutes, or older than the one
-//    already held, is accepted.
+//    call and not kept. A token of this fleet's own App counts only when a
+//    device signed in for it here (github.js), because the vault hands one to
+//    every box a person approves; see CLI_TOKEN_RE for the rest. A replayed
+//    deposit is refused: each carries the time it was made, and nothing older
+//    than ten minutes, or older than the one already held, is accepted.
 //  - A HAND-OUT is `answerMintRequest`'s shape without the repository: a job
 //    token whose audience binds the runner's one-request key, verified against
 //    GitHub's keys; a runner workflow started by a dispatch; a job in a
@@ -45,6 +47,7 @@ import { JWT_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE, DEPOSIT_AAD, atRestAad, claudeBindingFor, seal, open } from '../seal.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { runnerJobProblem, githubUser } from '../../core/repo-tokens.js';
+import { deviceSignedIn } from './github.js';
 
 /** How old a deposit may be when it arrives. Minutes, because a person made it just now. */
 export const DEPOSIT_MAX_AGE_MS = 10 * 60_000;
@@ -58,6 +61,23 @@ export const DEPOSIT_MAX_AGE_MS = 10 * 60_000;
 const TOKEN_RE = /^[A-Za-z0-9._~+/=-]{20,2048}$/;
 
 /**
+ * The GitHub tokens a person's own command line has, which no device sign-in
+ * here made: `fleetwright-claude-login` sends GH_TOKEN or what `gh auth token`
+ * prints, an OAuth app's token (gho_) or a personal one (ghp_, github_pat_).
+ * Every other kind, and a GitHub App's user token (ghu_) above all, which is
+ * what this fleet's App issues and the vault hands its boxes, must be a
+ * device's sign-in. Named by what is let through, so a kind GitHub adds later
+ * is held to the stricter rule.
+ *
+ * WHAT THIS LEAVES, said plainly: somebody holding one of these tokens of the
+ * person's, an app they authorised or a token they made, can still replace or
+ * forget their Claude login, as before. Refusing them would refuse the
+ * command line, which has no other token to send. A vault request takes none
+ * of them (vault.js).
+ */
+const CLI_TOKEN_RE = /^(?:gho_|ghp_|github_pat_)/;
+
+/**
  * @typedef {object} LoginStore  one row per GitHub account id
  * @property {(id: string) => Promise<any>} get
  * @property {(id: string, row: any) => Promise<void>} put
@@ -69,6 +89,7 @@ const TOKEN_RE = /^[A-Za-z0-9._~+/=-]{20,2048}$/;
  *   this Worker's deposit key, imported once; null when it holds none
  * @property {LoginStore|null} logins
  * @property {string[]} owners  the accounts a runner repository may belong to, besides the person's own
+ * @property {((userId: string) => Promise<any>)|null} [signIns]  the device sign-ins recorded for an account (github.js)
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {() => number} [now]
  */
@@ -140,8 +161,15 @@ export async function answerDeposit(ask, config) {
     return refuse('bad_token', 'That is not a Claude token. Paste the one line `claude setup-token` printed.');
   }
 
-  const who = await githubUser({ token: String(inside.github || ''), fetchImpl });
+  const github = String(inside.github || '');
+  const who = await githubUser({ token: github, fetchImpl });
   if (!who.ok) return refuse('not_github', `The minter could not tell whose deposit this is: ${who.message}.`);
+  if (!CLI_TOKEN_RE.test(github) && !(await deviceSignedIn(await config.signIns?.(who.userId), github, now()))) {
+    return refuse(
+      'not_a_device',
+      'That GitHub token is not one a phone signed in for through the fleet, so it changes no Claude login. If this phone signed in to GitHub before the fleet checked for that, sign out of GitHub under Runners from this phone and sign in again.',
+    );
+  }
 
   const held = await config.logins?.get(who.userId);
   if (held && Number(held.at) >= at) {
