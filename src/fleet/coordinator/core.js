@@ -1008,7 +1008,14 @@ export class CoordinatorCore {
     const claim = event.name
       ? this.registry.findSessions(event.name).find((c) => c.host?.hostId === event.hostId) ?? null
       : null;
-    const owner = claim?.createdBy ?? null;
+    // AND ONLY FOR SOMEBODY THAT BOX MAY ACT FOR (hosts.js mayActFor). The
+    // creator is the box's own word, so a box a member enrolled could name
+    // another member as the creator of a session of its own and put its own
+    // text, Remote Control link and answer buttons on that member's phone. A
+    // creator it may not speak for is filed under whom it does act for, its
+    // one person, which is who wrote those words. No creator stays nobody's.
+    const said = claim?.createdBy ?? null;
+    const owner = said === null || mayActFor(claim?.host, said) ? said : (claim?.host?.actsFor ?? null);
 
     // FILTERED FOR WHOSE PHONE IT IS, which it was not.
     //
