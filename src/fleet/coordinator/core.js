@@ -3809,12 +3809,27 @@ export class CoordinatorCore {
       return { status: 409, body: { ok: false, error: { code: 'already_joined' }, text: `${rec.hostId} has joined already.` } };
     }
     this.onStateChanged?.();
+    // ONCE PER NAME PER REFUSAL_EVERY_MS, as recordRefusal says a refused
+    // host. Anybody may ask and only the phone can tell a real request from
+    // rubbish, so every fresh key was an entry in the shared ring and a buzz
+    // on the owner's phone: 210 of them erased the stored history and sent
+    // 210 pushes in the second Workers audit. Every request is still kept
+    // (holder-joins.js) and the phone lists them all when it is opened; what
+    // is bounded is how often the fleet says so.
     if (r.fresh) {
-      this.record({ event: 'holder.asked', actor: rec.owner, hostId: rec.hostId, text: `${rec.hostId} asked to join, to hold ${rec.address}` });
-      await this.#pushHolderAsk(rec);
+      const now = this.now();
+      if (now - (this.#holderAskedAt.get(rec.hostId) ?? -Infinity) >= REFUSAL_EVERY_MS) {
+        for (const [other, at] of this.#holderAskedAt) if (now - at >= REFUSAL_EVERY_MS) this.#holderAskedAt.delete(other);
+        this.#holderAskedAt.set(rec.hostId, now);
+        this.record({ event: 'holder.asked', actor: rec.owner, hostId: rec.hostId, text: `${rec.hostId} asked to join, to hold ${rec.address}` });
+        await this.#pushHolderAsk(rec);
+      }
     }
     return { status: 202, body: { ok: true, text: `Asked. ${rec.hostId} joins once whoever made it lets it in from their phone.`, until: rec.until } };
   }
+
+  /** When each reserved name's last request was announced (holderJoin). */
+  #holderAskedAt = new Map();
 
   /**
    * The pool's own machines waiting on this person, each with the requests

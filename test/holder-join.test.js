@@ -13,7 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { CoordinatorCore, REFUSAL_EVERY_MS } from '../src/fleet/coordinator/core.js';
 import { HOLDER_JOIN_TTL_MS, MAX_REQUESTS } from '../src/fleet/coordinator/holder-joins.js';
 import { keyHashOf, proofOf, proofMessage } from '../src/fleet/protocol/holder-join.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
@@ -108,6 +108,22 @@ test('strangers who learned the name can add requests beside the machine’s, an
   assert.equal(kept.some((q) => q.key === real.keyHash), false, 'and the newest win, so a flood hides the real one until it asks again');
   await core.holderJoin(real.body);
   assert.equal(core.holdersFor({ email: ELI })[0].requests[0].key, real.keyHash, 'which a machine waiting to be let in does');
+});
+
+test('a flood of requests under the name is one ring entry and one push a window, not one each', async () => {
+  // The route needs no credential and the coordinator cannot check a proof, so
+  // every fresh key was a holder.asked entry in the shared 200-entry ring and
+  // a buzz on the owner's phone: 210 requests evicted the whole stored
+  // history and sent 210 pushes in the second Workers audit.
+  const { core, pushed, asking, tick } = await fleet();
+  for (let i = 0; i < 50; i++) assert.equal((await core.holderJoin((await asking('cd'.repeat(32))).body)).status, 202);
+  assert.equal(core.events.filter((e) => e.event === 'holder.asked').length, 1);
+  assert.equal(pushed.length, 1);
+  // A name still waited on later is news again.
+  tick(REFUSAL_EVERY_MS);
+  await core.holderJoin((await asking()).body);
+  assert.equal(core.events.filter((e) => e.event === 'holder.asked').length, 2);
+  assert.equal(pushed.length, 2);
 });
 
 test('its owner lets it in by its key: it joins as a permanent host of nobody’s, and the name is not waited on any more', async () => {
