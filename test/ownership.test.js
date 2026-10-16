@@ -227,12 +227,14 @@ test('logs naming a session is checked like peek, not like a box question', () =
 
 /**
  * Every verb that names a session and hands back, or changes, something
- * belonging to it. The workspace five are the ones this list was missing.
+ * belonging to it. The workspace five are the ones this list was missing, and
+ * `answer` after them: it types a digit into somebody's waiting prompt, and
+ * it went where free capacity sent it, with nobody asking whose prompt it was.
  */
-const SESSION_VERBS = ['peek', 'logs', 'files', 'readfile', 'writefile', 'copyfile', 'deletefile'];
+const SESSION_VERBS = ['peek', 'logs', 'files', 'readfile', 'writefile', 'copyfile', 'deletefile', 'answer'];
 
 /** Params wide enough for any of them; place() reads only `name`. */
-const withName = (/** @type {string} */ name) => ({ name, path: 'notes.md', to: 'copy.md', content: 'x' });
+const withName = (/** @type {string} */ name) => ({ name, path: 'notes.md', to: 'copy.md', content: 'x', option: 1 });
 
 test('a workspace verb is checked like peek, not routed like new work', () => {
   // THE FIVE VERBS THAT HAND BACK FILES HAD NO OWNERSHIP CHECK AT ALL.

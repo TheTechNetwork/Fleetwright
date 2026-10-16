@@ -46,11 +46,18 @@
 // somebody else got as far as trying to mount its container and failed on an
 // unrelated runtime error. The access control never ran; a mount permission
 // was doing its job.
+//
+// AND `answer`, which types a digit into a session's waiting prompt. It names
+// a session as surely as `stop` does and had the same two failures: no
+// ownership check, so a member could pick an option on somebody else's
+// question by guessing its name, and a box chosen by free capacity rather
+// than the one holding the session. The hub answers whatever it is sent and
+// asks nobody whose prompt it is, so this check is the only one.
 import { runsNoSessions } from './registry.js';
 import { mayActFor } from './hosts.js';
 
 const PINNED = new Set([
-  'resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge',
+  'resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge', 'answer',
   'files', 'readfile', 'writefile', 'copyfile', 'deletefile',
 ]);
 
