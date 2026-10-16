@@ -386,6 +386,19 @@ curl -fsSL '${target}' | sh
           return json({ ok: false, error: { code: 'rate_limited' }, text: 'Too many sign-in attempts. Try again in a minute.' }, 429);
         }
       }
+      // REGISTRATION TOO, under its own key in the same bucket's terms. It
+      // needs no credential and every one is a row in one shared registry and
+      // a storage write, and a flood of them is what used to push the
+      // clients people were signing in with out of it (src/mcp/oauth.js). A
+      // client registers once when it is set up, so ten a minute per address
+      // is far past what anything real does.
+      if (url.pathname === '/oauth/register' && request.method === 'POST' && env.SIGNIN_RATE_LIMIT) {
+        const key = `register:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
+        const { success } = await env.SIGNIN_RATE_LIMIT.limit({ key });
+        if (!success) {
+          return json({ error: 'temporarily_unavailable', error_description: 'Too many registrations from this address. Try again in a minute.' }, 429);
+        }
+      }
       return callFleet(env, request);
     }
 

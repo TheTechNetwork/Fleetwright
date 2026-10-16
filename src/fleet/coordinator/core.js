@@ -16,7 +16,8 @@ import { HostRegistry, runsNoSessions } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
 import { HostIdentities, actsFor, mayActFor } from './hosts.js';
-import { Enrollment } from './enrollment.js';
+import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
+import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -26,7 +27,7 @@ import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
-import { RunnerTickets, randomHex, hashSecret, constantTimeEqual } from './runner-tickets.js';
+import { RunnerTickets, randomHex, hashSecret, constantTimeEqual, TICKETS_FULL } from './runner-tickets.js';
 import { RunnerRepos } from './runner-repos.js';
 import { LinkedRepos } from './linked-repos.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
@@ -744,10 +745,22 @@ export class CoordinatorCore {
     // ONBOARDING PROGRESS IS ITS OWN AUDIENCE: the job's owner, on the surfaces
     // that show progress, never the ring every phone reads.
     if (msg.event === 'xosetup.progress') return this.#onSetupProgress(hostId, msg);
+    // A HOST REPORTS ON ITS SESSIONS, AND THAT IS ALL IT REPORTS. Every event a
+    // sidecar sends is `session.*` and names the session (watcher.js); the
+    // rest of the ring, enrolments, revocations, refusals, is the
+    // coordinator's to write. This took any type and any name, uncapped, so a
+    // box a member enrolled could write `client.revoked` in its own words into
+    // every member's feed, or one 110,000-character name that left the stored
+    // ring holding nothing else (second Workers audit).
+    const type = String(msg.event || '');
+    if (!HOST_EVENT_RE.test(type) || typeof msg.name !== 'string' || !SESSION_NAME_RE.test(msg.name)) {
+      this.log.warn(`coordinator: ${hostId} sent an event that is not about one of its sessions (${type.slice(0, 40) || 'no type'})`);
+      return;
+    }
     const event = {
       hostId,
-      event: String(msg.event || 'unknown'),
-      name: msg.name ? String(msg.name) : null,
+      event: type,
+      name: msg.name,
       text: msg.text ? String(msg.text).slice(0, 500) : null,
       url: msg.url ? String(msg.url).slice(0, 500) : null,
       // The NAME of the profile a session was started with, when the host
@@ -784,6 +797,17 @@ export class CoordinatorCore {
     const prompt = promptForPush(msg.prompt);
     // Bounded: a coordinator is not a log server, and an unbounded array in a
     // Durable Object is a memory leak with a long fuse.
+    //
+    // AND SHARED OUT. One ring with the oldest out meant any host's frames
+    // pushed out the coordinator's own records, and 200 of them erased the
+    // fleet's only history of who enrolled and revoked what. So a host's news
+    // displaces its own oldest once it holds HOST_EVENTS_EACH, and hosts' news
+    // displaces hosts' once together they hold HOST_EVENTS: whatever hosts
+    // send, the coordinator's records keep the rest of the ring.
+    const mine = this.events.filter((e) => hostReported(e) && e.hostId === hostId);
+    const hosts = this.events.filter(hostReported);
+    const drop = mine.length >= HOST_EVENTS_EACH ? mine[0] : hosts.length >= HOST_EVENTS ? hosts[0] : null;
+    if (drop) this.events.splice(this.events.indexOf(drop), 1);
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     // Persisted by whoever owns storage — a file on a box, DO storage in the
@@ -919,16 +943,25 @@ export class CoordinatorCore {
    *
    * A stranger is a line in the log and nothing more: there is no host to
    * report on, and the ring is for things that happened to this fleet. A host
-   * that IS enrolled (revoked, a bad signature, a stale challenge) is news its
+   * that IS enrolled (a bad signature, a stale challenge) is news its
    * operator wants, but once per REFUSAL_EVERY_MS says it as well as a
    * hundred times does, and the number of enrolled hosts bounds the rest.
+   *
+   * A REVOKED ROW IS A STRANGER TOO. Its row is kept thirty days so the 401
+   * can say "revoked", every retired runner leaves one, and none of them is
+   * counted against the live-host ceiling, so "the number of enrolled hosts"
+   * was not what bounded this: each row was one more ring entry every ten
+   * minutes for anybody holding the names, which every member is shown in
+   * host.retired. Thirty cycled the stored ring in about seventy minutes in
+   * the second Workers audit. The revocation is already in the ring.
    *
    * @param {string} hostId
    * @param {string} reason
    */
   recordRefusal(hostId, reason) {
     const id = String(hostId || '');
-    if (!this.hostIds.get(id)) {
+    const row = this.hostIds.get(id);
+    if (!row || row.revokedAt) {
       this.log.warn(`coordinator: refused a connection for ${id || '(no host id)'}: ${reason}`);
       return null;
     }
@@ -953,7 +986,18 @@ export class CoordinatorCore {
     // heard of yet, or one nobody is recorded as having started, is
     // unattributed — which everywhere else in this file means "the fleet's,
     // which is to say the admin's".
-    const owner = event.name ? (this.registry.findSessions(event.name)[0]?.createdBy ?? null) : null;
+    //
+    // FROM THE BOX THAT SENT IT. This took the first claim on the name in the
+    // whole fleet, and names are not unique across one: an event from the
+    // second box holding `build` went to whoever owned `build` on the first,
+    // question and Remote Control link included, and a box holding no such
+    // session could put its own words on that person's phone. A box speaks
+    // for its own sessions only; naming one it does not hold leaves the event
+    // unattributed, which is the admin's devices and nobody else's.
+    const claim = event.name
+      ? this.registry.findSessions(event.name).find((c) => c.host?.hostId === event.hostId) ?? null
+      : null;
+    const owner = claim?.createdBy ?? null;
 
     // FILTERED FOR WHOSE PHONE IT IS, which it was not.
     //
@@ -1523,14 +1567,20 @@ export class CoordinatorCore {
     // Checking live admins reopened it — revoke the owner's lost phone and the
     // next person to sign in, whoever they were, inherited the fleet.
     const admin = !this.clients.everHadAdmin() || this.clients.emailHasAdmin(who.email);
-    const issued = await this.clients.issue(`${label} (${who.email})`, { admin });
+    const issued = await this.clients.issue(`${label} (${who.email})`, { admin, email: who.email });
     // A FULL STORE REFUSES THE SIGN-IN RATHER THAN HALF-COMPLETING IT. The
     // caller already spent their ID token to get here, so this is the one
     // place the refusal has to be legible: minting a credential the save
     // cannot persist is precisely the fleet-wide sign-in failure the ceiling
     // exists to prevent (#351).
     if (issued.ok === false) {
-      this.record({ event: 'clients.full', actor: who.email, text: `${who.email} could not sign in: this fleet is holding as many credentials as it can store` });
+      this.record({
+        event: 'clients.full',
+        actor: who.email,
+        text: issued.code === 'person_full'
+          ? `${who.email} could not sign in: they hold as many credentials as one person may`
+          : `${who.email} could not sign in: this fleet is holding as many credentials as it can store`,
+      });
       return issued;
     }
     const { client, token } = issued;
@@ -1759,6 +1809,42 @@ export class CoordinatorCore {
   }
 
   /**
+   * The pins waiting to be spent, the same way: all of them to an admin and
+   * the shared token, a member's own to a member. Each one names the email
+   * of whoever minted it, and its first three digits, so the whole list was
+   * the colleague list clientsFor stopped handing out.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  pinsFor(requester) {
+    const all = this.enrollment.outstanding();
+    if (!requester || requester.admin) return all;
+    const mine = String(requester.email || '').toLowerCase();
+    return mine ? all.filter((p) => emailOf(p.actor) === mine) : [];
+  }
+
+  /**
+   * Every enrolled host, to everybody: a phone approving a box for its
+   * person's vault needs each host's name, fingerprint and key. Who added a
+   * host and whose temporary host it is are emails, and a member is shown
+   * them only when they are the member's own. An attribution naming nobody,
+   * a repository's runner or a machine image, stays.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  enrolledHostsFor(requester) {
+    const all = this.hostIds.list();
+    if (!requester || requester.admin) return all;
+    const mine = String(requester.email || '').toLowerCase();
+    /** @param {unknown} v `alice@…`, `holder:alice@…`, `actions:owner/repo` */
+    const shown = (v) => {
+      const who = emailOf(String(v || '').replace(/^[a-z]+:/i, ''));
+      return !who || who === mine ? v : null;
+    };
+    return all.map((h) => ({ ...h, enrolledBy: shown(h.enrolledBy), ...('owner' in h ? { owner: shown(h.owner) } : {}) }));
+  }
+
+  /**
    * Revoke everything belonging to one person.
    *
    * For when the person themselves withdraws consent — revoking this app from
@@ -1771,7 +1857,7 @@ export class CoordinatorCore {
    */
   revokePerson(email, why) {
     const address = String(email || '').toLowerCase();
-    if (!address) return { revoked: 0, devices: 0 };
+    if (!address) return { revoked: 0, devices: 0, hosts: [] };
     let revoked = 0;
     let devices = 0;
     for (const client of [...this.clients.clients.values()]) {
@@ -1787,7 +1873,71 @@ export class CoordinatorCore {
         text: `${address} ${why}; ${revoked} credential${revoked === 1 ? '' : 's'} revoked`,
       });
     }
-    return { revoked, devices };
+    // Their last credential's revocation did this already; a person with none
+    // left still has their machines taken back.
+    const hosts = this.#forgetPerson(address);
+    return { revoked, devices, hosts };
+  }
+
+  /**
+   * WHAT THE FLEET GOES ON DOING IN SOMEBODY'S NAME, stopped when they are
+   * removed: when they withdraw (revokePerson) and when their last live
+   * credential is revoked, which is how an admin removes a member (invites.js).
+   *
+   * Revoking credentials used to be the whole of it, and the fleet does
+   * things for a person without them asking. A wish to keep machines ready
+   * was topped up by the next health frame from a box holding their pool: a
+   * ticket minted in their name, a machine cloned on their hypervisor, and a
+   * new temporary host of theirs joining with the config frame, replaced
+   * within a minute whenever one was revoked. So the wish goes, the machines
+   * kept for it are ended through vmctl as Keep 0 would end them, their
+   * temporary hosts are revoked, and their runner tokens, tickets and
+   * waiting runner starts with them.
+   *
+   * @param {string} address  lower case
+   * @returns {string[]} the hosts revoked, for the caller to disconnect
+   */
+  #forgetPerson(address) {
+    if (!address) return [];
+    const { extra } = /** @type {{ extra: string[] }} */ (this.vmStandby.set(address, { template: '', count: 0, network: null }));
+    // As setVmStandby ends them: #vmctl refuses a requester without an email,
+    // and its ownership check runs before its first await, so before the
+    // hosts are revoked below.
+    const person = { email: address, admin: false };
+    for (const name of extra) {
+      void this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {});
+    }
+    /** @type {string[]} */
+    const hosts = [];
+    for (const h of this.hostIds.list()) {
+      if (h.ephemeral && String(h.owner || '').toLowerCase() === address && this.revokeHost(h.hostId)) hosts.push(h.hostId);
+    }
+    let changed = extra.length > 0 || hosts.length > 0;
+    for (const t of this.runnerTokens.list()) {
+      if (!t.revokedAt && String(t.email || '').toLowerCase() === address && this.runnerTokens.revoke(t.id)) changed = true;
+    }
+    for (const [id, t] of this.runnerTickets.tickets) {
+      if (t.owner === address) {
+        this.runnerTickets.tickets.delete(id);
+        changed = true;
+      }
+    }
+    for (const [hostId, p] of this.runnerStarts) {
+      if (String(p.owner || '').toLowerCase() === address) {
+        this.runnerStarts.delete(hostId);
+        changed = true;
+      }
+    }
+    if (changed) this.onStateChanged?.();
+    return hosts;
+  }
+
+  /** Does anybody hold a credential for this address that still works? @param {string} address */
+  #hasLiveCredential(address) {
+    for (const c of this.clients.clients.values()) {
+      if (!c.revokedAt && String(c.email || '').toLowerCase() === address) return true;
+    }
+    return false;
   }
 
   /**
@@ -1799,7 +1949,8 @@ export class CoordinatorCore {
    * session asks.
    *
    * @param {string} clientId
-   * @returns {{ revoked: boolean, devices: number }}
+   * @returns {{ revoked: boolean, devices: number, hosts: string[] }}
+   *   `hosts`: temporary hosts revoked with the person's last credential, for the caller to disconnect
    */
   revokeClient(clientId) {
     const revoked = this.clients.revoke(clientId);
@@ -1813,7 +1964,10 @@ export class CoordinatorCore {
     if (revoked || devices) {
       this.record({ event: 'client.revoked', text: `a device credential was revoked, and ${devices} push registration${devices === 1 ? '' : 's'} with it` });
     }
-    return { revoked, devices };
+    // THE PERSON'S LAST ONE is the person removed (#forgetPerson).
+    const email = String(this.clients.clients.get(clientId)?.email || '').toLowerCase();
+    const hosts = revoked && email && !this.#hasLiveCredential(email) ? this.#forgetPerson(email) : [];
+    return { revoked, devices, hosts };
   }
 
   /** Drop a token the provider told us is dead. */
@@ -3395,6 +3549,7 @@ export class CoordinatorCore {
       repository,
       start,
     });
+    if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
     // Persisted before the dispatch leaves, not after it succeeds: a ticket
     // that is spent by a job but was never written down is an unattributed
     // host, and the window between minting and enrolment is minutes long —
@@ -3770,6 +3925,10 @@ export class CoordinatorCore {
       return;
     }
     const pin = this.enrollment.mint({ purpose: 'host', label: `Holds a pool for ${rec.owner}`, actor: rec.owner, hostId: name });
+    if (!pin) {
+      answer({ ok: false, error: { code: 'pins_full' }, text: PINS_FULL });
+      return;
+    }
     // AND THE NAME HELD FOR A DAY, so a machine whose first boot outlasts the
     // pin can still ask to join and be let in from the phone (holder-joins.js).
     // The pin stays for machines made from an image older than the asking.
@@ -3800,12 +3959,27 @@ export class CoordinatorCore {
       return { status: 409, body: { ok: false, error: { code: 'already_joined' }, text: `${rec.hostId} has joined already.` } };
     }
     this.onStateChanged?.();
+    // ONCE PER NAME PER REFUSAL_EVERY_MS, as recordRefusal says a refused
+    // host. Anybody may ask and only the phone can tell a real request from
+    // rubbish, so every fresh key was an entry in the shared ring and a buzz
+    // on the owner's phone: 210 of them erased the stored history and sent
+    // 210 pushes in the second Workers audit. Every request is still kept
+    // (holder-joins.js) and the phone lists them all when it is opened; what
+    // is bounded is how often the fleet says so.
     if (r.fresh) {
-      this.record({ event: 'holder.asked', actor: rec.owner, hostId: rec.hostId, text: `${rec.hostId} asked to join, to hold ${rec.address}` });
-      await this.#pushHolderAsk(rec);
+      const now = this.now();
+      if (now - (this.#holderAskedAt.get(rec.hostId) ?? -Infinity) >= REFUSAL_EVERY_MS) {
+        for (const [other, at] of this.#holderAskedAt) if (now - at >= REFUSAL_EVERY_MS) this.#holderAskedAt.delete(other);
+        this.#holderAskedAt.set(rec.hostId, now);
+        this.record({ event: 'holder.asked', actor: rec.owner, hostId: rec.hostId, text: `${rec.hostId} asked to join, to hold ${rec.address}` });
+        await this.#pushHolderAsk(rec);
+      }
     }
     return { status: 202, body: { ok: true, text: `Asked. ${rec.hostId} joins once whoever made it lets it in from their phone.`, until: rec.until } };
   }
+
+  /** When each reserved name's last request was announced (holderJoin). */
+  #holderAskedAt = new Map();
 
   /**
    * The pool's own machines waiting on this person, each with the requests
@@ -4659,6 +4833,7 @@ export class CoordinatorCore {
     }
     const image = holders[0].entries[0].images[0];
     const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start });
+    if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
     const vmHost = `vm-${ticket.id}`;
     // A MACHINE KEPT READY IS BEING MADE FROM HERE, not from the box's answer.
     // Counted only once the box said yes, a top-up set off by a health frame
@@ -4852,6 +5027,12 @@ export class CoordinatorCore {
     for (const owner of owners) {
       const wish = this.vmStandby.wishFor(owner);
       if (!wish) continue;
+      // NOBODY BEHIND IT, NOTHING MADE. The background top-up acts for a
+      // person who is not asking, so it asks first whether they are still
+      // here: a wish whose owner holds no live credential is one left behind
+      // (#forgetPerson), and a machine made for it would join as theirs.
+      // `only` is a person acting now, signed in to do it.
+      if (!only && !this.#hasLiveCredential(owner)) continue;
       // ONE AT A TIME PER PERSON, taken before the first await: the count
       // below is read before a ticket exists, so two top-ups at once (the
       // Keep button and a health frame, on a real pool) both found none
@@ -5284,8 +5465,36 @@ function visibleHost(host, requester) {
       resumable: Array.isArray(host.health.resumable)
         ? host.health.resumable.filter((/** @type {any} */ n) => mine.has(n))
         : host.health.resumable,
+      // THE BIN IS SOMEBODY'S TOO: the names and titles of forgotten
+      // sessions and who forgot them. The sidecar sends `createdBy` so this
+      // could filter on it, and nothing did, so every member saw everyone's.
+      // The same rule as the live list, unattributed entries included.
+      ...(Array.isArray(host.health.bin)
+        ? { bin: host.health.bin.filter((/** @type {any} */ b) => ownedBy(b?.createdBy, requester)) }
+        : {}),
     },
   };
+}
+
+/**
+ * What a host may report: one of its sessions, `session.<what happened>`.
+ * Nothing the coordinator records is in that namespace, so it is also how an
+ * entry in the ring is known to be a host's word rather than the fleet's
+ * (hostReported), across a restart and without a field to forge.
+ */
+const HOST_EVENT_RE = /^session\.[a-z][a-z-]{0,39}$/;
+
+/** How much of the 200-entry ring hosts' news may hold, all of them and each. */
+const HOST_EVENTS = 100;
+const HOST_EVENTS_EACH = 25;
+
+/**
+ * Did a host write this, rather than the coordinator? See HOST_EVENT_RE.
+ *
+ * @param {any} e
+ */
+export function hostReported(e) {
+  return typeof e?.event === 'string' && e.event.startsWith('session.');
 }
 
 /**

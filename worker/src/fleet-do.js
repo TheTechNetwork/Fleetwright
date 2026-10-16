@@ -18,7 +18,7 @@
 // cache with provenance, never the authority" happen to be the same rule, which
 // is a good sign the rule was right.
 
-import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coordinator/core.js';
+import { CoordinatorCore, deviceStatus, deviceText, hostReported } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { relayFromEnv as relayEnv } from '../../src/fleet/relay/client.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
@@ -27,13 +27,16 @@ import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fle
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
-import { emailOf, installCommand } from '../../src/fleet/coordinator/enrollment.js';
+import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
+
+/** The most one stored event may weigh: a host's largest is about 1,100 (#saveEvents). */
+const EVENT_MAX_CHARS = 4_000;
 
 
 /**
@@ -697,6 +700,7 @@ export class Fleet {
             await this.#saveClients();
             await this.#saveDevices();
           }
+          this.#closeRevoked(r.hosts);
         }
         return json({ ok: true });
       } catch {
@@ -727,7 +731,7 @@ export class Fleet {
     }
 
     if (url.pathname === '/api/hosts/enrolled' && request.method === 'GET') {
-      return json({ ok: true, hosts: this.core.hostIds.list() });
+      return json({ ok: true, hosts: this.core.enrolledHostsFor(requesterFor(client)) });
     }
 
     // The destructive routes, checked BEFORE any of them run.
@@ -1057,7 +1061,8 @@ export class Fleet {
       const body = await readJson(request);
       const minted = await this.core.runnerTokens.issue(
         body?.name ? String(body.name) : 'a repository',
-        {},
+        // Counted per person, so one member cannot fill the store for everybody.
+        { email: client.email },
       );
       // 507 rather than 400 — see the Node coordinator's copy.
       if (minted.ok === false) return json(minted, 507);
@@ -1113,6 +1118,9 @@ export class Fleet {
         // retirement code that exists to prevent exactly that never ran.
         ephemeral: Boolean(body?.ephemeral),
       });
+      // 507, as for every full store: the fleet holds as many pins as it can
+      // and none of them is this person's to give up (enrollment.js).
+      if (!issued) return json({ ok: false, error: { code: 'pins_full' }, text: PINS_FULL }, 507);
       await this.#saveEnrollment();
       // THE PERSON IS THE ACTOR, not only words in the text. visibleEvents
       // shows a member every event with no actor and no session name, as fleet
@@ -1132,7 +1140,7 @@ export class Fleet {
     }
 
     if (url.pathname === '/api/enroll' && request.method === 'GET') {
-      return json({ ok: true, codes: this.core.enrollment.outstanding() });
+      return json({ ok: true, codes: this.core.pinsFor(requesterFor(client)) });
     }
 
     // Which devices can reach this fleet, and dropping one.
@@ -1154,11 +1162,15 @@ export class Fleet {
       // Revoke the credential AND stop notifying the device that held it —
       // otherwise a stolen phone loses the ability to ASK the fleet anything
       // and keeps the ability to be TOLD everything.
-      const { revoked, devices } = this.core.revokeClient(id);
+      const { revoked, devices, hosts } = this.core.revokeClient(id);
       if (revoked || devices) {
         await this.#saveClients();
         await this.#saveDevices();
       }
+      // The person's last credential takes their temporary hosts with it
+      // (core.js, #forgetPerson), and a revoked host with a live socket is
+      // still in the fleet until something closes it.
+      this.#closeRevoked(hosts);
       return json(
         {
           ok: revoked,
@@ -1559,6 +1571,17 @@ export class Fleet {
     };
   }
 
+  /** Close the sockets of hosts just revoked. @param {string[]} hostIds */
+  #closeRevoked(hostIds) {
+    if (!hostIds.length) return;
+    for (const socket of this.state.getWebSockets()) {
+      if (!hostIds.includes(/** @type {string} */ (this.#hostIdOf(socket)))) continue;
+      try {
+        socket.close(1008, 'revoked');
+      } catch { /* already gone */ }
+    }
+  }
+
   async #saveInvites() {
     await this.state.storage.put('invites', this.core.invites.toJSON());
   }
@@ -1572,14 +1595,27 @@ export class Fleet {
     //
     // (This also wrote slice(-500) while core caps the ring at 200 — a stale
     // copy of an older bound. One number, owned by the serialiser.)
-    let events = this.core.events.slice(-200);
-    while (events.length > 1 && JSON.stringify(events).length > 100_000) {
-      // Oldest half first: the recent events are the ones a waking phone asks
-      // for, and half-steps reach a fit in a few iterations rather than
-      // re-serialising once per dropped event.
-      events = events.slice(Math.ceil(events.length / 2));
+    //
+    // HOSTS' NEWS GOES FIRST, oldest first, and no single entry can displace
+    // the rest. This halved the oldest half away until it fitted, down to one
+    // entry, so one oversized entry was the whole stored ring, and the boxes
+    // filling their share of it took the coordinator's own records with them
+    // (second Workers audit). An entry past EVENT_MAX_CHARS is not stored at
+    // all; nothing the coordinator writes or a host may send comes near it.
+    // Measured once per entry, so a fit is one pass rather than a
+    // re-serialisation per drop.
+    const sized = this.core.events.slice(-200)
+      .map((e) => ({ e, chars: JSON.stringify(e).length + 1 }))
+      .filter((x) => x.chars <= EVENT_MAX_CHARS);
+    let size = 1 + sized.reduce((sum, x) => sum + x.chars, 0);
+    const dropped = new Set();
+    for (const x of [...sized.filter((x) => hostReported(x.e)), ...sized]) {
+      if (size <= 100_000 || sized.length - dropped.size <= 1) break;
+      if (dropped.has(x)) continue;
+      dropped.add(x);
+      size -= x.chars;
     }
-    await this.state.storage.put('events', events);
+    await this.state.storage.put('events', sized.filter((x) => !dropped.has(x)).map((x) => x.e));
   }
 
   async #saveEnrollment() {

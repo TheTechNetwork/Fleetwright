@@ -66,6 +66,14 @@ const SECRET_BYTES = 24;
  */
 const REVOKED_RETENTION_MS = 30 * 24 * 3_600_000;
 const MAX_LIVE = 150;
+/**
+ * AND HOW MANY ONE PERSON MAY HOLD. The ceiling above was the only one, so a
+ * member who signed in 149 times refused every other person's next sign-in,
+ * the admin's new phone included. Checked first, so reaching a limit only
+ * ever refuses the person who reached it. Twenty is every phone, tablet,
+ * laptop and MCP client somebody plausibly has, with room to spare.
+ */
+const MAX_LIVE_PER_EMAIL = 20;
 
 /** @param {Uint8Array} bytes */
 function hex(bytes) {
@@ -127,14 +135,24 @@ export class ClientRegistry {
    * can be made to.
    *
    * @param {string} name
-   * @param {{ admin?: boolean }} [opts]
+   * @param {{ admin?: boolean, email?: string|null }} [opts]  `email`: whose it is, counted against MAX_LIVE_PER_EMAIL
    * @returns {Promise<{ ok: true, client: Client, token: string }
    *   | { ok: false, code: string, error: string }>}
    */
-  async issue(name, { admin = false } = {}) {
+  async issue(name, { admin = false, email = null } = {}) {
     // Swept on the way in, which is the only moment this store grows. A timer
     // would be a second thing to get wrong on two coordinators.
     this.#sweep();
+    const who = email ? String(email).toLowerCase() : null;
+    if (who && this.#live(who) >= MAX_LIVE_PER_EMAIL) {
+      return {
+        ok: false,
+        code: 'person_full',
+        error:
+          `${who} already holds ${MAX_LIVE_PER_EMAIL} live credentials, which is as many as one person may. ` +
+          'An admin can revoke the ones belonging to devices that have gone.',
+      };
+    }
     if (this.#live() >= MAX_LIVE) {
       return {
         ok: false,
@@ -156,15 +174,16 @@ export class ClientRegistry {
       lastSeenAt: null,
       revokedAt: null,
       admin,
+      ...(who ? { email: who } : {}),
     };
     this.clients.set(id, client);
     return { ok: true, client, token: `${this.prefix}_${id}_${secret}` };
   }
 
-  /** Credentials that still authenticate something. */
-  #live() {
+  /** Credentials that still authenticate something, everybody's or one person's. @param {string|null} [email] */
+  #live(email = null) {
     let n = 0;
-    for (const c of this.clients.values()) if (!c.revokedAt) n++;
+    for (const c of this.clients.values()) if (!c.revokedAt && (!email || String(c.email || '').toLowerCase() === email)) n++;
     return n;
   }
 

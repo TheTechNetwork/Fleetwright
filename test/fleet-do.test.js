@@ -357,6 +357,22 @@ test('an enrolled host that is refused is recorded once, not once per attempt', 
   assert.equal(refused[0].hostId, 'durable');
 });
 
+test('a revoked host knocking is a stranger, not one ring entry per row per window', async () => {
+  // Revoked rows stay thirty days and every retired runner leaves one, so a
+  // per-name throttle was a recurring write slot per row for anybody holding
+  // the names, which every member is shown. Thirty of them cycled the stored
+  // ring in about seventy minutes in the second Workers audit.
+  const { fleet: f } = fleet();
+  for (const hostId of ['gone-1', 'gone-2', 'gone-3']) {
+    const { code } = f.core.enrollment.mint({ purpose: 'host' });
+    const key = await generateKeyPair();
+    assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId, publicJwk: key.publicJwk })).status, 200);
+    f.core.revokeHost(hostId);
+    assert.equal((await call(f, `/host/connect?hostId=${hostId}`, 'GET', null, { upgrade: 'websocket' })).status, 401);
+  }
+  assert.equal(f.core.events.filter((e) => e.event === 'host.refused').length, 0);
+});
+
 test('a member listing credentials sees their own devices, an admin sees everyone', async () => {
   // A list of everyone holding a credential is a list of colleagues, the
   // reason invites are refused to members, plus who the admin is and when
@@ -378,4 +394,105 @@ test('a member listing credentials sees their own devices, an admin sees everyon
 
   const asAdmin = await (await call(f, '/api/clients', 'GET', null, { authorization: `Bearer ${admin}` })).json();
   assert.equal(asAdmin.clients.length, 4);
+});
+
+test('a member listing pins and enrolled hosts is not shown whose they are', async () => {
+  // GET /api/clients stopped handing members every colleague's email; the
+  // pin list and the enrolled-host list still did, as each pin's actor and
+  // each pin-enrolled host's enrolledBy and owner.
+  const { fleet: f } = fleet();
+  const issue = async (/** @type {string} */ name, /** @type {string} */ email, admin = false) => {
+    const { token } = await f.core.clients.issue(name, { admin });
+    const row = [...f.core.clients.clients.values()].find((c) => c.name === name);
+    row.email = email;
+    return token;
+  };
+  const admin = await issue('admin phone', 'admin@example.test', true);
+  const alice = await issue('alice phone', 'alice@example.test');
+  const bob = await issue('bob phone', 'bob@example.test');
+  const as = (/** @type {string} */ token) => ({ authorization: `Bearer ${token}` });
+
+  const { code } = await (await call(f, '/api/enroll', 'POST', { kind: 'host', ephemeral: true }, as(alice))).json();
+  await call(f, '/api/enroll', 'POST', { kind: 'host' }, as(alice));
+  await call(f, '/api/enroll', 'POST', { kind: 'host' }, as(bob));
+  const key = await generateKeyPair();
+  assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: 'alice-box', publicJwk: key.publicJwk })).status, 200);
+
+  const pins = async (/** @type {string} */ token) => (await (await call(f, '/api/enroll', 'GET', null, as(token))).json()).codes;
+  assert.deepEqual((await pins(bob)).map((/** @type {any} */ c) => c.actor), ['bob@example.test']);
+  assert.equal((await pins(admin)).length, 2);
+
+  const hosts = async (/** @type {string} */ token) => (await (await call(f, '/api/hosts/enrolled', 'GET', null, as(token))).json()).hosts;
+  const [seenByBob] = await hosts(bob);
+  assert.equal(seenByBob.hostId, 'alice-box', 'every host stays listed, for vault approval');
+  assert.deepEqual(seenByBob.publicJwk, { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y });
+  assert.equal(JSON.stringify(seenByBob).includes('alice@'), false, `a member was shown a colleague's email: ${JSON.stringify(seenByBob)}`);
+  const [seenByAlice] = await hosts(alice);
+  assert.equal(seenByAlice.enrolledBy, 'alice@example.test', 'and the person who added it still sees that they did');
+  assert.equal(seenByAlice.owner, 'alice@example.test');
+  assert.equal((await hosts(admin))[0].enrolledBy, 'alice@example.test');
+});
+
+test('one member filling a shared store fills only their own share of it', async () => {
+  // Pending pins, runner and VM tickets and live credentials were each one
+  // fleet-wide store with a fleet-wide cap. A member minting two hundred pins
+  // or tickets evicted everybody else's oldest, and 149 sign-ins refused
+  // every other person's next one, the admin's included.
+  const { fleet: f } = fleet();
+  const issue = async (/** @type {string} */ name, /** @type {string} */ email) => {
+    const { token } = await f.core.clients.issue(name);
+    const row = [...f.core.clients.clients.values()].find((c) => c.name === name);
+    row.email = email;
+    return { authorization: `Bearer ${token}` };
+  };
+  const alice = await issue('alice phone', 'alice@example.test');
+  const bob = await issue('bob phone', 'bob@example.test');
+
+  const { code } = await (await call(f, '/api/enroll', 'POST', { kind: 'host' }, alice)).json();
+  for (let i = 0; i < 250; i++) await call(f, '/api/enroll', 'POST', { kind: 'host' }, bob);
+  const key = await generateKeyPair();
+  assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: 'alice-box', publicJwk: key.publicJwk })).status, 200, "another member's pins pushed out alice's");
+
+  const ticket = await f.core.runnerTickets.mint({ owner: 'alice@example.test', platform: 'linux' });
+  for (let i = 0; i < 250; i++) await f.core.runnerTickets.mint({ owner: 'bob@example.test', platform: 'linux' });
+  assert.ok(await f.core.runnerTickets.peek(ticket?.token), "another member's tickets pushed out alice's");
+
+  for (let i = 0; i < 160; i++) await f.core.issueClient({ email: 'bob@example.test' }, `bob device ${i}`);
+  const signedIn = await f.core.issueClient({ email: 'alice@example.test' }, 'alice laptop');
+  assert.ok('token' in signedIn, `alice could not sign in after another member's sign-ins: ${JSON.stringify(signedIn)}`);
+});
+
+test('an enrolled host cannot erase, outweigh or impersonate the fleet’s own records', async () => {
+  // Host event frames went into the one 200-entry ring the coordinator's
+  // audit records live in, with no share per host, no cap on `name` or
+  // `event`, and any type at all. In the second Workers audit a box a member
+  // enrolled evicted every enrolment and revocation with 200 small frames,
+  // made the stored ring a single entry with one 110,000-character name, and
+  // put a `client.revoked` of its own wording in every member's feed.
+  const { fleet: f, state } = fleet();
+  f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
+  const frame = (/** @type {string} */ hostId, /** @type {any} */ body) => f.webSocketMessage(
+    /** @type {any} */ ({ deserializeAttachment: () => ({ hostId }) }),
+    JSON.stringify({ kind: 'event', ...body }),
+  );
+
+  // Several boxes, as a member can enrol several, each sending the largest
+  // event the coordinator keeps.
+  for (const box of ['mallory-box', 'mallory-2', 'mallory-3', 'mallory-4', 'mallory-5']) {
+    for (let i = 0; i < 250; i++) await frame(box, { event: 'session.ended', name: `s${i}`, text: 'x'.repeat(500), url: `https://example.com/${'y'.repeat(470)}` });
+  }
+  await frame('mallory-box', { event: 'session.ended', name: 'n'.repeat(110_000) });
+  await frame('mallory-box', { event: 'client.revoked', text: 'your credential was revoked, sign in again here', url: 'https://evil.example/' });
+  await new Promise((r) => setTimeout(r, 0));
+
+  const seeded = (/** @type {any[]} */ events) => events.some((e) => e.hostId === 'seed-host');
+  assert.ok(seeded(f.core.events), 'a host pushed the coordinator’s record out of the ring');
+  assert.ok(seeded(state.raw.get('events') ?? []), 'a host pushed the coordinator’s record out of storage');
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(seeded(revived.core.events), 'and the loss outlived a rebuild');
+  assert.ok(f.core.events.some((e) => e.name === 's249'), 'the host’s own news is still recorded');
+  assert.ok(f.core.events.every((e) => String(e.name ?? '').length <= 40), 'a name no session can have was recorded');
+  const member = f.core.recentEvents({ email: 'someone@example.test', admin: false });
+  assert.ok(!member.some((e) => String(e.hostId).startsWith('mallory')), 'a member was shown an entry a host wrote');
 });

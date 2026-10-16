@@ -903,12 +903,45 @@ test('a notification goes to the person whose session it is, and nobody else', a
   await c.core.onHostMessage('box', { kind: 'event', event: 'session.awaiting-input', name: 'x', text: 'a question' });
   assert.deepEqual(sent.map((d) => d.actor), ['eli@thetech.network'], "a guest's phone was told what somebody else's session is asking");
 
-  // A HOST EVENT STILL GOES TO EVERYONE. Which machines exist and what state
-  // they are in is fleet topology, not somebody's private work — and a box
-  // going offline is exactly the thing everybody needs to be told about.
+  // A HOST-LEVEL EVENT IS THE COORDINATOR'S TO SAY, from the box's health
+  // (#onHostState), and a box sending one itself is refused before anybody is
+  // told: any type a box liked was how one put its own words in every feed.
   sent = [];
   await c.core.onHostMessage('box', { kind: 'event', event: 'host.degraded', text: 'claude is not logged in' });
-  assert.equal(sent.length, 2, 'a host event was withheld from somebody');
+  assert.equal(sent.length, 0, 'a box spoke for the fleet');
+});
+
+test('a notification belongs to the session on the box that sent it, not the first of that name', async (t) => {
+  // #notify took the owner from findSessions(name)[0]: the first box in the
+  // fleet claiming the name, whichever box sent the event. Names are not
+  // unique across a fleet, so one member's question and Remote Control link
+  // went to whoever owned a same-named session on an earlier box, and a box
+  // holding no such session could put its own text on that person's phone.
+  const { coordinator: c } = await coordinator(t);
+  const eli = await c.core.clients.issue('eli phone');
+  const guest = await c.core.clients.issue('guest phone');
+  await c.core.registerDevice({ platform: 'ios', token: 'm'.repeat(64), clientId: eli.client.id, actor: 'eli@thetech.network' });
+  await c.core.registerDevice({ platform: 'android', token: 't'.repeat(64), clientId: guest.client.id, actor: 'guest@example.com' });
+  for (const [hostId, sessions] of /** @type {const} */ ([
+    ['early', [{ name: 'build', status: 'running', createdBy: 'fleet:guest@example.com' }]],
+    ['late', [{ name: 'build', status: 'running', createdBy: 'fleet:eli@thetech.network' }]],
+    ['noisy', []],
+  ])) {
+    c.core.registry.connect(hostId, async () => ({}));
+    await c.core.onHostMessage(hostId, { kind: 'health', hostId, health: { sessions } });
+  }
+  /** @type {any[]} */
+  let sent = [];
+  c.core.push = { send: async (/** @type {any[]} */ d) => { sent.push(...d); return { ok: true }; } };
+
+  await c.core.onHostMessage('late', { kind: 'event', event: 'session.awaiting-input', name: 'build', text: 'a question' });
+  assert.deepEqual(sent.map((d) => d.actor), ['eli@thetech.network'], 'the question went to the owner of a same-named session on another box');
+
+  // A box naming a session it does not hold speaks for nobody's session:
+  // admin devices only, and there are none here.
+  sent = [];
+  await c.core.onHostMessage('noisy', { kind: 'event', event: 'session.awaiting-input', name: 'build', text: 'tap yes' });
+  assert.deepEqual(sent, [], "a box with no such session reached a member's phone");
 });
 
 test('what happened while you were asleep survives a restart', async (t) => {

@@ -40,6 +40,13 @@ function fleet() {
         { name: 'mine', title: 'my work', cwd: '/work/mine', createdBy: 'fleet:member@example.com' },
         { name: 'nobodys', title: 'from the CLI', cwd: '/work/x', createdBy: null },
       ],
+      // Forgotten sessions, as the sidecar reports them: whose they were
+      // travels so the coordinator can filter on it.
+      bin: [
+        { name: 'their-old', title: 'the admin’s old work', createdBy: 'fleet:admin@example.com', deletedAt: 1, expiresAt: 2 },
+        { name: 'my-old', title: 'my old work', createdBy: 'fleet:member@example.com', deletedAt: 1, expiresAt: 2 },
+        { name: 'nobodys-old', title: 'from the CLI', createdBy: null, deletedAt: 1, expiresAt: 2 },
+      ],
     },
   });
   return core;
@@ -60,6 +67,10 @@ test('a member’s fleet snapshot does not carry other people’s sessions', () 
   // An unattributed session belongs to the fleet, which is to say the admin —
   // erring open here would break the exact promise this exists for.
   assert.equal(seen.sessions.some((s) => s.name === 'nobodys'), false);
+
+  // THE BIN IS SOMEBODY'S TOO. It reached every member through the spread of
+  // the rest of the health frame: names, titles and who forgot them.
+  assert.deepEqual(seen.bin.map((b) => b.name), ['my-old']);
 });
 
 /**
@@ -227,12 +238,14 @@ test('logs naming a session is checked like peek, not like a box question', () =
 
 /**
  * Every verb that names a session and hands back, or changes, something
- * belonging to it. The workspace five are the ones this list was missing.
+ * belonging to it. The workspace five are the ones this list was missing, and
+ * `answer` after them: it types a digit into somebody's waiting prompt, and
+ * it went where free capacity sent it, with nobody asking whose prompt it was.
  */
-const SESSION_VERBS = ['peek', 'logs', 'files', 'readfile', 'writefile', 'copyfile', 'deletefile'];
+const SESSION_VERBS = ['peek', 'logs', 'files', 'readfile', 'writefile', 'copyfile', 'deletefile', 'answer'];
 
 /** Params wide enough for any of them; place() reads only `name`. */
-const withName = (/** @type {string} */ name) => ({ name, path: 'notes.md', to: 'copy.md', content: 'x' });
+const withName = (/** @type {string} */ name) => ({ name, path: 'notes.md', to: 'copy.md', content: 'x', option: 1 });
 
 test('a workspace verb is checked like peek, not routed like new work', () => {
   // THE FIVE VERBS THAT HAND BACK FILES HAD NO OWNERSHIP CHECK AT ALL.

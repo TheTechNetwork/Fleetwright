@@ -52,7 +52,7 @@ import { resource } from '../../src/core/resources.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { memberRoutes, isMemberPath, signInClients } from '../../src/fleet/coordinator/member-page.js';
-import { emailOf, installCommand } from '../../src/fleet/coordinator/enrollment.js';
+import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -862,6 +862,7 @@ export class Coordinator {
         if (isWithdrawal(note.type) && note.email) {
           const r = this.core.revokePerson(note.email, `withdrew consent at Apple (${note.type})`);
           if (r.revoked) this.saveState();
+          for (const hostId of r.hosts) this.connections.get(hostId)?.close(1008, 'revoked');
         }
         return json(res, 200, { ok: true });
       } catch (e) {
@@ -1112,7 +1113,7 @@ export class Coordinator {
     }
 
     if (p === '/api/hosts/enrolled' && req.method === 'GET') {
-      return json(res, 200, { ok: true, hosts: this.core.hostIds.list() });
+      return json(res, 200, { ok: true, hosts: this.core.enrolledHostsFor(requesterFor(client)) });
     }
 
     if (p.startsWith('/api/hosts/') && req.method === 'DELETE') {
@@ -1150,8 +1151,9 @@ export class Coordinator {
 
     if (p.startsWith('/api/clients/') && req.method === 'DELETE') {
       const id = p.slice('/api/clients/'.length);
-      const { revoked, devices } = this.core.revokeClient(id);
+      const { revoked, devices, hosts } = this.core.revokeClient(id);
       if (revoked || devices) this.saveState();
+      for (const hostId of hosts) this.connections.get(hostId)?.close(1008, 'revoked');
       return json(res, revoked ? 200 : 404, {
         ok: revoked,
         text: revoked
@@ -1161,7 +1163,7 @@ export class Coordinator {
     }
 
     if (p === '/api/enroll' && req.method === 'GET') {
-      return json(res, 200, { ok: true, codes: this.core.enrollment.outstanding() });
+      return json(res, 200, { ok: true, codes: this.core.pinsFor(requesterFor(client)) });
     }
 
     // Runner tokens: reusable, revocable, and powerless on their own.
@@ -1314,7 +1316,8 @@ export class Coordinator {
       const body = await readJson(req);
       const minted = await this.core.runnerTokens.issue(
         body?.name ? String(body.name) : 'a repository',
-        {},
+        // Counted per person, so one member cannot fill the store for everybody.
+        { email: client.email },
       );
       // 507 rather than 400: the request is well formed and the fleet is out
       // of room, the same distinction the device store draws.
@@ -1412,6 +1415,7 @@ export class Coordinator {
         // retirement code that exists to prevent exactly that never ran.
         ephemeral: Boolean(body?.ephemeral),
       });
+      if (!issued) return json(res, 507, { ok: false, error: { code: 'pins_full' }, text: PINS_FULL });
       this.saveState();
       // No install command: this coordinator publishes no installer (the
       // Worker's /install is the one that does), so the line would 404. Null
