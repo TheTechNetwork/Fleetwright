@@ -317,6 +317,43 @@ test('a runner repository is saved only once it passes, as GitHub spells it', as
   assert.equal(passing.core.runnerRepos.get(eli.email), null);
 });
 
+test('a check is answered by a box that may act for the asker, about the repository asked', async () => {
+  // FOUND BY AN AUDIT: the saved name was the one in the box's answer, and
+  // every permanent box was asked. A box bob enrolled with his own pin, named
+  // to sort first, answered sam's checks with bob/runners and bob/drop; sam's
+  // runner tickets were then minted for bob's repository and handed to that box.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const honest = (/** @type {any} */ spec) => spec.verb === 'linkrepo'
+    ? { ok: true, linkedRepo: { role: spec.params.role, repo: spec.params.repo, ok: true, public: false, push: true } }
+    : { ok: true, runnerRepo: { repo: spec.params.repo, ok: true, public: true } };
+  const lying = (/** @type {any} */ spec) => spec.verb === 'linkrepo'
+    ? { ok: true, linkedRepo: { role: spec.params.role, repo: 'bob/drop', ok: true, public: false, push: true } }
+    : { ok: true, runnerRepo: { repo: 'bob/runners', ok: true, public: true } };
+  const health = { hub: { reachable: true }, protocol: 13, maxSessions: 5, running: 0, free: 5, labels: [] };
+
+  const two = fleet([], (hostId, spec) => (hostId === 'aaa-bob' ? lying(spec) : honest(spec)));
+  await admit(two.core, 'aaa-bob', { enrolledBy: 'bob@example.com' });
+  await admit(two.core, 'deb14');
+  await admit(two.core, 'deb15');
+  for (const id of ['aaa-bob', 'deb14', 'deb15']) two.core.registry.recordHealth(id, health);
+  assert.equal((await two.core.setRunnerRepo(sam, 'sam/runners')).ok, true);
+  assert.equal((await two.core.setLinkedRepo(sam, 'archive', 'sam/archive')).ok, true);
+  assert.equal(two.core.runnerRepos.get(sam.email), 'sam/runners');
+  assert.equal(two.core.linkedRepos.get(sam.email, 'archive')?.repo, 'sam/archive');
+  await two.core.dispatch(provision(sam));
+  assert.equal(two.sent.some((x) => x.hostId === 'aaa-bob'), false, 'bob’s box was asked nothing for sam');
+
+  // And from a box that may answer, an answer about another repository is no answer.
+  const one = fleet([], (_, spec) => lying(spec));
+  await admit(one.core, 'deb14');
+  one.core.registry.recordHealth('deb14', health);
+  const runner = await one.core.setRunnerRepo(sam, 'sam/runners');
+  assert.equal(runner.error?.code, 'check_mismatch');
+  assert.equal((await one.core.setLinkedRepo(sam, 'archive', 'sam/archive')).error?.code, 'check_mismatch');
+  assert.equal(one.core.runnerRepos.get(sam.email), null);
+  assert.equal(one.core.linkedRepos.get(sam.email, 'archive'), null);
+});
+
 test('the session asked for with a machine starts on it once, as its owner', async () => {
   const { core, sent } = fleet([['deb14', 6]], (_h, spec) =>
     spec.verb === 'start' ? { ok: true, text: 'Started.', sessions: [] } : { ok: true, text: 'Asked GitHub.' });

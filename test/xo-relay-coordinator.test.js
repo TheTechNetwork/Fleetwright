@@ -142,6 +142,35 @@ test('the probe offers the way through the phone only when no machine reached th
   assert.match(/** @type {any} */ (r).text, /older than protocol 12/);
 });
 
+test('the machine offered through the phone is one of the fleet’s own, never a box a member enrolled', async () => {
+  // FOUND BY AN AUDIT: the offer was the first permanent box by name, so a box
+  // a member enrolled with their own pin as `aaa-…` was the one both apps put
+  // on the button, and the admin's sealed sign-in went to it.
+  const { admit, makeAdmin } = await import('./helpers/enrolled-hosts.js');
+  const health = { hub: { reachable: true }, protocol: 12, maxSessions: 5, running: 0, free: 5, labels: [] };
+  const { core, asked } = fleet({}, machine);
+  await makeAdmin(core, admin.email);
+  await admit(core, 'aaa-bob', { enrolledBy: 'bob@example.com' });
+  await admit(core, 'deb14', { enrolledBy: admin.email });
+  for (const id of ['aaa-bob', 'deb14']) core.registry.recordHealth(id, health);
+
+  const none = await core.dispatch({ verb: 'xoprobe', params: { address: 'xo.lan' }, actor: `fleet:${admin.email}`, requester: admin });
+  assert.deepEqual(none.relay, { hostId: 'deb14' });
+  const { r } = open(core);
+  assert.equal(/** @type {any} */ (r).hostId, 'deb14');
+  asked.length = 0;
+  await core.dispatch(begin(/** @type {any} */ (r).relay));
+  assert.deepEqual(asked.map((x) => x.hostId), ['deb14']);
+
+  // With only the member's box able, nothing is offered rather than it.
+  const theirs = fleet({}, machine);
+  await admit(theirs.core, 'aaa-bob', { enrolledBy: 'bob@example.com' });
+  theirs.core.registry.recordHealth('aaa-bob', health);
+  const offered = await theirs.core.dispatch({ verb: 'xoprobe', params: { address: 'xo.lan' }, actor: `fleet:${admin.email}`, requester: admin });
+  assert.equal(offered.relay, undefined);
+  assert.equal(open(theirs.core).r.ok, false);
+});
+
 test('bytes cross between the phone and its one machine, and only while that machine is using it for something asked', async () => {
   /** @type {any} */
   let during = null;

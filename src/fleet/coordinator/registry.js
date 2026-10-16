@@ -83,6 +83,8 @@ export function runsNoSessions(hostId) {
  * @property {boolean} connected
  * @property {boolean} [ephemeral]  expected to vanish
  * @property {string|null} [owner]   whose runner this is, for an ephemeral host
+ * @property {string|null} [actsFor] the one person this host may act for, or
+ *   null for an operator's box, which may act for anyone (hosts.js actsFor)
  */
 
 /** How stale a health report may be before the host becomes `unknown`. */
@@ -108,9 +110,9 @@ export class HostRegistry {
    * A host has dialled in.
    * @param {string} hostId
    * @param {(msg: object) => void} send
-   * @param {{ ephemeral?: boolean, owner?: string|null }} [opts]
+   * @param {{ ephemeral?: boolean, owner?: string|null, actsFor?: string|null }} [opts]
    */
-  connect(hostId, send, { ephemeral = false, owner = null } = {}) {
+  connect(hostId, send, { ephemeral = false, owner = null, actsFor = undefined } = {}) {
     const existing = this.hosts.get(hostId);
     // A reconnect from a host we already have replaces the old socket. The box
     // is the authority on itself, so the newest connection from it wins.
@@ -128,6 +130,10 @@ export class HostRegistry {
       ephemeral: ephemeral || existing?.ephemeral || false,
       // Whose runner this is. Only an ephemeral host has one — see hosts.js.
       owner: owner ?? existing?.owner ?? null,
+      // Who it may act for, from the enrolment on every connect. Null is an
+      // answer here (an operator's box), so only an absent value keeps the
+      // last one.
+      actsFor: actsFor === undefined ? existing?.actsFor ?? null : actsFor,
       send,
     });
   }
@@ -372,7 +378,9 @@ export class HostRegistry {
   /** @returns {HostEntry[]} */
   list() {
     this.sweep();
-    return [...this.hosts.values()].map(({ send, ...entry }) => entry);
+    // Not `actsFor` either: it is for placement, and a screen that wants who
+    // enrolled a box reads the enrolled list, which says so in its own words.
+    return [...this.hosts.values()].map(({ send, actsFor, ...entry }) => entry);
   }
 
   /** @param {string} hostId */

@@ -47,6 +47,7 @@
 // unrelated runtime error. The access control never ran; a mount permission
 // was doing its job.
 import { runsNoSessions } from './registry.js';
+import { mayActFor } from './hosts.js';
 
 const PINNED = new Set([
   'resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge',
@@ -66,6 +67,9 @@ const PINNED = new Set([
 /** Verbs answered by asking every host and merging. */
 const FANOUT = new Set(['list', 'profiles', 'secrets']);
 
+/** Verbs that carry, or act with, one person's credential. See `whose` in place(). */
+const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify']);
+
 /**
  * @typedef {object} Placement
  * @property {'host'|'fanout'|'refused'} kind
@@ -84,6 +88,32 @@ const FANOUT = new Set(['list', 'profiles', 'secrets']);
 export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '', preferLabels = null, requester = null } = {}) {
   const verb = intent.verb;
   const name = intent.params?.name;
+
+  // A CREDENTIAL GOES ONLY WHERE ITS PERSON'S CREDENTIALS MAY BE: an
+  // operator's box, a box they enrolled, their own temporary machine (hosts.js
+  // mayActFor). The fan-outs below went to every connected host, so a member's
+  // pasted GitHub token reached a box another member enrolled with a pin they
+  // minted, and that member's runner, while this same file refused to put the
+  // first member's work there. SEC-HOST-1.
+  //
+  // Whose it is: the verified caller's. A caller with no identity, the OAuth
+  // callback whose spent state proved the person or the break-glass token, is
+  // filed under the actor it names, and naming nobody reaches the operator's
+  // boxes alone.
+  const whose = requester?.email || (typeof /** @type {any} */ (intent).actor === 'string' ? /** @type {any} */ (intent).actor : null);
+  const credential = CREDENTIAL_VERBS.has(verb);
+  if (credential && preferHost) {
+    const named = registry.reachable().find((h) => h.hostId === preferHost);
+    if (named && !mayActFor(named, whose)) {
+      return {
+        kind: 'refused',
+        code: 'host_unavailable',
+        reason: `${preferHost} does not hold credentials for you. It acts for the person who enrolled it, or asked for it, and nobody else.`,
+      };
+    }
+  }
+  /** The connected hosts this person's credentials may reach. */
+  const holders = () => registry.reachable().filter((h) => mayActFor(h, whose));
 
   if (FANOUT.has(verb)) {
     // reachable(), not schedulable(): see the comment on both in registry.js.
@@ -138,10 +168,10 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // and hides the only interesting case: the machine that is missing it. Which
   // is exactly the question somebody asks after adding a host.
   if (verb === 'connect' && !intent.params?.provider && !preferHost) {
-    const hosts = registry.reachable();
+    const hosts = holders();
     return hosts.length
       ? { kind: 'fanout', hosts }
-      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHolders(registry) };
   }
 
   // `verify` WITH THEM, for the same reason: the token is the person's, and
@@ -158,10 +188,10 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // preference is the existing way to say so.
     !preferHost
   ) {
-    const hosts = registry.reachable();
+    const hosts = holders();
     return hosts.length
       ? { kind: 'fanout', hosts }
-      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHolders(registry) };
   }
 
   // connect/link/unlink join them, and for a stronger reason than the others:
@@ -322,14 +352,21 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     };
   }
 
+  // ONLY BOXES THAT MAY ACT FOR THE PERSON, for all three: each spends their
+  // GitHub connection, and `provision` hands the box a ticket that admits a
+  // machine as theirs. A box another member enrolled answered a member's
+  // runner-repository check with a repository of its own choosing, and was
+  // handed the runner ticket for it (core.js #askEachBox).
   if (verb === 'provision' || verb === 'runnerrepo' || verb === 'linkrepo') {
-    const durable = registry.reachable().filter((h) => !h.ephemeral);
+    const permanent = registry.reachable().filter((h) => !h.ephemeral);
+    const durable = permanent.filter((h) => mayActFor(h, whose));
     if (!durable.length) {
       return {
         kind: 'refused',
         code: 'no_hosts',
-        reason:
-          verb === 'linkrepo'
+        reason: permanent.length
+          ? describeWhyNoHolders(registry)
+          : verb === 'linkrepo'
             ? `${describeWhyNoHosts(registry)} A repository is checked with your GitHub connection on a permanent ` +
               'host, and this fleet has none to ask.'
             : `${describeWhyNoHosts(registry)} A runner is dispatched BY a permanent host, using the GitHub ` +
@@ -343,7 +380,9 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         : {
             kind: 'refused',
             code: 'host_unavailable',
-            reason: `${preferHost} is not a connected permanent host. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+            reason: permanent.some((h) => h.hostId === preferHost)
+              ? `${preferHost} does not act for you. It acts for the person who enrolled it, and nobody else.`
+              : `${preferHost} is not a connected permanent host. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
           };
     }
     if (durable.length === 1) return { kind: 'host', host: durable[0] };
@@ -394,9 +433,10 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     verb === 'link' ||
     verb === 'unlink'
   ) {
-    const reachable = registry.reachable();
+    // A Claude login is a credential too, and one box is still a choice of box.
+    const reachable = credential ? holders() : registry.reachable();
     if (!reachable.length) {
-      return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+      return { kind: 'refused', code: 'no_hosts', reason: credential ? describeWhyNoHolders(registry) : describeWhyNoHosts(registry) };
     }
     if (preferHost) {
       const chosen = reachable.find((h) => h.hostId === preferHost);
@@ -691,6 +731,16 @@ function describeWhyNoHosts(registry) {
   const all = registry.list();
   if (!all.length) return 'No host has ever connected to this coordinator.';
   return all.map((h) => `${h.hostId}: ${h.state} (${h.reason})`).join('; ');
+}
+
+/**
+ * Why no host may hold this person's credentials. Connected boxes that act for
+ * somebody else are not named, for the same reason their sessions are not.
+ * @param {import('./registry.js').HostRegistry} registry
+ */
+function describeWhyNoHolders(registry) {
+  if (!registry.reachable().length) return describeWhyNoHosts(registry);
+  return 'No connected host holds credentials for you. A box another member enrolled, or a temporary machine somebody else asked for, acts only for them.';
 }
 
 /** @param {unknown} value */
