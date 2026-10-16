@@ -17,6 +17,7 @@ import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
 import { HostIdentities, actsFor, mayActFor } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
+import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -744,10 +745,22 @@ export class CoordinatorCore {
     // ONBOARDING PROGRESS IS ITS OWN AUDIENCE: the job's owner, on the surfaces
     // that show progress, never the ring every phone reads.
     if (msg.event === 'xosetup.progress') return this.#onSetupProgress(hostId, msg);
+    // A HOST REPORTS ON ITS SESSIONS, AND THAT IS ALL IT REPORTS. Every event a
+    // sidecar sends is `session.*` and names the session (watcher.js); the
+    // rest of the ring, enrolments, revocations, refusals, is the
+    // coordinator's to write. This took any type and any name, uncapped, so a
+    // box a member enrolled could write `client.revoked` in its own words into
+    // every member's feed, or one 110,000-character name that left the stored
+    // ring holding nothing else (second Workers audit).
+    const type = String(msg.event || '');
+    if (!HOST_EVENT_RE.test(type) || typeof msg.name !== 'string' || !SESSION_NAME_RE.test(msg.name)) {
+      this.log.warn(`coordinator: ${hostId} sent an event that is not about one of its sessions (${type.slice(0, 40) || 'no type'})`);
+      return;
+    }
     const event = {
       hostId,
-      event: String(msg.event || 'unknown'),
-      name: msg.name ? String(msg.name) : null,
+      event: type,
+      name: msg.name,
       text: msg.text ? String(msg.text).slice(0, 500) : null,
       url: msg.url ? String(msg.url).slice(0, 500) : null,
       // The NAME of the profile a session was started with, when the host
@@ -784,6 +797,17 @@ export class CoordinatorCore {
     const prompt = promptForPush(msg.prompt);
     // Bounded: a coordinator is not a log server, and an unbounded array in a
     // Durable Object is a memory leak with a long fuse.
+    //
+    // AND SHARED OUT. One ring with the oldest out meant any host's frames
+    // pushed out the coordinator's own records, and 200 of them erased the
+    // fleet's only history of who enrolled and revoked what. So a host's news
+    // displaces its own oldest once it holds HOST_EVENTS_EACH, and hosts' news
+    // displaces hosts' once together they hold HOST_EVENTS: whatever hosts
+    // send, the coordinator's records keep the rest of the ring.
+    const mine = this.events.filter((e) => hostReported(e) && e.hostId === hostId);
+    const hosts = this.events.filter(hostReported);
+    const drop = mine.length >= HOST_EVENTS_EACH ? mine[0] : hosts.length >= HOST_EVENTS ? hosts[0] : null;
+    if (drop) this.events.splice(this.events.indexOf(drop), 1);
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     // Persisted by whoever owns storage — a file on a box, DO storage in the
@@ -1833,7 +1857,7 @@ export class CoordinatorCore {
    */
   revokePerson(email, why) {
     const address = String(email || '').toLowerCase();
-    if (!address) return { revoked: 0, devices: 0 };
+    if (!address) return { revoked: 0, devices: 0, hosts: [] };
     let revoked = 0;
     let devices = 0;
     for (const client of [...this.clients.clients.values()]) {
@@ -5450,6 +5474,27 @@ function visibleHost(host, requester) {
         : {}),
     },
   };
+}
+
+/**
+ * What a host may report: one of its sessions, `session.<what happened>`.
+ * Nothing the coordinator records is in that namespace, so it is also how an
+ * entry in the ring is known to be a host's word rather than the fleet's
+ * (hostReported), across a restart and without a field to forge.
+ */
+const HOST_EVENT_RE = /^session\.[a-z][a-z-]{0,39}$/;
+
+/** How much of the 200-entry ring hosts' news may hold, all of them and each. */
+const HOST_EVENTS = 100;
+const HOST_EVENTS_EACH = 25;
+
+/**
+ * Did a host write this, rather than the coordinator? See HOST_EVENT_RE.
+ *
+ * @param {any} e
+ */
+export function hostReported(e) {
+  return typeof e?.event === 'string' && e.event.startsWith('session.');
 }
 
 /**

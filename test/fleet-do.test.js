@@ -461,3 +461,38 @@ test('one member filling a shared store fills only their own share of it', async
   const signedIn = await f.core.issueClient({ email: 'alice@example.test' }, 'alice laptop');
   assert.ok('token' in signedIn, `alice could not sign in after another member's sign-ins: ${JSON.stringify(signedIn)}`);
 });
+
+test('an enrolled host cannot erase, outweigh or impersonate the fleet’s own records', async () => {
+  // Host event frames went into the one 200-entry ring the coordinator's
+  // audit records live in, with no share per host, no cap on `name` or
+  // `event`, and any type at all. In the second Workers audit a box a member
+  // enrolled evicted every enrolment and revocation with 200 small frames,
+  // made the stored ring a single entry with one 110,000-character name, and
+  // put a `client.revoked` of its own wording in every member's feed.
+  const { fleet: f, state } = fleet();
+  f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
+  const frame = (/** @type {string} */ hostId, /** @type {any} */ body) => f.webSocketMessage(
+    /** @type {any} */ ({ deserializeAttachment: () => ({ hostId }) }),
+    JSON.stringify({ kind: 'event', ...body }),
+  );
+
+  // Several boxes, as a member can enrol several, each sending the largest
+  // event the coordinator keeps.
+  for (const box of ['mallory-box', 'mallory-2', 'mallory-3', 'mallory-4', 'mallory-5']) {
+    for (let i = 0; i < 250; i++) await frame(box, { event: 'session.ended', name: `s${i}`, text: 'x'.repeat(500), url: `https://example.com/${'y'.repeat(470)}` });
+  }
+  await frame('mallory-box', { event: 'session.ended', name: 'n'.repeat(110_000) });
+  await frame('mallory-box', { event: 'client.revoked', text: 'your credential was revoked, sign in again here', url: 'https://evil.example/' });
+  await new Promise((r) => setTimeout(r, 0));
+
+  const seeded = (/** @type {any[]} */ events) => events.some((e) => e.hostId === 'seed-host');
+  assert.ok(seeded(f.core.events), 'a host pushed the coordinator’s record out of the ring');
+  assert.ok(seeded(state.raw.get('events') ?? []), 'a host pushed the coordinator’s record out of storage');
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(seeded(revived.core.events), 'and the loss outlived a rebuild');
+  assert.ok(f.core.events.some((e) => e.name === 's249'), 'the host’s own news is still recorded');
+  assert.ok(f.core.events.every((e) => String(e.name ?? '').length <= 40), 'a name no session can have was recorded');
+  const member = f.core.recentEvents({ email: 'someone@example.test', admin: false });
+  assert.ok(!member.some((e) => String(e.hostId).startsWith('mallory')), 'a member was shown an entry a host wrote');
+});

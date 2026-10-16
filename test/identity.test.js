@@ -903,12 +903,12 @@ test('a notification goes to the person whose session it is, and nobody else', a
   await c.core.onHostMessage('box', { kind: 'event', event: 'session.awaiting-input', name: 'x', text: 'a question' });
   assert.deepEqual(sent.map((d) => d.actor), ['eli@thetech.network'], "a guest's phone was told what somebody else's session is asking");
 
-  // A HOST EVENT STILL GOES TO EVERYONE. Which machines exist and what state
-  // they are in is fleet topology, not somebody's private work — and a box
-  // going offline is exactly the thing everybody needs to be told about.
+  // A HOST-LEVEL EVENT IS THE COORDINATOR'S TO SAY, from the box's health
+  // (#onHostState), and a box sending one itself is refused before anybody is
+  // told: any type a box liked was how one put its own words in every feed.
   sent = [];
   await c.core.onHostMessage('box', { kind: 'event', event: 'host.degraded', text: 'claude is not logged in' });
-  assert.equal(sent.length, 2, 'a host event was withheld from somebody');
+  assert.equal(sent.length, 0, 'a box spoke for the fleet');
 });
 
 test('a notification belongs to the session on the box that sent it, not the first of that name', async (t) => {

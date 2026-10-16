@@ -18,7 +18,7 @@
 // cache with provenance, never the authority" happen to be the same rule, which
 // is a good sign the rule was right.
 
-import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coordinator/core.js';
+import { CoordinatorCore, deviceStatus, deviceText, hostReported } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { relayFromEnv as relayEnv } from '../../src/fleet/relay/client.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
@@ -34,6 +34,9 @@ import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbe
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
+
+/** The most one stored event may weigh: a host's largest is about 1,100 (#saveEvents). */
+const EVENT_MAX_CHARS = 4_000;
 
 
 /**
@@ -1592,14 +1595,27 @@ export class Fleet {
     //
     // (This also wrote slice(-500) while core caps the ring at 200 — a stale
     // copy of an older bound. One number, owned by the serialiser.)
-    let events = this.core.events.slice(-200);
-    while (events.length > 1 && JSON.stringify(events).length > 100_000) {
-      // Oldest half first: the recent events are the ones a waking phone asks
-      // for, and half-steps reach a fit in a few iterations rather than
-      // re-serialising once per dropped event.
-      events = events.slice(Math.ceil(events.length / 2));
+    //
+    // HOSTS' NEWS GOES FIRST, oldest first, and no single entry can displace
+    // the rest. This halved the oldest half away until it fitted, down to one
+    // entry, so one oversized entry was the whole stored ring, and the boxes
+    // filling their share of it took the coordinator's own records with them
+    // (second Workers audit). An entry past EVENT_MAX_CHARS is not stored at
+    // all; nothing the coordinator writes or a host may send comes near it.
+    // Measured once per entry, so a fit is one pass rather than a
+    // re-serialisation per drop.
+    const sized = this.core.events.slice(-200)
+      .map((e) => ({ e, chars: JSON.stringify(e).length + 1 }))
+      .filter((x) => x.chars <= EVENT_MAX_CHARS);
+    let size = 1 + sized.reduce((sum, x) => sum + x.chars, 0);
+    const dropped = new Set();
+    for (const x of [...sized.filter((x) => hostReported(x.e)), ...sized]) {
+      if (size <= 100_000 || sized.length - dropped.size <= 1) break;
+      if (dropped.has(x)) continue;
+      dropped.add(x);
+      size -= x.chars;
     }
-    await this.state.storage.put('events', events);
+    await this.state.storage.put('events', sized.filter((x) => !dropped.has(x)).map((x) => x.e));
   }
 
   async #saveEnrollment() {
