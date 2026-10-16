@@ -560,9 +560,10 @@ machine of the fleet, through the coordinator.
   cannot be aimed at a world-readable repository from here. What it can still
   do is send a session's work to a different private repository the starter
   can push to, or name none, which loses a copy and nothing else. The
-  minting Worker's role check answers for a private repository only inside
-  `FLEETWRIGHT_GITHUB_MINT_OWNERS`, so the App's key is not an oracle over
-  which private repositories exist elsewhere.
+  minting Worker's role and runner-repository checks answer for a private
+  repository only inside `FLEETWRIGHT_GITHUB_MINT_OWNERS` (outside it, a
+  runner check is answered for a public repository and nothing else), so the
+  App's key is not an oracle over which private repositories exist elsewhere.
 - **A lab is an interface on the edge router, and its session holds no key**
   (`docs/hypervisors.md`, "Labs"). Lab networks are made by the policy job
   with the admin sign-in, attached to the edge, and given rules in its

@@ -365,7 +365,12 @@ export default {
       } catch (e) {
         return json(200, { ok: false, error: { code: 'bad_key' }, text: `The GitHub App key does not load: ${/** @type {Error} */ (e).message}.` });
       }
-      const check = await checkRunnerRepoForApp({ repo: String(/** @type {any} */ (ask)?.repo || ''), clientId, key });
+      const check = await checkRunnerRepoForApp({ repo: String(/** @type {any} */ (ask)?.repo || ''), clientId, key, owners });
+      // NOT MINE TO SAY, as for /linked-repo: anything but a public repository
+      // outside the accounts this key mints into.
+      if (!check) {
+        return json(200, { ok: false, needsMinter: true, error: { code: 'owner_not_allowed' }, text: 'That account is not one this fleet mints into.' });
+      }
       return json(200, { ok: check.ok, runnerRepo: check, text: check.message });
     }
     // THE VAULT, AND A DEVICE'S SIGN-IN when there is storage to record it

@@ -250,17 +250,24 @@ test('the App checks a private role only inside the accounts it mints into, and 
     const path = u.pathname.toLowerCase();
     asked.push(path);
     if (path === '/repos/eli/work/installation') return json(200, { id: 9, permissions: { contents: 'write', metadata: 'read' } });
-    if (path === '/app/installations/9/access_tokens') {
+    // Somebody else's installation of the same App, on a private repository.
+    if (path === '/repos/acme/secret/installation') return json(200, { id: 11, permissions: { actions: 'write', contents: 'read', metadata: 'read' } });
+    const full = { 9: 'Eli/Work', 11: 'Acme/Secret' }[path.split('/')[3]];
+    if (path.endsWith('/access_tokens') && full) {
       const body = JSON.parse(init.body);
-      return json(201, { token: 'ghs_read', expires_at: new Date(Date.now() + 3600e3).toISOString(), permissions: body.permissions, repositories: [{ full_name: 'Eli/Work' }] });
+      return json(201, { token: 'ghs_read', expires_at: new Date(Date.now() + 3600e3).toISOString(), permissions: body.permissions, repositories: [{ full_name: full }] });
     }
     if (String(init.headers?.authorization) !== 'Bearer ghs_read') return json(401, {});
     if (path === '/repos/eli/work') return json(200, { full_name: 'Eli/Work', private: true });
+    if (path === '/repos/acme/secret') return json(200, { full_name: 'Acme/Secret', private: true });
     return json(404, {});
   }));
+  /** @param {string} route @param {unknown} ask */
+  const call = async (route, ask) =>
+    (await minterWorker.fetch(new Request(`https://minter.internal${route}`, { method: 'POST', body: JSON.stringify(ask) }), env)).json();
   const minter = {
-    linkedRepo: async (/** @type {any} */ ask) =>
-      (await minterWorker.fetch(new Request('https://minter.internal/linked-repo', { method: 'POST', body: JSON.stringify(ask) }), env)).json(),
+    linkedRepo: (/** @type {any} */ ask) => call('/linked-repo', ask),
+    runnerRepo: (/** @type {any} */ ask) => call('/runner-repo', ask),
   };
 
   // No box is connected: the App's answer is the only one there is.
@@ -283,6 +290,20 @@ test('the App checks a private role only inside the accounts it mints into, and 
   assert.equal(sent[0]?.spec.verb, 'linkrepo');
   assert.equal(fell.ok, false);
   assert.equal(fell.needsConnection, 'github');
+
+  // THE RUNNER CHECK IS HELD TO THE SAME LINE, though it has to read the
+  // repository as the App to know whether it is public. Outside the owners a
+  // private repository the App reaches comes back exactly as a name that is
+  // not there does, and both questions go to a box.
+  /** @type {any[]} */
+  const answers = [];
+  for (const name of ['acme/secret', 'acme/nothing']) {
+    const { core: runners, sent: toBox } = fleet([['deb14', 11]], () => ({ ok: false, needsConnection: 'github', text: 'GitHub is not connected for you on this box.' }), { minter });
+    answers.push(await runners.setRunnerRepo(eli, name));
+    assert.equal(toBox[0]?.spec.verb, 'runnerrepo', `${name}: the App answered rather than a box`);
+    assert.equal((await call('/linked-repo', { role: 'runners', repo: name })).error?.code, 'owner_not_allowed', `${name}: as a linked runners role`);
+  }
+  assert.deepEqual(answers[0], answers[1], 'a private repository the App reaches was told apart from one that is not there');
 });
 
 test('stored links that do not look right are dropped, not trusted', () => {

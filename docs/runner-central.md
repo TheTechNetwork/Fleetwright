@@ -234,8 +234,12 @@ The fleet's repository stays the default for anybody who has not set one.
 **minting Worker** first, which checks as the GitHub App itself: it finds the
 App's installation on the repository, mints a read-only token for it (metadata
 and contents, nothing else, kept inside the minter), and answers the same four
-questions with no box involved. Where there is no minter, or it holds no App
-key, it asks a permanent box to run `runnerrepo` with the person's own GitHub
+questions with no box involved. Outside `FLEETWRIGHT_GITHUB_MINT_OWNERS` it
+answers only for a repository GitHub shows as public, and otherwise says "not
+mine to say", whether the repository is private, absent or without the App, so
+the App's key does not tell anybody which private repositories it reaches.
+Where there is no minter, it holds no App key, or it will not say, the question
+goes to a permanent box, which runs `runnerrepo` with the person's own GitHub
 connection. Either way the name is saved only if every answer is one a dispatch
 can use:
 
