@@ -1112,7 +1112,7 @@ export class Coordinator {
     }
 
     if (p === '/api/hosts/enrolled' && req.method === 'GET') {
-      return json(res, 200, { ok: true, hosts: this.core.hostIds.list() });
+      return json(res, 200, { ok: true, hosts: this.core.enrolledHostsFor(requesterFor(client)) });
     }
 
     if (p.startsWith('/api/hosts/') && req.method === 'DELETE') {
@@ -1161,7 +1161,7 @@ export class Coordinator {
     }
 
     if (p === '/api/enroll' && req.method === 'GET') {
-      return json(res, 200, { ok: true, codes: this.core.enrollment.outstanding() });
+      return json(res, 200, { ok: true, codes: this.core.pinsFor(requesterFor(client)) });
     }
 
     // Runner tokens: reusable, revocable, and powerless on their own.

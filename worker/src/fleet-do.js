@@ -727,7 +727,7 @@ export class Fleet {
     }
 
     if (url.pathname === '/api/hosts/enrolled' && request.method === 'GET') {
-      return json({ ok: true, hosts: this.core.hostIds.list() });
+      return json({ ok: true, hosts: this.core.enrolledHostsFor(requesterFor(client)) });
     }
 
     // The destructive routes, checked BEFORE any of them run.
@@ -1132,7 +1132,7 @@ export class Fleet {
     }
 
     if (url.pathname === '/api/enroll' && request.method === 'GET') {
-      return json({ ok: true, codes: this.core.enrollment.outstanding() });
+      return json({ ok: true, codes: this.core.pinsFor(requesterFor(client)) });
     }
 
     // Which devices can reach this fleet, and dropping one.

@@ -16,7 +16,7 @@ import { HostRegistry, runsNoSessions } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
 import { HostIdentities, actsFor, mayActFor } from './hosts.js';
-import { Enrollment } from './enrollment.js';
+import { Enrollment, emailOf } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -1776,6 +1776,42 @@ export class CoordinatorCore {
     if (!requester || requester.admin) return all;
     const mine = String(requester.email || '').toLowerCase();
     return mine ? all.filter((c) => String(c.email || '').toLowerCase() === mine) : [];
+  }
+
+  /**
+   * The pins waiting to be spent, the same way: all of them to an admin and
+   * the shared token, a member's own to a member. Each one names the email
+   * of whoever minted it, and its first three digits, so the whole list was
+   * the colleague list clientsFor stopped handing out.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  pinsFor(requester) {
+    const all = this.enrollment.outstanding();
+    if (!requester || requester.admin) return all;
+    const mine = String(requester.email || '').toLowerCase();
+    return mine ? all.filter((p) => emailOf(p.actor) === mine) : [];
+  }
+
+  /**
+   * Every enrolled host, to everybody: a phone approving a box for its
+   * person's vault needs each host's name, fingerprint and key. Who added a
+   * host and whose temporary host it is are emails, and a member is shown
+   * them only when they are the member's own. An attribution naming nobody,
+   * a repository's runner or a machine image, stays.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  enrolledHostsFor(requester) {
+    const all = this.hostIds.list();
+    if (!requester || requester.admin) return all;
+    const mine = String(requester.email || '').toLowerCase();
+    /** @param {unknown} v `alice@…`, `holder:alice@…`, `actions:owner/repo` */
+    const shown = (v) => {
+      const who = emailOf(String(v || '').replace(/^[a-z]+:/i, ''));
+      return !who || who === mine ? v : null;
+    };
+    return all.map((h) => ({ ...h, enrolledBy: shown(h.enrolledBy), ...('owner' in h ? { owner: shown(h.owner) } : {}) }));
   }
 
   /**

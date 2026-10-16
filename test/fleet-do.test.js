@@ -395,3 +395,40 @@ test('a member listing credentials sees their own devices, an admin sees everyon
   const asAdmin = await (await call(f, '/api/clients', 'GET', null, { authorization: `Bearer ${admin}` })).json();
   assert.equal(asAdmin.clients.length, 4);
 });
+
+test('a member listing pins and enrolled hosts is not shown whose they are', async () => {
+  // GET /api/clients stopped handing members every colleague's email; the
+  // pin list and the enrolled-host list still did, as each pin's actor and
+  // each pin-enrolled host's enrolledBy and owner.
+  const { fleet: f } = fleet();
+  const issue = async (/** @type {string} */ name, /** @type {string} */ email, admin = false) => {
+    const { token } = await f.core.clients.issue(name, { admin });
+    const row = [...f.core.clients.clients.values()].find((c) => c.name === name);
+    row.email = email;
+    return token;
+  };
+  const admin = await issue('admin phone', 'admin@example.test', true);
+  const alice = await issue('alice phone', 'alice@example.test');
+  const bob = await issue('bob phone', 'bob@example.test');
+  const as = (/** @type {string} */ token) => ({ authorization: `Bearer ${token}` });
+
+  const { code } = await (await call(f, '/api/enroll', 'POST', { kind: 'host', ephemeral: true }, as(alice))).json();
+  await call(f, '/api/enroll', 'POST', { kind: 'host' }, as(alice));
+  await call(f, '/api/enroll', 'POST', { kind: 'host' }, as(bob));
+  const key = await generateKeyPair();
+  assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: 'alice-box', publicJwk: key.publicJwk })).status, 200);
+
+  const pins = async (/** @type {string} */ token) => (await (await call(f, '/api/enroll', 'GET', null, as(token))).json()).codes;
+  assert.deepEqual((await pins(bob)).map((/** @type {any} */ c) => c.actor), ['bob@example.test']);
+  assert.equal((await pins(admin)).length, 2);
+
+  const hosts = async (/** @type {string} */ token) => (await (await call(f, '/api/hosts/enrolled', 'GET', null, as(token))).json()).hosts;
+  const [seenByBob] = await hosts(bob);
+  assert.equal(seenByBob.hostId, 'alice-box', 'every host stays listed, for vault approval');
+  assert.deepEqual(seenByBob.publicJwk, { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y });
+  assert.equal(JSON.stringify(seenByBob).includes('alice@'), false, `a member was shown a colleague's email: ${JSON.stringify(seenByBob)}`);
+  const [seenByAlice] = await hosts(alice);
+  assert.equal(seenByAlice.enrolledBy, 'alice@example.test', 'and the person who added it still sees that they did');
+  assert.equal(seenByAlice.owner, 'alice@example.test');
+  assert.equal((await hosts(admin))[0].enrolledBy, 'alice@example.test');
+});
