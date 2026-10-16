@@ -184,6 +184,38 @@ test('guessing pins gets slow long before a million tries', async () => {
   assert.equal(waited.length, 3, 'and the budget refills');
 });
 
+test('guesses sent all at once take turns instead of all being looked up', async () => {
+  // Each request used to sleep on its own, so a burst all slept the same five
+  // seconds and then all looked their codes up: 3000 concurrent guesses were
+  // answered in 5.2s and the real code among them enrolled a host. Measured
+  // against the Durable Object in the Workers security audit, run 1.
+  let clock = 0;
+  /** @type {number[]} */ const waited = [];
+  const enrollment = new Enrollment({
+    now: () => clock,
+    maxFailures: 0,
+    sleep: async (ms) => { waited.push(ms); },
+  });
+  const { code } = enrollment.mint({ purpose: 'host' });
+  await enrollment.redeem('000000', 'host'); // spends the budget
+
+  const burst = Array.from({ length: 200 }, (_, i) => enrollment.redeem(i === 199 ? code : String(100000 + i), 'host'));
+  const results = await Promise.all(burst);
+  const lookedUp = results.filter((r) => !(!r.ok && /too many/.test(r.reason)));
+  // Those admitted queue behind each other, one lookup per penalty, and only
+  // a bounded queue's worth are admitted at all: the rest are told to come back.
+  assert.ok(lookedUp.length > 0 && lookedUp.length <= 20, `a burst of 200 was looked up ${lookedUp.length} times`);
+  const turns = waited.slice(1);
+  for (let i = 1; i < turns.length; i++) {
+    assert.ok(turns[i] - turns[i - 1] >= 500, `two lookups less than a penalty apart: ${turns}`);
+  }
+  // The real code was in the part told to come back. Coming back works, once
+  // the queue a flood built has drained.
+  assert.equal(results[199].ok, false);
+  clock += 120_000;
+  assert.equal((await enrollment.redeem(code, 'host')).ok, true);
+});
+
 test('a code minted for a device cannot enrol a host', async () => {
   const enrollment = new Enrollment();
   const { code } = enrollment.mint({ purpose: 'device' });
@@ -662,7 +694,7 @@ test('a pin can be bound to one host, so it cannot take over another', async (t)
 
   await assert.rejects(
     () => enrol({ origin, code, hostId: 'build-server', publicJwk: key.publicJwk }),
-    /minted for the-pi/,
+    /minted for a different machine name/,
   );
   // And the pin is NOT spent by the attempt, so the person it was minted for
   // can still use it.

@@ -157,6 +157,8 @@ const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
  */
 const MAX_PUSH_TOKEN = 512;
 const MAX_DEVICES = 150;
+/** How often one enrolled host's refused connections reach the ring (recordRefusal). */
+export const REFUSAL_EVERY_MS = 10 * 60_000;
 /**
  * The most points of a machine's traffic passed on: half an hour of the
  * pool's one-minute samples, with room to spare. A box sending more is not
@@ -848,6 +850,42 @@ export class CoordinatorCore {
     this.onEvents?.();
     return event;
   }
+
+  /**
+   * A refused host connection, which reaches the ring only when it is news.
+   *
+   * Every failed proof used to be recorded. Trying costs nothing: the upgrade
+   * needs no credential, and a host id nobody enrolled is refused at a Map
+   * lookup, before any nonce or signature. So 200 made-up names replaced the
+   * whole stored ring, enrolments and revocations included, and the loss
+   * outlived a restart; 50 filled every member's catch-up page with names the
+   * stranger chose. Measured against the real Durable Object in the security
+   * audit of the Workers, run 1.
+   *
+   * A stranger is a line in the log and nothing more: there is no host to
+   * report on, and the ring is for things that happened to this fleet. A host
+   * that IS enrolled (revoked, a bad signature, a stale challenge) is news its
+   * operator wants, but once per REFUSAL_EVERY_MS says it as well as a
+   * hundred times does, and the number of enrolled hosts bounds the rest.
+   *
+   * @param {string} hostId
+   * @param {string} reason
+   */
+  recordRefusal(hostId, reason) {
+    const id = String(hostId || '');
+    if (!this.hostIds.get(id)) {
+      this.log.warn(`coordinator: refused a connection for ${id || '(no host id)'}: ${reason}`);
+      return null;
+    }
+    const now = this.now();
+    if (now - (this.#refusedAt.get(id) ?? -Infinity) < REFUSAL_EVERY_MS) return null;
+    for (const [other, at] of this.#refusedAt) if (now - at >= REFUSAL_EVERY_MS) this.#refusedAt.delete(other);
+    this.#refusedAt.set(id, now);
+    return this.record({ event: 'host.refused', hostId: id, text: reason });
+  }
+
+  /** When each enrolled host's last refusal was recorded (recordRefusal). */
+  #refusedAt = new Map();
 
   /**
    * @param {Record<string, any>} event
@@ -1634,6 +1672,27 @@ export class CoordinatorCore {
     if (!this.deviceReachableBy(device, requester)) return { ok: false, error: { code: 'not_yours' } };
     this.devices.delete(token);
     return { ok: true };
+  }
+
+  /**
+   * The credential list, as the requester may see it: everybody's to an admin
+   * and the shared token, a member's own devices to a member.
+   *
+   * It used to be the whole list for anyone signed in, so any member could
+   * read every colleague's email, which of them is the admin, and when each
+   * phone was last used. Invites are refused to members for exactly that
+   * reason (a list of who was invited is a list of colleagues), and /api/hosts
+   * and /api/events already answer each person with their own. Filtering
+   * rather than refusing keeps the Devices screen, which a member opens to
+   * see and remove their own phones.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  clientsFor(requester) {
+    const all = this.clients.list();
+    if (!requester || requester.admin) return all;
+    const mine = String(requester.email || '').toLowerCase();
+    return mine ? all.filter((c) => String(c.email || '').toLowerCase() === mine) : [];
   }
 
   /**
@@ -4805,6 +4864,9 @@ export class CoordinatorCore {
       event: 'host.enrolled',
       hostId,
       fingerprint: result.host.fingerprint,
+      // Whose machine, as the actor: a name only in the text was shown to every
+      // member as fleet topology (visibleEvents).
+      actor: ticket.owner,
       text: this.vmStandby.isKept(hostId)
         ? `a machine kept ready on ${ticket.owner}’s hypervisor enrolled itself`
         : `a machine from ${ticket.owner}’s hypervisor enrolled itself`,

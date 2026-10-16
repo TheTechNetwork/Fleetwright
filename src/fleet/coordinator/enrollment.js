@@ -44,6 +44,21 @@ const CODE_TTL_MS = 10 * 60_000;
 // The wait applies to every redemption while the budget is spent, including
 // correct ones. It has to: knowing whether a code is right is exactly what the
 // delay is paying for, and waiting only on failures would time-leak the answer.
+//
+// A DELAY ALONE DID NOT BOUND THE RATE. Each request slept on its own, so
+// requests sent together all slept the same capped five seconds and then each
+// looked its code up: 3000 concurrent guesses were answered in 5.2s, and the
+// one carrying the real code enrolled a permanent host (security audit of the
+// Workers, run 1, against the real Durable Object). The bound above held only
+// for a caller polite enough to wait for each answer.
+//
+// So past the budget, lookups take turns: one per penalty, in arrival order,
+// whoever sends them. A request that would wait more than MAX_QUEUE_MS for its
+// turn is told to come back instead of joining a queue an attacker could make
+// hours long. That is the honest price of the bound: while somebody floods
+// the endpoint, a person with a real pin may be asked to try again a few
+// times. They are never refused for longer than the flood lasts, and the
+// flood guesses at one code per penalty instead of thousands.
 const MAX_FAILURES = 10;
 // How many unspent pins may wait at once. See mint() for why there is a bound.
 const MAX_PENDING = 200;
@@ -57,6 +72,8 @@ const PENALTY_STEP_MS = 500;
  * Also bounded because this runs inside a Worker request.
  */
 const PENALTY_MAX_MS = 5_000;
+/** The longest a redemption waits for its turn before being told to come back. */
+const MAX_QUEUE_MS = 3 * PENALTY_MAX_MS;
 
 /** @typedef {'host'|'device'} Purpose */
 
@@ -94,6 +111,8 @@ export class Enrollment {
     this.sleep = sleep;
     /** @type {number[]} timestamps of recent wrong guesses */
     this.failures = [];
+    /** When the next lookup past the budget may happen (see MAX_QUEUE_MS). */
+    this.nextTurn = 0;
   }
 
   /**
@@ -163,7 +182,17 @@ export class Enrollment {
     // code from a wrong one — and applied to correct codes too, for the same
     // reason. See the note on PENALTY_MAX_MS.
     const penalty = this.#penaltyMs();
-    if (penalty > 0) await this.sleep(penalty);
+    if (penalty > 0) {
+      const now = this.now();
+      const turn = Math.max(now, this.nextTurn);
+      if (turn - now > MAX_QUEUE_MS) {
+        return { ok: false, reason: 'too many enrolment attempts right now — wait a minute and try again' };
+      }
+      // Claimed BEFORE the await, so requests that arrive together queue
+      // behind each other instead of all reading the same empty slot.
+      this.nextTurn = turn + penalty;
+      await this.sleep(turn - now + penalty);
+    }
     const entry = this.pending.get(String(code || '').replace(/\s+/g, ''));
     if (!entry) {
       this.failures.push(this.now());
@@ -173,7 +202,11 @@ export class Enrollment {
       this.pending.delete(entry.code);
       return { ok: false, reason: 'that code has expired — mint another' };
     }
+    // A hit under the wrong purpose or the wrong name counts as a failure.
+    // It is what a guesser sees far more often than the person the pin is for,
+    // and neither should cost the guesser less than a miss.
     if (entry.purpose !== purpose) {
+      this.failures.push(this.now());
       return { ok: false, reason: `that code was issued for a ${entry.purpose}, not a ${purpose}` };
     }
     // Checked HERE, beside the purpose check, and deliberately BEFORE the
@@ -181,8 +214,13 @@ export class Enrollment {
     // a spend — otherwise anyone who guessed a pin existed could burn it by
     // naming the wrong machine, and the person it was minted for would be left
     // asking for another.
+    //
+    // The reason does not say WHICH name. It used to, and to a guesser that
+    // named the host whose key a bound pin can replace. The person who minted
+    // the pin chose the name and can see it on their pending pins.
     if (entry.hostId && String(hostId || '') !== entry.hostId) {
-      return { ok: false, reason: `that code was minted for ${entry.hostId}` };
+      this.failures.push(this.now());
+      return { ok: false, reason: 'that code was minted for a different machine name — use the name it was minted for' };
     }
     // Deleted before the caller does anything with it: a redemption that fails
     // downstream must not leave the code usable, because the safe failure is

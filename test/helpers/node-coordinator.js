@@ -366,7 +366,7 @@ export class Coordinator {
         const nonce = String(req.headers['x-fleet-nonce'] || '');
         const outcome = await this.core.hostIds.prove(hostId, proof, nonce);
         if (outcome.ok) return true;
-        this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
+        this.core.recordRefusal(hostId, outcome.reason);
         return outcome.reason;
       },
       onConnection: (conn, req) => {
@@ -1145,7 +1145,7 @@ export class Coordinator {
     }
 
     if (p === '/api/clients' && req.method === 'GET') {
-      return json(res, 200, { ok: true, clients: this.core.clients.list() });
+      return json(res, 200, { ok: true, clients: this.core.clientsFor(requesterFor(client)) });
     }
 
     if (p.startsWith('/api/clients/') && req.method === 'DELETE') {

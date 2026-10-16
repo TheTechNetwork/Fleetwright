@@ -162,6 +162,13 @@ test('minting a pin records who it was for', async () => {
   const events = f.core.snapshot().events;
   const minted = events.find((/** @type {any} */ e) => e.event === 'enrol.minted');
   assert.match(minted.text, /someone@example.com/);
+
+  // Recorded AS the actor, not only in the text: a member is shown every event
+  // with no actor as fleet topology, so a name in the text alone reached all
+  // of them. The minter still sees it; somebody else does not.
+  assert.equal(minted.actor, 'someone@example.com');
+  assert.ok(f.core.recentEvents({ email: 'someone@example.com', admin: false }).some((/** @type {any} */ e) => e.event === 'enrol.minted'));
+  assert.ok(!f.core.recentEvents({ email: 'other@example.com', admin: false }).some((/** @type {any} */ e) => e.event === 'enrol.minted'));
 });
 
 test('sign-in is refused clearly when the coordinator has none configured', async () => {
@@ -315,4 +322,60 @@ test('the heartbeat auto-response is the shared constants, byte for byte', () =>
   // And a fake state without the method is simply not asked — the unit tests
   // above construct the object that way on every run.
   new Fleet(/** @type {any} */ (fakeState()), {});
+});
+
+test('strangers knocking on /host/connect cannot overwrite the event history', async () => {
+  // The upgrade needs no credential to attempt and an unknown host id is
+  // refused at a Map lookup, so every refusal used to be recorded: 200 made-up
+  // names replaced the stored ring, and the loss survived a rebuild.
+  const { fleet: f, state } = fleet();
+  f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
+  for (let i = 0; i < 250; i++) {
+    const res = await call(f, `/host/connect?hostId=stranger-${i}`, 'GET', null, { upgrade: 'websocket' });
+    assert.equal(res.status, 401);
+  }
+  assert.ok(f.core.events.some((e) => e.hostId === 'seed-host'), 'the history a stranger can reach is the history a stranger can erase');
+  assert.equal(f.core.events.filter((e) => e.event === 'host.refused').length, 0);
+  // The persisted ring is the one that matters across an eviction.
+  await new Promise((r) => setTimeout(r, 0));
+  const stored = state.raw.get('events') ?? [];
+  assert.ok(!stored.some((/** @type {any} */ e) => e.event === 'host.refused'));
+});
+
+test('an enrolled host that is refused is recorded once, not once per attempt', async () => {
+  const { fleet: f } = fleet();
+  const key = await loadOrCreateKey(scratch());
+  const { code } = f.core.enrollment.mint({ purpose: 'host' });
+  assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: 'durable', publicJwk: key.publicJwk })).status, 200);
+
+  // No challenge: refused, and its operator wants to know, once.
+  for (let i = 0; i < 20; i++) {
+    assert.equal((await call(f, '/host/connect?hostId=durable', 'GET', null, { upgrade: 'websocket' })).status, 401);
+  }
+  const refused = f.core.events.filter((e) => e.event === 'host.refused');
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0].hostId, 'durable');
+});
+
+test('a member listing credentials sees their own devices, an admin sees everyone', async () => {
+  // A list of everyone holding a credential is a list of colleagues, the
+  // reason invites are refused to members, plus who the admin is and when
+  // each phone was last used.
+  const { fleet: f } = fleet();
+  const issue = async (/** @type {string} */ name, /** @type {string} */ email, admin = false) => {
+    const { token } = await f.core.clients.issue(name, { admin });
+    const row = [...f.core.clients.clients.values()].find((c) => c.name === name);
+    row.email = email;
+    return token;
+  };
+  const admin = await issue('admin phone', 'admin@example.test', true);
+  await issue('alice phone', 'alice@example.test');
+  const bob = await issue('bob phone', 'bob@example.test');
+  await issue('bob tablet', 'bob@example.test');
+
+  const asBob = await (await call(f, '/api/clients', 'GET', null, { authorization: `Bearer ${bob}` })).json();
+  assert.deepEqual(asBob.clients.map((/** @type {any} */ c) => c.name).sort(), ['bob phone', 'bob tablet']);
+
+  const asAdmin = await (await call(f, '/api/clients', 'GET', null, { authorization: `Bearer ${admin}` })).json();
+  assert.equal(asAdmin.clients.length, 4);
 });
