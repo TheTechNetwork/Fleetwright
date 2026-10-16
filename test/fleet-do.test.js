@@ -357,6 +357,22 @@ test('an enrolled host that is refused is recorded once, not once per attempt', 
   assert.equal(refused[0].hostId, 'durable');
 });
 
+test('a revoked host knocking is a stranger, not one ring entry per row per window', async () => {
+  // Revoked rows stay thirty days and every retired runner leaves one, so a
+  // per-name throttle was a recurring write slot per row for anybody holding
+  // the names, which every member is shown. Thirty of them cycled the stored
+  // ring in about seventy minutes in the second Workers audit.
+  const { fleet: f } = fleet();
+  for (const hostId of ['gone-1', 'gone-2', 'gone-3']) {
+    const { code } = f.core.enrollment.mint({ purpose: 'host' });
+    const key = await generateKeyPair();
+    assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId, publicJwk: key.publicJwk })).status, 200);
+    f.core.revokeHost(hostId);
+    assert.equal((await call(f, `/host/connect?hostId=${hostId}`, 'GET', null, { upgrade: 'websocket' })).status, 401);
+  }
+  assert.equal(f.core.events.filter((e) => e.event === 'host.refused').length, 0);
+});
+
 test('a member listing credentials sees their own devices, an admin sees everyone', async () => {
   // A list of everyone holding a credential is a list of colleagues, the
   // reason invites are refused to members, plus who the admin is and when

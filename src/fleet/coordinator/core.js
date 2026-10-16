@@ -919,16 +919,25 @@ export class CoordinatorCore {
    *
    * A stranger is a line in the log and nothing more: there is no host to
    * report on, and the ring is for things that happened to this fleet. A host
-   * that IS enrolled (revoked, a bad signature, a stale challenge) is news its
+   * that IS enrolled (a bad signature, a stale challenge) is news its
    * operator wants, but once per REFUSAL_EVERY_MS says it as well as a
    * hundred times does, and the number of enrolled hosts bounds the rest.
+   *
+   * A REVOKED ROW IS A STRANGER TOO. Its row is kept thirty days so the 401
+   * can say "revoked", every retired runner leaves one, and none of them is
+   * counted against the live-host ceiling, so "the number of enrolled hosts"
+   * was not what bounded this: each row was one more ring entry every ten
+   * minutes for anybody holding the names, which every member is shown in
+   * host.retired. Thirty cycled the stored ring in about seventy minutes in
+   * the second Workers audit. The revocation is already in the ring.
    *
    * @param {string} hostId
    * @param {string} reason
    */
   recordRefusal(hostId, reason) {
     const id = String(hostId || '');
-    if (!this.hostIds.get(id)) {
+    const row = this.hostIds.get(id);
+    if (!row || row.revokedAt) {
       this.log.warn(`coordinator: refused a connection for ${id || '(no host id)'}: ${reason}`);
       return null;
     }
