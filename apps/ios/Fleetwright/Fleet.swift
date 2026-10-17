@@ -1050,10 +1050,31 @@ struct Fleet {
     /// One round trip: the catalogue and the current state arrive together, so
     /// a picker never renders a provider list from one answer and its status
     /// from another.
-    func connections(host: String? = nil) async throws -> Reply {
+    ///
+    /// `offeringSignIn` is for the credentials screen, which can finish a
+    /// GitHub or Cloudflare sign-in (`finishSignIn`): only then does the
+    /// coordinator rewrite those entries to its own sign-in and mint a flow
+    /// for each. Everywhere else this is asked only to read what is connected,
+    /// and gets the paste route and mints nothing.
+    func connections(host: String? = nil, offeringSignIn: Bool = false) async throws -> Reply {
         // No host means fleet-wide: the coordinator fans it out and merges the
         // answers, which is the only way to see WHERE a credential is.
-        try await intent("connect", params: [:], host: host)
+        try await intent("connect", params: [:], host: host, extra: offeringSignIn ? ["oauthFinish": true] : [:])
+    }
+
+    /// Finish a GitHub or Cloudflare sign-in with what the provider's page
+    /// handed back, as the person signed in on this phone.
+    ///
+    /// THE COORDINATOR'S CALLBACK NO LONGER FINISHES IT, because the browser
+    /// that comes back there is not known to be the person who started it: a
+    /// forwarded sign-in link put one person's token under another's name. So
+    /// the page hands the code to this app, and this request carries the
+    /// credential that proves who is finishing. Somebody else's sign-in is
+    /// refused, in words that say so.
+    func finishSignIn(provider: String, state: String, code: String?, sealed: String?) async throws -> Reply {
+        var body: [String: Any] = ["provider": provider, "state": state]
+        if let sealed { body["sealed"] = sealed } else if let code { body["code"] = code }
+        return try JSONDecoder().decode(Reply.self, from: try await post("/api/oauth/finish", body: body))
     }
 
     /// Begin connecting a credential. Returns a URL to open — never a secret.
