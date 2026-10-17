@@ -268,9 +268,13 @@ export class ClientRegistry {
    * Does this verified email hold admin anywhere — on ANY row, revoked or not?
    *
    * Revoked rows count, deliberately: revocation is for lost devices, and a
-   * person whose every phone was revoked is still the person. Demotion is a
-   * different act — removal from the allowlist — after which they cannot sign
-   * in and this is never consulted.
+   * person whose every phone was revoked is still the person, so signing in
+   * again makes them the admin again. That makes this the answer for signing
+   * in and not for what an admin's machines may hold now. It said it was
+   * never consulted once a person was taken off the allowlist, and the tier
+   * of every box they had enrolled asked it on each connect, so a removed
+   * admin's boxes stayed the operator's. That question is core.js
+   * #isOperator, which also wants a credential that still works.
    *
    * @param {string} email
    */
