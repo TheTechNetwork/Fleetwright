@@ -1197,20 +1197,53 @@ across the network once more.
   they don't carry the `fleetwright-image` tag, and they stay out of the
   resource set, so the fleet's token can't clone them.
 
-**The edge router does not use this yet.** Its configuration is written into
-its disk (above, "OPNsense"), so a copy would also need its configuration
-block written into it. That is a few MiB where today's build sends 3 GiB.
-Xen Orchestra has the call for it, `disk.importContent`, which imports into
-an existing disk. In its source as of October 2026, though, the handler
-never receives the `format` it advertises, and the XAPI import underneath
-asserts that a format was given, so the call fails. The Xen Orchestra that
-Fleetwright deploys ("A pool without Xen Orchestra") carries the fix: the pinned
-installer applies it to the source each time it installs or updates Xen
-Orchestra, and builds without it once upstream has the same change. A Xen
-Orchestra installed any other way still has the bug, so until the edge
-router's build tries the call and falls back, it is still built by sending
-its whole disk. A sparse upload that skipped the empty parts would save less
-than a third: 1,060 of the image's 1,536 2 MiB blocks hold data.
+**The edge router does the same, and writes only its configuration.** Its
+configuration is written into its disk (above, "OPNsense"), so a copy needs
+its configuration's blocks written into it as well: five of the image's 2 MiB
+blocks, the four the file system records the move in and the one the
+configuration moves to. The box reads those five out of the download it
+already keeps, unpacking it only as far as the last of them, makes the change
+in them, and checks every byte it replaces against the plan as the full build
+always has, all before anything on the pool is made. Then the router's VM is
+made from the kept disk, which copies it in seconds, and the five blocks are
+written into the copy with Xen Orchestra's `disk.importContent`, as a VHD that
+holds them and nothing else. XAPI writes what such a VHD holds and leaves the
+rest of the disk as it was, which is how an incremental backup is restored
+onto a copy of its base. About 10 MiB goes through Xen Orchestra where the
+whole disk is 3 GiB, and the build says so: "Copying the disk kept on … and
+writing the configuration: 10 MB."
+
+- **The disk as published is kept only where it can be used.** It is a
+  template that never boots, `Fleetwright base: OPNsense <release>`, tagged
+  `fleetwright-base` and `fleetwright-base:opnsense:<release>`, one per
+  release and storage, and out of the resource set like Debian's. Before the
+  first build on a storage keeps it, it asks Xen Orchestra to write one block
+  into a 2 MiB disk made for the question and removed after. Keeping the disk
+  costs the 3 GiB a build sends today, and a disk kept where nothing can write
+  into its copies would then cost another 3 GiB for nothing.
+- **A Xen Orchestra without the fix gets the whole disk, as before.** As Xen
+  Orchestra ships it, `disk.importContent` never passes on the `format` it
+  advertises, and the XAPI import underneath refuses an import without one.
+  The Xen Orchestra that Fleetwright deploys ("A pool without Xen
+  Orchestra") carries the fix: the pinned installer applies it to the source
+  each time it installs or updates Xen Orchestra, and builds without it once
+  upstream has the same change. One installed any other way answers the
+  question with an error, so nothing is kept, the router's whole disk is sent,
+  and the build says why and that updating Xen Orchestra with the fleet's
+  installer makes a rebuild a copy and a few MB. The next build asks again.
+  Storage XAPI has to zero before it writes into a disk (thick LVM) answers
+  the same way.
+- **A copy that cannot be written into is removed** before anything else is
+  made, and the whole disk sent. That happens only when a Xen Orchestra lost
+  the fix after the disk was kept, and the kept disk stays for the one that
+  is updated.
+- **A newer pinned release replaces the older one's**, on every storage,
+  once its own is made. Nothing else removes them, since nothing removes the
+  edge router itself. A router made from an older one keeps working, because
+  XCP-ng keeps a clone's parent disk while anything still reads from it.
+- **Not yet run against a real pool.** The calls are Xen Orchestra's own,
+  read in its source; the VHD is read back by qemu-img as the disk it holds,
+  and what XAPI does with it is read from `vhd-tool`'s source.
 
 **Keep, rebuild or remove.** Each image a pool has is a choice on the policy
 screen, Keep unless the person says otherwise (`rebuild` and `remove` in the
