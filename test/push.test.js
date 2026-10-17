@@ -23,6 +23,7 @@ import {
   routingPusher,
   pemToBytes,
 } from '../src/fleet/push.js';
+import { admit } from './helpers/enrolled-hosts.js';
 
 /** A sender that records what it was asked to deliver. */
 function fakePusher({ dead = [] } = {}) {
@@ -242,6 +243,42 @@ test('an event nobody needs waking for is recorded but not pushed', async () => 
 
   assert.equal(push.sends.length, 0, 'not everything that happens is worth a buzz');
   assert.equal(c.events.length, 1, 'but it is still worth recording');
+});
+
+test('one member’s boxes buzz a phone a bounded number of times an hour, and another member’s still arrive', async () => {
+  // Unbounded before: 610 frames from one member's box naming a session it
+  // did not hold were 598 pushes to the admin's phone, and on a relay fleet
+  // the whole hour's budget, so member B's real question was refused (fifth
+  // Workers audit). The bound is per person across boxes, since one member
+  // may hold 25, and it must not cost an honest burst anything.
+  const push = fakePusher();
+  let clock = 1_700_000_000_000;
+  const c = core({ push, now: () => clock });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
+  for (const box of ['boxa1', 'boxa2', 'boxa3']) await admit(c, box, { enrolledBy: 'a@example.com' });
+  await admit(c, 'boxb', { enrolledBy: 'b@example.com' });
+  const fromA = () => push.sends.filter((s) => s.message.data.hostId.startsWith('boxa')).length;
+
+  // Ten of A's sessions finishing in the same instant all arrive.
+  for (let i = 0; i < 10; i++) await c.onHostMessage('boxa1', { kind: 'event', event: 'session.ended', name: `job-${i}` });
+  assert.equal(fromA(), 10);
+  // The same news again inside the quiet window is a repeat, not news.
+  await c.onHostMessage('boxa1', { kind: 'event', event: 'session.ended', name: 'job-0' });
+  assert.equal(fromA(), 10);
+
+  // A flood spread over three boxes and fresh names is one person's allowance.
+  for (let i = 0; i < 300; i++) {
+    await c.onHostMessage(`boxa${(i % 3) + 1}`, { kind: 'event', event: 'session.awaiting-input', name: `flood-${i}`, text: 'flood' });
+  }
+  assert.equal(fromA(), 60, 'sixty in the hour from all of A’s boxes together');
+  assert.equal(c.events.at(-1)?.name, 'flood-299', 'and the ring kept the latest of them all the same');
+
+  await c.onHostMessage('boxb', { kind: 'event', event: 'session.awaiting-input', name: 'bjob', text: 'needs B' });
+  assert.equal(push.sends.at(-1)?.message.data.name, 'bjob', 'B’s own box is not spent by A’s');
+
+  clock += 60 * 60_000;
+  await c.onHostMessage('boxa2', { kind: 'event', event: 'session.ended', name: 'later' });
+  assert.equal(fromA(), 61, 'and the hour ends');
 });
 
 test('with no devices registered nothing is sent and nothing breaks', async () => {
