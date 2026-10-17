@@ -749,6 +749,14 @@ fun FleetScreen(
                                     },
                                 ) { ReassuranceBanner(summary) }
                             }
+                            // Eggs.kt: pulled four times in a minute. Under the
+                            // assurance line, where the pull happened and the
+                            // eye is, in the dimmest ink, and never on the line
+                            // itself. It sat under the last card, off screen
+                            // while pulling on a fleet of any size.
+                            Eggs.pullLine(pulls)?.let { line ->
+                                Text(line, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
+                            }
                             // THE ONBOARDING ASK, under the line that says
                             // whether anything needs you. A session runs on its
                             // starter's own Claude account, and a runner started
@@ -827,11 +835,6 @@ fun FleetScreen(
                             onResume = { act { fleet.resume(session.name, "summary") } },
                             onOpen = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
                         )
-                    }
-                    // Eggs.kt: pulled four times in a minute. Under the cards,
-                    // in the dimmest ink, and never on the assurance line.
-                    Eggs.pullLine(pulls)?.let { line ->
-                        item { Text(line, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now) }
                     }
                     item { Spacer(Modifier.heightIn(min = 88.dp)) }
                 }
