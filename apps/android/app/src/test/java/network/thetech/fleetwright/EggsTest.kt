@@ -31,4 +31,21 @@ class EggsTest {
             assertEquals("$taps taps", expected, Eggs.buildLine(taps))
         }
     }
+
+    @Test
+    fun pullingTheListIsTheTableToo() {
+        val pulls = fixture.getJSONObject("pulls")
+        assertEquals(pulls.getInt("count"), Eggs.PULL_COUNT)
+        assertEquals(pulls.getLong("withinSeconds"), Eggs.PULL_WINDOW_SECONDS)
+        assertEquals(pulls.getString("line"), Eggs.PULLING_LINE)
+        val cases = pulls.getJSONArray("cases")
+        assertTrue(cases.length() > 0)
+        for (i in 0 until cases.length()) {
+            val c = cases.getJSONObject(i)
+            val at = c.getJSONArray("at")
+            val seconds = (0 until at.length()).map { at.getLong(it) }
+            val expected = if (c.getBoolean("shows")) pulls.getString("line") else null
+            assertEquals("pulls at $seconds", expected, Eggs.pullLine(seconds))
+        }
+    }
 }
