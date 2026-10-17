@@ -1,6 +1,10 @@
 package network.thetech.fleetwright
 
 import android.os.Build
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +33,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -77,6 +82,8 @@ fun YouScreen(
     // has said; null until then, and the row is not drawn.
     var linkedCount by remember { mutableStateOf<Int?>(null) }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
+    // Eggs.kt: taps on the build line. Not saved, so leaving You hides it again.
+    var buildTaps by remember { mutableIntStateOf(0) }
     val inDemo = signedIn && Demo.isActive(settings.coordinatorUrl)
 
     LaunchedEffect(signedIn) {
@@ -261,11 +268,21 @@ fun YouScreen(
         }
         // WHICH BUILD THIS IS. versionName is the same across every build of a
         // release; versionCode is the number that differs.
+        // Eggs.kt. A tap detector rather than clickable, so TalkBack does not
+        // announce a button that does nothing anybody needs.
         Text(
             "Fleetwright ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
             style = Design.Style.micro,
             color = Design.Palette.inkDim.now,
+            modifier = Modifier.pointerInput(Unit) { detectTapGestures { buildTaps += 1 } },
         )
+        AnimatedVisibility(
+            visible = Eggs.buildLine(buildTaps) != null,
+            enter = fadeIn(Design.Motion.change()),
+            exit = fadeOut(Design.Motion.change()),
+        ) {
+            Text(Eggs.LINE, style = Design.Style.micro, color = Design.Palette.inkDim.now)
+        }
     }
 }
 
