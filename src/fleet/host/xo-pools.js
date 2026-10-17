@@ -121,8 +121,17 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null, perPerson?: number }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
  * @typedef {{ name: string, vm: string, state: string|null, ip: string|null, until: number|null, madeAt: number|null, cpus: number|null, memory: number|null, image: string|null, network: string|null, group: string|null, groupIp: string|null, lab: { name: string, open: boolean }|null, net: Traffic|null }} Machine
- * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string, holder?: boolean }} Seen
+ * @typedef {{ address: string, owner: string, reachable: boolean|null, pools: Array<{ id: string, name: string }>, images: Image[], networks: Network[], machines: Machine[], problem?: string, holder?: boolean, missing?: Array<{ id: string, name: string }>, missingFor?: number }} Seen
+ * @typedef {{ name: string, seenAt: number, missingSince: number|null }} Had
  */
+
+/**
+ * How long a pool the token no longer sees is still said to be missing, from
+ * the last time it was seen: a day. A pool somebody removed from Xen
+ * Orchestra on purpose stops being news, and a box that held the token
+ * before it was set up again does not report a pool for ever.
+ */
+export const MISSING_FORGET_MS = 24 * 60 * 60_000;
 
 /**
  * A person's SSH public keys, from the item they keep them in, each one
@@ -378,6 +387,17 @@ export class XoPools {
     this.ssh = new Map();
     /** @type {Map<string, Seen>} what the last look found, keyed as `held` */
     this.seen = new Map();
+    /**
+     * THE POOLS EACH TOKEN HAS SEEN, keyed as `held`, then by pool id: its
+     * name, when it was last seen, and since when a look that reached Xen
+     * Orchestra has not seen it. What makes "shows none of its pools" a fact
+     * this box can report rather than a guess: Xen Orchestra answering with
+     * an empty list is only news when the list used to have something in it.
+     * In memory, like everything else here; a restart forgets it, and the
+     * looks after it learn the pools again.
+     * @type {Map<string, Map<string, Had>>}
+     */
+    this.had = new Map();
   }
 
   /**
@@ -410,6 +430,7 @@ export class XoPools {
     // FORGOTTEN IS GONE: a pool missing from this answer is no longer held,
     // and what was seen of it goes with it.
     for (const k of [...this.seen.keys()]) if (!held.has(k)) this.seen.delete(k);
+    for (const k of [...this.had.keys()]) if (!held.has(k)) this.had.delete(k);
     const added = [...held.keys()].filter((k) => !this.held.has(k));
     this.held = held;
     this.claude = claude;
@@ -520,8 +541,15 @@ export class XoPools {
           if (m.state !== 'Running') continue;
           m.net = trafficFrom(await rpc.call('vm.stats', { id: m.vm, granularity: 'minutes' }).catch(() => null));
         }
-        this.seen.set(k, { address: record.address, owner, reachable: true, pools: pools.map((p) => ({ id: String(p.id), name: names.get(p.id) || '' })), images, networks, machines });
+        const listed = pools.map((p) => ({ id: String(p.id), name: names.get(p.id) || '' }));
+        const gone = this.#missing(k, listed);
+        this.seen.set(k, { address: record.address, owner, reachable: true, pools: listed, images, networks, machines, ...gone });
       } catch (e) {
+        // NOT SEEN IS NOT MISSING. A look that did not reach Xen Orchestra
+        // says nothing about its pools, so the clocks on the ones already
+        // missing stop: the next look that reaches it starts them again,
+        // rather than count an outage of this box's as time a pool was gone.
+        for (const h of this.had.get(k)?.values() ?? []) h.missingSince = null;
         this.seen.set(k, { address: record.address, owner, reachable: false, pools: [], images: [], networks: [], machines: [], problem: String(/** @type {Error} */ (e).message).slice(0, 200) });
       } finally {
         try {
@@ -531,6 +559,39 @@ export class XoPools {
         }
       }
     }
+  }
+
+  /**
+   * What a look that reached Xen Orchestra says of the pools this token saw
+   * before: each one listed now is remembered as seen; each one not listed
+   * is missing from this look on, and forgotten a day after it was last seen
+   * (MISSING_FORGET_MS). For the health frame, `missing` names them and
+   * `missingFor` is how long the longest has been missing, as a duration so
+   * the coordinator's clock need not agree with this one; both are left out
+   * when nothing is missing, and Xen Orchestra showing no pools with none
+   * remembered is `pools: []` and nothing else.
+   *
+   * @param {string} k  as `held` is keyed
+   * @param {Array<{ id: string, name: string }>} listed  what this look saw
+   * @returns {{ missing?: Array<{ id: string, name: string }>, missingFor?: number }}
+   */
+  #missing(k, listed) {
+    const now = this.now();
+    const had = this.had.get(k) ?? new Map();
+    for (const p of listed) had.set(p.id, { name: p.name, seenAt: now, missingSince: null });
+    const here = new Set(listed.map((p) => p.id));
+    for (const [id, h] of had) {
+      if (here.has(id)) continue;
+      if (now - h.seenAt >= MISSING_FORGET_MS) had.delete(id);
+      else h.missingSince ??= now;
+    }
+    this.had.set(k, had);
+    const gone = [...had].filter(([, h]) => h.missingSince !== null);
+    if (!gone.length) return {};
+    return {
+      missing: gone.map(([id, h]) => ({ id, name: h.name })),
+      missingFor: Math.max(...gone.map(([, h]) => now - /** @type {number} */ (h.missingSince))),
+    };
   }
 
   /**

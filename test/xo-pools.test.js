@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
-import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS } from '../src/fleet/host/xo-pools.js';
+import { XoPools, poolRecord, machineCloudConfig, groupPlace, trafficFrom, NET_POINTS, MISSING_FORGET_MS } from '../src/fleet/host/xo-pools.js';
 import { VM_IMAGE, CONFIG_DRIVE_NAME, buildCloudConfig, ensureImage, removeImage, imageStorage, imageChannelOf, DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
 import { enrolVmOnce, vmLogin, forgetJoin } from '../src/fleet/host/vm-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
@@ -150,6 +150,66 @@ test('a pool that cannot be reached is reported so, and asking it for a machine 
   const r = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, coordinatorUrl: 'https://fleet.test' });
   assert.equal(r.ok, false);
   assert.equal(r.unreachable, true);
+});
+
+test('a pool the token saw and no longer sees is reported missing, and for how long, only by a look that reached Xen Orchestra, and forgotten after a day', async () => {
+  // WHAT THE COORDINATOR READS "Xen Orchestra shows none of its pools" from
+  // (docs/hypervisors.md): this box's own token saw a pool, and a look that
+  // reached Xen Orchestra no longer does.
+  let now = 1_800_000_000_000;
+  const rack = { type: 'pool', id: 'pool-2', name_label: 'rack two' };
+  const objects = [pool, rack];
+  const stand = xo({ objects });
+  let down = false;
+  const reach = async () => {
+    if (down) throw new Error('connect ECONNREFUSED');
+    return stand.rpc;
+  };
+  const pools = new XoPools({ connect: /** @type {any} */ (reach), now: () => now });
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  const look = async () => {
+    await pools.refresh();
+    return /** @type {any} */ (pools.report()[0]);
+  };
+
+  let seen = await look();
+  assert.equal('missing' in seen, false, 'nothing missing is said as nothing at all');
+  objects.splice(0, objects.length);
+  now += 60_000;
+  seen = await look();
+  assert.deepEqual([seen.reachable, seen.pools], [true, []]);
+  assert.deepEqual(seen.missing, [{ id: 'pool-1', name: 'rack' }, { id: 'pool-2', name: 'rack two' }]);
+  assert.equal(seen.missingFor, 0, 'from the first look that missed them, not from when they were last seen');
+  objects.push(rack);
+  now += 4 * 60_000;
+  seen = await look();
+  assert.deepEqual(seen.missing, [{ id: 'pool-1', name: 'rack' }]);
+  assert.equal(seen.missingFor, 4 * 60_000);
+
+  // A LOOK THAT DID NOT REACH IT says nothing of its pools, and the clock
+  // starts again from the next one that does.
+  down = true;
+  now += 60_000;
+  seen = await look();
+  assert.equal(seen.reachable, false);
+  assert.equal('missing' in seen || 'missingFor' in seen, false);
+  down = false;
+  now += 60_000;
+  seen = await look();
+  assert.deepEqual([seen.missing, seen.missingFor], [[{ id: 'pool-1', name: 'rack' }], 0]);
+
+  // A DAY after it was last seen, it is no longer news.
+  now = 1_800_000_000_000 + MISSING_FORGET_MS;
+  seen = await look();
+  assert.equal('missing' in seen, false);
+  assert.deepEqual(seen.pools, [{ id: 'pool-2', name: 'rack two' }]);
+
+  // And a token never seen with a pool reports none and misses none.
+  const empty = new XoPools({ connect: /** @type {any} */ (async () => xo().rpc), now: () => now });
+  empty.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await empty.refresh();
+  assert.deepEqual(/** @type {any} */ (empty.report()[0]).pools, []);
+  assert.equal('missing' in /** @type {any} */ (empty.report()[0]), false);
 });
 
 test('a machine is made from the person’s own image, on the uplink, with its ticket, its login and its end', async () => {

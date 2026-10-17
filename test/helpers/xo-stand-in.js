@@ -5,8 +5,21 @@
 // test/xo-deploy.test.js, which installs Xen Orchestra first and then does
 // the same against it with a certificate the machine made, and
 // test/relay-end-to-end.test.js, which reaches it only through a phone. It
-// counts its connections (`connections`), so a test can hold every one of
-// them to having gone the way it should.
+// counts its connections (`connections`, and `live` for those still open),
+// so a test can hold every one of them to having gone the way it should.
+//
+// ITS SERVERS, when a test gives it some (`servers`), behave as xo-server's
+// xo-mixins/xen-servers.mjs does, which is where the reconnect job's reading
+// of them comes from: `server.enable` refuses with `incorrect state` (25)
+// unless the status is `disconnected` and no attempt of its own is running
+// (`busy`, the `_connectingXenServers` window), sets `enabled` on its way
+// in and answers once connected; `server.disable` sets `enabled: false` and
+// answers once disconnected, refusing a server already off. A refused
+// connection records its error on the server as Xen Orchestra does, and is
+// answered as an admin is answered: SESSION_AUTHENTICATION_FAILED as
+// `authenticationFailed` (8), PoolAlreadyConnected in its own words. A pool
+// object is listed only while the server it is the connection of is
+// connected.
 //
 // THE STAND-IN IS REAL WHERE IT MATTERS. A TLS server with a certificate made
 // for this run, a real WebSocket upgrade, and frames parsed the way the client
@@ -43,6 +56,11 @@ export function xenStoreAsXo(data) {
   return Object.fromEntries(Object.entries(data).map(([k, v]) => [`vm-data/${k}`, v]));
 }
 
+/**
+ * @typedef {{ id: string, label: string, host: string, status: string, enabled: boolean, error?: any, poolId: string, poolName?: string,
+ *   busy?: number, linger?: number, slow?: number, refuse?: 'auth'|'pool'|'down', lingering?: number, slowing?: number }} XoServer
+ */
+
 /** A certificate and key for this run only, and the pin a phone would accept. */
 export function certificate() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'xo-cert-'));
@@ -62,9 +80,16 @@ export function certificate() {
  * here, and `adminPassword` is the admin's password before anybody changes it.
  *
  * @param {import('node:test').TestContext} t
- * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string> }} [opts]
+ * `servers` are Xen Orchestra's own, each `{ id, label, host, status,
+ * enabled, error?, poolId, poolName }` and, to play how one behaves:
+ * `busy` (enables refused as `connecting` before one is taken), `linger`
+ * (looks it stays `disconnecting` after a disable), `slow` (looks it stays
+ * `connecting` after an enable; Infinity for never) and `refuse` (`auth`,
+ * `pool` or `down`: what every enable fails with).
+ *
+ * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string>, servers?: XoServer[] }} [opts]
  */
-export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}) } = {}) {
+export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null) } = {}) {
   const { key, cert, pin } = givenTls ?? certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -75,12 +100,17 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   const passwords = new Map([['admin@admin.net', adminPassword]]);
   const methods = Object.fromEntries(
     ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove']
+      .concat(servers ? ['server.getAll', 'server.enable', 'server.disable'] : [])
       .concat(more)
       .filter((m) => !drop.includes(m))
       .map((m) => [m, {}]),
   );
   const objects = {
-    pool: { p1: { id: 'p1', type: 'pool', name_label: 'Home', default_SR: 'sr1' } },
+    // With servers, the pools of the connected ones; without, the one pool.
+    get pool() {
+      if (!servers) return { p1: { id: 'p1', type: 'pool', name_label: 'Home', default_SR: 'sr1' } };
+      return Object.fromEntries(servers.filter((s) => s.status === 'connected' && s.poolId).map((s) => [s.poolId, { id: s.poolId, type: 'pool', name_label: s.poolName ?? s.poolId }]));
+    },
     host: { h1: { id: 'h1', type: 'host', cpus: { cores: 16 }, memory: { size: 64 * 1024 ** 3 } } },
     SR: {
       sr1: { id: 'sr1', type: 'SR', name_label: 'Local storage', $pool: 'p1', size: 1000 * 1024 ** 3, physical_usage: 200 * 1024 ** 3, content_type: 'user', shared: false },
@@ -100,9 +130,13 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
     VIF: vifs,
   };
   let conns = 0;
+  // THE ONES STILL OPEN, so a test can say a job let go of its session.
+  let live = 0;
   /** @param {import('node:net').Socket} socket */
   const serve = (socket) => {
     const conn = ++conns;
+    live++;
+    socket.once('close', () => live--);
     /** @type {string|null} */
     let as = null;
     let buf = Buffer.alloc(0);
@@ -136,10 +170,65 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
         calls.push({ conn, method: msg.method, params: msg.params, as });
         /** @param {any} result */
         const answer = (result) => socket.write(frame(0x1, Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })), { mask: false }));
-        /** @param {string} message */
-        const refuse = (message) => socket.write(frame(0x1, Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: 1, message } })), { mask: false }));
+        /** @param {string} message @param {number} [code] @param {any} [data] */
+        const refuse = (message, code = 1, data = undefined) => socket.write(frame(0x1, Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code, message, ...(data ? { data } : {}) } })), { mask: false }));
         const p = msg.params || {};
+        const server = servers?.find((s) => s.id === p.id);
         switch (msg.method) {
+          case 'server.getAll':
+            // A look moves a server along whatever it is in the middle of.
+            for (const s of servers ?? []) {
+              if (s.status === 'disconnecting' && --s.lingering <= 0) s.status = 'disconnected';
+              if (s.status === 'connecting' && s.slowing !== undefined && --s.slowing <= 0) Object.assign(s, { status: 'connected', error: undefined, slowing: undefined });
+            }
+            answer((servers ?? []).map((s) => ({
+              id: s.id,
+              label: s.label,
+              host: s.host,
+              username: 'root',
+              status: s.status,
+              enabled: s.enabled,
+              readOnly: false,
+              allowUnauthorized: true,
+              ...(s.error ? { error: s.error } : {}),
+              ...(s.status === 'connected' ? { poolId: s.poolId } : {}),
+            })));
+            break;
+          case 'server.enable': {
+            if (!server) { refuse(`no such xenServer ${p.id}`, 1); break; }
+            const busy = (server.busy ?? 0) > 0;
+            if (server.status !== 'disconnected' || busy) {
+              if (busy) server.busy = /** @type {number} */ (server.busy) - 1;
+              refuse('incorrect state', 25, { actual: busy ? 'connecting' : server.status, expected: 'disconnected', object: server.id, property: 'status' });
+              break;
+            }
+            server.enabled = true;
+            if (server.refuse) {
+              const why = {
+                auth: { recorded: { code: 'SESSION_AUTHENTICATION_FAILED', params: ['root', ''], message: 'SESSION_AUTHENTICATION_FAILED(root, )' }, code: 8, message: 'authentication failed' },
+                pool: { recorded: { name: 'PoolAlreadyConnected', message: 'this pool is already connected', poolId: server.poolId }, code: -32000, message: 'this pool is already connected' },
+                down: { recorded: { code: 'EHOSTUNREACH', message: 'connect EHOSTUNREACH' }, code: 9, message: 'server unreachable' },
+              }[server.refuse];
+              server.error = why.recorded;
+              refuse(why.message, why.code);
+              break;
+            }
+            if (server.slow) Object.assign(server, { status: 'connecting', slowing: server.slow });
+            else Object.assign(server, { status: 'connected', error: undefined });
+            answer(true);
+            break;
+          }
+          case 'server.disable':
+            if (!server) { refuse(`no such xenServer ${p.id}`, 1); break; }
+            if (server.status === 'disconnected' && !server.enabled) {
+              refuse('incorrect state', 25, { actual: 'disconnected', expected: ['connected', 'connecting'], object: server.id, property: 'status' });
+              break;
+            }
+            server.enabled = false;
+            if (server.linger) Object.assign(server, { status: 'disconnecting', lingering: server.linger });
+            else if (server.status !== 'disconnected') server.status = 'disconnected';
+            answer(true);
+            break;
           case 'session.signIn': {
             const u = users.find((x) => x.email === p.email);
             if (!u || passwords.get(p.email) !== p.password) refuse('invalid credentials');
@@ -192,5 +281,5 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => server.close());
   const address = `127.0.0.1:${/** @type {import('node:net').AddressInfo} */ (server.address()).port}`;
-  return { address, pin, calls, users, sets, tags, passwords, connections: () => conns };
+  return { address, pin, calls, users, sets, tags, passwords, connections: () => conns, live: () => live };
 }
