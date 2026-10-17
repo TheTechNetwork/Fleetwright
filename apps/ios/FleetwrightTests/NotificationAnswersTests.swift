@@ -139,7 +139,8 @@ final class NotificationAnswersTests: XCTestCase {
         // last time it ran, so a category learned on demand arrives after the
         // notification it was for. All three, at launch, or none of them work.
         let registered = NotificationAnswers.categories()
-        XCTAssertEqual(registered.count, NotificationAnswers.titles.count)
+        // One per kind of question, and the pool's Reconnect beside them.
+        XCTAssertEqual(registered.count, NotificationAnswers.titles.count + 1)
 
         for (kind, words) in NotificationAnswers.titles {
             guard let category = registered.first(where: {
@@ -159,5 +160,21 @@ final class NotificationAnswersTests: XCTestCase {
                 )
             }
         }
+    }
+
+    // MARK: - a pool Xen Orchestra lost
+
+    func testALostPoolHasOneButtonThatOpensTheAppBehindAnUnlock() throws {
+        // The coordinator sends `fleet.pool.reconnect` on a `pool-lost` push
+        // to an admin. Reconnecting opens the admin sign-in behind Face ID,
+        // which needs a screen, so the button opens the app; and it asks for
+        // the phone to be unlocked before it does anything at all.
+        let category = try XCTUnwrap(NotificationAnswers.categories().first { $0.identifier == "fleet.pool.reconnect" })
+        XCTAssertEqual(category.actions.map(\.identifier), ["reconnect"])
+        XCTAssertEqual(category.actions.map(\.title), ["Reconnect"])
+        let options = try XCTUnwrap(category.actions.first).options
+        XCTAssertTrue(options.contains(.foreground), "Reconnect would run without the screen Face ID needs")
+        XCTAssertTrue(options.contains(.authenticationRequired), "Reconnect can be tapped on a locked phone")
+        XCTAssertFalse(options.contains(.destructive), "Reconnect turns nothing off, and red would say it does")
     }
 }

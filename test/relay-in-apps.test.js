@@ -46,9 +46,9 @@ const SAID = [
   'Keep this screen open until it is done.',
 ];
 
-test('iOS: through this phone is offered only when the fleet named a machine that can take it, and never for a policy change', () => {
+test('iOS: through this phone is offered only when the fleet named a machine that can take it, and never for a policy change or a reconnect', () => {
   // C-2: an older fleet names nobody, and then nothing new is offered.
-  assert.match(SCREEN, /throughOffer = isPolicy \? nil : reply\.relay\?\.hostId/);
+  assert.match(SCREEN, /throughOffer = isPolicy \|\| isReconnect \? nil : reply\.relay\?\.hostId/);
   assert.match(SCREEN, /if offered\.isEmpty \{[\s\S]{0,700}?if let via = throughOffer, job == nil \{[\s\S]{0,400}?Button\(probing \? "Asking through this phone…" : "Try through this phone"\)/);
   assert.match(FLEET, /var relay: RelayOffer\?/);
   // A new probe, or a new address, takes the offer and any relay away.

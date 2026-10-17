@@ -112,7 +112,8 @@ struct XOSetupLines: View {
     /// Past the content's stale date: nothing has been heard for long enough
     /// that the step shown is no longer a claim about now.
     var stale: Bool = false
-    /// `policy` for a change to what the fleet may use (XOSetupAttributes).
+    /// `policy` for a change to what the fleet may use, `reconnect` for a
+    /// pool's servers (XOSetupAttributes).
     var purpose: String? = nil
 
     var body: some View {
@@ -145,8 +146,10 @@ struct XOSetupLines: View {
                 ProgressView(value: value, total: total)
                     .tint(Design.Palette.active)
             }
-            // A change to what the fleet may use is not a setup.
-            Text(purpose == "policy" ? "What the fleet may use, on \(hostId)" : "Hypervisor setup on \(hostId)")
+            // A change to what the fleet may use is not a setup, and nor is
+            // reconnecting a pool's servers.
+            Text(purpose == "reconnect" ? "Xen Orchestra’s servers, on \(hostId)"
+                 : purpose == "policy" ? "What the fleet may use, on \(hostId)" : "Hypervisor setup on \(hostId)")
                 .fleetType(.micro)
                 .foregroundStyle(Design.Palette.inkDim)
         }

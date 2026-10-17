@@ -73,6 +73,13 @@ enum Seal {
     /// a name of its own (xosetupWatchAad in src/fleet/seal.js).
     static func xosetupWatchAAD(job: String, address: String) -> String { "fleetwright-xosetup-watch/v1:\(job):\(address)" }
 
+    /// What a reconnect job did to each of Xen Orchestra's servers, and the
+    /// pools it shows at the end, on its way back to the key this phone sent
+    /// inside the sign-in: server names and addresses are not the
+    /// coordinator's to read (xosetupReconnectAad in src/fleet/seal.js;
+    /// XOReconnect).
+    static func xosetupReconnectAAD(job: String, address: String) -> String { "fleetwright-xosetup-reconnect/v1:\(job):\(address)" }
+
     enum Failure: LocalizedError {
         case notAKey, notSealed
         var errorDescription: String? {

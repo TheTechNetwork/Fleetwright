@@ -74,17 +74,36 @@ import SwiftUI
 /// pool and hands back an inventory sealed to that key, the person chooses,
 /// and the choice goes back sealed to the job's key (XOPolicy). No Live
 /// Activity: the machine waits on the person, so the person is on this screen.
+///
+/// AND IT RECONNECTS A POOL'S SERVERS (`reconnectFor`), when Xen Orchestra
+/// answers and shows none of the pool, or not all of it: from a push's
+/// Reconnect, or the pool's page. The same three steps again, starting from
+/// the machine that noticed (`via`) and the sign-in Face ID opens, so the tap
+/// and the face are the whole of it when both were kept. The sealed sign-in
+/// says `purpose: reconnect`, and only a machine whose `begin` says it can
+/// take one is sent it. What comes back is what was done to each server and
+/// the pools Xen Orchestra shows at the end, sealed to a key in this screen's
+/// memory (XOReconnect), and it runs on the Lock Screen while it does.
 struct AddHypervisorView: View {
     let settings: Settings
     /// The pool whose policy this changes, or nil to add one. Its address is
     /// the one this phone holds a record for, so it is not edited here.
     let policyFor: String?
+    /// The pool whose servers this reconnects, or nil. Like `policyFor`, an
+    /// address this phone already knows, not edited here.
+    let reconnectFor: String?
+    /// The machine to try first for a reconnect: the one that noticed the
+    /// pool had gone, or read its page. Nil starts from the one that got
+    /// through last time, as a policy change does.
+    let preferred: String?
     @Environment(\.dismiss) private var dismiss
 
-    init(settings: Settings, policyFor address: String? = nil) {
+    init(settings: Settings, policyFor address: String? = nil, reconnectFor pool: String? = nil, via machine: String? = nil) {
         self.settings = settings
         self.policyFor = address
-        _address = State(initialValue: address ?? "")
+        self.reconnectFor = address == nil ? pool : nil
+        self.preferred = machine.flatMap { $0.isEmpty ? nil : $0 }
+        _address = State(initialValue: address ?? pool ?? "")
     }
 
     @State private var address = ""
@@ -165,6 +184,13 @@ struct AddHypervisorView: View {
     @State private var relayId: String?
     /// Why the relay closed while the job still needed it, under the progress.
     @State private var relayNote = ""
+    /// A reconnect job, once its sign-in is sent: the key what it did comes
+    /// back to. In memory and nowhere else; dropped when the job ends.
+    @State private var reconnectJob: ReconnectJob?
+    /// What it did to each server and the pools it shows now, opened.
+    @State private var outcome: XOReconnect.Outcome?
+    /// What came back did not open with this screen's key.
+    @State private var outcomeUnopened = false
     private let biometry = XOSaved.biometryName()
 
     private struct Begun {
@@ -175,6 +201,11 @@ struct AddHypervisorView: View {
         let fingerprint: String
         /// What else a job on that machine can be (`can` in begin's answer).
         let can: [String]
+    }
+
+    private struct ReconnectJob {
+        let address: String
+        let reply: Seal.OneUseKey
     }
 
     private struct PolicyJob {
@@ -237,6 +268,7 @@ struct AddHypervisorView: View {
     private var plainReached: [Fleet.Probe] { (probes ?? []).filter { $0.plainHTTP } }
     private var offered: [Fleet.Probe] { reached + plainReached }
     private var isPolicy: Bool { policyFor != nil }
+    private var isReconnect: Bool { reconnectFor != nil }
     /// Still going, so the screen keeps asking and offers Cancel. A policy
     /// job waiting on the person is still going: the machine can still time
     /// out, and Cancel still lets it go.
@@ -263,6 +295,7 @@ struct AddHypervisorView: View {
                 } else {
                     progressSection(job)
                 }
+                if isReconnect { reconnectSections }
             }
             if !result.isBlank {
                 Section {
@@ -276,7 +309,7 @@ struct AddHypervisorView: View {
         .scrollContentBackground(.hidden)
         .background(Design.Palette.bg)
         .listRowBackground(Design.Palette.card)
-        .navigationTitle(isPolicy ? "What the fleet may use" : "Add a hypervisor")
+        .navigationTitle(isPolicy ? "What the fleet may use" : isReconnect ? Manage.Words.reconnectServers : "Add a hypervisor")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: job) { await follow() }
         // A relay is carried by this screen: gone, it carries nothing.
@@ -284,7 +317,7 @@ struct AddHypervisorView: View {
         // The address is already known, so the first question is asked for
         // the person, starting from the machine that got through last time.
         .task {
-            if isPolicy, probes == nil, !probing { await openRemembered() }
+            if isPolicy || isReconnect, probes == nil, !probing { await openRemembered() }
         }
     }
 
@@ -326,7 +359,7 @@ struct AddHypervisorView: View {
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .disabled(job != nil || busy || isPolicy)
+                .disabled(job != nil || busy || isPolicy || isReconnect)
                 // WHAT WAS FOUND WAS FOUND FOR AN ADDRESS. Edited, the old
                 // machines, certificate and acknowledgement would stand on
                 // screen for a different one, and `begin` would pair the new
@@ -355,6 +388,12 @@ struct AddHypervisorView: View {
             if isPolicy {
                 Text("The pool this phone holds a token for. The change runs from one of your permanent machines, "
                      + "so one of them has to be on a network that reaches it.")
+            } else if isReconnect {
+                // WHAT THE MACHINE WILL DO WITH AN ADMIN SIGN-IN, said before
+                // it is asked for, in the terms it keeps to.
+                Text("One of your permanent machines signs in to Xen Orchestra here as you, reconnects the servers that are not "
+                     + "connected, leaves any that are turned off as they are, and changes nothing else. It holds the signed-in "
+                     + "session for ten minutes at most and keeps nothing afterwards.")
             } else {
                 Text("A host name or address, with a port if it is not 443, and no https:// in front. "
                      + "The setup runs from one of your permanent machines, so one of them has to be on a network that reaches it.")
@@ -462,6 +501,9 @@ struct AddHypervisorView: View {
     /// an answer through this phone: installing needs a machine that reaches
     /// the pool, and the fleet refuses one through a relay.
     private var noXenOrchestra: Bool {
+        // Never from a reconnect: it is for a Xen Orchestra the fleet already
+        // reaches, and a machine that cannot tell is not a reason to install.
+        guard !isReconnect else { return false }
         guard !isPolicy, job == nil, let all = probes, !all.isEmpty, !all.contains(where: \.throughPhone) else { return false }
         return all.allSatisfy { $0.reachable == false || $0.xo == false }
     }
@@ -586,7 +628,9 @@ struct AddHypervisorView: View {
     /// switch as it stands: kept behind Face ID on this phone, or by nobody.
     /// The fleet never keeps it either way. The same words as Android.
     private func signInFooter(_ chosen: Fleet.Probe) -> String {
-        let use = isPolicy ? "to read the pool and apply what you choose" : "to make a limited fleetwright user and its token"
+        let use = isPolicy ? "to read the pool and apply what you choose"
+            : isReconnect ? "to reconnect Xen Orchestra’s servers that are not connected"
+            : "to make a limited fleetwright user and its token"
         let sealed = "It is sealed on this phone to a key only that machine holds, so the fleet relays it and cannot read it"
         // THROUGH THIS PHONE, where it crosses as well as what it crosses as.
         let path = chosen.throughPhone
@@ -666,7 +710,14 @@ struct AddHypervisorView: View {
             Text("This Xen Orchestra answers without HTTPS")
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.attention)
-            if isPolicy {
+            if isReconnect {
+                // No token is made by a reconnect either; what crosses is the
+                // password and which servers Xen Orchestra has, and where.
+                Text("The admin password you type, and the names and addresses of Xen Orchestra’s servers, would cross the network "
+                     + "between \(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            } else if isPolicy {
                 // No token is made by a policy change; what crosses is the
                 // password and what the pool is made of.
                 Text("The admin password you type, and the pool's storage and networks, would cross the network between "
@@ -845,18 +896,95 @@ struct AddHypervisorView: View {
     /// Onboarding's words, or a policy change's: the steps are shared, the
     /// ends are not.
     private func headline(_ state: XOSetupAttributes.ContentState) -> String {
-        isPolicy ? XOPolicy.statusLine(state) : XOSetupWords.headline(state)
+        if isReconnect { return reconnectHeadline(state) }
+        return isPolicy ? XOPolicy.statusLine(state) : XOSetupWords.headline(state)
+    }
+
+    /// A reconnect's words, which end on the pools. Done with what came back
+    /// saying Xen Orchestra shows none is not "Pools back": the screen says
+    /// what it was told (C-5).
+    private func reconnectHeadline(_ state: XOSetupAttributes.ContentState) -> String {
+        if state.state == "done", outcome?.pools?.isEmpty == true { return "Done, and Xen Orchestra still shows no pools" }
+        return XOSetupWords.headline(state, purpose: "reconnect")
     }
 
     /// The tone agrees with the headline it is on: finished, stopped,
     /// stopped by you, or still going.
     private func tone(_ state: String?) -> Color {
+        if isReconnect, state == "done", outcome?.pools?.isEmpty == true { return Design.Palette.attention }
         switch state ?? "" {
         case "done": return Design.Palette.ok
         case "failed": return Design.Palette.bad
         case "cancelled": return Design.Palette.inkDim
         default: return Design.Palette.ink
         }
+    }
+
+    // MARK: What a reconnect did
+
+    /// What the machine did to each of Xen Orchestra's servers, then the
+    /// pools it shows now: a row each, the same shape as the rows above
+    /// (RHYTHM 1), and the one that failed is the one in a tone, beside
+    /// words that say so. Drawn once something has opened; before that the
+    /// progress above, in counts, is all there is.
+    @ViewBuilder private var reconnectSections: some View {
+        if let outcome {
+            Section {
+                if outcome.servers.isEmpty {
+                    Text("Xen Orchestra lists no servers, so there was nothing to reconnect.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                }
+                ForEach(Array(outcome.servers.enumerated()), id: \.offset) { _, server in
+                    serverRow(server)
+                }
+            } header: {
+                sectionHead("Xen Orchestra’s servers")
+            }
+            Section {
+                if let sentence = XOReconnect.noPools(outcome.pools) {
+                    Text(sentence)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                } else {
+                    ForEach(Array((outcome.pools ?? []).enumerated()), id: \.offset) { _, pool in
+                        Text(XOReconnect.poolName(pool))
+                            .fleetType(.bodyStrong)
+                            .foregroundStyle(Design.Palette.ink)
+                            .frame(minHeight: 44, alignment: .leading)
+                    }
+                }
+            } header: {
+                sectionHead("Pools it shows now")
+            }
+        } else if outcomeUnopened {
+            Section {
+                Text("What \(hostId) sent back did not open with this phone’s key, so what it did to each server is not shown. "
+                     + "The pool’s page shows what Xen Orchestra lists now.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+        }
+    }
+
+    private func serverRow(_ server: XOReconnect.Outcome.Server) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            Text(XOReconnect.title(server))
+                .fleetType(.bodyStrong)
+                .foregroundStyle(Design.Palette.ink)
+            if let address = XOReconnect.address(server) {
+                Text(address)
+                    .fleetType(.labelMono)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .textSelection(.enabled)
+            }
+            Text(XOReconnect.line(server))
+                .fleetType(.label)
+                .foregroundStyle(XOReconnect.failed(server) ? Design.Palette.bad : Design.Palette.inkDim)
+        }
+        .frame(minHeight: 44, alignment: .leading)
+        .padding(.vertical, Design.Space.hair)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: What the fleet may use
@@ -1477,16 +1605,19 @@ struct AddHypervisorView: View {
             }
             probes = found
             // Adding a pool only: a policy change needs a machine that
-            // reaches the pool, which its own machine does once it has joined.
-            throughOffer = isPolicy ? nil : reply.relay?.hostId
+            // reaches the pool, which its own machine does once it has joined,
+            // and so does a reconnect, which is for a pool the fleet reaches.
+            throughOffer = isPolicy || isReconnect ? nil : reply.relay?.hostId
             // One machine that can is not a choice, so it is chosen. Over
             // plain HTTP too: choosing shows the warning, and sends nothing.
-            // Among several, the one that got through last time is chosen,
-            // and the others stay a tap away.
+            // Among several, the one a reconnect was asked to start from,
+            // else the one that got through last time, is chosen, and the
+            // others stay a tap away.
             if offered.count == 1 {
                 chosen = offered.first
-            } else if let via = XOSaved.machine(for: trimmedAddress) {
-                chosen = offered.first { $0.hostId == via }
+            } else {
+                let first = [preferred, XOSaved.machine(for: trimmedAddress)].compactMap { $0 }
+                chosen = first.compactMap { via in offered.first { $0.hostId == via } }.first
             }
             // An address typed on Add a hypervisor that this phone kept a
             // sign-in for: opened now, once there is something to send it to.
@@ -1571,7 +1702,8 @@ struct AddHypervisorView: View {
     @MainActor
     private func openRemembered() async {
         await unlockRemembered()
-        if let via = XOSaved.machine(for: trimmedAddress), let path = directPath(via) {
+        // A reconnect starts from the machine that noticed the pool had gone.
+        if let via = preferred ?? XOSaved.machine(for: trimmedAddress), let path = directPath(via) {
             probes = [path]
             chosen = path
             viaMemory = true
@@ -1774,6 +1906,20 @@ struct AddHypervisorView: View {
                 refuse("\(machine) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
                 return
             }
+            // THE SAME FOR A RECONNECT: an older machine would run onboarding
+            // with the sign-in instead. The machine a push named is a first
+            // try, so when it is too old the others are asked.
+            if isReconnect, !can.contains("reconnect") {
+                _ = try? await fleet.cancelSetup(job: begunJob)
+                let why = "\(machine) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent."
+                if viaMemory {
+                    await self.probe()
+                    refuse("\(why) Your other machines were asked instead.")
+                    return
+                }
+                refuse("\(why) Update that machine, then try again.")
+                return
+            }
             // AND A SETUP GOES ONLY TO A MACHINE NEW ENOUGH TO HAND THE TOKEN
             // BACK. An older one keeps the pool's token in a file of its own,
             // which is exactly what this app tells the person does not happen,
@@ -1836,6 +1982,10 @@ struct AddHypervisorView: View {
         guard let begun else { return }
         if isPolicy {
             await sendForPolicy(begun)
+            return
+        }
+        if isReconnect {
+            await sendForReconnect(begun)
             return
         }
         busy = true
@@ -1984,6 +2134,82 @@ struct AddHypervisorView: View {
         }
     }
 
+    /// The sign-in for a reconnect: the same seal to the same job key under
+    /// the same binding as a policy change's, saying `purpose: reconnect`
+    /// inside it, where the coordinator cannot change it, beside the key what
+    /// it did comes back to. That key is made here and held in this screen's
+    /// memory alone, as a policy change's is: nothing comes back to it once
+    /// the screen is gone.
+    @MainActor
+    private func sendForReconnect(_ begun: Begun) async {
+        // Asked again here, where the seal is, so no path reaches it without.
+        guard begun.can.contains("reconnect") else {
+            _ = try? await fleet.cancelSetup(job: begun.job)
+            self.begun = nil
+            refuse("\(begun.hostId) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent. Update that machine, then try again.")
+            return
+        }
+        busy = true
+        defer { busy = false }
+        let reply = Seal.newKey()
+        let sealed: [String: String]
+        do {
+            sealed = try Seal.seal(
+                to: begun.key,
+                aad: Seal.xosetupAAD(job: begun.job, address: begun.address),
+                payload: [
+                    "v": 1,
+                    "xo": ["email": email.trimmingCharacters(in: .whitespacesAndNewlines), "password": password],
+                    "reply": reply.publicKey,
+                    "purpose": "reconnect",
+                ]
+            )
+        } catch {
+            refuse(error.localizedDescription)
+            return
+        }
+        pendingSave = chosen.flatMap { entryToKeep($0) }
+        password = ""
+        toCompare = nil
+        let joined = "\(sealed["epk"] ?? "").\(sealed["iv"] ?? "").\(sealed["ct"] ?? "")"
+        do {
+            let answer = try await fleet.runSetup(job: begun.job, sealed: joined)
+            guard answer.ok != false else {
+                refuse(answer.text ?? "\(begun.hostId) did not take the sign-in.")
+                return
+            }
+            reconnectJob = ReconnectJob(address: begun.address, reply: reply)
+            hostId = begun.hostId
+            progress = answer.xosetup
+            job = begun.job
+            self.begun = nil
+            // ON THE LOCK SCREEN FROM HERE: a push's Reconnect is often
+            // tapped from it, and the waiting for the pools takes minutes.
+            XOSetupActivities.start(fleet: fleet, job: begun.job, hostId: begun.hostId, address: begun.address,
+                                    progress: answer.xosetup, purpose: "reconnect")
+        } catch {
+            // The send may have arrived; then the machine reconnects anyway,
+            // and the pool's page and the fleet's own push say how it went.
+            refuse(error.localizedDescription)
+        }
+    }
+
+    /// What the fleet said about a reconnect. What it did is opened the first
+    /// time it is there and kept on screen; the key goes the moment the job
+    /// is over, whichever way it ended.
+    @MainActor
+    private func applyReconnectState(_ state: Fleet.SetupState, job: String) {
+        if outcome == nil, let sealed = state.result, let reconnectJob {
+            if let opened = XOReconnect.open(sealed, job: job, address: reconnectJob.address, key: reconnectJob.reply) {
+                withAnimation(Design.Motion.change) { outcome = opened }
+                outcomeUnopened = false
+            } else {
+                outcomeUnopened = true
+            }
+        }
+        if let now = state.state, !XOSetupWords.isLive(now) { reconnectJob = nil }
+    }
+
     /// What the fleet said about a policy job. The inventory is opened the
     /// first time it is seen and never again, so a poll does not put back a
     /// choice the person is halfway through; and the keys go the moment the
@@ -2121,6 +2347,11 @@ struct AddHypervisorView: View {
         progress = state
         guard let job else { return }
         notePath(state)
+        if isReconnect {
+            applyReconnectState(state, job: job)
+            await XOSetupActivities.apply(job: job, progress: state)
+            return
+        }
         if isPolicy {
             await applyPolicyState(state, job: job)
             // The Lock Screen hears it too once there is an activity, which
@@ -2153,6 +2384,9 @@ struct AddHypervisorView: View {
         policyJob = nil
         inventory = nil
         choice = XOPolicy.Choice()
+        reconnectJob = nil
+        outcome = nil
+        outcomeUnopened = false
         toCompare = nil
         // A kept password comes back for the next try; a typed one does not.
         password = remembered?.login?.password ?? ""

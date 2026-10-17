@@ -115,6 +115,7 @@ test('iOS: the pools this phone holds are listed on Machines for a known admin o
   // Orchestra it installed for an install.
   assert.match(handoff, /let at = recordAddress\(text\) \?\? entry\.address\s*Keychain\.set\(text, for: tokenAccount\(at\)\)\s*remember\(at\)/);
   assert.equal((bare(IOS).match(/remember\(/g) ?? []).length, 2, 'the held list is written from somewhere other than collect');
-  // In policy mode the address is the one held, not one typed.
-  assert.match(SCREEN, /\.disabled\(job != nil \|\| busy \|\| isPolicy\)/);
+  // In policy mode the address is the one held, not one typed, and in
+  // reconnect mode the one a push or the pool's page named.
+  assert.match(SCREEN, /\.disabled\(job != nil \|\| busy \|\| isPolicy \|\| isReconnect\)/);
 });

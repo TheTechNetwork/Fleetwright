@@ -45,6 +45,10 @@ struct FleetApp: View {
     /// How a hypervisor setup ended, when its notification was tapped.
     @State private var setupResult: SetupResult?
 
+    /// A pool's page, or the reconnect for it, that a notification asked to
+    /// open. The Machines tab pushes it.
+    @State private var openPool: PoolAsk?
+
     /// The tab a screenshot run asked for, if this launch is one. The old
     /// names still work, so a screenshot plan written before the rename does
     /// not silently land on the wrong tab.
@@ -66,15 +70,15 @@ struct FleetApp: View {
                 })
             }
             Tab("Machines", systemImage: "server.rack", value: Tabs.machines) {
-                NavigationStack { MachinesView(settings: settings, opening: $openHost) }
+                NavigationStack { MachinesView(settings: settings, opening: $openHost, openingPool: $openPool) }
             }
             Tab("You", systemImage: "person.crop.circle", value: Tabs.you) {
                 NavigationStack { YouView(settings: settings) }
             }
         }
         // A tapped notification lands where it is about: how a hypervisor
-        // setup ended, a machine's page for a host event, the sessions for
-        // everything else.
+        // setup ended, a machine's page for a host event, a pool's page (or
+        // its reconnect) for a pool's news, the sessions for everything else.
         .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { note in
             if let setup = note.userInfo?["setup"] as? SetupResult {
                 setupResult = setup
@@ -82,6 +86,9 @@ struct FleetApp: View {
                 openHost = host
                 tab = .machines
             } else if note.userInfo?["machines"] as? Bool == true {
+                tab = .machines
+            } else if let pool = note.userInfo?["pool"] as? PoolAsk {
+                openPool = pool
                 tab = .machines
             } else {
                 tab = .sessions

@@ -1266,6 +1266,11 @@ struct Fleet {
         /// capacity, sealed by the machine to the key this phone sent inside
         /// the policy sign-in, as epk.iv.ct (XOPolicy.open).
         var inventory: String?
+        /// Once a reconnect job has reconnected what it could: what it did to
+        /// each server and the pools Xen Orchestra shows at the end, sealed
+        /// by the machine to the key this phone sent inside the sign-in, as
+        /// epk.iv.ct (XOReconnect.open).
+        var result: String?
         /// While a step that can say how far it has got is running (the edge
         /// router's build): which stage of how many, and how far through
         /// the whole build in thousandths. Nil from an older machine.

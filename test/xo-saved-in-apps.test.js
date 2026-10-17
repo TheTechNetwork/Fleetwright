@@ -65,7 +65,7 @@ test('iOS: nothing is kept until the machine has signed in with it, and a passwo
   assert.ok(SCREEN.includes('The kept sign-in did not work, so this phone no longer keeps it.'));
   // The copy waiting to be kept is the one sealed, taken before the password
   // is cleared, and dropped with any refusal.
-  for (const send of [fn(SCREEN, 'send'), fn(SCREEN, 'sendForPolicy')]) {
+  for (const send of [fn(SCREEN, 'send'), fn(SCREEN, 'sendForPolicy'), fn(SCREEN, 'sendForReconnect')]) {
     assert.match(bare(send), /pendingSave = chosen\.flatMap \{ entryToKeep\(\$0\) \}\s*password = ""/);
   }
   assert.match(bare(fn(SCREEN, 'refuse')), /pendingSave = nil/);
@@ -74,7 +74,9 @@ test('iOS: nothing is kept until the machine has signed in with it, and a passwo
 
 test('iOS: the machine that got through last time is tried first, and every machine is asked when it does not', () => {
   const open = bare(fn(SCREEN, 'openRemembered'));
-  assert.match(open, /if let via = XOSaved\.machine\(for: trimmedAddress\), let path = directPath\(via\) \{[\s\S]*?viaMemory = true\s*(?:await beginWithKept\(\)\s*)?return\s*\}\s*await probe\(\)/);
+  // A reconnect names the machine to start from (the one that noticed the
+  // pool had gone); without one, the one that got through last time.
+  assert.match(open, /if let via = preferred \?\? XOSaved\.machine\(for: trimmedAddress\), let path = directPath\(via\) \{[\s\S]*?viaMemory = true\s*(?:await beginWithKept\(\)\s*)?return\s*\}\s*await probe\(\)/);
   // Only with a certificate that needs nobody's word, or the person's kept
   // word for it; anything else is asked of every machine.
   const direct = bare(fn(SCREEN, 'directPath'));
@@ -85,8 +87,9 @@ test('iOS: the machine that got through last time is tried first, and every mach
   // Stopped at connect: said, and Try again asks every machine.
   // And a try through this phone, whose relay was for the job that ended.
   assert.match(SCREEN, /let askAll = \(viaMemory && progress\?\.phase == "connect"\) \|\| chosen\?\.throughPhone == true\s*reset\(\)\s*if askAll \{ Task \{ await probe\(\) \} \}/);
-  // Asked of all, the one that got through last time is chosen among them.
-  assert.match(bare(fn(SCREEN, 'probe')), /else if let via = XOSaved\.machine\(for: trimmedAddress\) \{\s*chosen = offered\.first \{ \$0\.hostId == via \}/);
+  // Asked of all, the one a reconnect named, else the one that got through
+  // last time, is chosen among them: the first of the two that answered.
+  assert.match(bare(fn(SCREEN, 'probe')), /let first = \[preferred, XOSaved\.machine\(for: trimmedAddress\)\]\.compactMap \{ \$0 \}\s*chosen = first\.compactMap \{ via in offered\.first \{ \$0\.hostId == via \} \}\.first/);
   // Remembered only once it got through.
   assert.match(bare(fn(SCREEN, 'notePath')), /if past \{\s*if !hostId\.isEmpty \{ XOSaved\.rememberMachine\(hostId, for: trimmedAddress\) \}/);
   // And it claims nothing it did not ask this time.

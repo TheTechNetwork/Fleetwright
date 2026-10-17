@@ -18,6 +18,9 @@ struct MachinesView: View {
     /// A machine somebody asked to see from elsewhere: a notification about
     /// it, or the reassurance line naming it. Pushed once the list has it.
     @Binding var opening: String?
+    /// A pool somebody asked to see from a notification: its page, or the
+    /// reconnect for it. Pushed as soon as it is asked for.
+    @Binding var openingPool: PoolAsk?
 
     @State private var fleetHosts: [Fleet.FleetHost] = []
     @State private var hosts: [Fleet.Host] = []
@@ -27,6 +30,8 @@ struct MachinesView: View {
     @State private var loaded = false
     /// The machine whose page is showing.
     @State private var showing: String?
+    /// The pool page, or the reconnect, a notification opened.
+    @State private var showingPool: PoolAsk?
     /// The pools this phone holds a token for (XOSetupHandoff), read when
     /// the list is, not on every redraw: each is a Keychain read.
     @State private var hypervisors: [XOSetupHandoff.Held] = []
@@ -169,9 +174,15 @@ struct MachinesView: View {
         .refreshable { await loadHosts() }
         .task(id: "\(settings.credential)|\(settings.viewAsMember)") { await loadHosts() }
         .onChange(of: opening) { _, _ in openAsked() }
+        .onChange(of: openingPool) { _, _ in openPoolAsked() }
         .navigationDestination(item: $showing) { id in hostPage(id) }
-        // Back from adding one, the new pool is listed.
-        .onAppear { hypervisors = XOSetupHandoff.heldPools() }
+        .navigationDestination(item: $showingPool) { ask in poolPage(ask) }
+        // Back from adding one, the new pool is listed. And a pool asked
+        // for before this tab was first drawn is opened now.
+        .onAppear {
+            hypervisors = XOSetupHandoff.heldPools()
+            openPoolAsked()
+        }
     }
 
     @ViewBuilder private var poolMachineRows: some View {
@@ -262,6 +273,27 @@ struct MachinesView: View {
             opening = nil
         } else if loaded {
             opening = nil
+        }
+    }
+
+    /// Push the pool a notification asked for. Its reconnect needs no token
+    /// on this phone, only the admin sign-in, so it always opens; its page
+    /// opens only for a pool this phone holds a token for, because that is
+    /// what the page reads it with, and otherwise the list is there.
+    private func openPoolAsked() {
+        guard let wanted = openingPool else { return }
+        openingPool = nil
+        hypervisors = XOSetupHandoff.heldPools()
+        guard wanted.reconnect || hypervisors.contains(where: { $0.address == wanted.address }) else { return }
+        showing = nil
+        showingPool = wanted
+    }
+
+    @ViewBuilder private func poolPage(_ ask: PoolAsk) -> some View {
+        if ask.reconnect {
+            AddHypervisorView(settings: settings, reconnectFor: ask.address, via: ask.via)
+        } else if let pool = hypervisors.first(where: { $0.address == ask.address }) {
+            PoolManageView(settings: settings, pool: pool)
         }
     }
 
@@ -434,4 +466,12 @@ func relativeTime(_ at: Double) -> String {
     let f = RelativeDateTimeFormatter()
     f.unitsStyle = .full
     return f.localizedString(for: date, relativeTo: Date())
+}
+
+/// A pool a notification is about, and what to open for it: its page, or the
+/// reconnect for its servers, starting from the machine that noticed.
+struct PoolAsk: Hashable {
+    let address: String
+    var reconnect = false
+    var via: String? = nil
 }

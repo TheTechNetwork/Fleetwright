@@ -58,7 +58,7 @@ enum NotificationAnswers {
     /// after the notification it was for. Three kinds is the whole vocabulary,
     /// and it is small enough to declare rather than negotiate.
     static func categories() -> Set<UNNotificationCategory> {
-        Set(titles.map { kind, words in
+        var all = Set(titles.map { kind, words in
             UNNotificationCategory(
                 identifier: "\(categoryPrefix).\(kind)",
                 actions: [action(slotA, words.a), action(slotB, words.b)],
@@ -66,6 +66,34 @@ enum NotificationAnswers {
                 options: []
             )
         })
+        all.insert(poolReconnect())
+        return all
+    }
+
+    /// A pool whose servers Xen Orchestra has lost: the category the
+    /// coordinator sends with a `pool-lost` push, and only when the pool's
+    /// owner is an admin, because only an admin may run the job it starts.
+    static let poolCategory = "fleet.pool.reconnect"
+    /// Its one button. The identifier is what comes back in
+    /// `UNNotificationResponse.actionIdentifier`.
+    static let reconnectAction = "reconnect"
+    static let reconnectWord = "Reconnect"
+
+    /// ONE BUTTON, AND IT OPENS THE APP. Reconnecting takes the admin sign-in
+    /// this phone keeps behind Face ID, and Face ID needs a screen, so the
+    /// button is `.foreground`: it opens the reconnect for that pool, which
+    /// asks for Face ID and begins (AddHypervisorView, reconnect mode).
+    /// `.authenticationRequired` as well, so a locked phone in somebody
+    /// else's hand cannot even get that far. Not `.destructive`: it turns
+    /// nothing off, and red would say it does.
+    private static func poolReconnect() -> UNNotificationCategory {
+        UNNotificationCategory(
+            identifier: poolCategory,
+            actions: [UNNotificationAction(identifier: reconnectAction, title: reconnectWord,
+                                           options: [.foreground, .authenticationRequired])],
+            intentIdentifiers: [],
+            options: []
+        )
     }
 
     /// AUTHENTICATION REQUIRED ON BOTH, and it is not a formality.
