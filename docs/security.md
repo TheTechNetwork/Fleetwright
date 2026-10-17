@@ -834,7 +834,7 @@ trust.
 
 | Hop | Verifies or carries | Mechanism |
 |---|---|---|
-| phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist; spent on exchange |
+| phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist; spent on exchange. An MCP client's sign-in asks the allowlist and invites again when its code is spent, and a removal drops the code |
 | phone → coordinator (per request) | **verifies** | device token, SHA-256 hash compared timing-safe |
 | host → coordinator | **verifies** | P-256 signature over a coordinator-issued nonce |
 | coordinator → host (the `actor`) | **carries** | the host trusts `fleet:<email>` because it arrived |

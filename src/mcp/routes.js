@@ -73,6 +73,9 @@ function bearer(header) {
  * @property {(token: string) => Promise<{ email?: string, admin?: boolean }|null>} verifyCredential
  * @property {(idToken: string) => Promise<{ ok: true, email: string, name: string|null } | { ok: false, status: number, text: string }>} verifyIdentity
  * @property {(who: { email: string, name?: string|null }, deviceName: string) => Promise<{ token: string } | { ok: false, code?: string, error?: string }>} issueCredential
+ * @property {(email: string) => boolean} mayStillSignIn  whether this person is
+ *   still on the allowlist or the invites, which /oauth/authorize asked and
+ *   the code outlives — see /oauth/token
  * @property {() => void} save
  * @property {{ google?: string|null, apple?: string|null }} signIn  client ids for the page
  * @property {string} selfOrigin  where to send intents — see below
@@ -200,6 +203,22 @@ export async function mcpRoutes(req, deps) {
       verifier: String(form.code_verifier || ''),
     });
     if (!spent.ok) return { status: 400, json: { error: spent.error } };
+
+    // STILL IN THE FLEET. The allow decision was made at /oauth/authorize,
+    // and the code it issued lived five minutes past it: a member un-invited
+    // and revoked in between spent it afterwards for a working credential,
+    // and with it minted the pins and runner tokens their removal had just
+    // taken back (fourth Workers audit). So it is asked again here, the same
+    // question identify() asks, before anything is issued. Removal also drops
+    // the person's codes (core.js #forgetPerson); this is the half that holds
+    // for somebody taken off the list while a credential of theirs still works.
+    if (!deps.mayStillSignIn(spent.email)) {
+      return {
+        status: 400,
+        headers: { 'cache-control': 'no-store' },
+        json: { error: 'invalid_grant', error_description: `${spent.email} is no longer on this fleet's list.` },
+      };
+    }
 
     // THE ACCESS TOKEN IS A DEVICE CREDENTIAL. Named so a person looking at
     // their device list can tell what it is and revoke it without guessing.

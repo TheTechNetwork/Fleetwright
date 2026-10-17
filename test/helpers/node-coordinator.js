@@ -43,7 +43,7 @@ import { http2Deliver } from './apns-node.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
-import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal, isAllowed } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
@@ -552,6 +552,8 @@ export class Coordinator {
       verifyCredential: (token) => this.core.clients.verify(token),
       verifyIdentity: (idToken) => this.#identify(idToken),
       issueCredential: (who, deviceName) => this.core.issueClient(who, deviceName),
+      // The lists #identify reads, asked again when a code is spent — see the Worker's copy.
+      mayStillSignIn: (email) => isAllowed(email, splitList(process.env.FLEETWRIGHT_AUTH_ALLOW)) || this.core.invites.has(email),
       save: () => this.saveState(),
       signIn: signInFromEnv(),
       selfOrigin: this.selfOrigin,

@@ -40,9 +40,9 @@ const silent = { info() {}, warn() {}, error() {}, debug() {} };
  */
 async function coordinator(t) {
   const before = { ...process.env };
-  process.env.AGENT_FLEET_AUTH_ISSUERS = 'https://accounts.google.com';
-  process.env.AGENT_FLEET_AUTH_AUDIENCES = '123-abc.apps.googleusercontent.com';
-  process.env.AGENT_FLEET_AUTH_ALLOW = 'owner@example.com';
+  process.env.FLEETWRIGHT_AUTH_ISSUERS = 'https://accounts.google.com';
+  process.env.FLEETWRIGHT_AUTH_AUDIENCES = '123-abc.apps.googleusercontent.com';
+  process.env.FLEETWRIGHT_AUTH_ALLOW = 'owner@example.com';
   const c = new Coordinator({ logger: silent });
   const port = await c.listen(0, '127.0.0.1');
   t.after(async () => {

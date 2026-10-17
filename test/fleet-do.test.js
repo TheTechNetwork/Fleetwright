@@ -17,6 +17,7 @@ import { Fleet } from '../worker/src/fleet-do.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../src/fleet/protocol/heartbeat.js';
 import { loadOrCreateKey, keyFingerprint } from '../src/fleet/host/identity.js';
 import { sign, signingInput, generateKeyPair } from '../src/fleet/crypto.js';
+import { s256 } from '../src/mcp/oauth.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -634,4 +635,47 @@ test('a removed member’s pins go with them, and any pin listed can be cancelle
   const again = new Fleet(/** @type {any} */ (state), {});
   await new Promise((r) => setTimeout(r, 0));
   assert.equal((await (await call(again, '/api/enroll', 'GET', null, as(admin))).json()).codes.length, 0, 'the cancelled pin came back after a restart');
+});
+
+test('an MCP sign-in begun before a person was removed buys no credential after', async () => {
+  // /oauth/authorize checks the allowlist and the invites; /oauth/token spent
+  // the code it issued for five minutes without asking again, and removal
+  // left the code alone. So a member un-invited and revoked while holding one
+  // exchanged it afterwards for a working credential, and minted pins and
+  // runner tokens with it (fourth Workers audit).
+  const { fleet: f } = fleet({ FLEETWRIGHT_AUTH_ALLOW: 'admin@example.test' });
+  const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const as = { authorization: `Bearer ${admin.token}` };
+  const reg = /** @type {any} */ (f.core.mcpAuthorizations.register({ redirect_uris: ['http://127.0.0.1:9999/cb'] }));
+  const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+  const challenge = await s256(verifier);
+  const signIn = (/** @type {string} */ email) =>
+    /** @type {any} */ (f.core.mcpAuthorizations.issueCode({ email, clientId: reg.clientId, redirectUri: 'http://127.0.0.1:9999/cb', challenge })).code;
+  const exchange = (/** @type {string} */ code) =>
+    f.fetch(new Request('https://fleet.example/oauth/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, client_id: reg.clientId, redirect_uri: 'http://127.0.0.1:9999/cb', code_verifier: verifier }),
+    }));
+  const held = (/** @type {string} */ email) => f.core.clients.list().filter((c) => c.email === email && !c.revokedAt).length;
+  for (const who of ['sam@example.test', 'carol@example.test']) f.core.invites.add(who, { invitedBy: 'admin@example.test', note: null });
+  const sam = await f.core.clients.issue('sam phone', { email: 'sam@example.test' });
+  const [first, second] = [signIn('sam@example.test'), signIn('sam@example.test')];
+
+  assert.equal((await call(f, '/api/invites/sam%40example.test', 'DELETE', null, as)).status, 200);
+  const refused = await exchange(first);
+  assert.equal(refused.status, 400);
+  assert.equal((await refused.json()).error, 'invalid_grant');
+  assert.equal(held('sam@example.test'), 1, 'an un-invited person was issued a credential');
+
+  // Revoking the last credential is the rest of the removal, and drops the
+  // code even if the person is invited again before it expires.
+  assert.equal((await call(f, `/api/clients/${sam.client.id}`, 'DELETE', null, as)).status, 200);
+  f.core.invites.add('sam@example.test', { invitedBy: 'admin@example.test', note: null });
+  assert.equal((await exchange(second)).status, 400, 'a removed person’s code outlived the removal');
+  assert.equal(held('sam@example.test'), 0);
+
+  // Somebody still in the fleet signs in as before.
+  assert.equal((await exchange(signIn('carol@example.test'))).status, 200);
+  assert.equal(held('carol@example.test'), 1);
 });

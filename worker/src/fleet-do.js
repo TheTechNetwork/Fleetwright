@@ -21,7 +21,7 @@
 import { CoordinatorCore, deviceStatus, deviceText, hostReported } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { relayFromEnv as relayEnv } from '../../src/fleet/relay/client.js';
-import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal, isAllowed } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
@@ -320,6 +320,8 @@ export class Fleet {
       verifyCredential: (token) => this.core.clients.verify(token),
       verifyIdentity: (idToken) => this.#identify(idToken),
       issueCredential: (who, deviceName) => this.core.issueClient(who, deviceName),
+      // The lists #identify reads, asked again when a code is spent (routes.js).
+      mayStillSignIn: (email) => isAllowed(email, split(this.env.FLEETWRIGHT_AUTH_ALLOW)) || this.core.invites.has(email),
       // Fire-and-forget on purpose: the reply does not depend on the write, and
       // a Durable Object write that has been issued will complete. The same
       // treatment the event ring gets, for the same reason.

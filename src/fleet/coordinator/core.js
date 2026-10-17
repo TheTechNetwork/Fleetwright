@@ -1975,7 +1975,8 @@ export class CoordinatorCore {
    * temporary hosts are revoked, and their runner tokens, tickets and
    * waiting runner starts with them.
    *
-   * AND THEIR PINS, which admit machines exactly as tickets do. They were
+   * AND THEIR PINS, which admit machines exactly as tickets do, and their
+   * unspent MCP sign-in codes, which buy a credential. They were
    * left, so for the rest of each pin's ten minutes a removed member could
    * enrol a host in their own name, re-key one the pin was bound to and
    * readmit one an admin had revoked, and nothing could cancel them (third
@@ -2021,6 +2022,12 @@ export class CoordinatorCore {
         this.enrollment.pending.delete(code);
         changed = true;
       }
+    }
+    // And an MCP sign-in they began, whose code buys a credential for five
+    // minutes: one spent after the removal was a working credential again
+    // (fourth Workers audit). Held in memory only, so nothing to save.
+    for (const [code, c] of this.mcpAuthorizations.codes) {
+      if (String(c.email || '').toLowerCase() === address) this.mcpAuthorizations.codes.delete(code);
     }
     // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
     // connected, whose tier was decided when it connected (#retier).
