@@ -4284,6 +4284,12 @@ export class CoordinatorCore {
    * What decides the answer is the job token, checked by the minter against
    * GitHub, and not anything said here.
    *
+   * WHOSE RUNNER GOES TO THE MINTER TOO, because the job's actor is not always
+   * its owner: a runner admitted with one member's reusable runner token and
+   * started by hand by another was handed the second member's login, for the
+   * first member's sessions. The minter gives a login only to the runner of
+   * the fleet account that deposited it (claude.js), which only this knows.
+   *
    * A refusal is ordinary: most people will not have deposited one, and their
    * runner then uses its repository's API key, as every runner did before.
    *
@@ -4321,7 +4327,7 @@ export class CoordinatorCore {
     recent.push(now);
     this.claudeAsks.set(hostId, recent);
 
-    const reply = await this.#askMinterClaude('login', { job, key });
+    const reply = await this.#askMinterClaude('login', { job, key, owner: host.owner });
     this.record({
       hostId,
       event: reply.ok ? 'runner.claude' : 'runner.claude-refused',
@@ -4746,9 +4752,10 @@ export class CoordinatorCore {
    *
    * The body is sealed on their computer to the minting Worker's key, and this
    * carries it through unread. Whose login it is comes from GitHub, inside the
-   * seal, and is the minter's to decide; the requester here is only recorded,
-   * so the fleet's events say which member made a deposit for which GitHub
-   * account.
+   * seal, and is the minter's to decide. The requester goes with it, and the
+   * minter keeps it as the one fleet account whose runners may be handed the
+   * login (#onRunnerClaude); it is also recorded, so the fleet's events say
+   * which member made a deposit for which GitHub account.
    *
    * @param {{ email?: string|null }|null} requester @param {any} body
    * @returns {Promise<Record<string, unknown>>}
@@ -4758,7 +4765,7 @@ export class CoordinatorCore {
     if (!sealed || typeof sealed !== 'object' || JSON.stringify(sealed).length > 8192) {
       return { ok: false, error: { code: 'bad_params' }, text: 'That is not a sealed Claude login.' };
     }
-    const r = await this.#askMinterClaude('deposit', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct } });
+    const r = await this.#askMinterClaude('deposit', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email: requester?.email ?? null });
     this.record({
       event: r.ok ? (r.forgotten ? 'claude.forgotten' : 'claude.deposited') : 'claude.deposit-refused',
       actor: requester?.email ?? null,

@@ -223,11 +223,21 @@ carry a credential through the coordinator, so both are accounted for here.
   against GitHub's keys, a runner workflow started by a dispatch — and the
   login goes to the account that **started the job**, and only from a job in
   that account's own repository or one on `FLEETWRIGHT_GITHUB_MINT_OWNERS`.
+  **And only to its depositor's own runner**: the minter keeps the fleet
+  account that sent each deposit, and refuses a hand-out to a runner enrolled
+  for anybody else. The job's starter and the runner's owner differ when a
+  member's reusable runner token is a shared repository's secret and somebody
+  else presses Run workflow; that runner was handed the starter's login for
+  the token owner's sessions. A login kept before deposits named their fleet
+  account is refused until it is deposited again.
 - **What it can still do** is deny: drop a deposit or a hand-out, and the
-  runner uses its repository's API key. It names the runner's owner in the
-  reply, and the runner runs that person's sessions on the login — a lie there
-  changes whose sessions on *that one runner* use it, which is no more than
-  forging the `actor` on a `start` already gives it. It can start sessions on
+  runner uses its repository's API key. Both fleet accounts above are its
+  word, the only part of the hand-out that is, because only it knows whose a
+  runner is; it names the runner's owner in the reply too, and the runner runs
+  that person's sessions on the login. A lie there changes whose sessions on
+  *that one runner* use it, which is no more than forging the `actor` on a
+  `start` already gives it, and the minter's check can only refuse what
+  GitHub's half would have allowed. It can start sessions on
   the runner, which then run on the person's subscription; a runner has no
   profiles and no verb carries free text, so such a session sits at an empty
   prompt. The login never leaves the runner through the fleet: the file verbs

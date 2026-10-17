@@ -141,9 +141,9 @@ async function minter(extra = {}) {
     return r;
   };
 
-  /** A Claude login deposited as fleetwright-claude-login and the phones seal one. @param {string} github @param {string|null} claude */
+  /** A Claude login deposited as fleetwright-claude-login and the phones seal one, and the coordinator relays it. @param {string} github @param {string|null} claude */
   const deposit_ = async (github, claude) =>
-    call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now() } }) });
+    call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now() } }), email: ELI });
 
   /** The coordinator's minter binding, as fleet-do.js makes it. */
   const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask) };
