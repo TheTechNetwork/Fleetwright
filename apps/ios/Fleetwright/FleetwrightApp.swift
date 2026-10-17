@@ -9,7 +9,7 @@ extension Notification.Name {
     static let credentialsChanged = Notification.Name("network.thetech.fleetwright.credentialsChanged")
     /// Somebody tapped a notification. `userInfo["name"]` is the session it
     /// was about, when the payload said; `userInfo["host"]` the machine, for a
-    /// host event.
+    /// host event; `userInfo["pool"]` a PoolAsk, for a pool's news.
     static let notificationOpened = Notification.Name("network.thetech.fleetwright.notificationOpened")
 }
 
@@ -333,10 +333,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             // build's log with it, were on the Lock Screen and nowhere else.
             let kind = info["kind"] as? String ?? ""
             let content = response.notification.request.content
+            let address = info["address"] as? String ?? ""
+            let action = response.actionIdentifier
             await MainActor.run {
                 // A POOL'S OWN MACHINE ASKING TO JOIN opens Machines, where it
                 // is the first card and Let it in is (HoldersAskingView).
                 if kind == "holder-join" { return openMachines() }
+                // A POOL XEN ORCHESTRA NO LONGER SHOWS, or one it shows again.
+                // Reconnect on a lost one opens the reconnect for it, starting
+                // from the machine that noticed (`hostId`), and Face ID is the
+                // next thing on screen; a tap on either opens the pool's page.
+                if kind == "pool-lost" || kind == "pool-back", !address.isEmpty {
+                    if kind == "pool-lost", action == NotificationAnswers.reconnectAction {
+                        return open(reconnect: address, via: host)
+                    }
+                    return open(pool: address)
+                }
                 if kind == "xosetup", !content.body.isEmpty {
                     open(setup: SetupResult(title: content.title, text: content.body,
                                             state: info["state"] as? String ?? "", host: host))
@@ -407,6 +419,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func openMachines() {
         NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["machines": true])
+    }
+
+    /// And for a pool: FleetApp opens Machines on that pool's page.
+    @MainActor
+    private func open(pool address: String) {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["pool": PoolAsk(address: address)])
+    }
+
+    /// And for Reconnect on a pool Xen Orchestra lost: FleetApp opens Machines
+    /// on the reconnect for it, from the machine named first when there is one.
+    @MainActor
+    private func open(reconnect address: String, via host: String) {
+        let ask = PoolAsk(address: address, reconnect: true, via: host.isEmpty ? nil : host)
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["pool": ask])
     }
 
     /// And for a setup's end: FleetApp shows how it ended (SetupResultView).

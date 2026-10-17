@@ -9,7 +9,8 @@ import SwiftUI
 /// putting what is on it under the same tab, as one more page under the row
 /// that names it, reads as part of Machines rather than as an app of its own.
 /// Changing what the fleet may use there is a row on this page now, for an
-/// admin, beside what it governs.
+/// admin, beside what it governs; and so is reconnecting its servers, when
+/// Xen Orchestra shows none of the pool or not all of it (XOReconnect).
 ///
 /// THE ROWS ARE THE MACHINES TAB'S ROWS: a card of the one shape (RHYTHM 1),
 /// the name at a hostname's weight, the state word on the right in a tone that
@@ -62,6 +63,22 @@ struct PoolManageView: View {
             }
             ForEach(Manage.Kind.allCases, id: \.self) { kind in
                 section(kind)
+            }
+            // WHEN XEN ORCHESTRA SHOWS NONE OF THE POOL, or not all of what
+            // setup named, reconnecting its servers usually brings it back.
+            // An admin's, like the row under it: it takes the admin sign-in.
+            // Offered only once the page has loaded and shows that, and from
+            // the machine that read it when one did (C-2).
+            if settings.showsAdmin, Manage.offersReconnect(loaded: watch.phase == .live, held: pool.pools, in: watch.snapshot) {
+                NavigationLink {
+                    AddHypervisorView(settings: settings, reconnectFor: pool.address, via: watch.via)
+                } label: {
+                    Label(Manage.Words.reconnectServers, systemImage: "arrow.triangle.2.circlepath")
+                        .fleetType(.body)
+                        .frame(minHeight: 44)
+                }
+                .fleetCard(radius: Design.Radius.cardSmall)
+                .fleetRow()
             }
             // AN ADMIN'S, as it was on Machines: changing the policy takes an
             // admin sign-in and the verb refuses a member.

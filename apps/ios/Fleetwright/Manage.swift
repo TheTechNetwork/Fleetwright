@@ -326,6 +326,27 @@ enum Manage {
         }
     }
 
+    // MARK: When its servers need reconnecting
+
+    /// The pool names this phone kept from setup (XOSetupHandoff.Held.pools)
+    /// that the page no longer shows. Nil kept names is a record that did not
+    /// say, and then nothing is missing that anyone can name.
+    static func missingPools(held: [String]?, in s: Snapshot) -> [String] {
+        guard let held else { return [] }
+        let shown = Set(s.list(.pool).map(\.name))
+        return held.filter { !shown.contains($0) }
+    }
+
+    /// Whether the page offers to reconnect the pool's servers: only once it
+    /// has loaded (directly or through one of your machines), and only when
+    /// what it loaded is a Xen Orchestra showing none of the pool, or not a
+    /// pool this phone was told about at setup. Before it has loaded, nothing
+    /// is known either way, so nothing is offered (C-2, C-5).
+    static func offersReconnect(loaded: Bool, held: [String]?, in s: Snapshot) -> Bool {
+        guard loaded else { return false }
+        return s.list(.pool).isEmpty || !missingPools(held: held, in: s).isEmpty
+    }
+
     // MARK: Words
 
     /// Sizes in powers of 1024, as Xen Orchestra reports them, to a tenth,
@@ -800,6 +821,7 @@ enum Manage {
         static let gone = "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it."
         static let lookAgain = "Look again"
         static let changePolicy = "Change what the fleet may use"
+        static let reconnectServers = "Reconnect its servers"
         static let whatItIs = "What it is"
         static let howItIs = "How it is"
         static let whatItCanDo = "What it can do"

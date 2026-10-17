@@ -61,8 +61,8 @@ struct XOSetupAttributes: ActivityAttributes {
     /// draw it, for the same reason the push does not carry it.
     let address: String
     /// `policy` for a change to what the fleet may use, whose end is not a
-    /// hypervisor added; `deploy` for installing Xen Orchestra first; nil for
-    /// adding one. Optional, so an activity a build
+    /// hypervisor added; `deploy` for installing Xen Orchestra first;
+    /// `reconnect` for reconnecting a pool's servers; nil for adding one. Optional, so an activity a build
     /// before it left on the Lock Screen still decodes, as the adding it was.
     var purpose: String? = nil
 }
@@ -103,6 +103,12 @@ enum XOSetupWords {
         case "packages": return "Installing packages"
         case "build": return "Building Xen Orchestra"
         case "admin": return "Replacing the default admin password"
+        // A reconnect's own three steps (XORECONNECT_STEPS), after the
+        // first two of onboarding's. The middle one is the job itself, so
+        // it says what the coordinator's banner says while it runs.
+        case "servers": return "Reading Xen Orchestra’s servers"
+        case "reconnect": return reconnectRunning
+        case "wait": return "Waiting for the pools to come back"
         case "done": return "Hypervisor added"
         default: return "Step \(min(step + 1, max(of, 1))) of \(max(of, 1))"
         }
@@ -148,6 +154,7 @@ enum XOSetupWords {
     static func headline(_ s: XOSetupAttributes.ContentState, purpose: String? = nil) -> String {
         if purpose == "policy", let end = policyEnd(s.state) { return end }
         if purpose == "deploy", let end = deployEnd(s.state) { return end }
+        if purpose == "reconnect", let end = reconnectEnd(s.state) { return end }
         switch s.state {
         case "done": return "Hypervisor added"
         case "failed": return "Hypervisor setup stopped"
@@ -177,6 +184,23 @@ enum XOSetupWords {
         case "failed": return "Installing Xen Orchestra stopped"
         case "cancelled": return "Installing Xen Orchestra cancelled"
         case "waiting": return "Waiting for the passwords"
+        default: return nil
+        }
+    }
+
+    /// What a reconnect is doing while it runs, in the words the
+    /// coordinator's banner uses for it (RECONNECT_TITLES in core.js).
+    static let reconnectRunning = "Reconnecting Xen Orchestra’s servers"
+
+    /// How a reconnect of a pool's servers ended, in the words the
+    /// coordinator's banner uses for it (RECONNECT_TITLES in core.js), or nil
+    /// while it has not. Its end is the pools, which is what the person
+    /// wanted back, rather than the servers, which were the way there.
+    static func reconnectEnd(_ state: String) -> String? {
+        switch state {
+        case "done": return "Pools back"
+        case "failed": return "The pools did not come back"
+        case "cancelled": return "Reconnecting cancelled"
         default: return nil
         }
     }
