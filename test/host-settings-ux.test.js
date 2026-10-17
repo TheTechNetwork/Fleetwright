@@ -73,7 +73,7 @@ test('Remove is offered on exactly the labels it works for', () => {
   const ios = code(iosSources());
   assert.match(
     ios,
-    /\.swipeActions\(edge: \.trailing\) \{\s*if setLabels\.contains\(label\) \{[\s\S]{0,200}?Button\("Remove", role: \.destructive\)/,
+    /\.swipeActions\(edge: \.trailing\) \{\s*if setLabels\.contains\(label\)(?:, mayAdminister)? \{[\s\S]{0,200}?Button\("Remove", role: \.destructive\)/,
     'iOS does not gate Remove on removability',
   );
   const kt = code(kotlin());

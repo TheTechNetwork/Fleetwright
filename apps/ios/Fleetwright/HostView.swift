@@ -43,6 +43,13 @@ struct HostView: View {
     let enrolled: Fleet.Host?
     /// A pool's own machine, as the list last said (Fleet.FleetHost.holder).
     var initialHolder: Bool = false
+    /// ONLY WHERE THEY WOULD DO SOMETHING (C-2). The coordinator refuses a
+    /// member's channel, image, labels, update, upgrade and reboot on a
+    /// machine that runs anybody's work but theirs, because each reaches that
+    /// work, so those controls are not drawn there; what each is set to still
+    /// is. As the list last said (Fleet.FleetHost.mayAdminister), and true
+    /// where it could not tell.
+    var mayAdminister: Bool = true
     /// Called when this page changes something the list should know about.
     var onChange: () async -> Void = {}
 
@@ -109,15 +116,22 @@ struct HostView: View {
 
             Section {
                 Button("Check for updates") { run { try await fleet.updates(host: hostId) } }
-                if health?.updates?.appUpdatePending == true {
+                if mayAdminister && health?.updates?.appUpdatePending == true {
                     Button("Apply update") { run { try await fleet.update(host: hostId, restart: true) } }
                 }
                 // ONLY WHERE IT WOULD WORK. A box that has not granted the
                 // upgrade refuses it with a paragraph; the button that earns
                 // that paragraph is the fault C-2 names. Nil is cannot tell
                 // (an older host) and keeps the button — the refusal explains.
-                if health?.updates?.systemPending == true && health?.updates?.grants?.upgrades != false {
+                if mayAdminister && health?.updates?.systemPending == true && health?.updates?.grants?.upgrades != false {
                     Button("Apply system upgrade") { run { try await fleet.upgrade(host: hostId, apply: true) } }
+                }
+                // Said once, at the top, so the settings further down read as
+                // answers and not as controls that went missing.
+                if !mayAdminister {
+                    Text("Only this fleet’s admin, or the one person this machine works for, can update it, reboot it or change how it is set up.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
                 }
             } header: {
                 sectionHead("Software")
@@ -269,6 +283,8 @@ struct HostView: View {
                 LabeledContent("Channel") {
                     Text("\(channel ?? "stable"), set on the box").fleetType(.label)
                 }
+            } else if let now = channel, !mayAdminister {
+                LabeledContent("Channel") { Text(now).fleetType(.label) }
             } else if let now = channel {
                 Picker("Channel", selection: Binding(
                     get: { now },
@@ -309,6 +325,10 @@ struct HostView: View {
                             .fleetType(.labelMono)
                             .foregroundStyle(Design.Palette.inkDim)
                             .textSelection(.enabled)
+                    }
+                } else if !mayAdminister {
+                    LabeledContent("Image") {
+                        Text(now.variant == "browser" ? "Browser" : "No browser").fleetType(.label)
                     }
                 } else {
                     Picker("Image", selection: Binding(
@@ -363,24 +383,26 @@ struct HostView: View {
                     }
                 }
                 .swipeActions(edge: .trailing) {
-                    if setLabels.contains(label) {
+                    if setLabels.contains(label), mayAdminister {
                         Button("Remove", role: .destructive) {
                             run { try await fleet.labels(host: hostId, remove: label) }
                         }
                     }
                 }
             }
-            HStack {
-                TextField("Add a label", text: $newLabel)
-                    // A LABEL IS COMPARED FOR EQUALITY by the scheduler, so iOS
-                    // capitalising it would store one that can never be matched
-                    // — which looks exactly like tags being broken.
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .fleetType(.label)
-                    .onSubmit(addLabel)
-                Button("Add", action: addLabel)
-                    .disabled(newLabel.trimmingCharacters(in: .whitespaces).isEmpty)
+            if mayAdminister {
+                HStack {
+                    TextField("Add a label", text: $newLabel)
+                        // A LABEL IS COMPARED FOR EQUALITY by the scheduler, so iOS
+                        // capitalising it would store one that can never be matched
+                        // — which looks exactly like tags being broken.
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .fleetType(.label)
+                        .onSubmit(addLabel)
+                    Button("Add", action: addLabel)
+                        .disabled(newLabel.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
         } header: {
             sectionHead("Labels")
@@ -563,7 +585,12 @@ struct HostView: View {
             // phone can ask it.
             switch rebootStage {
             case .idle:
-                if health?.updates?.grants?.reboot == false {
+                if !mayAdminister {
+                    // Nothing: a reboot ends everybody's sessions here, which
+                    // is why it is not this person's, and the Software section
+                    // already said so.
+                    EmptyView()
+                } else if health?.updates?.grants?.reboot == false {
                     // NO BUTTON FOR A THING THE BOX REFUSES. The grant is a
                     // root-owned rule on the machine and nothing on a phone can
                     // write it, so the honest control is the sentence and the
