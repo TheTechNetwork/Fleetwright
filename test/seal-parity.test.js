@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { importDepositKey, open } from '../src/fleet/seal.js';
+import { importDepositKey, open, seal, newSealKey, xosetupReconnectAad, xosetupInventoryAad } from '../src/fleet/seal.js';
 import { fingerprint } from '../src/fleet/crypto.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/parity/seal.json', import.meta.url), 'utf8'));
@@ -32,4 +32,16 @@ test('the box fingerprint the phones work out is the one a box prints', async ()
   // vault (PhoneVault.kt, PhoneVault.swift), and are tested against this.
   assert.equal(await fingerprint(fixture.boxKey), fixture.fingerprint);
   assert.match(fixture.fingerprint, /^[0-9a-f]{16}$/);
+});
+
+test('a reconnect’s outcome is sealed under its own name, the string both phones build', async () => {
+  // Each server's label and address travel only like this (the plain
+  // progress says counts and the address), so the phones open it with a
+  // string they build themselves: byte for byte this one.
+  assert.equal(xosetupReconnectAad('a1b2c3d4e5f6', 'xo.lan:8443'), 'fleetwright-xosetup-reconnect/v1:a1b2c3d4e5f6:xo.lan:8443');
+  // And it is not the inventory's, which the same job's reply key opens.
+  const reply = await newSealKey();
+  const sealed = await seal({ to: reply.publicKey, aad: xosetupReconnectAad('a1b2c3d4e5f6', 'xo.lan'), payload: { v: 1, servers: [], pools: [] } });
+  await assert.rejects(open({ ...reply, aad: xosetupInventoryAad('a1b2c3d4e5f6', 'xo.lan'), sealed }));
+  assert.deepEqual(await open({ ...reply, aad: xosetupReconnectAad('a1b2c3d4e5f6', 'xo.lan'), sealed }), { v: 1, servers: [], pools: [] });
 });

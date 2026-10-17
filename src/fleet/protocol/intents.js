@@ -248,6 +248,24 @@ export const XODEPLOY_STEPS = Object.freeze([
   ...XOSETUP_STEPS,
 ]);
 
+/**
+ * What reconnecting Xen Orchestra's servers does, in order, by key: a pool
+ * the fleet's token no longer sees, brought back with the admin sign-in from
+ * the phone, used once. The same first two as onboarding, then its own. The
+ * machine reports from `servers` on; the first two are over before anything
+ * is worth a Lock Screen. docs/hypervisors.md.
+ *
+ * Only servers that are not connected are touched, and a server a person
+ * turned off is left off and named: the job changes nothing else.
+ */
+export const XORECONNECT_STEPS = Object.freeze([
+  'connect',
+  'sign-in',
+  'servers', // what Xen Orchestra knows of each server, with the admin session
+  'reconnect', // each server not connected, enabled or cycled, one at a time
+  'wait', // until the servers touched are connected and their pools show again
+]);
+
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
 //
 // A VERSION BUMP IS A FLAG DAY, and this is the second one. Adding a VERB is
@@ -1695,6 +1713,14 @@ export const VERBS = Object.freeze({
   //           `purpose: deploy`. A phase rather than a parameter, the way
   //           `policy` came: an older host refuses the value it does not
   //           know, loudly, and nothing needs a version.
+  //
+  //   A RECONNECT is a `begin` and a `run` like any setup's, whose sealed
+  //           sign-in says `purpose: 'reconnect'`, as a policy job's says its
+  //           own: the machine reconnects Xen Orchestra's servers for a pool
+  //           the fleet's token no longer sees, and reports as `purpose:
+  //           reconnect` through XORECONNECT_STEPS. Nothing here changes for
+  //           it; a machine that can do it says `reconnect` in what `begin`
+  //           says it can, and the phone seals nothing to one that does not.
   //
   // PROGRESS ARRIVES AS AN EVENT, `xosetup.progress`, for the job's owner
   // only, and becomes a Live Activity on iOS and an ongoing notification on
