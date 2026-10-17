@@ -15,7 +15,7 @@
 import { HostRegistry, runsNoSessions } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
-import { HostIdentities, actsFor, mayActFor } from './hosts.js';
+import { HostIdentities, actsFor, mayActFor, believedCreator } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { place } from './scheduler.js';
@@ -397,7 +397,10 @@ export class CoordinatorCore {
      * fingerprint and typing a password is a gap it is evicted across. Every
      * later phase then answered `unknown_job`, and progress from a machine
      * still mid-run was dropped as coming from a job nobody had begun.
-     * @type {Map<string, { hostId: string, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number }, activityNews?: string, activityAt?: number }>}
+     *
+     * BOUND TO THE ENROLMENT THAT ANSWERED `begin` (`enrolment`, its key and
+     * when it was let in), not only to the name: see #setupOn.
+     * @type {Map<string, { hostId: string, enrolment?: string|null, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number }, activityNews?: string, activityAt?: number }>}
      */
     this.setups = new Map();
     /**
@@ -586,6 +589,8 @@ export class CoordinatorCore {
     const gone = this.hostIds.revoke(hostId);
     if (!gone) return false;
     this.registry.remove(hostId);
+    // A setup it was running ends with it (#setupOn would refuse it anyway).
+    for (const [job, rec] of this.setups) if (rec.hostId === hostId) this.#endSetup(job, `${hostId} was removed from the fleet, so the setup it was running ended.`);
     this.record({ event: 'host.revoked', hostId });
     return true;
   }
@@ -1033,14 +1038,14 @@ export class CoordinatorCore {
     const claim = event.name
       ? this.registry.findSessions(event.name).find((c) => c.host?.hostId === event.hostId) ?? null
       : null;
-    // AND ONLY FOR SOMEBODY THAT BOX MAY ACT FOR (hosts.js mayActFor). The
-    // creator is the box's own word, so a box a member enrolled could name
-    // another member as the creator of a session of its own and put its own
-    // text, Remote Control link and answer buttons on that member's phone. A
-    // creator it may not speak for is filed under whom it does act for, its
-    // one person, which is who wrote those words. No creator stays nobody's.
-    const said = claim?.createdBy ?? null;
-    const owner = said === null || mayActFor(claim?.host, said) ? said : (claim?.host?.actsFor ?? null);
+    // AND ONLY FOR SOMEBODY THAT BOX MAY ACT FOR. The creator is the box's
+    // own word, so a box a member enrolled could name another member as the
+    // creator of a session of its own and put its own text, Remote Control
+    // link and answer buttons on that member's phone. The registry files a
+    // creator a box may not speak for under the one person it does act for
+    // when the report arrives (hosts.js believedCreator), so this reads the
+    // same answer the listings and the pinned verbs do.
+    const owner = claim?.createdBy ?? null;
 
     // FILTERED FOR WHOSE PHONE IT IS, which it was not.
     //
@@ -1163,7 +1168,7 @@ export class CoordinatorCore {
       const job = answer?.xosetup?.job;
       if (answer?.ok !== false && typeof job === 'string' && XOSETUP_JOB_RE.test(job)) {
         this.#pruneSetups();
-        this.setups.set(job, { hostId, owner, startedAt: this.now(), last: null, activities: [] });
+        this.setups.set(job, { hostId, enrolment: this.#enrolmentOf(hostId), owner, startedAt: this.now(), last: null, activities: [] });
         if (relay) this.relays.bind(relay.id, job);
         this.onStateChanged?.();
       } else if (relay) {
@@ -1178,6 +1183,15 @@ export class CoordinatorCore {
         ok: false,
         error: { code: 'unknown_job' },
         text: 'No setup with that id is running for you. Start again from Add a hypervisor.',
+      };
+    }
+    // NOT TO WHOEVER HOLDS THE NAME NOW. The phase carries the job id, which
+    // is what a box shows to be given a holder pin in the owner's name.
+    if (!this.#setupOn(job, rec, rec.hostId)) {
+      return {
+        ok: false,
+        error: { code: 'unknown_job' },
+        text: `${rec.hostId} has been re-enrolled or removed since this setup began, so the setup ended with it. Start again from Add a hypervisor.`,
       };
     }
     /** @type {any} */
@@ -1199,15 +1213,16 @@ export class CoordinatorCore {
    * mayActFor), which for an admin is the fleet's own. The setup it carries
    * ends with the admin's Xen Orchestra sign-in sealed to a key that machine
    * made, and the offer was the first permanent box by name, so a box a member
-   * enrolled as `aaa-…` was the one both apps put on the button. Named, the
-   * machine is the person's own choice and stands.
+   * enrolled as `aaa-…` was the one both apps put on the button. Named, it is
+   * held to the same rule: `begin` is placed by it (scheduler.js), so a relay
+   * to a machine that may not act for the person could carry nothing.
    *
    * @param {string|null} prefer @param {string|null} who
    */
   #relayHost(prefer, who) {
     const able = this.registry.reachable().filter((h) => !h.ephemeral && Number(h.health?.protocol) >= RELAY_PROTOCOL);
-    if (prefer) return able.find((h) => h.hostId === prefer) ?? null;
     const own = able.filter((h) => mayActFor(h, who));
+    if (prefer) return own.find((h) => h.hostId === prefer) ?? null;
     own.sort((a, b) => Number(b.state === 'healthy') - Number(a.state === 'healthy') || a.hostId.localeCompare(b.hostId));
     return own[0] ?? null;
   }
@@ -1253,7 +1268,7 @@ export class CoordinatorCore {
         ok: false,
         error: { code: 'no_hosts' },
         text: prefer
-          ? `${prefer} cannot work through a phone now: it is offline, or older than protocol ${RELAY_PROTOCOL}. Update it and try again.`
+          ? `${prefer} cannot work through a phone now: it is offline, older than protocol ${RELAY_PROTOCOL}, or a box a member enrolled for themselves. An offline or older one can be updated and asked again.`
           : `No machine of the fleet’s own can work through a phone yet: each is offline, older than protocol ${RELAY_PROTOCOL}, or a box a member enrolled for themselves. Update one and try again.`,
       });
     }
@@ -1324,6 +1339,51 @@ export class CoordinatorCore {
     };
   }
 
+  /**
+   * Which enrolment of a name this is: its key and when it was let in, so a
+   * re-key or a readmission under the same name is a different machine. Null
+   * for a host connected without an enrolment, which only tests do.
+   *
+   * @param {string} hostId
+   * @returns {string|null}
+   */
+  #enrolmentOf(hostId) {
+    const enrolled = this.hostIds?.get(hostId);
+    if (!enrolled) return null;
+    if (enrolled.revokedAt) return 'revoked';
+    return `${enrolled.fingerprint}@${enrolled.enrolledAt}`;
+  }
+
+  /**
+   * Is this job still `hostId`'s, on the enrolment that began it?
+   *
+   * A setup job's authority was keyed by host name alone, for a day. Any
+   * member can mint a pin bound to an existing name, and redeeming it
+   * replaces that name's key; the re-keyed box then acted for the member and
+   * still passed every name check, so the admin's later phases took it the
+   * job id, and with that id it was minted a holder pin in the admin's name,
+   * which enrols a machine of operator tier and is sent the fleet's OAuth
+   * client secrets. The same check gave it image-report tokens and the
+   * admin's phones for its progress. So the job is bound to the key and the
+   * moment the name was let in, and a re-key, readmission or revocation of
+   * the name ends it here, wherever it is first noticed.
+   *
+   * @param {string} job @param {any} rec @param {string} hostId
+   */
+  #setupOn(job, rec, hostId) {
+    if (!rec || rec.hostId !== hostId) return false;
+    if ((rec.enrolment ?? null) === this.#enrolmentOf(hostId)) return true;
+    this.#endSetup(job, `${hostId} was re-enrolled since this setup began, so the setup ended.`);
+    return false;
+  }
+
+  /** A setup job is over: forgotten, and any relay it held closed. @param {string} job @param {string} why */
+  #endSetup(job, why) {
+    this.setups.delete(job);
+    this.relays.closeForJob(job, why);
+    this.onStateChanged?.();
+  }
+
   /** Forget jobs a day old, and keep the map bounded whatever happens. */
   #pruneSetups() {
     const cutoff = this.now() - SETUP_TTL_MS;
@@ -1353,6 +1413,9 @@ export class CoordinatorCore {
       const reporter = narrowReporter(r.reporter);
       this.setups.set(e[0], {
         hostId: r.hostId,
+        // A row from before jobs were bound to an enrolment has none, and so
+        // matches no enrolled machine: its job ends at its next phase.
+        enrolment: typeof r.enrolment === 'string' ? r.enrolment : null,
         owner: typeof r.owner === 'string' ? r.owner : null,
         startedAt: Number(r.startedAt),
         last: r.last ? narrowProgress(r.last) : null,
@@ -1361,6 +1424,9 @@ export class CoordinatorCore {
         // would be refused for the rest of it because the object was evicted.
         ...(reporter ? { reporter } : {}),
         ...(Number.isInteger(r.reporters) && r.reporters > 0 ? { reporters: Math.min(r.reporters, MAX_IMAGE_REPORTERS) } : {}),
+        // And the holder pins asked for, which serialiseSetups always wrote
+        // and this did not read back, so an eviction gave a job its three again.
+        ...(Number.isInteger(r.holderPins) && r.holderPins > 0 ? { holderPins: Math.min(r.holderPins, MAX_HOLDER_PINS + 1) } : {}),
       });
     }
   }
@@ -1379,7 +1445,7 @@ export class CoordinatorCore {
   async #onSetupProgress(hostId, msg) {
     const job = String(msg.job || '');
     const rec = this.setups.get(job);
-    if (!rec || rec.hostId !== hostId) {
+    if (!rec || !this.#setupOn(job, rec, hostId)) {
       this.log.warn(`coordinator: ${hostId} reported progress for a setup it is not running`);
       return;
     }
@@ -2353,7 +2419,17 @@ export class CoordinatorCore {
             .catch((e) => ({ hostId: h.hostId, ok: false, text: e.message, error: { code: 'host_timeout' } })),
         ),
       );
-      let sessions = results.flatMap((r) => (r.sessions || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId })));
+      // Each creator as the fleet believes the box that said it, by the rule
+      // the registry applies to health (hosts.js believedCreator), so a box a
+      // member enrolled cannot list its own sessions as another member's.
+      const byId = new Map((placement.hosts || []).map((h) => [h.hostId, h]));
+      let sessions = results.flatMap((r) =>
+        (r.sessions || []).map((/** @type {any} */ s) => ({
+          ...s,
+          ...(s && typeof s === 'object' && 'createdBy' in s ? { createdBy: believedCreator(byId.get(r.hostId), s.createdBy) } : {}),
+          hostId: r.hostId,
+        })),
+      );
 
       // WHOSE sessions the caller may see — filtered HERE, never at the host.
       // The host has one token and no idea who is asking; a host-side filter
@@ -3979,7 +4055,16 @@ export class CoordinatorCore {
     };
     const job = String(msg.job || '');
     const rec = XOSETUP_JOB_RE.test(job) ? this.setups.get(job) : undefined;
-    if (!rec || rec.hostId !== hostId || !rec.owner) {
+    // On the enrolment that began the job (#setupOn), for a box that may act
+    // for its owner, and while it runs: the pin admits a machine in the
+    // owner's name, which for an admin is operator tier.
+    if (
+      !rec ||
+      !this.#setupOn(job, rec, hostId) ||
+      !rec.owner ||
+      !mayActFor(host, rec.owner) ||
+      (rec.last && ENDED_SETUP.has(rec.last.state))
+    ) {
       answer({ ok: false, error: { code: 'not_your_job' }, text: `${hostId} is not running that setup, so it is given no pin.` });
       return;
     }
@@ -4175,7 +4260,7 @@ export class CoordinatorCore {
     };
     const job = String(msg.job || '');
     const rec = XOSETUP_JOB_RE.test(job) ? this.setups.get(job) : undefined;
-    if (!rec || rec.hostId !== hostId || (rec.last && ENDED_SETUP.has(rec.last.state))) {
+    if (!rec || !this.#setupOn(job, rec, hostId) || (rec.last && ENDED_SETUP.has(rec.last.state))) {
       answer({ ok: false, error: { code: 'not_your_job' }, text: `${hostId} is not running that setup, so it is given no token.` });
       return;
     }

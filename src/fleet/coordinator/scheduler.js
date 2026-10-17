@@ -74,6 +74,11 @@ const PINNED = new Set([
 /** Verbs answered by asking every host and merging. */
 const FANOUT = new Set(['list', 'profiles', 'secrets']);
 
+/** Why no machine may take an admin's hypervisor probe or setup. */
+const NO_OWN_MACHINE =
+  'No connected permanent machine is one of the fleet\u2019s own. A box a member enrolled acts only for them, ' +
+  'and is sent nobody else\u2019s probe or setup.';
+
 /** Verbs that carry, or act with, one person's credential. See `whose` in place(). */
 const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setuptoken']);
 
@@ -85,6 +90,23 @@ const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setupt
  * @property {string} [reason]
  * @property {string} [code]
  */
+
+/**
+ * The claims on a session name that the requester may act on: every one for
+ * an admin or the break-glass token, and for a member only those their
+ * verified identity created, as the registry attributes them (hosts.js
+ * believedCreator). Asked before anything is counted or named.
+ *
+ * @param {import('./registry.js').HostRegistry} registry
+ * @param {string} name
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ */
+function sessionsOf(registry, name, requester) {
+  const claims = registry.findSessions(name);
+  if (!requester || requester.admin) return claims;
+  const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
+  return claims.filter((c) => String(c.createdBy || '').toLowerCase() === mine);
+}
 
 /**
  * @param {import('./registry.js').HostRegistry} registry
@@ -219,10 +241,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // that does not exist, for the same reason it is byte-identical there: a
   // distinct "not yours" turns an access control into an existence oracle.
   if (verb === 'logs' && name && requester && !requester.admin) {
-    const claims = registry.findSessions(name);
-    const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
-    const owned = claims.filter((c) => String(c.createdBy || '').toLowerCase() === mine);
-    if (!owned.length) {
+    if (!sessionsOf(registry, name, requester).length) {
       return {
         kind: 'refused',
         code: 'unknown_session',
@@ -247,7 +266,9 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   if (verb === 'logs' && name) {
     // findSessions returns RECORDS, not hosts — each carries the host it was
     // found on. Reading them as hosts is the mistake the type checker caught.
-    const claims = registry.findSessions(name);
+    // A member's own claims only, as for the pinned verbs below: the refusal
+    // names every host it counted.
+    const claims = sessionsOf(registry, name, requester);
     if (claims.length === 1) return { kind: 'host', host: claims[0].host };
     if (claims.length > 1) {
       return {
@@ -330,11 +351,20 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // differs by machine and the point is to find the ones that can. A runner is
   // left out: it is on somebody else's network for a few hours and can reach
   // nothing on yours. docs/hypervisors.md.
+  //
+  // AND ONLY A MACHINE THAT MAY ACT FOR WHOEVER ASKED (hosts.js mayActFor),
+  // which for an admin is the fleet's own, for the probe and for the setup
+  // below. A box a member enrolled was sent the admin's probe, answered it in
+  // its own words onto the app's list, and was taken for `begin` when named or
+  // when it was the only permanent box; the job's `run` then carried the
+  // admin's sealed Xen Orchestra sign-in to it, to be opened where that member
+  // has root. SEC-HOST-1.
   if (verb === 'xoprobe') {
-    const durable = registry.reachable().filter((h) => !h.ephemeral);
+    const permanent = registry.reachable().filter((h) => !h.ephemeral);
+    const durable = permanent.filter((h) => mayActFor(h, whose));
     return durable.length
       ? { kind: 'fanout', hosts: durable }
-      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+      : { kind: 'refused', code: 'no_hosts', reason: permanent.length ? NO_OWN_MACHINE : describeWhyNoHosts(registry) };
   }
 
   // ONBOARDING RUNS ON THE MACHINE THAT WAS CHOSEN, and every phase of one job
@@ -344,8 +374,11 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // the first, so only `begin` ever needs a person to choose. Not new work, so
   // a full machine can still do it.
   if (verb === 'xosetup') {
-    const durable = registry.reachable().filter((h) => !h.ephemeral);
-    if (!durable.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    const permanent = registry.reachable().filter((h) => !h.ephemeral);
+    const durable = permanent.filter((h) => mayActFor(h, whose));
+    if (!durable.length) {
+      return { kind: 'refused', code: 'no_hosts', reason: permanent.length ? NO_OWN_MACHINE : describeWhyNoHosts(registry) };
+    }
     if (preferHost) {
       const chosen = durable.find((h) => h.hostId === preferHost);
       return chosen
@@ -353,7 +386,9 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         : {
             kind: 'refused',
             code: 'host_unavailable',
-            reason: `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+            reason: permanent.some((h) => h.hostId === preferHost)
+              ? `${preferHost} acts for the person who enrolled it, and runs nobody else\u2019s setup.`
+              : `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
           };
     }
     if (durable.length === 1) return { kind: 'host', host: durable[0] };
@@ -448,7 +483,31 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     verb === 'unlink'
   ) {
     // A Claude login is a credential too, and one box is still a choice of box.
-    const reachable = credential ? holders() : registry.reachable();
+    //
+    // A SERVICE JOURNAL IS EVERYBODY'S WORK ON THE BOX. The sidecar writes
+    // each intent into it with its actor, so it names other members, their
+    // sessions, the secret and archive each start used and the files each
+    // touched, and any member could read it from any box while `list`, `logs
+    // <name>` and nameless `status` were all scoped to them. An admin and the
+    // break-glass token read any box's; a member only a box that acts for
+    // them alone, which holds nobody's work but theirs (hosts.js mayActFor). A
+    // member's `logs <name>` never gets this far: it resolved to their own
+    // session above, or was refused there.
+    const journal = verb === 'logs' && Boolean(requester) && !requester?.admin;
+    const reachable = credential
+      ? holders()
+      : journal
+        ? registry.reachable().filter((h) => h.actsFor && mayActFor(h, requester?.email))
+        : registry.reachable();
+    if (journal && registry.reachable().length && (!reachable.length || (preferHost && !reachable.some((h) => h.hostId === preferHost)))) {
+      return {
+        kind: 'refused',
+        code: 'not_admin',
+        reason:
+          'A box\u2019s service journal records everybody\u2019s work on it, so only this fleet\u2019s admin, ' +
+          'or the one person a box acts for, can read it.',
+      };
+    }
     if (!reachable.length) {
       return { kind: 'refused', code: 'no_hosts', reason: credential ? describeWhyNoHolders(registry) : describeWhyNoHosts(registry) };
     }
@@ -498,7 +557,14 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   }
 
   if (PINNED.has(verb)) {
-    const claims = name ? registry.findSessions(name) : [];
+    // A MEMBER CHOOSES ONLY AMONG THEIR OWN. Every claim on the name was
+    // counted, whoever's, and the ambiguity refusal below ran before the
+    // ownership check further down: so any member's peek of a name two other
+    // people share was answered with the hosts holding it, and a box a member
+    // enrolled claiming the name of somebody's real session made their stop
+    // on it ambiguous. Narrowed first, another person's session is not a
+    // claim at all, for this as for the unknown_session refusal.
+    const claims = name ? sessionsOf(registry, name, requester) : [];
     // MORE THAN ONE BOX CLAIMS IT. Refuse, and name them both.
     //
     // findSession() returned the first match in Map order, so `stop bigjob`
@@ -516,21 +582,17 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
           'recoverable by trying again. Rename one, or stop it from the box itself.',
       };
     }
-    /** @type {(typeof claims)[number]|null} */
-    let found = claims[0] || null;
-    // OWNERSHIP, checked before anything is revealed. A member may act only on
-    // sessions their verified identity created; unattributed sessions belong
-    // to the fleet, exactly as in the visibility filter one layer down.
+    // OWNERSHIP, checked before anything is revealed (sessionsOf). A member
+    // may act only on sessions their verified identity created; unattributed
+    // sessions belong to the fleet, exactly as in the visibility filter one
+    // layer down.
     //
     // The refusal is BYTE-IDENTICAL to unknown_session, deliberately. A
     // distinct "not yours" answer would confirm to a member that a guessed
     // name exists on somebody else's work — an existence oracle built out of
     // an access control. To a member, a session they cannot touch and a
     // session that does not exist must be the same fact.
-    if (found && requester && !requester.admin) {
-      const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
-      if (String(found.createdBy || '').toLowerCase() !== mine) found = null;
-    }
+    const found = claims[0] || null;
     if (!found) {
       return {
         kind: 'refused',
@@ -561,6 +623,28 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       };
     }
     return { kind: 'host', host };
+  }
+
+  // A NEW SESSION UNDER A NAME SOMEBODY ELSE HOLDS IS NOT NEW. `start` is new
+  // work and never asked who held its name, and a box refused only a name
+  // that was running, binned or starting. So a member could start another
+  // member's STOPPED session by name on a box that acts for both: the box
+  // reused its workspace and Claude config volumes, keyed by name, on its
+  // owner's Claude account, and rewrote its creator to the starter, who then
+  // had its pinned verbs while its owner was told it did not exist. A member
+  // may not take a name another person's claim holds (an unattributed one is
+  // the fleet's), and the words are the same whatever holds it, so the
+  // refusal does not say whose or where. Their own stopped session is for
+  // `resume`, which the box says when asked to start it.
+  if (verb === 'start' && name && requester && !requester.admin) {
+    const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
+    if (registry.findSessions(name).some((c) => String(c.createdBy || '').toLowerCase() !== mine)) {
+      return {
+        kind: 'refused',
+        code: 'name_unavailable',
+        reason: `"${name}" cannot be used for a new session. Pick another name.`,
+      };
+    }
   }
 
   // --- new work: filter, rank, tie-break ------------------------------------

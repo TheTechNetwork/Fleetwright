@@ -275,7 +275,9 @@ machine of the fleet, through the coordinator.
   the flag itself; what it would gain is a setup the phone then has to seal a
   sign-in for, which the phone does only after asking.
 - **The probe is a port scan, one address at a time.** `xoprobe` asks every
-  permanent machine to reach an address on its network, and answers with
+  permanent machine of the fleet's own to reach an address on its network
+  (`begin` goes only to one of them too, by name or as the only one; a box a
+  member enrolled acts only for them, `mayActFor`), and answers with
   whether something did, whether it looks like Xen Orchestra and its
   certificate. Admin only, checked here, which a compromised coordinator does
   not respect; the reach is "does this address answer HTTPS from that box",
@@ -460,7 +462,13 @@ machine of the fleet, through the coordinator.
   403.
 - **The pool's own machine is admitted by a pin** (`docs/hypervisors.md`,
   "A machine of its own"). The coordinator gives the pin only to the box
-  running that person's policy job, at most three times a job. The pin is
+  running that person's policy job, at most three times a job, while the
+  job runs and the box may act for that person. "The box" is the enrolment
+  that began the job, its key and when it was let in, not its name: a
+  re-key, readmission or revocation of the name ends the job, so a member
+  who replaces a box's key with a pin bound to its name inherits none of
+  its setup, and the same binding holds for the build VM's token and for
+  progress pushed to the owner's phones. The pin is
   bound to a name the coordinator chose and no host had, so it cannot
   replace an existing host's key. It is single use and lasts ten minutes. It
   travels only on the machine's cloud-init drive, which the machine wipes
@@ -1195,7 +1203,9 @@ Hold a change against this. If a box is unchecked, the change is not done.
 - [ ] Command lines pass through `redactCommandLine` before any log call
       (SEC-LOG-1).
 - [ ] The surface does not put pane text, titles, or secrets in a journal a
-      phone can read via `logs`.
+      phone can read via `logs`. Who can read one is bounded too: a box's
+      journal is the admin's, or the one person the box acts for
+      (`mayActFor`), because it names everyone's work on that box.
 
 **Adding a surface that reaches a host locally**
 - [ ] It does not assume the loopback API is authenticated (SEC-HOST-2).

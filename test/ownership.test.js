@@ -231,9 +231,43 @@ test('logs naming a session is checked like peek, not like a box question', () =
 
   assert.equal(place(core.registry, intent({ name: 'mine' }), { requester: MEMBER }).kind, 'host');
   assert.equal(place(core.registry, intent({ name: 'theirs' }), { requester: ADMIN }).kind, 'host');
-  // A service journal is a question about the BOX, not about a session, and
-  // stays available — it is how a member finds out their own host is sick.
-  assert.equal(place(core.registry, intent({ service: 'hub' }), { requester: MEMBER }).kind, 'host');
+});
+
+test('a box’s service journal is read by the admin, or by the one person the box acts for', async () => {
+  // A later audit: this file said a service journal is a question about the
+  // box and asserted any member could read one. The sidecar journals every
+  // intent with its actor, so a member reading the operator's box, or a box
+  // another member enrolled, read who else used it, their session names, the
+  // secret and archive of each start and the files each wrote. It stays a
+  // member's on a box that acts for them alone, which is how they find out
+  // their own box is sick.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {string[]} */
+  const delivered = [];
+  const journal = (/** @type {string} */ hostId) => (/** @type {any} */ intent) => {
+    delivered.push(hostId);
+    queueMicrotask(() => core.onHostMessage(hostId, { kind: 'reply', id: intent.id, ok: true, text: 'sidecar: fleet:carol@example.com → /new carol-payroll' }));
+  };
+  await admit(core, 'ops-box', { send: journal('ops-box') });
+  await admit(core, 'carol-box', { enrolledBy: 'carol@example.com', send: journal('carol-box') });
+  await admit(core, 'member-box', { enrolledBy: MEMBER.email, send: journal('member-box') });
+  const read = (/** @type {any} */ requester, /** @type {string} */ host = '') =>
+    core.dispatch({ verb: 'logs', params: { service: 'sidecar', lines: 200 }, preferHost: host, actor: requester?.email, requester });
+
+  for (const host of ['ops-box', 'carol-box']) {
+    const r = await read(MEMBER, host);
+    assert.equal(r.error?.code, 'not_admin', `a member read the journal of ${host}`);
+  }
+  assert.deepEqual(delivered, [], 'a journal read reached a box that does not act for the member alone');
+
+  // Their own box, named or as the only one they may read.
+  assert.equal((await read(MEMBER, 'member-box')).ok, true);
+  assert.equal((await read(MEMBER)).ok, true);
+  // The admin and the break-glass token read any box's.
+  assert.equal((await read(ADMIN, 'ops-box')).ok, true);
+  assert.equal((await read(null, 'carol-box')).ok, true);
+  assert.deepEqual(delivered, ['member-box', 'member-box', 'ops-box', 'carol-box']);
 });
 
 /**
@@ -356,4 +390,117 @@ test('the shorthand route is not a way around any of this', async () => {
     assert.match(src, /snapshot\(requesterFor\(client\)\)/, `${file} snapshots unfiltered`);
     assert.match(src, /recentEvents\(requesterFor\(client\)\)/, `${file} returns the ring unfiltered`);
   }
+});
+
+/**
+ * Two boxes: `ops-box`, the operator's (it may act for anyone), holding
+ * alice's real session, and `mal-box`, which mallory enrolled with a pin she
+ * minted, so it acts for her alone. mal-box reports sessions and a bin entry
+ * it says alice created, and answers `list` the same way. What mal-box is
+ * sent is kept in `delivered`.
+ */
+async function forgedFleet() {
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {any[]} */
+  const delivered = [];
+  const forged = [
+    { name: 'forged', status: 'running', title: 'FORGED', cwd: '/forged', createdBy: 'fleet:alice@example.com' },
+    { name: 'alice-real', status: 'running', createdBy: 'fleet:alice@example.com' },
+  ];
+  const real = [{ name: 'alice-real', status: 'running', createdBy: 'fleet:alice@example.com' }];
+  await admit(core, 'ops-box', {
+    send: (/** @type {any} */ intent) => queueMicrotask(() => core.onHostMessage('ops-box', { kind: 'reply', id: intent.id, ok: true, text: 'ops', sessions: real })),
+  });
+  await admit(core, 'mal-box', {
+    enrolledBy: 'mallory@example.com',
+    send: (/** @type {any} */ intent) => {
+      delivered.push(intent);
+      queueMicrotask(() => core.onHostMessage('mal-box', { kind: 'reply', id: intent.id, ok: true, text: 'mal', sessions: forged }));
+    },
+  });
+  core.registry.recordHealth('ops-box', { hostId: 'ops-box', sessions: real });
+  core.registry.recordHealth('mal-box', { hostId: 'mal-box', sessions: forged, bin: [{ name: 'forged-bin', createdBy: 'fleet:alice@example.com' }] });
+  return { core, delivered };
+}
+
+const ALICE = { email: 'alice@example.com', admin: false };
+
+test('a box a member enrolled cannot file its sessions under somebody else', async () => {
+  // A later audit: #notify asked whether the box may act for the creator it
+  // named, and nothing else did. mal-box's word that alice made `forged` put
+  // it in alice's /api/hosts and her list, with mallory's title, and her
+  // writefile, readfile and restore on that name went to mal-box with her
+  // content and her name on them.
+  const { core, delivered } = await forgedFleet();
+
+  const hosts = core.snapshot(ALICE).hosts;
+  const mal = hosts.find((/** @type {any} */ h) => h.hostId === 'mal-box');
+  assert.deepEqual(mal.health.sessions, [], 'a member-enrolled box listed its session as another member’s');
+  assert.deepEqual(mal.health.bin, [], 'and its bin');
+  // An operator's box acts for anyone, so its word is still taken.
+  const ops = hosts.find((/** @type {any} */ h) => h.hostId === 'ops-box');
+  assert.deepEqual(ops.health.sessions.map((/** @type {any} */ s) => s.name), ['alice-real']);
+
+  const listed = await core.dispatch({ verb: 'list', params: {}, requester: ALICE });
+  assert.deepEqual(listed.sessions.map((/** @type {any} */ s) => `${s.name}@${s.hostId}`), ['alice-real@ops-box'], 'her list carried the forged session');
+
+  delivered.length = 0;
+  const wrote = await core.dispatch({ verb: 'writefile', params: { name: 'forged', path: 'p.txt', content: 'alice’s words' }, actor: 'alice@example.com', requester: ALICE });
+  assert.equal(wrote.error?.code, 'unknown_session');
+  assert.deepEqual(delivered, [], 'alice’s file went to a box that does not act for her');
+
+  // Filed under the person the box does act for, who wrote it.
+  assert.equal(place(core.registry, { verb: 'peek', params: { name: 'forged' } }, { requester: { email: 'mallory@example.com', admin: false } }).host?.hostId, 'mal-box');
+});
+
+test('a claim on the name of a member’s real session does not make it ambiguous', async () => {
+  // The denial half of the same audit finding: mal-box also claims
+  // `alice-real`, which is alice's on ops-box. Re-attributed to mallory, the
+  // claim still counted, and alice's stop was refused ambiguous_session,
+  // naming mal-box, with nothing sent to ops-box.
+  const { core } = await forgedFleet();
+  const stop = place(core.registry, { verb: 'stop', params: { name: 'alice-real' } }, { requester: ALICE });
+  assert.equal(stop.kind, 'host', stop.reason);
+  assert.equal(stop.host?.hostId, 'ops-box');
+});
+
+test('a member cannot start a new session under a name another member holds', async () => {
+  // A later audit: `start` is new work and never asked who held its name. On
+  // a box acting for both, a member's start of another member's stopped
+  // session reused its workspace and Claude config volumes on its owner's
+  // account, and moved it to the starter, who then had its pinned verbs.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {any[]} */
+  const delivered = [];
+  await admit(core, 'ops-box', {
+    send: (/** @type {any} */ intent) => {
+      delivered.push(intent.params?.name);
+      queueMicrotask(() => core.onHostMessage('ops-box', { kind: 'reply', id: intent.id, ok: true, text: 'Started' }));
+    },
+  });
+  core.registry.recordHealth('ops-box', {
+    hostId: 'ops-box', hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], claudeAccounts: 2,
+    sessions: [
+      { name: 'bjob', status: 'stopped', createdBy: 'fleet:b@example.com' },
+      { name: 'cli', status: 'stopped', createdBy: null },
+    ],
+  });
+  const start = (/** @type {string} */ name, /** @type {string} */ email) =>
+    core.dispatch({ verb: 'start', params: { name }, actor: email, requester: { email, admin: false } });
+
+  const taken = await start('bjob', 'a@example.com');
+  assert.equal(taken.error?.code, 'name_unavailable', taken.text);
+  // The same words for an unattributed session, so the refusal says nothing
+  // about whose the name is.
+  const fleets = await start('cli', 'a@example.com');
+  assert.equal(fleets.text, taken.text.replace('bjob', 'cli'));
+  assert.deepEqual(delivered, [], 'a start under somebody else’s name reached the box');
+
+  // A free name, and the owner's own name, still go to the box, which says
+  // to resume a stopped session it already has.
+  assert.equal((await start('fresh', 'a@example.com')).ok, true);
+  assert.equal((await start('bjob', 'b@example.com')).ok, true);
+  assert.deepEqual(delivered, ['fresh', 'bjob']);
 });
