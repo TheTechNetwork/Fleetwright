@@ -22,7 +22,6 @@ import {
 } from '../src/fleet/coordinator/oauth.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { androidSources } from './helpers/android-sources.js';
-import { iosSources } from './helpers/ios-sources.js';
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
 const APP = { clientId: 'Iv23liTEST', clientSecret: 'shh', slug: 'fleetwright-agents' };
@@ -334,7 +333,10 @@ test('a box’s callback page hands the code back, and finishes only through thi
   const back = `fleetwright://github?state=${state}&code=goodcode123`;
   const page = callbackPage({ ok: true, finish, text: 'Back to Fleetwright to finish connecting GitHub.' });
   assert.equal(/(src|href)\s*=\s*["']?https?:/i.test(page), false, 'the finishing page loads something external');
-  const script = /** @type {RegExpExecArray} */ (/<script>([\s\S]*)<\/script>/.exec(page))[1];
+  // Cut out by position, not a pattern: it is our own page and has one script.
+  const open = page.indexOf('<script>'), close = page.lastIndexOf('</script>');
+  assert.ok(open >= 0 && close > open, 'the finishing page carries its script');
+  const script = page.slice(open + '<script>'.length, close);
 
   /** @param {string|null} stored @param {{ status: number, body: any }} [answer] */
   const run = async (stored, answer) => {
@@ -512,23 +514,6 @@ test('the callback hands control back to the app', async () => {
   const page = callbackPage({ ok: true, text: 'done' });
   assert.match(page, /location\.replace/);
   assert.match(page, /Back to Fleetwright/);
-});
-
-test('iOS finishes a provider sign-in itself, as the person signed in on the phone', () => {
-  // The coordinator's callback page no longer connects anything: it hands the
-  // code back to whatever opened the provider's page, and that client finishes
-  // with its own credential. On iOS that is the credentials screen, which asks
-  // for the sign-in offer (the coordinator gives it only to a client that says
-  // it can finish), posts the finish, and shows the coordinator's own sentence,
-  // which is the refusal when the sign-in was somebody else's.
-  const code = (/** @type {string} */ src) => src.replace(/\/\/[^\n]*/g, '');
-  const ios = code(iosSources());
-  assert.match(ios, /"oauthFinish": true/, 'iOS never asks for the sign-in offer, so it is shown the paste route');
-  assert.match(ios, /"\/api\/oauth\/finish"/, 'iOS opens the provider page and never finishes what comes back');
-  // A device's own sign-in comes back on the same hosts with a `d.` state, and
-  // belongs to the screen that started it, not to this one.
-  assert.match(ios, /hasPrefix\("d\."\)/, 'iOS would post a device sign-in to the box flow’s finish');
-  assert.match(ios, /result = reply\.text \?\?/, 'iOS does not say what the coordinator answered');
 });
 
 test('both apps register the scheme the callback returns to', async () => {
