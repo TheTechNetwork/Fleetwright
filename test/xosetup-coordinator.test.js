@@ -162,7 +162,7 @@ test('a job is only its owner’s, and a stranger hears the same as for a job th
 
 test('progress becomes a Live Activity update with numbers only, and an Android notification', async () => {
   const { core, sent, activities } = fleet(['deb14'], machine);
-  await core.registerDevice({ platform: 'ios', token: 'i'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.registerDevice({ platform: 'ios', token: 'f'.repeat(64), actor: `fleet:${admin.email}` });
   await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
   await core.dispatch(begin(admin));
 
@@ -203,7 +203,7 @@ test('a policy job building the edge router reaches the Lock Screen as a change,
   // OPNsense download takes minutes. The first version dropped every policy
   // report, because `apply` is not one of onboarding's steps.
   const { core, sent, activities, clock } = fleet(['deb14'], machine);
-  await core.registerDevice({ platform: 'ios', token: 'i'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.registerDevice({ platform: 'ios', token: 'f'.repeat(64), actor: `fleet:${admin.email}` });
   await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
   await core.dispatch(begin(admin));
   core.registerSetupActivity(admin, { job: JOB, token: 'c0ffee'.repeat(12) });

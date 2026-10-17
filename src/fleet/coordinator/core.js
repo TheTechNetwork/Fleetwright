@@ -158,6 +158,31 @@ const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
  */
 const MAX_PUSH_TOKEN = 512;
 const MAX_DEVICES = 150;
+
+/**
+ * A push token in the one spelling its provider issues, or null for anything
+ * that is not one.
+ *
+ * Rows are keyed by the token and ownership is decided on the key, so two
+ * spellings of one delivery address were two rows with two owners. The APNs
+ * sender puts the token in a URL path, where `zz/../<token>` loses its dot
+ * segments and `<token>#zz` its fragment: both were accepted as new rows, and
+ * a member who learned a colleague's token could send that colleague's phone
+ * their own notifications past the not_yours check in registerDevice. An APNs
+ * token is bytes written as hex, kept in the lower case Fleet.swift writes, so
+ * the same bytes in capitals are the same row. FCM's registration tokens and
+ * installation IDs are both base64url plus the colon that separates a
+ * registration token's parts.
+ * Anything else could be a path, a query or a second token, and is refused.
+ *
+ * @param {string} platform @param {unknown} token
+ */
+function canonicalPushToken(platform, token) {
+  if (typeof token !== 'string' || token.length > MAX_PUSH_TOKEN) return null;
+  if (platform === 'ios') return /^[0-9a-fA-F]{64,}$/.test(token) ? token.toLowerCase() : null;
+  return /^[A-Za-z0-9_:-]{8,}$/.test(token) ? token : null;
+}
+
 /** How often one enrolled host's refused connections reach the ring (recordRefusal). */
 export const REFUSAL_EVERY_MS = 10 * 60_000;
 /**
@@ -1619,14 +1644,23 @@ export class CoordinatorCore {
    * say so is while somebody is looking at a settings screen — not silently,
    * hours later, when a session needs an answer.
    *
-   * @param {{ platform: string, token: string, actor?: string, clientId?: string, pushKey?: string }} reg
+   * `requester` is who is asking, as the route knows them (the same object
+   * testPush and unregisterDevice take); `null` is the admin token. A caller
+   * that names only `clientId` is that credential and nothing more.
+   *
+   * @param {{ platform: string, token: string, actor?: string, clientId?: string, pushKey?: string,
+   *   requester?: { id?: string, email?: string, admin?: boolean } | null }} reg
    */
-  async registerDevice({ platform, token, actor, clientId, pushKey }) {
+  async registerDevice({ platform, token: given, actor, clientId, pushKey, requester }) {
     if (!['ios', 'android', 'web'].includes(platform)) {
       return { ok: false, error: `unknown platform ${JSON.stringify(platform)}` };
     }
-    if (typeof token !== 'string' || token.length < 8 || token.length > MAX_PUSH_TOKEN) {
-      return { ok: false, error: 'a push token is required' };
+    if (typeof given !== 'string' || !given) return { ok: false, error: 'a push token is required' };
+    // THE KEY IS THE CANONICAL TOKEN, never the string as sent — see
+    // canonicalPushToken for the alias that got past the check below.
+    const token = canonicalPushToken(platform, given);
+    if (!token) {
+      return { ok: false, error: `that is not ${platform === 'ios' ? 'an APNs device token' : 'an FCM token'}` };
     }
     if (pushKey !== undefined && pushKey !== null && pushKey !== '') {
       const checked = await checkPublicKey(pushKey);
@@ -1641,7 +1675,25 @@ export class CoordinatorCore {
     // admin token has no credential and may re-register anything — and when
     // it does, the row keeps the credential it had, so it stays revocable
     // rather than becoming the unrevocable admin row the same issue names.
-    if (existing?.clientId && clientId && existing.clientId !== clientId) {
+    //
+    // DECIDED BY deviceReachableBy, the rule testPush and unregisterDevice
+    // ask. This had a weaker one of its own that asked only whether the row
+    // HAD a credential, so a row the admin token made, which those two refuse
+    // to a member, was any member's to re-key: the operator's phone stopped
+    // getting the operator's notifications, and went quiet for good when that
+    // member was revoked. The same rule also lets a person's new credential
+    // take over their own phone's row, which a phone that signed in again and
+    // kept its token was refused before.
+    //
+    // An admin credential does not get its reach-everything here. Removing a
+    // member's phone is what the admin seat is for; re-keying it to the admin
+    // would send that phone every session in the fleet. So an admin claims
+    // what anyone may, plus the rows with no credential, which are the
+    // admin's. A row from before credentials that names nobody is refused to
+    // the member whose phone it is, and an admin removes it once: nothing here
+    // can tell it from the operator's own, which is the row this protects.
+    const asker = requester !== undefined ? requester : clientId ? { id: clientId } : null;
+    if (existing && asker && !this.deviceReachableBy(existing, existing.clientId ? { ...asker, admin: false } : asker)) {
       return { ok: false, error: 'that push token is registered to another device', code: 'not_yours' };
     }
     const owner = clientId ?? existing?.clientId;
