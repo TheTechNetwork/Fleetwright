@@ -61,6 +61,28 @@ const STATE_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 200;
 
 /**
+ * How many flows one person may have waiting in one provider's store.
+ *
+ * PER PERSON, because the store is the whole fleet's. It used to have only
+ * the aggregate bound above, evicting the oldest entry whoever's it was, and
+ * every connect reply with a catalogue minted a state — so one member with a
+ * box that answers `connect` sent two hundred of them and every other
+ * person's sign-in, half-way through GitHub's consent page, came back
+ * "expired". Now a person's new flow makes room by retiring their OWN oldest,
+ * and when the store is full of other people's live flows the new one is
+ * refused (no offer; the paste route still works) rather than evicting theirs.
+ *
+ * NOT ONE, though one would be the tidy number. The screen a flow starts on
+ * asks for the catalogue again when the app comes back to the front — Android
+ * reloads on resume, which is the same moment the provider hands the code
+ * back — and with a single slot that reload would replace the state the
+ * person was in the middle of a moment before they finish with it. A few
+ * slots keep the flow they started alive through their own refreshes and
+ * still bound what one person can hold to a rounding error of the whole.
+ */
+const MAX_PENDING_PER_PERSON = 4;
+
+/**
  * Whose a flow is, as one comparable string. The admin token's flows carry no
  * email and share the empty key, which no signed-in person can have.
  * @param {string|null|undefined} email
@@ -108,16 +130,20 @@ export class PendingAuthorizations {
 
   /**
    * @param {{ state: string, hostId: string, email: string|null, pkce?: boolean, relayed?: boolean }} flow
+   * @returns {string|null} the state, or null when the store is full of other
+   *   people's live flows and this one was not kept — the caller makes no offer
    */
   mint({ state, hostId, email, pkce = false, relayed = false }) {
     this.sweep();
-    // Oldest first, so a flood of abandoned flows cannot evict a live one that
-    // somebody is in the middle of.
-    while (this.pending.size >= MAX_PENDING) {
-      const oldest = this.pending.keys().next().value;
-      if (oldest === undefined) break;
-      this.pending.delete(oldest);
-    }
+    const who = whoseFlow(email);
+    // Their own oldest first, so a person's fresh attempt displaces only their
+    // stale ones. Map order is insertion order, which is oldest first.
+    const theirs = [];
+    for (const [s, rec] of this.pending) if (whoseFlow(rec.email) === who) theirs.push(s);
+    while (theirs.length >= MAX_PENDING_PER_PERSON) this.pending.delete(/** @type {string} */ (theirs.shift()));
+    // NEVER SOMEBODY ELSE'S. Refusing costs this person the sign-in offer on
+    // one reply; evicting would cost another person the flow they are in.
+    if (this.pending.size >= MAX_PENDING) return null;
     // `pkce`: the host offered a challenge, so the code goes BACK TO IT to be
     // exchanged rather than being exchanged here. See `exchange` in
     // src/fleet/protocol/intents.js.

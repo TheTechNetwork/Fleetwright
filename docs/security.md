@@ -894,7 +894,9 @@ connected under the member's name, on a box the member enrolled. What remains:
 on Android a custom scheme can be claimed by another installed app, so an app
 that has taken `fleetwright://` on the victim's phone and is signed in as the
 person who started the flow could finish it. iOS hands the redirect only to the
-session that opened it, and `/me` never lets the code leave the origin.
+session that opened it, and `/me` never lets the code leave the origin. Each
+person also holds a bounded share of the pending flows, so another member's
+connects cannot evict a sign-in somebody is in the middle of.
 *Falsify:* `PendingAuthorizations.redeem` takes the requester and refuses a
 mismatch; `githubCallback`, `relayedGithubCallback` and `cloudflareCallback`
 in `core.js` dispatch nothing; `test/fleet-do.test.js` forwards a link through

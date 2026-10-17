@@ -63,15 +63,31 @@ test('a state expires, and an unknown one is refused the same way', () => {
   // telling them whether a state exists.
 });
 
-test('a flood of abandoned flows cannot evict a live one mid-authorization', () => {
+test('a person’s new flow retires their own oldest, and a store full of other people’s refuses', () => {
+  // The store is the whole fleet's. It evicted its oldest entry whoever's it
+  // was, so one member's connects pushed out everybody else's live sign-ins
+  // (the regression is in fleet-do.test.js, through the routes). These are the
+  // two rules that replaced it, which that test cannot reach cheaply.
   const p = new PendingAuthorizations();
-  p.mint({ state: 'mine', hostId: 'box', email: 'a@b.com' });
-  for (let i = 0; i < 500; i++) p.mint({ state: `junk${i}`, hostId: 'box', email: null });
-  // Oldest-first eviction means the earliest flow goes first, which is the
-  // honest trade: bounded memory, and the loser is the oldest rather than a
-  // random one. Pinned so a change to LIFO is a visible decision.
-  assert.equal(p.redeem('mine', { email: 'a@b.com', admin: false }), null);
-  assert.ok(p.pending.size <= 200);
+  for (let i = 0; i < 10; i++) p.mint({ state: `mine${i}`, hostId: 'box', email: 'a@b.com' });
+  assert.equal(p.isPending('mine0'), false, 'a person’s own oldest makes room for their next');
+  assert.equal(p.isPending('mine9'), true);
+  assert.ok(p.pending.size < 10, 'one person holds a bounded share');
+
+  // Two hundred different people mid-flow: the next one is refused, and none
+  // of theirs is touched.
+  const full = new PendingAuthorizations();
+  for (let i = 0; i < 200; i++) full.mint({ state: `s${i}`, hostId: 'box', email: `p${i}@b.com` });
+  assert.equal(full.mint({ state: 'late', hostId: 'box', email: 'late@b.com' }), null);
+  assert.equal(full.isPending('s0'), true, 'somebody else’s live flow was evicted');
+  assert.equal(full.isPending('late'), false);
+
+  // And a refused mint is no offer: an authorize URL whose state was not kept
+  // would end on "expired". The paste route comes back untouched.
+  const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
+  for (let i = 0; i < 200; i++) core.pendingGithub.mint({ state: `s${i}`, hostId: 'box', email: `p${i}@b.com` });
+  const reply = { ok: true, connections: { catalogue: [{ provider: 'github', url: 'https://github.com/settings/tokens/new' }], connected: [] } };
+  assert.deepEqual(core.offerOauth(reply, 'box', 'late@b.com', 'https://fleet.example'), reply);
 });
 
 test('the authorize URL names its own redirect', () => {

@@ -563,6 +563,29 @@ test('a forwarded GitHub or Cloudflare link connects nothing for the person who 
   assert.equal((await call(f, '/api/oauth/finish', 'POST', { provider: 'github', code: 'MALLORYCODE1', state: states.github }, mallory)).status, 400);
 });
 
+test('another member’s connects cannot push out a sign-in somebody is half-way through', async (t) => {
+  // Every connect reply with a catalogue minted a state into one store per
+  // provider, shared by the fleet and capped at two hundred, oldest out
+  // whoever's it was. A member with a box that answers connect sent two
+  // hundred and every other person's in-progress GitHub and Cloudflare
+  // sign-in came back "expired".
+  const { f, as, stored, connect } = await providerFleet(t);
+  const mallory = await as('mallory@example.test');
+  const victim = await as('victim@example.test');
+  const hers = await connect(victim, 'ops-box');
+  for (let i = 0; i < 1000; i++) {
+    await call(f, '/api/intent', 'POST', { verb: 'connect', params: {}, host: 'mallory-box', oauthFinish: true }, mallory);
+  }
+  for (const provider of ['github', 'cloudflare']) {
+    const r = await call(f, '/api/oauth/finish', 'POST', { provider, code: 'VICTIMCODE123', state: hers[provider] }, victim);
+    assert.equal(r.status, 200, `${provider}: ${(await r.json()).text}`);
+  }
+  assert.deepEqual(
+    stored.filter((x) => x.verb === 'link').map((x) => [x.hostId, x.actor]),
+    [['ops-box', 'victim@example.test'], ['ops-box', 'victim@example.test']],
+  );
+});
+
 test('an enrolled host cannot erase, outweigh or impersonate the fleet’s own records', async () => {
   // Host event frames went into the one 200-entry ring the coordinator's
   // audit records live in, with no share per host, no cap on `name` or

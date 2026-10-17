@@ -2510,8 +2510,10 @@ export class CoordinatorCore {
       const url = relayed
         ? relayAuthorizeUrl({ relay: relayed.url, fleet: relayed.fleet, state })
         : authorizeUrl({ clientId, origin, state, codeChallenge });
-      if (url) {
-        this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge), ...(relayed ? { relayed: true } : {}) });
+      // ONLY WITH A STATE KEPT. A store full of other people's live flows
+      // refuses the mint rather than evicting theirs, and an authorize URL
+      // whose state was never kept is a page that ends in "expired".
+      if (url && this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge), ...(relayed ? { relayed: true } : {}) })) {
         offers.github = {
           url,
           hint:
@@ -2537,8 +2539,7 @@ export class CoordinatorCore {
         scopes: this.cloudflareOauth.scopes,
         codeChallenge,
       });
-      if (url) {
-        this.pendingCloudflare.mint({ state, hostId, email, pkce: Boolean(codeChallenge) });
+      if (url && this.pendingCloudflare.mint({ state, hostId, email, pkce: Boolean(codeChallenge) })) {
         offers.cloudflare = {
           url,
           hint:
