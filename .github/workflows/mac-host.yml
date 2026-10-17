@@ -72,7 +72,7 @@ jobs:
         run: |
           brew untap aws/tap >/dev/null 2>&1 || true
           # renovate: datasource=npm depName=@anthropic-ai/claude-code
-          npm install -g @anthropic-ai/claude-code@2.1.296
+          npm install -g @anthropic-ai/claude-code@2.1.299
           claude --version
 
       - name: Install, the way the one-liner would with nobody watching
