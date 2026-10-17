@@ -167,11 +167,23 @@ export function Ledger({ events }) {
   );
 }
 
-/** The page. `egg` is one quiet line app.jsx sets; konami.js and late.js say when. */
+/**
+ * The page. `egg` is one quiet line app.jsx sets; konami.js and late.js say
+ * when. It goes under the assurance panel and above the panes: that is where
+ * the eye is when a code is typed or a page is opened at three in the morning.
+ * It sat under the panes, which on a phone is under three stacked columns and
+ * on a desktop is under the fold as soon as the fleet fills the window, so it
+ * was said to nobody. Never inside the panel: konami.js says why.
+ */
 export function Console({ snap, onAnswer, egg }) {
   return (
     <div class={`console ${snap?.reachable === false ? 'stale' : ''}`}>
       <Confidence snap={snap} />
+      {egg ? (
+        <p class="egg" role="status">
+          {egg}
+        </p>
+      ) : null}
       <div class="panes">
         <aside class="rail">
           <h2>Machines</h2>
@@ -191,11 +203,6 @@ export function Console({ snap, onAnswer, egg }) {
           <Ledger events={snap?.events} />
         </aside>
       </div>
-      {egg ? (
-        <p class="egg" role="status">
-          {egg}
-        </p>
-      ) : null}
     </div>
   );
 }
