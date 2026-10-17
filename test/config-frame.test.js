@@ -193,3 +193,52 @@ test('a removed admin’s boxes stop being the fleet’s, connected or reconnect
   assert.equal(/** @type {any} */ (await core.issueClient(boss, 'new phone')).client.admin, true);
   assert.deepEqual(await linked(), ['boss-box', 'nina-box']);
 });
+
+test('a removed admin’s box is asked for back what it held for everyone else, and the fleet says so', async () => {
+  // FOUND BY THE NEXT AUDIT: the test above took the tier away and nothing
+  // the tier had sent came back. Every member's GitHub and Cloudflare link
+  // had fanned out to the box and their sessions ran there under their own
+  // Claude sign-ins. Once it acted for the removed admin alone, a member's
+  // unlink left it out, its next health frame filed their session under that
+  // admin, and their stop and peek answered that no such session existed,
+  // on a machine somebody no longer in the fleet has root on.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  const boss = /** @type {any} */ (await core.issueClient({ email: 'boss@example.test' }, 'phone'));
+  await core.issueClient({ email: 'nina@example.test' }, 'phone');
+  await admit(core, 'boss-box', { enrolledBy: 'boss@example.test' });
+  await admit(core, 'nina-box', { enrolledBy: 'nina@example.test' });
+  core.registry.recordHealth('boss-box', {
+    hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: 2, free: 3, labels: [],
+    sessions: [
+      { name: 'nina-job', status: 'running', createdBy: 'fleet:nina@example.test' },
+      { name: 'boss-job', status: 'running', createdBy: 'fleet:boss@example.test' },
+    ],
+  });
+  /** @type {string[]} */
+  const asked = [];
+  core.send = async (/** @type {any} */ host, /** @type {any} */ spec) => {
+    asked.push(`${host.hostId} ${spec.verb} ${spec.params.name ?? spec.params.provider} for ${spec.actor}`);
+    return { ok: true, text: 'done' };
+  };
+
+  core.revokeClient(boss.client.id);
+  assert.deepEqual(asked.sort(), [
+    'boss-box stop nina-job for nina@example.test',
+    'boss-box unlink claude for nina@example.test',
+    'boss-box unlink cloudflare for nina@example.test',
+    'boss-box unlink github for nina@example.test',
+  ], 'a member’s session and sign-ins were left on a box the fleet no longer runs');
+  const nina = { email: 'nina@example.test', admin: false };
+  const said = core.recentEvents(nina).find((/** @type {any} */ e) => e.event === 'host.demoted');
+  assert.equal(said?.hostId, 'boss-box', 'the members whose tokens it held were not told');
+  assert.match(said.text, /client secrets/);
+
+  // And from now on the box is the removed admin's alone: a member's verbs on
+  // what it reported do not reach it, before its next frame as after.
+  asked.length = 0;
+  const stop = await core.dispatch({ verb: 'stop', params: { name: 'nina-job' }, actor: nina.email, requester: nina });
+  assert.equal(stop.error?.code, 'unknown_session');
+  assert.deepEqual(asked, [], 'a member’s stop reached a box that no longer acts for them');
+});
