@@ -1030,3 +1030,39 @@ test('a machine that never reports is still refused, after the wait and not fore
   assert.ok(Date.now() - at >= 250, 'it waited for a report first');
   assert.ok(Date.now() - at < 2_000, 'and not much longer than the wait');
 });
+
+test('a reply is taken only from the host the intent was sent to', async () => {
+  // FOUND BY AN AUDIT: a waiter was found by id alone, and /api/intent lets a
+  // caller choose the id. So a member started work on box-y under an id their
+  // own box-x already knew, box-x answered first, and the sessions in its
+  // reply were filed under box-y: b's session there read as a's, and a's peek
+  // of it was let through until box-y's next health frame.
+  const core = new CoordinatorCore({ intentTimeoutMs: 2_000, logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  /** @type {Record<string, any[]>} */
+  const sent = { 'box-x': [], 'box-y': [] };
+  for (const id of /** @type {const} */ (['box-x', 'box-y'])) {
+    core.hostConnected(id, (/** @type {any} */ msg) => { sent[id].push(msg); });
+  }
+  const bjob = { name: 'bjob', status: 'running', createdBy: 'fleet:b@example.test' };
+  await core.onHostMessage('box-y', { v: PROTOCOL_VERSION, kind: 'health', hostId: 'box-y', health: health({ hostId: 'box-y', sessions: [bjob] }) });
+  await core.onHostMessage('box-x', { v: PROTOCOL_VERSION, kind: 'health', hostId: 'box-x', health: health({ hostId: 'box-x' }) });
+  const a = { email: 'a@example.test', admin: false };
+
+  const started = core.dispatch({ verb: 'start', params: { name: 'ajob' }, id: 'evil-0001', actor: a.email, requester: a, preferHost: 'box-y' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(sent['box-y'].find((m) => m.kind === 'intent')?.id, 'evil-0001');
+  await core.onHostMessage('box-x', {
+    v: PROTOCOL_VERSION, kind: 'reply', id: 'evil-0001', ok: true, text: 'Started ajob',
+    sessions: [{ name: 'bjob', status: 'running', createdBy: 'fleet:a@example.test' }],
+  });
+  // Still waiting for box-y, which answers for itself.
+  await core.onHostMessage('box-y', {
+    v: PROTOCOL_VERSION, kind: 'reply', id: 'evil-0001', ok: true, text: 'Started ajob',
+    sessions: [{ name: 'ajob', status: 'running', createdBy: 'fleet:a@example.test' }],
+  });
+  const r = await started;
+  assert.equal(r.hostId, 'box-y', 'answered by the host it was sent to');
+  assert.equal(core.registry.findSessions('bjob')[0]?.createdBy, 'fleet:b@example.test', "another host's reply rewrote who owns a session here");
+  const peek = await core.dispatch({ verb: 'peek', params: { name: 'bjob' }, actor: a.email, requester: a });
+  assert.equal(peek.error?.code, 'unknown_session');
+});

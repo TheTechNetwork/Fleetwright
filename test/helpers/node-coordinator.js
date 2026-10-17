@@ -1446,6 +1446,7 @@ export class Coordinator {
         token: String(body?.token || ''),
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
         clientId: client?.id,
+        requester: client,
         // The phone's public key, so its notifications are unreadable to Apple,
         // Google and anything between. Absent from an app that predates this
         // and the sender falls back — see docs/push-encryption.md.

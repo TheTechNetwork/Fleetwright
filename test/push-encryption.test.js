@@ -163,9 +163,9 @@ test('a reinstall does not inherit the old key', async () => {
   const core = new CoordinatorCore({ log: { info() {}, warn() {}, error() {} } });
   const alice = await phone();
 
-  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(40), clientId: 'phone-1', pushKey: alice.pushKey });
-  assert.equal(core.devices.get('a'.repeat(40)).pushKey, alice.pushKey);
+  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: 'phone-1', pushKey: alice.pushKey });
+  assert.equal(core.devices.get('a'.repeat(64)).pushKey, alice.pushKey);
 
-  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(40), clientId: 'phone-1' });
-  assert.equal(core.devices.get('a'.repeat(40)).pushKey, undefined, 'the stale key was inherited');
+  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: 'phone-1' });
+  assert.equal(core.devices.get('a'.repeat(64)).pushKey, undefined, 'the stale key was inherited');
 });

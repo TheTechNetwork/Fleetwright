@@ -66,3 +66,59 @@ test('an unowned ephemeral host stays visible to everyone', () => {
   const r = place(registry(hosts), START, { requester: { email: 'me@example.com' } });
   assert.equal(r.code, 'only_ephemeral_hosts');
 });
+
+test('a box another member enrolled is not spare capacity either, named or not', async () => {
+  // FOUND BY AN AUDIT: any member can mint a host pin, and new work was ranked
+  // by the free slots each box reported, so alice's box, reporting the most
+  // room, took bob's unnamed start, his task and his archive's name with it,
+  // onto a machine where she has root. Naming her box worked too. Her box acts
+  // for her alone (hosts.js actsFor), as it already does for credentials.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { PROTOCOL_VERSION } = await import('../src/fleet/protocol/intents.js');
+  const { admit, makeAdmin } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  await makeAdmin(core, 'admin@example.test');
+  await admit(core, 'ops-box');
+  await admit(core, 'alice-box', { enrolledBy: 'alice@example.test' });
+  const report = (/** @type {string} */ hostId, /** @type {number} */ free, claudeAccounts = 1) => core.onHostMessage(hostId, {
+    kind: 'health',
+    health: { hostId, protocol: PROTOCOL_VERSION, maxSessions: 4, running: 4 - free, free, sessions: [], loadavg: [0, 0, 0], loggedIn: true, claudeAccounts, hub: { reachable: true } },
+  });
+  await report('ops-box', 1);
+  await report('alice-box', 4);
+  /** @type {string[]} */
+  const sent = [];
+  core.send = async (/** @type {any} */ host) => {
+    sent.push(host.hostId);
+    return { ok: true, text: 'started' };
+  };
+  const start = async (/** @type {string} */ email, /** @type {Record<string, any>} */ extra = {}) => {
+    sent.length = 0;
+    const reply = await core.dispatch({
+      verb: 'start',
+      params: { name: 'job', task: 'a job' },
+      actor: email,
+      requester: { email, admin: email === 'admin@example.test' },
+      ...extra,
+    });
+    return { reply, sent: [...sent] };
+  };
+
+  assert.deepEqual((await start('bob@example.test')).sent, ['ops-box'], 'the most room in the fleet is not his to use');
+  const named = await start('bob@example.test', { preferHost: 'alice-box' });
+  assert.equal(named.reply.error?.code, 'host_unavailable');
+  assert.deepEqual(named.sent, []);
+  // An admin is held to it like anybody, as for a credential.
+  assert.deepEqual((await start('admin@example.test')).sent, ['ops-box']);
+  // And it is still hers.
+  assert.deepEqual((await start('alice@example.test')).sent, ['alice-box']);
+
+  // With the fleet's own box unable to start anything, nothing that acts for
+  // him is left, and he is told that, not shown hers or told about runners.
+  await report('ops-box', 1, 0);
+  const none = await start('bob@example.test');
+  assert.equal(none.reply.error?.code, 'no_hosts');
+  assert.match(String(none.reply.text), /No machine that acts for you/);
+  assert.doesNotMatch(String(none.reply.text), /alice-box|temporary/);
+  assert.deepEqual(none.sent, []);
+});

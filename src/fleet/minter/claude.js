@@ -46,7 +46,7 @@
 import { JWT_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE, DEPOSIT_AAD, atRestAad, claudeBindingFor, seal, open } from '../seal.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
-import { runnerJobProblem, githubUser } from '../../core/repo-tokens.js';
+import { runnerJobProblem, runnerJobRepoProblem, githubUser } from '../../core/repo-tokens.js';
 import { deviceSignedIn } from './github.js';
 
 /** How old a deposit may be when it arrives. Minutes, because a person made it just now. */
@@ -217,18 +217,10 @@ export async function answerLogin(ask, config) {
   if (notRunner) return refuse('not_a_runner', notRunner);
   if (!claims.actorId) return refuse('not_the_asker', 'The job token does not say which GitHub account started the runner.');
   // WHICH REPOSITORY THE JOB RAN IN, because the login goes to that job's
-  // code. A runner workflow is known by its file name, so without this a
-  // `runner-linux.yml` in anybody's repository that the person could be got to
-  // dispatch would be handed their subscription. Theirs, or one the fleet
-  // mints for: the two places a runner repository legitimately is.
-  const ownRepo = claims.repositoryOwnerId !== '' && claims.repositoryOwnerId === claims.actorId;
-  const fleetRepo = config.owners.some((o) => o.toLowerCase() === claims.repositoryOwner.toLowerCase());
-  if (!ownRepo && !fleetRepo) {
-    return refuse(
-      'repo_not_allowed',
-      `That runner ran in ${claims.repository}, which is neither ${claims.actor}’s own nor one this fleet mints for, so it is not given a Claude login.`,
-    );
-  }
+  // code: otherwise a `runner-linux.yml` in anybody's repository that the
+  // person could be got to dispatch would be handed their subscription.
+  const elsewhere = runnerJobRepoProblem(claims, config.owners, 'a Claude login');
+  if (elsewhere) return refuse('repo_not_allowed', elsewhere);
 
   const held = await /** @type {LoginStore} */ (config.logins).get(claims.actorId);
   if (!held || held.forgotten || !held.sealed) {
