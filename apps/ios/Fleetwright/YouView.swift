@@ -29,6 +29,8 @@ struct YouView: View {
     /// How many roles this person has linked a repository for, once the
     /// fleet has said; nil until then, and the row is not drawn.
     @State private var linkedCount: Int?
+    // Eggs.swift: taps on the build line. Not saved, so leaving You hides it again.
+    @State private var buildTaps = 0
 
     private var signedIn: Bool { !settings.credential.isEmpty }
     private var inDemo: Bool { Demo.isActive(settings.coordinatorURL) }
@@ -217,7 +219,18 @@ struct YouView: View {
             // every TestFlight build of a release, so "it is still broken" and
             // "you do not have the fix yet" are the same sentence when nobody
             // can name the build they are on.
-            Text("Sign out to point this app at a different fleet.\n\nFleetwright \(Bundle.main.shortVersion) (build \(Bundle.main.buildNumber))")
+            VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+                Text("Sign out to point this app at a different fleet.\n\nFleetwright \(Bundle.main.shortVersion) (build \(Bundle.main.buildNumber))")
+                    // A gesture rather than a Button, so VoiceOver does not
+                    // announce a control that does nothing anybody needs.
+                    .onTapGesture { buildTaps += 1 }
+                if let line = Eggs.buildLine(taps: buildTaps) {
+                    Text(line)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .transition(.opacity)
+                }
+            }
+            .animation(Design.Motion.change, value: Eggs.buildLine(taps: buildTaps))
         }
     }
 
