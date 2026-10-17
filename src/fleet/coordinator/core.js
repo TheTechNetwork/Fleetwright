@@ -22,7 +22,7 @@ import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
-import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl } from './oauth.js';
+import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, handBack } from './oauth.js';
 import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
@@ -2694,6 +2694,14 @@ export class CoordinatorCore {
    * is in docs/connectors.md — and Cloudflare is now the second provider
    * through the same flow rather than a second design.
    *
+   * ONLY FOR A CLIENT THAT CAN FINISH ONE. Both routes call this when the
+   * request says `oauthFinish: true`, which the apps' credentials screens and
+   * `/me` send: a flow now ends in POST /api/oauth/finish from whatever opened
+   * the provider's page (githubCallback), and a client that predates that
+   * would open a page that never finishes. Without the flag the paste route is
+   * returned as the host sent it — and no state is minted, so the connect a
+   * screen sends just to read what is connected costs nothing in the stores.
+   *
    * @param {any} reply       a connect reply carrying `connections`
    * @param {string} hostId   where the flow must come back to
    * @param {string|null} email  whose credential this will be
@@ -2739,8 +2747,10 @@ export class CoordinatorCore {
       const url = relayed
         ? relayAuthorizeUrl({ relay: relayed.url, fleet: relayed.fleet, state })
         : authorizeUrl({ clientId, origin, state, codeChallenge });
-      if (url) {
-        this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge), ...(relayed ? { relayed: true } : {}) });
+      // ONLY WITH A STATE KEPT. A store full of other people's live flows
+      // refuses the mint rather than evicting theirs, and an authorize URL
+      // whose state was never kept is a page that ends in "expired".
+      if (url && this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge), ...(relayed ? { relayed: true } : {}) })) {
         offers.github = {
           url,
           hint:
@@ -2766,8 +2776,7 @@ export class CoordinatorCore {
         scopes: this.cloudflareOauth.scopes,
         codeChallenge,
       });
-      if (url) {
-        this.pendingCloudflare.mint({ state, hostId, email, pkce: Boolean(codeChallenge) });
+      if (url && this.pendingCloudflare.mint({ state, hostId, email, pkce: Boolean(codeChallenge) })) {
         offers.cloudflare = {
           url,
           hint:
@@ -2931,20 +2940,25 @@ export class CoordinatorCore {
   }
 
   /**
-   * Finish an authorization GitHub has redirected back to us.
+   * Where GitHub sends a browser back: hand the code on, and connect nothing.
    *
-   * Everything here is refusable and says why in a sentence a person reading a
-   * browser page can act on. The one thing it must never do is exchange a code
-   * for a flow it did not start — which is what `redeem` is for, and why it is
-   * the first thing that happens.
+   * THIS USED TO FINISH THE FLOW, and that was the hole. The request carries
+   * no fleet credential, so the redeemed state was taken as proof of who was
+   * on the other end — and it proves only who STARTED the flow. A member
+   * forwarded the github.com link from their own Connect; whoever authorized
+   * it had their token exchanged here and filed under that member, on a box
+   * the member could have enrolled themselves. Now this answers with a page
+   * that hands the code and state to whatever holds a credential — the app,
+   * or the `/me` page's own storage — and finishGithubAuthorization, behind
+   * the credential gate, finishes only for the person who started it.
    *
-   * @param {{ code?: unknown, state?: unknown, origin: string,
-   *   setupAction?: unknown, installationId?: unknown }} args
+   * The state is not looked up here, so nothing about it is spent or told:
+   * an unknown one gets the same page and is refused at the finish.
+   *
+   * @param {{ code?: unknown, state?: unknown, setupAction?: unknown }} args
    */
-  async finishGithubAuthorization({ code, state, origin, setupAction, installationId }) {
-    const clientId = this.githubApp?.clientId;
-    const clientSecret = this.githubApp?.clientSecret;
-    if (!clientId || !clientSecret) {
+  githubCallback({ code, state, setupAction }) {
+    if (!this.githubApp?.clientId || !this.githubApp?.clientSecret) {
       return { ok: false, text: 'This fleet has no GitHub App configured.' };
     }
     // A SIGN-IN A DEVICE STARTED, for the device's own use (starting a
@@ -2958,80 +2972,52 @@ export class CoordinatorCore {
         ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to GitHub.' }
         : { ok: false, text: 'GitHub did not send back a code to finish signing in with. Try again from the app.' };
     }
-    const flow = this.pendingGithub.redeem(state);
-    if (!flow) {
-      // TWO FLOWS ARRIVE AT THIS ONE URL, and only one of them was ours.
-      //
-      //   AUTHORIZATION — somebody tapped Connect in the app. We minted a
-      //     state, GitHub hands it back, and there is a person to attach the
-      //     token to.
-      //
-      //   INSTALLATION — somebody installed the App from GitHub's own page.
-      //     GitHub sends `installation_id` and `setup_action=install` and NO
-      //     state, because we did not start it.
-      //
-      // The second was being reported as "that sign-in link has expired or was
-      // already used", which is alarming and untrue: nothing expired, the
-      // install worked. A real report of it:
-      //
-      //   /oauth/github/callback?code=…&installation_id=159793900&setup_action=install
-      //
-      // NOT ATTRIBUTED TO WHOEVER LOADED THE PAGE. No state means no verified
-      // actor, and storing a token for the person who happens to be holding the
-      // URL is precisely the thing every other flow here refuses to do. So this
-      // says what happened and where to finish, and stores nothing.
-      if (setupAction) {
-        return {
-          ok: true,
-          installed: true,
-          text:
-            'The Fleetwright GitHub App is installed on your account. ' +
-            'To connect it to your Fleetwright sign-in, open the app and tap Connect under GitHub — ' +
-            'that step is what tells the fleet which account is yours.',
-        };
-      }
-      // Deliberately one message for unknown, expired and replayed. Telling a
-      // stranger which of those it was is telling them whether a state exists.
-      return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    // TWO FLOWS ARRIVE AT THIS ONE URL, and only one of them was ours.
+    //
+    //   AUTHORIZATION — somebody tapped Connect in the app. We minted a
+    //     state, GitHub hands it back, and there is a person to attach the
+    //     token to.
+    //
+    //   INSTALLATION — somebody installed the App from GitHub's own page.
+    //     GitHub sends `installation_id` and `setup_action=install` and NO
+    //     state, because we did not start it.
+    //
+    // The second was being reported as "that sign-in link has expired or was
+    // already used", which is alarming and untrue: nothing expired, the
+    // install worked. A real report of it:
+    //
+    //   /oauth/github/callback?code=…&installation_id=159793900&setup_action=install
+    //
+    // NOT ATTRIBUTED TO WHOEVER LOADED THE PAGE. No state means no verified
+    // actor, and storing a token for the person who happens to be holding the
+    // URL is precisely the thing every other flow here refuses to do. So this
+    // says what happened and where to finish, and stores nothing.
+    if (!state && setupAction) {
+      return {
+        ok: true,
+        installed: true,
+        text:
+          'The Fleetwright GitHub App is installed on your account. ' +
+          'To connect it to your Fleetwright sign-in, open the app and tap Connect under GitHub — ' +
+          'that step is what tells the fleet which account is yours.',
+      };
     }
-    if (typeof code !== 'string' || !code) {
-      return { ok: false, text: 'GitHub did not send an authorization code back.' };
-    }
-
-    if (flow.pkce) return this.#exchangeOnHost({ provider: 'github', flow, code, clientId, origin });
-
-    const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
-    if (!exchanged.ok) return { ok: false, text: exchanged.message };
-
-    return this.#storeAuthorizedToken({ provider: 'github', label: 'GitHub', flow, exchanged, clientId });
+    if (!state) return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    if (typeof code !== 'string' || !code) return { ok: false, text: 'GitHub did not send an authorization code back.' };
+    const finish = handBack({ provider: 'github', state, code });
+    if (!finish) return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    return { ok: true, finish, text: 'Back to Fleetwright to finish connecting GitHub. Nothing is connected until it is finished there, as you.' };
   }
 
   /**
-   * Finish a GitHub sign-in that went through the OAuth relay: the person
-   * arrives with this coordinator's own state and the token sealed to its key
-   * (src/fleet/relay/relay.js), or with one word for what went wrong there.
-   *
-   * THE STATE IS CHECKED TWICE, and both matter. Redeemed once, here, like
-   * every other flow, so a replayed URL is refused; and found again INSIDE the
-   * sealed token, because this coordinator's public key is public and anybody
-   * can seal something to it, but nobody can seal it for a state they never
-   * saw. A flow minted for the direct exchange is not finished this way.
-   *
-   * NOT RENEWABLE, and said so. Renewing a GitHub App token needs the client
-   * secret, which this coordinator does not have and its hosts are not given;
-   * renewing through the relay would show the relay the refresh token, which
-   * relay-terms.md does not allow. So the token lasts what GitHub gives it,
-   * and the person connects again after that.
+   * Where the OAuth relay sends a browser back with the token sealed to this
+   * coordinator: the GitHub callback above, for the relayed path. It hands the
+   * sealed token on and opens nothing, for the same reason.
    *
    * @param {{ state?: unknown, sealed?: unknown, error?: unknown }} args
    */
-  async finishRelayedGithubAuthorization({ state, sealed, error }) {
-    const clientId = this.githubApp?.clientId;
-    if (!this.oauthRelay || !clientId) return { ok: false, text: 'This fleet does not sign in to GitHub through the relay.' };
-    const flow = this.pendingGithub.redeem(state);
-    if (!flow || !flow.relayed) {
-      return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
-    }
+  relayedGithubCallback({ state, sealed, error }) {
+    if (!this.oauthRelay || !this.githubApp?.clientId) return { ok: false, text: 'This fleet does not sign in to GitHub through the relay.' };
     if (typeof error === 'string' && error) {
       // One word from the relay, mapped here, never echoed: the query is
       // something anybody can write.
@@ -3044,6 +3030,158 @@ export class CoordinatorCore {
       return { ok: false, text: words[error] ?? 'The sign-in did not finish. Start again from the app.' };
     }
     if (typeof sealed !== 'string' || !sealed) return { ok: false, text: 'The relay did not send back a sign-in to finish.' };
+    const finish = handBack({ provider: 'github', state, sealed });
+    if (!finish) return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    return { ok: true, finish, text: 'Back to Fleetwright to finish connecting GitHub. Nothing is connected until it is finished there, as you.' };
+  }
+
+  /**
+   * Where Cloudflare sends a browser back: the GitHub callback minus the
+   * installation branch, which is GitHub's alone.
+   *
+   * @param {{ code?: unknown, state?: unknown }} args
+   */
+  cloudflareCallback({ code, state }) {
+    if (!this.cloudflareOauth?.clientId || !this.cloudflareOauth?.clientSecret) {
+      return { ok: false, text: 'This fleet has no Cloudflare OAuth client configured.' };
+    }
+    // A DEVICE'S SIGN-IN, for its person's vault: the code goes back to the
+    // phone, which holds the verifier, and the minting Worker makes the
+    // exchange. The same branch GitHub's callback has.
+    if (DEVICE_STATE_RE.test(String(state ?? ''))) {
+      const back = deviceReturnUrl({ code, state, provider: 'cloudflare' });
+      return back
+        ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to Cloudflare.' }
+        : { ok: false, text: 'Cloudflare did not send back a code to finish signing in with. Try again from the app.' };
+    }
+    // A person who pressed Deny arrives here with `error=access_denied` and no
+    // code. The query's own words are NOT echoed — this page is reached by
+    // following a link, and its text must not be writable from the URL.
+    if (typeof code !== 'string' || !code) return { ok: false, text: 'Cloudflare did not send an authorization code back.' };
+    const finish = handBack({ provider: 'cloudflare', state, code });
+    if (!finish) return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    return { ok: true, finish, text: 'Back to Fleetwright to finish connecting Cloudflare. Nothing is connected until it is finished there, as you.' };
+  }
+
+  /**
+   * POST /api/oauth/finish: what the app, or the callback page on `/me`,
+   * sends with the code the provider handed back. Behind the credential gate,
+   * and `requester` is that credential's verified identity — the only proof
+   * of who is finishing that this flow has.
+   *
+   * One router for both coordinators' routes, which would otherwise each
+   * decide which of the three a body means.
+   *
+   * @param {{ provider?: unknown, code?: unknown, state?: unknown, sealed?: unknown, origin: string,
+   *   requester: { email?: string|null, admin?: boolean }|null }} args
+   */
+  finishAuthorization({ provider, code, state, sealed, origin, requester }) {
+    if (provider === 'cloudflare') return this.finishCloudflareAuthorization({ code, state, origin, requester });
+    if (provider === 'github') {
+      return sealed !== undefined && sealed !== null
+        ? this.finishRelayedGithubAuthorization({ state, sealed, requester })
+        : this.finishGithubAuthorization({ code, state, origin, requester });
+    }
+    return Promise.resolve({ ok: false, error: { code: 'bad_params' }, text: 'Which provider is this sign-in for? github or cloudflare.' });
+  }
+
+  /**
+   * Spend a flow for the person finishing it, or say why not.
+   *
+   * Two refusals with two sentences. Unknown, expired and used are one, as
+   * they always were. SOMEBODY ELSE'S is told apart, because the person
+   * reading it holds the state and a fleet credential — this is no oracle to
+   * a stranger — and the likeliest way to arrive with somebody else's state is
+   * a forwarded link, which they should hear about rather than retry.
+   *
+   * @param {PendingAuthorizations} store
+   * @param {unknown} state
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @returns {{ flow: { hostId: string, email: string|null, pkce: boolean, relayed: boolean }, refused?: undefined }
+   *   | { flow?: undefined, refused: { ok: false, error: { code: string }, text: string } }}
+   */
+  #redeemFor(store, state, requester) {
+    const flow = store.redeem(state, requester);
+    if (flow) return { flow };
+    if (store.isPending(state)) {
+      return {
+        refused: {
+          ok: false,
+          error: { code: 'not_yours' },
+          text:
+            'That sign-in was started from somebody else’s Fleetwright, so nothing was connected. ' +
+            'To connect your own account, start again from your app.',
+        },
+      };
+    }
+    return {
+      refused: { ok: false, error: { code: 'expired' }, text: 'That sign-in link has expired or was already used. Start again from the app.' },
+    };
+  }
+
+  /**
+   * Finish a GitHub authorization, for the person who started it.
+   *
+   * Everything here is refusable and says why in a sentence a person can act
+   * on. The one thing it must never do is exchange a code for a flow it did not
+   * start, or for somebody other than the person who started it — which is
+   * what `redeem` is for, and why it is the first thing that happens.
+   *
+   * @param {{ code?: unknown, state?: unknown, origin: string,
+   *   requester: { email?: string|null, admin?: boolean }|null }} args
+   */
+  async finishGithubAuthorization({ code, state, origin, requester }) {
+    const clientId = this.githubApp?.clientId;
+    const clientSecret = this.githubApp?.clientSecret;
+    if (!clientId || !clientSecret) {
+      return { ok: false, text: 'This fleet has no GitHub App configured.' };
+    }
+    // Checked before the state is spent: a finish with nothing to exchange is
+    // a client fault, and the person can still finish with the real one.
+    if (typeof code !== 'string' || !code) {
+      return { ok: false, text: 'GitHub did not send an authorization code back.' };
+    }
+    const { flow, refused } = this.#redeemFor(this.pendingGithub, state, requester);
+    if (!flow) return refused;
+
+    if (flow.pkce) return this.#exchangeOnHost({ provider: 'github', flow, code, clientId, origin });
+
+    const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
+    if (!exchanged.ok) return { ok: false, text: exchanged.message };
+
+    return this.#storeAuthorizedToken({ provider: 'github', label: 'GitHub', flow, exchanged, clientId });
+  }
+
+  /**
+   * Finish a GitHub sign-in that went through the OAuth relay: the person
+   * arrives with this coordinator's own state and the token sealed to its key
+   * (src/fleet/relay/relay.js), handed back by relayedGithubCallback.
+   *
+   * THE STATE IS CHECKED TWICE, and both matter. Redeemed once, here, for the
+   * person who started it, like every other flow, so a replay is refused; and
+   * found again INSIDE the sealed token, because this coordinator's public key
+   * is public and anybody can seal something to it, but nobody can seal it for
+   * a state they never saw. A flow minted for the direct exchange is not
+   * finished this way.
+   *
+   * NOT RENEWABLE, and said so. Renewing a GitHub App token needs the client
+   * secret, which this coordinator does not have and its hosts are not given;
+   * renewing through the relay would show the relay the refresh token, which
+   * relay-terms.md does not allow. So the token lasts what GitHub gives it,
+   * and the person connects again after that.
+   *
+   * @param {{ state?: unknown, sealed?: unknown,
+   *   requester: { email?: string|null, admin?: boolean }|null }} args
+   */
+  async finishRelayedGithubAuthorization({ state, sealed, requester }) {
+    const clientId = this.githubApp?.clientId;
+    if (!this.oauthRelay || !clientId) return { ok: false, text: 'This fleet does not sign in to GitHub through the relay.' };
+    if (typeof sealed !== 'string' || !sealed) return { ok: false, text: 'The relay did not send back a sign-in to finish.' };
+    const { flow, refused } = this.#redeemFor(this.pendingGithub, state, requester);
+    if (!flow) return refused;
+    if (!flow.relayed) {
+      return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    }
     let opened;
     try {
       const key = await crypto.subtle.importKey('jwk', this.oauthRelay.privateJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
@@ -3059,42 +3197,24 @@ export class CoordinatorCore {
   }
 
   /**
-   * Finish an authorization Cloudflare has redirected back to us.
+   * Finish a Cloudflare authorization, for the person who started it: the
+   * GitHub finish with Cloudflare's store, so a GitHub state cannot finish a
+   * Cloudflare flow or the reverse.
    *
-   * The GitHub flow minus the installation branch, which is GitHub's alone: a
-   * Cloudflare OAuth client has no install page, so everything arriving here
-   * either carries a state this coordinator minted or is refused.
-   *
-   * @param {{ code?: unknown, state?: unknown, origin: string }} args
+   * @param {{ code?: unknown, state?: unknown, origin: string,
+   *   requester: { email?: string|null, admin?: boolean }|null }} args
    */
-  async finishCloudflareAuthorization({ code, state, origin }) {
+  async finishCloudflareAuthorization({ code, state, origin, requester }) {
     const clientId = this.cloudflareOauth?.clientId;
     const clientSecret = this.cloudflareOauth?.clientSecret;
     if (!clientId || !clientSecret) {
       return { ok: false, text: 'This fleet has no Cloudflare OAuth client configured.' };
     }
-    // A DEVICE'S SIGN-IN, for its person's vault: the code goes back to the
-    // phone, which holds the verifier, and the minting Worker makes the
-    // exchange. The same branch GitHub's callback has.
-    if (DEVICE_STATE_RE.test(String(state ?? ''))) {
-      const back = deviceReturnUrl({ code, state, provider: 'cloudflare' });
-      return back
-        ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to Cloudflare.' }
-        : { ok: false, text: 'Cloudflare did not send back a code to finish signing in with. Try again from the app.' };
-    }
-    const flow = this.pendingCloudflare.redeem(state);
-    if (!flow) {
-      // Deliberately one message for unknown, expired and replayed — same as
-      // GitHub's, and for the same reason: telling a stranger which of those
-      // it was is telling them whether a state exists.
-      return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
-    }
-    // A person who pressed Deny arrives here with `error=access_denied` and no
-    // code. The query's own words are NOT echoed — this page is reached by
-    // following a link, and its text must not be writable from the URL.
     if (typeof code !== 'string' || !code) {
       return { ok: false, text: 'Cloudflare did not send an authorization code back.' };
     }
+    const { flow, refused } = this.#redeemFor(this.pendingCloudflare, state, requester);
+    if (!flow) return refused;
 
     if (flow.pkce) return this.#exchangeOnHost({ provider: 'cloudflare', flow, code, clientId, origin });
 
@@ -3130,8 +3250,9 @@ export class CoordinatorCore {
       params: { provider, code, clientId, origin: base },
       actor: flow.email ?? undefined,
       preferHost: flow.hostId,
-      // The person authorized in a browser; the state is what proved who they
-      // are, and it has just been spent.
+      // Placed as the person who started the flow, which redeem has just
+      // checked is the verified person finishing it; their identity rides as
+      // the actor, as it does for the link below.
       requester: null,
     });
     if (reply?.error?.code === 'unknown_verb') {
@@ -3170,8 +3291,11 @@ export class CoordinatorCore {
       params: { provider, secret },
       actor: flow.email ?? undefined,
       preferHost: flow.hostId,
-      // The person authorized in a browser; there is no fleet credential on
-      // that request, and the state is what proved who they are.
+      // Placed under the person who STARTED the flow. That is safe only
+      // because redeem refused anybody else: the finish carries a fleet
+      // credential and its verified email had to match the flow's. The state
+      // alone used to stand in for that, and a forwarded link proved it does
+      // not (finishGithubAuthorization).
       requester: null,
     });
     if (reply?.ok === false) return { ok: false, text: reply.text || 'The token could not be stored.' };

@@ -167,8 +167,8 @@ export function Ledger({ events }) {
   );
 }
 
-/** The page. */
-export function Console({ snap, onAnswer }) {
+/** The page. `egg` is one quiet line app.jsx sets; konami.js and late.js say when. */
+export function Console({ snap, onAnswer, egg }) {
   return (
     <div class={`console ${snap?.reachable === false ? 'stale' : ''}`}>
       <Confidence snap={snap} />
@@ -191,6 +191,11 @@ export function Console({ snap, onAnswer }) {
           <Ledger events={snap?.events} />
         </aside>
       </div>
+      {egg ? (
+        <p class="egg" role="status">
+          {egg}
+        </p>
+      ) : null}
     </div>
   );
 }

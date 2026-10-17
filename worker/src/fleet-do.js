@@ -29,7 +29,6 @@ import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
-import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
@@ -76,7 +75,10 @@ export class Fleet {
    * @param {Record<string, string|undefined>} env
    */
   constructor(state, env) {
-    env = withCurrentNames(env);
+    // The env as Cloudflare hands it, with no old name copied onto a new one:
+    // the front door says why (worker.js, `guarded`), and the allowlist read
+    // in #identify is the setting here that aliasing put back after it was
+    // blanked.
     this.state = state;
     this.env = env;
     const logger = {
@@ -1200,52 +1202,61 @@ export class Fleet {
       );
     }
 
+    // THE PROVIDER CALLBACKS, reached with no fleet credential (worker.js
+    // forwards them above the gate) and therefore finishing nothing. Each
+    // answers a page that hands the code and state to whatever opened the
+    // provider's page and holds a credential — the app, or `/me` on this
+    // origin — which finishes below with POST /api/oauth/finish. They used to
+    // exchange and link here on the state alone, and a forwarded authorize
+    // link delivered one person's token to whoever started the flow.
+    //
+    // HTML, not JSON: the thing reading these is a browser somebody was sent
+    // to, and a raw object on screen is how a working flow looks broken.
+    // No referrer, because the address carries the code.
     if (url.pathname === '/oauth/github/callback') {
-      const result = await this.core.finishGithubAuthorization({
+      const result = this.core.githubCallback({
         code: url.searchParams.get('code'),
         state: url.searchParams.get('state'),
         // The installation half of the flow, which arrives with no state.
         setupAction: url.searchParams.get('setup_action'),
-        installationId: url.searchParams.get('installation_id'),
-        origin: url.origin,
       });
-      // HTML, not JSON: the thing reading this is a browser somebody was sent
-      // to, and a raw object on screen is how a working flow looks broken.
-      return new Response(callbackPage(result), {
-        status: result.ok ? 200 : 400,
-        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-      });
+      return callbackResponse(result);
     }
-
-    // A GITHUB SIGN-IN THAT WENT THROUGH THE OAUTH RELAY, back with the token
-    // sealed to this coordinator's key (src/fleet/relay/relay.js). Secured by
-    // the same single-use state as the callback above, and by the state found
-    // again inside what was sealed.
+    // THE SAME FOR THE OAUTH RELAY, back with the token sealed to this
+    // coordinator's key (src/fleet/relay/relay.js): handed on, not opened.
     if (url.pathname === '/oauth/github/relayed') {
-      const result = await this.core.finishRelayedGithubAuthorization({
+      const result = this.core.relayedGithubCallback({
         state: url.searchParams.get('state'),
         sealed: url.searchParams.get('sealed'),
         error: url.searchParams.get('error'),
       });
-      return new Response(callbackPage(result), {
-        status: result.ok ? 200 : 400,
-        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
-      });
+      return callbackResponse(result);
     }
-
-    // THE CLOUDFLARE CALLBACK — the same flow, the second provider. Secured by
-    // the same single-use state, checked against its own pending store so a
-    // GitHub state cannot finish a Cloudflare flow or the reverse.
     if (url.pathname === '/oauth/cloudflare/callback') {
-      const result = await this.core.finishCloudflareAuthorization({
+      const result = this.core.cloudflareCallback({
         code: url.searchParams.get('code'),
         state: url.searchParams.get('state'),
+      });
+      return callbackResponse({ ...result, provider: 'cloudflare' });
+    }
+
+    // FINISHING A PROVIDER SIGN-IN, behind the credential gate: the code the
+    // callback handed back, from the app or `/me`, with that client's own
+    // credential. The coordinator finishes only for the person who started
+    // the flow — the verified email must match the one the state was minted
+    // for, and a flow the admin token started finishes only with the admin
+    // token — so a forwarded link ends with nothing stored.
+    if (url.pathname === '/api/oauth/finish' && request.method === 'POST') {
+      const body = await readJson(request);
+      const r = await this.core.finishAuthorization({
+        provider: body?.provider,
+        code: body?.code,
+        state: body?.state,
+        sealed: body?.sealed,
         origin: url.origin,
+        requester: requesterFor(client),
       });
-      return new Response(callbackPage({ ...result, provider: 'cloudflare' }), {
-        status: result.ok ? 200 : 400,
-        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-      });
+      return json(r, r.ok ? 200 : 400);
     }
 
     if (url.pathname === '/api/hosts' && request.method === 'GET') {
@@ -1360,8 +1371,11 @@ export class Fleet {
       // the client id and secret belong to the deployment rather than to any
       // machine. The coordinator is the only part that can improve on that, so
       // it rewrites the entries it can and leaves the rest alone.
+      //
+      // ONLY FOR A CLIENT THAT SAYS IT CAN FINISH ONE (`oauthFinish`), which
+      // is a screen about to offer Connect. See offerOauth.
       return json(
-        body.verb === 'connect'
+        body.verb === 'connect' && body.oauthFinish === true
           ? this.core.offerOauth(
               reply,
               typeof body.host === 'string' ? body.host : (reply?.hostId ?? ''),
@@ -1648,7 +1662,6 @@ export class Fleet {
   }
 }
 
-/** @param {unknown} body @param {number} [status] */
 /**
  * The identity an authorisation check is made against.
  *
@@ -1664,6 +1677,19 @@ function requesterFor(client) {
   return client ? { email: client.email ?? null, admin: Boolean(client.admin) } : null;
 }
 
+/**
+ * A provider callback's page. `no-referrer` because the address carries the
+ * code the page hands back.
+ * @param {Parameters<typeof callbackPage>[0]} result
+ */
+function callbackResponse(result) {
+  return new Response(callbackPage(result), {
+    status: result.ok ? 200 : 400,
+    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+  });
+}
+
+/** @param {unknown} body @param {number} [status] */
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,

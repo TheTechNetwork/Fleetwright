@@ -2,10 +2,11 @@
 // value holding them together.
 //
 // The provider redirects a BROWSER to the coordinator, and a browser carries no
-// fleet credential. `state` is the only thing tying that request to a flow
-// this coordinator started — so it has to be unguessable, single-use,
-// short-lived, and bound to both the host and the person. Miss any one and the
-// callback is an open door that writes a credential onto a machine.
+// fleet credential. `state` ties that request to a flow this coordinator
+// started — so it has to be unguessable, single-use, short-lived, and bound to
+// both the host and the person. What it cannot prove is whose browser came
+// back, so the callback finishes nothing: the app or `/me` finishes with its
+// own credential, for the person who started the flow.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,21 +22,35 @@ import {
 } from '../src/fleet/coordinator/oauth.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { androidSources } from './helpers/android-sources.js';
+import { iosSources } from './helpers/ios-sources.js';
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
 const APP = { clientId: 'Iv23liTEST', clientSecret: 'shh', slug: 'fleetwright-agents' };
 const CF = { clientId: 'cf-client-id', clientSecret: 'cf-shh', scopes: 'account-settings.read workers-scripts.edit offline_access' };
 
-test('a state is redeemable exactly once', () => {
-  // A callback replayed from browser history, or delivered twice, must not
-  // exchange a second time.
+test('a state is redeemable exactly once, and only by the person who started it', () => {
+  // A finish replayed, or delivered twice, must not exchange a second time.
   const p = new PendingAuthorizations();
+  const a = { email: 'A@b.com', admin: false };
   p.mint({ state: 's1', hostId: 'box', email: 'a@b.com' });
+  // Somebody else's credential, the admin token, and no requester at all are
+  // each refused, and the flow stays for the person who started it.
+  assert.equal(p.redeem('s1', { email: 'c@d.com', admin: true }), null);
+  assert.equal(p.redeem('s1', null), null);
+  assert.equal(p.redeem('s1', undefined), null);
+  assert.equal(p.isPending('s1'), true);
   assert.deepEqual(
-    { ...p.redeem('s1'), at: undefined },
+    { ...p.redeem('s1', a), at: undefined },
     { hostId: 'box', email: 'a@b.com', pkce: false, relayed: false, at: undefined },
   );
-  assert.equal(p.redeem('s1'), null);
+  assert.equal(p.redeem('s1', a), null);
+
+  // A flow the admin token started carries no email and finishes only with
+  // the admin token, never with a signed-in person's credential.
+  p.mint({ state: 's2', hostId: 'box', email: null });
+  assert.equal(p.redeem('s2', { email: null, admin: true }), null);
+  assert.equal(p.redeem('s2', a), null);
+  assert.equal(p.redeem('s2', null)?.hostId, 'box');
 });
 
 test('a state expires, and an unknown one is refused the same way', () => {
@@ -43,21 +58,37 @@ test('a state expires, and an unknown one is refused the same way', () => {
   const p = new PendingAuthorizations({ now: () => clock, ttlMs: 600_000 });
   p.mint({ state: 's1', hostId: 'box', email: null });
   clock += 600_001;
-  assert.equal(p.redeem('s1'), null);
-  assert.equal(p.redeem('never-existed'), null);
+  assert.equal(p.redeem('s1', null), null);
+  assert.equal(p.redeem('never-existed', null), null);
   // Same answer for expired and unknown — telling a stranger which it was is
   // telling them whether a state exists.
 });
 
-test('a flood of abandoned flows cannot evict a live one mid-authorization', () => {
+test('a person’s new flow retires their own oldest, and a store full of other people’s refuses', () => {
+  // The store is the whole fleet's. It evicted its oldest entry whoever's it
+  // was, so one member's connects pushed out everybody else's live sign-ins
+  // (the regression is in fleet-do.test.js, through the routes). These are the
+  // two rules that replaced it, which that test cannot reach cheaply.
   const p = new PendingAuthorizations();
-  p.mint({ state: 'mine', hostId: 'box', email: 'a@b.com' });
-  for (let i = 0; i < 500; i++) p.mint({ state: `junk${i}`, hostId: 'box', email: null });
-  // Oldest-first eviction means the earliest flow goes first, which is the
-  // honest trade: bounded memory, and the loser is the oldest rather than a
-  // random one. Pinned so a change to LIFO is a visible decision.
-  assert.equal(p.redeem('mine'), null);
-  assert.ok(p.pending.size <= 200);
+  for (let i = 0; i < 10; i++) p.mint({ state: `mine${i}`, hostId: 'box', email: 'a@b.com' });
+  assert.equal(p.isPending('mine0'), false, 'a person’s own oldest makes room for their next');
+  assert.equal(p.isPending('mine9'), true);
+  assert.ok(p.pending.size < 10, 'one person holds a bounded share');
+
+  // Two hundred different people mid-flow: the next one is refused, and none
+  // of theirs is touched.
+  const full = new PendingAuthorizations();
+  for (let i = 0; i < 200; i++) full.mint({ state: `s${i}`, hostId: 'box', email: `p${i}@b.com` });
+  assert.equal(full.mint({ state: 'late', hostId: 'box', email: 'late@b.com' }), null);
+  assert.equal(full.isPending('s0'), true, 'somebody else’s live flow was evicted');
+  assert.equal(full.isPending('late'), false);
+
+  // And a refused mint is no offer: an authorize URL whose state was not kept
+  // would end on "expired". The paste route comes back untouched.
+  const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
+  for (let i = 0; i < 200; i++) core.pendingGithub.mint({ state: `s${i}`, hostId: 'box', email: `p${i}@b.com` });
+  const reply = { ok: true, connections: { catalogue: [{ provider: 'github', url: 'https://github.com/settings/tokens/new' }], connected: [] } };
+  assert.deepEqual(core.offerOauth(reply, 'box', 'late@b.com', 'https://fleet.example'), reply);
 });
 
 test('the authorize URL names its own redirect', () => {
@@ -235,42 +266,44 @@ test('the Cloudflare exchange is form-encoded, and a non-200 is the failure it i
 
 test('a Cloudflare callback for a flow this coordinator did not start is refused', async () => {
   const core = new CoordinatorCore({ logger: quiet, cloudflareOauth: CF });
-  const bogus = await core.finishCloudflareAuthorization({ code: 'c', state: 'invented', origin: 'https://f.example' });
+  const a = { email: 'a@b.com', admin: false };
+  const bogus = await core.finishCloudflareAuthorization({ code: 'c', state: 'invented', origin: 'https://f.example', requester: a });
   assert.equal(bogus.ok, false);
   assert.match(bogus.text, /expired or was already used/);
 
   // A GitHub state cannot finish a Cloudflare flow: the two providers keep
   // separate pending stores, so this needs no check anybody could forget.
   core.pendingGithub.mint({ state: 'gh-state', hostId: 'box', email: 'a@b.com' });
-  const crossed = await core.finishCloudflareAuthorization({ code: 'c', state: 'gh-state', origin: 'https://f.example' });
+  const crossed = await core.finishCloudflareAuthorization({ code: 'c', state: 'gh-state', origin: 'https://f.example', requester: a });
   assert.equal(crossed.ok, false);
   assert.match(crossed.text, /expired or was already used/);
 
   // A real state with no code — the person pressed Deny — is refused with a
   // fixed sentence, never the query's own words.
   core.pendingCloudflare.mint({ state: 'real', hostId: 'box', email: 'a@b.com' });
-  const noCode = await core.finishCloudflareAuthorization({ code: null, state: 'real', origin: 'https://f.example' });
+  const noCode = await core.finishCloudflareAuthorization({ code: null, state: 'real', origin: 'https://f.example', requester: a });
   assert.equal(noCode.ok, false);
   assert.match(noCode.text, /did not send an authorization code/);
 });
 
 test('a fleet with no Cloudflare client configured says so rather than failing oddly', async () => {
   const core = new CoordinatorCore({ logger: quiet });
-  const r = await core.finishCloudflareAuthorization({ code: 'c', state: 's', origin: 'https://f.example' });
+  const r = await core.finishCloudflareAuthorization({ code: 'c', state: 's', origin: 'https://f.example', requester: null });
   assert.equal(r.ok, false);
   assert.match(r.text, /no Cloudflare OAuth client configured/);
 });
 
 test('a callback for a flow this coordinator did not start is refused', async () => {
   const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
-  const bogus = await core.finishGithubAuthorization({ code: 'c', state: 'invented', origin: 'https://f.example' });
+  const a = { email: 'a@b.com', admin: false };
+  const bogus = await core.finishGithubAuthorization({ code: 'c', state: 'invented', origin: 'https://f.example', requester: a });
   assert.equal(bogus.ok, false);
   assert.match(bogus.text, /expired or was already used/);
 
   // A real state with no code is refused too, and separately — GitHub sending
   // nothing back is a different fault from somebody forging a state.
   core.pendingGithub.mint({ state: 'real', hostId: 'box', email: 'a@b.com' });
-  const noCode = await core.finishGithubAuthorization({ code: null, state: 'real', origin: 'https://f.example' });
+  const noCode = await core.finishGithubAuthorization({ code: null, state: 'real', origin: 'https://f.example', requester: a });
   assert.equal(noCode.ok, false);
   assert.match(noCode.text, /did not send an authorization code/);
 });
@@ -288,9 +321,71 @@ test('the browser gets a page, and the page cannot be injected into', () => {
   assert.match(page, /href="fleetwright:\/\/connected/, 'and it offers the way back');
 });
 
+test('a box’s callback page hands the code back, and finishes only through this origin’s own credential', async () => {
+  // The callback page no longer connects anything: the browser on it may be
+  // somebody a link was forwarded to. It hands the code to whatever holds a
+  // fleet credential. Run here as the browser would run it, with the three
+  // things that can be on the other end: nothing, `/me`'s credential for the
+  // person who started it, and a credential for somebody else.
+  const vm = await import('node:vm');
+  const { handBack } = await import('../src/fleet/coordinator/oauth.js');
+  const state = '0b6f2c1e-6d1a-4c55-9a0e-5f0d2b9f6a11';
+  const finish = handBack({ provider: 'github', state, code: 'goodcode123' });
+  const back = `fleetwright://github?state=${state}&code=goodcode123`;
+  const page = callbackPage({ ok: true, finish, text: 'Back to Fleetwright to finish connecting GitHub.' });
+  assert.equal(/(src|href)\s*=\s*["']?https?:/i.test(page), false, 'the finishing page loads something external');
+  const script = /** @type {RegExpExecArray} */ (/<script>([\s\S]*)<\/script>/.exec(page))[1];
+
+  /** @param {string|null} stored @param {{ status: number, body: any }} [answer] */
+  const run = async (stored, answer) => {
+    /** @type {string[]} */
+    const went = [];
+    /** @type {Array<{ url: string, init: any }>} */
+    const posted = [];
+    const els = { say: { textContent: '' }, head: { textContent: '' } };
+    vm.runInNewContext(script, {
+      localStorage: { getItem: (/** @type {string} */ k) => (k === 'fleetwright.credential' ? stored : null) },
+      location: { replace: (/** @type {string} */ u) => went.push(u) },
+      document: { getElementById: (/** @type {'say'|'head'} */ id) => els[id] },
+      fetch: async (/** @type {string} */ url, /** @type {any} */ init) => {
+        posted.push({ url, init });
+        return { status: answer?.status, json: async () => answer?.body };
+      },
+    });
+    await new Promise((r) => setImmediate(r));
+    return { went, posted, els };
+  };
+
+  // Nothing on this origin: the code goes to the app, and nothing is posted.
+  const none = await run(null);
+  assert.deepEqual(none.posted, []);
+  assert.deepEqual(none.went, [back]);
+
+  // `/me`'s credential: one POST, to this origin, carrying it, and the
+  // coordinator's own sentence on screen.
+  const mine = await run('fwk_mine', { status: 200, body: { ok: true, text: 'Your sessions can use GitHub now.' } });
+  assert.equal(mine.posted.length, 1);
+  assert.equal(mine.posted[0].url, '/api/oauth/finish');
+  assert.equal(mine.posted[0].init.headers.authorization, 'Bearer fwk_mine');
+  assert.deepEqual(JSON.parse(mine.posted[0].init.body), { provider: 'github', state, code: 'goodcode123' });
+  assert.equal(mine.els.say.textContent, 'Your sessions can use GitHub now.');
+  assert.deepEqual(mine.went, ['fleetwright://connected?provider=github&ok=1']);
+
+  // Somebody else's flow: the refusal stays on screen, and the app is still
+  // offered the code, since it may hold the starter's credential where this
+  // browser does not.
+  const theirs = await run('fwk_other', { status: 400, body: { ok: false, error: { code: 'not_yours' }, text: 'That sign-in was started from somebody else’s Fleetwright, so nothing was connected.' } });
+  assert.match(theirs.els.say.textContent, /somebody else/);
+  assert.deepEqual(theirs.went, [back]);
+
+  // And nothing that is not a state and a code is carried onto the page.
+  assert.equal(handBack({ provider: 'github', state: 'x"><script>alert(1)</script>', code: 'goodcode123' }), null);
+  assert.equal(handBack({ provider: 'github', state, code: '"><script>' }), null);
+});
+
 test('a fleet with no App configured says so rather than failing oddly', async () => {
   const core = new CoordinatorCore({ logger: quiet });
-  const r = await core.finishGithubAuthorization({ code: 'c', state: 's', origin: 'https://f.example' });
+  const r = await core.finishGithubAuthorization({ code: 'c', state: 's', origin: 'https://f.example', requester: null });
   assert.equal(r.ok, false);
   assert.match(r.text, /no GitHub App configured/);
 });
@@ -419,6 +514,23 @@ test('the callback hands control back to the app', async () => {
   assert.match(page, /Back to Fleetwright/);
 });
 
+test('iOS finishes a provider sign-in itself, as the person signed in on the phone', () => {
+  // The coordinator's callback page no longer connects anything: it hands the
+  // code back to whatever opened the provider's page, and that client finishes
+  // with its own credential. On iOS that is the credentials screen, which asks
+  // for the sign-in offer (the coordinator gives it only to a client that says
+  // it can finish), posts the finish, and shows the coordinator's own sentence,
+  // which is the refusal when the sign-in was somebody else's.
+  const code = (/** @type {string} */ src) => src.replace(/\/\/[^\n]*/g, '');
+  const ios = code(iosSources());
+  assert.match(ios, /"oauthFinish": true/, 'iOS never asks for the sign-in offer, so it is shown the paste route');
+  assert.match(ios, /"\/api\/oauth\/finish"/, 'iOS opens the provider page and never finishes what comes back');
+  // A device's own sign-in comes back on the same hosts with a `d.` state, and
+  // belongs to the screen that started it, not to this one.
+  assert.match(ios, /hasPrefix\("d\."\)/, 'iOS would post a device sign-in to the box flow’s finish');
+  assert.match(ios, /result = reply\.text \?\?/, 'iOS does not say what the coordinator answered');
+});
+
 test('both apps register the scheme the callback returns to', async () => {
   const { readFileSync } = await import('node:fs');
   const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -496,13 +608,7 @@ test('installing the App is not a broken sign-in link', async () => {
   // The second was being told its link had expired or been used, which is
   // alarming and untrue — nothing expired and the install worked.
   const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
-  const r = await core.finishGithubAuthorization({
-    code: '6aa010f044fb4ab1c82f',
-    state: null,
-    setupAction: 'install',
-    installationId: '159793900',
-    origin: 'https://f.example',
-  });
+  const r = core.githubCallback({ code: '6aa010f044fb4ab1c82f', state: null, setupAction: 'install' });
 
   assert.equal(r.ok, true, 'an installation was reported as a failure');
   assert.equal(r.installed, true);
@@ -523,9 +629,8 @@ test('an installation is attributed to nobody, because nobody proved anything', 
   const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
   core.dispatch = async (spec) => { dispatched.push(spec); return { ok: true }; };
 
-  await core.finishGithubAuthorization({
-    code: 'a-real-code', state: null, setupAction: 'install', installationId: '1', origin: 'https://f.example',
-  });
+  const r = core.githubCallback({ code: 'a-real-code', state: null, setupAction: 'install' });
+  assert.equal(r.finish, undefined, 'an unattributed installation was handed on to be finished');
   assert.deepEqual(dispatched, [], 'an unattributed installation stored a credential');
 });
 
@@ -534,7 +639,7 @@ test('a missing state with no installation is still an expired link', async () =
   // one message, because telling a stranger which it was tells them whether a
   // state exists. `setup_action` is what separates the honest third case.
   const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
-  const r = await core.finishGithubAuthorization({ code: 'c', state: null, origin: 'https://f.example' });
+  const r = core.githubCallback({ code: 'c', state: null });
   assert.equal(r.ok, false);
   assert.match(r.text, /expired or was already used/);
 });

@@ -100,8 +100,9 @@ test('a pending state remembers whether the host offered a challenge', () => {
   const p = new PendingAuthorizations();
   p.mint({ state: 'a', hostId: 'box', email: 'a@b.com', pkce: true });
   p.mint({ state: 'b', hostId: 'box', email: 'a@b.com' });
-  assert.equal(p.redeem('a')?.pkce, true);
-  assert.equal(p.redeem('b')?.pkce, false);
+  const a = { email: 'a@b.com', admin: false };
+  assert.equal(p.redeem('a', a)?.pkce, true);
+  assert.equal(p.redeem('b', a)?.pkce, false);
 });
 
 test('offerOauth builds the host\'s challenge into the URL, and refuses a malformed one', () => {
@@ -132,7 +133,7 @@ test('with a challenge on file the coordinator relays the code and never exchang
   globalThis.fetch = /** @type {any} */ (async () => { throw new Error('the coordinator must not talk to GitHub on this path'); });
   try {
     core.pendingGithub.mint({ state: 'st', hostId: 'box', email: 'a@b.com', pkce: true });
-    const r = await core.finishGithubAuthorization({ code: 'the-code', state: 'st', origin: 'https://fleet.example/' });
+    const r = await core.finishGithubAuthorization({ code: 'the-code', state: 'st', origin: 'https://fleet.example/', requester: { email: 'a@b.com', admin: false } });
     assert.equal(r.ok, true);
     assert.match(r.text, /renews it by itself/);
   } finally {
@@ -149,7 +150,8 @@ test('a host that offered a challenge but cannot finish is reported, not mistake
   const core = new CoordinatorCore({ logger: quiet, githubApp: { clientId: 'id', clientSecret: 'shh', slug: 's' } });
   core.dispatch = async () => ({ ok: false, error: { code: 'unknown_verb' }, text: 'unknown verb' });
   core.pendingGithub.mint({ state: 'st', hostId: 'box', email: null, pkce: true });
-  const r = await core.finishGithubAuthorization({ code: 'c', state: 'st', origin: 'https://fleet.example' });
+  // Started with the admin token, which carries no email, so finished with it.
+  const r = await core.finishGithubAuthorization({ code: 'c', state: 'st', origin: 'https://fleet.example', requester: null });
   assert.equal(r.ok, false);
   assert.match(r.text, /Update the host/);
 });

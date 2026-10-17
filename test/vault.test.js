@@ -449,9 +449,9 @@ test('the coordinator refuses what it should before the minter is asked, and say
   assert.ok(!JSON.stringify(start).includes('cf-secret'));
   assert.equal(new CoordinatorCore({}).cloudflareDeviceStart('https://fleet.test').error?.code, 'not_configured');
   const state = `d.${'s'.repeat(32)}`;
-  const back = await cf.finishCloudflareAuthorization({ code: 'ory_ac_abc.def-ghi', state, origin: 'https://fleet.test' });
+  const back = cf.cloudflareCallback({ code: 'ory_ac_abc.def-ghi', state });
   assert.equal(back.device, `fleetwright://cloudflare?code=ory_ac_abc.def-ghi&state=${state}`);
-  assert.equal((await cf.finishCloudflareAuthorization({ code: '"><x', state, origin: 'https://fleet.test' })).ok, false);
+  assert.equal(cf.cloudflareCallback({ code: '"><x', state }).ok, false);
 
   // A BOX: no id, the wrong shape, a key it did not enrol with, no minter, and too many.
   const keys = await generateKeyPair();

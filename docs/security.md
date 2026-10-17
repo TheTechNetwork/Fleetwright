@@ -77,7 +77,7 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | Secret | At rest where | Readable by | Rotation | Revocation | Detection |
 |---|---|---|---|---|---|
 | **Device token** (`fwk_…`) | phone Keychain/Keystore; **hash only** in the DO | the phone; nobody via the DO | re-issue | `revoke(id)`, per-device | `lastSeenAt`, client list |
-| **Break-glass admin token** (`FLEETWRIGHT_API_TOKEN`) | Cloudflare secret | the Worker; whoever holds the Worker's secrets | `wrangler secret put` + redeploy | none — it is the floor | none; it is unattributed by design |
+| **Break-glass admin token** (`FLEETWRIGHT_API_TOKEN`) | Cloudflare secret | the Worker; whoever holds the Worker's secrets | `wrangler secret put` under this name + redeploy | delete the secret, which leaves no break-glass and never an older one (SEC-CRED-4) | none; it is unattributed by design |
 | **GitHub App client secret** | Cloudflare secret; on hosts, sidecar **memory only** — delivered on the config frame, never written (§9-G2, fixed) | the Worker; each connected sidecar on a box the operator runs, in memory (and root on that box, via process memory). Not a box a member enrolled, a pool's own machine or a runner (`actsFor`, `hosts.js`) | change in Cloudflare + redeploy; hosts pick it up on reconnect | none scoped | none |
 | **Host private key** (P-256) | `/var/lib/fleetwright-sidecar/host-key.json`, `0600` in `0700`, mode re-checked every load | the sidecar's own account (`fleetwright-sidecar`) only — not the session user, so neither the hub nor a session escape landing as it can read this (`hardening.md`) | re-enrol the host | `revoke` at coordinator, per-host | mode check refuses to start if loosened |
 | **Host public key** | coordinator DO | anyone who reads the DO (public half; harmless) | with re-enrol | with revoke | host list |
@@ -109,6 +109,19 @@ directory, and permissions SHOULD be re-checked on load, not only set on write.
 *Falsify:* `host/identity.js` re-checks and refuses, and so does the credential
 store now — `Connections` re-checks mode on every read, tightens, and warns
 (§9-G5, fixed; `test/connectors.test.js`).
+
+**SEC-CRED-4** — The coordinator Worker MUST read each secret under exactly one
+name. A deleted or blank secret is absent, and no other name stands in for it,
+least of all one from before the rename: a coordinator migrated off
+`AGENT_FLEET_*` still holds those copies, and when the Worker fell back to them,
+deleting `FLEETWRIGHT_API_TOKEN` brought the token it replaced back as admin.
+Removing or rotating a credential is only real if nothing else can supply it.
+*Falsify:* give the Worker `AGENT_FLEET_API_TOKEN` and a deleted or blank
+`FLEETWRIGHT_API_TOKEN`, and present the old value; it must be refused
+(`test/optional-admin-token.test.js`). The Durable Object must not read its
+sign-in settings or allowlist under an old name either (`test/fleet-do.test.js`),
+and the deploy's secret sync reads no `AGENT_FLEET_*` name
+(`.github/workflows/worker.yml`).
 
 ---
 
@@ -854,6 +867,7 @@ trust.
 | phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist; spent on exchange |
 | phone → coordinator (per request) | **verifies** | device token, SHA-256 hash compared timing-safe |
 | host → coordinator | **verifies** | P-256 signature over a coordinator-issued nonce |
+| provider redirect → coordinator (GitHub, Cloudflare) | **carries**, so it finishes nothing | the `state` names a flow and proves only who started it; the finish is a separate request that **verifies** (SEC-ID-8) |
 | coordinator → host (the `actor`) | **carries** | the host trusts `fleet:<email>` because it arrived |
 | host → fleetwright (`/api/command`) | **carries** | fleetwright records the actor a trusted caller states; it cannot verify |
 | session → host (uuid) | **verifies** | the bind-mounted socket *is* the proof of which session |
@@ -897,6 +911,26 @@ before its first presentation — and `identity.md` records why the nonce waits.
 *Falsify:* `spent-tokens.js` is consulted last in `identity.js:identify`; the
 Node state file and the Durable Object both persist `spentTokens`;
 `test/identity.test.js` drives the same token twice across a restart.
+
+**SEC-ID-8** — A provider sign-in a person starts MUST be finished only by
+that person's own verified credential. The callback a provider redirects to
+carries no fleet credential, so it MUST NOT exchange, link or renew: it hands
+the code and state to the app, or to `/me` on the same origin, and
+`POST /api/oauth/finish` behind the credential gate redeems the state only when
+the requester's email is the one it was minted for (an admin-token flow, only
+with the admin token). The state alone used to be the proof, and a member who
+forwarded the authorize URL from their own Connect had whoever completed it
+connected under the member's name, on a box the member enrolled. What remains:
+on Android a custom scheme can be claimed by another installed app, so an app
+that has taken `fleetwright://` on the victim's phone and is signed in as the
+person who started the flow could finish it. iOS hands the redirect only to the
+session that opened it, and `/me` never lets the code leave the origin. Each
+person also holds a bounded share of the pending flows, so another member's
+connects cannot evict a sign-in somebody is in the middle of.
+*Falsify:* `PendingAuthorizations.redeem` takes the requester and refuses a
+mismatch; `githubCallback`, `relayedGithubCallback` and `cloudflareCallback`
+in `core.js` dispatch nothing; `test/fleet-do.test.js` forwards a link through
+the routes and asserts nothing is stored until the starter finishes.
 
 ---
 
@@ -1240,6 +1274,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-CRED-1 | Coordinator holds no secret that derives a session credential |
 | SEC-CRED-2 | Refresh tokens never reach a session |
 | SEC-CRED-3 | Credential files 0600/0700, re-checked on load |
+| SEC-CRED-4 | The Worker reads each secret under one name; a removed one stays removed |
 | SEC-ID-1 | OIDC: issuer checked before key fetch |
 | SEC-ID-2 | `email_verified` required; relay addresses refused with remedy |
 | SEC-ID-3 | `actor` is carried, not verified; not local authorisation |
@@ -1247,6 +1282,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-ID-5 | Nothing replayable crosses the wire in host auth |
 | SEC-ID-6 | `fleet:` prefix required to resolve an actor to a credential row |
 | SEC-ID-7 | An ID token buys at most one credential, across a restart |
+| SEC-ID-8 | A provider sign-in is finished only by the person who started it |
 | SEC-PROTO-1 | The command line is built from literals, never received |
 | SEC-PROTO-2 | The verb allowlist is the defence, re-validated host-side |
 | SEC-PROTO-3 | The five conditions that make a verb safe to add |

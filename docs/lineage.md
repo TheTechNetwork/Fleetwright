@@ -25,7 +25,9 @@ Before the rename a box was made of agent-hub and agent-fleet names:
 next time an installer runs on them, which the next update does — see
 `install/install.sh`, "the names from before the rename". Until then, and for
 anything written by hand with the old names, `src/fleet/legacy-names.js` reads
-them under the new ones.
+them under the new ones. The coordinator Worker is the exception: it reads only
+the new names, because a secret Cloudflare still holds under an old one came
+back whenever its replacement was deleted ([coordinator-deploy.md](./coordinator-deploy.md)).
 
 Four things keep their old names on purpose:
 

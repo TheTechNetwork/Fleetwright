@@ -122,6 +122,16 @@ export class HttpAdapter {
 
     if (p === '/healthz') return json(res, 200, { ok: true, host: this.cfg.hostname });
 
+    // RFC 2324. Ungated, like /healthz, because it says nothing about the box
+    // that the box's name does not; and not on any list, because a person who
+    // asked this address for coffee was already looking for it.
+    if (p === '/coffee') {
+      return json(res, 418, {
+        error: "I'm a teapot",
+        text: 'This box is a teapot (RFC 2324). It brews sessions, not coffee: /new starts one.',
+      });
+    }
+
     // --- the SessionStart hook -------------------------------------------
     // Loopback only, and never token-gated: the hook runs as a child of a
     // claude process on this same box, and making it carry the operator token
@@ -576,7 +586,12 @@ export class HttpAdapter {
       return json(res, 200, { name, text });
     }
 
-    return json(res, 404, { error: 'not found' });
+    // Said in this product's voice, because the console's own fetches never
+    // land here and a person who did is reading it as prose.
+    return json(res, 404, {
+      error: 'not found',
+      text: 'There is nothing at this address, which is a fact about the address and not about the fleet.',
+    });
   }
 
   /**

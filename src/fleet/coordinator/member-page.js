@@ -50,6 +50,8 @@
 // The comments are prose for people reading the source and keep the house
 // voice.
 
+import { BROWSER_CREDENTIAL_KEY } from './oauth.js';
+
 /** @param {string} s */
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] || c);
@@ -441,7 +443,7 @@ function pageScript(signIn) {
 // EVERY ACCESS IS WRAPPED. Safari in private browsing throws on setItem, and
 // an exception here would leave a signed-in person looking at a signed-out
 // page with no error anywhere.
-var KEY = 'fleetwright.credential';
+var KEY = ${scriptJson(BROWSER_CREDENTIAL_KEY)};
 var WHO = 'fleetwright.device';
 var token = null;
 var who = '';
@@ -476,9 +478,10 @@ function show() {
  * One intent, with this browser's credential. Refusals arrive as data and name
  * a reason; only the transport throws.
  */
-async function intent(verb, params, host) {
+async function intent(verb, params, host, extra) {
   var body = { verb: verb, params: params || {} };
   if (host) body.host = host;
+  if (extra) for (var k in extra) body[k] = extra[k];
   var res;
   try {
     res = await fetch('/api/intent', {
@@ -530,7 +533,11 @@ async function load() {
   tell(say, 'Asking the fleet what you have connected.');
   var reply;
   try {
-    reply = await intent('connect', {});
+    // \`oauthFinish\`: this page can finish a GitHub or Cloudflare sign-in,
+    // because the coordinator's callback page runs on this origin and finishes
+    // it with the credential above. Without it the fleet offers the paste
+    // route only.
+    reply = await intent('connect', {}, null, { oauthFinish: true });
   } catch (e) {
     tell(say, e.message, true);
     return;
@@ -626,6 +633,23 @@ function card(entry, have, hosts) {
  */
 async function begin(entry, hosts, step) {
   step.textContent = '';
+  if (entry.flow === 'app' && entry.url) {
+    // A SIGN-IN WITH THE PROVIDER, NOT A PASTE. The page it ends on is this
+    // coordinator's, on this origin, and it finishes the connection itself
+    // with this browser's credential, so there is nothing to paste and no
+    // field for it. Coming back to this tab reads the fleet again rather
+    // than trusting that it worked.
+    if (entry.hint) step.appendChild(el('p', 'lede', entry.hint));
+    var go = el('a', 'btn', 'Sign in with ' + (entry.label || entry.provider));
+    go.href = entry.url;
+    go.target = '_blank';
+    go.rel = 'noopener noreferrer';
+    go.addEventListener('click', function () {
+      window.addEventListener('focus', function () { load(); }, { once: true });
+    });
+    step.appendChild(go);
+    return;
+  }
   if (entry.provider !== 'claude') {
     // The catalogue carries the provider's own page with the scopes already
     // ticked, and the hint that says what they are for.

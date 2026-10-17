@@ -183,7 +183,7 @@ signs people in and renews with:
 | secret | where | without it |
 |---|---|---|
 | `FLEETWRIGHT_GITHUB_CLIENT_SECRET` | repository secret or `github-app-key` | no GitHub in vaults, and no phone sign-in |
-| `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | repository secret or `github-app-key` (the old `AGENT_FLEET_` name is read too) | no Cloudflare in vaults |
+| `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | repository secret or `github-app-key` (under this name only; the old `AGENT_FLEET_` one is not read) | no Cloudflare in vaults |
 
 Both are synced by running the Worker workflow by hand on `main` with
 **sync_app_key** ticked ([ci.md](./ci.md)). The Cloudflare client id is read

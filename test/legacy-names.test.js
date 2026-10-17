@@ -1,10 +1,11 @@
 // The rename, as a box that has not been migrated yet experiences it.
 //
 // New code reads FLEETWRIGHT_* and the new paths. A box whose units still load
-// /etc/agent-hub.env, a coordinator whose Cloudflare secrets are AGENT_FLEET_*,
-// and a checkout whose units were never renamed all have to keep working until
-// the installer moves them — and a box that WAS moved must never be pulled back
-// to an old name. src/fleet/legacy-names.js and legacy-paths.js.
+// /etc/agent-hub.env and a checkout whose units were never renamed both have to
+// keep working until the installer moves them — and a box that WAS moved must
+// never be pulled back to an old name. src/fleet/legacy-names.js and
+// legacy-paths.js. The coordinator Worker reads no old name at all, and
+// test/optional-admin-token.test.js holds it to that.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { adoptLegacyEnv, withCurrentNames, LEGACY_UNITS } from '../src/fleet/legacy-names.js';
+import { adoptLegacyEnv, LEGACY_UNITS } from '../src/fleet/legacy-names.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
 import { loadConfig } from '../src/config.js';
 import { loadEnvFile } from '../src/core/env-file.js';
@@ -33,16 +34,6 @@ test('both old prefixes read under the new one, and the new name wins', () => {
   assert.equal(env.FLEETWRIGHT_SANDBOX, '0', 'an operator who wrote the new name said something more recent');
   assert.equal(env.FLEETWRIGHT_EMPTY, 'filled', 'an empty new value is not a decision');
   assert.equal(env.UNRELATED, 'x');
-});
-
-test("a Worker's env is copied, not written to, and left alone when there is nothing old in it", () => {
-  const frozen = Object.freeze({ AGENT_FLEET_API_TOKEN: 't', FLEET: {} });
-  const out = withCurrentNames(frozen);
-  assert.notEqual(out, frozen);
-  assert.equal(out.FLEETWRIGHT_API_TOKEN, 't');
-  assert.equal(out.FLEET, frozen.FLEET, 'bindings travel by reference');
-  const current = { FLEETWRIGHT_API_TOKEN: 't' };
-  assert.equal(withCurrentNames(current), current);
 });
 
 test('a config read from an old env file comes out under the new names', () => {

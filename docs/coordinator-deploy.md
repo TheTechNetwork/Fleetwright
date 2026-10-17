@@ -58,6 +58,33 @@ issued their own, and hosts never have it at all. Once sign-in is configured
 you may run without it — the trade is having no way back when sign-in itself
 is what broke.
 
+**A coordinator deployed before the rename holds its secrets twice, and reads
+only one of them.** Its first secrets were put as `AGENT_FLEET_*`, and CI has
+since put the same ones as `FLEETWRIGHT_*`. The Worker reads the new names and
+nothing else. It used to fall back to an old name whenever the new one was
+missing or empty, so deleting or blanking `FLEETWRIGHT_API_TOKEN` brought back
+the `AGENT_FLEET_API_TOKEN` it had replaced, and blanking
+`FLEETWRIGHT_AUTH_ALLOW` brought back the old allowlist. Now deleting the new
+name leaves the fleet without that secret, which is what deleting it means.
+The deploy reads only the new names from the repository's Actions secrets too.
+
+That makes the old copies inert, not gone. `npx wrangler secret list` shows
+which names the Worker holds; delete each `AGENT_FLEET_*` and `AGENT_HUB_*`
+one with `npx wrangler secret delete`, and the same names from the
+repository's Actions secrets and variables. Nothing in CI does this for you,
+because it changes a live deployment.
+
+**A coordinator that still has only the old names** loses each setting that has
+no new copy. With no `FLEETWRIGHT_API_TOKEN` there is no break-glass, and if
+sign-in is not configured either it answers 503 to everything and names both
+remedies. With no `FLEETWRIGHT_AUTH_ALLOW` a new sign-in is refused unless the
+person was invited, though phones already signed in keep their credentials.
+Without the push keys notifications go to the log, and without the client
+secrets a person links GitHub or Cloudflare by pasting a token rather than
+signing in to it. Put each one under its new name, with `wrangler secret put`
+or in the repository for the deploy to sync (a secret, or for the allowlist a
+variable), and it comes back.
+
 ### The Deploy to Cloudflare button
 
 The product page carries one. It clones this repository into your own GitHub
@@ -203,7 +230,7 @@ fleetwright-sidecar enrol 123456
 ```
 
 The line appears only when this coordinator publishes an installer
-(`AGENT_FLEET_INSTALL_URL`); without one the app shows the two-step form.
+(`FLEETWRIGHT_INSTALL_URL`); without one the app shows the two-step form.
 
 #### Break-glass: minting a pin with the admin token
 
@@ -214,7 +241,7 @@ up there:
 
 ```sh
 curl -sX POST https://your-coordinator/api/enroll \
-     -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
+     -H "authorization: Bearer $FLEETWRIGHT_API_TOKEN" \
      -H 'content-type: application/json' -d '{"kind":"host"}'
 # {"ok":true,"code":"123456","install":"curl -fsSL https://your-coordinator/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh",…}
 ```
