@@ -1190,7 +1190,9 @@ Hold a change against this. If a box is unchecked, the change is not done.
 - [ ] Command lines pass through `redactCommandLine` before any log call
       (SEC-LOG-1).
 - [ ] The surface does not put pane text, titles, or secrets in a journal a
-      phone can read via `logs`.
+      phone can read via `logs`. Who can read one is bounded too: a box's
+      journal is the admin's, or the one person the box acts for
+      (`mayActFor`), because it names everyone's work on that box.
 
 **Adding a surface that reaches a host locally**
 - [ ] It does not assume the loopback API is authenticated (SEC-HOST-2).

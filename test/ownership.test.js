@@ -231,9 +231,43 @@ test('logs naming a session is checked like peek, not like a box question', () =
 
   assert.equal(place(core.registry, intent({ name: 'mine' }), { requester: MEMBER }).kind, 'host');
   assert.equal(place(core.registry, intent({ name: 'theirs' }), { requester: ADMIN }).kind, 'host');
-  // A service journal is a question about the BOX, not about a session, and
-  // stays available — it is how a member finds out their own host is sick.
-  assert.equal(place(core.registry, intent({ service: 'hub' }), { requester: MEMBER }).kind, 'host');
+});
+
+test('a box’s service journal is read by the admin, or by the one person the box acts for', async () => {
+  // A later audit: this file said a service journal is a question about the
+  // box and asserted any member could read one. The sidecar journals every
+  // intent with its actor, so a member reading the operator's box, or a box
+  // another member enrolled, read who else used it, their session names, the
+  // secret and archive of each start and the files each wrote. It stays a
+  // member's on a box that acts for them alone, which is how they find out
+  // their own box is sick.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {string[]} */
+  const delivered = [];
+  const journal = (/** @type {string} */ hostId) => (/** @type {any} */ intent) => {
+    delivered.push(hostId);
+    queueMicrotask(() => core.onHostMessage(hostId, { kind: 'reply', id: intent.id, ok: true, text: 'sidecar: fleet:carol@example.com → /new carol-payroll' }));
+  };
+  await admit(core, 'ops-box', { send: journal('ops-box') });
+  await admit(core, 'carol-box', { enrolledBy: 'carol@example.com', send: journal('carol-box') });
+  await admit(core, 'member-box', { enrolledBy: MEMBER.email, send: journal('member-box') });
+  const read = (/** @type {any} */ requester, /** @type {string} */ host = '') =>
+    core.dispatch({ verb: 'logs', params: { service: 'sidecar', lines: 200 }, preferHost: host, actor: requester?.email, requester });
+
+  for (const host of ['ops-box', 'carol-box']) {
+    const r = await read(MEMBER, host);
+    assert.equal(r.error?.code, 'not_admin', `a member read the journal of ${host}`);
+  }
+  assert.deepEqual(delivered, [], 'a journal read reached a box that does not act for the member alone');
+
+  // Their own box, named or as the only one they may read.
+  assert.equal((await read(MEMBER, 'member-box')).ok, true);
+  assert.equal((await read(MEMBER)).ok, true);
+  // The admin and the break-glass token read any box's.
+  assert.equal((await read(ADMIN, 'ops-box')).ok, true);
+  assert.equal((await read(null, 'carol-box')).ok, true);
+  assert.deepEqual(delivered, ['member-box', 'member-box', 'ops-box', 'carol-box']);
 });
 
 /**

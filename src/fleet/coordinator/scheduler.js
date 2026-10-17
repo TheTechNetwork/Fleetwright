@@ -483,7 +483,31 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     verb === 'unlink'
   ) {
     // A Claude login is a credential too, and one box is still a choice of box.
-    const reachable = credential ? holders() : registry.reachable();
+    //
+    // A SERVICE JOURNAL IS EVERYBODY'S WORK ON THE BOX. The sidecar writes
+    // each intent into it with its actor, so it names other members, their
+    // sessions, the secret and archive each start used and the files each
+    // touched, and any member could read it from any box while `list`, `logs
+    // <name>` and nameless `status` were all scoped to them. An admin and the
+    // break-glass token read any box's; a member only a box that acts for
+    // them alone, which holds nobody's work but theirs (hosts.js mayActFor). A
+    // member's `logs <name>` never gets this far: it resolved to their own
+    // session above, or was refused there.
+    const journal = verb === 'logs' && Boolean(requester) && !requester?.admin;
+    const reachable = credential
+      ? holders()
+      : journal
+        ? registry.reachable().filter((h) => h.actsFor && mayActFor(h, requester?.email))
+        : registry.reachable();
+    if (journal && registry.reachable().length && (!reachable.length || (preferHost && !reachable.some((h) => h.hostId === preferHost)))) {
+      return {
+        kind: 'refused',
+        code: 'not_admin',
+        reason:
+          'A box\u2019s service journal records everybody\u2019s work on it, so only this fleet\u2019s admin, ' +
+          'or the one person a box acts for, can read it.',
+      };
+    }
     if (!reachable.length) {
       return { kind: 'refused', code: 'no_hosts', reason: credential ? describeWhyNoHolders(registry) : describeWhyNoHosts(registry) };
     }
