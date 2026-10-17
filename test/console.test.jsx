@@ -204,8 +204,11 @@ test('the Konami line is said beside the page, never as one of its claims', () =
   const snap = { hosts: [HEALTHY], sessions: [WORKING], events: [] };
   const html = render(<Console snap={snap} egg={line} />);
   assert.match(html, /class="egg" role="status"/);
-  const confidence = html.slice(html.indexOf('class="confidence'), html.indexOf('class="panes"'));
+  const start = html.indexOf('class="confidence');
+  const confidence = html.slice(start, html.indexOf('</section>', start));
   assert.doesNotMatch(confidence, /extra lives/, 'the egg landed inside the assurance panel');
+  // And above the panes, where the eye is, not under them where it was.
+  assert.ok(html.indexOf('class="egg"') < html.indexOf('class="panes"'), 'the egg is under the panes, off screen');
   // And without it, the page is the page it always was.
   assert.equal(render(<Console snap={snap} />), render(<Console snap={snap} egg={null} />));
   assert.doesNotMatch(render(<Console snap={snap} />), /class="egg"/);

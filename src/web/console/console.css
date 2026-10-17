@@ -413,7 +413,7 @@ body {
  * konami.js. Set like a ledger line, in the page's dimmest ink: it arrives,
  * so it moves (MOTION 2), and it is not news, so nothing about it is loud. */
 .egg {
-  margin: var(--s-group) 0 0;
+  margin: 0 0 var(--s-group);
   text-align: center;
   font-size: var(--t-body-small);
   color: var(--ink-dim);
