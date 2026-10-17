@@ -654,7 +654,11 @@ export class Fleet {
       }
       await this.#saveHosts();
 
-      this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
+      // Whose pin it was, as the actor, as the Actions route and enrol.minted
+      // name theirs: with none, a member re-keying their own box with bound
+      // pins cycled the whole ring (core.js #makeRoom). The admin token's
+      // names nobody.
+      this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint, actor: emailOf(spent.entry.actor) });
 
       // A re-enrolment REPLACES the key, and the machine holding the old one
       // may still be connected on this name. Leaving that socket open means two

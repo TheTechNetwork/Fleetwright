@@ -966,12 +966,20 @@ export class CoordinatorCore {
    * Workers audit). So whoever an entry names as its actor keeps at most
    * ACTOR_EVENTS_EACH, and what they do next displaces their own. An
    * operator's records are the fleet's, as an operator's boxes are
-   * (actsFor), and records naming nobody, `client.revoked` and
-   * `host.revoked` among them, are no one person's share to spend.
+   * (actsFor).
+   *
+   * RECORDS NAMING NOBODY were left out as no one person's share to spend,
+   * and some of them are written at a member's request: a phone
+   * re-registering without its push key and then with it, a box re-keyed
+   * with a pin bound to it, a temporary host going away. Each cycled the
+   * whole ring from one member's credential (fourth Workers audit). The ones
+   * a member asks for now name them; what still names nobody keeps
+   * ACTOR_EVENTS_EACH of each kind, so no one kind of it, `host.retired` or
+   * one added later, can be the whole ring.
    *
    * The ring is what #saveEvents stores, so a share kept here is kept there.
    *
-   * @param {{ hostId: string, actor?: string|null }} event
+   * @param {{ hostId: string, event: string, actor?: string|null }} event
    */
   #makeRoom(event) {
     /** @type {any} */
@@ -985,6 +993,9 @@ export class CoordinatorCore {
       if (this.#isOperator(who)) return;
       const theirs = this.events.filter((e) => !hostReported(e) && String(e.actor || '').toLowerCase() === who);
       if (theirs.length >= ACTOR_EVENTS_EACH) drop = theirs[0];
+    } else {
+      const same = this.events.filter((e) => !hostReported(e) && !e.actor && e.event === event.event);
+      if (same.length >= ACTOR_EVENTS_EACH) drop = same[0];
     }
     if (drop) this.events.splice(this.events.indexOf(drop), 1);
   }
@@ -1709,6 +1720,10 @@ export class CoordinatorCore {
       return { ok: false, error: 'that push token is registered to another device', code: 'not_yours' };
     }
     const owner = clientId ?? existing?.clientId;
+    // WHO ASKED, as the actor of what this request records, so it counts in
+    // their share of the ring (#makeRoom). From the credential, never the
+    // body: the admin token's registration names nobody.
+    const askedBy = clientId ? this.clients.clients.get(clientId)?.email ?? null : null;
 
     // A CEILING THAT REFUSES RATHER THAN FORGETS, which is the whole difference
     // between this key and the one above it.
@@ -1729,6 +1744,7 @@ export class CoordinatorCore {
     if (grows && this.devices.size >= MAX_DEVICES) {
       this.record({
         event: 'devices.full',
+        actor: askedBy,
         text:
           `a ${platform} device could not register: this fleet is holding ${MAX_DEVICES} push ` +
           'registrations, which is the most it can store in one record. Remove the phones that ' +
@@ -1753,6 +1769,7 @@ export class CoordinatorCore {
     if (existing?.pushKey && !pushKey) {
       this.record({
         event: 'device.plaintext',
+        actor: askedBy,
         text:
           `a ${platform} device re-registered without an encryption key, so its notifications are ` +
           'no longer sealed to it. A reinstall does this and is expected; the same phone doing it ' +

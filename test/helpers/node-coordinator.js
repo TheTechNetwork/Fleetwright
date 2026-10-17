@@ -806,7 +806,8 @@ export class Coordinator {
         const full = 'code' in result ? result.code : null;
         return json(res, full ? 507 : 400, { ok: false, error: { code: full ?? 'bad_request' }, text: result.error });
       }
-      this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
+      // Whose pin it was, as the actor — see the Worker's copy.
+      this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint, actor: emailOf(spent.entry.actor) });
 
       // A re-enrolment REPLACES the key, and the machine holding the old one may
       // still be connected on this name. Two machines as one host is the worst

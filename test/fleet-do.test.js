@@ -518,18 +518,47 @@ test('one member’s requests displace their own records, never the fleet’s or
   // entry in memory and in storage, and a rebuilt Fleet loaded only those:
   // the enrolments and revocations before them were gone (third Workers
   // audit).
+  //
+  // And records written at her request that named nobody, which that share
+  // did not count: a phone re-registering without its push key and then
+  // with it, a box of hers re-keyed with a pin bound to it, a temporary host
+  // of hers going away (fourth Workers audit).
   const { fleet: f, state } = fleet();
   const { token } = await f.core.clients.issue('mallory phone', { email: 'mallory@example.test' });
+  const as = { authorization: `Bearer ${token}` };
   f.core.record({ event: 'host.revoked', hostId: 'build-server' });
   f.core.record({ event: 'linked.repo', actor: 'alice@example.test', text: 'alice linked a repository' });
   for (let i = 0; i < 200; i++) {
-    assert.equal((await call(f, '/api/enroll', 'POST', { kind: 'host' }, { authorization: `Bearer ${token}` })).status, 200);
+    assert.equal((await call(f, '/api/enroll', 'POST', { kind: 'host' }, as)).status, 200);
+  }
+  const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const pushKey = Buffer.from(await crypto.subtle.exportKey('raw', pair.publicKey)).toString('base64');
+  for (let i = 0; i < 200; i++) {
+    for (const key of [{ pushKey }, {}]) {
+      assert.equal((await call(f, '/api/devices', 'POST', { platform: 'android', token: 'fcm_dummy_token', ...key }, as)).status, 200);
+    }
+  }
+  // Named as hers, so they count in her share and only she and an admin see them.
+  const last = () => `${f.core.events.at(-1)?.event} ${f.core.events.at(-1)?.actor}`;
+  assert.equal(last(), 'device.plaintext mallory@example.test');
+  const { publicJwk } = await generateKeyPair();
+  const pin = async (/** @type {any} */ body) => (await (await call(f, '/api/enroll', 'POST', { kind: 'host', ...body }, as)).json()).code;
+  for (let i = 0; i < 200; i++) {
+    const code = await pin(i ? { hostId: 'm-box' } : {});
+    assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: 'm-box', publicJwk })).status, 200);
+  }
+  assert.equal(last(), 'host.enrolled mallory@example.test');
+  for (let i = 0; i < 200; i++) {
+    const code = await pin({ ephemeral: true });
+    assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: `t-${i}`, publicJwk })).status, 200);
+    f.core.hostConnected(`t-${i}`, () => {});
+    f.core.hostDisconnected(`t-${i}`, 'job done');
   }
   await new Promise((r) => setTimeout(r, 0));
 
   const kept = (/** @type {any[]} */ events) =>
     events.some((e) => e.event === 'host.revoked') && events.some((e) => e.actor === 'alice@example.test');
-  assert.ok(kept(f.core.events), 'a member’s pins pushed other records out of the ring');
+  assert.ok(kept(f.core.events), 'a member’s requests pushed other records out of the ring');
   assert.ok(kept(state.raw.get('events') ?? []), 'and out of storage');
   const revived = new Fleet(/** @type {any} */ (state), {});
   await new Promise((r) => setTimeout(r, 0));
@@ -546,7 +575,8 @@ test('a box changing its health reason every frame is announced once, and holds 
   // storage and a rebuild (third Workers audit).
   const { fleet: f, state } = fleet();
   f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
-  for (let i = 0; i < 150; i++) f.core.record({ event: 'audit.seed', text: `seed ${i}` });
+  // Of several kinds, since one kind naming nobody keeps only 25 (#makeRoom).
+  for (let i = 0; i < 150; i++) f.core.record({ event: `audit.seed-${i % 10}`, text: `seed ${i}` });
   const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
   await f.core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: admin.client.id, actor: 'admin@example.test' });
   /** @type {any[]} */
