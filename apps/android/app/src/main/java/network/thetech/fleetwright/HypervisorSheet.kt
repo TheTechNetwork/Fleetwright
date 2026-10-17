@@ -912,10 +912,13 @@ internal fun HypervisorSheet(
                     XoHandoff.keepInFleet(settings, fleet, address.trim())
                 }
                 if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
-                // WHAT EACH SERVER CAME TO, opened once, when the job is
-                // done; the key goes with it, opened or not.
+                // WHAT EACH SERVER CAME TO, opened once, when the job has
+                // ended, however it ended: a failed reconnect is when it
+                // matters most which server did not come back. The key goes
+                // with it, opened or not.
                 val sealedOutcome = r.xosetup.result
-                if (reconnect && r.xosetup.state == "done" && sealedOutcome != null && reconnected == null && !outcomeUnopened) {
+                val ended = r.xosetup.state == "done" || r.xosetup.state == "failed" || r.xosetup.state == "cancelled"
+                if (reconnect && ended && sealedOutcome != null && reconnected == null && !outcomeUnopened) {
                     val opened = resultKey?.let { XoReconnect.openResult(sealedOutcome, id, address.trim(), it) }
                     if (opened != null) reconnected = opened else outcomeUnopened = true
                 }
@@ -1086,7 +1089,7 @@ internal fun HypervisorSheet(
                     // WHAT EACH SERVER CAME TO, from the sealed outcome, and
                     // the pools the admin sign-in sees now. Without it, the
                     // machine's counted sentence above is all there is.
-                    reconnect && setup != null && setup.state == "done" -> {
+                    reconnect && setup != null && (setup.state == "done" || reconnected != null || outcomeUnopened) -> {
                         when (val r = reconnected) {
                             null -> if (outcomeUnopened) {
                                 Hint(
@@ -1096,7 +1099,11 @@ internal fun HypervisorSheet(
                             }
                             else -> ReconnectOutcome(r, XoHandoff.held(settings).firstOrNull { it.address == address.trim() }?.pools)
                         }
-                        TextButton(onClick = { password = ""; onDismiss() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Done") }
+                        if (setup.state == "done") {
+                            TextButton(onClick = { password = ""; onDismiss() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Done") }
+                        } else {
+                            TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }
+                        }
                     }
                     setup != null -> {
                         TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }

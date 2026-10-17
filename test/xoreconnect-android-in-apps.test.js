@@ -84,6 +84,16 @@ test('Android: the key the outcome comes back to lives in memory, and goes when 
   assert.doesNotMatch(file('XoReconnect.kt'), /putSecret|Settings|SharedPreferences|Log\.[idwe]\(/);
 });
 
+test('Android: what each server came to is shown however the reconnect ended, a failed one most of all', () => {
+  const sheet = file('HypervisorSheet.kt');
+  // Opened on any end, not only done: the server that did not come back is
+  // the one the person needs named.
+  assert.match(sheet, /val ended = r\.xosetup\.state == "done" \|\| r\.xosetup\.state == "failed" \|\| r\.xosetup\.state == "cancelled"\s*if \(reconnect && ended && sealedOutcome != null/);
+  assert.match(sheet, /reconnect && setup != null && \(setup\.state == "done" \|\| reconnected != null \|\| outcomeUnopened\) -> \{/);
+  // And a failed one still offers to start again.
+  assert.match(sheet, /if \(setup\.state == "done"\) \{[\s\S]{0,200}?Text\("Done"\)[\s\S]{0,80}?\} else \{[\s\S]{0,160}?startAgain\(\)[\s\S]{0,120}?Text\("Start again"\)/);
+});
+
 test('Android: Reconnect on a lost pool’s notification opens the app, for an admin’s push only', () => {
   const notice = file('PoolNotice.kt');
   // An activity, because the fingerprint or face prompt needs a screen; a
