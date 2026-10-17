@@ -1148,13 +1148,8 @@ export class CoordinatorCore {
     await this.#pushPool(owner, {
       title: shown === 0 ? `${address} shows no pools` : missing.length === 1 && names.length ? `${address} no longer shows ${names[0]}` : `${address} no longer shows ${missing.length} pools`,
       body: text,
-      // THE RECONNECT BUTTON, only where it can be pressed: reconnecting
-      // needs the admin sign-in and only an admin may run `xosetup`. A
-      // member's own pool still gets the push, with nothing to press, and so
-      // do the admins, who are the ones who can reconnect it.
-      ...(this.#isOperator(owner) ? { category: POOL_RECONNECT_CATEGORY } : {}),
       data: { kind: 'pool-lost', name: `pool-lost-${address}`, hostId, address },
-    });
+    }, { reconnect: true });
   }
 
   /**
@@ -1189,14 +1184,24 @@ export class CoordinatorCore {
    * the app drew under the same name: "Pools back" would sit under the loss
    * instead of taking its place.
    *
-   * @param {string} owner @param {{ title: string, body: string, category?: string, data: Record<string, string> }} message
+   * THE RECONNECT BUTTON, only where it can be pressed: reconnecting needs
+   * the admin sign-in and only an admin may run `xosetup`. So a loss goes to
+   * an admin's phones with the button and to a member's without it, the
+   * member's own pool included: the admins are the ones who can reconnect
+   * it, and their phones are the ones that get something to press.
+   *
+   * @param {string} owner @param {{ title: string, body: string, data: Record<string, string> }} message
+   * @param {{ reconnect?: boolean }} [opts]
    */
-  async #pushPool(owner, message) {
+  async #pushPool(owner, message, { reconnect = false } = {}) {
     if (!this.push) return;
     const devices = this.#devicesOf(owner);
     if (!devices.length) return;
+    const admins = reconnect ? devices.filter((d) => !d.clientId || Boolean(this.clients.clients.get(d.clientId)?.admin)) : [];
+    const others = devices.filter((d) => !admins.includes(d));
     try {
-      await this.push.send(devices, { ...message, drawnByApp: true });
+      if (admins.length) await this.push.send(admins, { ...message, category: POOL_RECONNECT_CATEGORY, drawnByApp: true });
+      if (others.length) await this.push.send(others, { ...message, drawnByApp: true });
     } catch (e) {
       this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
     }

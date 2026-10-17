@@ -159,15 +159,19 @@ test('only a look a box may make for the owner, and one that reached Xen Orchest
   assert.equal(sent[0].message.data.hostId, 'deb14');
 });
 
-test('a member’s pool goes to their phones and the admin’s, with no Reconnect button, and stays out of other members’ feeds', async () => {
+test('a member’s pool goes to their phones without a Reconnect button and to the admin’s with one, and stays out of other members’ feeds', async () => {
   const { core, sent, frame, reached } = await fleet({ 'aaa-sam': SAM });
   await frame('aaa-sam', [gone(SAM, POOL_LOST_AFTER_MS, { missing: [{ id: 'p-1', name: 'tn-pool' }, { id: 'p-2', name: 'lab' }], pools: [{ id: 'p-3', name: 'dev' }] })]);
-  assert.equal(sent.length, 1);
-  assert.deepEqual(reached(sent[0]), [ELI, SAM], 'Kim was told about Sam’s pool, or Sam or the admin was not');
-  // Only an admin may run the reconnect, so a member's push offers none.
-  assert.equal(sent[0].message.category, undefined);
-  assert.equal(sent[0].message.title, 'xo.lan no longer shows 2 pools');
-  assert.match(sent[0].message.body, /no longer shows tn-pool and lab\. Reconnecting its servers usually brings them back\.$/);
+  assert.deepEqual(sent.flatMap(reached).sort(), [ELI, SAM], 'Kim was told about Sam’s pool, or Sam or the admin was not');
+  // Only an admin may run the reconnect, so the admin's phone gets the
+  // button and the member's does not, though it is the member's pool.
+  const to = (/** @type {string} */ who) => sent.find((p) => reached(p).includes(who))?.message;
+  assert.equal(to(ELI)?.category, 'fleet.pool.reconnect', 'the one who can reconnect it was given nothing to press');
+  assert.equal(to(SAM)?.category, undefined, 'a member was given a button they cannot use');
+  for (const m of [to(ELI), to(SAM)]) {
+    assert.equal(m?.title, 'xo.lan no longer shows 2 pools');
+    assert.match(m?.body, /no longer shows tn-pool and lab\. Reconnecting its servers usually brings them back\.$/);
+  }
 
   const mine = core.recentEvents({ email: SAM, admin: false }).filter((e) => e.event === 'xo.pool-lost');
   const theirs = core.recentEvents({ email: KIM, admin: false }).filter((e) => e.event === 'xo.pool-lost');
@@ -200,10 +204,13 @@ test('a box that sees no pools and remembers none is counted from the first fram
 test('one person’s box naming many addresses is heard about a few, not each', async () => {
   // The addresses are the box's word, and every push reaches the admin too.
   const { sent, clock, frame } = await fleet({ 'aaa-sam': SAM });
+  // Counted by address: one loss is a push to the member's phones and one
+  // to the admin's, with the button.
+  const said = () => new Set(sent.map((p) => p.message.data.address)).size;
   await frame('aaa-sam', Array.from({ length: 20 }, (_, i) => gone(SAM, 60 * 60_000, { address: `xo${i}.lan` })));
-  assert.equal(sent.length, 8);
+  assert.equal(said(), 8);
   // A bound on the hour, not for good.
   clock.now += 60 * 60_000;
   await frame('aaa-sam', Array.from({ length: 20 }, (_, i) => gone(SAM, 120 * 60_000, { address: `xo${i + 20}.lan` })));
-  assert.equal(sent.length, 16);
+  assert.equal(said(), 16);
 });
