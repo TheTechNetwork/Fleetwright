@@ -504,3 +504,103 @@ test('a member cannot start a new session under a name another member holds', as
   assert.equal((await start('bjob', 'b@example.com')).ok, true);
   assert.deepEqual(delivered, ['fresh', 'bjob']);
 });
+
+test('a box’s health, asked of it directly, is filtered like the host list', async () => {
+  // A later audit: GET /api/hosts runs each box's health through the
+  // visibility filter, and the `health` verb fetched the same blob from the
+  // box and handed it back as the box wrote it. Any member who asked for
+  // health, of the operator's box or of one another member enrolled, read
+  // every session on it: name, title, working directory, account, the live
+  // prompt question, and the bin.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  const carols = { name: 'carol-work', status: 'running', title: 'carol’s title', cwd: '/work/carol', account: 'carol@example.com', prompt: { question: 'carol’s question' }, createdBy: 'fleet:carol@example.com' };
+  /** @param {any[]} sessions @param {any[]} bin */
+  const blob = (sessions, bin) => ({ hub: { reachable: true }, maxSessions: 5, running: sessions.length, free: 3, labels: [], sessions, resumable: sessions.map((s) => s.name), bin });
+  const reported = {
+    'ops-box': blob([{ name: 'alice-work', status: 'running', createdBy: 'fleet:alice@example.com' }, carols], [{ name: 'carol-old', createdBy: 'fleet:carol@example.com' }]),
+    // carol's own box, which also says alice made something on it.
+    'carol-box': blob([carols, { name: 'planted', status: 'running', createdBy: 'fleet:alice@example.com' }], []),
+  };
+  for (const [hostId, enrolledBy] of [['ops-box', null], ['carol-box', 'carol@example.com']]) {
+    await admit(core, hostId, {
+      enrolledBy,
+      send: (/** @type {any} */ intent) => queueMicrotask(() => core.onHostMessage(hostId, { kind: 'reply', id: intent.id, ok: true, text: 'ok', health: reported[hostId] })),
+    });
+    core.registry.recordHealth(hostId, reported[hostId]);
+  }
+  const health = (/** @type {any} */ requester, /** @type {string} */ preferHost) =>
+    core.dispatch({ verb: 'health', params: {}, actor: requester.email, requester, preferHost });
+
+  const fromOps = (await health(ALICE, 'ops-box')).health;
+  assert.deepEqual(fromOps.sessions.map((/** @type {any} */ s) => s.name), ['alice-work'], 'another member’s session came back in a health reply');
+  assert.deepEqual(fromOps.resumable, ['alice-work']);
+  assert.deepEqual(fromOps.bin, [], 'and their bin');
+  assert.equal(fromOps.free, 3, 'capacity is the box’s, and still answered');
+  const fromCarol = (await health(ALICE, 'carol-box')).health;
+  assert.deepEqual(fromCarol.sessions, [], 'a box another member enrolled answered with their sessions, or filed one under alice');
+
+  // Its owner sees what is hers, and the admin the box's own words.
+  const forCarol = (await health({ email: 'carol@example.com', admin: false }, 'carol-box')).health;
+  assert.deepEqual(forCarol.sessions.map((/** @type {any} */ s) => s.name), ['carol-work', 'planted']);
+  assert.equal((await health(ADMIN, 'ops-box')).health.sessions.length, 2);
+});
+
+test('a member’s profiles and secrets are asked only of the boxes that act for them', async () => {
+  // A later audit: `profiles` and `secrets` fanned out to every connected box,
+  // so alice's question went, with her name on it, to the box mallory
+  // enrolled, and its profile names, their first lines and its secret names
+  // came back merged into alice's picker: a list of things on a box that
+  // takes no work from her, and the one way a member could read them.
+  const { core, delivered } = await forgedFleet();
+  for (const verb of ['profiles', 'secrets']) {
+    delivered.length = 0;
+    const r = await core.dispatch({ verb, params: {}, actor: 'alice@example.com', requester: ALICE });
+    assert.deepEqual(r.hosts.map((/** @type {any} */ h) => h.hostId), ['ops-box'], verb);
+    assert.deepEqual(delivered, [], `alice’s ${verb} went to a box that does not act for her`);
+  }
+  // mallory still asks her own box, and the admin every box.
+  const hers = await core.dispatch({ verb: 'profiles', params: {}, actor: 'mallory@example.com', requester: { email: 'mallory@example.com', admin: false } });
+  assert.deepEqual(hers.hosts.map((/** @type {any} */ h) => h.hostId).sort(), ['mal-box', 'ops-box']);
+  assert.equal((await core.dispatch({ verb: 'secrets', params: {}, requester: ADMIN })).hosts.length, 2);
+});
+
+test('a start is refused over a name only where it could have landed', async () => {
+  // A later audit: the name check counted every claim on every box before
+  // placement looked at which boxes could take the start. So a start naming
+  // a host that does not exist answered name_unavailable for a name somebody
+  // else held and host_unavailable for one nobody did, which told a member
+  // the name existed with nothing sent anywhere. And a box a member enrolled,
+  // which takes nobody else's work, reserved every name it reported for the
+  // whole fleet. The takeover the check exists for needs the box holding the
+  // record to take the start (the test above), and that part still holds.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {string[]} */
+  const delivered = [];
+  const room = { hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], claudeAccounts: 2 };
+  for (const [hostId, enrolledBy] of [['ops-box', null], ['mal-box', 'mallory@example.com']]) {
+    await admit(core, hostId, {
+      enrolledBy,
+      send: (/** @type {any} */ intent) => {
+        delivered.push(`${intent.params?.name}@${hostId}`);
+        queueMicrotask(() => core.onHostMessage(hostId, { kind: 'reply', id: intent.id, ok: true, text: 'Started' }));
+      },
+    });
+  }
+  core.registry.recordHealth('ops-box', { ...room, sessions: [{ name: 'carol-job', status: 'stopped', createdBy: 'fleet:carol@example.com' }] });
+  core.registry.recordHealth('mal-box', { ...room, sessions: [{ name: 'deploy', status: 'stopped', createdBy: null }, { name: 'build', status: 'stopped', createdBy: 'fleet:alice@example.com' }] });
+  const start = (/** @type {string} */ name, /** @type {string} */ preferHost = '') =>
+    core.dispatch({ verb: 'start', params: { name }, actor: 'alice@example.com', requester: ALICE, preferHost });
+
+  const held = await start('carol-job', 'no-such-host');
+  const free = await start('never-used', 'no-such-host');
+  assert.equal(held.error?.code, free.error?.code, 'a held name and a free one answered differently');
+  assert.equal(held.text, free.text);
+
+  for (const name of ['deploy', 'build']) {
+    const r = await start(name);
+    assert.equal(r.ok, true, `${name} on mallory’s box blocked alice’s start: ${r.text}`);
+  }
+  assert.deepEqual(delivered, ['deploy@ops-box', 'build@ops-box']);
+});

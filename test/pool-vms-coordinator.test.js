@@ -80,6 +80,23 @@ test('a member sees which pools a box holds only for themselves', () => {
   assert.deepEqual(seen.health.xo.map((/** @type {any} */ e) => e.owner), [SAM]);
 });
 
+test('a box another member enrolled cannot list a pool in somebody’s host list as theirs', async () => {
+  // A later audit: placement believed `xo[].owner` only from a box that may
+  // act for the owner (xoFor), and the host list believed it from any box.
+  // So bob's box naming sam as a pool's owner, at an address and with images
+  // bob chose, showed in sam's /api/hosts as a box holding sam's pool.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const { core } = fleet({});
+  await admit(core, 'aaa-bob', { enrolledBy: 'bob@example.com' });
+  await admit(core, 'sam-box', { enrolledBy: SAM });
+  const health = (/** @type {any[]} */ xo) => ({ hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [], xo });
+  core.registry.recordHealth('aaa-bob', health(holding(SAM).map((e) => ({ ...e, address: 'planted.example', holder: true }))));
+  core.registry.recordHealth('sam-box', health(holding(SAM)));
+  const seen = (/** @type {string} */ hostId) => core.snapshot(sam).hosts.find((/** @type {any} */ h) => h.hostId === hostId).health.xo;
+  assert.deepEqual(seen('aaa-bob'), [], 'a box that does not act for sam listed a pool as hers');
+  assert.deepEqual(seen('sam-box').map((/** @type {any} */ e) => e.address), ['xo.lan'], 'and her own box still does');
+});
+
 test('asking for a machine mints a VM ticket and asks a box that holds the pool, never a runner repository', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI) }, other: {} });
   const r = await core.dispatch(ask(eli, { minutes: 30, repo: 'mallory/evil' }));

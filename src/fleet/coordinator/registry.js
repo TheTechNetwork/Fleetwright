@@ -91,13 +91,15 @@ export function runsNoSessions(hostId) {
 /**
  * A health report with every session's and bin entry's creator replaced by
  * whom the fleet believes (hosts.js believedCreator). Copied rather than
- * edited in place, because the frame is the caller's.
+ * edited in place, because the frame is the caller's. Exported for the one
+ * copy of a box's health that reaches a person without being stored first,
+ * the `health` verb's reply (core.js dispatch).
  *
  * @param {{ actsFor?: string|null }} host
  * @param {HostHealth} health
  * @returns {HostHealth}
  */
-function attributed(host, health) {
+export function attributed(host, health) {
   if (!health || typeof health !== 'object') return health;
   /** @param {any} list */
   const each = (list) =>

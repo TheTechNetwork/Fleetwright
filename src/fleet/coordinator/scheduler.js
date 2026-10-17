@@ -148,10 +148,27 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // reachable(), not schedulable(): see the comment on both in registry.js.
     // Asking every connected box what it has is a different question from
     // choosing one to start work on.
-    const hosts = registry.reachable();
-    return hosts.length
-      ? { kind: 'fanout', hosts }
-      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    //
+    // A MEMBER'S PROFILES AND SECRETS ARE ASKED OF THE BOXES THAT ACT FOR
+    // THEM (holders), and they were asked of every box. So a member's
+    // question went, with their name on it, to a box another member enrolled,
+    // and its profile names, their first lines and its secret names came back
+    // merged into their picker: things on a machine that takes no start from
+    // them, belonging to the one person it does (fifth Workers audit). `list`
+    // still asks everywhere, because dispatch filters its records and rewrites
+    // its prose for the person asking, and nothing can do that to a profile.
+    const scoped = verb !== 'list' && requester && !requester.admin;
+    const hosts = scoped ? holders() : registry.reachable();
+    if (!hosts.length) {
+      return {
+        kind: 'refused',
+        code: 'no_hosts',
+        reason: scoped && registry.reachable().length
+          ? 'No connected machine acts for you. A box another member enrolled, or a temporary machine somebody else asked for, takes work only from them.'
+          : describeWhyNoHosts(registry),
+      };
+    }
+    return { kind: 'fanout', hosts };
   }
 
   // LOGS GO TO ONE NAMED BOX.
@@ -632,20 +649,31 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // reused its workspace and Claude config volumes, keyed by name, on its
   // owner's Claude account, and rewrote its creator to the starter, who then
   // had its pinned verbs while its owner was told it did not exist. A member
-  // may not take a name another person's claim holds (an unattributed one is
-  // the fleet's), and the words are the same whatever holds it, so the
-  // refusal does not say whose or where. Their own stopped session is for
-  // `resume`, which the box says when asked to start it.
-  if (verb === 'start' && name && requester && !requester.admin) {
+  // may not take a name another person's claim holds ON THE BOX THAT WOULD
+  // TAKE THE START (an unattributed claim is the fleet's), and the words are
+  // the same whatever holds it, so the refusal does not say whose. Their own
+  // stopped session is for `resume`, which the box says when asked to start
+  // it.
+  //
+  // ONLY THERE, which is the one place the takeover can happen: the volumes
+  // are the box's own. This was asked of every claim on every box before
+  // placement chose anything, so a start naming a host that does not exist
+  // answered name_unavailable for a name somebody held and host_unavailable
+  // for one nobody did, an existence oracle out of the access control the
+  // pinned verbs above are careful not to build. And a box a member enrolled,
+  // which takes nobody else's start, reserved every name it reported for the
+  // whole fleet (fifth Workers audit). Asked below, of the box named and of
+  // the boxes that could be chosen.
+  const takenOn = (/** @type {import('./registry.js').HostEntry} */ h) => {
+    if (verb !== 'start' || !name || !requester || requester.admin) return false;
     const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
-    if (registry.findSessions(name).some((c) => String(c.createdBy || '').toLowerCase() !== mine)) {
-      return {
-        kind: 'refused',
-        code: 'name_unavailable',
-        reason: `"${name}" cannot be used for a new session. Pick another name.`,
-      };
-    }
-  }
+    return registry.findSessions(name).some((c) => c.host.hostId === h.hostId && String(c.createdBy || '').toLowerCase() !== mine);
+  };
+  const nameUnavailable = /** @type {Placement} */ ({
+    kind: 'refused',
+    code: 'name_unavailable',
+    reason: `"${name}" cannot be used for a new session. Pick another name.`,
+  });
 
   // --- new work: filter, rank, tie-break ------------------------------------
   // THE POOL'S OWN MACHINE, named: refused as what it is, before anything
@@ -721,6 +749,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         reason: `${preferHost} acts for the person who enrolled it, and takes work only from them.`,
       };
     }
+    if (takenOn(chosen)) return nameUnavailable;
     if ((chosen.health?.free ?? 0) <= 0) {
       return {
         kind: 'refused',
@@ -800,9 +829,14 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
           'from them, and a runner only from the person who asked for it.',
     };
   }
+  // Not a box holding somebody else's claim on the name (takenOn, above), and
+  // when every box that acts for them holds one, the name is taken everywhere
+  // this start could go.
+  const open = usable.filter((h) => !takenOn(h));
+  if (!open.length) return nameUnavailable;
 
-  const durable = usable.filter((h) => !h.ephemeral);
-  if (!durable.length && usable.length) {
+  const durable = open.filter((h) => !h.ephemeral);
+  if (!durable.length && open.length) {
     // OFFERED, NOT CHOSEN, and the difference is the whole rule. A runner has
     // the most free capacity in the fleet because it is empty and about to
     // disappear; picking it by capacity would put work on a machine that takes
@@ -812,7 +846,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       code: 'only_ephemeral_hosts',
       reason:
         `${required.length ? `Nothing durable carries ${required.join(', ')}. ` : ''}` +
-        `The only hosts that match are temporary: ${usable.map((h) => h.hostId).join(', ')}. ` +
+        `The only hosts that match are temporary: ${open.map((h) => h.hostId).join(', ')}. ` +
         'Name one explicitly to use it — work started there is lost when it goes.',
     };
   }
@@ -822,7 +856,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     return {
       kind: 'refused',
       code: 'at_capacity',
-      reason: usable
+      reason: open
         .map((h) => `${h.hostId} ${h.health?.running}/${h.health?.maxSessions}`)
         .join(', '),
     };
