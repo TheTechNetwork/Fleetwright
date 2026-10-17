@@ -887,58 +887,26 @@ export class Coordinator {
       return json(res, 200, { ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
     }
 
-    // THE GITHUB CALLBACK. GitHub redirects a BROWSER here, which carries no
-    // fleet credential — `state` is what stands in for one: unguessable,
-    // single-use, minutes-long, and bound to the host and person who started
-    // the flow. Both coordinators serve it, because a client that works
-    // against one and not the other is exactly what openapi.json exists to
-    // prevent.
-    if (p === '/oauth/github/callback' && req.method === 'GET') {
-      const result = await this.core.finishGithubAuthorization({
-        code: url.searchParams.get('code'),
-        state: url.searchParams.get('state'),
-        // The installation half of the flow, which arrives with no state.
-        setupAction: url.searchParams.get('setup_action'),
-        installationId: url.searchParams.get('installation_id'),
-        origin: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`,
-      });
+    // THE PROVIDER CALLBACKS, the same as the Worker's: no fleet credential,
+    // so they finish nothing. Each answers a page that hands the code and
+    // state to the app or to `/me`, which finishes with POST /api/oauth/finish
+    // behind the gate. Both coordinators serve them, because a client that
+    // works against one and not the other is exactly what openapi.json exists
+    // to prevent.
+    if ((p === '/oauth/github/callback' || p === '/oauth/github/relayed' || p === '/oauth/cloudflare/callback') && req.method === 'GET') {
+      const q = url.searchParams;
+      const result =
+        p === '/oauth/cloudflare/callback'
+          ? { ...this.core.cloudflareCallback({ code: q.get('code'), state: q.get('state') }), provider: 'cloudflare' }
+          : p === '/oauth/github/relayed'
+            ? this.core.relayedGithubCallback({ state: q.get('state'), sealed: q.get('sealed'), error: q.get('error') })
+            : this.core.githubCallback({ code: q.get('code'), state: q.get('state'), setupAction: q.get('setup_action') });
       res.writeHead(result.ok ? 200 : 400, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
       });
-      // HTML, not JSON: a person was sent here by a browser, and a raw object
-      // on screen is how a working flow looks broken.
       res.end(callbackPage(result));
-      return undefined;
-    }
-
-    // A GITHUB SIGN-IN THAT WENT THROUGH THE OAUTH RELAY: the same as the
-    // Worker's, because openapi.json holds both coordinators to it.
-    if (p === '/oauth/github/relayed' && req.method === 'GET') {
-      const result = await this.core.finishRelayedGithubAuthorization({
-        state: url.searchParams.get('state'),
-        sealed: url.searchParams.get('sealed'),
-        error: url.searchParams.get('error'),
-      });
-      res.writeHead(result.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
-      res.end(callbackPage(result));
-      return undefined;
-    }
-
-    // THE CLOUDFLARE CALLBACK — the same flow, the second provider. Secured by
-    // the same single-use state, checked against its own pending store so a
-    // GitHub state cannot finish a Cloudflare flow or the reverse.
-    if (p === '/oauth/cloudflare/callback' && req.method === 'GET') {
-      const result = await this.core.finishCloudflareAuthorization({
-        code: url.searchParams.get('code'),
-        state: url.searchParams.get('state'),
-        origin: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`,
-      });
-      res.writeHead(result.ok ? 200 : 400, {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-      });
-      res.end(callbackPage({ ...result, provider: 'cloudflare' }));
       return undefined;
     }
 
@@ -1143,6 +1111,21 @@ export class Coordinator {
     // Same as the Worker: the flag the destructive-route guard reads.
     if (p === '/api/me' && req.method === 'GET') {
       return json(res, 200, { ok: true, email: client?.email ?? null, admin: isAdmin, viewing: client && !client.admin ? 'member' : 'admin' });
+    }
+
+    // Finishing a provider sign-in, for the person who started it: the
+    // Worker's route, from the same core method.
+    if (p === '/api/oauth/finish' && req.method === 'POST') {
+      const body = await readJson(req);
+      const r = await this.core.finishAuthorization({
+        provider: body?.provider,
+        code: body?.code,
+        state: body?.state,
+        sealed: body?.sealed,
+        origin: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`,
+        requester: requesterFor(client),
+      });
+      return json(res, r.ok ? 200 : 400, r);
     }
 
     if (p === '/api/clients' && req.method === 'GET') {
@@ -1522,7 +1505,8 @@ export class Coordinator {
       return json(
         res,
         200,
-        body.verb === 'connect'
+        // Only for a client that can finish one: the Worker's rule, see offerOauth.
+        body.verb === 'connect' && body.oauthFinish === true
           ? this.core.offerOauth(
               reply,
               typeof body.host === 'string' ? body.host : (reply?.hostId ?? ''),

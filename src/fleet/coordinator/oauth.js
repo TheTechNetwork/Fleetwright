@@ -61,21 +61,57 @@ const STATE_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 200;
 
 /**
- * A pending authorization, and the whole security of the callback.
+ * How many flows one person may have waiting in one provider's store.
  *
- * `state` is the only thing tying a request arriving from the open internet to
- * a flow this coordinator started. It therefore has to be:
+ * PER PERSON, because the store is the whole fleet's. It used to have only
+ * the aggregate bound above, evicting the oldest entry whoever's it was, and
+ * every connect reply with a catalogue minted a state — so one member with a
+ * box that answers `connect` sent two hundred of them and every other
+ * person's sign-in, half-way through GitHub's consent page, came back
+ * "expired". Now a person's new flow makes room by retiring their OWN oldest,
+ * and when the store is full of other people's live flows the new one is
+ * refused (no offer; the paste route still works) rather than evicting theirs.
+ *
+ * NOT ONE, though one would be the tidy number. The screen a flow starts on
+ * asks for the catalogue again when the app comes back to the front — Android
+ * reloads on resume, which is the same moment the provider hands the code
+ * back — and with a single slot that reload would replace the state the
+ * person was in the middle of a moment before they finish with it. A few
+ * slots keep the flow they started alive through their own refreshes and
+ * still bound what one person can hold to a rounding error of the whole.
+ */
+const MAX_PENDING_PER_PERSON = 4;
+
+/**
+ * Whose a flow is, as one comparable string. The admin token's flows carry no
+ * email and share the empty key, which no signed-in person can have.
+ * @param {string|null|undefined} email
+ */
+const whoseFlow = (email) => (email ? String(email).trim().toLowerCase() : '');
+
+/**
+ * A pending authorization, and what it does and does not prove.
+ *
+ * `state` ties a request back to a flow this coordinator started. It has to be:
  *
  *  - **unguessable** — a uuid, not a counter
- *  - **single-use** — redeemed exactly once, so a replayed callback is refused
+ *  - **single-use** — redeemed exactly once, so a replayed finish is refused
  *  - **short-lived** — ten minutes is longer than anybody takes and shorter
  *    than a link left open in a tab
- *  - **bound to both the host and the person**, so the token that comes back
- *    can only be delivered where the flow started and stored under the
- *    identity that asked
+ *  - **bound to both the host and the person who started it**, so the token
+ *    that comes back can only be delivered where the flow started and stored
+ *    under the identity that asked
  *
- * Without those four the callback is an open door for anyone who can guess a
- * URL — and the thing behind the door writes a credential onto a machine.
+ * WHAT IT DOES NOT PROVE is who finished it. The state is in the authorize
+ * URL, the authorize URL is a link, and a link can be forwarded: a member
+ * kept the github.com page from their own Connect, sent it to somebody else,
+ * and when that person authorized, the callback — which took no credential
+ * and checked only that the state was live — exchanged THEIR code and filed
+ * the token under the member who started it, on a box that member had root
+ * on. So a flow is now redeemed only by the person who started it, proved by
+ * their own fleet credential on an authenticated request (`redeem`'s
+ * `requester`), and the provider's redirect only hands the code back to the
+ * app or page that holds one. See finishGithubAuthorization in core.js.
  */
 export class PendingAuthorizations {
   /** @param {{ now?: () => number, ttlMs?: number }} [opts] */
@@ -94,16 +130,20 @@ export class PendingAuthorizations {
 
   /**
    * @param {{ state: string, hostId: string, email: string|null, pkce?: boolean, relayed?: boolean }} flow
+   * @returns {string|null} the state, or null when the store is full of other
+   *   people's live flows and this one was not kept — the caller makes no offer
    */
   mint({ state, hostId, email, pkce = false, relayed = false }) {
     this.sweep();
-    // Oldest first, so a flood of abandoned flows cannot evict a live one that
-    // somebody is in the middle of.
-    while (this.pending.size >= MAX_PENDING) {
-      const oldest = this.pending.keys().next().value;
-      if (oldest === undefined) break;
-      this.pending.delete(oldest);
-    }
+    const who = whoseFlow(email);
+    // Their own oldest first, so a person's fresh attempt displaces only their
+    // stale ones. Map order is insertion order, which is oldest first.
+    const theirs = [];
+    for (const [s, rec] of this.pending) if (whoseFlow(rec.email) === who) theirs.push(s);
+    while (theirs.length >= MAX_PENDING_PER_PERSON) this.pending.delete(/** @type {string} */ (theirs.shift()));
+    // NEVER SOMEBODY ELSE'S. Refusing costs this person the sign-in offer on
+    // one reply; evicting would cost another person the flow they are in.
+    if (this.pending.size >= MAX_PENDING) return null;
     // `pkce`: the host offered a challenge, so the code goes BACK TO IT to be
     // exchanged rather than being exchanged here. See `exchange` in
     // src/fleet/protocol/intents.js.
@@ -115,19 +155,45 @@ export class PendingAuthorizations {
   }
 
   /**
-   * Redeem once. Returns the flow, or null for unknown, expired or replayed.
+   * Redeem once, for the person who started it. Returns the flow, or null for
+   * unknown, expired, replayed, or somebody else's.
+   *
+   * `requester` is the VERIFIED caller finishing it, from its fleet
+   * credential: null is the admin token, which finishes only a flow the admin
+   * token started. Omitted is not null — a caller that forgot to pass one is
+   * refused, because reading a missing requester as "anybody" is the
+   * fail-open direction.
+   *
+   * SOMEBODY ELSE'S IS LEFT PENDING. Spending it would let whoever holds a
+   * forwarded link cancel the starter's flow; leaving it lets the starter
+   * still finish, and they are the only one who can.
+   *
    * @param {unknown} state
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
    */
-  redeem(state) {
+  redeem(state, requester) {
     this.sweep();
     const key = typeof state === 'string' ? state : '';
     const found = this.pending.get(key);
-    if (!found) return null;
-    // Deleted before the caller does anything with it: a callback that arrives
-    // twice, or is replayed from a browser history entry, must not exchange a
-    // second time.
+    if (!found || requester === undefined) return null;
+    const starter = whoseFlow(found.email);
+    const ok = requester === null ? starter === '' : starter !== '' && whoseFlow(requester.email) === starter;
+    if (!ok) return null;
+    // Deleted before the caller does anything with it: a finish that arrives
+    // twice, or is replayed, must not exchange a second time.
     this.pending.delete(key);
     return found;
+  }
+
+  /**
+   * Whether a state is live — after a refused `redeem`, the difference between
+   * "expired or used" and "started by somebody else", which only a caller
+   * holding the state and a fleet credential is ever told.
+   * @param {unknown} state
+   */
+  isPending(state) {
+    this.sweep();
+    return typeof state === 'string' && this.pending.has(state);
   }
 }
 
@@ -381,16 +447,6 @@ export async function exchangeCloudflareCode({ clientId, clientSecret, code, ori
 }
 
 /**
- * The page a browser lands on afterwards.
- *
- * Deliberately plain and self-closing in tone: the person is in a browser they
- * opened from an app, and the useful thing is to tell them it worked and that
- * they can go back. No styling, no script, nothing to load — this is served by
- * the coordinator and must not become a page that fetches anything.
- *
- * @param {{ ok: boolean, text: string }} result
- */
-/**
  * The scheme both apps register, so the browser can hand control back.
  *
  * A person who taps Connect leaves the app, authorizes, and lands on a page
@@ -444,6 +500,60 @@ export function deviceReturnUrl({ code, state, provider = 'github' }) {
   return `fleetwright://${host}?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
 }
 
+/** What a state this coordinator minted looks like (a uuid), as far as a page will carry one. */
+const BOX_STATE_RE = /^[A-Za-z0-9-]{16,64}$/;
+
+/** What the relay's sealed token looks like: base64url, and never larger than a page should carry. */
+const SEALED_RE = /^[A-Za-z0-9_-]{16,4096}$/;
+
+/**
+ * Where the browser's fleet credential lives on this origin. The `/me` page
+ * writes it (member-page.js); the finishing page below reads it. One name in
+ * one place, because a page that looked under a different key would quietly
+ * fall back to the app every time.
+ */
+export const BROWSER_CREDENTIAL_KEY = 'fleetwright.credential';
+
+/**
+ * What the provider's redirect hands back for a box's flow, checked and
+ * fixed in shape: the provider, the state, and the code (or the relay's
+ * sealed token). Nothing else from the request reaches the page.
+ *
+ * @param {{ provider: 'github'|'cloudflare', state: unknown, code?: unknown, sealed?: unknown }} q
+ * @returns {{ provider: 'github'|'cloudflare', state: string, code?: string, sealed?: string }|null}
+ */
+export function handBack({ provider, state, code, sealed }) {
+  const which = provider === 'cloudflare' ? 'cloudflare' : 'github';
+  const st = String(state ?? '');
+  if (!BOX_STATE_RE.test(st)) return null;
+  if (sealed !== undefined && sealed !== null) {
+    const s = String(sealed);
+    return which === 'github' && SEALED_RE.test(s) ? { provider: which, state: st, sealed: s } : null;
+  }
+  const c = String(code ?? '');
+  return CODE_RE.test(c) ? { provider: which, state: st, code: c } : null;
+}
+
+/**
+ * The same, as the app's own return: `fleetwright://<provider>?…`, the hosts
+ * a device's sign-in already comes back on, so neither app needs a new scheme
+ * registered. A device's state starts `d.` and a box's never does, which is
+ * how the screen waiting for each tells them apart.
+ *
+ * @param {{ provider: 'github'|'cloudflare', state: string, code?: string, sealed?: string }} finish  from handBack
+ */
+export function handBackUrl(finish) {
+  const query = new URLSearchParams({ state: finish.state, ...(finish.sealed ? { sealed: finish.sealed } : { code: /** @type {string} */ (finish.code) }) });
+  return `fleetwright://${finish.provider === 'cloudflare' ? 'cloudflare' : 'github'}?${query}`;
+}
+
+/** JSON for inside a `<script>` element: a `</script>` in a value would close it. @param {unknown} value */
+const scriptJson = (value) =>
+  JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+
+/** One stylesheet for both pages, inline: they load nothing. */
+const PAGE_STYLE = 'body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem}\na.back{display:inline-block;margin-top:1rem}';
+
 /**
  * The page a browser lands on afterwards.
  *
@@ -451,9 +561,14 @@ export function deviceReturnUrl({ code, state, provider = 'github' }) {
  * two-value vocabulary, never from the request — the words on this page and
  * the scheme it redirects to must not be steerable by whoever crafted the URL.
  *
- * @param {{ ok: boolean, text: string, installed?: boolean, provider?: string, device?: string|null }} result
+ * `finish` is a box's flow coming back (handBack), and that page connects
+ * nothing by itself; see finishingPage.
+ *
+ * @param {{ ok: boolean, text: string, installed?: boolean, provider?: string, device?: string|null,
+ *   finish?: { provider: 'github'|'cloudflare', state: string, code?: string, sealed?: string }|null }} result
  */
-export function callbackPage({ ok, text, installed, provider = 'github', device = null }) {
+export function callbackPage({ ok, text, installed, provider = 'github', device = null, finish = null }) {
+  if (finish) return finishingPage(finish, text);
   const which = provider === 'cloudflare' ? 'cloudflare' : 'github';
   const label = which === 'cloudflare' ? 'Cloudflare' : 'GitHub';
   const safe = String(text).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
@@ -471,12 +586,79 @@ export function callbackPage({ ok, text, installed, provider = 'github', device 
   // answer. The person reads it or nobody does.
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${installed ? 'App installed' : ok ? 'Connected' : 'Not connected'}</title>
-<style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem}
-a.back{display:inline-block;margin-top:1rem}</style>
+<style>${PAGE_STYLE}</style>
 <h1>${installed ? 'GitHub App installed' : ok ? `${label} connected` : 'Not connected'}</h1>
 <p>${safe}</p>
 <p><a class="back" href="${back}">Back to Fleetwright</a></p>
 ${installed ? '' : `<script>location.replace(${JSON.stringify(back)})</script>`}`;
+}
+
+/**
+ * The page a box's flow lands on: it hands the code back, and connects
+ * nothing itself.
+ *
+ * THE BROWSER THAT COMES BACK HERE IS NOT KNOWN TO BE THE PERSON WHO STARTED
+ * THE FLOW — a forwarded authorize link brings somebody else's browser, with
+ * somebody else's code. So this page only passes what came back to something
+ * that holds a fleet credential, which finishes it with POST /api/oauth/finish,
+ * and the coordinator finishes only for the person who started it:
+ *
+ *  - **This origin's own credential**, which `/me` keeps in localStorage, is
+ *    the same-origin case: the page posts the finish with it. A browser
+ *    signed in as somebody else is told the sign-in was not theirs.
+ *  - **The app**, otherwise: the code and state go to `fleetwright://`, where
+ *    the screen that opened the provider's page is waiting, and it posts the
+ *    finish with its own credential.
+ *
+ * A browser holding neither — the forwarded link's usual victim — ends here
+ * with nothing sent anywhere.
+ *
+ * NOTHING EXTERNAL, as before: the one request is to this origin.
+ *
+ * @param {{ provider: 'github'|'cloudflare', state: string, code?: string, sealed?: string }} finish
+ * @param {string} text
+ */
+function finishingPage(finish, text) {
+  const label = finish.provider === 'cloudflare' ? 'Cloudflare' : 'GitHub';
+  const safe = String(text).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
+  const back = handBackUrl(finish);
+  const done = appReturnUrl({ ok: true, provider: finish.provider });
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Finishing</title>
+<style>${PAGE_STYLE}</style>
+<h1 id="head">Finishing the ${label} connection</h1>
+<p id="say" role="status">${safe}</p>
+<p><a class="back" href="${back.replace(/&/g, '&amp;')}">Back to Fleetwright</a></p>
+<script>
+(function () {
+  var finish = ${scriptJson(finish)};
+  var back = ${scriptJson(back)};
+  var token = null;
+  try { token = localStorage.getItem(${scriptJson(BROWSER_CREDENTIAL_KEY)}); } catch (e) { token = null; }
+  if (!token) { location.replace(back); return; }
+  var say = document.getElementById('say');
+  fetch('/api/oauth/finish', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+    body: JSON.stringify(finish)
+  }).then(function (res) {
+    return res.json().then(function (body) { return { status: res.status, body: body || {} }; });
+  }).then(function (r) {
+    // A credential this fleet no longer accepts is no credential: the app may
+    // still hold a good one.
+    if (r.status === 401) { location.replace(back); return; }
+    say.textContent = r.body.text || (r.body.ok ? 'Connected.' : 'Nothing was connected.');
+    document.getElementById('head').textContent = r.body.ok ? ${scriptJson(`${label} connected`)} : 'Not connected';
+    // Somebody else's flow, as far as this browser's credential can tell.
+    // The words stay on screen, and the app is still offered the code: an app
+    // signed in as the person who started it can finish where this cannot.
+    if (r.body.error && r.body.error.code === 'not_yours') { location.replace(back); return; }
+    if (r.body.ok) location.replace(${scriptJson(done)});
+  }, function () {
+    location.replace(back);
+  });
+})();
+</script>`;
 }
 
 /**
