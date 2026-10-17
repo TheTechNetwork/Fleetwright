@@ -25,7 +25,7 @@ RUN apt-get update \
 # here rather than taking whatever is current keeps image rebuilds boring.
 # Renovate moves it from one LTS line to the next, and nothing in between.
 # renovate: datasource=node-version depName=node-major
-ARG NODE_MAJOR=22
+ARG NODE_MAJOR=24
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
