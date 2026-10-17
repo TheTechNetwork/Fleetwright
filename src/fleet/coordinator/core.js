@@ -489,7 +489,7 @@ export class CoordinatorCore {
     // Which machines are in the fleet. The authority, unlike `registry` above,
     // which is a cache of what those machines say about themselves.
     // An operator's machines are not counted against anybody's share of it.
-    this.hostIds = new HostIdentities({ now, isAdmin: (email) => this.clients.emailHasAdmin(email) });
+    this.hostIds = new HostIdentities({ now, isAdmin: (email) => this.#isOperator(email) });
     // Codes that admit a new host or device, once.
     this.enrollment = new Enrollment({ now });
     /** @type {Map<string, { resolve: (reply: any) => void, timer: any, hostId: string }>} */
@@ -535,7 +535,7 @@ export class CoordinatorCore {
     // AND WHO IT MAY ACT FOR, which the enrolment also knows and placement did
     // not: every credential and errand went to any permanent box, a box a
     // member enrolled for themselves included. See actsFor in hosts.js.
-    const person = actsFor(enrolled, (email) => this.clients.emailHasAdmin(email));
+    const person = actsFor(enrolled, (email) => this.#isOperator(email));
     this.registry.connect(hostId, send, {
       ephemeral: Boolean(enrolled?.ephemeral),
       owner: enrolled?.owner ?? null,
@@ -1007,12 +1007,20 @@ export class CoordinatorCore {
    * Workers audit). So whoever an entry names as its actor keeps at most
    * ACTOR_EVENTS_EACH, and what they do next displaces their own. An
    * operator's records are the fleet's, as an operator's boxes are
-   * (actsFor), and records naming nobody, `client.revoked` and
-   * `host.revoked` among them, are no one person's share to spend.
+   * (actsFor).
+   *
+   * RECORDS NAMING NOBODY were left out as no one person's share to spend,
+   * and some of them are written at a member's request: a phone
+   * re-registering without its push key and then with it, a box re-keyed
+   * with a pin bound to it, a temporary host going away. Each cycled the
+   * whole ring from one member's credential (fourth Workers audit). The ones
+   * a member asks for now name them; what still names nobody keeps
+   * ACTOR_EVENTS_EACH of each kind, so no one kind of it, `host.retired` or
+   * one added later, can be the whole ring.
    *
    * The ring is what #saveEvents stores, so a share kept here is kept there.
    *
-   * @param {{ hostId: string, actor?: string|null }} event
+   * @param {{ hostId: string, event: string, actor?: string|null }} event
    */
   #makeRoom(event) {
     /** @type {any} */
@@ -1023,9 +1031,12 @@ export class CoordinatorCore {
       drop = mine.length >= HOST_EVENTS_EACH ? mine[0] : hosts.length >= HOST_EVENTS ? hosts[0] : null;
     } else if (event.actor) {
       const who = String(event.actor).toLowerCase();
-      if (this.clients.emailHasAdmin(who)) return;
+      if (this.#isOperator(who)) return;
       const theirs = this.events.filter((e) => !hostReported(e) && String(e.actor || '').toLowerCase() === who);
       if (theirs.length >= ACTOR_EVENTS_EACH) drop = theirs[0];
+    } else {
+      const same = this.events.filter((e) => !hostReported(e) && !e.actor && e.event === event.event);
+      if (same.length >= ACTOR_EVENTS_EACH) drop = same[0];
     }
     if (drop) this.events.splice(this.events.indexOf(drop), 1);
   }
@@ -1729,8 +1740,12 @@ export class CoordinatorCore {
     // The email on a credential is verified by the identity provider before it
     // is ever stored, which is exactly what makes it usable as the thing role
     // attaches to. And it deliberately follows across REVOKED rows: revocation
-    // exists for lost devices, not demotion — removing a person is taking them
-    // off the allowlist, after which they cannot sign in at all.
+    // exists for lost devices, so an admin whose every phone went signs in as
+    // the admin again. Removing a person is two acts: taking them off the
+    // allowlist or the invites, so they cannot sign in again, and revoking what
+    // they hold, which is the half this object sees. Until they sign in again
+    // their machines are not the fleet's (#isOperator), and signing in puts
+    // them back (#retier below).
     // everHadAdmin, not hasAdmin: the founding of a fleet happens once.
     // Checking live admins reopened it — revoke the owner's lost phone and the
     // next person to sign in, whoever they were, inherited the fleet.
@@ -1757,6 +1772,7 @@ export class CoordinatorCore {
     client.email = who.email;
     this.log.info(`coordinator: issued a credential to ${who.email} for ${label}${admin ? ' (admin — first in)' : ''}`);
     if (admin) this.record({ event: 'client.admin', actor: who.email, text: `${who.email} is the first person in, and is this fleet's admin` });
+    if (admin) this.#retier();
     return { token, client: { id: client.id, name: client.name, createdAt: client.createdAt, admin: client.admin } };
   }
 
@@ -1840,6 +1856,10 @@ export class CoordinatorCore {
       return { ok: false, error: 'that push token is registered to another device', code: 'not_yours' };
     }
     const owner = clientId ?? existing?.clientId;
+    // WHO ASKED, as the actor of what this request records, so it counts in
+    // their share of the ring (#makeRoom). From the credential, never the
+    // body: the admin token's registration names nobody.
+    const askedBy = clientId ? this.clients.clients.get(clientId)?.email ?? null : null;
 
     // A CEILING THAT REFUSES RATHER THAN FORGETS, which is the whole difference
     // between this key and the one above it.
@@ -1860,6 +1880,7 @@ export class CoordinatorCore {
     if (grows && this.devices.size >= MAX_DEVICES) {
       this.record({
         event: 'devices.full',
+        actor: askedBy,
         text:
           `a ${platform} device could not register: this fleet is holding ${MAX_DEVICES} push ` +
           'registrations, which is the most it can store in one record. Remove the phones that ' +
@@ -1884,6 +1905,7 @@ export class CoordinatorCore {
     if (existing?.pushKey && !pushKey) {
       this.record({
         event: 'device.plaintext',
+        actor: askedBy,
         text:
           `a ${platform} device re-registered without an encryption key, so its notifications are ` +
           'no longer sealed to it. A reinstall does this and is expected; the same phone doing it ' +
@@ -2106,7 +2128,8 @@ export class CoordinatorCore {
    * temporary hosts are revoked, and their runner tokens, tickets and
    * waiting runner starts with them.
    *
-   * AND THEIR PINS, which admit machines exactly as tickets do. They were
+   * AND THEIR PINS, which admit machines exactly as tickets do, and their
+   * unspent MCP sign-in codes, which buy a credential. They were
    * left, so for the rest of each pin's ten minutes a removed member could
    * enrol a host in their own name, re-key one the pin was bound to and
    * readmit one an admin had revoked, and nothing could cancel them (third
@@ -2153,6 +2176,15 @@ export class CoordinatorCore {
         changed = true;
       }
     }
+    // And an MCP sign-in they began, whose code buys a credential for five
+    // minutes: one spent after the removal was a working credential again
+    // (fourth Workers audit). Held in memory only, so nothing to save.
+    for (const [code, c] of this.mcpAuthorizations.codes) {
+      if (String(c.email || '').toLowerCase() === address) this.mcpAuthorizations.codes.delete(code);
+    }
+    // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
+    // connected, whose tier was decided when it connected (#retier).
+    this.#retier();
     if (changed) this.onStateChanged?.();
     return hosts;
   }
@@ -2163,6 +2195,45 @@ export class CoordinatorCore {
       if (!c.revokedAt && String(c.email || '').toLowerCase() === address) return true;
     }
     return false;
+  }
+
+  /**
+   * Is this person the fleet's operator, whose machines may hold anybody's
+   * credentials and whose records and boxes are no one person's share?
+   *
+   * An admin with a credential that still works. emailHasAdmin alone counts
+   * revoked rows, as signing in must (clients.js), and admin rows are never
+   * swept, so it stays true for good. It was the whole test, and the allowlist
+   * a removal takes someone off is read only at sign-in: an admin removed by
+   * revoking every credential they held kept every box they had enrolled as
+   * an operator's, sent the fleet's client secrets on each connect and every
+   * member's pasted token, and placed for anybody's work, on a machine they
+   * still had root on (fourth Workers audit).
+   *
+   * @param {string} email
+   */
+  #isOperator(email) {
+    const address = String(email || '').toLowerCase().trim();
+    return this.clients.emailHasAdmin(address) && this.#hasLiveCredential(address);
+  }
+
+  /**
+   * Decide again who each connected box acts for, which hostConnected decides
+   * once per connection: a box that stays connected kept the tier it had
+   * when its person was removed, and kept getting what that tier is sent. Run
+   * when a person is removed (#forgetPerson) and when an admin signs in, so a
+   * returning admin's boxes are the fleet's again without waiting for a
+   * reconnect. The client secrets still arrive only on a connect.
+   */
+  #retier() {
+    for (const entry of this.registry.hosts.values()) {
+      const enrolled = this.hostIds.get(entry.hostId);
+      if (!enrolled || enrolled.revokedAt) continue;
+      const person = actsFor(enrolled, (email) => this.#isOperator(email));
+      if (person === entry.actsFor) continue;
+      entry.actsFor = person;
+      this.log.info(`coordinator: ${entry.hostId} now acts for ${person ?? 'anybody (an operator’s box)'}`);
+    }
   }
 
   /**

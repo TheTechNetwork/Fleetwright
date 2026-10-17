@@ -78,7 +78,7 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 |---|---|---|---|---|---|
 | **Device token** (`fwk_…`) | phone Keychain/Keystore; **hash only** in the DO | the phone; nobody via the DO | re-issue | `revoke(id)`, per-device | `lastSeenAt`, client list |
 | **Break-glass admin token** (`FLEETWRIGHT_API_TOKEN`) | Cloudflare secret | the Worker; whoever holds the Worker's secrets | `wrangler secret put` under this name + redeploy | delete the secret, which leaves no break-glass and never an older one (SEC-CRED-4) | none; it is unattributed by design |
-| **GitHub App client secret** | Cloudflare secret; on hosts, sidecar **memory only** — delivered on the config frame, never written (§9-G2, fixed) | the Worker; each connected sidecar on a box the operator runs, in memory (and root on that box, via process memory). Not a box a member enrolled, a pool's own machine or a runner (`actsFor`, `hosts.js`) | change in Cloudflare + redeploy; hosts pick it up on reconnect | none scoped | none |
+| **GitHub App client secret** | Cloudflare secret; on hosts, sidecar **memory only** — delivered on the config frame, never written (§9-G2, fixed) | the Worker; each connected sidecar on a box the operator runs, in memory (and root on that box, via process memory). Not a box a member enrolled, a pool's own machine or a runner (`actsFor`, `hosts.js`), and not a box enrolled by an admin since removed: the tier wants an admin holding a credential that still works, and is decided again when they are removed (`#isOperator`, `core.js`) | change in Cloudflare + redeploy; hosts pick it up on reconnect | none scoped | none |
 | **Host private key** (P-256) | `/var/lib/fleetwright-sidecar/host-key.json`, `0600` in `0700`, mode re-checked every load | the sidecar's own account (`fleetwright-sidecar`) only — not the session user, so neither the hub nor a session escape landing as it can read this (`hardening.md`) | re-enrol the host | `revoke` at coordinator, per-host | mode check refuses to start if loosened |
 | **Host public key** | coordinator DO | anyone who reads the DO (public half; harmless) | with re-enrol | with revoke | host list |
 | **Box Claude credential** | **gone as a standing store** — adopted once into `${stateDir}/accounts/<email>.json` and handed to the member it belonged to; a session with no linked account is refused, not given a shared one (`one-account-per-person.md`) | — | — | — | — |
@@ -864,7 +864,7 @@ trust.
 
 | Hop | Verifies or carries | Mechanism |
 |---|---|---|
-| phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist; spent on exchange |
+| phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist; spent on exchange. An MCP client's sign-in asks the allowlist and invites again when its code is spent, and a removal drops the code |
 | phone → coordinator (per request) | **verifies** | device token, SHA-256 hash compared timing-safe |
 | host → coordinator | **verifies** | P-256 signature over a coordinator-issued nonce |
 | provider redirect → coordinator (GitHub, Cloudflare) | **carries**, so it finishes nothing | the `state` names a flow and proves only who started it; the finish is a separate request that **verifies** (SEC-ID-8) |
@@ -1198,7 +1198,8 @@ Stated plainly, because omission is where a security document lies.
   closed. Nor closed by one member filling it: the 200 live hosts a fleet can
   store are shared out at 25 per person (`hosts.js`), the operator's boxes
   not counted, so a member's own excess is refused with `person_full` and
-  everyone else's enrolment goes on.
+  everyone else's enrolment goes on. A readmitted machine counts as a new
+  one, and a re-key that hands a box to another person counts in theirs.
 - **Traffic analysis / metadata.** The coordinator sees which member touched which
   host and when; that is not hidden.
 

@@ -17,6 +17,7 @@ import { Fleet } from '../worker/src/fleet-do.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../src/fleet/protocol/heartbeat.js';
 import { loadOrCreateKey, keyFingerprint } from '../src/fleet/host/identity.js';
 import { sign, signingInput, generateKeyPair } from '../src/fleet/crypto.js';
+import { s256 } from '../src/mcp/oauth.js';
 import { admit } from './helpers/enrolled-hosts.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -685,18 +686,47 @@ test('one member’s requests displace their own records, never the fleet’s or
   // entry in memory and in storage, and a rebuilt Fleet loaded only those:
   // the enrolments and revocations before them were gone (third Workers
   // audit).
+  //
+  // And records written at her request that named nobody, which that share
+  // did not count: a phone re-registering without its push key and then
+  // with it, a box of hers re-keyed with a pin bound to it, a temporary host
+  // of hers going away (fourth Workers audit).
   const { fleet: f, state } = fleet();
   const { token } = await f.core.clients.issue('mallory phone', { email: 'mallory@example.test' });
+  const as = { authorization: `Bearer ${token}` };
   f.core.record({ event: 'host.revoked', hostId: 'build-server' });
   f.core.record({ event: 'linked.repo', actor: 'alice@example.test', text: 'alice linked a repository' });
   for (let i = 0; i < 200; i++) {
-    assert.equal((await call(f, '/api/enroll', 'POST', { kind: 'host' }, { authorization: `Bearer ${token}` })).status, 200);
+    assert.equal((await call(f, '/api/enroll', 'POST', { kind: 'host' }, as)).status, 200);
+  }
+  const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const pushKey = Buffer.from(await crypto.subtle.exportKey('raw', pair.publicKey)).toString('base64');
+  for (let i = 0; i < 200; i++) {
+    for (const key of [{ pushKey }, {}]) {
+      assert.equal((await call(f, '/api/devices', 'POST', { platform: 'android', token: 'fcm_dummy_token', ...key }, as)).status, 200);
+    }
+  }
+  // Named as hers, so they count in her share and only she and an admin see them.
+  const last = () => `${f.core.events.at(-1)?.event} ${f.core.events.at(-1)?.actor}`;
+  assert.equal(last(), 'device.plaintext mallory@example.test');
+  const { publicJwk } = await generateKeyPair();
+  const pin = async (/** @type {any} */ body) => (await (await call(f, '/api/enroll', 'POST', { kind: 'host', ...body }, as)).json()).code;
+  for (let i = 0; i < 200; i++) {
+    const code = await pin(i ? { hostId: 'm-box' } : {});
+    assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: 'm-box', publicJwk })).status, 200);
+  }
+  assert.equal(last(), 'host.enrolled mallory@example.test');
+  for (let i = 0; i < 200; i++) {
+    const code = await pin({ ephemeral: true });
+    assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: `t-${i}`, publicJwk })).status, 200);
+    f.core.hostConnected(`t-${i}`, () => {});
+    f.core.hostDisconnected(`t-${i}`, 'job done');
   }
   await new Promise((r) => setTimeout(r, 0));
 
   const kept = (/** @type {any[]} */ events) =>
     events.some((e) => e.event === 'host.revoked') && events.some((e) => e.actor === 'alice@example.test');
-  assert.ok(kept(f.core.events), 'a member’s pins pushed other records out of the ring');
+  assert.ok(kept(f.core.events), 'a member’s requests pushed other records out of the ring');
   assert.ok(kept(state.raw.get('events') ?? []), 'and out of storage');
   const revived = new Fleet(/** @type {any} */ (state), {});
   await new Promise((r) => setTimeout(r, 0));
@@ -713,7 +743,8 @@ test('a box changing its health reason every frame is announced once, and holds 
   // storage and a rebuild (third Workers audit).
   const { fleet: f, state } = fleet();
   f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
-  for (let i = 0; i < 150; i++) f.core.record({ event: 'audit.seed', text: `seed ${i}` });
+  // Of several kinds, since one kind naming nobody keeps only 25 (#makeRoom).
+  for (let i = 0; i < 150; i++) f.core.record({ event: `audit.seed-${i % 10}`, text: `seed ${i}` });
   const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
   await f.core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: admin.client.id, actor: 'admin@example.test' });
   /** @type {any[]} */
@@ -763,6 +794,36 @@ test('one member’s machines fill their own share of the fleet, not everybody�
   for (let i = 0; i < 40; i++) assert.equal((await enrol(i % 2 ? 'admin@example.test' : null, `op-${i}`)).status, 200, `the operator was refused their ${i + 1}th box`);
 });
 
+test('readmitting a machine, or re-keying one for somebody else, is counted like a new one', async () => {
+  // The share and the ceiling were checked only for a host id with no row, so
+  // a readmission (a revoked row made live again, under whoever's pin it was)
+  // and a re-key handing a row to another person counted for neither. One
+  // member let 200 temporary hosts of theirs retire, readmitted every row,
+  // and held 225 live hosts; the next person's enrolment got hosts_full
+  // (fourth Workers audit).
+  const { fleet: f } = fleet();
+  await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const { publicJwk } = await generateKeyPair();
+  const enrol = async (/** @type {string|null} */ actor, /** @type {string} */ hostId, /** @type {any} */ pin = {}) => {
+    const { code } = /** @type {any} */ (f.core.enrollment.mint({ purpose: 'host', actor, ...pin }));
+    const res = await call(f, '/api/enroll/host', 'POST', { code, hostId, publicJwk });
+    return res.status === 200 ? 200 : `${res.status} ${(await res.json()).error.code}`;
+  };
+  const mallory = 'mallory@example.test';
+  for (let i = 0; i < 25; i++) assert.equal(await enrol(mallory, `m-${i}`), 200);
+  for (let i = 0; i < 5; i++) f.core.revokeHost(`m-${i}`);
+  for (let i = 0; i < 5; i++) assert.equal(await enrol(mallory, `n-${i}`), 200);
+  assert.equal(await enrol(mallory, 'm-0', { readmit: true }), '507 person_full', 'a readmission went past the person’s share');
+  assert.equal(await enrol(null, 'ops-box'), 200);
+  assert.equal(await enrol(mallory, 'ops-box', { hostId: 'ops-box' }), '507 person_full', 'a re-key handed a box to a person at their share');
+  assert.equal(await enrol(mallory, 'm-5', { hostId: 'm-5' }), 200, 'a person at their share could not re-key their own box');
+
+  // And the fleet's ceiling: a readmission makes one more live machine.
+  for (let i = 0; f.core.hostIds.list().length < 200; i++) assert.equal(await enrol(null, `op-${i}`), 200);
+  assert.equal(await enrol(null, 'm-1', { readmit: true }), '507 hosts_full', 'a readmission went past the fleet’s ceiling');
+  assert.equal(await enrol(mallory, 'm-6', { hostId: 'm-6' }), 200, 'a re-key, which adds no machine, was refused by a full fleet');
+});
+
 test('a removed member’s pins go with them, and any pin listed can be cancelled after a restart', async () => {
   // #forgetPerson took back a removed member's tickets and left their pins:
   // for the rest of each pin's ten minutes they enrolled a new host in that
@@ -802,4 +863,47 @@ test('a removed member’s pins go with them, and any pin listed can be cancelle
   const again = new Fleet(/** @type {any} */ (state), {});
   await new Promise((r) => setTimeout(r, 0));
   assert.equal((await (await call(again, '/api/enroll', 'GET', null, as(admin))).json()).codes.length, 0, 'the cancelled pin came back after a restart');
+});
+
+test('an MCP sign-in begun before a person was removed buys no credential after', async () => {
+  // /oauth/authorize checks the allowlist and the invites; /oauth/token spent
+  // the code it issued for five minutes without asking again, and removal
+  // left the code alone. So a member un-invited and revoked while holding one
+  // exchanged it afterwards for a working credential, and minted pins and
+  // runner tokens with it (fourth Workers audit).
+  const { fleet: f } = fleet({ FLEETWRIGHT_AUTH_ALLOW: 'admin@example.test' });
+  const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const as = { authorization: `Bearer ${admin.token}` };
+  const reg = /** @type {any} */ (f.core.mcpAuthorizations.register({ redirect_uris: ['http://127.0.0.1:9999/cb'] }));
+  const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+  const challenge = await s256(verifier);
+  const signIn = (/** @type {string} */ email) =>
+    /** @type {any} */ (f.core.mcpAuthorizations.issueCode({ email, clientId: reg.clientId, redirectUri: 'http://127.0.0.1:9999/cb', challenge })).code;
+  const exchange = (/** @type {string} */ code) =>
+    f.fetch(new Request('https://fleet.example/oauth/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, client_id: reg.clientId, redirect_uri: 'http://127.0.0.1:9999/cb', code_verifier: verifier }),
+    }));
+  const held = (/** @type {string} */ email) => f.core.clients.list().filter((c) => c.email === email && !c.revokedAt).length;
+  for (const who of ['sam@example.test', 'carol@example.test']) f.core.invites.add(who, { invitedBy: 'admin@example.test', note: null });
+  const sam = await f.core.clients.issue('sam phone', { email: 'sam@example.test' });
+  const [first, second] = [signIn('sam@example.test'), signIn('sam@example.test')];
+
+  assert.equal((await call(f, '/api/invites/sam%40example.test', 'DELETE', null, as)).status, 200);
+  const refused = await exchange(first);
+  assert.equal(refused.status, 400);
+  assert.equal((await refused.json()).error, 'invalid_grant');
+  assert.equal(held('sam@example.test'), 1, 'an un-invited person was issued a credential');
+
+  // Revoking the last credential is the rest of the removal, and drops the
+  // code even if the person is invited again before it expires.
+  assert.equal((await call(f, `/api/clients/${sam.client.id}`, 'DELETE', null, as)).status, 200);
+  f.core.invites.add('sam@example.test', { invitedBy: 'admin@example.test', note: null });
+  assert.equal((await exchange(second)).status, 400, 'a removed person’s code outlived the removal');
+  assert.equal(held('sam@example.test'), 0);
+
+  // Somebody still in the fleet signs in as before.
+  assert.equal((await exchange(signIn('carol@example.test'))).status, 200);
+  assert.equal(held('carol@example.test'), 1);
 });

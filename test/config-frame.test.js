@@ -142,3 +142,54 @@ test('the client secrets go to the fleet’s own boxes, never to a machine a mem
     assert.deepEqual(frames[id], { runnerRepo: 'fleet/runners' }, id);
   }
 });
+
+test('a removed admin’s boxes stop being the fleet’s, connected or reconnecting', async () => {
+  // FOUND BY AN AUDIT: an admin removed by revoking every credential they
+  // held kept their boxes in the operator's tier for good, because admin rows
+  // are kept and the tier asked only whether a row had ever been admin. Each
+  // reconnect was sent both client secrets, and every member's pasted token
+  // still reached the box the removed person had root on.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    githubApp: { clientId: 'Iv1.app', clientSecret: SECRET },
+    cloudflareOauth: { clientId: 'cf-app', clientSecret: 'cfsecret000000000000000000' },
+    runnerRepo: 'fleet/runners',
+  });
+  const boss = { email: 'boss@example.test', name: null };
+  const phone = /** @type {any} */ (await core.issueClient(boss, 'phone'));
+  const laptop = /** @type {any} */ (await core.issueClient(boss, 'laptop'));
+  assert.equal(phone.client.admin, true);
+  await core.issueClient({ email: 'nina@example.test', name: null }, 'phone');
+  /** @type {any} */
+  let frame = null;
+  await admit(core, 'boss-box', { enrolledBy: boss.email, send: (/** @type {any} */ m) => { if (m?.kind === 'config') frame = m.values; } });
+  await admit(core, 'nina-box', { enrolledBy: 'nina@example.test' });
+  /** @type {string[]} */
+  let sent = [];
+  core.send = async (/** @type {any} */ host) => {
+    sent.push(host.hostId);
+    return { ok: true, text: 'stored' };
+  };
+  const nina = { email: 'nina@example.test', admin: false };
+  const linked = async () => {
+    sent = [];
+    await core.dispatch({ verb: 'link', params: { provider: 'github', secret: 'ghp_DUMMY' }, actor: nina.email, requester: nina });
+    return sent.sort();
+  };
+  assert.deepEqual(await linked(), ['boss-box', 'nina-box'], 'an admin’s box is the fleet’s');
+
+  core.revokeClient(phone.client.id);
+  assert.deepEqual(await linked(), ['boss-box', 'nina-box'], 'one lost phone is not a removal');
+  core.revokeClient(laptop.client.id);
+  assert.deepEqual(await linked(), ['nina-box'], 'a removed admin’s box, still connected, was sent a member’s token');
+  core.hostDisconnected('boss-box', 'reconnect');
+  core.hostConnected('boss-box', (/** @type {any} */ m) => { if (m?.kind === 'config') frame = m.values; });
+  assert.deepEqual(frame, { runnerRepo: 'fleet/runners' }, 'a removed admin’s box was sent the fleet’s client secrets');
+  assert.deepEqual(await linked(), ['nina-box']);
+
+  // Signing in again is still how an admin whose every phone went comes back.
+  assert.equal(/** @type {any} */ (await core.issueClient(boss, 'new phone')).client.admin, true);
+  assert.deepEqual(await linked(), ['boss-box', 'nina-box']);
+});
