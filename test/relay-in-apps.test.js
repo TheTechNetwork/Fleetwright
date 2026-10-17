@@ -105,7 +105,9 @@ test('iOS: the job goes through the relay only for a machine that reached it tha
 // --- Android ---------------------------------------------------------------
 
 test('Android: through this phone is offered only when the fleet named a machine that can take it, in the iPhone’s words', () => {
-  assert.match(SHEET, /throughOffer = if \(policy\) null else r\.relayHost/);
+  // Adding a pool only: a policy change and a reconnect each need a machine
+  // that reaches the pool.
+  assert.match(SHEET, /throughOffer = if \(policy \|\| reconnect\) null else r\.relayHost/);
   assert.match(KFLEET, /relayHost = json\.optJSONObject\("relay"\)\?\.optString\("hostId"\)/);
   // Under "no machine reached it", and only there.
   assert.match(SHEET, /reachable\.isEmpty\(\) -> \{[\s\S]{0,900}?throughOffer\?\.let \{ via ->[\s\S]{0,500}?Text\(if \(probing\) "Asking through this phone…" else "Try through this phone"\)/);

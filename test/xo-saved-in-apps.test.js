@@ -167,19 +167,22 @@ test('Android: nothing is written until the machine has signed in with it, and a
   assert.match(note, /phase == "sign-in" && keepLoaded\) \{\s*XoSaved\.forget\(settings, where\)/);
   // Sealed while the password is still here, before the machine's seal, and
   // dropped when the send is refused.
-  for (const name of ['run', 'runPolicy']) {
-    assert.match(kfn(name), /pendingSave = pick\?\.let \{ sealToKeep\(it, p\.email\) \}\s*val sealed = Xo(?:Setup|Policy)\.sealSignIn/);
+  for (const name of ['run', 'runPolicy', 'runReconnect']) {
+    assert.match(kfn(name), /pendingSave = pick\?\.let \{ sealToKeep\(it, p\.email\) \}\s*val sealed = Xo(?:Setup|Policy|Reconnect)\.sealSignIn/);
     assert.match(kfn(name), /if \(!r\.ok\) \{\s*pendingSave = null/);
   }
 });
 
 test('Android: the machine that got through last time is tried first, and every machine is asked when it does not', () => {
-  assert.match(kfn('openRemembered'), /val path = XoSaved\.machine\(settings, address\.trim\(\)\)\?\.let \{ directPath\(it\) \}\s*if \(path != null\) \{[\s\S]*?viaMemory = true\s*return\s*\}\s*probe\(\)/);
+  // A reconnect tries the machine its push named first (preferred), and
+  // every other path the one that got through last time.
+  assert.match(kfn('preferred'), /\(if \(reconnect\) via\?\.takeIf \{ it\.isNotBlank\(\) \} else null\) \?: XoSaved\.machine\(settings, address\.trim\(\)\)/);
+  assert.match(kfn('openRemembered'), /val path = preferred\(\)\?\.let \{ directPath\(it\) \}\s*if \(path != null\) \{[\s\S]*?viaMemory = true\s*return\s*\}\s*probe\(\)/);
   assert.match(kfn('directPath'), /XoHandoff\.pinnedCertificate\(settings, address\.trim\(\)\)/);
   assert.match(kfn('begin'), /\(!r\.ok \|\| setup == null\) && viaMemory -> \{[\s\S]*?probe\(\)\s*refusal = "\$why Your other machines were asked instead\."/);
   // And a try through this phone, whose relay was for the job that ended.
   assert.match(kfn('startAgain'), /val askAll = \(viaMemory && progress\?\.state == "failed" && progress\?\.phase == "connect"\) \|\| pick\?\.through == "phone"[\s\S]*?if \(askAll\) probe\(\)/);
-  assert.match(kfn('probe'), /chosen = able\.singleOrNull\(\)\?\.hostId \?: able\.firstOrNull \{ it\.hostId == via \}\?\.hostId/);
+  assert.match(kfn('probe'), /val first = preferred\(\)\s*chosen = able\.singleOrNull\(\)\?\.hostId \?: able\.firstOrNull \{ it\.hostId == first \}\?\.hostId/);
   assert.match(kfn('notePath'), /if \(past\) \{\s*if \(runningOn\.isNotBlank\(\)\) XoSaved\.rememberMachine\(settings, where, runningOn\)/);
 });
 

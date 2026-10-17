@@ -104,7 +104,14 @@ internal object XoSetupNotice {
         // AN INSTALL installs Xen Orchestra and then adds the pool, so its
         // end says both (DEPLOY_TITLES in core.js).
         val deploy = data["purpose"] == "deploy"
-        val title = if (deploy) {
+        // A RECONNECT of a pool's servers reports from reading them on, and
+        // its end says whether the pools came back (RECONNECT_TITLES in
+        // core.js; XoReconnect.title). Counts only: the servers' names are
+        // sealed to the screen that asked.
+        val reconnect = data["purpose"] == XoReconnect.PURPOSE
+        val title = if (reconnect) {
+            XoReconnect.title(state)
+        } else if (deploy) {
             when (state) {
                 "done" -> "Xen Orchestra installed and added"
                 "failed" -> "Installing Xen Orchestra stopped"
@@ -128,6 +135,7 @@ internal object XoSetupNotice {
         }
         val body = when (state) {
             "done" -> when {
+                reconnect -> "Open to see what each server came to."
                 policy -> if (hostId.isBlank()) "Applied." else "$hostId applied it."
                 hostId.isBlank() -> "The pool is in the fleet."
                 else -> "$hostId finished. The pool is in the fleet."
@@ -136,7 +144,11 @@ internal object XoSetupNotice {
             "cancelled" -> "Stopped between steps, as asked."
             "waiting" -> if (deploy) "Waiting for the passwords" else "Waiting for the sign-in"
             else -> listOfNotNull(
-                if (policy) XoPolicy.stepWords(data["phase"], step, of) else XoSetup.stepWords(data["phase"], step, of),
+                when {
+                    reconnect -> XoReconnect.stepWords(data["phase"], step, of)
+                    policy -> XoPolicy.stepWords(data["phase"], step, of)
+                    else -> XoSetup.stepWords(data["phase"], step, of)
+                },
                 detail,
                 hostId.takeIf { it.isNotBlank() }?.let { "on $it" },
             ).joinToString(" · ")

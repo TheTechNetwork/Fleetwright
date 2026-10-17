@@ -252,7 +252,7 @@ final class ManageParityTests: XCTestCase {
             "nothingOffered": Manage.Words.nothingOffered, "seesNothing": Manage.Words.seesNothing,
             "tuneNeedsStopped": Manage.Words.tuneNeedsStopped, "growNote": Manage.Words.growNote, "slow": Manage.Words.slow,
             "actionsFooter": Manage.Words.actionsFooter, "gone": Manage.Words.gone, "lookAgain": Manage.Words.lookAgain,
-            "changePolicy": Manage.Words.changePolicy, "whatItIs": Manage.Words.whatItIs, "howItIs": Manage.Words.howItIs,
+            "changePolicy": Manage.Words.changePolicy, "reconnectServers": Manage.Words.reconnectServers, "whatItIs": Manage.Words.whatItIs, "howItIs": Manage.Words.howItIs,
             "whatItCanDo": Manage.Words.whatItCanDo, "oneOfYours": Manage.Words.oneOfYours,
             "edgeHeading": Manage.Words.edgeHeading, "edgeNobody": Manage.Words.edgeNobody,
             "edgeUnasked": Manage.Words.edgeUnasked, "edgeEvents": Manage.Words.edgeEvents,

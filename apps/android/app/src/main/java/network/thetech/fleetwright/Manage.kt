@@ -736,6 +736,8 @@ internal object Manage {
         const val gone = "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it."
         const val lookAgain = "Look again"
         const val changePolicy = "Change what the fleet may use"
+        /** An admin's row, when the page shows none of the pool's pools or not every one this phone kept (XoReconnect.offered). */
+        const val reconnectServers = "Reconnect its servers"
         const val whatItIs = "What it is"
         const val howItIs = "How it is"
         const val whatItCanDo = "What it can do"

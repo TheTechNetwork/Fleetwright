@@ -326,6 +326,7 @@
     "gone": "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it.",
     "lookAgain": "Look again",
     "changePolicy": "Change what the fleet may use",
+    "reconnectServers": "Reconnect its servers",
     "whatItIs": "What it is",
     "howItIs": "How it is",
     "whatItCanDo": "What it can do",

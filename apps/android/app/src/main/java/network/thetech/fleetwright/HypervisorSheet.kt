@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -124,19 +125,48 @@ import kotlinx.coroutines.withContext
  * a screen rebuilt while the machine waits says it can no longer open what
  * the machine sent, and offers Cancel, rather than pretending otherwise.
  *
+ * RECONNECTING A POOL'S SERVERS is this screen a third time ([reconnectFor]),
+ * for a pool whose servers Xen Orchestra lost: from the `pool-lost` push's
+ * Reconnect, or the pool's page. Begun as the policy change is, from what
+ * this phone kept behind a fingerprint or face, so the push's one tap and
+ * the face check are the whole of it when the sign-in was kept. It starts on
+ * [via], the machine that noticed, when the path to it is known, and on the
+ * machine that got through last time otherwise. `begin` must answer that the
+ * machine can (`can` holds "reconnect"), checked before anything is sealed
+ * and again at the seal. The sign-in carries `purpose: "reconnect"` inside
+ * the seal, in the policy sign-in's shape, with a key for the outcome kept in
+ * this screen's memory alone; what each server came to, and the pools the
+ * admin sign-in sees at the end, open with it once the job is done
+ * (XoReconnect). No form and no choice: the machine reconnects only what is
+ * not connected and leaves a server somebody turned off off.
+ *
  * @param resumeJob a job a notification was tapped for: straight to its
  *   progress, from `status`, with nothing to type.
  * @param policyFor a pool's address, to change what the fleet may use on it
  *   instead of adding it. The address is fixed: it is the pool the token is
  *   kept for.
+ * @param reconnectFor a pool's address, to reconnect Xen Orchestra's servers
+ *   for it. Fixed, as [policyFor] is.
+ * @param via the machine to try first for a reconnect: the one the push
+ *   named, which saw the pools go. Null tries the one that got through last.
  */
 @Composable
-internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, policyFor: String? = null, onDismiss: () -> Unit) {
+internal fun HypervisorSheet(
+    settings: Settings,
+    resumeJob: String? = null,
+    policyFor: String? = null,
+    reconnectFor: String? = null,
+    via: String? = null,
+    onDismiss: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val fleet = remember { Fleet(settings) }
     val policy = policyFor != null
+    // A RECONNECT is never a policy change, and shares its fixed address,
+    // its start from memory and its machine that reaches the pool.
+    val reconnect = !policy && reconnectFor != null
 
-    var address by rememberSaveable { mutableStateOf(policyFor ?: "") }
+    var address by rememberSaveable { mutableStateOf(policyFor ?: reconnectFor ?: "") }
     var probing by remember { mutableStateOf(false) }
     // NULL IS NOT ASKED. An empty list is a fleet with nothing permanent to ask.
     var probes by remember { mutableStateOf<List<Fleet.Probe>?>(null) }
@@ -242,6 +272,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // `refusal`, which the poll clears on every answer, because the person
     // needs to read it while they change what it was about.
     var choiceRefusal by remember { mutableStateOf("") }
+    // A RECONNECT. The key the outcome comes back to, IN MEMORY ONLY, as the
+    // policy's is; what each server came to, once opened; and whether it did
+    // not open with this screen's key (a rebuilt screen, or not what the
+    // machine sealed).
+    var resultKey by remember { mutableStateOf<Seal.OneUseKey?>(null) }
+    var reconnected by remember { mutableStateOf<XoReconnect.Result?>(null) }
+    var outcomeUnopened by remember { mutableStateOf(false) }
     // INSTALLING XEN ORCHESTRA, for a pool that has none: its own screen,
     // drawn in place of this one (XoDeploySheet), and back here when it goes.
     var deploying by rememberSaveable { mutableStateOf(false) }
@@ -306,6 +343,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         keepLoaded = true
     }
 
+    /**
+     * The machine tried first: for a reconnect, the one the push named,
+     * which saw the pools go from where it stands; otherwise, and when
+     * nothing was named, the one that got through last time.
+     */
+    fun preferred(): String? = (if (reconnect) via?.takeIf { it.isNotBlank() } else null) ?: XoSaved.machine(settings, address.trim())
+
     fun probe() {
         scope.launch {
             probing = true
@@ -322,15 +366,15 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 probes = r.probes
                 // Adding a pool only: a policy change needs a machine that
                 // reaches the pool, which its own machine does once it has joined.
-                throughOffer = if (policy) null else r.relayHost
+                throughOffer = if (policy || reconnect) null else r.relayHost
                 // One machine that can is chosen for them; two is a decision,
                 // unless one of them got through last time, which is chosen
                 // and the others stay a tap away. A lone plain-HTTP machine is
                 // chosen too: choosing it shows the card that asks, and
                 // nothing is sent until it is answered.
                 val able = r.probes.filter { XoSetup.pinned(it) || XoSetup.plain(it) }
-                val via = XoSaved.machine(settings, address.trim())
-                chosen = able.singleOrNull()?.hostId ?: able.firstOrNull { it.hostId == via }?.hostId
+                val first = preferred()
+                chosen = able.singleOrNull()?.hostId ?: able.firstOrNull { it.hostId == first }?.hostId
                 // An address this phone kept a sign-in for: opened now, once
                 // there is something to send it to.
                 if (remembered == null) unlockRemembered()
@@ -426,7 +470,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
      */
     suspend fun openRemembered() {
         unlockRemembered()
-        val path = XoSaved.machine(settings, address.trim())?.let { directPath(it) }
+        val path = preferred()?.let { directPath(it) }
         if (path != null) {
             probes = listOf(path)
             chosen = path.hostId
@@ -491,6 +535,39 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     fun olderThanPolicy(hostId: String) =
         "$hostId is older than changing a policy, so nothing was sent. Update it, or choose another machine that reaches $address."
 
+    fun olderThanReconnect(hostId: String) =
+        "$hostId is older than reconnecting servers, so nothing was sent. Update it, or choose another machine that reaches $address."
+
+    /**
+     * `run` for a reconnect: the policy sign-in's seal and binding, with
+     * this purpose inside it and a key for the outcome made here and kept
+     * only in memory, never XoHandoff's, for runPolicy's reason.
+     */
+    suspend fun runReconnect(p: Pending) {
+        val key = p.setup.key ?: return
+        // ASKED AGAIN, though begin already refused: this is the last line
+        // before a sign-in is sealed.
+        if (XoReconnect.PURPOSE !in p.setup.can) {
+            password = ""
+            refusal = olderThanReconnect(p.hostId)
+            return
+        }
+        val reply = Seal.newKey()
+        pendingSave = pick?.let { sealToKeep(it, p.email) }
+        val sealed = XoReconnect.sealSignIn(key, p.setup.job, p.where, p.email, password, reply.publicKey)
+        password = ""
+        val r = fleet.xosetup("run", job = p.setup.job, sealed = sealed)
+        if (!r.ok) {
+            pendingSave = null
+            refusal = r.text.ifBlank { "${p.hostId} did not take the sign-in." }
+            return
+        }
+        resultKey = reply
+        job = p.setup.job
+        runningOn = r.hostId ?: p.hostId
+        progress = r.xosetup ?: p.setup.copy(state = "running")
+    }
+
     /**
      * `run` for a policy job: the same seal, under the same binding, with the
      * purpose inside it and a reply key made here and kept only in memory.
@@ -546,6 +623,10 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
      * sign-in sealed under a different one would be refused as a replay.
      */
     suspend fun run(p: Pending) {
+        if (reconnect) {
+            runReconnect(p)
+            return
+        }
         if (policy) {
             runPolicy(p)
             return
@@ -618,6 +699,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                 policy && XoPolicy.PURPOSE !in setup.can -> {
                     password = ""
                     refusal = olderThanPolicy(hostId)
+                    runCatching { fleet.xosetup("cancel", job = setup.job) }
+                }
+                // A RECONNECT the same way: an older machine would read the
+                // sign-in as a setup and add the pool again.
+                reconnect && XoReconnect.PURPOSE !in setup.can -> {
+                    password = ""
+                    refusal = olderThanReconnect(hostId)
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
                 // AND A SETUP ONLY TO A MACHINE NEW ENOUGH TO HAND THE TOKEN
@@ -701,6 +789,9 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         jobKey = null
         policyKey = null
         watchKey = null
+        resultKey = null
+        reconnected = null
+        outcomeUnopened = false
         inventory = null
         choice = null
         unopened = false
@@ -766,7 +857,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
     // A POOL THIS PHONE HOLDS opens on the machine that got through last
     // time, once per screen: a rotation does not put the prompt up again.
     LaunchedEffect(Unit) {
-        if (policy && job == null && !openedOnce) {
+        if ((policy || reconnect) && job == null && !openedOnce) {
             openedOnce = true
             openRemembered()
         }
@@ -821,6 +912,17 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     XoHandoff.keepInFleet(settings, fleet, address.trim())
                 }
                 if (r.xosetup.state == "failed" || r.xosetup.state == "cancelled") XoHandoff.forget(settings, id)
+                // WHAT EACH SERVER CAME TO, opened once, when the job has
+                // ended, however it ended: a failed reconnect is when it
+                // matters most which server did not come back. The key goes
+                // with it, opened or not.
+                val sealedOutcome = r.xosetup.result
+                val ended = r.xosetup.state == "done" || r.xosetup.state == "failed" || r.xosetup.state == "cancelled"
+                if (reconnect && ended && sealedOutcome != null && reconnected == null && !outcomeUnopened) {
+                    val opened = resultKey?.let { XoReconnect.openResult(sealedOutcome, id, address.trim(), it) }
+                    if (opened != null) reconnected = opened else outcomeUnopened = true
+                }
+                if (reconnect && (r.xosetup.state == "done" || r.xosetup.state == "failed" || r.xosetup.state == "cancelled")) resultKey = null
                 // CHOOSING IS NOT AN END: the loop goes on asking, so this
                 // screen hears when the machine lets go. The pool is opened
                 // once, the first time it arrives, and never after the
@@ -875,17 +977,18 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         return
     }
 
-    FullScreen(title = if (policy) "What the fleet may use" else "Add a hypervisor", onDismiss = { password = ""; onDismiss() }) {
+    val title = if (reconnect) "Reconnect its servers" else if (policy) "What the fleet may use" else "Add a hypervisor"
+    FullScreen(title = title, onDismiss = { password = ""; onDismiss() }) {
         val setup = progress
         val waitingOn = unvouched
         when {
             job != null -> {
-                SectionHead(if (policy) address else "Setting up")
+                SectionHead(if (policy || reconnect) address else "Setting up")
                 if (runningOn.isNotBlank()) Hint("On $runningOn", color = Design.Palette.ink.now)
                 if (setup == null) {
                     if (!pollStopped) Hint("Asking where it has got to…")
                 } else {
-                    SetupProgress(setup, policy)
+                    SetupProgress(setup, policy, reconnect)
                 }
                 when (val outcome = handedBack) {
                     XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted. No machine in the fleet keeps it on disk.")
@@ -970,8 +1073,11 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             modifier = Modifier.heightIn(min = 48.dp),
                         ) { Text(if (cancelling) "Cancelling…" else "Cancel") }
                         Hint(
-                            if (policy) "It stops between steps, and nothing is changed until you have chosen."
-                            else "It stops between steps. What was made so far is tagged fleetwright, and running the setup again picks up from what exists.",
+                            when {
+                                policy -> "It stops between steps, and nothing is changed until you have chosen."
+                                reconnect -> "It stops between steps, and changes nothing more after that."
+                                else -> "It stops between steps. What was made so far is tagged fleetwright, and running the setup again picks up from what exists."
+                            },
                         )
                     }
                     setup != null && (setup.state == "running" || setup.state == "waiting") -> {
@@ -979,6 +1085,25 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     }
                     policy && setup != null && setup.state == "done" -> {
                         TextButton(onClick = { password = ""; onDismiss() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Done") }
+                    }
+                    // WHAT EACH SERVER CAME TO, from the sealed outcome, and
+                    // the pools the admin sign-in sees now. Without it, the
+                    // machine's counted sentence above is all there is.
+                    reconnect && setup != null && (setup.state == "done" || reconnected != null || outcomeUnopened) -> {
+                        when (val r = reconnected) {
+                            null -> if (outcomeUnopened) {
+                                Hint(
+                                    "What each server came to did not open with this screen's key, so only the machine's count above " +
+                                        "can be shown. That key is kept in memory only, and goes when the screen does.",
+                                )
+                            }
+                            else -> ReconnectOutcome(r, XoHandoff.held(settings).firstOrNull { it.address == address.trim() }?.pools)
+                        }
+                        if (setup.state == "done") {
+                            TextButton(onClick = { password = ""; onDismiss() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Done") }
+                        } else {
+                            TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }
+                        }
                     }
                     setup != null -> {
                         TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Start again") }
@@ -1042,11 +1167,14 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     )
                 }
                 SectionHead("Where Xen Orchestra answers")
-                if (policy) {
+                if (policy || reconnect) {
                     // FIXED: the pool this phone keeps a token for, as the
                     // setup that made the token was begun.
                     Text(address, style = Design.Style.body, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
-                    Hint("Changing what the fleet may use starts the way adding the pool did: a machine that reaches it, and an admin sign-in.")
+                    Hint(
+                        if (reconnect) "Reconnecting its servers starts the way adding the pool did: a machine that reaches it, and an admin sign-in."
+                        else "Changing what the fleet may use starts the way adding the pool did: a machine that reaches it, and an admin sign-in.",
+                    )
                 } else OutlinedTextField(
                     value = address,
                     onValueChange = { typed ->
@@ -1086,7 +1214,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
 
                 val found = probes
                 if (found != null) {
-                    SectionHead(if (policy) "Which machine reads the pool" else "Which machine runs the setup")
+                    SectionHead(
+                        when {
+                            policy -> "Which machine reads the pool"
+                            reconnect -> "Which machine reconnects them"
+                            else -> "Which machine runs the setup"
+                        },
+                    )
                     when {
                         found.isEmpty() -> Hint("This fleet has no permanent machine to ask. Add a machine first; a temporary one cannot hold the pool's token.")
                         reachable.isEmpty() -> {
@@ -1109,8 +1243,12 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                         }
                         else -> {
                             Hint(
-                                if (policy) "Only a machine that reaches it can. It signs in, reads the pool, applies what you choose, and keeps nothing afterwards."
-                                else "Only a machine that reaches it can. The machine keeps the pool's token afterwards, so pick one that stays.",
+                                when {
+                                    policy -> "Only a machine that reaches it can. It signs in, reads the pool, applies what you choose, and keeps nothing afterwards."
+                                    reconnect -> "Only a machine that reaches it can. It signs in, reconnects the servers that are not connected, leaves any " +
+                                        "turned off in Xen Orchestra off, and keeps nothing afterwards."
+                                    else -> "Only a machine that reaches it can. The machine keeps the pool's token afterwards, so pick one that stays."
+                                },
                             )
                             reachable.forEach { p ->
                                 Row(
@@ -1142,7 +1280,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                                         // NOT ASKED THIS TIME, so nothing it found is
                                         // claimed: only why it is tried first.
                                         Text(
-                                            if (viaMemory && p.hostId == chosen) "Got through last time, so it is tried first" else XoSetup.describe(p),
+                                            when {
+                                                // The push's machine, which is not the one remembered.
+                                                viaMemory && p.hostId == chosen && reconnect && p.hostId == via && via != XoSaved.machine(settings, address.trim()) ->
+                                                    "Saw the pools go, so it is tried first"
+                                                viaMemory && p.hostId == chosen -> "Got through last time, so it is tried first"
+                                                else -> XoSetup.describe(p)
+                                            },
                                             style = Design.Style.label,
                                             color = Design.Palette.inkDim.now,
                                         )
@@ -1159,7 +1303,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     // Nor an answer through this phone: installing needs a
                     // machine that reaches the pool, and the fleet refuses one
                     // through a relay.
-                    if (!policy && found.isNotEmpty() && found.none { it.through == "phone" } && found.all { !it.reachable || it.xo == false }) {
+                    if (!policy && !reconnect && found.isNotEmpty() && found.none { it.through == "phone" } && found.all { !it.reachable || it.xo == false }) {
                         OutlinedButton(enabled = !beginning, onClick = { password = ""; deploying = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text("This pool has no Xen Orchestra yet")
                         }
@@ -1268,6 +1412,13 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                     val path = if (pick.through == "phone") XoRelayWords.crosses(pick.hostId) else ""
                     Hint(
                         when {
+                            keep && canKeep && reconnect ->
+                                "Used on ${pick.hostId} to reconnect Xen Orchestra’s servers. It is sealed to that machine on this " +
+                                    "phone; the fleet relays it and cannot read it. This phone keeps it$word encrypted behind your " +
+                                    "fingerprint or face, once ${pick.hostId} has signed in with it; the fleet never keeps it."
+                            reconnect ->
+                                "Used once, on ${pick.hostId}, to reconnect Xen Orchestra’s servers, and not kept. " +
+                                    "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
                             keep && canKeep && policy ->
                                 "Used on ${pick.hostId} to read the pool and apply what you choose. It is sealed to that machine on this " +
                                     "phone; the fleet relays it and cannot read it. This phone keeps it$word encrypted behind your " +
@@ -1297,6 +1448,7 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
                             when {
                                 beginning -> "Checking ${pick.hostId}'s key…"
                                 policy -> "Read the pool on ${pick.hostId}"
+                                reconnect -> "Reconnect on ${pick.hostId}"
                                 else -> "Set up on ${pick.hostId}"
                             },
                         )
@@ -1306,6 +1458,46 @@ internal fun HypervisorSheet(settings: Settings, resumeJob: String? = null, poli
         }
         if (refusal.isNotBlank()) Hint(refusal, color = Design.Palette.bad.now)
     }
+}
+
+/**
+ * What a reconnect came to, from the outcome the machine sealed to this
+ * screen: the count first, then each server as the same row (RHYTHM 1), the
+ * one line that failed in the bad tone with its reason in words, then the
+ * pools the admin sign-in sees now and any pool this phone kept from setup
+ * that is still not among them. Nothing here asks anything, so nothing wears
+ * a ring.
+ */
+@Composable
+private fun ReconnectOutcome(r: XoReconnect.Result, held: List<String>?) {
+    Text(XoReconnect.summary(r), style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+    if (r.servers.isNotEmpty()) {
+        SectionHead("Xen Orchestra’s servers")
+        r.servers.forEach { s ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .fleetCard(radius = Design.Radius.cardSmall)
+                    .padding(Design.Space.groupTight)
+                    .semantics(mergeDescendants = true) {},
+                verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
+            ) {
+                Text(s.label, style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+                if (s.host.isNotBlank() && s.host != s.label) {
+                    Text(s.host, style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.inkDim.now)
+                }
+                Text(
+                    XoReconnect.serverLine(s),
+                    style = Design.Style.bodySmall,
+                    color = if (XoReconnect.failed(s)) Design.Palette.bad.now else Design.Palette.ink.now,
+                )
+            }
+        }
+    }
+    SectionHead("Pools")
+    Hint(XoReconnect.poolsLine(r), color = Design.Palette.ink.now)
+    r.pools?.forEach { p -> Text(p.name, style = Design.Style.body, color = Design.Palette.ink.now) }
+    XoReconnect.stillMissing(held, r)?.let { Hint(it, color = Design.Palette.attention.now) }
 }
 
 /** The words for working through this phone, which are iOS's (AddHypervisorView). */
@@ -1483,8 +1675,8 @@ private fun Detail(label: String, value: String?) {
  * crossfade is what Reduce Motion keeps.
  */
 @Composable
-private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false) {
-    val of = setup.of ?: (if (policy) XoPolicy.STEPS.size else XoSetup.STEPS.size)
+private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false, reconnect: Boolean = false) {
+    val of = setup.of ?: (if (reconnect) XoReconnect.STEPS.size else if (policy) XoPolicy.STEPS.size else XoSetup.STEPS.size)
     val step = setup.step ?: 0
     val ended = setup.state == "done" || setup.state == "failed" || setup.state == "cancelled"
     // THE BUILD'S OWN BAR while the machine says how far it has got. Asked
@@ -1506,10 +1698,14 @@ private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false) {
     val words = when (setup.state) {
         "waiting" -> "Waiting for the sign-in"
         "choosing" -> "Waiting for your choice"
-        "done" -> if (policy) "Changed" else "Added"
+        "done" -> if (reconnect) "Finished" else if (policy) "Changed" else "Added"
         "failed" -> "Stopped"
         "cancelled" -> "Cancelled"
-        else -> if (policy) XoPolicy.stepWords(setup.phase, step, of) else XoSetup.stepWords(setup.phase, step, of)
+        else -> when {
+            reconnect -> XoReconnect.stepWords(setup.phase, step, of)
+            policy -> XoPolicy.stepWords(setup.phase, step, of)
+            else -> XoSetup.stepWords(setup.phase, step, of)
+        }
     }
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         LinearProgressIndicator(

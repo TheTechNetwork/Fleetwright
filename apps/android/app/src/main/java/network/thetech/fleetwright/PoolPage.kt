@@ -58,6 +58,12 @@ import kotlinx.coroutines.launch
  * Changing what the fleet may use is a row on this page now, for an admin,
  * beside what it governs.
  *
+ * RECONNECT ITS SERVERS is the row under it, for an admin, and only when the
+ * page has something to say it from (XoReconnect.offered): read, directly or
+ * through a machine, and showing no pool at all, or missing a pool name this
+ * phone kept from setup. A page that has not loaded, or a pool that shows
+ * every pool it had, offers nothing to reconnect (C-2, C-5).
+ *
  * THE ROWS ARE THE MACHINES TAB'S CARDS: one shape (RHYTHM 1), the name at a
  * hostname's weight, the state word on the right in a tone that only agrees
  * with it, then what it is and the numbers behind how it is. No row wears a
@@ -71,7 +77,14 @@ import kotlinx.coroutines.launch
  * moves (MOTION 2). Under reduced motion the height simply changes.
  */
 @Composable
-internal fun PoolPage(settings: Settings, pool: XoHandoff.Held, admin: Boolean?, onChangePolicy: () -> Unit, onDismiss: () -> Unit) {
+internal fun PoolPage(
+    settings: Settings,
+    pool: XoHandoff.Held,
+    admin: Boolean?,
+    onChangePolicy: () -> Unit,
+    onDismiss: () -> Unit,
+    onReconnect: () -> Unit = {},
+) {
     val scope = rememberCoroutineScope()
     val watch = remember(pool.address) { PoolWatch(settings, pool.address, scope) }
     var showing by remember { mutableStateOf<String?>(null) }
@@ -132,9 +145,12 @@ internal fun PoolPage(settings: Settings, pool: XoHandoff.Held, admin: Boolean?,
         }
         // AN ADMIN'S, as it was on Machines: changing the policy takes an
         // admin sign-in and the verb refuses a member.
+        val seen = watch.snapshot.list(Manage.Kind.POOL).map { it.name }
+        val reconnect = XoReconnect.offered(admin, watch.phase == PoolWatch.Phase.Live, seen, pool.pools)
         if (admin == true) {
             Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
                 OpenRow(Manage.Words.changePolicy) { onChangePolicy() }
+                if (reconnect) OpenRow(Manage.Words.reconnectServers) { onReconnect() }
             }
         }
     }
