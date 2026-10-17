@@ -15,7 +15,7 @@
 import { HostRegistry, runsNoSessions } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
-import { HostIdentities, actsFor, mayActFor } from './hosts.js';
+import { HostIdentities, actsFor, mayActFor, believedCreator } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { place } from './scheduler.js';
@@ -1008,14 +1008,14 @@ export class CoordinatorCore {
     const claim = event.name
       ? this.registry.findSessions(event.name).find((c) => c.host?.hostId === event.hostId) ?? null
       : null;
-    // AND ONLY FOR SOMEBODY THAT BOX MAY ACT FOR (hosts.js mayActFor). The
-    // creator is the box's own word, so a box a member enrolled could name
-    // another member as the creator of a session of its own and put its own
-    // text, Remote Control link and answer buttons on that member's phone. A
-    // creator it may not speak for is filed under whom it does act for, its
-    // one person, which is who wrote those words. No creator stays nobody's.
-    const said = claim?.createdBy ?? null;
-    const owner = said === null || mayActFor(claim?.host, said) ? said : (claim?.host?.actsFor ?? null);
+    // AND ONLY FOR SOMEBODY THAT BOX MAY ACT FOR. The creator is the box's
+    // own word, so a box a member enrolled could name another member as the
+    // creator of a session of its own and put its own text, Remote Control
+    // link and answer buttons on that member's phone. The registry files a
+    // creator a box may not speak for under the one person it does act for
+    // when the report arrives (hosts.js believedCreator), so this reads the
+    // same answer the listings and the pinned verbs do.
+    const owner = claim?.createdBy ?? null;
 
     // FILTERED FOR WHOSE PHONE IT IS, which it was not.
     //
@@ -2301,7 +2301,17 @@ export class CoordinatorCore {
             .catch((e) => ({ hostId: h.hostId, ok: false, text: e.message, error: { code: 'host_timeout' } })),
         ),
       );
-      let sessions = results.flatMap((r) => (r.sessions || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId })));
+      // Each creator as the fleet believes the box that said it, by the rule
+      // the registry applies to health (hosts.js believedCreator), so a box a
+      // member enrolled cannot list its own sessions as another member's.
+      const byId = new Map((placement.hosts || []).map((h) => [h.hostId, h]));
+      let sessions = results.flatMap((r) =>
+        (r.sessions || []).map((/** @type {any} */ s) => ({
+          ...s,
+          ...(s && typeof s === 'object' && 'createdBy' in s ? { createdBy: believedCreator(byId.get(r.hostId), s.createdBy) } : {}),
+          hostId: r.hostId,
+        })),
+      );
 
       // WHOSE sessions the caller may see — filtered HERE, never at the host.
       // The host has one token and no idea who is asking; a host-side filter

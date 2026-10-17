@@ -357,3 +357,65 @@ test('the shorthand route is not a way around any of this', async () => {
     assert.match(src, /recentEvents\(requesterFor\(client\)\)/, `${file} returns the ring unfiltered`);
   }
 });
+
+/**
+ * Two boxes: `ops-box`, the operator's (it may act for anyone), holding
+ * alice's real session, and `mal-box`, which mallory enrolled with a pin she
+ * minted, so it acts for her alone. mal-box reports sessions and a bin entry
+ * it says alice created, and answers `list` the same way. What mal-box is
+ * sent is kept in `delivered`.
+ */
+async function forgedFleet() {
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {any[]} */
+  const delivered = [];
+  const forged = [
+    { name: 'forged', status: 'running', title: 'FORGED', cwd: '/forged', createdBy: 'fleet:alice@example.com' },
+    { name: 'alice-real', status: 'running', createdBy: 'fleet:alice@example.com' },
+  ];
+  const real = [{ name: 'alice-real', status: 'running', createdBy: 'fleet:alice@example.com' }];
+  await admit(core, 'ops-box', {
+    send: (/** @type {any} */ intent) => queueMicrotask(() => core.onHostMessage('ops-box', { kind: 'reply', id: intent.id, ok: true, text: 'ops', sessions: real })),
+  });
+  await admit(core, 'mal-box', {
+    enrolledBy: 'mallory@example.com',
+    send: (/** @type {any} */ intent) => {
+      delivered.push(intent);
+      queueMicrotask(() => core.onHostMessage('mal-box', { kind: 'reply', id: intent.id, ok: true, text: 'mal', sessions: forged }));
+    },
+  });
+  core.registry.recordHealth('ops-box', { hostId: 'ops-box', sessions: real });
+  core.registry.recordHealth('mal-box', { hostId: 'mal-box', sessions: forged, bin: [{ name: 'forged-bin', createdBy: 'fleet:alice@example.com' }] });
+  return { core, delivered };
+}
+
+const ALICE = { email: 'alice@example.com', admin: false };
+
+test('a box a member enrolled cannot file its sessions under somebody else', async () => {
+  // A later audit: #notify asked whether the box may act for the creator it
+  // named, and nothing else did. mal-box's word that alice made `forged` put
+  // it in alice's /api/hosts and her list, with mallory's title, and her
+  // writefile, readfile and restore on that name went to mal-box with her
+  // content and her name on them.
+  const { core, delivered } = await forgedFleet();
+
+  const hosts = core.snapshot(ALICE).hosts;
+  const mal = hosts.find((/** @type {any} */ h) => h.hostId === 'mal-box');
+  assert.deepEqual(mal.health.sessions, [], 'a member-enrolled box listed its session as another member’s');
+  assert.deepEqual(mal.health.bin, [], 'and its bin');
+  // An operator's box acts for anyone, so its word is still taken.
+  const ops = hosts.find((/** @type {any} */ h) => h.hostId === 'ops-box');
+  assert.deepEqual(ops.health.sessions.map((/** @type {any} */ s) => s.name), ['alice-real']);
+
+  const listed = await core.dispatch({ verb: 'list', params: {}, requester: ALICE });
+  assert.deepEqual(listed.sessions.map((/** @type {any} */ s) => `${s.name}@${s.hostId}`), ['alice-real@ops-box'], 'her list carried the forged session');
+
+  delivered.length = 0;
+  const wrote = await core.dispatch({ verb: 'writefile', params: { name: 'forged', path: 'p.txt', content: 'alice’s words' }, actor: 'alice@example.com', requester: ALICE });
+  assert.equal(wrote.error?.code, 'unknown_session');
+  assert.deepEqual(delivered, [], 'alice’s file went to a box that does not act for her');
+
+  // Filed under the person the box does act for, who wrote it.
+  assert.equal(place(core.registry, { verb: 'peek', params: { name: 'forged' } }, { requester: { email: 'mallory@example.com', admin: false } }).host?.hostId, 'mal-box');
+});
