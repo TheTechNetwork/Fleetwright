@@ -16,15 +16,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 
-import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf, writeIntoDisk } from '../src/fleet/host/edge-router.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 import { EDGE_WATCH, newWatch, watchOf } from '../src/fleet/host/edge-credentials.js';
+import { VM_IMAGE } from '../src/fleet/host/vm-image.js';
 import { xenStoreAsXo } from './helpers/xo-stand-in.js';
+import { readVhd } from './helpers/vhd-read.js';
 
 const DEFAULT = readFileSync(new URL('./fixtures/opnsense-26.7-config.xml', import.meta.url));
 
@@ -537,7 +540,9 @@ test('the edge router is made in the order that boots: disk in, WAN first, check
   const { args, said } = edgeArgs(admin);
   const done = await ensureEdge(args);
   const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects');
-  assert.deepEqual(methods, ['disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vif.set', 'vm.start']);
+  // Asked first whether it can write into a disk that is there: this stand-in
+  // makes none, so the whole disk is sent.
+  assert.deepEqual(methods, ['disk.create', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vif.set', 'vm.start']);
   const params = Object.fromEntries(admin.calls);
   // On the chosen storage in this pool with the most room.
   assert.equal(params['disk.import'].sr, 'sr-big');
@@ -661,7 +666,7 @@ test('an edge built the other way is rebuilt: the old one stopped, the new one b
   const done = await ensureEdge(args);
   assert.equal(told, 1, 'the job is not told it is rebuilding');
   const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects' && m !== 'vif.set');
-  assert.deepEqual(methods, ['vm.stop', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.delete']);
+  assert.deepEqual(methods, ['vm.stop', 'disk.create', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.delete']);
   const params = Object.fromEntries(admin.calls);
   assert.deepEqual(params['vm.stop'], { id: 'vm-old', force: true });
   assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag]);
@@ -719,7 +724,7 @@ test('one edge becomes a pair with the way out gone only while the second starts
   const { args, said } = edgeArgs(admin, { ha: true });
   const done = await ensureEdge(args);
   // The second made but not started while the old one still has 10.254.0.1.
-  assert.deepEqual(methodsOf(admin), ['disk.import', 'vm.create', 'vm.set', 'vm.attachDisk', 'vm.stop', 'vm.start', 'disk.import', 'vm.create', 'vm.set', 'vm.attachDisk', 'vm.start', 'vm.delete']);
+  assert.deepEqual(methodsOf(admin), ['disk.create', 'disk.import', 'vm.create', 'vm.set', 'vm.attachDisk', 'vm.stop', 'vm.start', 'disk.create', 'disk.import', 'vm.create', 'vm.set', 'vm.attachDisk', 'vm.start', 'vm.delete']);
   const starts = admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.start').map((/** @type {any} */ c) => c[1].id);
   assert.deepEqual(starts, ['vm-new-1', 'vm-new-2'], 'the second, then the new first');
   assert.deepEqual(admin.calls.find((/** @type {any} */ c) => c[0] === 'vm.stop')?.[1], { id: 'vm-old', force: true });
@@ -940,4 +945,312 @@ test('a router without the key the job brings is rebuilt once, keeping its WAN M
   const first = await macOf();
   assert.match(first, /^02(:[0-9a-f]{2}){5}$/, 'locally administered and unicast');
   assert.equal(await macOf(), first);
+});
+
+// THE KEPT DISK (edge-router.js, buildEdge): the image as published kept on
+// the pool, and a rebuild that copies it and writes only the blocks the
+// configuration changes. The image here is made up, block by block, with the
+// bytes the plan (OPNSENSE_IMAGE.grow) must find where it must find them.
+
+const BLOCK = 2 * 1024 * 1024;
+const MiB = 1024 ** 2;
+/** The blocks the plan changes: its edits and the block the configuration moves to. */
+const TOUCHED = [...new Set([...OPNSENSE_IMAGE.grow.edits.map((e) => e.offset), OPNSENSE_IMAGE.grow.data.offset].map((o) => Math.floor(o / BLOCK)))].sort((a, b) => a - b);
+const FILLER = Buffer.alloc(BLOCK, 0x11);
+
+/** Block `i` of the published image, as far as the plan can tell: its own bytes, with what the plan expects where it expects it. */
+function pristine(/** @type {number} */ i) {
+  const b = Buffer.alloc(BLOCK, (i * 37) & 0xff);
+  for (const e of OPNSENSE_IMAGE.grow.edits) if (Math.floor(e.offset / BLOCK) === i) Buffer.from(e.was, 'hex').copy(b, e.offset - i * BLOCK);
+  const { data } = OPNSENSE_IMAGE.grow;
+  if (Math.floor(data.offset / BLOCK) === i) b.fill(0, data.offset - i * BLOCK, data.offset - i * BLOCK + data.length);
+  return b;
+}
+
+/** The same block once the edge's configuration is written: each edit's bytes, and the configuration in its block. */
+function configured(/** @type {number} */ i, /** @type {Buffer} */ config) {
+  const b = pristine(i);
+  for (const e of OPNSENSE_IMAGE.grow.edits) if (Math.floor(e.offset / BLOCK) === i) Buffer.from(e.becomes, 'hex').copy(b, e.offset - i * BLOCK);
+  const { data } = OPNSENSE_IMAGE.grow;
+  if (Math.floor(data.offset / BLOCK) === i) config.copy(b, data.offset - i * BLOCK);
+  return b;
+}
+
+/** The unpacked image, a block at a time; `wrong` spoils one byte the plan checks. */
+function madeUpImage(wrong = false) {
+  return Readable.from((function* () {
+    for (let i = 0; i < OPNSENSE_IMAGE.rawSize / BLOCK; i++) {
+      if (!TOUCHED.includes(i)) {
+        yield FILLER;
+        continue;
+      }
+      const b = pristine(i);
+      if (wrong && i === TOUCHED.at(-1)) b[OPNSENSE_IMAGE.grow.data.offset - i * BLOCK] = 1;
+      yield b;
+    }
+  })());
+}
+
+const BASE_TAG = `${EDGE.baseTag}:${EDGE.baseKey}:${OPNSENSE_IMAGE.release}`;
+const BASE_NAME = `OPNsense ${OPNSENSE_IMAGE.release} (as published)`;
+
+/**
+ * A stand-in Xen Orchestra that keeps what it is asked to make, as the real
+ * one does: VMs and templates with their disks, a VM made from a template
+ * getting a copy of each of its disks on the same storage, so a disk kept by
+ * one build is there for the next. `kept` starts it with the kept disk on
+ * sr-big; `answers` overrides any call.
+ */
+function keptXo({ kept = false, answers = /** @type {Record<string, (p: any) => any>} */ ({}), writeInto = async (/** @type {any} */ _w) => {} } = {}) {
+  /** @type {Record<string, any[]>} */
+  const objects = { VM: [], 'VM-template': [TEMPLATE], VBD: [], VDI: [], VIF: [] };
+  let n = 0;
+  const next = (/** @type {string} */ p) => `${p}-${++n}`;
+  const attach = (/** @type {string} */ vm, /** @type {string} */ vdi) => objects.VBD.push({ id: next('vbd'), VM: vm, VDI: vdi, is_cd_drive: false });
+  if (kept) {
+    objects['VM-template'].push({ id: 'tpl-kept', $pool: 'p1', name_label: `Fleetwright base: OPNsense ${OPNSENSE_IMAGE.release}`, tags: [EDGE.baseTag, BASE_TAG] });
+    objects.VDI.push({ id: 'vdi-kept', $SR: 'sr-big', name_label: BASE_NAME, $VBDs: ['vbd-kept'] });
+    attach('tpl-kept', 'vdi-kept');
+  }
+  /** @type {any} */
+  let importing = null;
+  const drop = (/** @type {string} */ type, /** @type {string} */ id) => {
+    objects[type] = objects[type].filter((o) => o.id !== id);
+  };
+  const admin = xo(objects, {
+    'disk.create': (p) => {
+      const id = next('vdi-asked');
+      objects.VDI.push({ id, $SR: p.sr, name_label: p.name, $VBDs: [] });
+      return id;
+    },
+    'disk.importContent': (p) => ({ $sendTo: `/content/${p.id}` }),
+    'disk.import': (p) => {
+      importing = p;
+      return { $sendTo: '/import/abc' };
+    },
+    'vm.create': (p) => {
+      const id = next('vm');
+      objects.VM.push({ id, $pool: 'p1', name_label: p.name_label, tags: p.tags, power_state: 'Halted' });
+      for (const vbd of objects.VBD.filter((b) => b.VM === p.template)) {
+        const copy = { ...objects.VDI.find((d) => d.id === vbd.VDI), id: next('vdi-copy') };
+        objects.VDI.push(copy);
+        attach(id, copy.id);
+      }
+      return id;
+    },
+    'vm.attachDisk': (p) => void attach(p.vm, p.vdi),
+    'vm.convertToTemplate': (p) => {
+      objects['VM-template'].push(...objects.VM.filter((v) => v.id === p.id));
+      drop('VM', p.id);
+    },
+    'vm.delete': (p) => {
+      for (const vbd of objects.VBD.filter((b) => b.VM === p.id)) {
+        if (p.deleteDisks) drop('VDI', vbd.VDI);
+        drop('VBD', vbd.id);
+      }
+      drop('VM', p.id);
+      drop('VM-template', p.id);
+    },
+    'vdi.delete': (p) => void drop('VDI', p.id),
+    'vm.start': (p) => {
+      for (const v of objects.VM) if (v.id === p.id) v.power_state = 'Running';
+    },
+    ...answers,
+  });
+  /** @type {Array<{ sendTo: string, body: Buffer }>} */
+  const writes = [];
+  /** @type {any[]} */
+  const uploads = [];
+  return {
+    admin,
+    objects,
+    writes,
+    uploads,
+    extra: {
+      unpackImpl: () => madeUpImage(),
+      upload: async (/** @type {any} */ u) => {
+        uploads.push({ ...importing, body: u.body });
+        const id = next('vdi-up');
+        objects.VDI.push({ id, $SR: importing.sr, name_label: importing.name, $VBDs: [] });
+        return id;
+      },
+      writeInto: async (/** @type {any} */ w) => {
+        writes.push({ sendTo: w.sendTo, body: w.body });
+        await writeInto(w);
+      },
+    },
+  };
+}
+
+const called = (/** @type {any} */ admin, /** @type {string} */ m) => admin.calls.filter((/** @type {any} */ c) => c[0] === m).map((/** @type {any} */ c) => c[1]);
+
+test('with the disk kept on the pool, the router is a copy of it with only the blocks its configuration changes written, each whole and checked', async () => {
+  const k = keptXo({ kept: true });
+  const { args, said, parts } = edgeArgs(k.admin, k.extra);
+  const done = await ensureEdge(args);
+  assert.deepEqual(called(k.admin, 'disk.import'), [], 'the whole disk was sent');
+  assert.deepEqual(called(k.admin, 'disk.create'), [], 'a kept disk that is there was asked about again');
+  const [made] = called(k.admin, 'vm.create');
+  assert.equal(made.template, 'tpl-kept', 'not made from the kept disk');
+  assert.equal(made.VDIs, undefined, 'the kept disk’s copy was not left to come with the VM');
+  assert.deepEqual(made.VIFs.map((/** @type {any} */ v) => v.network), ['net-wan', 'net-up']);
+  assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag]);
+  const copy = k.objects.VBD.find((b) => b.VM === 'vm-2')?.VDI;
+  assert.deepEqual(called(k.admin, 'disk.importContent'), [{ id: copy, format: 'vhd' }]);
+  assert.deepEqual(k.writes.map((w) => w.sendTo), [`/content/${copy}`]);
+  // FIVE BLOCKS, each the published bytes with the change made, and nothing
+  // else in the table: what is not listed is left as the copy has it.
+  const sent = readVhd(k.writes[0].body);
+  assert.equal(sent.size, OPNSENSE_IMAGE.rawSize);
+  assert.deepEqual([...sent.blocks.keys()], TOUCHED);
+  const config = edgeConfig();
+  for (const i of TOUCHED) assert.ok(sent.blocks.get(i)?.equals(configured(i, config)), `block ${i} is not the published one with the configuration written`);
+  assert.ok(k.writes[0].body.length < 11 * MiB, `${k.writes[0].body.length} bytes sent`);
+  // Named as an uploaded disk is, so the phone can say where it is; never
+  // attached again, since it came with the VM.
+  assert.deepEqual(called(k.admin, 'vdi.set'), [{ id: copy, name_label: EDGE.vm, name_description: `OPNsense ${OPNSENSE_IMAGE.release}, configured by Fleetwright as the edge router` }]);
+  assert.deepEqual(called(k.admin, 'vm.attachDisk'), []);
+  assert.deepEqual(called(k.admin, 'vm.start'), [{ id: 'vm-2' }]);
+  assert.match(done, /The edge router is up: OPNsense 26\.7, its WAN on eth0\.10[\s\S]*its disk on sr-big\./);
+  assert.ok(said.some((t) => /already on sr-big, kept from an earlier build/.test(t)), said.join('\n'));
+  assert.ok(said.includes('Copying the disk kept on sr-big and writing the configuration: 10 MB.'), said.join('\n'));
+  assert.deepEqual([...new Set(parts.map((p) => p.stage))], [1, 2, 3]);
+  for (let i = 1; i < parts.length; i++) assert.ok(parts[i].fill >= parts[i - 1].fill, `the bar went back at ${i}`);
+});
+
+test('the first build keeps the image as published, never booted and out of the fleet’s reach, and the next build is a copy of it', async () => {
+  const k = keptXo();
+  // An older release's, which the new one replaces.
+  k.objects['VM-template'].push({ id: 'tpl-older', $pool: 'p1', tags: [EDGE.baseTag, `${EDGE.baseTag}:${EDGE.baseKey}:26.1`] });
+  const first = edgeArgs(k.admin, k.extra);
+  await ensureEdge(first.args);
+  // Asked first, on a disk made for the question and removed after.
+  const [asked] = called(k.admin, 'disk.create');
+  assert.deepEqual(asked, { name: `${EDGE.vm} (checking)`, size: BLOCK, sr: 'sr-big' });
+  assert.equal(k.writes[0].sendTo, '/content/vdi-asked-1');
+  assert.deepEqual(readVhd(k.writes[0].body).blocks.size, 1);
+  assert.ok(called(k.admin, 'vdi.delete').some((p) => p.id === 'vdi-asked-1'), 'the disk the question was asked on was left');
+  // THE KEPT DISK: the image unchanged, a template with no network, tagged as
+  // a kept disk and not as an image, never started, never in the set.
+  assert.deepEqual(k.uploads.map((u) => [u.name, u.body.regions.length]), [[BASE_NAME, 0]]);
+  const [kept, router] = called(k.admin, 'vm.create');
+  assert.deepEqual(kept.tags, [VM_IMAGE.baseTag, BASE_TAG]);
+  assert.ok(!kept.tags.includes(VM_IMAGE.tag), 'a box would offer the kept disk for sessions');
+  assert.deepEqual(kept.VIFs, []);
+  assert.deepEqual(called(k.admin, 'vm.convertToTemplate'), [{ id: 'vm-3' }]);
+  assert.ok(!called(k.admin, 'vm.start').some((p) => p.id === 'vm-3'), 'the kept disk was booted');
+  assert.deepEqual(called(k.admin, 'resourceSet.addObject'), [], 'the fleet’s token could clone the kept disk');
+  assert.ok(called(k.admin, 'vm.delete').some((p) => p.id === 'tpl-older' && p.deleteDisks), 'the older release’s kept disk was left');
+  // And the router itself, a copy of it with its blocks written.
+  assert.equal(router.template, 'vm-3');
+  assert.deepEqual([...readVhd(k.writes[1].body).blocks.keys()], TOUCHED);
+
+  // THE NEXT BUILD, a rebuild to block: nothing asked, nothing uploaded.
+  const before = k.admin.calls.length;
+  const again = edgeArgs(k.admin, { ...k.extra, block: true });
+  const done = await ensureEdge(again.args);
+  const later = k.admin.calls.slice(before).map((c) => c[0]).filter((m) => !['xo.getAllObjects', 'vif.set'].includes(m));
+  assert.deepEqual(later, ['vm.stop', 'vm.create', 'disk.importContent', 'vdi.set', 'vm.start', 'vm.delete']);
+  assert.equal(called(k.admin, 'vm.create').at(-1).template, 'vm-3');
+  assert.deepEqual(k.uploads.length, 1, 'the second build sent the disk again');
+  assert.match(done, /dropped[\s\S]*replaced the one that was there/);
+});
+
+test('where Xen Orchestra cannot write into a disk that is there, the whole disk is sent as before, nothing extra is kept, and the person is told why', async () => {
+  const refuse = async () => {
+    throw new Error('Xen Orchestra did not write into the disk: undefined == undefined');
+  };
+  for (const [what, kept, k] of /** @type {Array<[string, boolean, ReturnType<typeof keptXo>]>} */ ([
+    ['a copy of the kept disk refused', true, keptXo({ kept: true, writeInto: refuse })],
+    ['no disk.importContent at all', true, keptXo({ kept: true, answers: { 'disk.importContent': () => { throw new Error('no such method disk.importContent'); } } })],
+    ['the question refused, with nothing kept yet', false, keptXo({ writeInto: refuse })],
+  ])) {
+    const { args, said } = edgeArgs(k.admin, k.extra);
+    const done = await ensureEdge(args);
+    assert.match(done, /The edge router is up/, what);
+    // The copy, or the disk the question was asked on, removed with its disk.
+    const routerVms = k.objects.VM.filter((v) => v.tags?.includes(EDGE.tag));
+    assert.equal(routerVms.length, 1, `${what}: ${routerVms.length} edges left for the next run`);
+    assert.equal(k.objects.VDI.filter((d) => /^vdi-(copy|asked)/.test(d.id)).length, 0, `${what}: a disk was left behind`);
+    // The whole disk, through the patch, as before.
+    assert.deepEqual(k.uploads.map((u) => [u.name, u.body.regions.length]), [[EDGE.vm, imagePatches(edgeConfig()).length]], what);
+    assert.deepEqual(called(k.admin, 'vm.convertToTemplate'), [], `${what}: kept a disk this Xen Orchestra cannot use`);
+    // A kept disk that is there stays, for the Xen Orchestra that is updated.
+    assert.equal(k.objects['VM-template'].some((t) => t.id === 'tpl-kept'), kept, `${what}: the kept disk was removed`);
+    const told = said.find((t) => t.startsWith('This Xen Orchestra cannot write into a disk'));
+    assert.match(String(told), /whole disk is sent[\s\S]*lacks the fix[\s\S]*fleet’s installer/, what);
+  }
+});
+
+test('a build from the kept disk that fails or is cancelled leaves nothing half-made, and keeps a kept disk that was finished', async () => {
+  // Started and failing: the copy goes with its disk; the kept disk stays.
+  const start = keptXo({ kept: true, answers: { 'vm.start': () => { throw new Error('HOST_NOT_ENOUGH_FREE_MEMORY'); } } });
+  await assert.rejects(ensureEdge(edgeArgs(start.admin, start.extra).args), /HOST_NOT_ENOUGH_FREE_MEMORY/);
+  assert.deepEqual(start.objects.VM, []);
+  assert.deepEqual(start.objects.VDI.map((d) => d.id), ['vdi-kept']);
+
+  // The kept disk failing to become a template: it goes, and no router is made.
+  const convert = keptXo({ answers: { 'vm.convertToTemplate': () => { throw new Error('VM_BAD_POWER_STATE'); } } });
+  await assert.rejects(ensureEdge(edgeArgs(convert.admin, convert.extra).args), /VM_BAD_POWER_STATE/);
+  assert.deepEqual(convert.objects.VM, []);
+  assert.deepEqual(convert.objects.VDI, []);
+  assert.equal(called(convert.admin, 'vm.create').length, 1);
+
+  // Cancelled while the kept disk is sent: the part Xen Orchestra kept goes,
+  // and nothing falls back to sending the whole disk.
+  const controller = new AbortController();
+  const cut = keptXo();
+  cut.objects.VDI.push({ id: 'vdi-partial', $SR: 'sr-big', name_label: BASE_NAME, $VBDs: [] });
+  await assert.rejects(
+    ensureEdge(edgeArgs(cut.admin, {
+      ...cut.extra,
+      signal: controller.signal,
+      upload: async () => {
+        controller.abort();
+        throw new Error('cancelled');
+      },
+    }).args),
+    /cancelled/,
+  );
+  assert.ok(called(cut.admin, 'vdi.delete').some((p) => p.id === 'vdi-partial'), 'the partial kept disk was left');
+  assert.equal(called(cut.admin, 'disk.import').length, 1);
+
+  // Cancelled while the blocks are written: no fallback, the copy goes.
+  const late = new AbortController();
+  const writing = keptXo({ kept: true, writeInto: async () => { late.abort(); throw new Error('cancelled'); } });
+  await assert.rejects(ensureEdge(edgeArgs(writing.admin, { ...writing.extra, signal: late.signal }).args), /abort|cancel/i);
+  assert.deepEqual(called(writing.admin, 'disk.import'), []);
+  assert.deepEqual(writing.objects.VM, []);
+
+  // An image without the bytes the plan expects: refused before anything on
+  // the pool is made.
+  const wrong = keptXo({ kept: true });
+  await assert.rejects(ensureEdge(edgeArgs(wrong.admin, { ...wrong.extra, unpackImpl: () => madeUpImage(true) }).args), /does not have the free block the configuration moves to where it should/);
+  assert.deepEqual(called(wrong.admin, 'vm.create'), []);
+});
+
+test('the blocks go to Xen Orchestra as the request body itself, with their length, and only its answer of true counts as written', async (t) => {
+  /** @type {Array<{ method: string, url: string, length: string|undefined, body: Buffer }>} */
+  const got = [];
+  let answer = { status: 200, body: '{"jsonrpc":"2.0","id":0,"result":true}' };
+  const server = http.createServer((req, res) => {
+    const chunks = /** @type {Buffer[]} */ ([]);
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      got.push({ method: String(req.method), url: String(req.url), length: req.headers['content-length'], body: Buffer.concat(chunks) });
+      res.writeHead(answer.status).end(answer.body);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(undefined)));
+  t.after(() => server.close());
+  const address = `127.0.0.1:${/** @type {any} */ (server.address()).port}`;
+  const body = Buffer.from('a VHD, as far as this test cares');
+  await writeIntoDisk({ address, pin: null, plain: true, sendTo: '/api/abc', body });
+  assert.deepEqual(got, [{ method: 'POST', url: '/api/abc', length: String(body.length), body }]);
+  // XAPI's refusal, as Xen Orchestra without the fix passes it on.
+  answer = { status: 500, body: '{"jsonrpc":"2.0","id":0,"error":{"code":-32000,"message":"undefined == undefined"}}' };
+  await assert.rejects(writeIntoDisk({ address, pin: null, plain: true, sendTo: '/api/abc', body }), /did not write into the disk: undefined == undefined/);
+  // Anything but true is not written, whatever the status.
+  answer = { status: 200, body: '{"jsonrpc":"2.0","id":0,"result":"vdi-1"}' };
+  await assert.rejects(writeIntoDisk({ address, pin: null, plain: true, sendTo: '/api/abc', body }), /did not write into the disk: HTTP 200/);
 });
