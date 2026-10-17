@@ -1,0 +1,83 @@
+#!/bin/sh
+# fleetwright-apt-channel stable|rolling — move a box apt owns between the two
+# suites of the Fleetwright apt repository.
+#
+# ROOT'S HALF OF `/channel` ON AN APT BOX. The suite a box takes is the one
+# word on its sources line, /etc/apt/sources.list.d/fleetwright.list, and that
+# file is root's: the hub runs unprivileged and cannot rewrite it. So, like an
+# upgrade, the change is a named systemd unit the hub may start and nothing
+# more — fleetwright-apt-channel@stable.service or @rolling.service, each a
+# separate line in the sudoers grant — and this is what the unit runs. No
+# argument the hub could widen: the instance IS the suite, and the two
+# instances are the two the grant names.
+#
+# THREE THINGS, IN THIS ORDER, so that a box which loses power between any two
+# of them is on one suite or the other and never half-way:
+#
+#   1. The sources line, rewritten in place and renamed over the old one. Only
+#      the suite word moves; the architecture, the keyring and the address are
+#      whatever the image or the installer wrote.
+#   2. The pin. A rolling build is `0.0.0~main.<run>`, which sorts below every
+#      release on purpose (docs/packaging.md, "Kept apart by suite, never by
+#      version"), so a box moving from stable to rolling is asking apt for a
+#      DOWNGRADE, and apt refuses one unless a pin above 1000 says so. The pin
+#      names the package and the suite, nothing else, and is removed on the
+#      way back: a release outranks any main build, so stable needs none.
+#   3. `apt-get update`, so the candidate the hub reads next is the new
+#      suite's and not the old lists'.
+#
+# Paths and the apt-get binary are overridable from the environment so the
+# script is tested against a temporary directory (test/apt-channel.test.js);
+# the unit sets none of them, so on a box they are the real ones.
+
+set -eu
+
+SOURCES="${FLEETWRIGHT_APT_SOURCES:-/etc/apt/sources.list.d/fleetwright.list}"
+PREFS="${FLEETWRIGHT_APT_PREFS:-/etc/apt/preferences.d/fleetwright-channel}"
+APT_GET="${FLEETWRIGHT_APT_GET:-/usr/bin/apt-get}"
+
+suite="${1:-}"
+case "$suite" in
+  stable|rolling) ;;
+  *)
+    echo "fleetwright-apt-channel: '$suite' is not a suite: stable or rolling" >&2
+    exit 2 ;;
+esac
+
+if [ ! -f "$SOURCES" ]; then
+  echo "fleetwright-apt-channel: $SOURCES does not exist, so this box does not take Fleetwright from apt" >&2
+  exit 3
+fi
+
+# The one line this script knows the shape of: `deb [options] <address> <suite> <component>`,
+# with the suite one of the two. Anything else is left exactly as it is and
+# refused, because rewriting a line it does not understand is how a box ends up
+# with a source apt cannot read.
+LINE='^([[:space:]]*deb[[:space:]]+(\[[^]]*\][[:space:]]+)?[^[:space:]]+[[:space:]]+)(stable|rolling)([[:space:]]|$)'
+if ! grep -Eq "$LINE" "$SOURCES"; then
+  echo "fleetwright-apt-channel: $SOURCES has no Fleetwright source line this script knows the shape of; it was left alone" >&2
+  exit 4
+fi
+
+tmp="$SOURCES.tmp"
+sed -E "s/$LINE/\\1${suite}\\4/" "$SOURCES" > "$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" "$SOURCES"
+
+if [ "$suite" = rolling ]; then
+  tmp="$PREFS.tmp"
+  {
+    printf '# Written by fleetwright-apt-channel. A build of main is 0.0.0~main.<run>, which\n'
+    printf '# sorts below every release, so taking the rolling suite is a downgrade and apt\n'
+    printf '# needs a pin above 1000 to make one. Removed by `/channel stable`.\n'
+    printf 'Package: fleetwright\n'
+    printf 'Pin: release o=Fleetwright,a=rolling\n'
+    printf 'Pin-Priority: 1001\n'
+  } > "$tmp"
+  chmod 0644 "$tmp"
+  mv "$tmp" "$PREFS"
+else
+  rm -f "$PREFS"
+fi
+
+DEBIAN_FRONTEND=noninteractive "$APT_GET" update

@@ -139,7 +139,9 @@ if [ "$PLATFORM" = linux ]; then
   # below; the units it permitted starting stayed, and a purged package left
   # them in /etc/systemd/system naming an apt run nobody had asked for.
   rm -f /etc/systemd/system/fleetwright-upgrade.service /etc/systemd/system/fleetwright-apt-update.service \
-        /etc/systemd/system/agent-hub-upgrade.service /etc/systemd/system/agent-hub-apt-update.service
+        /etc/systemd/system/agent-hub-upgrade.service /etc/systemd/system/agent-hub-apt-update.service \
+        /etc/systemd/system/fleetwright-package-upgrade.service /etc/systemd/system/fleetwright-apt-channel@.service \
+        /usr/local/sbin/fleetwright-apt-channel
 fi
 [ "$PLATFORM" = linux ] && { systemctl daemon-reload >/dev/null 2>&1 || true; }
 ok "service definitions removed"

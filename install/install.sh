@@ -1058,7 +1058,7 @@ previous_install() {
   for d in /var/lib/fleetwright /var/lib/fleetwright-coordinator; do
     [ -d "$d" ] && FOUND+=("state     $d")
   done
-  for u in fleetwright fleetwright-sidecar fleetwright-coordinator fleetwright-upgrade fleetwright-apt-update; do
+  for u in fleetwright fleetwright-sidecar fleetwright-coordinator fleetwright-upgrade fleetwright-apt-update fleetwright-package-upgrade fleetwright-apt-channel@; do
     if [ "$PLATFORM" = macos ]; then
       [ -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] && FOUND+=("service   $u")
     else
@@ -1116,6 +1116,16 @@ install_upgrade_units() {
   # The package's own door, for a box apt owns: it names fleetwright and
   # nothing else, and the system unit holds fleetwright for its run.
   install_unit fleetwright-package-upgrade
+  # THE SUITE, for a box apt owns: /channel on such a box moves one word on a
+  # root-owned sources line, so it is a unit too, a template whose instance is
+  # the suite, running a script outside the app's tree for the same reason
+  # fleetwright-confirm lives there. The grant names the two instances.
+  local channel_src="$SELF_DIR"
+  [ -f "$channel_src/install/fleetwright-apt-channel" ] || channel_src="$DIR"
+  if [ -f "$channel_src/install/fleetwright-apt-channel" ]; then
+    install -m 0755 -o root -g root "$channel_src/install/fleetwright-apt-channel" /usr/local/sbin/fleetwright-apt-channel
+    install_unit fleetwright-apt-channel@
+  fi
   systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
@@ -1151,10 +1161,17 @@ write_upgrade_sudoers() {
   # THE THIRD, WITH --no-block: the package unit restarts the hub that starts
   # it, so the hub must not wait on it. The option is part of the granted
   # line — sudo matches the whole argv — and it is the only form permitted.
+  #
+  # THE FOURTH AND FIFTH ARE ONE TEMPLATE, TWICE: fleetwright-apt-channel@ with
+  # the suite as its instance. Granting the template with a wildcard would let
+  # the hub name any instance, so the two the script accepts are granted as
+  # two exact lines and nothing else matches.
   {
     printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl start fleetwright-upgrade.service, ' "$RUN_USER"
     printf '/usr/bin/systemctl start fleetwright-apt-update.service, '
-    printf '/usr/bin/systemctl start --no-block fleetwright-package-upgrade.service\n'
+    printf '/usr/bin/systemctl start --no-block fleetwright-package-upgrade.service, '
+    printf '/usr/bin/systemctl start fleetwright-apt-channel@stable.service, '
+    printf '/usr/bin/systemctl start fleetwright-apt-channel@rolling.service\n'
   } > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
     install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-upgrade
@@ -1236,7 +1253,7 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
       if write_upgrade_sudoers; then
         put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
         set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
-        ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade, fleetwright-apt-update and fleetwright-package-upgrade"
+        ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade, fleetwright-apt-update, fleetwright-package-upgrade and fleetwright-apt-channel@{stable,rolling}"
       else
         warn "the upgrade sudoers rule did not validate, so it was NOT installed"
         return 1
