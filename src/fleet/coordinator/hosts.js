@@ -259,13 +259,24 @@ export class HostIdentities {
       };
     }
 
-    // THE CEILING, and only where the store actually grows. Replacing the key
-    // of a machine that already has a row, or readmitting a revoked one,
-    // reuses that row — so neither can be locked out by a full fleet. What is
-    // refused is a genuinely new machine on a fleet with no room, which is a
+    // THE CEILING, and the person's share of it, wherever a live machine is
+    // added: a new row, and a revoked row made live again. Replacing the key
+    // of a live machine adds none, so a full fleet cannot lock that out. What
+    // is refused is one more live machine on a fleet with no room, which is a
     // thing an operator has to be told rather than a thing to absorb.
+    //
+    // BOTH WERE CHECKED ONLY FOR A NEW ROW, on the argument that a reused row
+    // does not grow storage. True of storage and not of who holds what: a
+    // readmission comes back under whoever's pin it was, and any member can
+    // mint a readmit pin and make revoked rows of their own (a temporary host
+    // that retires leaves one for thirty days). One member readmitted 200
+    // rows, held 225 live hosts against a share of 25, and closed enrolment
+    // for everyone else (fourth Workers audit). So the share counts a
+    // readmission, and a re-key that hands a live row to another person,
+    // which adds one to theirs; a re-key of a person's own box adds nothing.
     const who = personOf({ ephemeral, owner, enrolledBy });
-    if (!previous && who && !this.isAdmin(who)) {
+    const live = previous && !previous.revokedAt ? previous : null;
+    if (who && !this.isAdmin(who) && (!live || personOf(live) !== who)) {
       let theirs = 0;
       for (const h of this.hosts.values()) if (!h.revokedAt && personOf(h) === who) theirs++;
       if (theirs >= MAX_LIVE_HOSTS_PER_PERSON) {
@@ -278,7 +289,7 @@ export class HostIdentities {
         };
       }
     }
-    if (!previous && this.#liveHosts() >= MAX_LIVE_HOSTS) {
+    if (!live && this.#liveHosts() >= MAX_LIVE_HOSTS) {
       return {
         ok: false,
         code: 'hosts_full',

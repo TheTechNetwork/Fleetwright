@@ -596,6 +596,36 @@ test('one member’s machines fill their own share of the fleet, not everybody�
   for (let i = 0; i < 40; i++) assert.equal((await enrol(i % 2 ? 'admin@example.test' : null, `op-${i}`)).status, 200, `the operator was refused their ${i + 1}th box`);
 });
 
+test('readmitting a machine, or re-keying one for somebody else, is counted like a new one', async () => {
+  // The share and the ceiling were checked only for a host id with no row, so
+  // a readmission (a revoked row made live again, under whoever's pin it was)
+  // and a re-key handing a row to another person counted for neither. One
+  // member let 200 temporary hosts of theirs retire, readmitted every row,
+  // and held 225 live hosts; the next person's enrolment got hosts_full
+  // (fourth Workers audit).
+  const { fleet: f } = fleet();
+  await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const { publicJwk } = await generateKeyPair();
+  const enrol = async (/** @type {string|null} */ actor, /** @type {string} */ hostId, /** @type {any} */ pin = {}) => {
+    const { code } = /** @type {any} */ (f.core.enrollment.mint({ purpose: 'host', actor, ...pin }));
+    const res = await call(f, '/api/enroll/host', 'POST', { code, hostId, publicJwk });
+    return res.status === 200 ? 200 : `${res.status} ${(await res.json()).error.code}`;
+  };
+  const mallory = 'mallory@example.test';
+  for (let i = 0; i < 25; i++) assert.equal(await enrol(mallory, `m-${i}`), 200);
+  for (let i = 0; i < 5; i++) f.core.revokeHost(`m-${i}`);
+  for (let i = 0; i < 5; i++) assert.equal(await enrol(mallory, `n-${i}`), 200);
+  assert.equal(await enrol(mallory, 'm-0', { readmit: true }), '507 person_full', 'a readmission went past the person’s share');
+  assert.equal(await enrol(null, 'ops-box'), 200);
+  assert.equal(await enrol(mallory, 'ops-box', { hostId: 'ops-box' }), '507 person_full', 'a re-key handed a box to a person at their share');
+  assert.equal(await enrol(mallory, 'm-5', { hostId: 'm-5' }), 200, 'a person at their share could not re-key their own box');
+
+  // And the fleet's ceiling: a readmission makes one more live machine.
+  for (let i = 0; f.core.hostIds.list().length < 200; i++) assert.equal(await enrol(null, `op-${i}`), 200);
+  assert.equal(await enrol(null, 'm-1', { readmit: true }), '507 hosts_full', 'a readmission went past the fleet’s ceiling');
+  assert.equal(await enrol(mallory, 'm-6', { hostId: 'm-6' }), 200, 'a re-key, which adds no machine, was refused by a full fleet');
+});
+
 test('a removed member’s pins go with them, and any pin listed can be cancelled after a restart', async () => {
   // #forgetPerson took back a removed member's tickets and left their pins:
   // for the rest of each pin's ten minutes they enrolled a new host in that

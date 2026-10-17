@@ -1147,7 +1147,8 @@ Stated plainly, because omission is where a security document lies.
   closed. Nor closed by one member filling it: the 200 live hosts a fleet can
   store are shared out at 25 per person (`hosts.js`), the operator's boxes
   not counted, so a member's own excess is refused with `person_full` and
-  everyone else's enrolment goes on.
+  everyone else's enrolment goes on. A readmitted machine counts as a new
+  one, and a re-key that hands a box to another person counts in theirs.
 - **Traffic analysis / metadata.** The coordinator sees which member touched which
   host and when; that is not hidden.
 
