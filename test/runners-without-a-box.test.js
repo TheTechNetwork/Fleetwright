@@ -183,14 +183,14 @@ test('a phone signs in to GitHub itself, and neither the coordinator nor the pag
   // 2. GITHUB SENDS THE BROWSER BACK; the coordinator hands the code to the
   // app by its scheme and exchanges nothing.
   const state = `d.${'s'.repeat(32)}`;
-  const back = await core.finishGithubAuthorization({ code: 'goodcode123', state, origin: ORIGIN });
+  const back = core.githubCallback({ code: 'goodcode123', state });
   assert.equal(back.ok, true);
   assert.equal(back.device, `fleetwright://github?code=goodcode123&state=${state}`);
   assert.match(callbackPage(back), /location\.replace\("fleetwright:\/\/github\?code=goodcode123&state=d\.s+"\)/);
   assert.equal(exchanges.length, 0, 'the coordinator made no exchange');
   // A state that is not a device's shape is not passed on, and nothing from
   // the request can steer where the page goes.
-  assert.equal((await core.finishGithubAuthorization({ code: 'x"><script>', state, origin: ORIGIN })).ok, false);
+  assert.equal(core.githubCallback({ code: 'x"><script>', state }).ok, false);
 
   // 3. THE DEVICE FINISHES IT through the minter, sealed both ways.
   const phone = await newSealKey();

@@ -837,6 +837,7 @@ trust.
 | phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist; spent on exchange |
 | phone → coordinator (per request) | **verifies** | device token, SHA-256 hash compared timing-safe |
 | host → coordinator | **verifies** | P-256 signature over a coordinator-issued nonce |
+| provider redirect → coordinator (GitHub, Cloudflare) | **carries**, so it finishes nothing | the `state` names a flow and proves only who started it; the finish is a separate request that **verifies** (SEC-ID-8) |
 | coordinator → host (the `actor`) | **carries** | the host trusts `fleet:<email>` because it arrived |
 | host → fleetwright (`/api/command`) | **carries** | fleetwright records the actor a trusted caller states; it cannot verify |
 | session → host (uuid) | **verifies** | the bind-mounted socket *is* the proof of which session |
@@ -880,6 +881,24 @@ before its first presentation — and `identity.md` records why the nonce waits.
 *Falsify:* `spent-tokens.js` is consulted last in `identity.js:identify`; the
 Node state file and the Durable Object both persist `spentTokens`;
 `test/identity.test.js` drives the same token twice across a restart.
+
+**SEC-ID-8** — A provider sign-in a person starts MUST be finished only by
+that person's own verified credential. The callback a provider redirects to
+carries no fleet credential, so it MUST NOT exchange, link or renew: it hands
+the code and state to the app, or to `/me` on the same origin, and
+`POST /api/oauth/finish` behind the credential gate redeems the state only when
+the requester's email is the one it was minted for (an admin-token flow, only
+with the admin token). The state alone used to be the proof, and a member who
+forwarded the authorize URL from their own Connect had whoever completed it
+connected under the member's name, on a box the member enrolled. What remains:
+on Android a custom scheme can be claimed by another installed app, so an app
+that has taken `fleetwright://` on the victim's phone and is signed in as the
+person who started the flow could finish it. iOS hands the redirect only to the
+session that opened it, and `/me` never lets the code leave the origin.
+*Falsify:* `PendingAuthorizations.redeem` takes the requester and refuses a
+mismatch; `githubCallback`, `relayedGithubCallback` and `cloudflareCallback`
+in `core.js` dispatch nothing; `test/fleet-do.test.js` forwards a link through
+the routes and asserts nothing is stored until the starter finishes.
 
 ---
 
@@ -1225,6 +1244,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-ID-5 | Nothing replayable crosses the wire in host auth |
 | SEC-ID-6 | `fleet:` prefix required to resolve an actor to a credential row |
 | SEC-ID-7 | An ID token buys at most one credential, across a restart |
+| SEC-ID-8 | A provider sign-in is finished only by the person who started it |
 | SEC-PROTO-1 | The command line is built from literals, never received |
 | SEC-PROTO-2 | The verb allowlist is the defence, re-validated host-side |
 | SEC-PROTO-3 | The five conditions that make a verb safe to add |
