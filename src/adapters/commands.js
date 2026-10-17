@@ -43,6 +43,9 @@
  *   attached to the Claude row of a person's connections listing
  * @property {typeof fetch} [fetch] stands in for the network, so a test can
  *   serve the changelog a release check reads; the real one otherwise
+ * @property {(argv: string[], timeout: number) => { status: number|null, stdout: string, stderr: string }} [exec]
+ *   stands in for spawning, so a test can script sudo's answer to the one
+ *   unit the channel verb starts on an apt box; the real one otherwise
  * @property {string} [secret]     which named secret a new session may fetch.
  *   A NAME, never the value: the value is a file on this box the session reads
  *   at runtime over the hook socket, and a caller that could supply it would be
@@ -109,7 +112,7 @@ import { applyRelease, currentVersion, versionDrift } from '../core/release-appl
 import { armConfirmation } from '../core/update-confirm.js';
 import { PROTOCOL_VERSION, LINK_ROLES, REPO_RE } from '../fleet/protocol/intents.js';
 import { listSecretNames } from '../core/secret-store.js';
-import { readChannel, writeChannel, pinnedByEnv, aptSuite } from '../core/channel.js';
+import { readChannel, writeChannel, pinnedByEnv, aptSuite, switchAptSuite } from '../core/channel.js';
 import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
 import { readLabels, addLabel, removeLabel, describeLabels } from '../core/labels.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
@@ -123,7 +126,7 @@ import { checkClaudeAuth, describeTokenCheck } from '../core/claude-token-check.
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageLists, runUpgrade, runPackageUpgrade } from '../core/upgrades.js';
 import { fetchNotes, describeNotes, changelogRepo } from '../core/changelog.js';
-import { grantsOf } from '../core/grants.js';
+import { grantsOf, grantCommand } from '../core/grants.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
@@ -926,25 +929,35 @@ export const COMMANDS = {
       'itself — it decides what the next update is allowed to be.',
     run: (ctx, args) => {
       const [wanted] = args;
-      // NO CHANNEL TO MOVE ON AN APT BOX. Its suite is the one its sources
-      // line names: stable for every box installed from the package, rolling
-      // for a machine made from an image built from main (vm-image.js). Pinned
-      // either way, so the picker does not render a choice that is refused.
+      // ON AN APT BOX THE CHANNEL IS THE SUITE on its sources line: stable for
+      // a box installed from the package, rolling for a machine made from an
+      // image built from main (vm-image.js). The line is root's, so moving it
+      // is a unit the upgrade grant lets the hub start (channel.js,
+      // switchAptSuite); without the grant it is pinned, and says so, so the
+      // picker does not render a choice that is refused.
       if (ctx.cfg.releaseSource === 'apt') {
         const suite = aptSuite(/** @type {any} */ (ctx.cfg));
+        const pinned = pinnedByEnv(ctx.cfg);
+        if (!wanted) {
+          return {
+            ok: true,
+            text:
+              (suite === 'rolling'
+                ? 'This box takes Fleetwright from apt’s rolling suite: the newest build of main, on every merge.'
+                : 'This box takes Fleetwright from apt’s stable suite: published releases only, each one once its rollout is complete.') +
+              (pinned
+                ? `\n\nChanging suite needs the upgrade grant on this box: ${grantCommand('upgrades', 'on')}`
+                : ''),
+            channel: suite,
+            channelPinned: pinned,
+          };
+        }
+        const r = switchAptSuite(ctx.cfg, wanted, ctx.exec ? { exec: ctx.exec } : {});
         return {
-          ok: !wanted || wanted === suite,
-          text:
-            (suite === 'rolling'
-              ? 'This box takes Fleetwright from apt’s rolling suite: the newest build of main, on every merge. It was made from a machine image built from main.'
-              : 'This box takes Fleetwright from apt, which carries stable releases only — each one once its rollout is complete.') +
-            (wanted && wanted !== suite
-              ? suite === 'rolling'
-                ? '\n\nTo take released versions, make it again from an image built from released versions.'
-                : '\n\nTo take rolling builds, install with the one-line installer instead of the package.'
-              : ''),
-          channel: suite,
-          channelPinned: true,
+          ok: r.ok,
+          text: r.message,
+          channel: r.channel ?? suite,
+          channelPinned: pinnedByEnv(ctx.cfg),
         };
       }
       const current = readChannel(ctx.cfg);

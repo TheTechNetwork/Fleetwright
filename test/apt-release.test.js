@@ -106,18 +106,23 @@ test('/update on an apt box reports apt, and offers the package install only whe
   }
 });
 
-test('/channel on an apt box: stable, pinned, and rolling refused with the way to get it', async () => {
+test('/channel on an apt box without the upgrade grant: stable, pinned, and rolling refused with the way to get it', async () => {
+  // Moving the suite is a unit the upgrade grant lets the hub start
+  // (test/apt-channel.test.js); without the grant there is no way from here,
+  // and the answer says which command gives it rather than offering a picker
+  // that would be refused.
   const cfg = /** @type {any} */ ({ releaseSource: 'apt' });
   const asked = await dispatch({ cfg }, '/channel');
   assert.equal(asked.channel, 'stable');
   assert.equal(asked.channelPinned, true);
+  assert.match(asked.text, /grant upgrades on/);
 
   const rolling = await dispatch({ cfg }, '/channel rolling');
   assert.equal(rolling.ok, false);
-  assert.match(rolling.text, /one-line installer/);
+  assert.match(rolling.text, /grant upgrades on/);
 });
 
-test('/channel on a machine made from an image built from main: rolling, pinned, read from its apt line', async () => {
+test('/channel on a machine made from an image built from main: rolling, read from its apt line, pinned without the grant', async () => {
   // The machine image writes the suite into the apt line every clone keeps
   // (vm-image.js), so that line is what the next upgrade installs from and the
   // one place the answer cannot drift from it.
@@ -133,7 +138,7 @@ test('/channel on a machine made from an image built from main: rolling, pinned,
     assert.equal(readChannel(cfg), 'rolling', 'health says what /channel says');
     const back = await dispatch({ cfg }, '/channel stable');
     assert.equal(back.ok, false);
-    assert.match(back.text, /make it again from an image built from released versions/);
+    assert.match(back.text, /grant upgrades on/);
     // An unreadable line is stable, the only suite the package itself writes.
     assert.equal(readChannel(/** @type {any} */ ({ releaseSource: 'apt', aptSources: path.join(dir, 'missing') })), 'stable');
   } finally {

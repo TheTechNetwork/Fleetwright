@@ -1,0 +1,28 @@
+[Unit]
+Description=fleetwright — move this box's apt source to the %i suite, on request from the hub
+Documentation=https://github.com/TheTechNetwork/Fleetwright
+
+[Service]
+# ROOT'S HALF OF /channel ON A BOX APT OWNS. The suite a box takes is one word
+# in /etc/apt/sources.list.d/fleetwright.list, which is root's, so the hub
+# cannot move it itself: it may START this unit, and the unit runs
+# /usr/local/sbin/fleetwright-apt-channel, which rewrites that one word, sets
+# or clears the pin a rolling build needs, and refreshes the package lists.
+#
+# A TEMPLATE, AND THE INSTANCE IS THE SUITE. The sudoers grant names the two
+# instances, @stable and @rolling, as two separate lines, so there is still
+# nothing the hub could widen: `systemctl start fleetwright-apt-channel@x`
+# matches neither. The script refuses any instance but the two as well.
+#
+# Blocking, unlike the package unit beside it: nothing here restarts the hub,
+# and the hub waits so it can read the sources line back and report what the
+# box is on rather than what it asked for.
+Type=oneshot
+User=root
+Environment=DEBIAN_FRONTEND=noninteractive
+ExecStart=/usr/local/sbin/fleetwright-apt-channel %i
+TimeoutStartSec=180
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fleetwright-apt-channel
