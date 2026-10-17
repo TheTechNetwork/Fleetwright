@@ -51,15 +51,17 @@ test('Renovate can see every image the fleet downloads, and moves the name the b
   }
 });
 
-test('the soak is kept for them: the cloud images carry their date in the name, OPNsense is proposed without one, and the pin waits three days', () => {
+test('the soak is kept for them: every image carries its date in its name, and the pin waits three days', () => {
   // Renovate 42 and later never propose an update with no release date while
   // minimumReleaseAge is set, and a listing has none. A cloud image's build is
-  // named for its day, so its datasource reads the date from the name and the
-  // ordinary soak applies; only OPNsense, whose 26.1.3 says nothing about when,
-  // is proposed at once and held at the pin instead.
-  const rule = config.packageRules.find((/** @type {any} */ r) => r.minimumReleaseAgeBehaviour === 'timestamp-optional');
-  assert.deepEqual(rule.matchDatasources, ['custom.opnsense'], 'timestamp-optional reaches a listing whose names carry a date');
-  for (const [name, current] of [['debian-cloud', `${DEBIAN_IMAGE.build}/`], ['ubuntu-cloud', `${UBUNTU_2404_IMAGE.build}/`], ['ubuntu-cloud', `${UBUNTU_2604_IMAGE.build}/`]]) {
+  // named for its day and an OPNsense release for its month, so each datasource
+  // reads the date from the name and the ordinary soak applies. None is marked
+  // timestamp-optional: that proposed a build the moment it appeared, red, and
+  // Renovate reported it as a repository problem on every run.
+  for (const rule of config.packageRules.filter((/** @type {any} */ r) => r.minimumReleaseAgeBehaviour === 'timestamp-optional')) {
+    assert.ok(!rule.matchDatasources?.some((/** @type {string} */ d) => d.startsWith('custom.')), 'timestamp-optional reaches a listing whose names carry a date');
+  }
+  for (const [name, current] of [['debian-cloud', `${DEBIAN_IMAGE.build}/`], ['ubuntu-cloud', `${UBUNTU_2404_IMAGE.build}/`], ['ubuntu-cloud', `${UBUNTU_2604_IMAGE.build}/`], ['opnsense', `OPNsense-${OPNSENSE_IMAGE.release}-nano-amd64.img.bz2`]]) {
     const transform = config.customDatasources[name].transformTemplates?.[0] ?? '';
     assert.match(transform, /"releaseTimestamp":/, `custom.${name} gives Renovate no date, so it would never propose a build`);
     // The transform keeps only the links that are builds; one that did not keep
