@@ -269,7 +269,9 @@ machine of the fleet, through the coordinator.
   the flag itself; what it would gain is a setup the phone then has to seal a
   sign-in for, which the phone does only after asking.
 - **The probe is a port scan, one address at a time.** `xoprobe` asks every
-  permanent machine to reach an address on its network, and answers with
+  permanent machine of the fleet's own to reach an address on its network
+  (`begin` goes only to one of them too, by name or as the only one; a box a
+  member enrolled acts only for them, `mayActFor`), and answers with
   whether something did, whether it looks like Xen Orchestra and its
   certificate. Admin only, checked here, which a compromised coordinator does
   not respect; the reach is "does this address answer HTTPS from that box",

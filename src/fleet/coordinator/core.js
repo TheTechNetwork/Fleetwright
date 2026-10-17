@@ -1174,15 +1174,16 @@ export class CoordinatorCore {
    * mayActFor), which for an admin is the fleet's own. The setup it carries
    * ends with the admin's Xen Orchestra sign-in sealed to a key that machine
    * made, and the offer was the first permanent box by name, so a box a member
-   * enrolled as `aaa-…` was the one both apps put on the button. Named, the
-   * machine is the person's own choice and stands.
+   * enrolled as `aaa-…` was the one both apps put on the button. Named, it is
+   * held to the same rule: `begin` is placed by it (scheduler.js), so a relay
+   * to a machine that may not act for the person could carry nothing.
    *
    * @param {string|null} prefer @param {string|null} who
    */
   #relayHost(prefer, who) {
     const able = this.registry.reachable().filter((h) => !h.ephemeral && Number(h.health?.protocol) >= RELAY_PROTOCOL);
-    if (prefer) return able.find((h) => h.hostId === prefer) ?? null;
     const own = able.filter((h) => mayActFor(h, who));
+    if (prefer) return own.find((h) => h.hostId === prefer) ?? null;
     own.sort((a, b) => Number(b.state === 'healthy') - Number(a.state === 'healthy') || a.hostId.localeCompare(b.hostId));
     return own[0] ?? null;
   }
@@ -1228,7 +1229,7 @@ export class CoordinatorCore {
         ok: false,
         error: { code: 'no_hosts' },
         text: prefer
-          ? `${prefer} cannot work through a phone now: it is offline, or older than protocol ${RELAY_PROTOCOL}. Update it and try again.`
+          ? `${prefer} cannot work through a phone now: it is offline, older than protocol ${RELAY_PROTOCOL}, or a box a member enrolled for themselves. An offline or older one can be updated and asked again.`
           : `No machine of the fleet’s own can work through a phone yet: each is offline, older than protocol ${RELAY_PROTOCOL}, or a box a member enrolled for themselves. Update one and try again.`,
       });
     }

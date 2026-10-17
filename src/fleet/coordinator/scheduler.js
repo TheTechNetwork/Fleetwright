@@ -74,6 +74,11 @@ const PINNED = new Set([
 /** Verbs answered by asking every host and merging. */
 const FANOUT = new Set(['list', 'profiles', 'secrets']);
 
+/** Why no machine may take an admin's hypervisor probe or setup. */
+const NO_OWN_MACHINE =
+  'No connected permanent machine is one of the fleet\u2019s own. A box a member enrolled acts only for them, ' +
+  'and is sent nobody else\u2019s probe or setup.';
+
 /** Verbs that carry, or act with, one person's credential. See `whose` in place(). */
 const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setuptoken']);
 
@@ -346,11 +351,20 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // differs by machine and the point is to find the ones that can. A runner is
   // left out: it is on somebody else's network for a few hours and can reach
   // nothing on yours. docs/hypervisors.md.
+  //
+  // AND ONLY A MACHINE THAT MAY ACT FOR WHOEVER ASKED (hosts.js mayActFor),
+  // which for an admin is the fleet's own, for the probe and for the setup
+  // below. A box a member enrolled was sent the admin's probe, answered it in
+  // its own words onto the app's list, and was taken for `begin` when named or
+  // when it was the only permanent box; the job's `run` then carried the
+  // admin's sealed Xen Orchestra sign-in to it, to be opened where that member
+  // has root. SEC-HOST-1.
   if (verb === 'xoprobe') {
-    const durable = registry.reachable().filter((h) => !h.ephemeral);
+    const permanent = registry.reachable().filter((h) => !h.ephemeral);
+    const durable = permanent.filter((h) => mayActFor(h, whose));
     return durable.length
       ? { kind: 'fanout', hosts: durable }
-      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+      : { kind: 'refused', code: 'no_hosts', reason: permanent.length ? NO_OWN_MACHINE : describeWhyNoHosts(registry) };
   }
 
   // ONBOARDING RUNS ON THE MACHINE THAT WAS CHOSEN, and every phase of one job
@@ -360,8 +374,11 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // the first, so only `begin` ever needs a person to choose. Not new work, so
   // a full machine can still do it.
   if (verb === 'xosetup') {
-    const durable = registry.reachable().filter((h) => !h.ephemeral);
-    if (!durable.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    const permanent = registry.reachable().filter((h) => !h.ephemeral);
+    const durable = permanent.filter((h) => mayActFor(h, whose));
+    if (!durable.length) {
+      return { kind: 'refused', code: 'no_hosts', reason: permanent.length ? NO_OWN_MACHINE : describeWhyNoHosts(registry) };
+    }
     if (preferHost) {
       const chosen = durable.find((h) => h.hostId === preferHost);
       return chosen
@@ -369,7 +386,9 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         : {
             kind: 'refused',
             code: 'host_unavailable',
-            reason: `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+            reason: permanent.some((h) => h.hostId === preferHost)
+              ? `${preferHost} acts for the person who enrolled it, and runs nobody else\u2019s setup.`
+              : `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
           };
     }
     if (durable.length === 1) return { kind: 'host', host: durable[0] };
