@@ -12,12 +12,14 @@
 // from the download's own length, and the disk's size from its qcow2 header,
 // read by a ranged request of 64 bytes. Nothing else in the file is touched.
 //
-// THE SOAK IS KEPT HERE. renovate.json holds every update for three days so a
-// compromised release is found by somebody else first; these listings carry
-// no release dates, so Renovate proposes them as soon as they appear, and this
-// refuses a build whose checksum file is younger than three days, saying when
-// it can be pinned. Until it has run, the build and the address disagree and
-// test/pin-images.test.js fails, naming this command.
+// THE SOAK IS CHECKED TWICE. renovate.json holds every update for three days
+// so a compromised release is found by somebody else first. These listings
+// carry no release dates, so its datasources read the day out of each build's
+// name (20261015-2632 is a date) and Renovate waits on that; this then refuses
+// a build whose checksum file, which does carry a time, is younger than three
+// days, saying when it can be pinned. A pull request that is refused here was
+// opened early, which is worth knowing. Until this has run, the build and the
+// address disagree and test/pin-images.test.js fails, naming this command.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';

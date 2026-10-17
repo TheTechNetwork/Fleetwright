@@ -140,13 +140,13 @@
     },
     {
       "description": [
-        "The cloud images the machine images are made of, and OPNsense, read from their vendors' directory listings: what a build looks like in each, and how two compare.",
+        "OPNsense, read from its vendor's directory listing.",
         "",
-        "THE SOAK IS KEPT, ONE STEP LATER. A listing carries no release dates, and Renovate 42 and later hold an update with no date back for good under minimumReleaseAge, so these would never be proposed. They are proposed at once instead, and what the soak protects against is held at the pin: scripts/pin-images.mjs refuses a cloud image whose checksum file is younger than three days, and an OPNsense release is pinned by a person (the note below). Nothing reaches a machine before CI is green, and CI is red until the pin is written."
+        "THE SOAK IS KEPT, ONE STEP LATER. The listing carries no release dates and its names carry none either (26.1.3 says nothing about when), and Renovate 42 and later hold an update with no date back for good under minimumReleaseAge, so these would never be proposed. They are proposed at once instead, and what the soak protects against is held at the pin: a release is pinned by a person, after three days (the note below). Nothing reaches a machine before CI is green, and CI is red until the pin is written.",
+        "",
+        "The cloud images used to be here too, until somebody pointed out that 20261015-2632 is a date. Their datasources below read it, so they soak like everything else."
       ],
       "matchDatasources": [
-        "custom.debian-cloud",
-        "custom.ubuntu-cloud",
         "custom.opnsense"
       ],
       "minimumReleaseAgeBehaviour": "timestamp-optional"
@@ -182,7 +182,7 @@
         "custom.ubuntu-cloud"
       ],
       "prBodyNotes": [
-        "**Before merging:** run `node scripts/pin-images.mjs` on this branch and commit what it writes. Renovate moved the build; that script pins its address, digest and sizes from the vendor's own checksum file, and refuses a build published less than three days ago, saying when it can be pinned. CI stays red until it has."
+        "**Before merging:** run `node scripts/pin-images.mjs` on this branch and commit what it writes. Renovate moved the build; that script pins its address, digest and sizes from the vendor's own checksum file. It also refuses a build whose checksum file is younger than three days, saying when it can be pinned, which should not happen here (this pull request waited for that already) and is a thing to look into if it does. CI stays red until it has run."
       ]
     },
     {
@@ -239,14 +239,28 @@
   "rangeStrategy": "pin",
   "customDatasources": {
     "debian-cloud": {
-      "description": "Debian's cloud images, one directory per build (20261001-2618/), as the listing at cloud.debian.org links them. depName is the release's codename.",
+      "description": [
+        "Debian's cloud images, one directory per build (20261001-2618/), as the listing at cloud.debian.org links them. depName is the release's codename.",
+        "",
+        "THE DATE IS IN THE NAME. The listing itself carries none, and without one Renovate 42 and later hold an update back for good under minimumReleaseAge. So the transform keeps the links that are builds and reads each one's day out of its first eight digits, as the last second of that day in UTC: a build named for a day cannot have been published before it, so the soak that follows is never shorter than the three days everything else gets. scripts/pin-images.mjs still checks the checksum file's own date when it pins, as the second line."
+      ],
       "defaultRegistryUrlTemplate": "https://cloud.debian.org/images/cloud/{{packageName}}/",
-      "format": "html"
+      "format": "html",
+      "transformTemplates": [
+        "{ \"releases\": [releases[$contains(version, /^\\d{8}-\\d+\\/$/)].{ \"version\": version, \"releaseTimestamp\": $substring(version, 0, 4) & \"-\" & $substring(version, 4, 2) & \"-\" & $substring(version, 6, 2) & \"T23:59:59Z\" }] }"
+      ]
     },
     "ubuntu-cloud": {
-      "description": "Ubuntu's cloud images, one directory per release (release-20260926/), as cloud-images.ubuntu.com links them. depName is the release's codename.",
+      "description": [
+        "Ubuntu's cloud images, one directory per release (release-20260926/), as cloud-images.ubuntu.com links them. depName is the release's codename.",
+        "",
+        "The date is in the name here too, after release-, and is read the same way as Debian's above and for the same reason; a .1 after it is a second build of the same day and keeps that day."
+      ],
       "defaultRegistryUrlTemplate": "https://cloud-images.ubuntu.com/releases/{{packageName}}/",
-      "format": "html"
+      "format": "html",
+      "transformTemplates": [
+        "{ \"releases\": [releases[$contains(version, /^release-\\d{8}(\\.\\d+)?\\/$/)].{ \"version\": version, \"releaseTimestamp\": $substring(version, 8, 4) & \"-\" & $substring(version, 12, 2) & \"-\" & $substring(version, 14, 2) & \"T23:59:59Z\" }] }"
+      ]
     },
     "opnsense": {
       "description": "OPNsense's installer images on its own mirror, whose nano image the edge router is built from.",
