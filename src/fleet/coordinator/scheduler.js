@@ -144,7 +144,12 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   /** The connected hosts this person's credentials may reach. */
   const holders = () => registry.reachable().filter((h) => mayActFor(h, whose));
 
-  if (FANOUT.has(verb)) {
+  // `status` with no name is a fleet-wide question, not a session one, so it
+  // fans out here, and for a member to the boxes that may act for them, by the
+  // rule and for the reason `list` is below: it went to every box, and a box
+  // that takes no work from them put its own words into their reply as the
+  // fleet's (sixth audit).
+  if (FANOUT.has(verb) || (verb === 'status' && !name)) {
     // reachable(), not schedulable(): see the comment on both in registry.js.
     // Asking every connected box what it has is a different question from
     // choosing one to start work on.
@@ -154,10 +159,17 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // question went, with their name on it, to a box another member enrolled,
     // and its profile names, their first lines and its secret names came back
     // merged into their picker: things on a machine that takes no start from
-    // them, belonging to the one person it does (fifth Workers audit). `list`
-    // still asks everywhere, because dispatch filters its records and rewrites
-    // its prose for the person asking, and nothing can do that to a profile.
-    const scoped = verb !== 'list' && requester && !requester.admin;
+    // them, belonging to the one person it does (fifth Workers audit).
+    //
+    // AND `list` WITH THEM. It asked everywhere on the strength of dispatch
+    // filtering its records and rewriting its prose, and the rewrite ran only
+    // on a reply that carried records, so a box another member enrolled could
+    // leave them out and write its own text into this member's listing, with
+    // their name delivered to it on every ask (sixth audit). Nothing it says
+    // could survive the filter anyway: every session it reports is filed under
+    // the person it acts for (hosts.js believedCreator), so asking it hands
+    // over the name and gets back nothing that is theirs.
+    const scoped = Boolean(requester && !requester.admin);
     const hosts = scoped ? holders() : registry.reachable();
     if (!hosts.length) {
       return {
@@ -510,19 +522,36 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // them alone, which holds nobody's work but theirs (hosts.js mayActFor). A
     // member's `logs <name>` never gets this far: it resolved to their own
     // session above, or was refused there.
+    //
+    // AND A BOX IS ADMINISTERED BY THE SAME TWO PEOPLE, for the same reason:
+    // what it changes is everybody's work on the box. A reboot's first step
+    // names every running session on it, whoever's, and its second ends them,
+    // which is the stop this file refuses a member on anybody else's session;
+    // `sandbox` changes the image everybody's next session runs in, `channel`
+    // and `update` what code runs everybody's work, `upgrade` the system under
+    // it, and `labels` where other people's tag-placed work lands. Each went to
+    // any connected box a member named, the operator's included, and a tag
+    // fanned the settings out to every box carrying it (sixth audit). A member
+    // still administers a box that acts for them alone, which holds nobody's
+    // work but theirs; the admin and the break-glass token, any box.
     const journal = verb === 'logs' && Boolean(requester) && !requester?.admin;
+    const administer =
+      (setting || verb === 'update' || verb === 'upgrade' || verb === 'reboot') && Boolean(requester) && !requester?.admin;
+    const ownOnly = journal || administer;
     const reachable = credential
       ? holders()
-      : journal
+      : ownOnly
         ? registry.reachable().filter((h) => h.actsFor && mayActFor(h, requester?.email))
         : registry.reachable();
-    if (journal && registry.reachable().length && (!reachable.length || (preferHost && !reachable.some((h) => h.hostId === preferHost)))) {
+    if (ownOnly && registry.reachable().length && (!reachable.length || (preferHost && !reachable.some((h) => h.hostId === preferHost)))) {
       return {
         kind: 'refused',
         code: 'not_admin',
-        reason:
-          'A box\u2019s service journal records everybody\u2019s work on it, so only this fleet\u2019s admin, ' +
-          'or the one person a box acts for, can read it.',
+        reason: journal
+          ? 'A box\u2019s service journal records everybody\u2019s work on it, so only this fleet\u2019s admin, ' +
+            'or the one person a box acts for, can read it.'
+          : 'A box\u2019s settings, updates and reboots reach everybody\u2019s work on it, so only this fleet\u2019s admin, ' +
+            'or the one person a box acts for, can change, update or reboot it.',
       };
     }
     if (!reachable.length) {
@@ -563,14 +592,6 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       code: 'ambiguous_host',
       reason: `Which box? ${reachable.map((h) => h.hostId).join(', ')}.`,
     };
-  }
-
-  // `status` with no name is a fleet-wide question, not a session one.
-  if (verb === 'status' && !name) {
-    const hosts = registry.reachable();
-    return hosts.length
-      ? { kind: 'fanout', hosts }
-      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
   }
 
   if (PINNED.has(verb)) {

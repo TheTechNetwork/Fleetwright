@@ -460,6 +460,14 @@ revoking a device come from `GET /api/me`, which answers with the flag the
 coordinator's own guard reads. A member sees none of them rather than a control
 that refuses after the tap; not knowing (an older coordinator) draws nothing.
 
+**Not yet true of a machine's own controls.** Releases, image, labels, the
+software update and reboot are the admin's on every machine, and a member's
+only on a machine that acts for them alone; on any other the coordinator
+answers a member's with `not_admin` (`place`, `scheduler.js`). Both phones
+still draw them on every machine's page, so on the operator's machines and on
+ones other members enrolled a member meets that refusal after the tap. Drawing
+them only where the viewer may use them is app work still to do.
+
 **An admin can view the fleet as a member** (You, This fleet, View as a member).
 Every request then carries `x-fleetwright-view: member` and the coordinator
 answers it as a member's, so the lists are the member's lists and the refusals
