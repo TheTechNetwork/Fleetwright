@@ -1768,6 +1768,181 @@ The Android relay compiles and its unit tests run. **Not run:** the Worker's
 relay socket in workerd, the iPhone's relay (Swift compiles only in CI), and
 either phone against a real Xen Orchestra.
 
+### When a pool goes missing
+
+Asked for: *"When Xen shows no pool, reconnecting all hosts usually fixes it.
+Why don't we do it instead of me logging in?"* Xen Orchestra keeps one
+connection to each pool master, and when a master restarts, moves or changes
+its certificate that connection can stay disconnected, or stuck connecting,
+while Xen Orchestra goes on answering and shows no pool. Nothing the fleet
+makes or reaches on that pool works until somebody signs in as admin and
+reconnects its servers. The fleet now notices, says so once, and the phone
+does the signing in, with one tap and Face ID or a fingerprint.
+
+**What a box notices.** Each box holding a pool's token already looks at Xen
+Orchestra with it (["Machines from your pool"](#machines-from-your-pool)). It
+now remembers, per token and in memory only, which pools those looks have
+shown (`src/fleet/host/xo-pools.js`). A look that reaches Xen Orchestra and no
+longer lists one of them starts a clock on it, and the health frame names it
+in `missing` and carries `missingFor`: how long the longest has been gone, as
+a duration, so the coordinator's clock need not agree with the box's. A look
+that does not reach Xen Orchestra stops those clocks rather than count the
+box's own outage as time a pool was gone. A pool not seen for a day is
+forgotten, so one removed on purpose stops being news, and a box that
+restarts forgets them all and learns the pools again from its next looks.
+
+**What the coordinator calls lost.** It reads those frames only from a box
+that may act for the pool's owner (`xoFor`, as for everything else in a
+frame's `xo[]`), so a box another member enrolled cannot put a pool, and a
+Reconnect button, on this person's phone. And only from a look that got an
+answer: `reachable: false` is the box's network, and null is cannot tell;
+neither says anything about the pool (C-5). A pool is lost when an answer
+has had it missing for five minutes, or when Xen Orchestra has answered with
+no pools at all for five minutes. A box that sees no pools and remembers none
+sends no duration, so for that one the coordinator counts from the first
+frame it saw it in. Five minutes because a master restarting for an update
+is gone for a minute or two and back by itself, and saying so every time
+would teach people to ignore the time it matters. An unreachable Xen
+Orchestra is never this, and the words never say Xen Orchestra is down,
+because it answered.
+
+**Who is told, and how often.** The pool's owner and the fleet's admins, on
+their phones, and in the event log the owner alone: `xo.pool-lost` is
+recorded with the owner as its actor, so other members do not see it. Once
+per person and address per hour, however many of their boxes hold the pool,
+and no more than eight addresses per person in that hour, because the
+addresses are a box's word and every push reaches the admins' phones as
+well. The title is "xo.lan shows no pools", or "xo.lan no longer shows Home"
+when one named pool is gone, and the body names the machine that saw it:
+"Xen Orchestra at xo.lan answers `<machine>` but shows none of its pools.
+Reconnecting its servers usually brings them back."
+
+When a box that may act for the owner later sees pools there with nothing
+missing, `xo.pool-back` is recorded and pushed once, titled "Pools back",
+under the same name as the loss (`pool-lost-<address>`). Android draws both
+itself under one id, so the recovery replaces the loss. On an iPhone it
+replaces it where the push travels unsealed, whose `apns-collapse-id` is that
+name; a sealed push carries no collapse id, so there "Pools back" arrives
+beside it. As soon as a reconnect ends, however it ended, the box looks again
+with the fleet's own token and sends a health frame, so the pools coming back
+is reported by the eyes that reported them gone and not by what an admin
+session happened to see.
+
+**One tap.** On an admin's phone the loss carries the category
+`fleet.pool.reconnect`, with one action, **Reconnect**, whoever's pool it is.
+A member's phone gets the same words without it, their own pool included:
+only an admin may run `xosetup`, so the button goes where it can be pressed,
+and a member's lost pool reaches the admins who can bring it back. Reconnect opens the
+app (iOS: `.foreground` and `.authenticationRequired`, so a locked phone is
+unlocked first; Android: an activity PendingIntent, because the biometric
+prompt needs a screen) into the reconnect for that address, starting from the
+machine the push named, the one that saw the pools go. When the admin sign-in
+was kept on the phone (["The path it used last"](#the-path-it-used-last)),
+Face ID or a fingerprint opens it and the phone begins by itself, so the tap
+and the face are the whole of it; otherwise it is typed. A tap on the body
+opens the pool's page where this phone holds the pool, and Machines where it
+does not.
+
+The same reconnect is a row on the pool's page, **Reconnect its servers**,
+for an admin, offered only once the page has loaded (directly or through one
+of your machines) and shows no pool, or lacks a pool name the phone kept from
+setup. A page that has not loaded has said nothing either way, so it offers
+nothing (`manage.md`).
+
+**What the machine does.** It is a job inside `xosetup`, begun as a policy
+change is, whose sealed sign-in says `purpose: reconnect` beside a key the
+phone made for the answer. Its steps are `XORECONNECT_STEPS`:
+
+1. **Connect and sign in**, as setup does. The password is gone from the
+   machine's memory once it has signed in, and an account that is not a Xen
+   Orchestra admin is refused: "reconnecting its servers needs one".
+2. **Servers.** `system.getMethodsInfo` must list `server.getAll`,
+   `server.enable`, `server.disable` and `xo.getAllObjects`, or the job stops
+   with nothing changed. Then `server.getAll`. A Xen Orchestra with no servers
+   at all stops here too, also with nothing changed.
+3. **Reconnect**, one server at a time, by what Xen Orchestra says of it. The
+   reading of each call is xo-server's own `xo-mixins/xen-servers.mjs`, not a
+   guess:
+
+   | The server | What the job does | Said as |
+   |---|---|---|
+   | connected, with no error recorded | nothing | `left` |
+   | turned off (`enabled` anything but true) | nothing: only a person turns a server off, and it is named on the phone as the reason | `skipped-disabled` |
+   | disconnected | `server.enable`, asked again every two seconds for up to half a minute while Xen Orchestra answers `incorrect state` because an attempt of its own is still running | `enabled` |
+   | connecting, connected with an error, or any status that is neither connected nor disconnected | `server.disable`, up to half a minute for it to reach disconnected, then `server.enable` whether it did or not, so a server this job turned off is not left off by it | `cycled` |
+   | the pool master refuses the user name and password Xen Orchestra keeps for it (`SESSION_AUTHENTICATION_FAILED`), or the pool is already connected through another server (`PoolAlreadyConnected`) | said in words and not tried again, because Xen Orchestra does not retry those either | `failed` |
+
+   Any other refusal is `failed` with Xen Orchestra's own words, and whether
+   the server is now turned off is read back and said, with where to turn it
+   on.
+4. **Wait**, every five seconds for up to three minutes, until every server
+   it touched is connected and Xen Orchestra lists a pool object for each
+   connected server that names one.
+
+**The bounds.** Ten minutes signed in as admin, then the session is closed
+under whatever call is waiting. No server is begun with less than a minute
+left, because a cycle turns the server off first and that minute is the room
+to turn it on again, and a cycle is never cut short, by Cancel or by the
+clock. Cancel is honoured between servers and while waiting. A server a
+person turned off stays off. When every server was already connected with no
+error, nothing is asked of Xen Orchestra, and the job says so and ends done.
+The session, never the password, is all it holds, and it keeps nothing
+afterwards.
+
+**What comes back.** Each server's name and address, its status before and
+at the last look, what was done to it and why it failed, and the pools the
+admin session sees at the end, sealed to the phone's key under
+`fleetwright-xosetup-reconnect/v1:<job>:<address>`: once, whichever way the
+job ended after it read the servers, because a reconnect that failed is when
+the person most needs to see which server and why. The key lives in the
+screen's memory alone, so nothing comes back to a reconnect whose screen is
+gone, and a screen whose answer does not open with its key says so. Both
+phones draw the list however the job ended.
+
+The coordinator relays counts and the address and nothing else: "Reconnecting
+server 2 of 3.", "Waiting for the pools: 1 of 2 servers connected.", and at
+the end "2 of 3 servers are connected again; Xen Orchestra at xo.lan shows 2
+pools.", with a sentence for servers left turned off and one for servers that
+could not be reconnected ("which and why are on your phone"). A job that
+touched servers and did not see the pools come back within the three minutes
+ends failed, in those words. The job reports from `servers` on with
+`purpose: reconnect`; the coordinator holds it to `XORECONNECT_STEPS` and
+titles it "Reconnecting Xen Orchestra’s servers", then "Pools back", "The
+pools did not come back" or "Reconnecting cancelled". The iPhone starts a
+Live Activity when the sign-in is sent, and Android draws the same in its
+ongoing notification. An iPhone told the job is done while the pools it sees
+are none says "Done, and Xen Orchestra still shows no pools" rather than
+"Pools back".
+
+**An older machine is sent nothing.** The phone seals a reconnect only to a
+machine whose `begin` lists `reconnect` in `can`, checked when `begin`
+answers and again where the seal is made. An older machine ignores a purpose
+it does not know and would run the sign-in as a whole setup, making a
+limited user, a resource set and a token nobody asked for. When the machine
+a push named is too old, the iPhone asks your other machines instead;
+Android says so and asks for another machine that reaches the pool.
+
+**Every server Xen Orchestra lists.** `server.getAll` is every pool master
+Xen Orchestra is registered with, not only the pool the fleet uses, so the
+job reconnects whichever of them is not connected, including pools outside
+the fleet's resource set, as a person signing in to do it by hand would. It
+turns on nothing a person turned off, and calls nothing but `server.enable`
+and `server.disable`.
+
+**What has run, and what has not.** `test/xo-setup.test.js` runs the job
+against the suite's stand-in Xen Orchestra, which now answers
+`server.getAll`, `server.enable` and `server.disable` the way xo-server's
+source does: a server left, one enabled, one cycled and one turned off left
+off; the two failures said and not retried; the three-minute wait; nothing
+changed when everything was connected; a cancel while waiting; a job that
+would outrun ten minutes stopping before a server it could not finish; and
+the admin session closed at ten minutes. `test/xo-pools.test.js` holds the
+box's `missing` and `missingFor`, and `test/pool-lost-coordinator.test.js`
+the coordinator's five minutes, its once an hour, its eight per person and
+the recovery, and `test/sidecar.test.js` the box looking again once a
+reconnect ends. **Not run:** a real Xen Orchestra or pool, and either phone on
+a device.
+
 ### Next: a pool's first machine image
 
 - **A pool without Xen Orchestra** is built ("A pool without Xen Orchestra").
