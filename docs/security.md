@@ -24,7 +24,7 @@ normative.
 | Actor | Is | Trusted to | Explicitly NOT trusted to |
 |---|---|---|---|
 | **Coordinator** | Cloudflare Worker + Durable Object, internet-facing at `fleet.thetech.network` | Route intents, hold device-token hashes, host public keys, enrolment pins, the GitHub App **client secret**, and relay OAuth. Authenticate phones and hosts. | Read any session secret; hold a refresh token, a GitHub App private key, or a member's Claude credential. It is **treated as compromised** for custody decisions. |
-| **Host** | Debian box: fleetwright + sidecar + rootless podman | Be the sole authority on its own tmux, hold its own P-256 key, hold at rest the credentials of members who linked on it. | Speak for any host but itself; hold a fleet-wide admin credential. |
+| **Host** | Debian box: fleetwright + sidecar + rootless podman | Be the sole authority on its own tmux, hold its own P-256 key, hold at rest the credentials of members who linked on it. | Speak for any host but itself (a reply is taken only for an intent sent to it); speak for, or be given the work or credentials of, a member it does not act for (`mayActFor`, `hosts.js`); hold a fleet-wide admin credential. |
 | **Session** | A Claude Code agent in a container, root inside, reading untrusted input, holding live credentials | Do the work it was asked to. Nothing else. It is the **least trusted component in the system**. | Be believed about who it is (it reports over a bind-mounted socket it cannot forge); hold anything whose leak must outlive it. |
 | **Phone app** | iOS/Android, App Store / Play, holds one per-device credential | Act as the member it was issued to, until revoked. | Contain any baked-in fleet secret (an IPA/APK is public). |
 | **Member** | A verified email on the allowlist | Drive their own sessions, see their own sessions, mint enrolment pins. | See or act on another member's sessions; link a Claude account for anyone but themselves. |
@@ -174,7 +174,13 @@ asks in ten minutes. What it cannot do is get a token it can use:
   that started the job can do** in that repository — asked by account id, by
   the minting Worker with a metadata-only probe token, or by a box with that
   person's own connection. Nothing the coordinator claims about the owner is
-  read.
+  read;
+- and the job must have run in **that account's own repository or one on
+  `FLEETWRIGHT_GITHUB_MINT_OWNERS`**, as the Claude hand-out below requires.
+  The job's code chose the repository and the key, so without this a
+  `runner-linux.yml` in a stranger's repository that the person was got to
+  dispatch would be minted their push on a fleet repository, sealed to a key
+  that stranger holds.
 
 To obtain such a job token it would need code of its choosing running inside a
 runner the person started. `provision` cannot express one — no workflow file,
@@ -215,8 +221,10 @@ carry a credential through the coordinator, so both are accounted for here.
   reach podman volumes only, and a runner has none.
 - **A token made on a machine** (`setuptoken`) is in the clear on that
   machine for the seconds between the CLI printing it and the seal: on its
-  pane, and in the hub's memory. The machine is one of the person's own, which
-  already holds their linked login if they have one, and it keeps nothing: the
+  pane, and in the hub's memory. The machine is one that may hold the person's
+  credentials, an operator's box, one they enrolled or their own runner
+  (`mayActFor`), which already holds their linked login if they have one, and
+  never a box or runner another member controls. It keeps nothing: the
   pane and its config directory are removed before the reply, the code is
   masked in the journal, and the token is in no reply text. The coordinator
   relays the sign-in page and a ciphertext sealed to the phone's one-answer
@@ -267,7 +275,9 @@ machine of the fleet, through the coordinator.
   the flag itself; what it would gain is a setup the phone then has to seal a
   sign-in for, which the phone does only after asking.
 - **The probe is a port scan, one address at a time.** `xoprobe` asks every
-  permanent machine to reach an address on its network, and answers with
+  permanent machine of the fleet's own to reach an address on its network
+  (`begin` goes only to one of them too, by name or as the only one; a box a
+  member enrolled acts only for them, `mayActFor`), and answers with
   whether something did, whether it looks like Xen Orchestra and its
   certificate. Admin only, checked here, which a compromised coordinator does
   not respect; the reach is "does this address answer HTTPS from that box",
@@ -452,7 +462,13 @@ machine of the fleet, through the coordinator.
   403.
 - **The pool's own machine is admitted by a pin** (`docs/hypervisors.md`,
   "A machine of its own"). The coordinator gives the pin only to the box
-  running that person's policy job, at most three times a job. The pin is
+  running that person's policy job, at most three times a job, while the
+  job runs and the box may act for that person. "The box" is the enrolment
+  that began the job, its key and when it was let in, not its name: a
+  re-key, readmission or revocation of the name ends the job, so a member
+  who replaces a box's key with a pin bound to its name inherits none of
+  its setup, and the same binding holds for the build VM's token and for
+  progress pushed to the owner's phones. The pin is
   bound to a name the coordinator chose and no host had, so it cannot
   replace an existing host's key. It is single use and lasts ten minutes. It
   travels only on the machine's cloud-init drive, which the machine wipes
@@ -554,9 +570,10 @@ machine of the fleet, through the coordinator.
   cannot be aimed at a world-readable repository from here. What it can still
   do is send a session's work to a different private repository the starter
   can push to, or name none, which loses a copy and nothing else. The
-  minting Worker's role check answers for a private repository only inside
-  `FLEETWRIGHT_GITHUB_MINT_OWNERS`, so the App's key is not an oracle over
-  which private repositories exist elsewhere.
+  minting Worker's role and runner-repository checks answer for a private
+  repository only inside `FLEETWRIGHT_GITHUB_MINT_OWNERS` (outside it, a
+  runner check is answered for a public repository and nothing else), so the
+  App's key is not an oracle over which private repositories exist elsewhere.
 - **A lab is an interface on the edge router, and its session holds no key**
   (`docs/hypervisors.md`, "Labs"). Lab networks are made by the policy job
   with the admin sign-in, attached to the edge, and given rules in its
@@ -1190,7 +1207,9 @@ Hold a change against this. If a box is unchecked, the change is not done.
 - [ ] Command lines pass through `redactCommandLine` before any log call
       (SEC-LOG-1).
 - [ ] The surface does not put pane text, titles, or secrets in a journal a
-      phone can read via `logs`.
+      phone can read via `logs`. Who can read one is bounded too: a box's
+      journal is the admin's, or the one person the box acts for
+      (`mayActFor`), because it names everyone's work on that box.
 
 **Adding a surface that reaches a host locally**
 - [ ] It does not assume the loopback API is authenticated (SEC-HOST-2).

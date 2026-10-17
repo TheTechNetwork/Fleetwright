@@ -1276,6 +1276,9 @@ export class Fleet {
         // The credential this registration belongs to, so revoking a phone can
         // stop the fleet talking to it. The Node coordinator does the same.
         clientId: client?.id,
+        // Who is asking, for the ownership rule testPush and unregisterDevice
+        // already ask with the same object.
+        requester: client,
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
         // The phone's public key. Validated during registration rather than at
         // send time: a key that cannot be imported is a registration that fails

@@ -335,6 +335,23 @@ export class SessionManager {
     if (this.inFlight.has(sessionName)) {
       return { ok: false, message: `"${sessionName}" is already starting — give it a moment.` };
     }
+    // A NAME THAT HAS A RECORD IS NOT NEW, stopped or not. Only a running,
+    // binned or starting name was refused, so a start over a stopped session
+    // went on to #launch, which took the account and creator off the old
+    // record, reused its workspace and Claude config volumes (keyed by name)
+    // and then rewrote the creator to whoever pressed start: through the
+    // fleet, one member taking over another's session, account and all (a
+    // later audit). The coordinator refuses that too, but it cannot see a
+    // session on a box that is offline to it. The one start let through is a
+    // retry of the same person's start that failed before it had a
+    // conversation, which holds nothing of anybody else's.
+    const existing = this.registry.get(sessionName);
+    if (existing && !(existing.status === 'error' && !existing.uuid && (existing.createdBy ?? null) === (actor ?? null))) {
+      return {
+        ok: false,
+        message: `"${sessionName}" already exists on this box. /resume ${sessionName} brings it back, or pick another name.`,
+      };
+    }
 
     // THE PROFILE IS RESOLVED BEFORE ANYTHING IS CREATED, and an unknown one
     // is refused rather than downgraded to an idle session.

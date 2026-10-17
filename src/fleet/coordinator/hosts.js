@@ -173,6 +173,32 @@ export function mayActFor(host, email) {
   return emailOf(email) === person;
 }
 
+/**
+ * Whose a session is, as far as the fleet believes the box that reported it.
+ *
+ * `createdBy` arrives in a health frame or a reply, so it is the box's own
+ * word, and a box a member enrolled with a pin they minted could name another
+ * member as the creator of a session of its own. Believed as said, that
+ * session was listed as the other member's, took their writefile and readfile,
+ * and made their stop on a real session elsewhere ambiguous. A box speaks only
+ * for the people it may act for (mayActFor); a creator it may not speak for is
+ * filed under the one person it does act for, who controls it and wrote it.
+ * No creator stays nobody's, which everywhere means the fleet's.
+ *
+ * Applied once, where a report enters the registry (registry.js) and where a
+ * fan-out reply is merged (core.js), so every reader gets the same answer.
+ *
+ * @param {{ actsFor?: string|null }|null|undefined} host
+ * @param {unknown} createdBy
+ * @returns {string|null}
+ */
+export function believedCreator(host, createdBy) {
+  if (createdBy === null || createdBy === undefined) return null;
+  const said = String(createdBy);
+  if (mayActFor(host, said)) return said;
+  return host?.actsFor ? `fleet:${host.actsFor}` : null;
+}
+
 export class HostIdentities {
   /**
    * @param {{ now?: () => number, isAdmin?: (email: string) => boolean }} [opts]

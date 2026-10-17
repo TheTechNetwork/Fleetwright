@@ -71,7 +71,7 @@ test('a full device store serialises to less than a Durable Object value holds',
   // both break, weeks after the change, on a box where nothing happened.
   const c = core({ newId: () => Math.random().toString(36).slice(2) });
   for (let i = 0; i < 150; i++) {
-    const r = await c.registerDevice({ platform: 'ios', token: `${i}`.padStart(512, 'x'), actor: `p${i}@example.com` });
+    const r = await c.registerDevice({ platform: 'android', token: `${i}`.padStart(512, 'x'), actor: `p${i}@example.com` });
     assert.equal(r.ok, true, `row ${i} should fit`);
   }
   assert.equal(c.devices.size, 150);
@@ -85,9 +85,9 @@ test('a full store refuses a new phone rather than forgetting an old one', async
   // dropped device row silently stops somebody's notifications, and this
   // product's whole argument is that the phone gets woken.
   const c = core({ newId: () => Math.random().toString(36).slice(2) });
-  for (let i = 0; i < 150; i++) await c.registerDevice({ platform: 'ios', token: `tok-${i}-`.padEnd(20, 'x'), clientId: `c${i}` });
+  for (let i = 0; i < 150; i++) await c.registerDevice({ platform: 'android', token: `tok-${i}-`.padEnd(20, 'x'), clientId: `c${i}` });
 
-  const r = await c.registerDevice({ platform: 'ios', token: 'one-too-many-00000', clientId: 'c-new' });
+  const r = await c.registerDevice({ platform: 'android', token: 'one-too-many-00000', clientId: 'c-new' });
   assert.equal(r.ok, false);
   assert.equal(r.code, 'devices_full');
   assert.equal(c.devices.size, 150, 'nothing was evicted to make room');
@@ -97,8 +97,8 @@ test('a full store refuses a new phone rather than forgetting an old one', async
   // it holds replaces a row; registering a changed address frees its old row in
   // the sweep. Neither grows the store, so neither may be refused by a ceiling
   // that exists to bound growth.
-  assert.equal((await c.registerDevice({ platform: 'ios', token: 'tok-7-'.padEnd(20, 'x'), clientId: 'c7' })).ok, true);
-  const moved = await c.registerDevice({ platform: 'ios', token: 'c7-new-address-0000', clientId: 'c7' });
+  assert.equal((await c.registerDevice({ platform: 'android', token: 'tok-7-'.padEnd(20, 'x'), clientId: 'c7' })).ok, true);
+  const moved = await c.registerDevice({ platform: 'android', token: 'c7-new-address-0000', clientId: 'c7' });
   assert.equal(moved.ok, true, 'a phone whose address changed is not a new phone');
   assert.equal(c.devices.size, 150);
 });
@@ -113,11 +113,11 @@ test('losing an encryption key is recorded, since it cannot be prevented', async
   const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
   const key = Buffer.from(raw).toString('base64url');
-  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40), clientId: 'phone-1', pushKey: key });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: 'phone-1', pushKey: key });
   assert.equal(c.events.some((e) => e.event === 'device.plaintext'), false, 'nothing to say yet');
 
-  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40), clientId: 'phone-1' });
-  assert.equal(c.devices.get('a'.repeat(40)).pushKey, undefined, 'the stale key was inherited');
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: 'phone-1' });
+  assert.equal(c.devices.get('a'.repeat(64)).pushKey, undefined, 'the stale key was inherited');
   assert.ok(c.events.some((e) => e.event === 'device.plaintext'), 'and the downgrade is visible');
 });
 
@@ -151,7 +151,7 @@ test('two phones on one account both keep their registration', async () => {
   // person. Someone with a tablet and a phone is one actor and two devices.
   const c = core();
   await c.registerDevice({ platform: 'android', token: 'a'.repeat(40), clientId: 'phone-1', actor: 'fleet:e@x.com' });
-  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40), clientId: 'tablet-2', actor: 'fleet:e@x.com' });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(64), clientId: 'tablet-2', actor: 'fleet:e@x.com' });
 
   assert.equal(c.devices.size, 2);
 });
@@ -172,13 +172,16 @@ test('a nonsense platform or token is refused', async () => {
   assert.equal((await c.registerDevice({ platform: 'blackberry', token: 'a'.repeat(40) })).ok, false);
   assert.equal((await c.registerDevice({ platform: 'ios', token: 'short' })).ok, false);
   assert.equal((await c.registerDevice({ platform: 'ios', token: 'x'.repeat(5000) })).ok, false);
+  // Hex for APNs, base64url and a colon for FCM: nothing else is a token either issues.
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'z'.repeat(64) })).ok, false);
+  assert.equal((await c.registerDevice({ platform: 'android', token: 'fid-one/../fid-two' })).ok, false);
 
   // A KEY THAT CANNOT BE IMPORTED IS REFUSED AT REGISTRATION, not at send
   // time. Accepting it would be a registration that fails on every
   // notification forever, and the moment to say so is while somebody is
   // looking at a settings screen — not silently, hours later, when a session
   // needs an answer.
-  const bad = await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40), pushKey: 'not-base64!!' });
+  const bad = await c.registerDevice({ platform: 'ios', token: 'b'.repeat(64), pushKey: 'not-base64!!' });
   assert.equal(bad.ok, false);
   assert.match(String(bad.error), /base64/);
   // 65 bytes, right shape, not on the curve — the classic way to learn
@@ -189,7 +192,7 @@ test('a nonsense platform or token is refused', async () => {
   offCurve.fill(0x01, 1);
   const notAPoint = await c.registerDevice({
     platform: 'ios',
-    token: 'c'.repeat(40),
+    token: 'c'.repeat(64),
     pushKey: Buffer.from(offCurve).toString('base64'),
   });
   assert.equal(notAPoint.ok, false);
@@ -200,8 +203,8 @@ test('a nonsense platform or token is refused', async () => {
 
 test('a device can be unregistered', async () => {
   const c = core();
-  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
-  assert.equal(c.unregisterDevice('b'.repeat(40)).ok, true);
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(64) });
+  assert.equal(c.unregisterDevice('b'.repeat(64)).ok, true);
   assert.equal(c.devices.size, 0);
 });
 
@@ -211,7 +214,7 @@ test('a session waiting for input notifies every registered device', async () =>
   const push = fakePusher();
   const c = core({ push });
   await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
-  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(64) });
 
   await c.onHostMessage('unabandoned', {
     kind: 'event',
@@ -523,7 +526,7 @@ test('a test push reports what actually happened, not that it tried', async () =
   assert.equal(none.ok, false);
   assert.equal(none.error?.code, 'no_devices');
 
-  await core.registerDevice({ platform: 'ios', token: 'a-real-looking-token' });
+  await core.registerDevice({ platform: 'ios', token: '4a7d1c9e0b3f5862'.repeat(4) });
 
   // logPusher reports sent: 0 — configured to log, so nothing was delivered.
   const logged = await core.testPush();
@@ -567,11 +570,11 @@ test('a test push to one device does not wake the whole fleet', async () => {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     push: { async send(devices) { seen.push(devices.map((d) => d.token)); return { sent: devices.length, dead: [] }; } },
   });
-  await core.registerDevice({ platform: 'ios', token: 'mine-token-01' });
-  await core.registerDevice({ platform: 'ios', token: 'somebody-elses-token' });
+  await core.registerDevice({ platform: 'ios', token: '0d'.repeat(32) });
+  await core.registerDevice({ platform: 'ios', token: '5e'.repeat(32) });
 
-  await core.testPush('mine-token-01');
-  assert.deepEqual(seen, [['mine-token-01']]);
+  await core.testPush('0d'.repeat(32));
+  assert.deepEqual(seen, [['0d'.repeat(32)]]);
 });
 
 // --- APNs -------------------------------------------------------------------
@@ -834,15 +837,59 @@ test('a member cannot re-register somebody else’s push token', async () => {
   // replaced, revoking the victim no longer removing it, revoking the attacker
   // silently killing the victim's push (#351).
   const c = core();
-  await c.registerDevice({ platform: 'ios', token: 'v'.repeat(64), clientId: 'victim', actor: 'fleet:v@x.com' });
-  const r = await c.registerDevice({ platform: 'ios', token: 'v'.repeat(64), clientId: 'attacker', actor: 'fleet:a@x.com' });
+  await c.registerDevice({ platform: 'ios', token: 'e'.repeat(64), clientId: 'victim', actor: 'fleet:v@x.com' });
+  const r = await c.registerDevice({ platform: 'ios', token: 'e'.repeat(64), clientId: 'attacker', actor: 'fleet:a@x.com' });
   assert.equal(r.ok, false);
   assert.equal(r.code, 'not_yours');
-  const row = c.devices.get('v'.repeat(64));
+  const row = c.devices.get('e'.repeat(64));
   assert.equal(row?.clientId, 'victim', 'the row is untouched');
   assert.equal(row?.actor, 'fleet:v@x.com');
   // The victim's own re-registration still updates it.
-  assert.equal((await c.registerDevice({ platform: 'ios', token: 'v'.repeat(64), clientId: 'victim' })).ok, true);
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'e'.repeat(64), clientId: 'victim' })).ok, true);
+});
+
+test('a push token has one spelling, so an alias of somebody else’s is not a new phone', async () => {
+  // The check above compares map keys, and the APNs sender puts the token in a
+  // URL path, where `zz/../<token>` loses its dot segments and `<token>#zz` its
+  // fragment. Both were new keys with the victim's delivery address, so a
+  // member who learned a colleague's token registered an alias of it and sent
+  // that colleague's phone their own notifications, which the colleague could
+  // neither test nor remove.
+  const c = core();
+  const victim = '9b1f3c7e5a2d4806'.repeat(4);
+  await c.registerDevice({ platform: 'ios', token: victim, clientId: 'victim', actor: 'fleet:v@x.com' });
+  for (const alias of [`zz/../${victim}`, `${victim}#zz`, `${victim}?zz`, `${victim}/`, ` ${victim}`]) {
+    const r = await c.registerDevice({ platform: 'ios', token: alias, clientId: 'attacker', actor: 'fleet:a@x.com' });
+    assert.equal(r.ok, false, `${JSON.stringify(alias)} was accepted`);
+  }
+  // The same bytes in capitals are the same phone, so the same row, and its owner's.
+  const upper = await c.registerDevice({ platform: 'ios', token: victim.toUpperCase(), clientId: 'attacker', actor: 'fleet:a@x.com' });
+  assert.equal(upper.code, 'not_yours');
+  assert.deepEqual([...c.devices.keys()], [victim]);
+});
+
+test('an APNs token goes in the URL as one path segment', async () => {
+  // Registration accepts only hex now, but rows stored before it did are
+  // loaded as they were, and the relay passes on whatever a fleet sends it. A
+  // token that is a path in disguise must stay a token Apple refuses, not
+  // become the address of a phone it was never registered as.
+  const { pem } = await apnsKey();
+  const victim = '9b1f3c7e5a2d4806'.repeat(4);
+  const real = globalThis.fetch;
+  /** @type {string[]} */
+  const urls = [];
+  globalThis.fetch = /** @type {any} */ (async (/** @type {string} */ url) => {
+    urls.push(String(url));
+    return new Response('{"reason":"BadDeviceToken"}', { status: 400 });
+  });
+  try {
+    const pusher = apnsPusher({ keyId: 'K', teamId: 'T', bundleId: 'network.thetech.fleetwright', privateKey: pem }, { logger: { info() {}, warn() {} } });
+    await pusher.send([{ token: `zz/../${victim}`, platform: 'ios' }, { token: `${victim}#zz`, platform: 'ios' }], { title: 't', body: 'b', data: {} });
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.equal(urls.length, 2);
+  for (const url of urls) assert.notEqual(new URL(url).pathname, `/3/device/${victim}`, url);
 });
 
 test('an admin-token re-registration keeps the row revocable', async () => {
@@ -916,7 +963,7 @@ test('an FCM push carries a ttl, a collapse key, and when it was sent', async ()
 test('a session started from a profile coming back to its prompt is the "done" the phone gets', async () => {
   const push = fakePusher();
   const c = core({ push });
-  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
 
   await c.onHostMessage('deb132', { kind: 'event', event: 'session.ready', name: 'nightly-1', text: 'is back at its prompt', profile: 'nightly' });
 
@@ -931,7 +978,7 @@ test('a session started from a profile coming back to its prompt is the "done" t
 test('a session handed its task in words coming back is the same "done", and only that it had one travels', async () => {
   const push = fakePusher();
   const c = core({ push });
-  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
 
   await c.onHostMessage('deb132', { kind: 'event', event: 'session.ready', name: 'build-1', text: 'is back at its prompt', tasked: true });
 
@@ -945,7 +992,7 @@ test('a session handed its task in words coming back is the same "done", and onl
 test('a turn in a conversation somebody is driving by hand is recorded and not pushed', async () => {
   const push = fakePusher();
   const c = core({ push });
-  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
 
   await c.onHostMessage('deb132', { kind: 'event', event: 'session.ready', name: 'chat', text: 'is back at its prompt' });
 

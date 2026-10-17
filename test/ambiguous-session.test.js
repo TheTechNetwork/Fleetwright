@@ -83,20 +83,44 @@ test('three boxes are still refused, and all three are named', () => {
   for (const host of ['alpha', 'beta', 'gamma']) assert.match(p.reason, new RegExp(host));
 });
 
-test('ambiguity is checked BEFORE ownership, so it cannot become an oracle', () => {
-  // unknown_session and "not yours" are byte-identical on purpose — a member
-  // must not be able to learn that a guessed name exists on somebody else's
-  // work. The ambiguous refusal names hosts, so if it were reachable by a
-  // member who owns neither session it would be exactly the oracle that
-  // identical wording exists to prevent.
-  //
-  // It is not: both claims here belong to somebody else, and the answer is
-  // still the host-naming one — which is safe only because BOTH sessions are
-  // unattributed (createdBy null means fleet-owned, per the visibility filter).
-  // This test pins the ordering so a later refactor cannot swap the two checks
-  // without saying so.
-  const p = place(claiming(['alpha', 'beta']), intent('stop', 'bigjob'), {
-    requester: { email: 'member@example.com', admin: false },
-  });
-  assert.equal(p.code, 'ambiguous_session');
+test('a member is asked to choose only among their own sessions', () => {
+  // This pinned the opposite order, ambiguity before ownership, and said that
+  // was safe because both claims were unattributed. It was not safe with any
+  // creators (a later audit): two other people's sessions of one name, or one
+  // of theirs and one on a box the member enrolled, answered any member's
+  // peek with the hosts holding them, where a single claim answered
+  // unknown_session. Narrowed to the member's own claims first, somebody
+  // else's session changes nothing a member is told.
+  const member = { email: 'member@example.com', admin: false };
+  /** @param {Array<[string, string|null]>} claims host and creator */
+  const by = (claims) => {
+    const hosts = claims.map(([hostId]) => ({ hostId, connected: true, state: 'ready', reason: '' }));
+    return /** @type {any} */ ({
+      reachable: () => hosts,
+      schedulable: () => hosts,
+      list: () => hosts,
+      get: (/** @type {string} */ id) => hosts.find((h) => h.hostId === id),
+      findSessions: () => claims.map(([, createdBy], i) => ({ host: hosts[i], status: 'running', createdBy, ageMs: 0 })),
+    });
+  };
+  const absent = place(by([]), intent('stop', 'bigjob'), { requester: member });
+
+  for (const verb of ['peek', 'stop', 'status']) {
+    const theirs = place(by([['alpha', 'fleet:carol@example.com'], ['beta', 'fleet:dave@example.com']]), intent(verb, 'bigjob'), { requester: member });
+    assert.equal(theirs.code, 'unknown_session', `${verb} told a member where two other people's sessions are`);
+    assert.equal(theirs.reason, absent.reason, verb);
+
+    // Their own and somebody else's: theirs, on the box holding it.
+    const mine = place(by([['alpha', 'fleet:carol@example.com'], ['beta', 'fleet:member@example.com']]), intent(verb, 'bigjob'), { requester: member });
+    assert.equal(mine.host?.hostId, 'beta', verb);
+  }
+
+  // Two of their own is still theirs to choose between, and only those named.
+  const both = place(by([['alpha', 'fleet:member@example.com'], ['beta', 'fleet:carol@example.com'], ['gamma', 'fleet:member@example.com']]), intent('stop', 'bigjob'), { requester: member });
+  assert.equal(both.code, 'ambiguous_session');
+  assert.match(both.reason, /alpha and gamma/);
+
+  // logs <name> counted every claim once the member owned one.
+  const logs = place(by([['alpha', 'fleet:carol@example.com'], ['beta', 'fleet:member@example.com']]), intent('logs', 'bigjob'), { requester: member });
+  assert.equal(logs.host?.hostId, 'beta');
 });

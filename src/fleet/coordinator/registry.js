@@ -21,6 +21,7 @@
 
 import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
 import { HOLDER_ID_RE } from '../protocol/holder-join.js';
+import { believedCreator } from './hosts.js';
 
 /**
  * A POOL'S OWN MACHINE RUNS NO SESSIONS. It is made to stay up and hold the
@@ -87,6 +88,29 @@ export function runsNoSessions(hostId) {
  *   null for an operator's box, which may act for anyone (hosts.js actsFor)
  */
 
+/**
+ * A health report with every session's and bin entry's creator replaced by
+ * whom the fleet believes (hosts.js believedCreator). Copied rather than
+ * edited in place, because the frame is the caller's.
+ *
+ * @param {{ actsFor?: string|null }} host
+ * @param {HostHealth} health
+ * @returns {HostHealth}
+ */
+function attributed(host, health) {
+  if (!health || typeof health !== 'object') return health;
+  /** @param {any} list */
+  const each = (list) =>
+    Array.isArray(list)
+      ? list.map((s) => (s && typeof s === 'object' && 'createdBy' in s ? { ...s, createdBy: believedCreator(host, s.createdBy) } : s))
+      : list;
+  return {
+    ...health,
+    ...('sessions' in health ? { sessions: each(health.sessions) } : {}),
+    ...('bin' in health ? { bin: each(health.bin) } : {}),
+  };
+}
+
 /** How stale a health report may be before the host becomes `unknown`. */
 export const HEALTH_STALE_MS = 45_000;
 
@@ -114,13 +138,19 @@ export class HostRegistry {
    */
   connect(hostId, send, { ephemeral = false, owner = null, actsFor = undefined } = {}) {
     const existing = this.hosts.get(hostId);
+    const person = actsFor === undefined ? existing?.actsFor ?? null : actsFor;
     // A reconnect from a host we already have replaces the old socket. The box
     // is the authority on itself, so the newest connection from it wins.
     this.hosts.set(hostId, {
       hostId,
       state: 'unknown',
       reason: existing ? 'reconnected, no health report yet' : 'connected, no health report yet',
-      health: existing?.health ?? null,
+      // The last report is kept until the next one, ATTRIBUTED AGAIN under who
+      // this connection may act for: a name re-keyed by a member with a pin
+      // bound to it comes back acting for that member, and until its first
+      // frame the old report would still have filed the operator box's
+      // sessions under their creators, on a machine that member now controls.
+      health: existing?.health ? attributed({ actsFor: person }, existing.health) : null,
       healthAt: existing?.healthAt ?? null,
       connectedAt: this.now(),
       connected: true,
@@ -133,7 +163,7 @@ export class HostRegistry {
       // Who it may act for, from the enrolment on every connect. Null is an
       // answer here (an operator's box), so only an absent value keeps the
       // last one.
-      actsFor: actsFor === undefined ? existing?.actsFor ?? null : actsFor,
+      actsFor: person,
       send,
     });
   }
@@ -199,7 +229,12 @@ export class HostRegistry {
     const beforeReason = host.reason;
     /** @type {string|null} */
     let fault = null;
-    host.health = health;
+    // WHOSE EACH SESSION IS, decided here and once (hosts.js believedCreator).
+    // Kept as reported, a box a member enrolled could name another member as
+    // the creator of its sessions and its bin, and every reader below believed
+    // it: their listing, their pinned verbs and their stop on a real session
+    // of the same name elsewhere.
+    host.health = attributed(host, health);
     host.healthAt = this.now();
     // A host whose own fleetwright is unreachable is NOT healthy, even though its
     // socket is fine. It cannot start anything, and saying "healthy" because we
@@ -465,7 +500,9 @@ export class HostRegistry {
     for (const s of sessions) {
       if (!s || typeof s.name !== 'string') continue;
       const at = known.findIndex((k) => k?.name === s.name);
-      const row = { name: s.name, status: String(s.status || 'running'), createdBy: s.createdBy ?? null };
+      // A reply is the box's word as much as a health frame is, so its
+      // creator is believed by the same rule (believedCreator).
+      const row = { name: s.name, status: String(s.status || 'running'), createdBy: believedCreator(host, s.createdBy) };
       if (at >= 0) known[at] = { ...known[at], ...row };
       else known.push(row);
     }
