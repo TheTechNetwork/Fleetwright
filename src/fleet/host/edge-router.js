@@ -38,6 +38,11 @@
 // no disks of its own, the imported disk attached, TX checksum offload turned
 // off on both interfaces (XCP-ng's advice for FreeBSD guests, which otherwise
 // drop forwarded traffic), and started.
+//
+// AND WHAT IS NOT SENT AGAIN. The image as published is kept on the pool, a
+// template that never boots, and a rebuild is a copy of it with only the
+// blocks the configuration changes written into the copy: a few MiB through
+// Xen Orchestra where the whole disk is 3 GiB (buildEdge, THE KEPT DISK).
 
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -51,6 +56,7 @@ import { pipeline } from 'node:stream/promises';
 import { REQUIRED_HOSTS } from '../../core/egress.js';
 import { connectPinnedTls, splitAddress } from './xo-ws.js';
 import { EDGE_WATCH, keptOn, watchConfig, watchOf } from './edge-credentials.js';
+import { VHD_BLOCK, sparseVhd } from './vhd.js';
 
 /**
  * The image, pinned. A new OPNsense release is a new entry here, with the
@@ -127,6 +133,15 @@ export const EDGE = Object.freeze({
   lan: Object.freeze({ address: '10.254.0.1', prefix: 24, from: '10.254.0.100', to: '10.254.0.250' }),
   cpus: 2,
   memory: 2 * 1024 ** 3,
+  /**
+   * On the kept disk's template (buildEdge, THE KEPT DISK), and as
+   * `fleetwright-base:opnsense:<release>` beside it, saying which pinned image
+   * it holds. The same tag as the machine image's kept disks (VM_IMAGE.baseTag
+   * in vm-image.js), written here rather than imported because vm-image.js
+   * imports from this file.
+   */
+  baseTag: 'fleetwright-base',
+  baseKey: 'opnsense',
 });
 
 /**
@@ -825,6 +840,59 @@ export async function uploadDisk({ address, pin, plain, sendTo, body, size, file
   });
 }
 
+/**
+ * Write `body`, a VHD of the blocks to change (vhd.js), into a disk that is
+ * already there, at the URL `disk.importContent` answered with. Its handler
+ * reads the request itself rather than a form, as disk.import's does, and
+ * answers `true` (xo-server's api/disk.mjs, handleImportContent), so the body
+ * goes as it is, with its length, over the same pinned connection.
+ *
+ * @param {{ address: string, pin: string|null, plain: boolean, sendTo: string, body: Buffer, connectTls?: typeof connectPinnedTls, signal?: AbortSignal }} opts
+ * @returns {Promise<void>}
+ */
+export async function writeIntoDisk({ address, pin, plain, sendTo, body, connectTls = connectPinnedTls, signal }) {
+  const { host, port } = splitAddress(address, plain ? 80 : 443);
+  const socket = plain ? await connectPlain(host, port) : await connectTls({ host, port, pin: /** @type {string} */ (pin) });
+  const hostHeader = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`;
+  await new Promise((resolve, reject) => {
+    const req = http.request({
+      method: 'POST',
+      path: sendTo,
+      headers: { Host: hostHeader, 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length) },
+      createConnection: () => /** @type {any} */ (socket),
+    });
+    req.on('error', reject);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        const e = new Error('cancelled');
+        req.destroy(e);
+        reject(e);
+      },
+      { once: true },
+    );
+    req.on('response', (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (d) => {
+        text = (text + d).slice(0, 64 * 1024);
+      });
+      res.on('end', () => {
+        /** @type {any} */
+        let answer = null;
+        try {
+          answer = JSON.parse(text);
+        } catch {
+          /* not JSON */
+        }
+        if (res.statusCode === 200 && answer?.result === true) return resolve(undefined);
+        reject(new Error(`Xen Orchestra did not write into the disk: ${answer?.error?.message ?? `HTTP ${res.statusCode}`}`));
+      });
+    });
+    req.end(body);
+  });
+}
+
 /** @param {string} host @param {number} port @returns {Promise<net.Socket>} */
 function connectPlain(host, port) {
   return new Promise((resolve, reject) => {
@@ -1061,6 +1129,7 @@ export function buildFill(downloaded, written) {
  *   getImage?: typeof fetchImage,
  *   unpackImpl?: typeof unpack,
  *   upload?: typeof uploadDisk,
+ *   writeInto?: typeof writeIntoDisk,
  * }} opts
  */
 export async function ensureEdge(opts) {
@@ -1322,75 +1391,363 @@ function labsSaid(key) {
 }
 
 /**
- * A new edge router, built, tagged with how it filters, and started.
+ * THE KEPT DISK. Asked for, of the machine image first: "Rebuilding machines
+ * why don't we have cached copies?" The download was kept; what every build
+ * did again was write the whole disk, 3 GiB, from the machine running the job
+ * through Xen Orchestra to the pool's storage, and the edge router is rebuilt
+ * for every change of what it filters, its labs or its pair. So the image as
+ * published is kept on the pool, as the machine image's is (vm-image.js,
+ * baseOf): a template that has never booted, `Fleetwright base: OPNsense
+ * <release>`, tagged EDGE.baseTag and `fleetwright-base:opnsense:<release>`,
+ * one per release and storage, since a copy is fast only on the storage the
+ * template's disk is on. Not tagged `fleetwright-image` and never put in the
+ * resource set, so no box offers it and the fleet's token cannot clone it.
+ *
+ * A REBUILD COPIES IT AND WRITES ONLY THE CONFIGURATION. The router's VM is
+ * made from that template, which copies its disk (a copy-on-write clone on
+ * the storage XCP-ng keeps as VHD files: seconds, the way a session's machine
+ * is made from the image). Then the blocks imagePatches changes, five of them,
+ * 2 MiB each, are written into the copy by `disk.importContent` as a VHD that
+ * holds those blocks and nothing else (vhd.js says why that leaves the rest
+ * as it is). What goes in each block is the published image's own bytes with
+ * the change made, read from the download on this machine and unpacked only
+ * as far as the last of them, through the same ConfigPatch the whole disk
+ * goes through, so every byte replaced is checked first, before anything on
+ * the pool is made. About 10 MiB is sent where the whole disk is 3 GiB.
+ *
+ * WHEN XEN ORCHESTRA CANNOT, the whole disk is sent, as before, and the
+ * person is told why. `disk.importContent` as Xen Orchestra ships it never
+ * passes on its format, and XAPI refuses an import without one; the Xen
+ * Orchestra the fleet deploys carries the fix (xo-deploy.js, INSTALLER), one
+ * installed any other way does not. Storage that cannot be written sparsely
+ * (thick LVM, where XAPI must zero a disk it writes) refuses it too.
+ *
+ * WHEN THE KEPT DISK IS MADE, which is the choice that costs. The first build
+ * on a storage would send the published image to keep it and then its few
+ * MiB, which is today's 3 GiB; but where Xen Orchestra cannot write into a
+ * disk, it would then send the whole configured disk as well, 6 GiB, to keep
+ * a disk nothing can use. So before the kept disk is sent, the build asks:
+ * Xen Orchestra is given a 2 MiB disk made for the question (writesInto),
+ * and one block written into it the way the rebuild will write. Only when that
+ * works is the image kept. When it does not, the router is built as before
+ * and nothing is kept, and the next build asks again, so updating Xen
+ * Orchestra is all it takes. A kept disk that is there is not asked about: it
+ * was kept because the question was answered, and a copy that then cannot be
+ * written into is removed and the whole disk sent. The kept disk stays, for
+ * the Xen Orchestra that is updated.
+ *
+ * ONE RELEASE AT A TIME. A newer pinned release's kept disk replaces the
+ * older one's on every storage once it is made. A router made from the older
+ * one keeps working, because XCP-ng keeps a clone's parent disk while
+ * anything still reads from it, as the machine image's do.
+ *
+ * NOT YET RUN AGAINST A REAL POOL. The calls are Xen Orchestra's own, read in
+ * its source (disk.create, disk.importContent, disk.import, vm.create from a
+ * template, vm.attachDisk, vm.convertToTemplate, vdi.set, vdi.delete,
+ * vm.delete); the VHD is checked by qemu-img and by a reader of its own
+ * (test/vhd.test.js); what XAPI does with it is read from vhd-tool's source.
+ */
+
+/** The kept disk's tag for a release. @param {string} [release] */
+const baseTagFor = (release = OPNSENSE_IMAGE.release) => `${EDGE.baseTag}:${EDGE.baseKey}:${release}`;
+
+/**
+ * A VM's or template's disk: the first that is not a CD drive. The same
+ * calls the machine image reads its kept disk with (vm-image.js, diskOf).
+ *
+ * @param {any} admin @param {string} vm @returns {Promise<any|null>}
+ */
+async function diskOf(admin, vm) {
+  const vbds = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VBD', VM: vm } })) || {}));
+  for (const vbd of vbds) {
+    if (!vbd?.VDI || vbd.is_cd_drive) continue;
+    const vdi = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', id: vbd.VDI } })) || {})[0]);
+    if (vdi) return vdi;
+  }
+  return null;
+}
+
+/**
+ * The kept disk for this release on storage `sr`, or null.
+ *
+ * @param {any} admin @param {any[]} templates @param {string} pool @param {string} sr
+ */
+async function keptBaseOn(admin, templates, pool, sr) {
+  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(baseTagFor()))) {
+    if ((await diskOf(admin, t.id))?.$SR === sr) return t;
+  }
+  return null;
+}
+
+/** The 2 MiB blocks of the disk the regions fall in, in order. @param {Array<{ offset: number, replacement: Buffer }>} regions */
+function blocksOf(regions) {
+  const blocks = new Set();
+  for (const r of regions) {
+    for (let b = Math.floor(r.offset / VHD_BLOCK); b <= Math.floor((r.offset + r.replacement.length - 1) / VHD_BLOCK); b++) blocks.add(b);
+  }
+  return [...blocks].sort((a, b) => a - b);
+}
+
+/**
+ * The blocks the configuration changes, each whole and with the change made:
+ * the download unpacked as far as the last of them and no further, through
+ * ConfigPatch, so a byte that is not what the plan says is there fails here,
+ * before the pool is touched.
+ *
+ * @param {{ file: string, regions: ReturnType<typeof imagePatches>, unpackImpl: typeof unpack, signal?: AbortSignal, onProgress: (done: number, total: number) => void }} opts
+ * @returns {Promise<Map<number, Buffer>>}
+ */
+async function patchedBlocks({ file, regions, unpackImpl, signal, onProgress }) {
+  const wanted = blocksOf(regions);
+  const end = (/** @type {number} */ (wanted.at(-1)) + 1) * VHD_BLOCK;
+  const blocks = new Map(wanted.map((b) => [b, Buffer.alloc(VHD_BLOCK)]));
+  // STOPPED ONCE IT HAS THEM: bzip2 is killed rather than left to unpack the
+  // rest of the disk for nobody.
+  const stop = new AbortController();
+  const source = unpackImpl(file, { signal: signal ? AbortSignal.any([signal, stop.signal]) : stop.signal });
+  const patched = new ConfigPatch({ regions, total: OPNSENSE_IMAGE.rawSize });
+  source.on('error', (e) => patched.destroy(e));
+  source.pipe(patched);
+  let at = 0;
+  let told = 0;
+  try {
+    for await (const chunk of patched) {
+      const until = at + chunk.length;
+      for (let b = Math.floor(at / VHD_BLOCK); b <= Math.floor((until - 1) / VHD_BLOCK); b++) {
+        const into = blocks.get(b);
+        if (!into) continue;
+        const from = Math.max(at, b * VHD_BLOCK);
+        chunk.copy(into, from - b * VHD_BLOCK, from - at, Math.min(until, (b + 1) * VHD_BLOCK) - at);
+      }
+      at = until;
+      if (at - told >= 64 * 1024 * 1024) {
+        told = at;
+        onProgress(Math.min(at, end), end);
+      }
+      if (at >= end) break;
+    }
+  } catch (e) {
+    signal?.throwIfAborted();
+    throw e;
+  } finally {
+    stop.abort();
+    source.destroy();
+    patched.destroy();
+  }
+  return blocks;
+}
+
+/** What went wrong, short enough to say. @param {unknown} e */
+const why = (e) => String(/** @type {any} */ (e)?.message || e).slice(0, 160);
+
+/**
+ * WHETHER THIS XEN ORCHESTRA CAN WRITE INTO A DISK THAT IS THERE, on this
+ * storage (THE KEPT DISK says why it is asked): a 2 MiB disk made for the
+ * question, one block of zeros written into it the way a rebuild writes its
+ * configuration, and the disk removed whatever the answer. Null when it can;
+ * otherwise what it said.
+ *
+ * @param {{ admin: any, sr: string, send: (sendTo: string, body: Buffer) => Promise<void>, signal?: AbortSignal }} opts
+ * @returns {Promise<string|null>}
+ */
+async function writesInto({ admin, sr, send, signal }) {
+  /** @type {unknown} */
+  let disk = null;
+  try {
+    disk = await admin.call('disk.create', { name: `${EDGE.vm} (checking)`, size: VHD_BLOCK, sr });
+    if (typeof disk !== 'string') return 'it made no disk to try it on';
+    const sendTo = (await admin.call('disk.importContent', { id: disk, format: 'vhd' }))?.$sendTo;
+    if (typeof sendTo !== 'string') return 'it gave nowhere to send the blocks';
+    await send(sendTo, sparseVhd({ size: VHD_BLOCK, blocks: new Map([[0, Buffer.alloc(VHD_BLOCK)]]) }));
+    return null;
+  } catch (e) {
+    signal?.throwIfAborted();
+    return why(e);
+  } finally {
+    if (typeof disk === 'string') await admin.call('vdi.delete', { id: disk }).catch(() => {});
+  }
+}
+
+/**
+ * A new edge router, built, tagged with how it filters, and started: from a
+ * copy of the disk kept on the pool when Xen Orchestra can write into one,
+ * and from the whole image otherwise (THE KEPT DISK, above).
  *
  * @param {Omit<Parameters<typeof ensureEdge>[0], 'ha'> & { block: boolean, labs: Array<{ id: string, open: boolean }>, ha?: { node: 0|1, password: string }|null, wanMac?: string|null, start?: boolean }} opts
  */
-async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, block, labs, fleet = [], ha = null, watch = null, syslog = [], wanMac = null, start = true, address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk }) {
+async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chosenSr = null, block, labs, fleet = [], ha = null, watch = null, syslog = [], wanMac = null, start = true, address, pin, plain, imageDir, say, signal, getImage = fetchImage, unpackImpl = unpack, upload = uploadDisk, writeInto = writeIntoDisk }) {
   // Checked before anything is downloaded: a closed lab with nowhere to let
   // the fleet through would be a machine that never joins.
   const config = edgeConfig({ block, labs: labs.map((l) => l.open), fleet, ha, watch, syslog });
   const name = ha?.node ? EDGE_HA.second : EDGE.vm;
   const sr = edgeStorage({ pool, srs, fleetSrs, sr: chosenSr });
   const on = srName(sr);
+  const { release, rawSize, compressedSize } = OPNSENSE_IMAGE;
 
-  const templates = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {});
-  const template = /** @type {any} */ (templates.find((t) => /** @type {any} */ (t)?.$pool === pool && /** @type {any} */ (t)?.name_label === EDGE.template));
+  const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
+  const template = templates.find((t) => t?.$pool === pool && t?.name_label === EDGE.template);
   if (!template) throw new Error(`this pool has no "${EDGE.template}" template to make the edge router from. Nothing was built`);
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: BUILD_STAGES, fill });
-  say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}.`, stage(1, 0));
+  say(`Downloading OPNsense ${release}.`, stage(1, 0));
   let downloaded = 0;
   const file = await getImage({
     dir: imageDir,
     signal,
     onProgress: (d, t) => {
       downloaded = d;
-      say(`Downloading OPNsense ${OPNSENSE_IMAGE.release}: ${mb(d)} of ${mb(t)} MB.`, stage(1, buildFill(d, 0)));
+      say(`Downloading OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, stage(1, buildFill(d, 0)));
     },
   });
   signal?.throwIfAborted();
-  if (!downloaded) say(`OPNsense ${OPNSENSE_IMAGE.release} was already downloaded and checked.`, stage(1, buildFill(OPNSENSE_IMAGE.compressedSize, 0)));
+  if (!downloaded) say(`OPNsense ${release} was already downloaded and checked.`, stage(1, buildFill(compressedSize, 0)));
+
+  const regions = imagePatches(config);
+  const send = (/** @type {string} */ sendTo, /** @type {Buffer} */ body) => writeInto({ address, pin, plain, sendTo, body, signal });
+  /** @type {any} */
+  let base = await keptBaseOn(admin, templates, pool, sr.id);
+  /** Why a copy of the kept disk cannot be written into here, once that is known. */
+  let refused = base ? null : await writesInto({ admin, sr: sr.id, send, signal });
+  const baseName = `OPNsense ${release} (as published)`;
+  const description = `OPNsense ${release}, configured by Fleetwright as the edge router`;
+  const vmParams = {
+    name_label: name,
+    name_description: 'The only way out of every lab. Made by Fleetwright; its rules are fixed and it has no login.',
+    // WAN, uplink, then each lab, in order: xn0, xn1, xn2 and on, as the
+    // configuration names them.
+    VIFs: [{ network: egress.id, ...(wanMac ? { mac: wanMac } : {}) }, { network: uplink }, ...labs.map((l) => ({ network: l.id }))],
+    CPUs: EDGE.cpus,
+    memory: EDGE.memory,
+    tags: [EDGE.tag, EDGE.updatesTag, ...(watch ? [EDGE_WATCH.tag] : []), ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : []), ...(ha ? [`${EDGE_HA.nodeTag}${ha.node}`] : [])],
+    bootAfterCreate: false,
+  };
 
   /** @type {string|null} */
   let vdi = null;
   /** @type {string|null} */
   let vm = null;
+  // The kept disk while it is being made: its upload, its disk, its template.
+  let keeping = false;
+  /** @type {string|null} */
+  let keptVdi = null;
+  /** @type {string|null} */
+  let making = null;
   try {
-    say(`Writing the edge router’s disk to ${on}.`, stage(2, buildFill(OPNSENSE_IMAGE.compressedSize, 0)));
-    const { $sendTo } = await admin.call('disk.import', {
-      sr: sr.id,
-      type: 'iso',
-      name,
-      description: `OPNsense ${OPNSENSE_IMAGE.release}, configured by Fleetwright as the edge router`,
-    });
-    const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ regions: imagePatches(config), total: OPNSENSE_IMAGE.rawSize }));
-    vdi = await upload({
-      address,
-      pin,
-      plain,
-      sendTo: $sendTo,
-      body,
-      size: OPNSENSE_IMAGE.rawSize,
-      signal,
-      onProgress: (d, t) => say(`Writing the edge router’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, buildFill(OPNSENSE_IMAGE.compressedSize, d))),
-    });
-    signal?.throwIfAborted();
+    if (!refused) {
+      // THE BAR, by bytes as buildFill weighs them: the image read as far as
+      // the last block, the image kept when it is not yet, and the blocks.
+      const read = (/** @type {number} */ (blocksOf(regions).at(-1)) + 1) * VHD_BLOCK;
+      const work = read + (base ? 0 : rawSize) + blocksOf(regions).length * VHD_BLOCK;
+      const from = buildFill(compressedSize, 0);
+      const bar = (/** @type {number} */ done) => stage(2, from + Math.floor(((MAKING - from) * Math.min(done, work)) / work));
+      say(
+        base
+          ? `OPNsense ${release} is already on ${on}, kept from an earlier build, so the edge router starts from a copy of it and only its configuration is written.`
+          : `Reading the blocks the edge router’s configuration goes in from OPNsense ${release}.`,
+        bar(0),
+      );
+      const blocks = await patchedBlocks({
+        file,
+        regions,
+        unpackImpl,
+        signal,
+        onProgress: (d, t) => say(`Reading the blocks the configuration goes in from OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, bar(d)),
+      });
+      const vhd = sparseVhd({ size: rawSize, blocks });
+
+      if (!base) {
+        say(`Writing OPNsense ${release} as published to ${on}, where it is kept so a rebuild writes only the configuration.`, bar(read));
+        keeping = true;
+        const { $sendTo } = await admin.call('disk.import', {
+          sr: sr.id,
+          type: 'iso',
+          name: baseName,
+          description: `OPNsense ${release}'s nano image as published, kept by Fleetwright so the edge router is built from a copy of it`,
+        });
+        keptVdi = await upload({
+          address,
+          pin,
+          plain,
+          sendTo: $sendTo,
+          // Unchanged, and still held to its length.
+          body: unpackImpl(file, { signal }).pipe(new ConfigPatch({ regions: [], total: rawSize })),
+          size: rawSize,
+          signal,
+          onProgress: (d, t) => say(`Writing OPNsense ${release} as published to ${on}: ${mb(d)} of ${mb(t)} MB.`, bar(read + d)),
+        });
+        signal?.throwIfAborted();
+        making = await admin.call('vm.create', {
+          template: template.id,
+          name_label: `Fleetwright base: OPNsense ${release}`,
+          name_description: `OPNsense ${release}'s nano image as published, never booted. Fleetwright builds the edge router from a copy of it, so a rebuild writes only its configuration; it is not offered for sessions.`,
+          VIFs: [],
+          VDIs: [],
+          CPUs: EDGE.cpus,
+          memory: EDGE.memory,
+          tags: [EDGE.baseTag, baseTagFor()],
+          bootAfterCreate: false,
+        });
+        await admin.call('vm.attachDisk', { vm: making, vdi: keptVdi, bootable: true, position: '0' });
+        keptVdi = null; // the template's now, and deleted with it
+        await admin.call('vm.convertToTemplate', { id: making });
+        base = { id: making };
+        making = null; // kept from here, whatever happens to this build
+        keeping = false;
+        for (const old of templates.filter((t) => t?.$pool === pool && (t?.tags || []).some((/** @type {string} */ x) => x.startsWith(`${EDGE.baseTag}:${EDGE.baseKey}:`)) && !t.tags.includes(baseTagFor()))) {
+          await admin.call('vm.delete', { id: old.id, deleteDisks: true }).catch(() => {});
+        }
+      }
+
+      say(`Copying the disk kept on ${on} and writing the configuration: ${mb(vhd.length)} MB.`, bar(work - blocks.size * VHD_BLOCK));
+      // A COPY OF THE KEPT DISK comes with the VM, as a session's machine
+      // gets a copy of the image's.
+      vm = await admin.call('vm.create', { template: base.id, ...vmParams });
+      try {
+        const disk = await diskOf(admin, /** @type {string} */ (vm));
+        if (!disk) throw new Error('the copy of the kept disk came without a disk');
+        const sendTo = (await admin.call('disk.importContent', { id: disk.id, format: 'vhd' }))?.$sendTo;
+        if (typeof sendTo !== 'string') throw new Error('it gave nowhere to send the blocks');
+        await send(sendTo, vhd);
+        // Named as an uploaded one is, which is how the phone finds which
+        // storage the router is on (xo-setup.js, edgeDisks).
+        await admin.call('vdi.set', { id: disk.id, name_label: name, name_description: description }).catch(() => {});
+      } catch (e) {
+        signal?.throwIfAborted();
+        refused = why(e);
+        // Gone before anything else is made: two VMs tagged as the edge
+        // would be two edges to the next run. A copy that cannot be removed
+        // fails the build, and the catch below tries again.
+        await admin.call('vm.delete', { id: vm, deleteDisks: true });
+        vm = null;
+      }
+    }
+
+    if (refused) {
+      say(
+        `This Xen Orchestra cannot write into a disk that is already there, so the edge router’s whole disk is sent, as before (${refused}). ` +
+          'One installed other than by the fleet lacks the fix for that; updated with the fleet’s installer, a rebuild is a copy of the disk kept on the pool and a few MB.',
+        stage(2, buildFill(compressedSize, 0)),
+      );
+      say(`Writing the edge router’s disk to ${on}.`, stage(2, buildFill(compressedSize, 0)));
+      const { $sendTo } = await admin.call('disk.import', { sr: sr.id, type: 'iso', name, description });
+      const body = unpackImpl(file, { signal }).pipe(new ConfigPatch({ regions, total: rawSize }));
+      vdi = await upload({
+        address,
+        pin,
+        plain,
+        sendTo: $sendTo,
+        body,
+        size: rawSize,
+        signal,
+        onProgress: (d, t) => say(`Writing the edge router’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, buildFill(compressedSize, d))),
+      });
+      signal?.throwIfAborted();
+    }
 
     say(`Making the edge router, its disk on ${on}${start ? ', and starting it' : ''}.`, stage(3, MAKING));
-    vm = await admin.call('vm.create', {
-      template: template.id,
-      name_label: name,
-      name_description: 'The only way out of every lab. Made by Fleetwright; its rules are fixed and it has no login.',
-      // WAN, uplink, then each lab, in order: xn0, xn1, xn2 and on, as the
-      // configuration names them.
-      VIFs: [{ network: egress.id, ...(wanMac ? { mac: wanMac } : {}) }, { network: uplink }, ...labs.map((l) => ({ network: l.id }))],
-      VDIs: [],
-      CPUs: EDGE.cpus,
-      memory: EDGE.memory,
-      tags: [EDGE.tag, EDGE.updatesTag, ...(watch ? [EDGE_WATCH.tag] : []), ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : []), ...(ha ? [`${EDGE_HA.nodeTag}${ha.node}`] : [])],
-      bootAfterCreate: false,
-    });
+    if (!vm) {
+      vm = await admin.call('vm.create', { template: template.id, ...vmParams, VDIs: [] });
+    }
     // The pair's CARP password and the key the fleet reads it with, kept
     // with each router where the next rebuild finds them (pairPassword,
     // watchOf): Xen Orchestra's admins can read them, and the fleet's token
@@ -1401,16 +1758,20 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
         xenStoreData: { ...(ha ? { [EDGE_HA.passwordKey]: ha.password } : {}), ...(watch ? { [EDGE_WATCH.key]: JSON.stringify(watch) } : {}) },
       });
     }
-    await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
+    if (vdi) await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });
     const vifs = Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VIF', $VM: vm } })) || {});
     for (const v of vifs) await admin.call('vif.set', { id: /** @type {any} */ (v).id, txChecksumming: false });
     signal?.throwIfAborted();
     if (start) await admin.call('vm.start', { id: vm });
   } catch (e) {
-    // Nothing half-made is left for the next run to trip over.
+    // Nothing half-made is left for the next run to trip over: not the
+    // router, not its disk, and not a kept disk that was never finished.
     if (vm) await admin.call('vm.delete', { id: vm, deleteDisks: true }).catch(() => {});
     else if (vdi) await admin.call('vdi.delete', { id: vdi }).catch(() => {});
     else await removePartialDisk(admin, sr.id, name);
+    if (making) await admin.call('vm.delete', { id: making, deleteDisks: true }).catch(() => {});
+    else if (keptVdi) await admin.call('vdi.delete', { id: keptVdi }).catch(() => {});
+    else if (keeping) await removePartialDisk(admin, sr.id, baseName);
     throw e;
   }
   const { address: lan, prefix } = EDGE.lan;
