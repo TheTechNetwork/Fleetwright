@@ -174,7 +174,13 @@ asks in ten minutes. What it cannot do is get a token it can use:
   that started the job can do** in that repository — asked by account id, by
   the minting Worker with a metadata-only probe token, or by a box with that
   person's own connection. Nothing the coordinator claims about the owner is
-  read.
+  read;
+- and the job must have run in **that account's own repository or one on
+  `FLEETWRIGHT_GITHUB_MINT_OWNERS`**, as the Claude hand-out below requires.
+  The job's code chose the repository and the key, so without this a
+  `runner-linux.yml` in a stranger's repository that the person was got to
+  dispatch would be minted their push on a fleet repository, sealed to a key
+  that stranger holds.
 
 To obtain such a job token it would need code of its choosing running inside a
 runner the person started. `provision` cannot express one — no workflow file,
@@ -554,9 +560,10 @@ machine of the fleet, through the coordinator.
   cannot be aimed at a world-readable repository from here. What it can still
   do is send a session's work to a different private repository the starter
   can push to, or name none, which loses a copy and nothing else. The
-  minting Worker's role check answers for a private repository only inside
-  `FLEETWRIGHT_GITHUB_MINT_OWNERS`, so the App's key is not an oracle over
-  which private repositories exist elsewhere.
+  minting Worker's role and runner-repository checks answer for a private
+  repository only inside `FLEETWRIGHT_GITHUB_MINT_OWNERS` (outside it, a
+  runner check is answered for a public repository and nothing else), so the
+  App's key is not an oracle over which private repositories exist elsewhere.
 - **A lab is an interface on the edge router, and its session holds no key**
   (`docs/hypervisors.md`, "Labs"). Lab networks are made by the policy job
   with the admin sign-in, attached to the edge, and given rules in its

@@ -28,7 +28,9 @@
 //  1. GitHub's own signature on the runner's job token, whose audience is a
 //     hash of this exact request (src/fleet/seal.js). Not the coordinator's
 //     word — the box checks it.
-//  2. The job is one of the four runner workflows, started by workflow_dispatch.
+//  2. The job is one of the four runner workflows, started by workflow_dispatch,
+//     in the starter's own repository or one owned by an account on the list
+//     below (runnerJobRepoProblem says why the job's repository matters).
 //  3. The repository's owner is on FLEETWRIGHT_GITHUB_MINT_OWNERS. The App is
 //     installable by any account, so "this key never mints into somebody else's
 //     account" is kept by what the fleet does rather than by what GitHub allows
@@ -185,6 +187,36 @@ export function runnerJobProblem(job) {
     return `That job runs ${job.workflowRef || 'an unknown workflow'}, which is not one of the runner workflows.`;
   }
   return null;
+}
+
+/**
+ * Did this runner job run where a runner repository legitimately is: a
+ * repository of the account that started it, or one owned by an account this
+ * minter mints into?
+ *
+ * Asked by every hand-out that gives a job's code something of the person's
+ * (a repository token, from the minting Worker or a minting box, and a Claude
+ * login), because that code is what receives it, and for a repository token it
+ * also chose the repository and the sealing key, through the audience it asked
+ * GitHub for. runnerJobProblem knows a runner by its file name in whatever
+ * repository the job ran in, so without this a `runner-linux.yml` in anybody's
+ * repository that the person could be got to dispatch would be served: the
+ * dispatch makes them the job's actor, and the actor's reach is what is handed
+ * out. Their own repository is known by account id, which a rename cannot move.
+ *
+ * ONE CHECK FOR ALL OF THEM, because the Claude hand-out had it and the
+ * repository token, which came first, did not.
+ *
+ * @param {{ repository: string, repositoryOwner: string, repositoryOwnerId: string, actor: string, actorId: string }} job
+ * @param {string[]} owners  the accounts this minter mints into
+ * @param {string} given  what is withheld, for the sentence: "a Claude login"
+ * @returns {string|null} why not, or null when it may
+ */
+export function runnerJobRepoProblem(job, owners, given) {
+  const ownRepo = job.repositoryOwnerId !== '' && job.repositoryOwnerId === job.actorId;
+  const fleetRepo = owners.some((o) => o.toLowerCase() === job.repositoryOwner.toLowerCase());
+  if (ownRepo || fleetRepo) return null;
+  return `That runner ran in ${job.repository}, which is neither ${job.actor}’s own nor one this fleet mints for, so it is not given ${given}.`;
 }
 
 /**
@@ -401,16 +433,25 @@ export async function mintForActor({ repo, actor, actorId, clientId, key, fetchI
  * ./runners.js has the questions and why each is asked).
  *
  * The token it mints reads one repository's metadata and contents, lives for
- * the length of the check, and never leaves the process that minted it. That
- * is why this is not held to FLEETWRIGHT_GITHUB_MINT_OWNERS the way a minted
- * token is: the list decides whose repositories the App's key may hand anyone
- * access to, and this hands nobody anything — it reads a public repository's
- * workflow list and says what it found.
+ * the length of the check, and never leaves the process that minted it.
  *
- * @param {{ repo: string, clientId: string, key: AppKey, fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
- * @returns {Promise<import('./runners.js').RunnerRepoCheck>}
+ * OUTSIDE FLEETWRIGHT_GITHUB_MINT_OWNERS IT SAYS ONLY WHAT ANYBODY COULD SEE: the
+ * whole answer for a repository GitHub shows as public, and NULL, "not mine to
+ * say", for everything else. A runner repository has to be public, so the
+ * person loses nothing by it; but the check has read the repository as the App
+ * before it can tell, and an answer of "Owner/Name is private", against "not
+ * installed" for a name that is not there, told any member which private
+ * repositories exist, spelled exactly, in every installation of an App anybody
+ * may install. So not installed, a refused read, private and unreachable all
+ * come back as the same null, and the coordinator asks a box with the person's
+ * own connection, which sees what they can and nothing else. Inside the owners
+ * it is the fleet's own accounts, and every refusal is said in full.
+ *
+ * @param {{ repo: string, clientId: string, key: AppKey, owners: string[],
+ *   fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
+ * @returns {Promise<import('./runners.js').RunnerRepoCheck|null>}
  */
-export async function checkRunnerRepoForApp({ repo, clientId, key, fetchImpl = fetch, now = () => Date.now() }) {
+export async function checkRunnerRepoForApp({ repo, clientId, key, owners, fetchImpl = fetch, now = () => Date.now() }) {
   const name = String(repo || '');
   /** @param {string} message @param {Partial<import('./runners.js').RunnerRepoCheck>} [extra] */
   const no = (message, extra = {}) => ({
@@ -418,10 +459,12 @@ export async function checkRunnerRepoForApp({ repo, clientId, key, fetchImpl = f
     platforms: [], missing: Object.keys(RUNNER_WORKFLOWS), ok: false, message, ...extra,
   });
   if (!REPO_RE.test(name)) return no('That is not a repository name. Write it as owner/repo.');
+  const ours = ownerAllowed(name, Array.isArray(owners) ? owners : []);
   try {
     const jwt = await appJwt({ clientId, key, now });
     const inst = await installationFor({ repo: name, jwt, fetchImpl });
     if (!inst.ok) {
+      if (!ours) return null;
       return inst.notInstalled
         ? no(`The Fleetwright GitHub App is not installed on ${name}. Install it there and pick ${name}, then check again.`, { installed: false })
         : no(inst.message);
@@ -433,13 +476,13 @@ export async function checkRunnerRepoForApp({ repo, clientId, key, fetchImpl = f
       jwt,
       fetchImpl,
     });
-    if (!read.ok) return no(read.message, { installed: true });
-    return await checkRunnerRepoAsApp({ repo: name, installation: inst, token: read.token, fetchImpl });
+    if (!read.ok) return ours ? no(read.message, { installed: true }) : null;
+    const check = await checkRunnerRepoAsApp({ repo: name, installation: inst, token: read.token, fetchImpl });
+    return ours || check.public === true ? check : null;
   } catch (e) {
-    return no(`Could not reach GitHub: ${/** @type {Error} */ (e).message}`);
+    return ours ? no(`Could not reach GitHub: ${/** @type {Error} */ (e).message}`) : null;
   }
 }
-
 
 /**
  * Is this repository fit for a linked role, asked by the GitHub App itself —
@@ -447,16 +490,16 @@ export async function checkRunnerRepoForApp({ repo, clientId, key, fetchImpl = f
  * repository (checkLinkedRepoAsApp in ./linked-repo-check.js has the
  * questions). `runners` is the runner check above, with the role on it.
  *
- * HELD TO FLEETWRIGHT_GITHUB_MINT_OWNERS for the other two, unlike the runner
- * check, and the difference is visibility. A runner repository is public, so
- * reading it tells nobody anything; an archive is private by definition, and a
+ * HELD TO FLEETWRIGHT_GITHUB_MINT_OWNERS, and for the other two before GitHub
+ * is asked anything, because an archive is private by definition and a
  * templates repository may be. Answering "does this private repository exist,
  * and does the App reach it" for any account at all would make the App's key
  * an oracle over every installation of an App anybody may install. Inside the
  * owners list it is the fleet's own accounts, which this key already mints
  * into — and outside it a runner could never be minted a token to push there
  * anyway. So outside it this answers NULL, "not mine to say", and the
- * coordinator asks a box with the person's own connection instead.
+ * coordinator asks a box with the person's own connection instead. The runner
+ * check answers outside it for a public repository only, and null otherwise.
  *
  * @param {{ role: string, repo: string, clientId: string, key: AppKey, owners: string[],
  *   fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
@@ -465,7 +508,8 @@ export async function checkRunnerRepoForApp({ repo, clientId, key, fetchImpl = f
 export async function checkLinkedRepoForApp({ role, repo, clientId, key, owners, fetchImpl = fetch, now = () => Date.now() }) {
   const name = String(repo || '');
   if (role === 'runners') {
-    return runnersCheck(await checkRunnerRepoForApp({ repo: name, clientId, key, fetchImpl, now }));
+    const check = await checkRunnerRepoForApp({ repo: name, clientId, key, owners, fetchImpl, now });
+    return check && runnersCheck(check);
   }
   /** @param {string} message @param {Partial<import('./linked-repo-check.js').LinkedRepoCheck>} [extra] */
   const no = (message, extra = {}) => ({
