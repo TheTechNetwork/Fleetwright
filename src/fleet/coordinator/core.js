@@ -12,7 +12,7 @@
 // Nothing in here imports from `node:` — if that stops being true, the Worker
 // build breaks, which is the check that keeps it honest.
 
-import { HostRegistry, runsNoSessions } from './registry.js';
+import { HostRegistry, runsNoSessions, attributed } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
 import { HostIdentities, actsFor, mayActFor, believedCreator } from './hosts.js';
@@ -2738,6 +2738,19 @@ export class CoordinatorCore {
       if (answer?.ok !== false && Array.isArray(answer?.sessions)) {
         this.registry.noteSessions(placement.host?.hostId || '', answer.sessions);
       }
+      // A BOX'S HEALTH, ASKED OF IT, IS THE SAME BLOB /api/hosts FILTERS, and
+      // it came back as the box wrote it. `health` is placed on any box,
+      // because asking one hands it nothing of the asker's (scheduler.js), and
+      // what it handed back was everything of everyone's: each session's name,
+      // title, working directory, account and live prompt question, and the
+      // bin. Any member could read the operator's box, or a box another member
+      // enrolled, by asking it how it was (fifth Workers audit). So the reply
+      // is attributed and filtered exactly as the stored frame is.
+      if (spec.verb === 'health' && answer?.health && typeof answer.health === 'object') {
+        const entry = placement.host;
+        const health = visibleHost({ health: attributed(entry ?? {}, answer.health) }, spec.requester ?? null, entry).health;
+        return withArchiveNote({ ...answer, health }, spec, entry);
+      }
       return withArchiveNote(answer, spec, placement.host);
     } catch (e) {
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
@@ -4704,7 +4717,7 @@ export class CoordinatorCore {
       // not somebody else's temporary machine, and never a pool's own
       // machine, which runs no sessions and says so (`holder`).
       hosts: this.registry.list().map((h) => ({
-        ...visibleHost(h, requester),
+        ...visibleHost(h, requester, this.registry.hosts.get(h.hostId)),
         takesSessions: takesSessions(h, requester),
         ...(runsNoSessions(h.hostId) ? { holder: true } : {}),
       })),
@@ -5886,8 +5899,11 @@ function takesSessions(host, requester) {
  *
  * @param {any} host
  * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @param {{ actsFor?: string|null }|null|undefined} entry  the host's registry
+ *   entry, for whom it acts, which `host` may not carry (registry.js list).
+ *   Without one no pool entry is believed.
  */
-function visibleHost(host, requester) {
+function visibleHost(host, requester, entry) {
   if (!requester || requester.admin || !host) return host;
   // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only
   // when it is theirs, as /api/hosts/enrolled already did (enrolledHostsFor).
@@ -5907,9 +5923,12 @@ function visibleHost(host, requester) {
       sessions,
       // WHICH POOLS A BOX HOLDS TOKENS FOR is the people's who kept them: an
       // address on somebody's network and the names of their pools. A
-      // member sees their own.
+      // member sees their own, AS PLACEMENT BELIEVES IT (xoFor): `owner` is
+      // the box's word, and this took it from any box, so one another member
+      // enrolled could name a member as the owner of a pool at an address it
+      // chose and have it listed in her hosts as hers (fifth Workers audit).
       ...(Array.isArray(host.health.xo)
-        ? { xo: host.health.xo.filter((/** @type {any} */ e) => String(e?.owner || '').toLowerCase() === String(requester.email || '').toLowerCase()) }
+        ? { xo: entry ? xoFor({ actsFor: entry.actsFor ?? null, health: host.health }, String(requester.email || '').toLowerCase()) : [] }
         : {}),
       resumable: Array.isArray(host.health.resumable)
         ? host.health.resumable.filter((/** @type {any} */ n) => mine.has(n))
