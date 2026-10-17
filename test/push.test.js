@@ -24,6 +24,7 @@ import {
   pemToBytes,
 } from '../src/fleet/push.js';
 import { admit } from './helpers/enrolled-hosts.js';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 
 /** A sender that records what it was asked to deliver. */
 function fakePusher({ dead = [] } = {}) {
@@ -279,6 +280,39 @@ test('one member’s boxes buzz a phone a bounded number of times an hour, and a
   clock += 60 * 60_000;
   await c.onHostMessage('boxa2', { kind: 'event', event: 'session.ended', name: 'later' });
   assert.equal(fromA(), 61, 'and the hour ends');
+});
+
+test('a box’s health changes spend the same hourly allowance as its sessions do', async () => {
+  // Outside it before: #onHostState pushed every fault it had not said this
+  // hour, and a fault carrying the box's own words was a new one per frame, so
+  // a member's box held to sixty session pushes could send the admin's phone
+  // as many health pushes as it had frames (sixth Workers audit). One count,
+  // so a box's next way of saying something new is bounded too.
+  const push = fakePusher();
+  let clock = 1_700_000_000_000;
+  const c = core({ push, now: () => clock });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
+  for (const box of ['boxa1', 'boxa2']) await admit(c, box, { enrolledBy: 'a@example.com' });
+  await admit(c, 'boxb', { enrolledBy: 'b@example.com' });
+  const fromA = () => push.sends.filter((s) => s.message.data.hostId.startsWith('boxa')).length;
+  const health = (/** @type {object} */ patch) => ({
+    kind: 'health',
+    health: { protocol: PROTOCOL_VERSION, labels: [], maxSessions: 4, running: 0, free: 4, sessions: [], loggedIn: true, claudeAccounts: 1, hub: { reachable: true }, ...patch },
+  });
+
+  await c.onHostMessage('boxa1', health({ claudeAccounts: 0 }));
+  assert.equal(fromA(), 1, 'a box nobody can start a session on is news');
+  for (let i = 0; i < 100; i++) {
+    await c.onHostMessage('boxa1', { kind: 'event', event: 'session.awaiting-input', name: `flood-${i}`, text: 'flood' });
+  }
+  assert.equal(fromA(), 60, 'the fault was one of A’s sixty, not a sixty-first');
+
+  await c.onHostMessage('boxa2', health({ hub: { reachable: false, reason: 'down' } }));
+  assert.equal(fromA(), 60, 'and A’s other box’s fault waits for the hour like a session would');
+  assert.equal(`${c.events.at(-1)?.hostId} ${c.events.at(-1)?.event}`, 'boxa2 host.degraded', 'though the ring has it');
+
+  await c.onHostMessage('boxb', health({ claudeAccounts: 0 }));
+  assert.equal(push.sends.at(-1)?.message.data.hostId, 'boxb', 'B’s box is not spent by A’s');
 });
 
 test('with no devices registered nothing is sent and nothing breaks', async () => {
