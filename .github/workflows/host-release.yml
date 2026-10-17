@@ -66,7 +66,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.0'
 
       # esbuild only. The build bundles the ONE runtime dependency into the
       # artifact, which is the whole point — `npm ci` here is about what the
@@ -423,7 +423,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.0'
       - uses: actions/download-artifact@v8.0.2
         with:
           name: fleetwright-host
