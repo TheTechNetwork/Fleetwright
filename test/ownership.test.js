@@ -464,3 +464,43 @@ test('a claim on the name of a member’s real session does not make it ambiguou
   assert.equal(stop.kind, 'host', stop.reason);
   assert.equal(stop.host?.hostId, 'ops-box');
 });
+
+test('a member cannot start a new session under a name another member holds', async () => {
+  // A later audit: `start` is new work and never asked who held its name. On
+  // a box acting for both, a member's start of another member's stopped
+  // session reused its workspace and Claude config volumes on its owner's
+  // account, and moved it to the starter, who then had its pinned verbs.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {any[]} */
+  const delivered = [];
+  await admit(core, 'ops-box', {
+    send: (/** @type {any} */ intent) => {
+      delivered.push(intent.params?.name);
+      queueMicrotask(() => core.onHostMessage('ops-box', { kind: 'reply', id: intent.id, ok: true, text: 'Started' }));
+    },
+  });
+  core.registry.recordHealth('ops-box', {
+    hostId: 'ops-box', hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], claudeAccounts: 2,
+    sessions: [
+      { name: 'bjob', status: 'stopped', createdBy: 'fleet:b@example.com' },
+      { name: 'cli', status: 'stopped', createdBy: null },
+    ],
+  });
+  const start = (/** @type {string} */ name, /** @type {string} */ email) =>
+    core.dispatch({ verb: 'start', params: { name }, actor: email, requester: { email, admin: false } });
+
+  const taken = await start('bjob', 'a@example.com');
+  assert.equal(taken.error?.code, 'name_unavailable', taken.text);
+  // The same words for an unattributed session, so the refusal says nothing
+  // about whose the name is.
+  const fleets = await start('cli', 'a@example.com');
+  assert.equal(fleets.text, taken.text.replace('bjob', 'cli'));
+  assert.deepEqual(delivered, [], 'a start under somebody else’s name reached the box');
+
+  // A free name, and the owner's own name, still go to the box, which says
+  // to resume a stopped session it already has.
+  assert.equal((await start('fresh', 'a@example.com')).ok, true);
+  assert.equal((await start('bjob', 'b@example.com')).ok, true);
+  assert.deepEqual(delivered, ['fresh', 'bjob']);
+});

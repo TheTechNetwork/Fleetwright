@@ -625,6 +625,28 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     return { kind: 'host', host };
   }
 
+  // A NEW SESSION UNDER A NAME SOMEBODY ELSE HOLDS IS NOT NEW. `start` is new
+  // work and never asked who held its name, and a box refused only a name
+  // that was running, binned or starting. So a member could start another
+  // member's STOPPED session by name on a box that acts for both: the box
+  // reused its workspace and Claude config volumes, keyed by name, on its
+  // owner's Claude account, and rewrote its creator to the starter, who then
+  // had its pinned verbs while its owner was told it did not exist. A member
+  // may not take a name another person's claim holds (an unattributed one is
+  // the fleet's), and the words are the same whatever holds it, so the
+  // refusal does not say whose or where. Their own stopped session is for
+  // `resume`, which the box says when asked to start it.
+  if (verb === 'start' && name && requester && !requester.admin) {
+    const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
+    if (registry.findSessions(name).some((c) => String(c.createdBy || '').toLowerCase() !== mine)) {
+      return {
+        kind: 'refused',
+        code: 'name_unavailable',
+        reason: `"${name}" cannot be used for a new session. Pick another name.`,
+      };
+    }
+  }
+
   // --- new work: filter, rank, tie-break ------------------------------------
   // THE POOL'S OWN MACHINE, named: refused as what it is, before anything
   // about the rest of the fleet (registry.js, runsNoSessions).
