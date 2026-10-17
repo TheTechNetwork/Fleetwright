@@ -155,6 +155,9 @@ struct FleetView: View {
     /// still felt twice: `.sensoryFeedback` fires when its trigger changes.
     @State private var accepted = 0
     @State private var refused = 0
+    // Eggs.swift: when this list was pulled to refresh. Not saved, so a new
+    // visit starts calm.
+    @State private var pulls: [TimeInterval] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Whether this person's Claude login is kept for their runners. Nil until
     /// asked; see ClaudeKept for why there are four answers.
@@ -308,6 +311,14 @@ struct FleetView: View {
                                changed: { await refresh(keepStatus: true) })
                         .fleetRow()
                 }
+                // Eggs.swift: pulled four times in a minute. Under the cards,
+                // in the dimmest ink, and never on the assurance line.
+                if let line = Eggs.pullLine(pulls) {
+                    Text(line)
+                        .fleetType(.bodySmall)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .fleetRow()
+                }
             }
             // A STACK OF CARDS, NOT A TABLE. `.plain` drops the grouped
             // list's inset panels and grey separators — every one of which
@@ -318,7 +329,10 @@ struct FleetView: View {
             .listRowSpacing(Design.Space.groupTight)
             .scrollContentBackground(.hidden)
             .background(Design.Palette.bg)
-            .refreshable { await refresh() }
+            .refreshable {
+                pulls.append(Date().timeIntervalSince1970)
+                await refresh()
+            }
             // Asked again when the fleet or this phone's GitHub sign-in changes,
             // and whenever the list comes back into view, which is how a login
             // kept on the setup page takes the card away.
