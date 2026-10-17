@@ -24,7 +24,7 @@ shared:
 | that person's **device** afterwards | `fwk_…` bearer credential | `/api/session`, or the MCP `/oauth/token` | until revoked; never expires |
 | a **host** | ECDSA P-256 keypair, signs an HMAC nonce per connection | the host itself; admitted by a 6-digit pin | until revoked; 30-day tombstone |
 | a **GitHub Actions runner** | GitHub's OIDC job token plus a `fwt_` ticket or `fwr_` token | GitHub, and `provision` | retired on disconnect |
-| the **operator with no phone** | `AGENT_FLEET_API_TOKEN` | `wrangler secret put` | until rotated |
+| the **operator with no phone** | `FLEETWRIGHT_API_TOKEN` | `wrangler secret put` | until rotated |
 
 The coordinator holds no password, no refresh token and no session secret. What
 it does hold is hashes of the `fwk_` secrets, host public keys, spent ID-token

@@ -1740,6 +1740,10 @@
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "oauthFinish": {
+                    "type": "boolean",
+                    "description": "For `connect` only: this client can finish a provider sign-in with `POST /api/oauth/finish`, so the coordinator may rewrite the GitHub and Cloudflare entries to its own authorize URLs (`flow: \"app\"`) and mint a state for each. Without it the catalogue comes back as the host sent it, with the paste route, and nothing is minted."
                   }
                 }
               }
@@ -1937,8 +1941,8 @@
     },
     "/oauth/github/callback": {
       "get": {
-        "summary": "Finish a GitHub App authorization",
-        "description": "Where GitHub redirects a browser after somebody authorizes the App. Unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 and secured by `state`: unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
+        "summary": "Where GitHub sends a browser back after an authorization",
+        "description": "Unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 and therefore finishes nothing. For a box's flow it answers a page that hands `code` and `state` to whatever opened the provider's page and holds a credential: this origin's `/me` page, by its own script, or the app at `fleetwright://github`. That client finishes with `POST /api/oauth/finish`. A device's own sign-in (a `d.` state) goes straight back to the app as before, and an installation from GitHub's page (`setup_action`, no state) is told where to connect. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
         "parameters": [
           {
             "name": "code",
@@ -1959,7 +1963,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Connected. An HTML page telling the person they can close the tab.",
+            "description": "A page handing the code back to the app or to `/me`, which finish it. Nothing is connected yet.",
             "content": {
               "text/html": {
                 "schema": {
@@ -1969,7 +1973,7 @@
             }
           },
           "400": {
-            "description": "Refused \u2014 unknown, expired or already-used state, or GitHub declined.",
+            "description": "Refused: no code, no state, or values that are not a code and a state.",
             "content": {
               "text/html": {
                 "schema": {
@@ -1985,7 +1989,7 @@
     "/oauth/github/relayed": {
       "get": {
         "summary": "Finish a GitHub sign-in made through the OAuth relay",
-        "description": "Where the OAuth relay (docs/relay-terms.md) sends a browser back, for a coordinator that has the App's client id and not its secret. The relay exchanged the code and sealed the token to this coordinator's registered key; only this coordinator can open it. Unauthenticated by necessity and secured like the callback: the `state` is single-use and minted here, and the same state must be found again inside what was sealed. Returns HTML. A coordinator with no relay configured refuses every request here.",
+        "description": "Where the OAuth relay (docs/relay-terms.md) sends a browser back, for a coordinator that has the App's client id and not its secret. The relay exchanged the code and sealed the token to this coordinator's registered key. Unauthenticated by necessity, so it opens nothing: like the callback it answers a page that hands `state` and `sealed` to the app or to `/me`, which finish with `POST /api/oauth/finish`. Returns HTML. A coordinator with no relay configured refuses every request here.",
         "parameters": [
           {
             "name": "state",
@@ -2022,7 +2026,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Connected. An HTML page telling the person they can close the tab.",
+            "description": "A page handing the sealed token back to the app or to `/me`. Nothing is connected yet.",
             "content": {
               "text/html": {
                 "schema": {
@@ -2032,7 +2036,7 @@
             }
           },
           "400": {
-            "description": "Refused: unknown, expired or already-used state, a sealed token that does not open or was made for another state, or what the relay said went wrong.",
+            "description": "Refused: what the relay said went wrong, or no sealed token.",
             "content": {
               "text/html": {
                 "schema": {
@@ -2048,7 +2052,7 @@
     "/oauth/cloudflare/callback": {
       "get": {
         "summary": "Finish a Cloudflare OAuth authorization",
-        "description": "Where Cloudflare redirects a browser after somebody authorizes this fleet's OAuth client. The same shape as the GitHub callback and secured the same way: unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 with a `state` that is unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured client, every request here is refused.",
+        "description": "Where Cloudflare redirects a browser after somebody authorizes this fleet's OAuth client. The same shape as the GitHub callback: unauthenticated by necessity, so it finishes nothing, and hands `code` and `state` to the app (`fleetwright://cloudflare`) or to `/me`, which finish with `POST /api/oauth/finish`. Returns HTML. Absent a configured client, every request here is refused.",
         "parameters": [
           {
             "name": "code",
@@ -2069,7 +2073,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Connected. An HTML page telling the person they can close the tab.",
+            "description": "A page handing the code back to the app or to `/me`. Nothing is connected yet.",
             "content": {
               "text/html": {
                 "schema": {
@@ -2079,7 +2083,7 @@
             }
           },
           "400": {
-            "description": "Refused \u2014 unknown, expired or already-used state, or Cloudflare declined.",
+            "description": "Refused: no code (the person pressed Deny), or values that are not a code and a state.",
             "content": {
               "text/html": {
                 "schema": {
@@ -2090,6 +2094,60 @@
           }
         },
         "security": []
+      }
+    },
+    "/api/oauth/finish": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Finish a GitHub or Cloudflare sign-in, as the person who started it",
+        "description": "What the app, or the callback page on `/me`, sends with what the provider's redirect handed back. The state names a flow; the credential on this request must belong to the person who started it (the verified email must match, and a flow the admin token started finishes only with the admin token), so a forwarded authorize link ends with nothing stored. Single-use: a second finish is refused. The token is then exchanged here, or by the host that offered a PKCE challenge, and stored on the host the flow named, as before.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "provider",
+                  "state"
+                ],
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "github",
+                      "cloudflare"
+                    ]
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "The authorization code. Absent on the relayed GitHub path."
+                  },
+                  "sealed": {
+                    "type": "string",
+                    "description": "The relay's sealed token, on the relayed GitHub path, in place of `code`."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Connected: `ok`, and the sentence to show."
+          },
+          "400": {
+            "description": "Refused: `error.code` is `not_yours` for a flow somebody else started, `expired` for unknown, expired or used, `bad_params` for no provider; otherwise the provider or the host declined, in words."
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
       }
     },
     "/api/runner-tokens": {

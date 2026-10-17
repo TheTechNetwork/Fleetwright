@@ -133,6 +133,7 @@ import { dispatchRunner, checkRunnerRepo, RUNNER_WORKFLOWS, DEFAULT_MINUTES, MAX
 import { checkRepoAccess } from '../core/repo-tokens.js';
 import { checkLinkedRepo } from '../core/linked-repo-check.js';
 import { archiveSession } from '../core/archive.js';
+import { egg } from './eggs.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -2525,6 +2526,8 @@ export async function dispatch(ctx, line) {
 
   const canonical = LOOKUP[name];
   if (!canonical) {
+    const hidden = egg(name, args);
+    if (hidden) return { ok: true, text: hidden };
     return { ok: false, text: `Unknown command "${name}". Try /help.` };
   }
   if (!ctx.cfg.loginEnabled && (canonical === 'login' || canonical === 'code')) {

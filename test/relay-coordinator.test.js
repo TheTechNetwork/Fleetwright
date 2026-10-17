@@ -133,13 +133,19 @@ test('a GitHub sign-in goes out through the relay and comes back sealed to this 
   // GitHub sends the person to the relay, which sends them back here.
   const back = new URL(/** @type {string} */ ((await relayCall(`/github/callback?code=c0de&state=${fleet}.${state}`, { method: 'GET', headers: { cookie } })).headers.get('location')));
   assert.equal(back.searchParams.get('state'), state);
-  const done = await core.finishRelayedGithubAuthorization({ state: back.searchParams.get('state'), sealed: back.searchParams.get('sealed'), error: back.searchParams.get('error') });
+  // The coordinator's page hands the sealed token on and opens nothing; the
+  // app or `/me` finishes it as the person who started it.
+  const landed = core.relayedGithubCallback({ state: back.searchParams.get('state'), sealed: back.searchParams.get('sealed'), error: back.searchParams.get('error') });
+  assert.equal(landed.finish?.sealed, back.searchParams.get('sealed'));
+  assert.deepEqual(dispatched, [], 'the page a browser lands on stored something');
+  const eli = { email: 'eli@example.com', admin: false };
+  const done = await core.finishRelayedGithubAuthorization({ state: landed.finish.state, sealed: landed.finish.sealed, requester: eli });
   assert.equal(done.ok, true, done.text);
   assert.deepEqual(dispatched.map((d) => [d.verb, d.params.provider, d.params.secret, d.preferHost, d.actor]), [['link', 'github', 'ghu_relayed', 'box', 'eli@example.com']]);
   assert.ok(!dispatched.some((d) => d.verb === 'renew'), 'renewal material deposited with no secret anywhere to renew with');
 
   // ONCE: the same URL again is refused.
-  const again = await core.finishRelayedGithubAuthorization({ state, sealed: back.searchParams.get('sealed') });
+  const again = await core.finishRelayedGithubAuthorization({ state, sealed: back.searchParams.get('sealed'), requester: eli });
   assert.equal(again.ok, false);
   assert.match(again.text, /expired or was already used/);
 });
@@ -154,15 +160,15 @@ test('a sealed token made for another sign-in, or a flow not made for the relay,
   // Anybody can seal to a public key; nobody can seal it for a state they never saw.
   core.pendingGithub.mint({ state: 'the-real-state', hostId: 'box', email: 'a@b.com', relayed: true });
   const forged = await sealTo(coord.publicKey, { state: 'some-other-state', accessToken: 'ghu_attacker' });
-  const r = await core.finishRelayedGithubAuthorization({ state: 'the-real-state', sealed: forged });
+  const a = { email: 'a@b.com', admin: false };
+  const r = await core.finishRelayedGithubAuthorization({ state: 'the-real-state', sealed: forged, requester: a });
   assert.equal(r.ok, false);
   assert.match(r.text, /not made for this link/);
   // A direct-exchange flow cannot be finished with a sealed token.
   core.pendingGithub.mint({ state: 'direct-state', hostId: 'box', email: 'a@b.com' });
   const sealed = await sealTo(coord.publicKey, { state: 'direct-state', accessToken: 'ghu_x' });
-  assert.equal((await core.finishRelayedGithubAuthorization({ state: 'direct-state', sealed })).ok, false);
+  assert.equal((await core.finishRelayedGithubAuthorization({ state: 'direct-state', sealed, requester: a })).ok, false);
   // What the relay said, in this coordinator's words, never the query's.
-  core.pendingGithub.mint({ state: 'denied-state', hostId: 'box', email: 'a@b.com', relayed: true });
-  assert.match((await core.finishRelayedGithubAuthorization({ state: 'denied-state', error: 'denied' })).text, /not authorised/);
+  assert.match(core.relayedGithubCallback({ state: 'denied-state', error: 'denied' }).text, /not authorised/);
   assert.deepEqual(dispatched, []);
 });

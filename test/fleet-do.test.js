@@ -18,6 +18,7 @@ import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../src/fleet/protocol/heartbeat.
 import { loadOrCreateKey, keyFingerprint } from '../src/fleet/host/identity.js';
 import { sign, signingInput, generateKeyPair } from '../src/fleet/crypto.js';
 import { s256 } from '../src/mcp/oauth.js';
+import { admit } from './helpers/enrolled-hosts.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -176,6 +177,23 @@ test('sign-in is refused clearly when the coordinator has none configured', asyn
   const { fleet: f } = fleet();
   const res = await call(f, '/api/session', 'POST', { idToken: 'anything' });
   assert.equal(res.status, 503);
+  assert.match((await res.json()).text, /no sign-in configured/);
+});
+
+test('the Durable Object reads no setting under a name from before the rename', async () => {
+  // It aliased AGENT_FLEET_X onto a missing or empty FLEETWRIGHT_X in its
+  // constructor, so blanking FLEETWRIGHT_AUTH_ALLOW brought back the allowlist
+  // it replaced. The sign-in settings ride the same path and are what a route
+  // shows without a signed token: under the old names only, there is no
+  // sign-in, and no old allowlist either.
+  const { fleet: f } = fleet({
+    AGENT_FLEET_AUTH_ISSUERS: 'https://accounts.google.com',
+    AGENT_FLEET_AUTH_AUDIENCES: 'network.thetech.fleetwright',
+    FLEETWRIGHT_AUTH_ALLOW: '',
+    AGENT_FLEET_AUTH_ALLOW: 'legacy@example.test',
+  });
+  const res = await call(f, '/api/session', 'POST', { idToken: 'anything' });
+  assert.equal(res.status, 503, 'the Durable Object read its sign-in settings under the old names');
   assert.match((await res.json()).text, /no sign-in configured/);
 });
 
@@ -358,7 +376,7 @@ test('strangers knocking on /host/connect cannot overwrite the event history', a
   // names replaced the stored ring, and the loss survived a rebuild.
   const { fleet: f, state } = fleet();
   f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
-  for (let i = 0; i < 250; i++) {
+  for (let i = 0; i < 1000; i++) {
     const res = await call(f, `/host/connect?hostId=stranger-${i}`, 'GET', null, { upgrade: 'websocket' });
     assert.equal(res.status, 401);
   }
@@ -502,6 +520,129 @@ test('one member filling a shared store fills only their own share of it', async
   for (let i = 0; i < 160; i++) await f.core.issueClient({ email: 'bob@example.test' }, `bob device ${i}`);
   const signedIn = await f.core.issueClient({ email: 'alice@example.test' }, 'alice laptop');
   assert.ok('token' in signedIn, `alice could not sign in after another member's sign-ins: ${JSON.stringify(signedIn)}`);
+});
+
+/**
+ * A fleet with a GitHub App and a Cloudflare client, a box one member
+ * enrolled and one the operator runs, each answering `connect` with a
+ * catalogue and recording every credential verb the coordinator sends it. The providers' token
+ * endpoints answer with a token named after the code, so a test can see whose
+ * code became whose token.
+ *
+ * @param {import('node:test').TestContext} t
+ */
+async function providerFleet(t) {
+  const { fleet: f } = fleet({
+    FLEETWRIGHT_GITHUB_CLIENT_ID: 'Iv23liTEST',
+    FLEETWRIGHT_GITHUB_CLIENT_SECRET: 'shh',
+    FLEETWRIGHT_CLOUDFLARE_CLIENT_ID: 'cf-id',
+    FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: 'cf-shh',
+    FLEETWRIGHT_CLOUDFLARE_SCOPES: 'account-settings.read offline_access',
+  });
+  const as = async (/** @type {string} */ email) => {
+    const { token } = await f.core.clients.issue(`${email} phone`);
+    const row = [...f.core.clients.clients.values()].find((c) => c.name === `${email} phone`);
+    row.email = email;
+    return { authorization: `Bearer ${token}` };
+  };
+  /** @type {any[]} */
+  const stored = [];
+  /** A box answering as a sidecar would, recording what it is asked to store. @param {string} hostId */
+  const box = (hostId) => (/** @type {any} */ msg) => {
+    if (msg?.kind !== 'intent') return;
+    if (msg.verb !== 'connect') stored.push({ hostId, verb: msg.verb, actor: msg.actor, secret: msg.params?.secret });
+    const reply =
+      msg.verb === 'connect'
+        ? { connections: { catalogue: [{ provider: 'github', url: 'https://github.com/settings/tokens/new' }, { provider: 'cloudflare', url: 'https://dash.cloudflare.com/profile/api-tokens' }], connected: [] } }
+        : { text: 'stored' };
+    queueMicrotask(() => f.core.onHostMessage(hostId, { kind: 'reply', id: msg.id, ok: true, ...reply }));
+  };
+  // One box Mallory enrolled with a pin of her own, and one the operator runs.
+  await admit(f.core, 'mallory-box', { enrolledBy: 'mallory@example.test', send: box('mallory-box') });
+  await admit(f.core, 'ops-box', { send: box('ops-box') });
+  // Reported, as a sidecar does within seconds: a box that has not is waited for.
+  for (const hostId of ['mallory-box', 'ops-box']) f.core.registry.recordHealth(hostId, { hostId, running: 0, sessions: [] });
+  const real = globalThis.fetch;
+  globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init) => {
+    const u = new URL(String(url));
+    if (u.pathname === '/login/oauth/access_token' || u.pathname === '/oauth2/token') {
+      const code = new URLSearchParams(String(init?.body)).get('code');
+      return new Response(JSON.stringify({ access_token: `tok_for_${code}`, token_type: 'bearer', expires_in: 28800, refresh_token: 'refresh_x' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`nothing else is reachable from this test: ${u.href}`);
+  });
+  t.after(() => { globalThis.fetch = real; });
+  /** The two authorize URLs' states from one Connect. @param {Record<string,string>} who @param {string} host */
+  const connect = async (who, host) => {
+    const reply = await (await call(f, '/api/intent', 'POST', { verb: 'connect', params: {}, host, oauthFinish: true }, who)).json();
+    const url = (/** @type {string} */ p) => new URL(reply.connections.catalogue.find((/** @type {any} */ c) => c.provider === p).url);
+    return { github: url('github').searchParams.get('state'), cloudflare: url('cloudflare').searchParams.get('state') };
+  };
+  return { f, as, stored, connect };
+}
+
+test('a forwarded GitHub or Cloudflare link connects nothing for the person who started it', async (t) => {
+  // Mallory, a member, started a connect on a box she enrolled, kept the
+  // provider's authorize URL and forwarded it. Whoever authorized it came back
+  // to the callback, which took no credential, redeemed the state, exchanged
+  // THEIR code with the App's secret, and linked the token on mallory-box as
+  // Mallory's. The state proves who started a flow, not whose browser came
+  // back, so the callback now finishes nothing, and the finish is refused to
+  // anybody but the person who started it.
+  const { f, as, stored, connect } = await providerFleet(t);
+  const mallory = await as('mallory@example.test');
+  const victim = await as('victim@example.test');
+  const states = await connect(mallory, 'mallory-box');
+
+  // The victim's browser comes back from each provider with the victim's
+  // code and Mallory's state, holding no fleet credential.
+  for (const [path, state] of [['/oauth/github/callback', states.github], ['/oauth/cloudflare/callback', states.cloudflare]]) {
+    const page = await call(f, `${path}?code=VICTIMCODE123&state=${state}`);
+    assert.deepEqual(stored, [], `${path} stored somebody else’s token for the person who started the flow`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /fleetwright:\/\/(github|cloudflare)\?state=/, 'the page does not hand the code back');
+  }
+
+  // The victim's app or `/me` hands it on with the victim's own credential.
+  for (const provider of ['github', 'cloudflare']) {
+    const r = await call(f, '/api/oauth/finish', 'POST', { provider, code: 'VICTIMCODE123', state: states[provider] }, victim);
+    const body = await r.json();
+    assert.equal(r.status, 400);
+    assert.equal(body.error?.code, 'not_yours', body.text);
+  }
+  // Nor the admin token, which is what reaches the object with no client: it
+  // finishes only the flows it started itself.
+  assert.equal((await (await call(f, '/api/oauth/finish', 'POST', { provider: 'github', code: 'VICTIMCODE123', state: states.github })).json()).error?.code, 'not_yours');
+  assert.deepEqual(stored, [], 'a finish by somebody other than the starter stored a token');
+
+  // The person who started it still can, with their own code, and only once.
+  const own = await call(f, '/api/oauth/finish', 'POST', { provider: 'github', code: 'MALLORYCODE1', state: states.github }, mallory);
+  assert.equal(own.status, 200, (await own.clone().json()).text);
+  assert.deepEqual(stored.filter((x) => x.verb === 'link').map((x) => [x.hostId, x.actor, x.secret]), [['mallory-box', 'mallory@example.test', 'tok_for_MALLORYCODE1']]);
+  assert.equal((await call(f, '/api/oauth/finish', 'POST', { provider: 'github', code: 'MALLORYCODE1', state: states.github }, mallory)).status, 400);
+});
+
+test('another member’s connects cannot push out a sign-in somebody is half-way through', async (t) => {
+  // Every connect reply with a catalogue minted a state into one store per
+  // provider, shared by the fleet and capped at two hundred, oldest out
+  // whoever's it was. A member with a box that answers connect sent two
+  // hundred and every other person's in-progress GitHub and Cloudflare
+  // sign-in came back "expired".
+  const { f, as, stored, connect } = await providerFleet(t);
+  const mallory = await as('mallory@example.test');
+  const victim = await as('victim@example.test');
+  const hers = await connect(victim, 'ops-box');
+  for (let i = 0; i < 1000; i++) {
+    await call(f, '/api/intent', 'POST', { verb: 'connect', params: {}, host: 'mallory-box', oauthFinish: true }, mallory);
+  }
+  for (const provider of ['github', 'cloudflare']) {
+    const r = await call(f, '/api/oauth/finish', 'POST', { provider, code: 'VICTIMCODE123', state: hers[provider] }, victim);
+    assert.equal(r.status, 200, `${provider}: ${(await r.json()).text}`);
+  }
+  assert.deepEqual(
+    stored.filter((x) => x.verb === 'link').map((x) => [x.hostId, x.actor]),
+    [['ops-box', 'victim@example.test'], ['ops-box', 'victim@example.test']],
+  );
 });
 
 test('an enrolled host cannot erase, outweigh or impersonate the fleet’s own records', async () => {

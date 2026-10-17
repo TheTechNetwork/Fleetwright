@@ -85,6 +85,8 @@ const NOT_A_CLIENT_ROUTE = {
   '/oauth/github/callback': "a browser redirect target — GitHub sends somebody's browser here.",
   '/oauth/github/relayed': "the same redirect target by way of the OAuth relay — the relay sends somebody's browser here with the token sealed to this coordinator.",
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
+  '/api/oauth/finish':
+    'the coordinator’s own callback page posts it, from the browser that came back from the provider, with the credential `/me` keeps on this origin. The apps post it too, from the screen that opened the provider’s page, and the page is the one client every fleet has whichever apps it runs.',
   '/api/enroll/actions':
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
   '/api/enroll/vm':
