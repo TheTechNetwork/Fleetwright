@@ -208,6 +208,17 @@ struct FleetView: View {
                     .accessibilityHint(openHint(summary.unwell))
                     .fleetRow()
                 }
+                // Eggs.swift: pulled four times in a minute. Under the assurance
+                // line, where the pull happened and the eye is, in the dimmest
+                // ink, and never on the line itself. It sat under the last card,
+                // which on a fleet of any size is off screen while pulling, so
+                // the one person it was written for never saw it.
+                if let line = Eggs.pullLine(pulls) {
+                    Text(line)
+                        .fleetType(.bodySmall)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .fleetRow()
+                }
                 // THE ONBOARDING ASK, under the line that says whether anything
                 // needs you. A session runs on its starter's own Claude account,
                 // and a runner started with none kept refused the session it was
@@ -309,14 +320,6 @@ struct FleetView: View {
                                    }
                                },
                                changed: { await refresh(keepStatus: true) })
-                        .fleetRow()
-                }
-                // Eggs.swift: pulled four times in a minute. Under the cards,
-                // in the dimmest ink, and never on the assurance line.
-                if let line = Eggs.pullLine(pulls) {
-                    Text(line)
-                        .fleetType(.bodySmall)
-                        .foregroundStyle(Design.Palette.inkDim)
                         .fleetRow()
                 }
             }
