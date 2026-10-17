@@ -59,6 +59,63 @@ test('another box, a job nobody began, or a job past its pins is given nothing',
   assert.equal((await ask('laptop')).error.code, 'too_many');
 });
 
+test('a job’s pins are counted across the coordinator being rebuilt from storage', async () => {
+  // serialiseSetups wrote the count and restoreSetups did not read it back,
+  // so every eviction gave a job its pins again.
+  const { core, ask } = fleet();
+  for (let i = 0; i < MAX_HOLDER_PINS; i++) await ask('laptop');
+  const again = new CoordinatorCore({});
+  /** @type {any[]} */
+  const frames = [];
+  again.registry.connect('laptop', (/** @type {any} */ f) => frames.push(f));
+  again.restoreSetups(JSON.parse(JSON.stringify(core.serialiseSetups())));
+  await again.onHostMessage('laptop', { kind: 'holder-pin', id: 'holder-11111111-9', job: JOB });
+  assert.equal(frames.find((f) => f.id === 'holder-11111111-9')?.error?.code, 'too_many');
+});
+
+test('a setup ends when its box’s name is re-keyed, and the new key is given nothing in the owner’s name', async () => {
+  // A later audit: the job was bound to the host NAME for a day. Any member
+  // can mint a pin bound to an existing name and replace its key; the
+  // re-keyed box acts for that member, yet the admin's next phase still took
+  // it the job id, and with the id it was minted a holder pin in the admin's
+  // name, which enrols a machine of operator tier and is sent the fleet's
+  // OAuth client secrets.
+  const { admit, makeAdmin } = await import('./helpers/enrolled-hosts.js');
+  const { generateKeyPair } = await import('../src/fleet/crypto.js');
+  const core = new CoordinatorCore({});
+  await makeAdmin(core, ELI);
+  await admit(core, 'box');
+  core.registry.recordHealth('box', { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [] });
+  /** @type {any[]} */
+  const delivered = [];
+  core.send = /** @type {any} */ (async (/** @type {any} */ host, /** @type {any} */ spec) => {
+    delivered.push({ hostId: host.hostId, phase: spec.params.phase });
+    return { ok: true, text: 'Ready.', xosetup: { job: JOB, state: 'waiting', key: 'k', keySig: 's', hostKey: 'h' } };
+  });
+  const eli = { email: ELI, admin: true };
+  const phase = (/** @type {Record<string, any>} */ params) => core.dispatch({ verb: 'xosetup', params, actor: `fleet:${ELI}`, requester: eli });
+  assert.equal((await phase({ phase: 'begin', address: 'xo.lan', pin: 'a'.repeat(64) })).ok, true);
+
+  // The member's pin bound to `box`, redeemed as /api/enroll/host does.
+  const key = await generateKeyPair();
+  const rekeyed = await core.hostIds.enrol({ hostId: 'box', publicJwk: key.publicJwk, enrolledBy: 'sam@example.com', boundToThisHost: true });
+  assert.equal(rekeyed.ok && rekeyed.replaced, true);
+  core.hostDisconnected('box', 're-enrolled');
+  /** @type {any[]} */
+  const frames = [];
+  core.hostConnected('box', (/** @type {any} */ f) => frames.push(f));
+  core.registry.recordHealth('box', { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [] });
+
+  const status = await phase({ phase: 'status', job: JOB });
+  assert.equal(status.ok, false, 'the admin’s phase went to the re-keyed box');
+  assert.deepEqual(delivered.map((d) => d.phase), ['begin'], 'the job id reached the new key');
+
+  await core.onHostMessage('box', { kind: 'holder-pin', id: 'holder-11111111-0', job: JOB });
+  const minted = frames.find((f) => f.id === 'holder-11111111-0');
+  assert.equal(minted?.ok, false, 'a re-keyed box was minted a pin in the admin’s name');
+  assert.equal(core.setups.has(JOB), false, 'the job outlived its machine’s key');
+});
+
 test('the name given is never one a host already has, so the pin cannot replace its key', async () => {
   const { core, ask } = fleet();
   const taken = new Set();

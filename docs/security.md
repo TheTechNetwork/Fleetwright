@@ -456,7 +456,13 @@ machine of the fleet, through the coordinator.
   403.
 - **The pool's own machine is admitted by a pin** (`docs/hypervisors.md`,
   "A machine of its own"). The coordinator gives the pin only to the box
-  running that person's policy job, at most three times a job. The pin is
+  running that person's policy job, at most three times a job, while the
+  job runs and the box may act for that person. "The box" is the enrolment
+  that began the job, its key and when it was let in, not its name: a
+  re-key, readmission or revocation of the name ends the job, so a member
+  who replaces a box's key with a pin bound to its name inherits none of
+  its setup, and the same binding holds for the build VM's token and for
+  progress pushed to the owner's phones. The pin is
   bound to a name the coordinator chose and no host had, so it cannot
   replace an existing host's key. It is single use and lasts ten minutes. It
   travels only on the machine's cloud-init drive, which the machine wipes
