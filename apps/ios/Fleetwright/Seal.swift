@@ -79,6 +79,14 @@ enum Seal {
     /// coordinator's to read (xosetupReconnectAad in src/fleet/seal.js;
     /// XOReconnect).
     static func xosetupReconnectAAD(job: String, address: String) -> String { "fleetwright-xosetup-reconnect/v1:\(job):\(address)" }
+    /// A reconnect's admin sign-in on its way to the machine: the job and
+    /// address under a name of its own, not the setup's, because a machine
+    /// too old to know reconnect opens anything under `xosetupAAD` and runs a
+    /// whole setup with it. Whether a machine knows is only its unsigned
+    /// `can`, which a relay can add to; under this name, a machine that does
+    /// not know cannot open the seal at all (xosetupReconnectSigninAad in
+    /// src/fleet/seal.js).
+    static func xosetupReconnectSigninAAD(job: String, address: String) -> String { "fleetwright-xosetup-reconnect-signin/v1:\(job):\(address)" }
 
     enum Failure: LocalizedError {
         case notAKey, notSealed
