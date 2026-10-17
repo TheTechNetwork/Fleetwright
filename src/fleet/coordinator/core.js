@@ -488,7 +488,8 @@ export class CoordinatorCore {
     this.mailer = mailer;
     // Which machines are in the fleet. The authority, unlike `registry` above,
     // which is a cache of what those machines say about themselves.
-    this.hostIds = new HostIdentities({ now });
+    // An operator's machines are not counted against anybody's share of it.
+    this.hostIds = new HostIdentities({ now, isAdmin: (email) => this.clients.emailHasAdmin(email) });
     // Codes that admit a new host or device, once.
     this.enrollment = new Enrollment({ now });
     /** @type {Map<string, { resolve: (reply: any) => void, timer: any, hostId: string }>} */
@@ -844,11 +845,8 @@ export class CoordinatorCore {
     // fleet's only history of who enrolled and revoked what. So a host's news
     // displaces its own oldest once it holds HOST_EVENTS_EACH, and hosts' news
     // displaces hosts' once together they hold HOST_EVENTS: whatever hosts
-    // send, the coordinator's records keep the rest of the ring.
-    const mine = this.events.filter((e) => hostReported(e) && e.hostId === hostId);
-    const hosts = this.events.filter(hostReported);
-    const drop = mine.length >= HOST_EVENTS_EACH ? mine[0] : hosts.length >= HOST_EVENTS ? hosts[0] : null;
-    if (drop) this.events.splice(this.events.indexOf(drop), 1);
+    // send, the coordinator's records keep the rest of the ring (#makeRoom).
+    this.#makeRoom(event);
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     // Persisted by whoever owns storage — a file on a box, DO storage in the
@@ -872,7 +870,7 @@ export class CoordinatorCore {
    * A host changed state. Say so, once, in words about what it means.
    *
    * @param {string} hostId
-   * @param {{ from: string, to: string, reason: string }} moved
+   * @param {{ from: string, to: string, reason: string, fault?: string }} moved
    */
   async #onHostState(hostId, moved) {
     // NOT AGAIN, FOR THE SAME REASON, WITHIN THE HOUR.
@@ -919,16 +917,32 @@ export class CoordinatorCore {
       // a notification saying "degraded" sends somebody to find out what this
       // line already knows.
       : `${hostId} cannot start sessions: ${moved.reason}`;
-    const said = this.events.some(
-      (e) => e.hostId === hostId
-        && (e.event === 'host.degraded' || e.event === 'host.recovered')
-        && e.text === text
-        && this.now() - e.at < HOST_STATE_QUIET_MS,
-    );
-    if (said) return;
+    // ONCE PER FAULT, WHATEVER THE BOX SAYS ABOUT IT. This matched the whole
+    // sentence, and the sentence carries the box's own hub reason: a box
+    // sending a new one in every frame was never quiet, and each frame was a
+    // record and a push to the admin's phone (third Workers audit). So the
+    // fault is the coordinator's words alone (`fault`, registry.js), of which
+    // there are a handful: a fault that changes is still news inside the
+    // hour, and the box's words changing is not. They still reach the host's
+    // row, which the apps show; it is the announcement that waits.
+    //
+    // And remembered here as well as in the ring, because the ring is not a
+    // memory the box cannot touch: its own session events displace its own
+    // oldest (#makeRoom), this record among them.
+    const kind = recovered ? 'host.recovered' : 'host.degraded';
+    const said = recovered ? text : `${hostId} cannot start sessions: ${moved.fault ?? moved.reason}`;
+    const key = `${kind}\n${said}`;
+    const now = this.now();
+    const quiet = now - (this.#hostStateSaidAt.get(key) ?? -Infinity) < HOST_STATE_QUIET_MS
+      || this.events.some(
+        (e) => e.hostId === hostId && e.event === kind && String(e.text).startsWith(said) && now - e.at < HOST_STATE_QUIET_MS,
+      );
+    if (quiet) return;
+    for (const [k, at] of this.#hostStateSaidAt) if (now - at >= HOST_STATE_QUIET_MS) this.#hostStateSaidAt.delete(k);
+    this.#hostStateSaidAt.set(key, now);
     const event = this.record({
       hostId,
-      event: recovered ? 'host.recovered' : 'host.degraded',
+      event: kind,
       name: hostId,
       text,
     });
@@ -938,6 +952,9 @@ export class CoordinatorCore {
     // nobody opens.
     if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
   }
+
+  /** When each host's last announcement of each fault was made (#onHostState). */
+  #hostStateSaidAt = new Map();
 
   /**
    * Record something the coordinator itself did, as opposed to something a
@@ -964,11 +981,53 @@ export class CoordinatorCore {
       url: entry.url ?? null,
       at: this.now(),
     };
+    this.#makeRoom(event);
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     this.log.info(`coordinator: ${event.event}${event.hostId !== 'coordinator' ? ` ${event.hostId}` : ''}`);
     this.onEvents?.();
     return event;
+  }
+
+  /**
+   * Make room in the ring for one more entry from whoever this one is from,
+   * at the expense of that writer's own oldest when they hold their share.
+   *
+   * A host's news: its own oldest once it holds HOST_EVENTS_EACH, any host's
+   * once hosts together hold HOST_EVENTS (#onHostEvent says why). Its health
+   * changes count here too, written by record() from #onHostState, because
+   * the box chooses how often they happen (hostReported).
+   *
+   * AND A PERSON'S RECORDS, the same way. The coordinator's own share had no
+   * bound per writer, and several of its records are written at a member's
+   * request: every pin minted is an `enrol.minted`, minting never fails (the
+   * twentieth waiting pin drops the minter's own oldest), so 200 of them
+   * from one member replaced every enrolment, revocation and approval in
+   * memory and in storage, and a rebuilt Fleet loaded only the mints (third
+   * Workers audit). So whoever an entry names as its actor keeps at most
+   * ACTOR_EVENTS_EACH, and what they do next displaces their own. An
+   * operator's records are the fleet's, as an operator's boxes are
+   * (actsFor), and records naming nobody, `client.revoked` and
+   * `host.revoked` among them, are no one person's share to spend.
+   *
+   * The ring is what #saveEvents stores, so a share kept here is kept there.
+   *
+   * @param {{ hostId: string, actor?: string|null }} event
+   */
+  #makeRoom(event) {
+    /** @type {any} */
+    let drop = null;
+    if (hostReported(event)) {
+      const mine = this.events.filter((e) => hostReported(e) && e.hostId === event.hostId);
+      const hosts = this.events.filter(hostReported);
+      drop = mine.length >= HOST_EVENTS_EACH ? mine[0] : hosts.length >= HOST_EVENTS ? hosts[0] : null;
+    } else if (event.actor) {
+      const who = String(event.actor).toLowerCase();
+      if (this.clients.emailHasAdmin(who)) return;
+      const theirs = this.events.filter((e) => !hostReported(e) && String(e.actor || '').toLowerCase() === who);
+      if (theirs.length >= ACTOR_EVENTS_EACH) drop = theirs[0];
+    }
+    if (drop) this.events.splice(this.events.indexOf(drop), 1);
   }
 
   /**
@@ -1960,6 +2019,23 @@ export class CoordinatorCore {
   }
 
   /**
+   * Withdraw a waiting pin, by the id pinsFor lists: any of them for an admin
+   * and the shared token, a member's own for a member, so a member cannot
+   * learn that a pin they were not shown exists by cancelling it.
+   *
+   * @param {string} id
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @returns {boolean}
+   */
+  cancelPin(id, requester) {
+    const mine = String(requester?.email || '').toLowerCase();
+    const gone = this.enrollment.cancel(String(id || ''), (p) => !requester || Boolean(requester.admin) || (Boolean(mine) && emailOf(p.actor) === mine));
+    if (!gone) return false;
+    this.record({ event: 'enrol.cancelled', actor: requester?.email ?? null, text: `a ${gone.purpose} pin was cancelled by ${requester?.email || 'the admin token'}` });
+    return true;
+  }
+
+  /**
    * Every enrolled host, to everybody: a phone approving a box for its
    * person's vault needs each host's name, fingerprint and key. Who added a
    * host and whose temporary host it is are emails, and a member is shown
@@ -2030,6 +2106,13 @@ export class CoordinatorCore {
    * temporary hosts are revoked, and their runner tokens, tickets and
    * waiting runner starts with them.
    *
+   * AND THEIR PINS, which admit machines exactly as tickets do. They were
+   * left, so for the rest of each pin's ten minutes a removed member could
+   * enrol a host in their own name, re-key one the pin was bound to and
+   * readmit one an admin had revoked, and nothing could cancel them (third
+   * Workers audit). Saved by onStateChanged, so a restart does not bring
+   * them back.
+   *
    * @param {string} address  lower case
    * @returns {string[]} the hosts revoked, for the caller to disconnect
    */
@@ -2061,6 +2144,12 @@ export class CoordinatorCore {
     for (const [hostId, p] of this.runnerStarts) {
       if (String(p.owner || '').toLowerCase() === address) {
         this.runnerStarts.delete(hostId);
+        changed = true;
+      }
+    }
+    for (const [code, p] of this.enrollment.pending) {
+      if (emailOf(p.actor) === address) {
+        this.enrollment.pending.delete(code);
         changed = true;
       }
     }
@@ -4295,8 +4384,8 @@ export class CoordinatorCore {
     }
     const result = await this.hostIds.enrol({ hostId, publicJwk: found.request.publicJwk, enrolledBy: `holder:${owner}` });
     if (!result.ok || !result.host) {
-      const full = 'code' in result && result.code === 'hosts_full';
-      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error } };
+      const full = 'code' in result ? result.code : null;
+      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ?? 'bad_request' }, text: result.error } };
     }
     this.holderJoins.joined(hostId);
     this.record({ event: 'host.enrolled', hostId, fingerprint: result.host.fingerprint });
@@ -5401,8 +5490,8 @@ export class CoordinatorCore {
       ephemeral: true,
     });
     if (!result.ok || !result.host) {
-      const full = 'code' in result && result.code === 'hosts_full';
-      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error } };
+      const full = 'code' in result ? result.code : null;
+      return { status: full ? 507 : 400, body: { ok: false, error: { code: full ?? 'bad_request' }, text: result.error } };
     }
     this.noteRunnerEnrolled(hostId, ticket);
     if (this.vmStandby.isKept(hostId)) {
@@ -5728,13 +5817,20 @@ function takesSessions(host, requester) {
  * @param {{ email?: string|null, admin?: boolean }|null} requester
  */
 function visibleHost(host, requester) {
-  if (!requester || requester.admin || !host?.health) return host;
+  if (!requester || requester.admin || !host) return host;
+  // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only
+  // when it is theirs, as /api/hosts/enrolled already did (enrolledHostsFor).
+  // This route handed every member every runner's owner, before its first
+  // health frame as well as after (third Workers audit).
+  const owner = host.owner && emailOf(host.owner) !== String(requester.email || '').toLowerCase() ? null : host.owner;
+  if (!host.health) return { ...host, ...('owner' in host ? { owner } : {}) };
   const sessions = Array.isArray(host.health.sessions)
     ? host.health.sessions.filter((/** @type {any} */ s) => ownedBy(s?.createdBy, requester))
     : host.health.sessions;
   const mine = new Set((sessions || []).map((/** @type {any} */ s) => s?.name));
   return {
     ...host,
+    ...('owner' in host ? { owner } : {}),
     health: {
       ...host.health,
       sessions,
@@ -5769,14 +5865,24 @@ const HOST_EVENT_RE = /^session\.[a-z][a-z-]{0,39}$/;
 /** How much of the 200-entry ring hosts' news may hold, all of them and each. */
 const HOST_EVENTS = 100;
 const HOST_EVENTS_EACH = 25;
+/** And how much one person's records may, as one host's (#makeRoom). */
+const ACTOR_EVENTS_EACH = 25;
 
 /**
  * Did a host write this, rather than the coordinator? See HOST_EVENT_RE.
  *
+ * OR CHOOSE WHEN IT WAS WRITTEN. `host.degraded` and `host.recovered` are the
+ * coordinator's words about a box's health frames, and the box decides how
+ * often its health changes: counted as the coordinator's own, a new hub
+ * reason per frame wrote one per frame into the share the audit records keep
+ * (third Workers audit). A host cannot send either itself (HOST_EVENT_RE), so
+ * the name still cannot be forged.
+ *
  * @param {any} e
  */
 export function hostReported(e) {
-  return typeof e?.event === 'string' && e.event.startsWith('session.');
+  return typeof e?.event === 'string'
+    && (e.event.startsWith('session.') || e.event === 'host.degraded' || e.event === 'host.recovered');
 }
 
 /**

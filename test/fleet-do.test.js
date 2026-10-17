@@ -476,6 +476,20 @@ test('a member listing pins and enrolled hosts is not shown whose they are', asy
   assert.equal(seenByAlice.enrolledBy, 'alice@example.test', 'and the person who added it still sees that they did');
   assert.equal(seenByAlice.owner, 'alice@example.test');
   assert.equal((await hosts(admin))[0].enrolledBy, 'alice@example.test');
+
+  // And the live host list the apps draw from, which handed every member the
+  // owner of every temporary host (third Workers audit), before its first
+  // health frame and after.
+  f.core.hostConnected('alice-box', () => {});
+  const live = async (/** @type {string} */ token) =>
+    (await (await call(f, '/api/hosts', 'GET', null, as(token))).json()).hosts.find((/** @type {any} */ h) => h.hostId === 'alice-box');
+  for (const when of ['before its health', 'after its health']) {
+    if (when === 'after its health') await f.core.onHostMessage('alice-box', { kind: 'health', health: { sessions: [], claudeAccounts: 1 } });
+    const seen = await live(bob);
+    assert.ok(seen, `a member was not shown the host at all ${when}`);
+    assert.equal(JSON.stringify(seen).includes('alice@'), false, `a member was shown a colleague's email ${when}: ${JSON.stringify(seen)}`);
+    assert.equal((await live(alice)).owner, 'alice@example.test', `the owner was not shown their own ${when}`);
+  }
 });
 
 test('one member filling a shared store fills only their own share of it', async () => {
@@ -663,4 +677,129 @@ test('an enrolled host cannot erase, outweigh or impersonate the fleet’s own r
   assert.ok(f.core.events.every((e) => String(e.name ?? '').length <= 40), 'a name no session can have was recorded');
   const member = f.core.recentEvents({ email: 'someone@example.test', admin: false });
   assert.ok(!member.some((e) => String(e.hostId).startsWith('mallory')), 'a member was shown an entry a host wrote');
+});
+
+test('one member’s requests displace their own records, never the fleet’s or anybody else’s', async () => {
+  // The coordinator's own records had no share of the ring at all, so 200
+  // pins minted by one member (never more than 20 waiting) replaced every
+  // entry in memory and in storage, and a rebuilt Fleet loaded only those:
+  // the enrolments and revocations before them were gone (third Workers
+  // audit).
+  const { fleet: f, state } = fleet();
+  const { token } = await f.core.clients.issue('mallory phone', { email: 'mallory@example.test' });
+  f.core.record({ event: 'host.revoked', hostId: 'build-server' });
+  f.core.record({ event: 'linked.repo', actor: 'alice@example.test', text: 'alice linked a repository' });
+  for (let i = 0; i < 200; i++) {
+    assert.equal((await call(f, '/api/enroll', 'POST', { kind: 'host' }, { authorization: `Bearer ${token}` })).status, 200);
+  }
+  await new Promise((r) => setTimeout(r, 0));
+
+  const kept = (/** @type {any[]} */ events) =>
+    events.some((e) => e.event === 'host.revoked') && events.some((e) => e.actor === 'alice@example.test');
+  assert.ok(kept(f.core.events), 'a member’s pins pushed other records out of the ring');
+  assert.ok(kept(state.raw.get('events') ?? []), 'and out of storage');
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(kept(revived.core.events), 'and the loss outlived a rebuild');
+  assert.ok(f.core.events.filter((e) => e.actor === 'mallory@example.test').length > 0, 'her own minting is still recorded');
+});
+
+test('a box changing its health reason every frame is announced once, and holds only its own share', async () => {
+  // A health frame's hub.reason went into host.reason uncapped, every new
+  // reason was a transition, and #onHostState suppressed only the identical
+  // sentence: so a box with a new reason per frame wrote one host.degraded
+  // per frame into the coordinator's records and pushed each one to the
+  // admin's phone. 51 frames displaced the oldest audit record from memory,
+  // storage and a rebuild (third Workers audit).
+  const { fleet: f, state } = fleet();
+  f.core.record({ event: 'host.enrolled', hostId: 'seed-host' });
+  for (let i = 0; i < 150; i++) f.core.record({ event: 'audit.seed', text: `seed ${i}` });
+  const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  await f.core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: admin.client.id, actor: 'admin@example.test' });
+  /** @type {any[]} */
+  const sent = [];
+  f.core.push = /** @type {any} */ ({ send: async (/** @type {any[]} */ d) => { sent.push(...d); return { ok: true }; } });
+  f.core.hostConnected('mallory-box', () => {});
+  const socket = /** @type {any} */ ({ deserializeAttachment: () => ({ hostId: 'mallory-box' }) });
+  for (let i = 0; i < 120; i++) {
+    const health = { protocol: 7, labels: [], maxSessions: 4, running: 0, free: 4, sessions: [], loggedIn: true, claudeAccounts: 1, hub: { reachable: false, reason: `DUMMY-REASON-${i} ${'x'.repeat(3_000)}` } };
+    await f.webSocketMessage(socket, JSON.stringify({ kind: 'health', health }));
+  }
+  await new Promise((r) => setTimeout(r, 0));
+
+  const degraded = f.core.events.filter((e) => e.event === 'host.degraded');
+  assert.equal(degraded.length, 1, `one box wrote ${degraded.length} host.degraded records in a quiet window`);
+  assert.ok(sent.length <= 1, `and pushed ${sent.length} of them`);
+  assert.ok(String(f.core.registry.get('mallory-box')?.reason).length < 300, 'a reason the box chose was kept uncapped');
+  const seeded = (/** @type {any[]} */ events) => events.some((e) => e.hostId === 'seed-host');
+  assert.ok(seeded(f.core.events), 'a box’s health pushed the coordinator’s record out of the ring');
+  assert.ok(seeded(state.raw.get('events') ?? []), 'and out of storage');
+});
+
+test('one member’s machines fill their own share of the fleet, not everybody’s', async () => {
+  // HostIdentities refused any new machine once 200 were live, and nothing
+  // bounded how many one person added: a member minting and spending pins one
+  // after another enrolled 200 permanent hosts, and every other enrolment in
+  // the fleet, runners and VMs included, answered 507 hosts_full until an admin
+  // revoked them one at a time (third Workers audit).
+  const { fleet: f } = fleet();
+  await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const { publicJwk } = await generateKeyPair();
+  const enrol = async (/** @type {string|null} */ actor, /** @type {string} */ hostId) => {
+    const { code } = /** @type {any} */ (f.core.enrollment.mint({ purpose: 'host', actor }));
+    return call(f, '/api/enroll/host', 'POST', { code, hostId, publicJwk });
+  };
+  let refused = null;
+  for (let i = 0; i < 40 && !refused; i++) {
+    const res = await enrol('mallory@example.test', `m-${i}`);
+    if (res.status !== 200) refused = { i, status: res.status, body: await res.json() };
+  }
+  assert.ok(refused, 'one member enrolled forty machines with nothing to stop them');
+  assert.equal(refused.status, 507);
+  assert.equal(refused.body.error.code, 'person_full');
+  assert.ok(refused.i >= 20, `refused after only ${refused.i}`);
+  assert.equal((await enrol('alice@example.test', 'alice-box')).status, 200, 'another member was refused for mallory’s machines');
+  // The operator's boxes are the fleet, not one person's share of it.
+  for (let i = 0; i < 40; i++) assert.equal((await enrol(i % 2 ? 'admin@example.test' : null, `op-${i}`)).status, 200, `the operator was refused their ${i + 1}th box`);
+});
+
+test('a removed member’s pins go with them, and any pin listed can be cancelled after a restart', async () => {
+  // #forgetPerson took back a removed member's tickets and left their pins:
+  // for the rest of each pin's ten minutes they enrolled a new host in that
+  // person's name, re-keyed a host the pin was bound to and readmitted a
+  // revoked one. And nothing could cancel a pin, before a restart or after:
+  // the admin's DELETE answered 404 (third Workers audit).
+  const { fleet: f, state } = fleet();
+  const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'admin@example.test' });
+  const sam = await f.core.clients.issue('sam phone', { email: 'sam@example.test' });
+  const bob = await f.core.clients.issue('bob phone', { email: 'bob@example.test' });
+  const carol = await f.core.clients.issue('carol phone', { email: 'carol@example.test' });
+  const as = (/** @type {{ token: string }} */ who) => ({ authorization: `Bearer ${who.token}` });
+  const { publicJwk } = await generateKeyPair();
+  const op = /** @type {any} */ (f.core.enrollment.mint({ purpose: 'host', actor: 'admin@example.test' }));
+  assert.equal((await call(f, '/api/enroll/host', 'POST', { code: op.code, hostId: 'op-box', publicJwk })).status, 200);
+
+  const mint = async (/** @type {any} */ who, /** @type {any} */ body) => (await (await call(f, '/api/enroll', 'POST', { kind: 'host', ...body }, as(who))).json()).code;
+  const pins = [await mint(sam, {}), await mint(sam, { hostId: 'op-box' })];
+  assert.equal((await call(f, `/api/clients/${sam.client.id}`, 'DELETE', null, as(admin))).status, 200);
+  await new Promise((r) => setTimeout(r, 0));
+  for (const fleetNow of [f, new Fleet(/** @type {any} */ (state), {})]) {
+    await new Promise((r) => setTimeout(r, 0));
+    const fresh = (await generateKeyPair()).publicJwk;
+    assert.equal((await call(fleetNow, '/api/enroll/host', 'POST', { code: pins[0], hostId: 'sam-box', publicJwk: fresh })).status, 403, 'a removed member’s pin enrolled a host');
+    assert.equal((await call(fleetNow, '/api/enroll/host', 'POST', { code: pins[1], hostId: 'op-box', publicJwk: fresh })).status, 403, 'a removed member’s pin re-keyed a host');
+  }
+
+  // Cancelling: whoever minted the pin, or an admin, by the id the list shows.
+  const bobs = await mint(bob, {});
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  const listed = (await (await call(revived, '/api/enroll', 'GET', null, as(admin))).json()).codes;
+  assert.equal(listed.length, 1);
+  assert.equal((await call(revived, `/api/enroll/${listed[0].id}`, 'DELETE', null, as(carol))).status, 404, 'a member cancelled somebody else’s pin');
+  assert.equal((await call(revived, `/api/enroll/${listed[0].id}`, 'DELETE', null, as(admin))).status, 200, 'the admin could not cancel a listed pin after a restart');
+  assert.equal((await call(revived, '/api/enroll/host', 'POST', { code: bobs, hostId: 'bob-box', publicJwk })).status, 403, 'a cancelled pin still enrolled');
+  const again = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal((await (await call(again, '/api/enroll', 'GET', null, as(admin))).json()).codes.length, 0, 'the cancelled pin came back after a restart');
 });

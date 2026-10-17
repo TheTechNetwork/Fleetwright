@@ -749,8 +749,9 @@ export class Coordinator {
         // to `bad_request` would tell somebody their pin or their key was
         // malformed when what actually happened is that this fleet has no room
         // left, sending them to debug the one thing that was fine.
-        const full = 'code' in result && result.code === 'hosts_full';
-        return json(res, full ? 507 : 400, { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error });
+        // `hosts_full` is the fleet's room, `person_full` this person's share of it.
+        const full = 'code' in result ? result.code : null;
+        return json(res, full ? 507 : 400, { ok: false, error: { code: full ?? 'bad_request' }, text: result.error });
       }
       // The session they asked for with it, started on its first health frame.
       if (ticket) this.core.noteRunnerEnrolled(result.host.hostId, ticket);
@@ -800,8 +801,8 @@ export class Coordinator {
         // to `bad_request` would tell somebody their pin or their key was
         // malformed when what actually happened is that this fleet has no room
         // left, sending them to debug the one thing that was fine.
-        const full = 'code' in result && result.code === 'hosts_full';
-        return json(res, full ? 507 : 400, { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error });
+        const full = 'code' in result ? result.code : null;
+        return json(res, full ? 507 : 400, { ok: false, error: { code: full ?? 'bad_request' }, text: result.error });
       }
       this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
 
@@ -1147,6 +1148,16 @@ export class Coordinator {
 
     if (p === '/api/enroll' && req.method === 'GET') {
       return json(res, 200, { ok: true, codes: this.core.pinsFor(requesterFor(client)) });
+    }
+
+    // Withdrawing one — see the Worker's copy.
+    if (p.startsWith('/api/enroll/') && req.method === 'DELETE') {
+      const gone = this.core.cancelPin(decodeURIComponent(p.slice('/api/enroll/'.length)), requesterFor(client));
+      if (gone) this.saveState();
+      return json(res, gone ? 200 : 404, {
+        ok: gone,
+        text: gone ? 'Cancelled. That pin no longer works.' : 'No such pin waiting: it was used, it expired, or it is not yours.',
+      });
     }
 
     // Runner tokens: reusable, revocable, and powerless on their own.

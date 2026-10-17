@@ -85,7 +85,7 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink` | `/api/state` per-account |
 | **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local); provider revoke (real) | `verify` verb |
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`; provider revoke | renewal-failure log |
-| **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry | `outstanding()` (masked) |
+| **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry; `DELETE /api/enroll/{id}` by its minter or an admin; dropped when its minter is removed (`#forgetPerson`) | `outstanding()` (masked) |
 | **Telegram bot token** (archived) | host env (`FLEETWRIGHT_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `fleetwright doctor` names it |
 | **GitHub App private key** | **nowhere in this system** (ASPIRATIONAL: waits for the broker) | — | regenerate at first use | delete in GitHub | — |
 
@@ -1195,7 +1195,10 @@ Stated plainly, because omission is where a security document lies.
   and was fixed rather than accepted** (§9-G7): a global lockout let anyone who
   could reach the endpoint keep enrolment shut indefinitely without ever nearly
   guessing a code, so it is a bounded delay now — slow under attack, never
-  closed.
+  closed. Nor closed by one member filling it: the 200 live hosts a fleet can
+  store are shared out at 25 per person (`hosts.js`), the operator's boxes
+  not counted, so a member's own excess is refused with `person_full` and
+  everyone else's enrolment goes on.
 - **Traffic analysis / metadata.** The coordinator sees which member touched which
   host and when; that is not hidden.
 

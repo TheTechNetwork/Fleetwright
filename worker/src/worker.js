@@ -1332,10 +1332,40 @@ const OPENAPI = JSON.stringify({
         "description": "Codes are masked. This answers \"what did I leave lying around\", not \"what is the pin\".",
         "responses": {
           "200": {
-            "description": "outstanding pins, masked"
+            "description": "outstanding pins, masked, each with the `id` DELETE /api/enroll/{id} cancels it by"
           },
           "401": {
             "description": "no credential"
+          }
+        }
+      }
+    },
+    "/api/enroll/{id}": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Cancel a pin before it is spent",
+        "description": "By the `id` GET /api/enroll lists, since the code there is masked. A member may cancel their own pins, an admin anybody's. A pin also goes when the person who minted it is removed.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "cancelled"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "no such pin waiting: spent, expired, or not the caller's to cancel"
           }
         }
       }
@@ -3214,7 +3244,7 @@ const OPENAPI = JSON.stringify({
             "description": "`already_joined`"
           },
           "507": {
-            "description": "`hosts_full`"
+            "description": "`hosts_full`, or `person_full` when the person already has as many machines as one may add"
           }
         }
       }
@@ -3549,7 +3579,7 @@ const OPENAPI = JSON.stringify({
             "description": "not a machine ticket, spent, or expired \u2014 `error.code` is `unclaimed`"
           },
           "507": {
-            "description": "the fleet has no room for another host \u2014 `hosts_full`"
+            "description": "the fleet has no room for another host \u2014 `hosts_full` \u2014 or its owner has as many machines as one person may add \u2014 `person_full`"
           }
         }
       }

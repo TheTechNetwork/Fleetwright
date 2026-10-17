@@ -217,7 +217,7 @@ export class HostRegistry {
 
   /**
    * @param {string} hostId @param {HostHealth} health
-   * @returns {{ from: string, to: string, reason: string }|null} the state
+   * @returns {{ from: string, to: string, reason: string, fault: string }|null} the state
    *   TRANSITION, when there was one. Returned rather than logged because the
    *   transition is the notifiable thing and only the caller can notify — and
    *   because a state, reported every fifteen seconds, is not an event.
@@ -227,6 +227,8 @@ export class HostRegistry {
     if (!host) return null;
     const before = host.state;
     const beforeReason = host.reason;
+    /** @type {string|null} */
+    let fault = null;
     // WHOSE EACH SESSION IS, decided here and once (hosts.js believedCreator).
     // Kept as reported, a box a member enrolled could name another member as
     // the creator of its sessions and its bin, and every reader below believed
@@ -300,7 +302,13 @@ export class HostRegistry {
             'own coordinator to be deployed.';
     } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
-      host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;
+      // The one reason in this file the box writes itself, so it is cut to a
+      // line here: it is shown on every phone and was taken whole, any length
+      // and any characters, into the record #onHostState writes (third
+      // Workers audit). An error message fits in 200 with room to spare.
+      const said = String(health.hub.reason ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+      host.reason = `session manager unreachable: ${said || 'no reason given'}`;
+      fault = 'session manager unreachable';
     } else if (host.ephemeral && health.claudeAccounts === 0 && health.runnerAuth == null) {
       // A RUNNER THAT HAS NOT BEEN TOLD YET IS NOT ONE WITH NOTHING TO RUN ON.
       // For its first seconds it has not heard back from the minter about its
@@ -383,8 +391,11 @@ export class HostRegistry {
     // The reason is part of the identity: a host that goes from "not logged in"
     // to "credential expired" changed in a way worth saying, even though both
     // are `degraded`.
+    //
+    // `fault` is the same without the box's own words, which is what
+    // #onHostState keys its quiet hour on (core.js).
     if (host.state === before && host.reason === beforeReason) return null;
-    return { from: before, to: host.state, reason: host.reason };
+    return { from: before, to: host.state, reason: host.reason, fault: fault ?? host.reason };
   }
 
   /**

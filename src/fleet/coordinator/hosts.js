@@ -50,6 +50,21 @@ const CHALLENGE_TTL_MS = 120_000;
  */
 const REVOKED_RETENTION_MS = 30 * 24 * 3_600_000;
 const MAX_LIVE_HOSTS = 200;
+/**
+ * AND HOW MANY OF THEM ONE PERSON MAY ADD. The ceiling above was the only one,
+ * and a member can mint as many pins as they like one after another, so one
+ * member enrolled 200 permanent hosts and every other enrolment in the fleet,
+ * runners and VMs included, was refused until an admin revoked them one at a
+ * time (third Workers audit). Checked first, so reaching a limit only ever
+ * refuses the person who reached it, as the credential store's does.
+ *
+ * Twenty-five: the twenty machines one person's tickets can have on their way
+ * at once (runner-tickets.js) with room for a few boxes of their own, and
+ * eight people at their share before the fleet is full. An operator's boxes
+ * are the fleet's rather than anybody's share of it (actsFor), so they are
+ * not counted.
+ */
+const MAX_LIVE_HOSTS_PER_PERSON = 25;
 
 // NONCES ARE NOT STORED. They are minted, and the coordinator recognises its own.
 //
@@ -125,9 +140,21 @@ export function actsFor(enrolled, isAdmin) {
   // asked for it. A temporary host with no owner came from an admin-token pin,
   // which is the operator's.
   if (enrolled.ephemeral) return emailOf(enrolled.owner);
-  const by = String(enrolled.enrolledBy || '');
-  const person = emailOf(by.startsWith('holder:') ? by.slice('holder:'.length) : by);
+  const person = personOf(enrolled);
   return person && !isAdmin(person) ? person : null;
+}
+
+/**
+ * The person whose machine this is: the owner of a temporary host, otherwise
+ * whoever's pin or phone let it in. Null when that names nobody, the admin
+ * token or a repository's runner.
+ *
+ * @param {{ ephemeral?: boolean, owner?: string|null, enrolledBy?: string|null }} enrolled
+ */
+function personOf(enrolled) {
+  if (enrolled.ephemeral) return emailOf(enrolled.owner);
+  const by = String(enrolled.enrolledBy || '');
+  return emailOf(by.startsWith('holder:') ? by.slice('holder:'.length) : by);
 }
 
 /**
@@ -173,8 +200,11 @@ export function believedCreator(host, createdBy) {
 }
 
 export class HostIdentities {
-  /** @param {{ now?: () => number }} [opts] */
-  constructor({ now = () => Date.now() } = {}) {
+  /**
+   * @param {{ now?: () => number, isAdmin?: (email: string) => boolean }} [opts]
+   *   `isAdmin`: whose machines are the operator's, as actsFor asks it
+   */
+  constructor({ now = () => Date.now(), isAdmin = () => false } = {}) {
     /** @type {Map<string, EnrolledHost>} */
     this.hosts = new Map();
     /** Nonces that have been SPENT, and when. Bounded by real connections,
@@ -188,6 +218,7 @@ export class HostIdentities {
     /** @type {Promise<CryptoKey>|null} */
     this.nonceSecret = null;
     this.now = now;
+    this.isAdmin = isAdmin;
   }
 
   /**
@@ -259,6 +290,20 @@ export class HostIdentities {
     // reuses that row — so neither can be locked out by a full fleet. What is
     // refused is a genuinely new machine on a fleet with no room, which is a
     // thing an operator has to be told rather than a thing to absorb.
+    const who = personOf({ ephemeral, owner, enrolledBy });
+    if (!previous && who && !this.isAdmin(who)) {
+      let theirs = 0;
+      for (const h of this.hosts.values()) if (!h.revokedAt && personOf(h) === who) theirs++;
+      if (theirs >= MAX_LIVE_HOSTS_PER_PERSON) {
+        return {
+          ok: false,
+          code: 'person_full',
+          error:
+            `${who} already has ${MAX_LIVE_HOSTS_PER_PERSON} machines in this fleet, which is as many as one ` +
+            'person may add. An admin can remove the ones that have gone, and a temporary machine goes when its job ends.',
+        };
+      }
+    }
     if (!previous && this.#liveHosts() >= MAX_LIVE_HOSTS) {
       return {
         ok: false,

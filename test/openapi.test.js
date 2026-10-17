@@ -52,7 +52,7 @@ function bodyFor(path) {
 
 /** A path with its parameters filled in, so it can actually be requested. */
 function concrete(path, ids = {}) {
-  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : ids.clientId;
+  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : path.startsWith('/api/enroll/') ? ids.pinId : ids.clientId;
   return path
     .replace('{hostId}', ids.hostId || 'some-host')
     .replace('{id}', id || 'some-id')
@@ -74,7 +74,9 @@ async function seed(core) {
   await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
   core.invites.add('invited@example.com', { invitedBy: 'admin', note: null });
   const { client: runner } = await core.runnerTokens.issue('a repository', {});
-  return { hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id };
+  core.enrollment.mint({ purpose: 'host' });
+  const [pin] = core.enrollment.outstanding();
+  return { hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id, pinId: pin.id };
 }
 
 /** The Worker, wired to a real Durable Object rather than a stub. */
