@@ -16,9 +16,11 @@ const ELI = 'eli@example.com';
 const JOB = 'a1b2c3d4e5f6';
 const IMAGE = '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c';
 
-/** A box running Eli's policy job, and every frame each box was sent. */
-function fleet() {
+/** A box running Eli's policy job, and every frame each box was sent. Eli
+ * holds a credential: a pin is minted only for somebody still in the fleet. */
+async function fleet() {
   const core = new CoordinatorCore({});
+  await core.issueClient({ email: ELI }, 'phone');
   /** @type {Record<string, any[]>} */
   const sent = {};
   for (const hostId of ['laptop', 'build']) {
@@ -37,7 +39,7 @@ function fleet() {
 }
 
 test('the box running the job is given a pin bound to a new name, for a permanent host of nobody’s', async () => {
-  const { core, ask } = fleet();
+  const { core, ask } = await fleet();
   const a = await ask('laptop');
   assert.equal(a.kind, 'minted');
   assert.equal(a.ok, true, a.text);
@@ -52,7 +54,7 @@ test('the box running the job is given a pin bound to a new name, for a permanen
 });
 
 test('another box, a job nobody began, or a job past its pins is given nothing', async () => {
-  const { ask } = fleet();
+  const { ask } = await fleet();
   assert.equal((await ask('build')).error.code, 'not_your_job', 'only the box running the job');
   assert.equal((await ask('laptop', { job: 'ffffffffffff' })).error.code, 'not_your_job');
   for (let i = 0; i < MAX_HOLDER_PINS; i++) assert.equal((await ask('laptop')).ok, true);
@@ -62,9 +64,10 @@ test('another box, a job nobody began, or a job past its pins is given nothing',
 test('a job’s pins are counted across the coordinator being rebuilt from storage', async () => {
   // serialiseSetups wrote the count and restoreSetups did not read it back,
   // so every eviction gave a job its pins again.
-  const { core, ask } = fleet();
+  const { core, ask } = await fleet();
   for (let i = 0; i < MAX_HOLDER_PINS; i++) await ask('laptop');
   const again = new CoordinatorCore({});
+  await again.issueClient({ email: ELI }, 'phone');
   /** @type {any[]} */
   const frames = [];
   again.registry.connect('laptop', (/** @type {any} */ f) => frames.push(f));
@@ -116,8 +119,35 @@ test('a setup ends when its box’s name is re-keyed, and the new key is given n
   assert.equal(core.setups.has(JOB), false, 'the job outlived its machine’s key');
 });
 
+test('a setup ends when its owner is removed, and their box is given no pin in their name', async () => {
+  // A later audit: removal took back the person's pins and left their setup,
+  // and their own box acts for them once they are removed, so it passed every
+  // check and was minted three host pins in their name, each admitting a new
+  // permanent machine enrolled by somebody no longer in the fleet.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({});
+  const phone = /** @type {any} */ (await core.issueClient({ email: ELI }, 'phone'));
+  await admit(core, 'box', { enrolledBy: ELI });
+  core.registry.recordHealth('box', { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [] });
+  core.send = /** @type {any} */ (async () => ({ ok: true, text: 'Ready.', xosetup: { job: JOB, state: 'waiting', key: 'k', keySig: 's', hostKey: 'h' } }));
+  const begun = await core.dispatch({ verb: 'xosetup', params: { phase: 'begin', address: 'xo.lan', pin: 'a'.repeat(64) }, actor: `fleet:${ELI}`, requester: { email: ELI, admin: true } });
+  assert.equal(begun.ok, true, begun.text);
+  const stored = JSON.parse(JSON.stringify(core.serialiseSetups()));
+
+  core.revokeClient(phone.client.id);
+  assert.equal(core.setups.has(JOB), false, 'the setup outlived its owner’s removal');
+  // And one that comes back from storage written before the removal is
+  // refused all the same: the pin is the owner's, and they hold no credential.
+  core.restoreSetups(stored);
+  /** @type {any[]} */
+  const frames = [];
+  core.registry.hosts.get('box').send = (/** @type {any} */ f) => frames.push(f);
+  await core.onHostMessage('box', { kind: 'holder-pin', id: 'holder-11111111-0', job: JOB });
+  assert.equal(frames.find((f) => f.id === 'holder-11111111-0')?.error?.code, 'not_your_job', 'a removed admin’s box was minted a pin in their name');
+});
+
 test('the name given is never one a host already has, so the pin cannot replace its key', async () => {
-  const { core, ask } = fleet();
+  const { core, ask } = await fleet();
   const taken = new Set();
   for (let i = 0; i < MAX_HOLDER_PINS; i++) {
     const a = await ask('laptop');

@@ -44,6 +44,7 @@ async function fleet() {
   const push = { send: async (/** @type {any[]} */ devices, /** @type {any} */ message) => { pushed.push({ devices, message }); return { dead: [] }; } };
   const core = new CoordinatorCore({ push: /** @type {any} */ (push), now: () => now });
   core.hostIds.now = () => now;
+  await core.issueClient({ email: ELI }, 'phone');
   /** @type {any[]} */
   const frames = [];
   core.registry.connect('laptop', (/** @type {any} */ f) => frames.push(f));

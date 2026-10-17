@@ -2182,9 +2182,18 @@ export class CoordinatorCore {
     for (const [code, c] of this.mcpAuthorizations.codes) {
       if (String(c.email || '').toLowerCase() === address) this.mcpAuthorizations.codes.delete(code);
     }
+    // AND THE SETUPS THEY BEGAN, whose box may ask for pins in their name
+    // (#onHolderPin). Their own box acts for them once they are removed, so it
+    // passed every check and was minted host pins, each admitting a new
+    // permanent machine enrolled by somebody no longer in the fleet (fifth
+    // Workers audit). #endSetup saves.
+    for (const [job, rec] of [...this.setups]) {
+      if (String(rec.owner || '').toLowerCase() === address) this.#endSetup(job, `${address} was removed from the fleet, so the setup they began ended.`);
+    }
     // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
-    // connected, whose tier was decided when it connected (#retier).
-    this.#retier();
+    // connected, whose tier was decided when it connected (#retier), and are
+    // asked for back what that tier gave them (#handBack).
+    for (const { entry, person, health } of this.#retier()) this.#handBack(entry, person, health);
     if (changed) this.onStateChanged?.();
     return hosts;
   }
@@ -2224,16 +2233,85 @@ export class CoordinatorCore {
    * when a person is removed (#forgetPerson) and when an admin signs in, so a
    * returning admin's boxes are the fleet's again without waiting for a
    * reconnect. The client secrets still arrive only on a connect.
+   *
+   * @returns {Array<{ entry: any, person: string, health: any }>} the boxes
+   *   that stopped being an operator's, each with the report it made as one
+   *   (#handBack)
    */
   #retier() {
+    /** @type {Array<{ entry: any, person: string, health: any }>} */
+    const demoted = [];
     for (const entry of this.registry.hosts.values()) {
       const enrolled = this.hostIds.get(entry.hostId);
       if (!enrolled || enrolled.revokedAt) continue;
       const person = actsFor(enrolled, (email) => this.#isOperator(email));
       if (person === entry.actsFor) continue;
-      entry.actsFor = person;
+      if (entry.actsFor === null && person !== null) demoted.push({ entry, person, health: entry.health });
+      this.registry.actFor(entry.hostId, person);
       this.log.info(`coordinator: ${entry.hostId} now acts for ${person ?? 'anybody (an operator’s box)'}`);
     }
+    return demoted;
+  }
+
+  /**
+   * WHAT A BOX HELD AS THE FLEET'S, asked back when it stops being the
+   * fleet's. #retier took the tier from a removed admin's box and nothing the
+   * tier had sent it: every member's GitHub and Cloudflare link fans out to
+   * an operator's box, and their sessions ran there under their own Claude
+   * sign-ins. Once the box acted for that admin alone, a member's unlink left
+   * it out and its next frame filed their sessions under the admin, so
+   * nobody but an admin could reach any of it, on a machine somebody no
+   * longer in the fleet has root on (fifth Workers audit).
+   *
+   * So the fleet asks, while it still knows whose each session was: every
+   * session the box reported for somebody else is stopped, and everybody
+   * else's sign-ins there are unlinked. Asked by the coordinator, never
+   * opened to the members, whose verbs reach only boxes that act for them
+   * (SEC-HOST-1). It is a request to a box the removed person controls, so
+   * the record says what only the operator can do about the rest: rotate the
+   * client secrets the box was sent on every connect, and revoke at the
+   * provider. Named in a record with no actor, which every member sees.
+   *
+   * The box is not revoked. It is the removed person's own machine, the
+   * removal of a person is not the removal of their hardware, and an admin's
+   * DELETE is one step away; revoking it would also take away the only
+   * channel these requests travel on.
+   *
+   * @param {any} entry  its registry entry
+   * @param {string} person  who it acts for now
+   * @param {any} health  its last report, as attributed while it was the fleet's
+   */
+  #handBack(entry, person, health) {
+    let stopped = 0;
+    /** @param {string} verb @param {Record<string, string>} params @param {string} actor */
+    const ask = (verb, params, actor) => {
+      try {
+        void this.send(entry, { verb, params, actor }, FANOUT_TIMEOUT_MS).catch(() => {});
+      } catch { /* a name this protocol would not carry is not a session to stop */ }
+    };
+    if (entry.connected) {
+      for (const s of Array.isArray(health?.sessions) ? health.sessions : []) {
+        const who = String(s?.createdBy || '').startsWith('fleet:') ? emailOf(s.createdBy) : null;
+        if (!who || who === person || typeof s.name !== 'string') continue;
+        ask('stop', { name: s.name }, who);
+        stopped++;
+      }
+      const others = new Set([...this.clients.clients.values()].map((c) => String(c.email || '').toLowerCase()));
+      for (const email of others) {
+        if (!email || email === person) continue;
+        for (const provider of ['github', 'cloudflare', 'claude']) ask('unlink', { provider }, email);
+      }
+    }
+    const asked = entry.connected
+      ? `It was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} of other people and to forget everybody else’s GitHub, Cloudflare and Claude sign-ins, which a box does only if it is honest.`
+      : 'It is offline, so nothing could be asked of it.';
+    this.record({
+      event: 'host.demoted',
+      hostId: entry.hostId,
+      text:
+        `${entry.hostId} is no longer one of the fleet’s own machines: the admin who enrolled it was removed. ${asked} ` +
+        'Rotate the GitHub and Cloudflare client secrets it was sent, and anyone who linked an account while it was the fleet’s should revoke that token with the provider.',
+    });
   }
 
   /**
@@ -4354,11 +4432,14 @@ export class CoordinatorCore {
     const rec = XOSETUP_JOB_RE.test(job) ? this.setups.get(job) : undefined;
     // On the enrolment that began the job (#setupOn), for a box that may act
     // for its owner, and while it runs: the pin admits a machine in the
-    // owner's name, which for an admin is operator tier.
+    // owner's name, which for an admin is operator tier. AND WHILE THE OWNER
+    // IS IN THE FLEET: removal ends their setups (#forgetPerson), and this
+    // holds if one comes back some other way, as topUpStandby skips them.
     if (
       !rec ||
       !this.#setupOn(job, rec, hostId) ||
       !rec.owner ||
+      !this.#hasLiveCredential(String(rec.owner).toLowerCase()) ||
       !mayActFor(host, rec.owner) ||
       (rec.last && ENDED_SETUP.has(rec.last.state))
     ) {

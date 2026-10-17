@@ -171,6 +171,23 @@ export class HostRegistry {
   }
 
   /**
+   * Who a host may act for, decided again while it stays connected (core.js
+   * #retier), and its last report attributed again under that, as a
+   * reconnect's is. Changing only the field left a removed admin's box
+   * holding a report that filed members' sessions under them until its next
+   * frame, so for those seconds their pinned verbs still reached a machine
+   * that no longer acted for them.
+   *
+   * @param {string} hostId @param {string|null} person
+   */
+  actFor(hostId, person) {
+    const host = this.hosts.get(hostId);
+    if (!host) return;
+    host.actsFor = person;
+    if (host.health) host.health = attributed(host, host.health);
+  }
+
+  /**
    * A host that is no longer in the fleet, as opposed to one that dropped.
    *
    * `disconnect` keeps the entry as `offline` because a real box may come back.
