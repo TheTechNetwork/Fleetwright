@@ -1,5 +1,5 @@
 {
-  "why": "The one hidden thing in the two apps: tap the build line on You seven times and a line appears under it. Written once here so the phones agree on the count and the words. EggsTests.swift and EggsTest.kt run every case.",
+  "why": "The hidden things in the two apps, written once so the phones agree on the counts and the words. Seven taps on the build line under You shows a line; pulling the session list to refresh four times inside a minute shows another. EggsTests.swift and EggsTest.kt run every case.",
   "taps": 7,
   "line": "Seven taps unlocks developer options on a phone. This app has no hidden settings, only this line.",
   "cases": [
@@ -9,5 +9,20 @@
     { "taps": 7, "shows": true },
     { "taps": 8, "shows": true },
     { "taps": 40, "shows": true }
-  ]
+  ],
+  "pulls": {
+    "count": 4,
+    "withinSeconds": 60,
+    "line": "Pulling again does not make a host report sooner. Each one reports on its own, whether or not anybody is pulling.",
+    "cases": [
+      { "at": [], "shows": false },
+      { "at": [0], "shows": false },
+      { "at": [0, 10, 20], "shows": false },
+      { "at": [0, 10, 20, 30], "shows": true },
+      { "at": [0, 70, 80, 90], "shows": false },
+      { "at": [0, 70, 80, 90, 100], "shows": true },
+      { "at": [0, 59, 59, 60], "shows": true },
+      { "at": [0, 61, 61, 61], "shows": false }
+    ]
+  }
 }
