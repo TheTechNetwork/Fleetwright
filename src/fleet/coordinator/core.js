@@ -488,7 +488,7 @@ export class CoordinatorCore {
     this.hostIds = new HostIdentities({ now });
     // Codes that admit a new host or device, once.
     this.enrollment = new Enrollment({ now });
-    /** @type {Map<string, { resolve: (reply: any) => void, timer: any }>} */
+    /** @type {Map<string, { resolve: (reply: any) => void, timer: any, hostId: string }>} */
     this.pending = new Map();
     /** @type {Map<string, Device>} */
     this.devices = new Map();
@@ -751,6 +751,17 @@ export class CoordinatorCore {
       // thrown away. A late reply is rare and interesting; a debug level that
       // eats it in production is how that stops being true.
       this.log.warn(`coordinator: late reply from ${hostId} for ${msg.id} — nothing was waiting`);
+      return;
+    }
+    // ONLY FROM THE HOST IT WAS SENT TO. A waiter was found by id alone, and a
+    // caller chooses the id on /api/intent, so a member's own box could answer
+    // a start sent to another box under an id it already knew: the start
+    // resolved with its reply, and the sessions in it, createdBy included,
+    // were filed under the other box (dispatch, noteSessions), which made a
+    // second member's session look like the first's to the ownership check
+    // on peek, stop and answer. Dropped, and the waiter left for its own host.
+    if (waiter.hostId !== hostId) {
+      this.log.warn(`coordinator: ${hostId} replied to ${msg.id}, which was sent to ${waiter.hostId}; ignored`);
       return;
     }
     this.pending.delete(msg.id);
@@ -1022,7 +1033,14 @@ export class CoordinatorCore {
     const claim = event.name
       ? this.registry.findSessions(event.name).find((c) => c.host?.hostId === event.hostId) ?? null
       : null;
-    const owner = claim?.createdBy ?? null;
+    // AND ONLY FOR SOMEBODY THAT BOX MAY ACT FOR (hosts.js mayActFor). The
+    // creator is the box's own word, so a box a member enrolled could name
+    // another member as the creator of a session of its own and put its own
+    // text, Remote Control link and answer buttons on that member's phone. A
+    // creator it may not speak for is filed under whom it does act for, its
+    // one person, which is who wrote those words. No creator stays nobody's.
+    const said = claim?.createdBy ?? null;
+    const owner = said === null || mayActFor(claim?.host, said) ? said : (claim?.host?.actsFor ?? null);
 
     // FILTERED FOR WHOSE PHONE IT IS, which it was not.
     //
@@ -2073,7 +2091,9 @@ export class CoordinatorCore {
         this.pending.delete(intent.id);
         reject(new Error(`${host.hostId} did not answer ${intent.verb} within ${timeoutMs}ms`));
       }, timeoutMs);
-      this.pending.set(intent.id, { resolve, timer });
+      // AND WHICH HOST IT WENT TO, which is the only host that may answer it
+      // (onHostMessage).
+      this.pending.set(intent.id, { resolve, timer, hostId: host.hostId });
       try {
         host.send(intent);
       } catch (e) {

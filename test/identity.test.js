@@ -942,6 +942,16 @@ test('a notification belongs to the session on the box that sent it, not the fir
   sent = [];
   await c.core.onHostMessage('noisy', { kind: 'event', event: 'session.awaiting-input', name: 'build', text: 'tap yes' });
   assert.deepEqual(sent, [], "a box with no such session reached a member's phone");
+
+  // A box the guest enrolled names eli as the creator of a session of its own.
+  // Its word is taken for the people it acts for, and the guest is the only
+  // one, so the words it wrote go to the guest who controls it (a later audit).
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  await admit(c.core, 'guest-box', { enrolledBy: 'guest@example.com' });
+  await c.core.onHostMessage('guest-box', { kind: 'health', hostId: 'guest-box', health: { sessions: [{ name: 'deploy', status: 'running', createdBy: 'fleet:eli@thetech.network' }] } });
+  sent = [];
+  await c.core.onHostMessage('guest-box', { kind: 'event', event: 'session.rc-online', name: 'deploy', url: 'https://example.invalid/drive' });
+  assert.deepEqual(sent.map((d) => d.actor), ['guest@example.com'], "a member's box put its own link on another member's phone");
 });
 
 test('what happened while you were asleep survives a restart', async (t) => {

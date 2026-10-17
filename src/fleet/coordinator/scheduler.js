@@ -75,7 +75,7 @@ const PINNED = new Set([
 const FANOUT = new Set(['list', 'profiles', 'secrets']);
 
 /** Verbs that carry, or act with, one person's credential. See `whose` in place(). */
-const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify']);
+const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setuptoken']);
 
 /**
  * @typedef {object} Placement
@@ -294,11 +294,18 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // into THAT pane, so the second half landing on another box would type a
   // code into a machine that never asked for one: pinned, like a Claude
   // `connect`. Not new work either, so a full box can still make one; the
-  // capacity filter below is for sessions. Any connected machine will do,
-  // a runner included, because the token goes back sealed to the phone.
+  // capacity filter below is for sessions.
+  //
+  // ONLY A MACHINE THAT MAY HOLD THE PERSON'S CREDENTIALS, their own runner
+  // included. This said any connected machine would do because the token goes
+  // back sealed to the phone, and the seal protects it only after it leaves:
+  // the token is in the clear in the pane and the hub's memory first, so a box
+  // another member enrolled, where that member has root, could make a
+  // member's year-long Claude token. It is a credential verb, so the named
+  // host is refused at the top of this function like a Claude `connect`.
   if (verb === 'setuptoken') {
-    const hosts = registry.reachable();
-    if (!hosts.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    const hosts = holders();
+    if (!hosts.length) return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHolders(registry) };
     if (preferHost) {
       const chosen = hosts.find((h) => h.hostId === preferHost);
       return chosen
@@ -571,6 +578,21 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
   }
 
+  // NEW WORK GOES ONLY TO A MACHINE THAT ACTS FOR THE PERSON: an operator's
+  // box, a box they enrolled, their own runner (hosts.js mayActFor), the same
+  // set their credentials reach and by the same `whose`, so an admin is held to
+  // it like anybody and the break-glass token reaches the operator's boxes. This
+  // ranked every healthy box by the free slots it reported, so a box another
+  // member enrolled, reporting the most room, took everybody's unnamed starts:
+  // the task, the actor and the archive's name on a machine where that member
+  // has root. Naming it worked too. SEC-HOST-1.
+  //
+  // Not `health` or `updates`, which fall through to here and are questions
+  // about one box, like `logs`: asking one hands it nothing of the asker's.
+  const actsForThem = verb === 'health' || verb === 'updates'
+    ? () => true
+    : (/** @type {import('./registry.js').HostEntry} */ h) => mayActFor(h, whose);
+
   // A host the caller CHOSE. A preference, not a parameter: it rides beside
   // the intent and never inside it, because `start` deliberately takes no host
   // — the protocol cannot express "run this THERE", only the coordinator can
@@ -606,6 +628,13 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         kind: 'refused',
         code: 'host_unavailable',
         reason: `${preferHost} is a temporary machine somebody else asked for. It takes work only from them.`,
+      };
+    }
+    if (!actsForThem(chosen)) {
+      return {
+        kind: 'refused',
+        code: 'host_unavailable',
+        reason: `${preferHost} acts for the person who enrolled it, and takes work only from them.`,
       };
     }
     if ((chosen.health?.free ?? 0) <= 0) {
@@ -669,7 +698,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // host is simply not one of theirs. Admins see every host for reads; placing
   // work is still per-owner, because "can see it" and "should have work put on
   // it" are different questions.
-  const usable = matching.filter((h) => !h.ephemeral || !h.owner || h.owner === requester?.email);
+  const usable = matching.filter((h) => (!h.ephemeral || !h.owner || h.owner === requester?.email) && actsForThem(h));
   // Matched, but none of them are this person's to use. Without this the next
   // check reports `at_capacity` — which is both wrong and unactionable: the
   // host is empty, and the reason it cannot be used has nothing to do with how
@@ -678,10 +707,13 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     return {
       kind: 'refused',
       code: 'no_hosts',
-      reason:
-        'The only hosts that match are temporary ones belonging to somebody else. ' +
-        'A runner exists for one person\'s job and disappears when it ends, so it is not spare capacity. ' +
-        'Start your own, or use a permanent host.',
+      reason: matching.every((h) => h.ephemeral)
+        ? 'The only hosts that match are temporary ones belonging to somebody else. ' +
+          'A runner exists for one person\'s job and disappears when it ends, so it is not spare capacity. ' +
+          'Start your own, or use a permanent host.'
+        // Not named, for the same reason their sessions are not.
+        : 'No machine that acts for you has room for this. A box another member enrolled takes work only ' +
+          'from them, and a runner only from the person who asked for it.',
     };
   }
 
@@ -706,7 +738,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     return {
       kind: 'refused',
       code: 'at_capacity',
-      reason: matching
+      reason: usable
         .map((h) => `${h.hostId} ${h.health?.running}/${h.health?.maxSessions}`)
         .join(', '),
     };
