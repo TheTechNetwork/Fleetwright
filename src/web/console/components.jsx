@@ -167,7 +167,7 @@ export function Ledger({ events }) {
   );
 }
 
-/** The page. `egg` is a line app.jsx sets when somebody finds it; see konami.js. */
+/** The page. `egg` is one quiet line app.jsx sets; konami.js and late.js say when. */
 export function Console({ snap, onAnswer, egg }) {
   return (
     <div class={`console ${snap?.reachable === false ? 'stale' : ''}`}>

@@ -64,6 +64,8 @@ async function hub(t, over = {}) {
     cfg,
     stateDir,
     state: async () => (await fetch(`http://127.0.0.1:${port}/api/state`, { headers: auth })).json(),
+    /** @param {string} p */
+    get: (p) => fetch(`http://127.0.0.1:${port}${p}`, { headers: auth }),
     /** @param {string} p @param {unknown} body @param {Record<string,string>} [headers] */
     post: (p, body, headers = auth) =>
       fetch(`http://127.0.0.1:${port}${p}`, {
@@ -283,4 +285,19 @@ test('the SessionStart hook on this box may say where the transcript is, and the
   assert.equal(r.status, 200);
   assert.equal(recorded[0].transcriptPath, transcriptPath);
   assert.equal(recorded[0].uuid, uuid);
+});
+
+test('/coffee is a teapot, and an address that is nothing says so as prose', async (t) => {
+  const h = await hub(t);
+  // RFC 2324, ungated like /healthz: it says nothing about the box.
+  const tea = await h.get('/coffee');
+  assert.equal(tea.status, 418);
+  assert.match((await tea.json()).text, /teapot/);
+  // The 404 carries a sentence, not only an error word, because the one
+  // reader who lands here is a person at a browser.
+  const nowhere = await h.get('/nowhere/in/particular');
+  assert.equal(nowhere.status, 404);
+  const body = await nowhere.json();
+  assert.equal(body.error, 'not found');
+  assert.match(body.text, /nothing at this address/);
 });
