@@ -153,6 +153,7 @@ class MainActivity : ComponentActivity() {
         notifiedHost.value = hostNamedBy(intent)
         notifiedSetup.value = setupNamedBy(intent)
         notifiedHolder.value = holderNamedBy(intent)
+        notifiedPool.value = poolNamedBy(intent)
     }
 
     /**
@@ -213,6 +214,21 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * A pool Xen Orchestra stopped showing, or showed again, from a tapped
+     * notification (PoolNotice): its page, or the reconnect for it from the
+     * Reconnect button, on the machine that noticed. It carries no `event`,
+     * so it is never taken for a session above.
+     */
+    private val notifiedPool = mutableStateOf<PoolTap?>(null)
+
+    private fun poolNamedBy(intent: Intent?): PoolTap? = PoolNotice.tap(
+        intent?.getStringExtra(PoolNotice.EXTRA_KIND),
+        intent?.getStringExtra(PoolNotice.EXTRA_ADDRESS),
+        intent?.getStringExtra(PoolNotice.EXTRA_HOST),
+        intent?.getStringExtra(PoolNotice.EXTRA_ACTION),
+    )
+
+    /**
      * Android 13+ shows nothing until this is granted. Asked once there is a
      * fleet to be notified about: asking on a first launch, before anything is
      * set up, is asking for a permission nobody can yet see a reason for.
@@ -246,6 +262,7 @@ class MainActivity : ComponentActivity() {
         notifiedHost.value = hostNamedBy(intent)
         notifiedSetup.value = setupNamedBy(intent)
         notifiedHolder.value = holderNamedBy(intent)
+        notifiedPool.value = poolNamedBy(intent)
 
         // A fleet app that cannot tell you a session is waiting has lost its
         // main reason to exist, so this is asked as soon as there is a fleet.
@@ -279,6 +296,7 @@ class MainActivity : ComponentActivity() {
                     notifiedHost = notifiedHost.value,
                     notifiedSetup = notifiedSetup.value,
                     notifiedHolder = notifiedHolder.value,
+                    notifiedPool = notifiedPool.value,
                 )
             }
         }
@@ -310,6 +328,7 @@ fun FleetScreen(
     notifiedHost: String? = null,
     notifiedSetup: String? = null,
     notifiedHolder: String? = null,
+    notifiedPool: PoolTap? = null,
 ) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -529,6 +548,15 @@ fun FleetScreen(
             tab = "machines"
         }
     }
+    // A pool's notification, tapped: Machines, with its page or its
+    // reconnect open, rather than whatever was on screen last.
+    var openPool by remember { mutableStateOf<PoolTap?>(null) }
+    LaunchedEffect(notifiedPool) {
+        if (notifiedPool != null) {
+            openPool = notifiedPool
+            tab = "machines"
+        }
+    }
     // AND THE SESSION THE NOTIFICATION WAS ABOUT IS OPENED, once per tap,
     // from the fresh list once it has arrived and still holds the name.
     var openedFor by remember { mutableStateOf<String?>(null) }
@@ -671,6 +699,8 @@ fun FleetScreen(
                 modifier = inner,
                 resumingSetup = openSetup,
                 onResumed = { openSetup = null },
+                poolTap = openPool,
+                onPoolTapped = { openPool = null },
             )
             "you" -> YouScreen(
                 settings = settings,

@@ -136,8 +136,9 @@ const ADD = read('apps/android/app/src/main/java/network/thetech/fleetwright/Hyp
 const NOTICE = read('apps/android/app/src/main/java/network/thetech/fleetwright/XoSetupNotice.kt');
 
 test('Android: installing is offered only when every machine that answered found no Xen Orchestra', () => {
-  // Nor through this phone, as on iOS.
-  assert.match(ADD, /if \(!policy && found\.isNotEmpty\(\) && found\.none \{ it\.through == "phone" \} && found\.all \{ !it\.reachable \|\| it\.xo == false \}\) \{/);
+  // Nor through this phone, as on iOS; nor for a pool already added, whose
+  // policy is changing or whose servers are being reconnected.
+  assert.match(ADD, /if \(!policy && !reconnect && found\.isNotEmpty\(\) && found\.none \{ it\.through == "phone" \} && found\.all \{ !it\.reachable \|\| it\.xo == false \}\) \{/);
   assert.match(ADD, /if \(deploying\) \{\s*XoDeploySheet\(/);
 });
 

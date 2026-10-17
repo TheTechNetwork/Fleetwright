@@ -75,6 +75,9 @@ fun MachinesScreen(
     /** A hypervisor setup a notification was tapped for: its progress, by job. */
     resumingSetup: String? = null,
     onResumed: () -> Unit = {},
+    /** A pool's notification, tapped: its page, or the reconnect from its button (PoolNotice). */
+    poolTap: PoolTap? = null,
+    onPoolTapped: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val reduced = Design.Motion.reduced()
@@ -104,10 +107,15 @@ fun MachinesScreen(
     // A pool whose page is open, by address (PoolPage, docs/manage.md).
     // Saveable for the same reason; its connection opens again after a turn.
     var managing by rememberSaveable { mutableStateOf<String?>(null) }
+    // A pool whose servers are being reconnected, by address, and the
+    // machine to try first: the one a push named. Saveable for the same
+    // reason; the job itself starts over after a rotation (HypervisorSheet).
+    var reconnectFor by rememberSaveable { mutableStateOf<String?>(null) }
+    var reconnectVia by rememberSaveable { mutableStateOf<String?>(null) }
     // THE POOLS THIS PHONE KEEPS A TOKEN FOR, read again whenever a sheet that
     // could have added one closes. On this phone and nowhere else, so this is
     // the one place that can list them.
-    val held = remember(addingHypervisor, policyFor, managing) { XoHandoff.held(settings) }
+    val held = remember(addingHypervisor, policyFor, managing, reconnectFor) { XoHandoff.held(settings) }
 
     LaunchedEffect(resumingSetup) {
         if (resumingSetup != null) {
@@ -115,6 +123,21 @@ fun MachinesScreen(
             addingHypervisor = true
             onResumed()
         }
+    }
+
+    // RECONNECT, TAPPED: straight to the reconnect, which opens the kept
+    // sign-in behind a fingerprint or face. A body tap opens the pool's page,
+    // when this phone holds the pool; one it does not hold has no page here,
+    // and Machines is where the tap lands.
+    LaunchedEffect(poolTap) {
+        val tap = poolTap ?: return@LaunchedEffect
+        if (tap.reconnect) {
+            reconnectVia = tap.hostId
+            reconnectFor = tap.address
+        } else if (held.any { it.address == tap.address }) {
+            managing = tap.address
+        }
+        onPoolTapped()
     }
 
     suspend fun loadHosts() {
@@ -176,13 +199,18 @@ fun MachinesScreen(
     managing?.let { address ->
         held.firstOrNull { it.address == address }?.let { pool ->
             key(address) {
-                PoolPage(settings, pool, admin, onChangePolicy = { policyFor = address }, onDismiss = { managing = null })
+                PoolPage(settings, pool, admin, onChangePolicy = { policyFor = address }, onDismiss = { managing = null }, onReconnect = { reconnectVia = null; reconnectFor = address })
             }
         }
     }
     policyFor?.let { pool ->
         key(pool) {
             HypervisorSheet(settings, policyFor = pool, onDismiss = { policyFor = null })
+        }
+    }
+    reconnectFor?.let { pool ->
+        key(pool, reconnectVia) {
+            HypervisorSheet(settings, reconnectFor = pool, via = reconnectVia, onDismiss = { reconnectFor = null; reconnectVia = null })
         }
     }
 

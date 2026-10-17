@@ -266,7 +266,7 @@ class ManageParityTest {
             "nothingOffered" to Manage.Words.nothingOffered, "seesNothing" to Manage.Words.seesNothing,
             "tuneNeedsStopped" to Manage.Words.tuneNeedsStopped, "growNote" to Manage.Words.growNote, "slow" to Manage.Words.slow,
             "actionsFooter" to Manage.Words.actionsFooter, "gone" to Manage.Words.gone, "lookAgain" to Manage.Words.lookAgain,
-            "changePolicy" to Manage.Words.changePolicy, "whatItIs" to Manage.Words.whatItIs, "howItIs" to Manage.Words.howItIs,
+            "changePolicy" to Manage.Words.changePolicy, "reconnectServers" to Manage.Words.reconnectServers, "whatItIs" to Manage.Words.whatItIs, "howItIs" to Manage.Words.howItIs,
             "whatItCanDo" to Manage.Words.whatItCanDo, "oneOfYours" to Manage.Words.oneOfYours,
             "edgeHeading" to Manage.Words.edgeHeading, "edgeNobody" to Manage.Words.edgeNobody,
             "edgeUnasked" to Manage.Words.edgeUnasked, "edgeEvents" to Manage.Words.edgeEvents,

@@ -937,6 +937,13 @@ class Fleet(
          */
         val inventory: String? = null,
         /**
+         * Once a reconnect is done: what each of Xen Orchestra's servers came
+         * to, and the pools the admin sign-in sees at the end, sealed by the
+         * machine to the key this phone sent inside the sign-in, as
+         * epk.iv.ct (XoReconnect.openResult). Null from an older machine.
+         */
+        val result: String? = null,
+        /**
          * While a step that can say how far it has got is running (the edge
          * router's build): which stage of how many, and how far through the
          * whole build in thousandths. Null from an older machine.
@@ -2697,6 +2704,7 @@ class Fleet(
                                 (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { it.isNotBlank() && !a.isNull(i) } }
                             } ?: emptyList(),
                             inventory = s.optString("inventory").takeIf { it.split(".").size == 3 },
+                            result = s.optString("result").takeIf { it.split(".").size == 3 },
                             part = s.optJSONObject("part")?.let { p ->
                                 val stage = p.optInt("stage", -1)
                                 val stages = p.optInt("stages", -1)

@@ -79,6 +79,19 @@ class Messaging : FirebaseMessagingService() {
             XoSetupNotice.post(applicationContext, message.data)
             return
         }
+        // A POOL XEN ORCHESTRA STOPPED SHOWING, AND ITS RETURN: one
+        // notification per pool, with Reconnect on it for an admin, which
+        // the tray could not have drawn (PoolNotice). Read before the
+        // answers below, whose categories it is not one of.
+        if (PoolNotice.handles(message.data[PoolNotice.EXTRA_KIND])) {
+            PoolNotice.post(
+                applicationContext,
+                message.data,
+                message.data["title"] ?: message.notification?.title,
+                message.data["body"] ?: message.notification?.body,
+            )
+            return
+        }
         val words = NotificationAnswers.titlesFor(message.data["category"])
         if (words == null) {
             Log.i(TAG, "push while foregrounded: ${message.notification?.title ?: message.data}")
