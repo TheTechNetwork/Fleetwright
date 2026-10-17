@@ -863,8 +863,67 @@ export class CoordinatorCore {
     // notification that matters gets switched off with the rest. The ring
     // keeps all of them; only the phone is selective.
     const worth = event.event !== 'session.ready' || Boolean(event.profile) || event.tasked === true || ephemeral;
-    if (this.push && worth && NOTIFIABLE.has(event.event)) await this.#notify(event, prompt);
+    if (this.push && worth && NOTIFIABLE.has(event.event) && this.#mayPush(hostId, event)) await this.#notify(event, prompt);
   }
+
+  /**
+   * May a box's session event buzz a phone now? The ring has it either way.
+   *
+   * EVERY OTHER THING A BOX MAKES THE FLEET SAY HAS A BOUND, and this had
+   * none: a fault is announced once an hour (#onHostState), a reserved name's
+   * request once per REFUSAL_EVERY_MS (holderJoin), and a session event once
+   * per frame. A box chooses its frames, and naming a session it does not
+   * hold leaves the event unattributed, which is every admin device (#notify).
+   * 610 frames from one member's box were 598 pushes to the admin's phone,
+   * and on a fleet using the relay the whole of its 600 an hour, so another
+   * member's real question from their own box was refused for the rest of
+   * the hour (fifth Workers audit).
+   *
+   * THE SAME NEWS ONCE PER HOST_PUSH_QUIET_MS, per box, session and kind. The
+   * watcher speaks on a transition and polls every twenty seconds, so it
+   * cannot say one kind twice about one session sooner than two polls apart:
+   * it has to see the session leave that state in between. The window is
+   * shorter than two polls, so only a repeat no honest box sends waits.
+   *
+   * AND HOST_PUSHES_EACH IN ANY HOUR PER PERSON, across all of their boxes,
+   * because one member may hold 25 (hosts.js) and a bound per box was the
+   * same bound twenty-five times. The person is the one the box acts for
+   * (actsFor, on its registry entry); an operator's box acts for nobody in
+   * particular and an admin's runner for the fleet, so each of those is
+   * bounded by its own name, which keeps an operator's twenty boxes from
+   * sharing one allowance.
+   *
+   * Counted only for what is about to be sent, and remembered only for as
+   * long as it bounds anything, as #hostStateSaidAt is: a pass sweeps out
+   * what has aged past its window, so each map holds at most what was pushed
+   * inside it.
+   *
+   * @param {string} hostId @param {{ event: string, name: string }} event
+   */
+  #mayPush(hostId, event) {
+    const now = this.now();
+    const key = `${hostId}\n${event.name}\n${event.event}`;
+    if (now - (this.#pushedAt.get(key) ?? -Infinity) < HOST_PUSH_QUIET_MS) return false;
+    const person = this.registry.get(hostId)?.actsFor;
+    const who = person && !this.#isOperator(person) ? person : `host:${hostId}`;
+    const recent = (this.#pushesBy.get(who) || []).filter((t) => now - t < HOST_PUSH_WINDOW_MS);
+    if (recent.length >= HOST_PUSHES_EACH) {
+      this.#pushesBy.set(who, recent);
+      this.log.warn(`coordinator: ${hostId} ${event.event} ${event.name} kept and not pushed: ${who} has had ${recent.length} in the last hour`);
+      return false;
+    }
+    for (const [k, at] of this.#pushedAt) if (now - at >= HOST_PUSH_QUIET_MS) this.#pushedAt.delete(k);
+    for (const [k, times] of this.#pushesBy) if (now - times[times.length - 1] >= HOST_PUSH_WINDOW_MS) this.#pushesBy.delete(k);
+    this.#pushedAt.set(key, now);
+    recent.push(now);
+    this.#pushesBy.set(who, recent);
+    return true;
+  }
+
+  /** When each box's last push about each session, of each kind, was sent (#mayPush). @type {Map<string, number>} */
+  #pushedAt = new Map();
+  /** When each person's, or operator box's, pushes in the last hour were sent (#mayPush). @type {Map<string, number[]>} */
+  #pushesBy = new Map();
 
   /**
    * A host changed state. Say so, once, in words about what it means.
@@ -6001,6 +6060,25 @@ const FANOUT_TIMEOUT_MS = 10_000;
  * past.
  */
 const HOST_STATE_QUIET_MS = 60 * 60_000;
+
+/**
+ * How often a box's sessions may buzz a phone (#mayPush).
+ *
+ * The same kind of news about one session once in thirty seconds: less than
+ * the two of the watcher's twenty-second polls it takes to say it twice.
+ *
+ * Sixty pushes in any hour per person, with no rate inside the hour, so
+ * however many of somebody's sessions finish in the same minute, they all
+ * arrive. Sixty is one a minute for an hour, which is more than a person
+ * reads; the ring and the app's list still hold every one past it. And it is
+ * a share of the relay's 600 an hour (relay.js LIMITS.push) that a fleet with
+ * a few admin phones, each sent every unattributed event, can afford to give
+ * any one member without that member's boxes being able to spend everybody
+ * else's.
+ */
+const HOST_PUSH_QUIET_MS = 30_000;
+const HOST_PUSHES_EACH = 60;
+const HOST_PUSH_WINDOW_MS = 60 * 60_000;
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set([
