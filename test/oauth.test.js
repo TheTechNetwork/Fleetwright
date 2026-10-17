@@ -333,7 +333,10 @@ test('a box’s callback page hands the code back, and finishes only through thi
   const back = `fleetwright://github?state=${state}&code=goodcode123`;
   const page = callbackPage({ ok: true, finish, text: 'Back to Fleetwright to finish connecting GitHub.' });
   assert.equal(/(src|href)\s*=\s*["']?https?:/i.test(page), false, 'the finishing page loads something external');
-  const script = /** @type {RegExpExecArray} */ (/<script>([\s\S]*)<\/script>/.exec(page))[1];
+  // Cut out by position, not a pattern: it is our own page and has one script.
+  const open = page.indexOf('<script>'), close = page.lastIndexOf('</script>');
+  assert.ok(open >= 0 && close > open, 'the finishing page carries its script');
+  const script = page.slice(open + '<script>'.length, close);
 
   /** @param {string|null} stored @param {{ status: number, body: any }} [answer] */
   const run = async (stored, answer) => {
