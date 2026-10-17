@@ -178,6 +178,23 @@ test('sign-in is refused clearly when the coordinator has none configured', asyn
   assert.match((await res.json()).text, /no sign-in configured/);
 });
 
+test('the Durable Object reads no setting under a name from before the rename', async () => {
+  // It aliased AGENT_FLEET_X onto a missing or empty FLEETWRIGHT_X in its
+  // constructor, so blanking FLEETWRIGHT_AUTH_ALLOW brought back the allowlist
+  // it replaced. The sign-in settings ride the same path and are what a route
+  // shows without a signed token: under the old names only, there is no
+  // sign-in, and no old allowlist either.
+  const { fleet: f } = fleet({
+    AGENT_FLEET_AUTH_ISSUERS: 'https://accounts.google.com',
+    AGENT_FLEET_AUTH_AUDIENCES: 'network.thetech.fleetwright',
+    FLEETWRIGHT_AUTH_ALLOW: '',
+    AGENT_FLEET_AUTH_ALLOW: 'legacy@example.test',
+  });
+  const res = await call(f, '/api/session', 'POST', { idToken: 'anything' });
+  assert.equal(res.status, 503, 'the Durable Object read its sign-in settings under the old names');
+  assert.match((await res.json()).text, /no sign-in configured/);
+});
+
 test('re-enrolling a name disconnects whoever held the old key', async () => {
   const { fleet: f, state } = fleet();
   const first = await generateKeyPair();

@@ -21,7 +21,6 @@ import { sentryOptions } from './sentry.js';
 import { PRIVACY } from './pages.js';
 import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
 import { normaliseOrigin } from '../../src/fleet/coordinator/oauth.js';
-import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 
 // THE DURABLE OBJECT REPORTS TOO, and it is where the interesting failures
 // live: the socket handling, the intent routing, the storage. An unhandled
@@ -587,10 +586,19 @@ const guarded = {
    * @param {any} ctx
    */
   async fetch(request, env, ctx) {
-    // Secrets put before the rename are named AGENT_FLEET_*; the code reads
-    // FLEETWRIGHT_*. CI now syncs the new names, and this covers a
-    // deployment whose secrets have not been re-put. src/fleet/legacy-names.js.
-    env = withCurrentNames(env);
+    // NO NAME FROM BEFORE THE RENAME IS READ HERE, and none must be. This
+    // line used to copy AGENT_FLEET_X onto a missing or empty FLEETWRIGHT_X,
+    // for a deployment whose secrets had not been re-put. But Cloudflare never
+    // deletes a secret on its own, so every coordinator that had been
+    // migrated still held the old copies, and the old one answered whenever
+    // the new one was absent: deleting or blanking FLEETWRIGHT_API_TOKEN to
+    // retire break-glass brought back the token it had replaced, and
+    // blanking FLEETWRIGHT_AUTH_ALLOW brought back the old allowlist. A
+    // credential has to depend on one name, or removing it is not removing
+    // it. The [vars] are rewritten from the committed config on every deploy,
+    // so the only settings an old name could still supply are secrets, which
+    // is exactly the class that must not be aliased. Hosts still read old
+    // names (src/fleet/legacy-names.js); a Worker does not.
     try {
       return await handler.fetch(request, env, ctx);
     } catch (e) {

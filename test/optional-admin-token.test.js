@@ -102,3 +102,24 @@ test('the admin token still works when it is set', async () => {
   const wrong = await call('/api/hosts', env, { authorization: 'Bearer not-the-token-here' });
   assert.equal(wrong.status, 401);
 });
+
+test('a token under a name from before the rename is never the admin token', async () => {
+  // A coordinator deployed before the rename holds AGENT_FLEET_API_TOKEN beside
+  // FLEETWRIGHT_API_TOKEN, and the Worker used to read the old name whenever
+  // the new one was missing or empty. So deleting or blanking the new name to
+  // retire break-glass, which the paragraph above calls a choice, brought back
+  // the token it had replaced, and whoever still held that value was admin.
+  // Deleted, blank, with sign-in or without: the old name is not read at all.
+  const old = 'a-superseded-token-16ch';
+  for (const [label, env, refused] of /** @type {const} */ ([
+    ['deleted, with sign-in', { ...SIGNIN, AGENT_FLEET_API_TOKEN: old }, 401],
+    ['blank, with sign-in', { ...SIGNIN, FLEETWRIGHT_API_TOKEN: '', AGENT_FLEET_API_TOKEN: old }, 401],
+    ['deleted, agent-hub prefix', { ...SIGNIN, AGENT_HUB_API_TOKEN: old }, 401],
+    // No sign-in and no current token is a coordinator with no way in, and it
+    // has to say so rather than let the old name stand in.
+    ['blank, no sign-in', { FLEETWRIGHT_API_TOKEN: '', AGENT_FLEET_API_TOKEN: old }, 503],
+  ])) {
+    const res = await call('/api/hosts', env, { authorization: `Bearer ${old}` });
+    assert.equal(res.status, refused, `a token under the old name was admin (${label})`);
+  }
+});
