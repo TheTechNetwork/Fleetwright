@@ -1,0 +1,13 @@
+{
+  "why": "The one hidden thing in the two apps: tap the build line on You seven times and a line appears under it. Written once here so the phones agree on the count and the words. EggsTests.swift and EggsTest.kt run every case.",
+  "taps": 7,
+  "line": "Seven taps unlocks developer options on a phone. This app has no hidden settings, only this line.",
+  "cases": [
+    { "taps": 0, "shows": false },
+    { "taps": 1, "shows": false },
+    { "taps": 6, "shows": false },
+    { "taps": 7, "shows": true },
+    { "taps": 8, "shows": true },
+    { "taps": 40, "shows": true }
+  ]
+}
