@@ -52,10 +52,11 @@ object WebAuth {
     /** Called by the activity when an Intent arrives on our scheme. */
     fun deliver(intent: Intent?) {
         val data = intent?.data ?: return
-        // `connected` ends a box's connect flow; `github` and `cloudflare`
-        // bring back the code for a sign-in this phone runs itself
-        // (DeviceSignIn), which only the screen that started it, holding the
-        // matching state, will use.
+        // `github` and `cloudflare` bring back a code: for a sign-in this
+        // phone runs itself (DeviceSignIn, a `d.` state), or for a box's
+        // connect flow, which the credentials screen finishes. `connected` is
+        // a box's flow from a coordinator that finished it on its own page.
+        // Only the screen holding the matching flow uses either.
         if (data.scheme != "fleetwright" || data.host !in setOf("connected", "github", "cloudflare")) return
         _returned.tryEmit(data)
     }
