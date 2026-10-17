@@ -370,7 +370,12 @@ machine of the fleet, through the coordinator.
   The machine downloads OPNsense's published nano image, refuses it unless
   its SHA-256 is the one pinned in the source, and replaces only the default
   configuration's bytes, after checking those against their own pinned hash.
-  The disk goes to Xen Orchestra over the job's pinned connection. The router
+  The disk goes to Xen Orchestra over the job's pinned connection. The image
+  as published is kept on the pool as a template so a rebuild can copy it
+  and write only the configuration's blocks into the copy, checked the same
+  way first; that template is visible to Xen Orchestra's admins only, is not
+  tagged for the fleet and is outside its resource set, so the fleet's token
+  can neither see nor clone it, and no box offers it for sessions. The router
   has no account anyone can sign in to (root's password is `*`) and no
   anti-lockout rule, so a lab, the only thing on its LAN side, cannot change
   the rules that keep it off the person's LAN. It is not tagged `fleetwright`,
