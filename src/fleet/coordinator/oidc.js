@@ -224,6 +224,9 @@ export async function verifyActionsToken(token, { audiences, repositories, workf
  *    account whose connection answers the access check, and the caller compares
  *    them. A job somebody else started — a collaborator on the runner
  *    repository, a pull request from a fork — carries somebody else's id.
+ *    That does not cover code somebody else WROTE that the person started, so
+ *    the caller also checks whose the job's repository is (runnerJobRepoProblem
+ *    in src/core/repo-tokens.js): the person's own, or one the fleet mints for.
  *  - THE AUDIENCE IS THE REQUEST. It is the binding from seal.js, a hash of the
  *    repository asked for and the key the answer is sealed to, so the job token
  *    is good for exactly one question and cannot be replayed with another.

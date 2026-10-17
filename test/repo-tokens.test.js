@@ -30,13 +30,31 @@ const CLIENT_ID = 'Iv23liTEST';
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-/** A runner job the owner started, as GitHub would describe it. */
+/** A runner job the owner started, in their own repository, as GitHub would describe it. */
 const RUNNER_JOB = {
   repository: 'eli/runners',
+  repository_owner: 'eli',
+  repository_owner_id: 42,
   job_workflow_ref: 'eli/runners/.github/workflows/runner-linux.yml@refs/heads/main',
   event_name: 'workflow_dispatch',
   actor: 'eli',
   actor_id: 42,
+};
+
+/** The same runner workflow, dispatched by the owner, in a repository neither theirs nor the fleet's. */
+const STRANGERS_JOB = {
+  repository: 'outsider/x',
+  repository_owner: 'outsider',
+  repository_owner_id: 2002,
+  job_workflow_ref: 'outsider/x/.github/workflows/runner-linux.yml@refs/heads/main',
+};
+
+/** And in the fleet's own runner repository, which the owner did not create. */
+const FLEET_JOB = {
+  repository: 'acme/runners',
+  repository_owner: 'acme',
+  repository_owner_id: 5,
+  job_workflow_ref: 'acme/runners/.github/workflows/runner-linux.yml@refs/heads/main',
 };
 
 /**
@@ -187,10 +205,17 @@ test('a runner gets a token for the one repository it asked for, and the coordin
 test('the token never exceeds the person, the repository, or the runner that asked', async (t) => {
   /** @type {Array<[string, Parameters<typeof fleet>[0], string, RegExp]>} */
   const cases = [
-    ['a runner somebody else started', { job: { actor: 'mallory', actor_id: 7 } }, 'acme/app', /started by mallory.*connection here is eli/],
+    [
+      'a runner somebody else started',
+      { job: { actor: 'mallory', actor_id: 7, repository: 'mallory/runners', repository_owner: 'mallory', repository_owner_id: 7,
+        job_workflow_ref: 'mallory/runners/.github/workflows/runner-linux.yml@refs/heads/main' } },
+      'acme/app',
+      /started by mallory.*connection here is eli/,
+    ],
     ['a workflow that is not a runner', { job: { job_workflow_ref: 'eli/runners/.github/workflows/ci.yml@refs/heads/main' } }, 'acme/app', /not one of the runner workflows/],
     ['a job not started by a dispatch', { job: { event_name: 'push' } }, 'acme/app', /not by a dispatch/],
     ['an account this box does not mint into', {}, 'guest/app', /only for acme, and guest is not one/],
+    ['a runner workflow in somebody else’s repository', { job: STRANGERS_JOB }, 'acme/app', /outsider\/x, which is neither eli.s own nor one this fleet mints for/],
     ['a repository the person cannot read', { access: { userId: '42', login: 'eli', repo: 'Acme/App', pull: false, push: false } }, 'acme/app', /cannot read Acme\/App/],
     ['a person with no GitHub connection on any box', { access: 'not connected' }, 'acme/app', /box \(GitHub not connected for you\)/],
     ['a fleet with no box holding the key', { minter: false }, 'acme/app', /box \(holds no GitHub App key\)/],
@@ -301,6 +326,10 @@ test('the minting Worker mints no wider than GitHub says the account can reach',
     ['GitHub answering for somebody else', { worker: {}, box: false, permissionUserId: 7 }, /different account/, null],
     ['an account it does not mint into', { worker: { FLEETWRIGHT_GITHUB_MINT_OWNERS: 'other' }, box: false }, /only for other, and acme is not one/, null],
     ['a job not started by a dispatch', { worker: {}, box: false, job: { event_name: 'push' } }, /not by a dispatch/, null],
+    // The person dispatched it, so GitHub names them, but the code that asked
+    // and would hold the token is whoever wrote that repository's workflow.
+    ['a runner workflow in somebody else’s repository', { worker: {}, box: false, job: STRANGERS_JOB }, /outsider\/x, which is neither eli.s own nor one this fleet mints for/, null],
+    ['a runner in a repository of an account it mints into', { worker: {}, box: false, job: FLEET_JOB }, null, { contents: 'write', pull_requests: 'write' }],
   ];
   for (const [name, opts, refused, perms] of cases) {
     const f = await fleet(opts);

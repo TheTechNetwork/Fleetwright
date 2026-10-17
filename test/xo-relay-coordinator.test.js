@@ -169,6 +169,8 @@ test('the machine offered through the phone is one of the fleet’s own, never a
   const offered = await theirs.core.dispatch({ verb: 'xoprobe', params: { address: 'xo.lan' }, actor: `fleet:${admin.email}`, requester: admin });
   assert.equal(offered.relay, undefined);
   assert.equal(open(theirs.core).r.ok, false);
+  // Nor when the admin names it: `begin` could not be placed there.
+  assert.equal(open(theirs.core, admin, PHONE, { address: 'xo.lan', host: 'aaa-bob' }).r.ok, false);
 });
 
 test('bytes cross between the phone and its one machine, and only while that machine is using it for something asked', async () => {

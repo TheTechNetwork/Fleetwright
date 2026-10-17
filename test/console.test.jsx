@@ -198,3 +198,15 @@ test('no rendered output can inject markup', () => {
   assert.equal(html.includes('<script>alert(2)'), false);
   assert.match(html, /&lt;img/);
 });
+
+test('the Konami line is said beside the page, never as one of its claims', () => {
+  const line = 'No extra lives here. Every host still has to report in for itself.';
+  const snap = { hosts: [HEALTHY], sessions: [WORKING], events: [] };
+  const html = render(<Console snap={snap} egg={line} />);
+  assert.match(html, /class="egg" role="status"/);
+  const confidence = html.slice(html.indexOf('class="confidence'), html.indexOf('class="panes"'));
+  assert.doesNotMatch(confidence, /extra lives/, 'the egg landed inside the assurance panel');
+  // And without it, the page is the page it always was.
+  assert.equal(render(<Console snap={snap} />), render(<Console snap={snap} egg={null} />));
+  assert.doesNotMatch(render(<Console snap={snap} />), /class="egg"/);
+});

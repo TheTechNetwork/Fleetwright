@@ -4,16 +4,14 @@
 // Fleetwright began as a spin-off of agent-hub (docs/lineage.md), and until the
 // rename its settings were AGENT_HUB_* and AGENT_FLEET_*, its files
 // /etc/agent-hub.env and /var/lib/agent-fleet, its units agent-hub.service.
-// Every box installed before the rename is made of those names, and the
-// coordinator's secrets in Cloudflare are stored under them. So the code reads
-// only FLEETWRIGHT_* and the new paths, and this module is what lets it do that
-// on a machine that has not been migrated yet:
+// Every box installed before the rename is made of those names. So the code
+// reads only FLEETWRIGHT_* and the new paths, and this module is what lets it
+// do that on a machine that has not been migrated yet:
 //
 //   adoptLegacyEnv   copies AGENT_HUB_X / AGENT_FLEET_X to FLEETWRIGHT_X when
-//                    the new name is unset. Called by every config loader and
-//                    by the Worker's entry, so a box whose unit still loads
-//                    /etc/agent-hub.env, and a coordinator whose secrets were
-//                    put under the old names, both keep working unchanged.
+//                    the new name is unset. Called by every config loader, so
+//                    a box whose unit still loads /etc/agent-hub.env keeps
+//                    working unchanged.
 //   preferExisting   (legacy-paths.js, host only — a Worker has no disk) a
 //                    default path: the new one if it exists, else the old one
 //                    if THAT exists, else the new one. A box that has not run
@@ -25,8 +23,18 @@
 // which the next update does. This file is what makes the time between the new
 // code arriving and that happening safe. It can go once no box reports an old
 // name, and not before; the same rule docs/packaging.md applies to the git path.
+//
+// THE COORDINATOR WORKER DOES NOT CALL THIS, and must not. It used to, for a
+// deployment whose Cloudflare secrets were still AGENT_FLEET_*, and that made
+// every credential depend on two names: a migrated coordinator kept its old
+// copies, so deleting or blanking FLEETWRIGHT_API_TOKEN brought the old token
+// back as break-glass. worker.js, `guarded`, has the whole of it. A box is
+// different: its settings are one file, where an old name and its replacement
+// sit side by side in front of whoever edits it, not a store that keeps
+// whatever was ever put in it and never shows a value back.
 
-// No imports: the coordinator Worker loads this too, and has no node:fs.
+// No imports, so it stays loadable anywhere; legacy-paths.js holds the half
+// that needs a disk.
 
 const LEGACY = /^AGENT_(?:HUB|FLEET)_(.+)$/;
 
@@ -50,20 +58,6 @@ export function adoptLegacyEnv(env) {
     if (env[next] === undefined || env[next] === '') /** @type {any} */ (env)[next] = env[key];
   }
   return env;
-}
-
-/**
- * The same, as a copy — for an env that must not be written to, such as the
- * one a Worker is handed.
- *
- * @template {Record<string, any>} T
- * @param {T} env
- * @returns {T}
- */
-export function withCurrentNames(env) {
-  if (!env || typeof env !== 'object') return env;
-  if (!Object.keys(env).some((k) => LEGACY.test(k))) return env;
-  return adoptLegacyEnv({ ...env });
 }
 
 /** Each unit's name from before the rename. */

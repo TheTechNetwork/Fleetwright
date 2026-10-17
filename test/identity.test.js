@@ -882,7 +882,7 @@ test('a notification goes to the person whose session it is, and nobody else', a
   const { coordinator: c } = await coordinator(t);
   const mine = await c.core.clients.issue('eli phone');
   const theirs = await c.core.clients.issue('guest phone');
-  await c.core.registerDevice({ platform: 'ios', token: 'm'.repeat(64), clientId: mine.client.id, actor: 'eli@thetech.network' });
+  await c.core.registerDevice({ platform: 'ios', token: 'd'.repeat(64), clientId: mine.client.id, actor: 'eli@thetech.network' });
   await c.core.registerDevice({ platform: 'android', token: 't'.repeat(64), clientId: theirs.client.id, actor: 'guest@example.com' });
 
   // The registry learns who owns what from a health frame, which is where
@@ -920,7 +920,7 @@ test('a notification belongs to the session on the box that sent it, not the fir
   const { coordinator: c } = await coordinator(t);
   const eli = await c.core.clients.issue('eli phone');
   const guest = await c.core.clients.issue('guest phone');
-  await c.core.registerDevice({ platform: 'ios', token: 'm'.repeat(64), clientId: eli.client.id, actor: 'eli@thetech.network' });
+  await c.core.registerDevice({ platform: 'ios', token: 'd'.repeat(64), clientId: eli.client.id, actor: 'eli@thetech.network' });
   await c.core.registerDevice({ platform: 'android', token: 't'.repeat(64), clientId: guest.client.id, actor: 'guest@example.com' });
   for (const [hostId, sessions] of /** @type {const} */ ([
     ['early', [{ name: 'build', status: 'running', createdBy: 'fleet:guest@example.com' }]],
@@ -942,6 +942,16 @@ test('a notification belongs to the session on the box that sent it, not the fir
   sent = [];
   await c.core.onHostMessage('noisy', { kind: 'event', event: 'session.awaiting-input', name: 'build', text: 'tap yes' });
   assert.deepEqual(sent, [], "a box with no such session reached a member's phone");
+
+  // A box the guest enrolled names eli as the creator of a session of its own.
+  // Its word is taken for the people it acts for, and the guest is the only
+  // one, so the words it wrote go to the guest who controls it (a later audit).
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  await admit(c.core, 'guest-box', { enrolledBy: 'guest@example.com' });
+  await c.core.onHostMessage('guest-box', { kind: 'health', hostId: 'guest-box', health: { sessions: [{ name: 'deploy', status: 'running', createdBy: 'fleet:eli@thetech.network' }] } });
+  sent = [];
+  await c.core.onHostMessage('guest-box', { kind: 'event', event: 'session.rc-online', name: 'deploy', url: 'https://example.invalid/drive' });
+  assert.deepEqual(sent.map((d) => d.actor), ['guest@example.com'], "a member's box put its own link on another member's phone");
 });
 
 test('what happened while you were asleep survives a restart', async (t) => {
@@ -1228,8 +1238,8 @@ test('a test notification from a member reaches only their own phones', async (t
   alice.client.email = 'alice@example.com';
   const bob = await c.core.clients.issue('bob phone');
   bob.client.email = 'bob@example.com';
-  await c.core.registerDevice({ platform: 'ios', token: 'alice-token-01', clientId: alice.client.id, actor: 'alice@example.com' });
-  await c.core.registerDevice({ platform: 'ios', token: 'bob-token-0001', clientId: bob.client.id, actor: 'bob@example.com' });
+  await c.core.registerDevice({ platform: 'ios', token: 'a1ce'.repeat(16), clientId: alice.client.id, actor: 'alice@example.com' });
+  await c.core.registerDevice({ platform: 'ios', token: 'b0b0'.repeat(16), clientId: bob.client.id, actor: 'bob@example.com' });
 
   const mine = await fetch(`${origin}/api/devices/test`, {
     method: 'POST',
@@ -1237,12 +1247,12 @@ test('a test notification from a member reaches only their own phones', async (t
     body: JSON.stringify({}),
   });
   assert.equal(mine.status, 200);
-  assert.deepEqual(seen, [['bob-token-0001']], 'the whole fleet is not woken by one person pressing a test button');
+  assert.deepEqual(seen, [['b0b0'.repeat(16)]], 'the whole fleet is not woken by one person pressing a test button');
 
   const hers = await fetch(`${origin}/api/devices/test`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
-    body: JSON.stringify({ token: 'alice-token-01' }),
+    body: JSON.stringify({ token: 'a1ce'.repeat(16) }),
   });
   assert.equal(hers.status, 400);
   assert.equal(/** @type {any} */ (await hers.json()).error?.code, 'no_devices', 'somebody else’s phone is not distinguishable from an unregistered one');
@@ -1255,5 +1265,5 @@ test('a test notification from a member reaches only their own phones', async (t
     body: JSON.stringify({}),
   });
   assert.equal(all.status, 200);
-  assert.deepEqual(seen[0].sort(), ['alice-token-01', 'bob-token-0001']);
+  assert.deepEqual(seen[0].sort(), ['a1ce'.repeat(16), 'b0b0'.repeat(16)]);
 });

@@ -13,7 +13,9 @@
 //  1. the runner's job token, verified against GitHub's own keys, with an
 //     audience that binds exactly this repository to exactly this sealing key
 //     (src/fleet/seal.js) — so a coordinator that swaps either is refused;
-//  2. the job is one of the four runner workflows, started by a dispatch;
+//  2. the job is one of the four runner workflows, started by a dispatch, in
+//     the starter's own repository or one owned by an account in (3) — the
+//     job's code receives the token, and it chose the repository and the key;
 //  3. the repository's account is one this Worker may mint into — its own
 //     setting, FLEETWRIGHT_GITHUB_MINT_OWNERS, never one the coordinator sends;
 //  4. GitHub says the account that started the job can read the repository,
@@ -29,7 +31,7 @@
 import { REPO_RE, JWT_RE } from '../protocol/intents.js';
 import { SEAL_KEY_RE, bindingFor, seal } from '../seal.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
-import { runnerJobProblem, ownerAllowed, mintForActor } from '../../core/repo-tokens.js';
+import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, mintForActor } from '../../core/repo-tokens.js';
 
 /**
  * @typedef {object} MinterConfig
@@ -87,6 +89,12 @@ export async function answerMintRequest(ask, { appKey, clientId, owners, fetchIm
     );
   }
   if (!claims.actor || !claims.actorId) return refuse('not_the_asker', 'The job token does not say which GitHub account started the runner.');
+  // WHICH REPOSITORY THE JOB RAN IN, as the Claude hand-out asks. The checks
+  // above bind the repository and the key to this job, and this job's code
+  // picked both; without this, a runner workflow in a stranger's repository
+  // that the person dispatched would be minted their push on a fleet one.
+  const elsewhere = runnerJobRepoProblem(claims, owners, 'a repository token');
+  if (elsewhere) return refuse('repo_not_allowed', elsewhere);
 
   let appKeyValue;
   try {

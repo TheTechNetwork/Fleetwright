@@ -349,6 +349,9 @@ fun FleetScreen(
     var showBin by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
+    // Eggs.kt: when the list was pulled to refresh, in seconds. Not saved, so
+    // a new visit starts calm.
+    var pulls by remember { mutableStateOf(listOf<Long>()) }
     /** The session whose workspace is open, if any. */
     var browsing by remember { mutableStateOf<Fleet.Session?>(null) }
     // The session whose sheet is open: the state sentence, the pane watched,
@@ -693,6 +696,7 @@ fun FleetScreen(
             else -> PullToRefreshBox(
                 isRefreshing = refreshing,
                 onRefresh = {
+                    pulls = pulls + System.currentTimeMillis() / 1000
                     scope.launch {
                         refreshing = true
                         reload()
@@ -823,6 +827,11 @@ fun FleetScreen(
                             onResume = { act { fleet.resume(session.name, "summary") } },
                             onOpen = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
                         )
+                    }
+                    // Eggs.kt: pulled four times in a minute. Under the cards,
+                    // in the dimmest ink, and never on the assurance line.
+                    Eggs.pullLine(pulls)?.let { line ->
+                        item { Text(line, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now) }
                     }
                     item { Spacer(Modifier.heightIn(min = 88.dp)) }
                 }

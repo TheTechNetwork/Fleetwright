@@ -500,10 +500,21 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
  *   => Promise<{ status: number, body: string }>} Deliver
  */
 
-/** The default transport: fetch, which is HTTP/2 on Workers. @param {string} host */
+/**
+ * The default transport: fetch, which is HTTP/2 on Workers.
+ *
+ * THE TOKEN IS ONE PATH SEGMENT, encoded. Interpolated as it was, URL
+ * serialisation removed the dot segments from `zz/../<token>` and dropped the
+ * fragment from `<token>#zz`, so a string the fleet stored as one row was
+ * delivered as another phone's address. Registration now refuses anything but
+ * hex; this still holds for a row stored before it did, and for whatever a
+ * fleet hands the relay, which sends through here too.
+ *
+ * @param {string} host
+ */
 function fetchDeliver(host) {
   return async (/** @type {string} */ token, /** @type {string} */ payload, /** @type {Record<string,string>} */ headers) => {
-    const res = await fetch(`https://${host}/3/device/${token}`, { method: 'POST', headers, body: payload });
+    const res = await fetch(`https://${host}/3/device/${encodeURIComponent(token)}`, { method: 'POST', headers, body: payload });
     return { status: res.status, body: await res.text() };
   };
 }

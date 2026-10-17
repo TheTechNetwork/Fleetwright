@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -74,6 +74,33 @@ test('a name in the bin is taken, because the volumes are keyed by name', () => 
   r.bin_('bigjob');
   assert.equal(r.taken('bigjob'), true);
   assert.equal(r.has('bigjob'), false, 'has() is about live sessions and stays that way');
+});
+
+test('a stopped session’s name is taken too, for a new session started over it', async (t) => {
+  // The same volumes, kept by a session that is only stopped. A start under
+  // its name went on to launch over the old record: its account and its
+  // volumes, with its creator rewritten to whoever pressed start, so through
+  // the fleet one member took over another's session (a later audit). It is
+  // refused and resume is offered. The cap is 0 so that a start let past the
+  // check stops at the next refusal rather than launching anything.
+  const { SessionManager } = await import('../src/core/sessions.js');
+  const dir = mkdtempSync(join(tmpdir(), 'bin-start-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const r = new Registry({ stateFile: join(dir, 'state.json'), spoolFile: join(dir, 'spool.jsonl') });
+  r.upsert('bigjob', { status: 'stopped', uuid: 'u-1', account: 'b@example.com', createdBy: 'fleet:b@example.com' });
+  const sm = new SessionManager(/** @type {any} */ ({ stateDir: dir, workdir: dir, maxSessions: 0, binTtlMs: TTL }), r, null);
+  sm.reconcile = () => {};
+
+  const taken = await sm.start({ name: 'bigjob', actor: 'fleet:a@example.com' });
+  assert.equal(taken.ok, false);
+  assert.match(taken.message, /already exists on this box\. \/resume bigjob/, taken.message);
+  assert.equal(r.get('bigjob')?.createdBy, 'fleet:b@example.com');
+
+  // A retry of a start that failed before it had a conversation is the one
+  // let through, and only for the person whose start it was.
+  r.upsert('flaky', { status: 'error', createdBy: 'fleet:a@example.com' });
+  assert.match((await sm.start({ name: 'flaky', actor: 'fleet:b@example.com' })).message, /already exists/);
+  assert.match((await sm.start({ name: 'flaky', actor: 'fleet:a@example.com' })).message, /concurrency cap/);
 });
 
 test('what expires is what has outstayed the window, and nothing else', () => {

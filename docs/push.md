@@ -116,9 +116,22 @@ another phone's token used to be able to re-register it under their own
 credential — the victim's row replaced, revoking the victim no longer removing
 it, revoking the attacker silently killing the victim's push (#351). That is
 refused now, 403 `not_yours`. The admin token may re-register anything, and the
-row keeps the credential it had, so it stays revocable. Unregistering and the
-test notification follow the same ownership rule, so a member reaches only
-their own phones.
+row keeps the credential it had, so it stays revocable. Registering,
+unregistering and the test notification all ask the same ownership rule, so a
+member reaches only their own phones. A row with no credential is the admin's:
+the admin token made it, and a member cannot claim it any more than remove it.
+An admin's own credential may claim one of those, but not a member's phone,
+because re-keying it would send that phone every session in the fleet. A row
+old enough to name nobody is refused to the member whose phone it is, and an
+admin removes it once; nothing can tell it apart from the operator's own.
+
+**A token has one spelling.** Ownership is decided on the row's key, so two
+spellings of one address would be two rows with two owners. An iOS token is
+accepted only as hex (stored lower case) and an Android one only in FCM's
+base64url-and-colon alphabet. Before that, `zz/../<token>` and `<token>#zz` were
+new rows that the APNs sender's URL turned back into a colleague's phone. The
+sender also encodes the token as one path segment, which covers a row stored
+before the check and anything a fleet hands the relay.
 
 ## Android: the token is becoming an installation ID
 

@@ -149,6 +149,31 @@ test('with several machines a person chooses, and every later phase goes back to
   assert.equal(asked[1].spec.params.sealed, 'epk.iv.ct');
 });
 
+test('a box a member enrolled is never sent an admin’s probe or setup', async () => {
+  // A later audit: the probe and `begin` asked only whether a machine was
+  // permanent. A box a member enrolled with a pin they minted was probed with
+  // the admin's address, taken for `begin` by name or as the only permanent
+  // box, and then sent `run` with the admin's sealed sign-in, to be opened
+  // where that member has root.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const { core, asked } = fleet(['deb14'], machine);
+  await admit(core, 'aaa-sam', { enrolledBy: member.email });
+  core.registry.recordHealth('aaa-sam', { hub: { reachable: true }, protocol: 7, maxSessions: 5, running: 0, free: 5, labels: [] });
+
+  await core.dispatch({ verb: 'xoprobe', params: { address: 'xo.lan' }, actor: `fleet:${admin.email}`, requester: admin });
+  assert.deepEqual(asked.map((a) => a.hostId), ['deb14'], 'the admin’s probe reached a member’s box');
+
+  asked.length = 0;
+  const named = await core.dispatch(begin(admin, { preferHost: 'aaa-sam' }));
+  assert.equal(named.error?.code, 'host_unavailable', named.text);
+
+  // Nor is it the machine nobody had to choose, once it is the only one.
+  core.hostDisconnected('deb14', 'gone');
+  const alone = await core.dispatch(begin(admin));
+  assert.equal(alone.error?.code, 'no_hosts', alone.text);
+  assert.deepEqual(asked, [], 'a setup reached a box that does not act for the admin');
+});
+
 test('a job is only its owner’s, and a stranger hears the same as for a job that never was', async () => {
   const { core, asked } = fleet(['deb14'], machine);
   await core.dispatch(begin(admin));
@@ -162,7 +187,7 @@ test('a job is only its owner’s, and a stranger hears the same as for a job th
 
 test('progress becomes a Live Activity update with numbers only, and an Android notification', async () => {
   const { core, sent, activities } = fleet(['deb14'], machine);
-  await core.registerDevice({ platform: 'ios', token: 'i'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.registerDevice({ platform: 'ios', token: 'f'.repeat(64), actor: `fleet:${admin.email}` });
   await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
   await core.dispatch(begin(admin));
 
@@ -203,7 +228,7 @@ test('a policy job building the edge router reaches the Lock Screen as a change,
   // OPNsense download takes minutes. The first version dropped every policy
   // report, because `apply` is not one of onboarding's steps.
   const { core, sent, activities, clock } = fleet(['deb14'], machine);
-  await core.registerDevice({ platform: 'ios', token: 'i'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.registerDevice({ platform: 'ios', token: 'f'.repeat(64), actor: `fleet:${admin.email}` });
   await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
   await core.dispatch(begin(admin));
   core.registerSetupActivity(admin, { job: JOB, token: 'c0ffee'.repeat(12) });

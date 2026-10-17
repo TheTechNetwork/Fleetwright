@@ -111,6 +111,8 @@ test('the minting Worker checks a runner repository as the App, and the coordina
 
   const core = new CoordinatorCore({ minter: minterFor(env) });
   // No box is connected at all: a box would have been the only way before.
+  // And eli is not an account this minter mints into, which a public
+  // repository does not need it to be.
   const saved = await core.setRunnerRepo({ email: OWNER }, 'eli/runners');
   assert.equal(saved.ok, true, String(saved.text));
   assert.equal(saved.repo, 'Eli/Runners', 'saved as GitHub spells it');
@@ -126,9 +128,12 @@ test('the minting Worker checks a runner repository as the App, and the coordina
     ['a private repository', { private: true }, /is private/],
     ['no runner workflows', { workflows: ['ci.yml'] }, /none of the runner workflows/],
   ];
+  // Each refusal in full inside the owners. Outside them only a public
+  // repository is answered (linked-repos.test.js has why).
+  const ours = { ...env, FLEETWRIGHT_GITHUB_MINT_OWNERS: 'eli' };
   for (const [name, w, expected] of cases) {
     world = w;
-    const r = await new CoordinatorCore({ minter: minterFor(env) }).setRunnerRepo({ email: OWNER }, 'eli/runners');
+    const r = await new CoordinatorCore({ minter: minterFor(ours) }).setRunnerRepo({ email: OWNER }, 'eli/runners');
     assert.equal(r.ok, false, name);
     assert.match(String(r.text), expected, name);
   }

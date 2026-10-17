@@ -62,7 +62,7 @@ import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { EdgeWatch } from './edge-watch.js';
-import { runnerJobProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
+import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -1005,6 +1005,9 @@ export class Sidecar {
     }
     const notRunner = runnerJobProblem(job);
     if (notRunner) return refuse('not_a_runner', notRunner);
+    // The job's own repository, as the minting Worker asks (repo-tokens.js).
+    const elsewhere = runnerJobRepoProblem(job, this.minter.owners, 'a repository token');
+    if (elsewhere) return refuse('repo_not_allowed', elsewhere);
     if (!ownerAllowed(repo, this.minter.owners)) {
       return refuse(
         'owner_not_allowed',

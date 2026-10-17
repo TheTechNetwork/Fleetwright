@@ -49,9 +49,11 @@ never "no".
 | the person | can push (a box can tell; the App cannot, and says so) | — | — |
 | also says | — | which of `.claude`, `.github` and a Renovate `default.json` are at its top level | which runner workflows it carries |
 
-**The App answers for a private role only inside
-`FLEETWRIGHT_GITHUB_MINT_OWNERS`.** A runner repository is public, so the App
-reading it tells nobody anything. An archive is private by definition. "Does
+**The App answers for a private repository only inside
+`FLEETWRIGHT_GITHUB_MINT_OWNERS`.** An archive is private by definition, and a
+runner repository has to be public, which the App learns only by reading it:
+so outside the owners it answers `runners` for a repository GitHub shows as
+public, and for anything else says what it says for an archive. "Does
 this private repository exist, and does the App reach it" asked of any account
 would make the App's key an oracle over every installation of an App anybody
 may install. Inside the owners list it is the fleet's own accounts, which the

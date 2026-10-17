@@ -29,7 +29,6 @@ import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
-import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
@@ -76,7 +75,10 @@ export class Fleet {
    * @param {Record<string, string|undefined>} env
    */
   constructor(state, env) {
-    env = withCurrentNames(env);
+    // The env as Cloudflare hands it, with no old name copied onto a new one:
+    // the front door says why (worker.js, `guarded`), and the allowlist read
+    // in #identify is the setting here that aliasing put back after it was
+    // blanked.
     this.state = state;
     this.env = env;
     const logger = {
@@ -1261,6 +1263,9 @@ export class Fleet {
         // The credential this registration belongs to, so revoking a phone can
         // stop the fleet talking to it. The Node coordinator does the same.
         clientId: client?.id,
+        // Who is asking, for the ownership rule testPush and unregisterDevice
+        // already ask with the same object.
+        requester: client,
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
         // The phone's public key. Validated during registration rather than at
         // send time: a key that cannot be imported is a registration that fails

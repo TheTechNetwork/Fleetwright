@@ -182,10 +182,10 @@ struct CredentialsView: View {
                     Text(pending.hint).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
 
                     // NO PASTE FIELD FOR AN APP FLOW, because there is nothing
-                    // to copy. GitHub sends the result to the coordinator,
-                    // which hands it to the box over the socket it already
-                    // holds. A token field here would be asking somebody for
-                    // something that does not exist.
+                    // to copy. The provider sends the result back through the
+                    // coordinator's page to this screen, which finishes it
+                    // (`authorize`). A token field here would be asking
+                    // somebody for something that does not exist.
                     if pending.isAppFlow {
                         // No step 2. The button above is the whole flow now;
                         // "Done" existed only so somebody could tell the app
@@ -525,8 +525,20 @@ struct CredentialsView: View {
         busy = true
         defer { busy = false }
         do {
-            _ = try await WebAuth.authorize(url)
+            let back = try await WebAuth.authorize(url)
             pending = nil
+            // THE CODE CAME BACK TO THIS SCREEN, and this screen finishes it,
+            // with this phone's credential. The coordinator's page no longer
+            // connects anything itself (Fleet.finishSignIn says why), so its
+            // answer is the sentence to show, success or refusal.
+            if let handed = handedBack(back) {
+                let reply = try await Fleet(settings: settings).finishSignIn(
+                    provider: handed.provider, state: handed.state, code: handed.code, sealed: handed.sealed,
+                )
+                await load()
+                result = reply.text ?? (reply.ok == false ? "Nothing was connected." : "Connected with \(provider.label).")
+                return
+            }
             await load()
             // SAY WHAT THE HOST FOUND, now that load() has been and asked it.
             //
@@ -553,6 +565,23 @@ struct CredentialsView: View {
             // changed their mind has not made a mistake to be told about.
             if let text = error.localizedDescription.nilIfEmpty { result = text }
         }
+    }
+
+    /// What a provider's page handed back for a flow this screen started:
+    /// `fleetwright://github` or `fleetwright://cloudflare` with a state and a
+    /// code, or the relay's sealed token. Nil for anything else, which
+    /// includes `fleetwright://connected` from a coordinator that still
+    /// finishes on its own page, and a device's own sign-in (a `d.` state),
+    /// which is not this screen's.
+    private func handedBack(_ url: URL) -> (provider: String, state: String, code: String?, sealed: String?)? {
+        guard url.scheme == "fleetwright", let host = url.host, host == "github" || host == "cloudflare",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let state = items.first(where: { $0.name == "state" })?.value, !state.hasPrefix("d.")
+        else { return nil }
+        let code = items.first { $0.name == "code" }?.value
+        let sealed = items.first { $0.name == "sealed" }?.value
+        guard code != nil || sealed != nil else { return nil }
+        return (host, state, code, sealed)
     }
 
     @MainActor
@@ -604,7 +633,7 @@ struct CredentialsView: View {
         busy = true
         defer { busy = false }
         do {
-            let reply = try await Fleet(settings: settings).connections(host: host)
+            let reply = try await Fleet(settings: settings).connections(host: host, offeringSignIn: true)
             if let fresh = reply.connections { connections = fresh }
         } catch {
             result = error.localizedDescription

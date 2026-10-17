@@ -179,6 +179,23 @@ test('sign-in is refused clearly when the coordinator has none configured', asyn
   assert.match((await res.json()).text, /no sign-in configured/);
 });
 
+test('the Durable Object reads no setting under a name from before the rename', async () => {
+  // It aliased AGENT_FLEET_X onto a missing or empty FLEETWRIGHT_X in its
+  // constructor, so blanking FLEETWRIGHT_AUTH_ALLOW brought back the allowlist
+  // it replaced. The sign-in settings ride the same path and are what a route
+  // shows without a signed token: under the old names only, there is no
+  // sign-in, and no old allowlist either.
+  const { fleet: f } = fleet({
+    AGENT_FLEET_AUTH_ISSUERS: 'https://accounts.google.com',
+    AGENT_FLEET_AUTH_AUDIENCES: 'network.thetech.fleetwright',
+    FLEETWRIGHT_AUTH_ALLOW: '',
+    AGENT_FLEET_AUTH_ALLOW: 'legacy@example.test',
+  });
+  const res = await call(f, '/api/session', 'POST', { idToken: 'anything' });
+  assert.equal(res.status, 503, 'the Durable Object read its sign-in settings under the old names');
+  assert.match((await res.json()).text, /no sign-in configured/);
+});
+
 test('re-enrolling a name disconnects whoever held the old key', async () => {
   const { fleet: f, state } = fleet();
   const first = await generateKeyPair();
@@ -272,6 +289,33 @@ test('the Worker refuses to unregister somebody else’s phone, in the same word
 
   const missing = await call(f, '/api/devices', 'DELETE', { token: 'a'.repeat(64) }, { authorization: `Bearer ${alice.token}` });
   assert.equal(missing.status, 404);
+});
+
+test('a member cannot claim a phone the admin token registered, any more than remove it', async () => {
+  // A row with no credential is the operator's: the admin token made it. The
+  // test notification and unregistering refused it to members, and
+  // registering did not — its check asked only whether the row HAD a
+  // credential — so a member who knew the phone's token re-keyed the row to
+  // their own, the operator's notifications stopped reaching it, and revoking
+  // the member removed it.
+  const { fleet: f } = fleet();
+  const member = await f.core.clients.issue('member phone', { email: 'm@example.com' });
+  const admin = await f.core.clients.issue('admin phone', { admin: true, email: 'eli@thetech.network' });
+  const token = '5f0c9e2ab4d3e1f7'.repeat(4);
+  // No credential at all is the admin token here; worker.js has already checked it.
+  assert.equal((await call(f, '/api/devices', 'POST', { platform: 'ios', token })).status, 200);
+
+  const removes = await call(f, '/api/devices', 'DELETE', { token }, { authorization: `Bearer ${member.token}` });
+  assert.equal(removes.status, 403, 'removing it was already refused');
+  const claims = await call(f, '/api/devices', 'POST', { platform: 'ios', token }, { authorization: `Bearer ${member.token}` });
+  assert.equal(claims.status, 403);
+  assert.equal(/** @type {any} */ (await claims.json()).code, 'not_yours');
+  assert.equal(f.core.devices.get(token)?.clientId, undefined, 'the row is still the operator’s');
+
+  // The operator's own phone, signed in as the admin, may take its row over.
+  const adopts = await call(f, '/api/devices', 'POST', { platform: 'ios', token }, { authorization: `Bearer ${admin.token}` });
+  assert.equal(adopts.status, 200);
+  assert.equal(f.core.devices.get(token)?.clientId, admin.client.id);
 });
 
 test('a spent sign-in token stays spent across an eviction', async () => {

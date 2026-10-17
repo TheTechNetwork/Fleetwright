@@ -190,7 +190,7 @@ test('a session asking something answerable says which question, and how', async
     newId: () => 'test-id',
     push: { async send(devices, message) { sends.push({ devices, message }); return { sent: 1, dead: [] }; } },
   });
-  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(64) });
 
   await c.onHostMessage('unabandoned', {
     kind: 'event',
@@ -225,7 +225,7 @@ test('a notification with nothing to answer carries no empty keys', async () => 
     newId: () => 'test-id',
     push: { async send(devices, message) { sends.push({ devices, message }); return { sent: 1, dead: [] }; } },
   });
-  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(64) });
 
   await c.onHostMessage('unabandoned', {
     kind: 'event',
@@ -271,7 +271,7 @@ test('a notification with answers names a category, and one without does not', a
     newId: () => 'test-id',
     push: { async send(devices, message) { sends.push(message); return { sent: 1, dead: [] }; } },
   });
-  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(64) });
 
   await c.onHostMessage('unabandoned', {
     kind: 'event',
