@@ -8,7 +8,9 @@ import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
 import { Console } from './components.jsx';
+import { headline } from './state.js';
 import { KONAMI, KONAMI_LINE, konamiStep } from './konami.js';
+import { lateLine } from './late.js';
 
 // For whoever opens the developer tools, which is the one reader who already
 // knows where the rest of this is written down.
@@ -97,7 +99,10 @@ function App() {
     if (rc) window.open(rc, '_blank', 'noopener');
   };
 
-  return <Console snap={snap} onAnswer={onAnswer} egg={egg} />;
+  // The small hours, in the same quiet slot the Konami line uses, and only
+  // under a settled headline: late.js says why.
+  const late = headline(snap).settled ? lateLine(new Date()) : null;
+  return <Console snap={snap} onAnswer={onAnswer} egg={egg ?? late} />;
 }
 
 const root = document.getElementById('console-root');

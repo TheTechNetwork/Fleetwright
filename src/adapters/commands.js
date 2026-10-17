@@ -2526,7 +2526,7 @@ export async function dispatch(ctx, line) {
 
   const canonical = LOOKUP[name];
   if (!canonical) {
-    const hidden = egg(name);
+    const hidden = egg(name, args);
     if (hidden) return { ok: true, text: hidden };
     return { ok: false, text: `Unknown command "${name}". Try /help.` };
   }
