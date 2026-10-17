@@ -19,7 +19,7 @@ import { HostIdentities, actsFor, mayActFor, believedCreator } from './hosts.js'
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, handBack } from './oauth.js';
@@ -696,6 +696,12 @@ export class CoordinatorCore {
       // silence has to be trustworthy before it is comfortable, and a warning
       // that reaches a log file is silence.
       if (moved) await this.#onHostState(hostId, moved);
+      // A POOL XEN ORCHESTRA NO LONGER SHOWS, said to the person whose it is.
+      // Asked for: "When Xen shows no pool, reconnecting all hosts usually
+      // fixes it. Why don't we do it instead of me logging in?" The box sees
+      // it with the fleet's own token; the fleet says so once, and the phone
+      // offers the reconnect (#onPoolsSeen).
+      if (Array.isArray(msg.health?.xo)) await this.#onPoolsSeen(hostId);
       // A RUNNER THAT WAS ASKED FOR WITH A SESSION gets it now. Only once the
       // hub answers: a frame from a box whose hub is still starting would place
       // the start and have it refused.
@@ -1014,6 +1020,199 @@ export class CoordinatorCore {
 
   /** When each host's last announcement of each fault was made (#onHostState). */
   #hostStateSaidAt = new Map();
+
+  /**
+   * A box's look at the pools it holds a token for, from its health frame.
+   * A pool Xen Orchestra stopped showing is said to its owner; a pool that
+   * shows again after that is said too.
+   *
+   * WHY IT HAPPENS, AND WHY IT IS WORTH A PUSH. Xen Orchestra keeps one
+   * connection to each pool master, and when a master restarts, moves or
+   * changes its certificate that connection can stay disconnected, or stuck
+   * connecting, with nothing visibly wrong: Xen Orchestra answers and shows
+   * no pool. The fleet's machines on that pool cannot be made or reached
+   * until somebody signs in as admin and reconnects its servers. The person
+   * asked for the fleet to notice and offer that, rather than finding out
+   * when something they started fails.
+   *
+   * ONLY WHAT A BOX THAT MAY ACT FOR THE OWNER SAYS (xoFor), as for every
+   * other use of `xo[]`: a box another member enrolled could otherwise put a
+   * pool of theirs on this person's phone, with a Reconnect button that
+   * opens the admin sign-in.
+   *
+   * ONLY A LOOK THAT GOT AN ANSWER. `reachable: false` is the box unable to
+   * reach Xen Orchestra, which is its network's news and not the pool's;
+   * null is cannot tell. Neither is evidence a pool is gone (C-5).
+   *
+   * AND ONLY AFTER POOL_LOST_AFTER_MS, by the box's `missingFor`, a duration
+   * so the two clocks need not agree: a master restarting for an update is
+   * gone for a minute or two and back by itself, and saying so would be the
+   * cry of wolf that gets the real one ignored. A box that sees no pools at
+   * all and remembers none sends no duration, so for that one the fleet
+   * counts from the first frame it saw it in.
+   *
+   * @param {string} hostId
+   */
+  async #onPoolsSeen(hostId) {
+    const host = this.registry.get(hostId);
+    if (!host?.health) return;
+    const now = this.now();
+    /** @type {Set<string>} */
+    const empty = new Set();
+    const owners = new Set((host.health.xo ?? []).map((/** @type {any} */ e) => String(e?.owner || '').toLowerCase()));
+    for (const owner of owners) {
+      if (owner.length > 254 || !emailOf(owner)) continue;
+      for (const e of xoFor(host, owner)) {
+        const address = String(e?.address || '');
+        const pools = /** @type {any} */ (e).pools;
+        if (e?.reachable !== true || !Array.isArray(pools) || address.length > 260 || !XO_ADDRESS_RE.test(address)) continue;
+        const missing = Array.isArray(/** @type {any} */ (e).missing) ? /** @type {any[]} */ (/** @type {any} */ (e).missing) : [];
+        if (pools.length && !missing.length) {
+          await this.#poolBack(hostId, owner, address, pools.length);
+          continue;
+        }
+        const said = Number(/** @type {any} */ (e).missingFor);
+        let missingFor = Number.isFinite(said) && said >= 0 ? said : null;
+        if (missingFor === null && !pools.length) {
+          const key = `${hostId}\n${owner}\n${address}`;
+          const since = this.#poolsEmptySince.get(key)?.since ?? now;
+          this.#poolsEmptySince.set(key, { since, seen: now });
+          empty.add(key);
+          missingFor = now - since;
+        }
+        if (missingFor !== null && missingFor >= POOL_LOST_AFTER_MS) await this.#poolLost(hostId, owner, address, pools.length, missing);
+      }
+    }
+    // Remembered only while this box keeps seeing it, and swept once nothing
+    // has refreshed it within the hour (a box that went away).
+    for (const [k, v] of this.#poolsEmptySince) {
+      if ((k.startsWith(`${hostId}\n`) && !empty.has(k)) || now - v.seen >= POOL_LOST_QUIET_MS) this.#poolsEmptySince.delete(k);
+    }
+  }
+
+  /**
+   * Say a pool is gone from Xen Orchestra: once per person and address per
+   * POOL_LOST_QUIET_MS, however many of their boxes hold it.
+   *
+   * KEYED BY OWNER AND ADDRESS, NOT BY BOX. Two boxes holding one pool see
+   * it go together, and two pushes about one pool is one too many. Quiet
+   * from the ring, which survives a deploy, and from a map, which survives
+   * the box's own session events displacing the record (#onHostState says
+   * both at more length).
+   *
+   * AND NO MORE THAN POOLS_LOST_EACH ADDRESSES PER PERSON IN THE HOUR. The
+   * addresses are the box's word: a box a member enrolled can name any
+   * number of them for its own person, and every push goes to the admins'
+   * phones as well as theirs.
+   *
+   * @param {string} hostId @param {string} owner @param {string} address
+   * @param {number} shown how many pools the box still sees there
+   * @param {any[]} missing the pools it saw before and no longer does
+   */
+  async #poolLost(hostId, owner, address, shown, missing) {
+    const key = `${owner}\n${address}`;
+    const now = this.now();
+    const quiet = now - (this.#poolLostSaidAt.get(key) ?? -Infinity) < POOL_LOST_QUIET_MS
+      || this.events.some((e) => e.event === 'xo.pool-lost' && e.actor === owner && e.name === address && now - e.at < POOL_LOST_QUIET_MS);
+    if (quiet) return;
+    for (const [k, at] of this.#poolLostSaidAt) if (now - at >= POOL_LOST_QUIET_MS) this.#poolLostSaidAt.delete(k);
+    const theirs = [...this.#poolLostSaidAt.keys()].filter((k) => k.startsWith(`${owner}\n`));
+    if (theirs.length >= POOLS_LOST_EACH) {
+      this.log.warn(`coordinator: ${hostId} says ${address} lost a pool, kept quiet: ${owner} has had ${theirs.length} in the last hour`);
+      return;
+    }
+    this.#poolLostSaidAt.set(key, now);
+    // OPEN UNTIL IT SHOWS AGAIN, so the recovery is said once. Bounded per
+    // person as the announcements are: their oldest open loss goes first.
+    const open = [...this.#poolsLost].filter(([k]) => k.startsWith(`${owner}\n`));
+    if (open.length >= POOLS_LOST_EACH) this.#poolsLost.delete(open.sort((a, b) => a[1] - b[1])[0][0]);
+    this.#poolsLost.set(key, now);
+
+    // WHAT IS GONE, by the names the box remembers, as a person would say
+    // them: Xen Orchestra answers, so it is never said to be down.
+    const names = missing.slice(0, 3)
+      .map((m) => String(m?.name || m?.id || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 80))
+      .filter(Boolean);
+    const gone = names.length < Math.min(missing.length, 3)
+      ? `${missing.length} of its pools`
+      : missing.length <= 2
+        ? names.join(' and ')
+        : `${names[0]}, ${names[1]} and ${missing.length === 3 ? names[2] : `${missing.length - 2} more`}`;
+    const text = shown === 0
+      ? `Xen Orchestra at ${address} answers ${hostId} but shows none of its pools. Reconnecting its servers usually brings them back.`
+      : `Xen Orchestra at ${address} answers ${hostId} but no longer shows ${gone}. Reconnecting its servers usually brings ${missing.length === 1 ? 'it' : 'them'} back.`;
+    // THE OWNER'S, so other members do not see it (visibleEvents), and the
+    // box's share of the ring, because the box chooses when it happens
+    // (hostReported).
+    this.record({ event: 'xo.pool-lost', hostId, name: address, actor: owner, text });
+    await this.#pushPool(owner, {
+      title: shown === 0 ? `${address} shows no pools` : missing.length === 1 && names.length ? `${address} no longer shows ${names[0]}` : `${address} no longer shows ${missing.length} pools`,
+      body: text,
+      data: { kind: 'pool-lost', name: `pool-lost-${address}`, hostId, address },
+    }, { reconnect: true });
+  }
+
+  /**
+   * Say a pool is back, once, after it was said to be gone: a person told a
+   * pool is missing and never told it returned checks by hand forever after
+   * (#onHostState). The same `name` as the loss, so where a platform
+   * collapses by name the good news replaces the bad.
+   *
+   * @param {string} hostId @param {string} owner @param {string} address @param {number} shown
+   */
+  async #poolBack(hostId, owner, address, shown) {
+    const key = `${owner}\n${address}`;
+    const last = this.events.filter((e) => (e.event === 'xo.pool-lost' || e.event === 'xo.pool-back') && e.actor === owner && e.name === address).at(-1);
+    if (!this.#poolsLost.has(key) && last?.event !== 'xo.pool-lost') return;
+    this.#poolsLost.delete(key);
+    const text = `Xen Orchestra at ${address} shows ${shown === 1 ? 'its pool' : `${shown} pools`} to ${hostId} again.`;
+    this.record({ event: 'xo.pool-back', hostId, name: address, actor: owner, text });
+    await this.#pushPool(owner, {
+      title: 'Pools back',
+      body: text,
+      data: { kind: 'pool-back', name: `pool-lost-${address}`, hostId, address },
+    });
+  }
+
+  /**
+   * A pool's news, to its owner's phones and the admins' (#devicesOf), as a
+   * holder's request is (#pushHolderAsk).
+   *
+   * DRAWN BY THE APP, the loss and the recovery alike. On Android a push
+   * with a category is handed to the app to draw and one without is drawn
+   * by the system, and a notification the system drew does not replace one
+   * the app drew under the same name: "Pools back" would sit under the loss
+   * instead of taking its place.
+   *
+   * THE RECONNECT BUTTON, only where it can be pressed: reconnecting needs
+   * the admin sign-in and only an admin may run `xosetup`. So a loss goes to
+   * an admin's phones with the button and to a member's without it, the
+   * member's own pool included: the admins are the ones who can reconnect
+   * it, and their phones are the ones that get something to press.
+   *
+   * @param {string} owner @param {{ title: string, body: string, data: Record<string, string> }} message
+   * @param {{ reconnect?: boolean }} [opts]
+   */
+  async #pushPool(owner, message, { reconnect = false } = {}) {
+    if (!this.push) return;
+    const devices = this.#devicesOf(owner);
+    if (!devices.length) return;
+    const admins = reconnect ? devices.filter((d) => !d.clientId || Boolean(this.clients.clients.get(d.clientId)?.admin)) : [];
+    const others = devices.filter((d) => !admins.includes(d));
+    try {
+      if (admins.length) await this.push.send(admins, { ...message, category: POOL_RECONNECT_CATEGORY, drawnByApp: true });
+      if (others.length) await this.push.send(others, { ...message, drawnByApp: true });
+    } catch (e) {
+      this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  /** Since when each box has seen no pools at an address, for a box that sends no duration (#onPoolsSeen). @type {Map<string, { since: number, seen: number }>} */
+  #poolsEmptySince = new Map();
+  /** When each person's last word about each address's pools being gone was said (#poolLost). @type {Map<string, number>} */
+  #poolLostSaidAt = new Map();
+  /** The losses said and not yet followed by a recovery, by person and address (#poolBack). @type {Map<string, number>} */
+  #poolsLost = new Map();
 
   /**
    * Record something the coordinator itself did, as opposed to something a
@@ -1628,7 +1827,7 @@ export class CoordinatorCore {
     // hears only the end, as an ordinary notification.
     const targets = ended ? devices : devices.filter((d) => d.platform !== 'ios');
     if (!targets.length) return;
-    const title = (progress.purpose === 'policy' ? POLICY_TITLES : progress.purpose === 'deploy' ? DEPLOY_TITLES : SETUP_TITLES)[progress.state];
+    const title = { policy: POLICY_TITLES, deploy: DEPLOY_TITLES, reconnect: RECONNECT_TITLES, setup: SETUP_TITLES }[progress.purpose][progress.state];
     const body = progress.text || `Step ${Math.min(progress.step + 1, progress.of)} of ${progress.of}`;
     try {
       await this.push.send(targets, {
@@ -6113,13 +6312,16 @@ const ACTOR_EVENTS_EACH = 25;
  * often its health changes: counted as the coordinator's own, a new hub
  * reason per frame wrote one per frame into the share the audit records keep
  * (third Workers audit). A host cannot send either itself (HOST_EVENT_RE), so
- * the name still cannot be forged.
+ * the name still cannot be forged. `xo.pool-lost` and `xo.pool-back` are the
+ * same kind of thing: the coordinator's words about what a box's frames say
+ * of a pool, at a moment the box chose.
  *
  * @param {any} e
  */
 export function hostReported(e) {
   return typeof e?.event === 'string'
-    && (e.event.startsWith('session.') || e.event === 'host.degraded' || e.event === 'host.recovered');
+    && (e.event.startsWith('session.') || e.event === 'host.degraded' || e.event === 'host.recovered'
+      || e.event === 'xo.pool-lost' || e.event === 'xo.pool-back');
 }
 
 /**
@@ -6167,6 +6369,24 @@ const FANOUT_TIMEOUT_MS = 10_000;
  * past.
  */
 const HOST_STATE_QUIET_MS = 60 * 60_000;
+
+/**
+ * How long a pool must be gone from Xen Orchestra, by the box's own count,
+ * before its owner is told (#onPoolsSeen). Five minutes: a pool master
+ * restarting for an update is back well inside it, and a pool still gone
+ * after it is not coming back by itself.
+ */
+const POOL_LOST_AFTER_MS = 5 * 60_000;
+/** And how long before the same pool is said to be gone again: an hour, as a host's fault (#poolLost). */
+const POOL_LOST_QUIET_MS = 60 * 60_000;
+/** How many addresses one person may be told about in that hour (#poolLost). */
+const POOLS_LOST_EACH = 8;
+/**
+ * The category a pool's loss is pushed under when its owner can reconnect
+ * it: one action, Reconnect, which opens the app into the reconnect with the
+ * admin sign-in behind Face ID or the fingerprint. Both apps register it.
+ */
+const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
 
 /**
  * How often a box's sessions may buzz a phone (#mayPush).
@@ -6233,6 +6453,12 @@ const POLICY_TITLES = Object.freeze({ running: 'Changing what the fleet may use'
  * adds. Its end is both, so "done" says both rather than only the second.
  */
 const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done: 'Xen Orchestra installed and added', failed: 'Installing Xen Orchestra stopped', cancelled: 'Installing Xen Orchestra cancelled' });
+/**
+ * A reconnect's: Xen Orchestra's servers reconnected for a pool the fleet's
+ * token stopped seeing. What the person wants back is the pools, so the end
+ * says whether they came back rather than what was done to the servers.
+ */
+const RECONNECT_TITLES = Object.freeze({ running: 'Reconnecting Xen Orchestra\u2019s servers', done: 'Pools back', failed: 'The pools did not come back', cancelled: 'Reconnecting cancelled' });
 
 /**
  * Where an onboarding job has got to, as a host may report it.
@@ -6242,8 +6468,9 @@ const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done:
  * @property {number} of     how many steps there are
  * @property {string} phase  the step's key, or `done`
  * @property {'running'|'done'|'failed'|'cancelled'} state
- * @property {'setup'|'policy'|'deploy'} purpose  adding a pool, changing what the fleet may use on one,
- *   or installing Xen Orchestra on a pool that has none and then adding it
+ * @property {'setup'|'policy'|'deploy'|'reconnect'} purpose  adding a pool, changing what the fleet may use on one,
+ *   installing Xen Orchestra on a pool that has none and then adding it, or reconnecting Xen Orchestra's
+ *   servers for a pool it stopped showing
  * @property {number|null} fill  how far the step now running has got, in thousandths, when the host can
  *   tell (the edge router's download and disk), or null
  * @property {'edge'|'image'|'holder'|null} build  what the step is building, from a fixed list, or null
@@ -6286,9 +6513,11 @@ export function narrowProgress(msg) {
   // AN INSTALL REPORTS from its first step, and its steps are its own and
   // then onboarding's, so a deploy phase from a host that did not say it is
   // one is refused like any phase onboarding does not have.
-  const purpose = msg?.purpose === 'policy' ? 'policy' : msg?.purpose === 'deploy' ? 'deploy' : 'setup';
+  // A RECONNECT the same way: its steps are its own after onboarding's
+  // first two, and a host that says it is one is held to them.
+  const purpose = ['policy', 'deploy', 'reconnect'].includes(msg?.purpose) ? msg.purpose : 'setup';
   const phase = String(msg?.phase || '');
-  const steps = purpose === 'policy' ? XOPOLICY_STEPS : purpose === 'deploy' ? XODEPLOY_STEPS : XOSETUP_STEPS;
+  const steps = { policy: XOPOLICY_STEPS, deploy: XODEPLOY_STEPS, reconnect: XORECONNECT_STEPS, setup: XOSETUP_STEPS }[/** @type {SetupProgress['purpose']} */ (purpose)];
   if (!steps.includes(phase) && phase !== 'done') return null;
   return {
     step,

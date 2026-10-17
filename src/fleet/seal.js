@@ -171,6 +171,22 @@ export function xosetupWatchAad(job, address) {
 }
 
 /**
+ * What a reconnect's outcome is sealed under on its way from the machine to
+ * the phone that asked for it: each server, what it was, what was done to it
+ * and what it is now, and the pools the admin session sees at the end. Server
+ * names and host addresses travel only like this; the plain progress says
+ * counts and the address. Its own name over the same job and address, as each
+ * of a job's messages has. src/fleet/host/xo-setup.js, the reconnect job; the
+ * phones build the same string.
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function xosetupReconnectAad(job, address) {
+  return `fleetwright-xosetup-reconnect/v1:${job}:${address}`;
+}
+
+/**
  * What an install's passwords are sealed under: the pool master's root
  * password and the admin password the person chose for the Xen Orchestra the
  * machine installs, for one job at one pool master. Its own name, so a sealed

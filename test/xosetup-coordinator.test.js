@@ -15,7 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ACTIVITY_FILL_EVERY_MS, CoordinatorCore, narrowProgress, narrowCertificate } from '../src/fleet/coordinator/core.js';
-import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS } from '../src/fleet/protocol/intents.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
 
 const JOB = 'a1b2c3d4e5f6';
 const admin = { email: 'eli@example.com', admin: true };
@@ -456,4 +456,41 @@ test('an install reaches the Lock Screen as one, through its own steps and onboa
   assert.equal(sent.at(-1)?.message.title, 'Xen Orchestra installed and added');
   // An install's own step from a host that did not say it is one is refused.
   assert.equal(narrowProgress({ step: image, of, phase: 'image', state: 'running' }), null);
+});
+
+test('a reconnect runs on the pool’s own machine and reaches the Lock Screen as one', async () => {
+  // ASKED FOR: "When Xen shows no pool, reconnecting all hosts usually fixes
+  // it. Why don't we do it instead of me logging in?" A reconnect is a setup
+  // job whose sealed sign-in says so; the coordinator sees it only in how the
+  // machine reports. It is begun where the pool is held, the pool's own
+  // machine when it has one, which runs no sessions and is still a machine
+  // the admin's setup may go to.
+  const { admit, makeAdmin } = await import('./helpers/enrolled-hosts.js');
+  const { core, asked, sent, activities } = fleet(['deb14'], machine);
+  await makeAdmin(core, admin.email);
+  await admit(core, 'holder-a1b2c3', { enrolledBy: `holder:${admin.email}` });
+  core.registry.recordHealth('holder-a1b2c3', { hub: { reachable: true }, protocol: 7, maxSessions: 5, running: 0, free: 5, labels: [] });
+  await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
+  const begun = await core.dispatch(begin(admin, { preferHost: 'holder-a1b2c3' }));
+  assert.equal(begun.hostId, 'holder-a1b2c3', begun.text);
+  assert.deepEqual(asked.map((a) => a.hostId), ['holder-a1b2c3']);
+  core.registerSetupActivity(admin, { job: JOB, token: 'c0ffee'.repeat(12) });
+
+  const of = XORECONNECT_STEPS.length;
+  const step = XORECONNECT_STEPS.indexOf('reconnect');
+  await core.onHostMessage('holder-a1b2c3', { kind: 'event', event: 'xosetup.progress', job: JOB, step, of, phase: 'reconnect', state: 'running', purpose: 'reconnect', text: '1 of 3 servers reconnected.' });
+  assert.equal(activities.length, 1, 'a reconnect’s step was refused as one onboarding does not have');
+  assert.deepEqual(activities[0].update.state, { step, of, phase: 'reconnect', state: 'running' });
+  assert.equal(sent[0].message.title, 'Reconnecting Xen Orchestra’s servers');
+  assert.equal(sent[0].message.data.purpose, 'reconnect', 'Android draws its own words, so it is told which');
+
+  await core.onHostMessage('holder-a1b2c3', { kind: 'event', event: 'xosetup.progress', job: JOB, step: of, of, phase: 'done', state: 'failed', purpose: 'reconnect', text: '1 of 3 servers are connected again; Xen Orchestra shows 1 pool.' });
+  assert.equal(activities[1].update.event, 'end');
+  assert.equal(sent[1].message.title, 'The pools did not come back');
+
+  // A reconnect's step from a host that did not say it is one is refused, and
+  // so is a step a reconnect does not have.
+  assert.equal(narrowProgress({ step, of, phase: 'reconnect', state: 'running' }), null);
+  assert.equal(narrowProgress({ step: 2, of, phase: 'inventory', state: 'running', purpose: 'reconnect' }), null);
+  assert.equal(narrowProgress({ step: of, of, phase: 'done', state: 'done', purpose: 'reconnect' })?.purpose, 'reconnect');
 });
