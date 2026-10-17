@@ -87,6 +87,23 @@ const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setupt
  */
 
 /**
+ * The claims on a session name that the requester may act on: every one for
+ * an admin or the break-glass token, and for a member only those their
+ * verified identity created, as the registry attributes them (hosts.js
+ * believedCreator). Asked before anything is counted or named.
+ *
+ * @param {import('./registry.js').HostRegistry} registry
+ * @param {string} name
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ */
+function sessionsOf(registry, name, requester) {
+  const claims = registry.findSessions(name);
+  if (!requester || requester.admin) return claims;
+  const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
+  return claims.filter((c) => String(c.createdBy || '').toLowerCase() === mine);
+}
+
+/**
  * @param {import('./registry.js').HostRegistry} registry
  * @param {{ verb: string, params?: Record<string, any> }} intent
  * @param {{ maxPinAgeMs?: number, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} [opts]
@@ -219,10 +236,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // that does not exist, for the same reason it is byte-identical there: a
   // distinct "not yours" turns an access control into an existence oracle.
   if (verb === 'logs' && name && requester && !requester.admin) {
-    const claims = registry.findSessions(name);
-    const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
-    const owned = claims.filter((c) => String(c.createdBy || '').toLowerCase() === mine);
-    if (!owned.length) {
+    if (!sessionsOf(registry, name, requester).length) {
       return {
         kind: 'refused',
         code: 'unknown_session',
@@ -247,7 +261,9 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   if (verb === 'logs' && name) {
     // findSessions returns RECORDS, not hosts — each carries the host it was
     // found on. Reading them as hosts is the mistake the type checker caught.
-    const claims = registry.findSessions(name);
+    // A member's own claims only, as for the pinned verbs below: the refusal
+    // names every host it counted.
+    const claims = sessionsOf(registry, name, requester);
     if (claims.length === 1) return { kind: 'host', host: claims[0].host };
     if (claims.length > 1) {
       return {
@@ -498,7 +514,14 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   }
 
   if (PINNED.has(verb)) {
-    const claims = name ? registry.findSessions(name) : [];
+    // A MEMBER CHOOSES ONLY AMONG THEIR OWN. Every claim on the name was
+    // counted, whoever's, and the ambiguity refusal below ran before the
+    // ownership check further down: so any member's peek of a name two other
+    // people share was answered with the hosts holding it, and a box a member
+    // enrolled claiming the name of somebody's real session made their stop
+    // on it ambiguous. Narrowed first, another person's session is not a
+    // claim at all, for this as for the unknown_session refusal.
+    const claims = name ? sessionsOf(registry, name, requester) : [];
     // MORE THAN ONE BOX CLAIMS IT. Refuse, and name them both.
     //
     // findSession() returned the first match in Map order, so `stop bigjob`
@@ -516,21 +539,17 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
           'recoverable by trying again. Rename one, or stop it from the box itself.',
       };
     }
-    /** @type {(typeof claims)[number]|null} */
-    let found = claims[0] || null;
-    // OWNERSHIP, checked before anything is revealed. A member may act only on
-    // sessions their verified identity created; unattributed sessions belong
-    // to the fleet, exactly as in the visibility filter one layer down.
+    // OWNERSHIP, checked before anything is revealed (sessionsOf). A member
+    // may act only on sessions their verified identity created; unattributed
+    // sessions belong to the fleet, exactly as in the visibility filter one
+    // layer down.
     //
     // The refusal is BYTE-IDENTICAL to unknown_session, deliberately. A
     // distinct "not yours" answer would confirm to a member that a guessed
     // name exists on somebody else's work — an existence oracle built out of
     // an access control. To a member, a session they cannot touch and a
     // session that does not exist must be the same fact.
-    if (found && requester && !requester.admin) {
-      const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
-      if (String(found.createdBy || '').toLowerCase() !== mine) found = null;
-    }
+    const found = claims[0] || null;
     if (!found) {
       return {
         kind: 'refused',

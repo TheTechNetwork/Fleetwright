@@ -419,3 +419,14 @@ test('a box a member enrolled cannot file its sessions under somebody else', asy
   // Filed under the person the box does act for, who wrote it.
   assert.equal(place(core.registry, { verb: 'peek', params: { name: 'forged' } }, { requester: { email: 'mallory@example.com', admin: false } }).host?.hostId, 'mal-box');
 });
+
+test('a claim on the name of a member’s real session does not make it ambiguous', async () => {
+  // The denial half of the same audit finding: mal-box also claims
+  // `alice-real`, which is alice's on ops-box. Re-attributed to mallory, the
+  // claim still counted, and alice's stop was refused ambiguous_session,
+  // naming mal-box, with nothing sent to ops-box.
+  const { core } = await forgedFleet();
+  const stop = place(core.registry, { verb: 'stop', params: { name: 'alice-real' } }, { requester: ALICE });
+  assert.equal(stop.kind, 'host', stop.reason);
+  assert.equal(stop.host?.hostId, 'ops-box');
+});
