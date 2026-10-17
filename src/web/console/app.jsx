@@ -8,6 +8,11 @@ import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
 import { Console } from './components.jsx';
+import { KONAMI, KONAMI_LINE, konamiStep } from './konami.js';
+
+// For whoever opens the developer tools, which is the one reader who already
+// knows where the rest of this is written down.
+console.info('fleetwright: the comments are the documentation here. Start at CLAUDE.md.');
 
 /**
  * One poll of the coordinator, folded into the shape the components want.
@@ -56,6 +61,32 @@ function App() {
     };
   }, []);
 
+  // Eight seconds, or Escape. It is one line and it should not outstay itself.
+  const [egg, setEgg] = useState(/** @type {string|null} */ (null));
+  useEffect(() => {
+    let at = 0;
+    /** @type {ReturnType<typeof setTimeout>|undefined} */
+    let hide;
+    /** @param {KeyboardEvent} e */
+    const onKey = (e) => {
+      if (e.key === 'Escape') return setEgg(null);
+      // Typing into a field is typing, not a cheat code.
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t?.closest?.('input, textarea, [contenteditable]')) return;
+      at = konamiStep(at, e.key);
+      if (at < KONAMI.length) return;
+      at = 0;
+      setEgg(KONAMI_LINE);
+      clearTimeout(hide);
+      hide = setTimeout(() => setEgg(null), 8000);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      clearTimeout(hide);
+    };
+  }, []);
+
   /**
    * Answering is not wired to a verb yet — `answer` is Phase 3 of docs/plan.md
    * and needs a protocol bump. Saying so is better than a button that silently
@@ -66,7 +97,7 @@ function App() {
     if (rc) window.open(rc, '_blank', 'noopener');
   };
 
-  return <Console snap={snap} onAnswer={onAnswer} />;
+  return <Console snap={snap} onAnswer={onAnswer} egg={egg} />;
 }
 
 const root = document.getElementById('console-root');
