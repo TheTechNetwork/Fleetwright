@@ -469,8 +469,9 @@ test('GET /api/hosts describes the host and never the socket carrying it', async
     // `ephemeral` and `owner` are descriptions of the host — is it expected to
     // vanish, and whose runner is it — so they belong here. The pin exists to
     // catch the OTHER kind of addition: a socket, a server, a process handle.
-    // `takesSessions` is the same: whether a start would reach it.
-    ['connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'owner', 'reason', 'state', 'takesSessions'],
+    // `takesSessions` is the same: whether a start would reach it; and
+    // `administers`, whether its settings, update and reboot would.
+    ['administers', 'connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'owner', 'reason', 'state', 'takesSessions'],
     'the entry is a description of the host, not a window onto the process serving it',
   );
 

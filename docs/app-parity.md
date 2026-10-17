@@ -463,10 +463,15 @@ that refuses after the tap; not knowing (an older coordinator) draws nothing.
 **Not yet true of a machine's own controls.** Releases, image, labels, the
 software update and reboot are the admin's on every machine, and a member's
 only on a machine that acts for them alone; on any other the coordinator
-answers a member's with `not_admin` (`place`, `scheduler.js`). Both phones
-still draw them on every machine's page, so on the operator's machines and on
-ones other members enrolled a member meets that refusal after the tap. Drawing
-them only where the viewer may use them is app work still to do.
+answers a member's with `not_admin` (`place`, `scheduler.js`). Each host in
+`GET /api/hosts` says which with `administers`: true where these controls do
+something for the person asking, false where the coordinator would refuse
+them, and absent from a coordinator too old to send it, which is cannot-tell.
+It comes from the same rule placement refuses with (`administers`,
+`hosts.js`), so the two cannot disagree. Both phones still draw the controls
+on every machine's page, so on the operator's machines and on ones other
+members enrolled a member meets that refusal after the tap; drawing them only
+where `administers` is true lands in the iOS and Android changes.
 
 **An admin can view the fleet as a member** (You, This fleet, View as a member).
 Every request then carries `x-fleetwright-view: member` and the coordinator

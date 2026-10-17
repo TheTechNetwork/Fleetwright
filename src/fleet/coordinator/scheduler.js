@@ -54,7 +54,7 @@
 // than the one holding the session. The hub answers whatever it is sent and
 // asks nobody whose prompt it is, so this check is the only one.
 import { runsNoSessions } from './registry.js';
-import { mayActFor } from './hosts.js';
+import { mayActFor, administers } from './hosts.js';
 
 const PINNED = new Set([
   'resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge', 'answer',
@@ -533,7 +533,9 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // any connected box a member named, the operator's included, and a tag
     // fanned the settings out to every box carrying it (sixth audit). A member
     // still administers a box that acts for them alone, which holds nobody's
-    // work but theirs; the admin and the break-glass token, any box.
+    // work but theirs; the admin and the break-glass token, any box. The rule
+    // is hosts.js administers, which the snapshot reads too, so a phone draws
+    // these controls exactly where this lets them through.
     const journal = verb === 'logs' && Boolean(requester) && !requester?.admin;
     const administer =
       (setting || verb === 'update' || verb === 'upgrade' || verb === 'reboot') && Boolean(requester) && !requester?.admin;
@@ -541,7 +543,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     const reachable = credential
       ? holders()
       : ownOnly
-        ? registry.reachable().filter((h) => h.actsFor && mayActFor(h, requester?.email))
+        ? registry.reachable().filter((h) => administers(h, requester))
         : registry.reachable();
     if (ownOnly && registry.reachable().length && (!reachable.length || (preferHost && !reachable.some((h) => h.hostId === preferHost)))) {
       return {

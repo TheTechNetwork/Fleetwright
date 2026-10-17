@@ -322,6 +322,18 @@ test('a box is administered by the admin, or by the one person the box acts for'
   assert.equal((await send('sandbox', null, { preferHost: 'bob-box' })).ok, true);
   assert.equal((await send('labels', ADMIN, { preferLabels: ['shared'] })).hosts.length, 3);
   assert.deepEqual(delivered.slice(-6), ['reboot@alice-box', 'reboot@ops-box', 'sandbox@bob-box', 'labels@ops-box', 'labels@bob-box', 'labels@alice-box']);
+
+  // AND THE PHONES ARE TOLD THE SAME, so the controls are drawn exactly where
+  // placement lets them through (C-2): `administers` on each snapshot host.
+  const expected = { alice: [false, false, true], admin: [true, true, true], breakGlass: [true, true, true] };
+  for (const [who, requester] of [['alice', ALICE], ['admin', ADMIN], ['breakGlass', null]]) {
+    const told = core.snapshot(requester).hosts;
+    const hosts = ['ops-box', 'bob-box', 'alice-box'];
+    const says = hosts.map((id) => told.find((/** @type {any} */ h) => h.hostId === id)?.administers);
+    const lets = hosts.map((id) => place(core.registry, { verb: 'reboot', params: {} }, { preferHost: id, requester }).kind === 'host');
+    assert.deepEqual(says, expected[who], `${who}: the snapshot says ${says}`);
+    assert.deepEqual(says, lets, `${who}: the snapshot and placement disagree`);
+  }
 });
 
 /**

@@ -15,7 +15,7 @@
 import { HostRegistry, runsNoSessions, attributed } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
-import { HostIdentities, actsFor, mayActFor, believedCreator } from './hosts.js';
+import { HostIdentities, actsFor, mayActFor, believedCreator, administers } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { place } from './scheduler.js';
@@ -5074,9 +5074,18 @@ export class CoordinatorCore {
       // start would reach (C-2): not one that is not reporting or degraded,
       // not somebody else's temporary machine, and never a pool's own
       // machine, which runs no sessions and says so (`holder`).
+      //
+      // AND WHETHER THIS PERSON ADMINISTERS IT, by the rule placement refuses
+      // with (hosts.js administers), so a machine's releases, image, labels,
+      // update and reboot are drawn only where they do something (C-2): every
+      // machine for the admin, a member's only on one that acts for them
+      // alone. Read from the registry entry, which carries `actsFor`; list()
+      // leaves it out. A coordinator too old to send it omits it, and absent
+      // is cannot-tell.
       hosts: this.registry.list().map((h) => ({
         ...visibleHost(h, requester, this.registry.hosts.get(h.hostId)),
         takesSessions: takesSessions(h, requester),
+        administers: administers(this.registry.hosts.get(h.hostId), requester),
         ...(runsNoSessions(h.hostId) ? { holder: true } : {}),
       })),
       devices: this.devices.size,
