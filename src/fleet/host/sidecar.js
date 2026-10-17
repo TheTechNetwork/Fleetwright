@@ -569,6 +569,15 @@ export class Sidecar {
         imageReporter: (/** @type {string} */ job) => this.#askForJob('image-reporter', job),
         // And how it reaches a pool through the phone adding it.
         relay: { open: (relay) => this.relays.open(relay), done: (relay) => this.relays.done(relay) },
+        // AFTER A RECONNECT, however it ended, a look with the fleet's own
+        // token and a health frame saying what it saw: the pools coming back
+        // is reported by the eyes that reported them gone, so the
+        // coordinator's `xo.pool-back` rests on the fleet's view and not on
+        // what an admin session happened to see.
+        onEnd: ({ purpose }) => {
+          if (purpose !== 'reconnect' || !this.pools?.held.size) return;
+          void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
+        },
       });
     }
     const actor = intent.actor ? String(intent.actor) : null;

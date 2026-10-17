@@ -21,15 +21,15 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits } from '../src/fleet/host/xo-setup.js';
-import { XOSETUP_STEPS, XOPOLICY_STEPS } from '../src/fleet/protocol/intents.js';
-import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupWatchAad } from '../src/fleet/seal.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
+import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupWatchAad } from '../src/fleet/seal.js';
 import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
 import { standIn, PASSWORD, skip, xenStoreAsXo } from './helpers/xo-stand-in.js';
 
 /** A machine with an enrolment key, collecting what it reports. */
-async function machine(/** @type {{ log?: any, policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, dropImage?: any, holderPin?: any, imageReporter?: any, relay?: any }} */ opts = {}) {
+async function machine(/** @type {{ log?: any, policyWaitMs?: number, coordinatorUrl?: string, buildImage?: any, dropImage?: any, holderPin?: any, imageReporter?: any, relay?: any, now?: () => number, sleep?: (ms: number) => Promise<void>, onEnd?: any }} */ opts = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
@@ -259,7 +259,7 @@ test('the limits are half of what the pool has, and every step has words', () =>
     limitsFrom([{ cpus: { cores: 6 } }, { cpus: { cores: 2 } }], [{ id: 's', size: 100, physical_usage: 20 }], [{ default_SR: 's' }]),
     { cpus: 4, memory: 1024 ** 3, disk: 10 * 1024 ** 3 },
   );
-  for (const key of XOSETUP_STEPS) assert.ok(STEP_WORDS[key], key);
+  for (const key of [...XOSETUP_STEPS, ...XORECONNECT_STEPS]) assert.ok(STEP_WORDS[key], key);
 });
 
 test('a certificate nothing vouches for stops setup unless the person accepted it, before a byte is sent', { skip }, async (t) => {
@@ -337,7 +337,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
+    ['policy', 'reconnect', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -981,4 +981,307 @@ test('through a phone, a policy makes the pool its own machine, and gigabyte bui
   // EVERY CONNECTION WENT THROUGH THE PHONE, and the relay was given up once.
   assert.equal(relay.opened.length, xo.connections());
   assert.deepEqual(relay.done, [R]);
+});
+
+// --- reconnecting a pool's servers -------------------------------------------
+//
+// ASKED FOR: "When Xen shows no pool, reconnecting all hosts usually fixes it.
+// Why don't we do it instead of me logging in?" One tap and Face ID on the
+// phone, which seals the kept admin sign-in to one job here. The servers are
+// the stand-in's, behaving as xo-server's xen-servers.mjs does; the clock is
+// the test's, so three minutes of waiting and ten of holding a session are
+// times, not counts of looks, and take none of the suite's.
+
+/** A clock the job waits on: a pause moves it on and returns at once. */
+function clock() {
+  let t = 1_800_000_000_000;
+  /** @type {Array<(ms: number) => void>} */
+  const onPause = [];
+  return {
+    now: () => t,
+    sleep: async (/** @type {number} */ ms) => {
+      t += ms;
+      for (const f of onPause) f(ms);
+      await new Promise((r) => setImmediate(r));
+    },
+    onPause,
+    get elapsed() {
+      return t - 1_800_000_000_000;
+    },
+  };
+}
+
+/** What the phone seals for a reconnect: the admin sign-in, the purpose, and a key for the answer. */
+async function reconnecting(/** @type {any} */ xo, /** @type {XoSetups} */ setups, /** @type {string} */ actor) {
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  assert.equal(begun.ok, true, begun.text);
+  const reply = await newSealKey();
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, purpose: 'reconnect', xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey });
+  const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
+  assert.equal(ran.ok, true, ran.text);
+  return { begun, reply, job: begun.xosetup.job };
+}
+
+/** The per-server account the phone opens, under the reconnect's own binding. */
+async function account(/** @type {any} */ end, /** @type {any} */ reply, /** @type {string} */ address) {
+  const [epk, iv, ct] = String(end.result).split('.');
+  return /** @type {any} */ (await open({ ...reply, aad: xosetupReconnectAad(end.job, address), sealed: { epk, iv, ct } }));
+}
+
+/** Every connection the job opened is closed again: the admin session went with it. */
+async function letGo(/** @type {any} */ xo) {
+  for (let i = 0; i < 200 && xo.live() > 0; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(xo.live(), 0, 'the admin session was closed');
+}
+
+/** A server of Xen Orchestra's, as the stand-in plays it. @param {string} id @param {Record<string, any>} [extra] */
+const xenServer = (id, extra = {}) => ({ id, label: `Rack ${id}`, host: `10.0.0.${id.charCodeAt(0) - 96}`, status: 'connected', enabled: true, poolId: `pool-${id}`, poolName: `Pool ${id.toUpperCase()}`, ...extra });
+
+/** How many times each server was asked to do something. @param {any} xo @param {string} method */
+const asked = (xo, method) => xo.calls.filter((/** @type {any} */ c) => c.method === method).map((/** @type {any} */ c) => c.params.id);
+
+test('a reconnect leaves a connected server, enables a disconnected one, cycles one stuck or erroring, and leaves one a person turned off', { skip }, async (t) => {
+  const xo = await standIn(t, {
+    servers: [
+      xenServer('a'),
+      xenServer('b', { status: 'disconnected', error: { code: 'ECONNRESET', message: 'socket hang up' } }),
+      // Stuck: it takes two looks to let go once disabled, and Xen Orchestra
+      // is still busy with an attempt of its own for the first two enables.
+      xenServer('c', { status: 'connecting', linger: 2, busy: 2 }),
+      xenServer('d', { error: { message: 'the event loop stopped' } }),
+      xenServer('e', { status: 'disconnected', enabled: false }),
+    ],
+  });
+  const c = clock();
+  const { setups, events } = await machine({ now: c.now, sleep: c.sleep });
+  const actor = 'eli@example.com';
+  const { reply, job } = await reconnecting(xo, setups, actor);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.equal(end.of, XORECONNECT_STEPS.length);
+
+  // ONE AT A TIME, each as its state asks, and the stuck one's enable asked
+  // again while Xen Orchestra was still connecting it.
+  assert.deepEqual(asked(xo, 'server.enable'), ['b', 'c', 'c', 'c', 'd']);
+  assert.deepEqual(asked(xo, 'server.disable'), ['c', 'd']);
+  assert.equal(c.elapsed, 3 * 2_000, 'two seconds before each try again, and no wait once the pools showed');
+
+  // WHAT BECAME OF EACH, for the phone alone, under its own binding.
+  const said = await account(end, reply, xo.address);
+  assert.deepEqual(said.servers, [
+    { label: 'Rack a', host: '10.0.0.1', before: 'connected', enabled: true, after: 'connected', action: 'left' },
+    { label: 'Rack b', host: '10.0.0.2', before: 'disconnected', enabled: true, after: 'connected', action: 'enabled' },
+    { label: 'Rack c', host: '10.0.0.3', before: 'connecting', enabled: true, after: 'connected', action: 'cycled' },
+    { label: 'Rack d', host: '10.0.0.4', before: 'connected', enabled: true, after: 'connected', action: 'cycled' },
+    { label: 'Rack e', host: '10.0.0.5', before: 'disconnected', enabled: false, after: 'disconnected', action: 'skipped-disabled' },
+  ]);
+  assert.deepEqual(said.pools.map((/** @type {any} */ p) => p.id).sort(), ['pool-a', 'pool-b', 'pool-c', 'pool-d']);
+  assert.equal(said.v, 1);
+  const [epk, iv, ct] = end.result.split('.');
+  await assert.rejects(open({ ...reply, aad: xosetupHandoffAad(job, xo.address), sealed: { epk, iv, ct } }), 'not under a setup’s binding');
+  await assert.rejects(open({ ...reply, aad: xosetupReconnectAad(job, 'elsewhere.lan'), sealed: { epk, iv, ct } }), 'nor for another address');
+
+  // WHAT THE COORDINATOR CARRIES is counts and the address: no server's
+  // name, no pool master's address, no password.
+  assert.equal(end.text, `4 of 5 servers are connected again; Xen Orchestra at ${xo.address} shows 4 pools. One server is turned off in Xen Orchestra and was left that way.`);
+  const relayed = JSON.stringify({ events, end: { ...end, result: undefined } });
+  for (const secret of ['Rack ', '10.0.0.', 'Pool A', PASSWORD]) assert.ok(!relayed.includes(secret), secret);
+  // FROM `servers` ON, said as a reconnect's.
+  assert.deepEqual(events.map((e) => [e.phase, e.state, e.purpose]), [['servers', 'running', 'reconnect'], ['reconnect', 'running', 'reconnect'], ['wait', 'running', 'reconnect'], ['done', 'done', 'reconnect']]);
+  assert.ok(!xo.calls.some((/** @type {any} */ c) => /^(user|token|resourceSet)\./.test(c.method)), 'nothing else is changed');
+  assert.ok(!JSON.stringify([...setups.jobs.values()]).includes(PASSWORD), 'the job kept no copy of the sign-in');
+  await letGo(xo);
+});
+
+test('a server the pool master refuses, or whose pool is already connected, is said and not tried again; one Xen Orchestra stays busy with is tried for half a minute', { skip }, async (t) => {
+  const xo = await standIn(t, {
+    servers: [
+      xenServer('f', { status: 'disconnected', refuse: 'auth' }),
+      xenServer('g', { status: 'connecting', refuse: 'pool' }),
+      xenServer('h', { status: 'connecting', busy: 1000 }),
+    ],
+  });
+  const c = clock();
+  const { setups } = await machine({ now: c.now, sleep: c.sleep });
+  const actor = 'eli@example.com';
+  const { reply, job } = await reconnecting(xo, setups, actor);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'failed');
+  assert.equal(end.text, `0 of 3 servers are connected; Xen Orchestra at ${xo.address} shows no pools. 3 could not be reconnected; which and why are on your phone.`);
+  const enables = asked(xo, 'server.enable');
+  assert.deepEqual([enables.filter((x) => x === 'f').length, enables.filter((x) => x === 'g').length], [1, 1], 'the two Xen Orchestra will not retry are asked once');
+  assert.equal(enables.filter((x) => x === 'h').length, 16, 'every two seconds for half a minute, and then no more');
+  const said = await account(end, reply, xo.address);
+  const [f, g, h] = said.servers;
+  assert.equal(f.action, 'failed');
+  assert.match(f.error, /refused the user name and password .*SESSION_AUTHENTICATION_FAILED/);
+  assert.equal(g.action, 'failed');
+  assert.match(g.error, /already has this pool connected .*PoolAlreadyConnected/);
+  assert.doesNotMatch(g.error, /turned off/, 'its enable got as far as turning it back on');
+  // TURNED OFF TO BE CYCLED, and never back on: said, read back from Xen
+  // Orchestra rather than assumed.
+  assert.equal(h.action, 'failed');
+  assert.match(h.error, /still busy connecting it after 30 seconds\. It is turned off in Xen Orchestra now; turn it on there/);
+  assert.equal(h.after, 'disconnected');
+  await letGo(xo);
+});
+
+test('a reconnect waits three minutes for the pools and no longer, and still hands back what it did', { skip }, async (t) => {
+  const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected', slow: Infinity })] });
+  const c = clock();
+  const { setups, events } = await machine({ now: c.now, sleep: c.sleep });
+  const actor = 'eli@example.com';
+  const { reply, job } = await reconnecting(xo, setups, actor);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'failed');
+  assert.equal(end.text, `After three minutes, 0 of 1 server is connected; Xen Orchestra at ${xo.address} shows no pools.`);
+  assert.equal(c.elapsed, 3 * 60_000, 'a look every five seconds for three minutes');
+  assert.equal(xo.calls.filter((/** @type {any} */ x) => x.method === 'server.getAll').length, 1 + 37);
+  const said = await account(end, reply, xo.address);
+  assert.deepEqual(said.servers.map((/** @type {any} */ s) => [s.action, s.after]), [['enabled', 'connecting']]);
+  assert.deepEqual(said.pools, []);
+  assert.deepEqual(events.at(-1), { event: 'xosetup.progress', job, step: 4, of: 5, phase: 'wait', state: 'failed', text: end.text, purpose: 'reconnect' });
+  await letGo(xo);
+});
+
+test('every server already connected changes nothing and says so', { skip }, async (t) => {
+  const xo = await standIn(t, { servers: [xenServer('a'), xenServer('b')] });
+  const c = clock();
+  const { setups } = await machine({ now: c.now, sleep: c.sleep });
+  const actor = 'eli@example.com';
+  const { reply, job } = await reconnecting(xo, setups, actor);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.equal(end.text, `All 2 servers of Xen Orchestra at ${xo.address} were already connected, so nothing was changed; it shows 2 pools.`);
+  assert.ok(!xo.calls.some((/** @type {any} */ x) => x.method === 'server.enable' || x.method === 'server.disable'));
+  assert.equal(c.elapsed, 0);
+  assert.deepEqual((await account(end, reply, xo.address)).servers.map((/** @type {any} */ s) => s.action), ['left', 'left']);
+  await letGo(xo);
+});
+
+test('a reconnect cancelled while it waits stops there, and one that would outrun ten minutes stops before a server it could not finish', { skip }, async (t) => {
+  const actor = 'eli@example.com';
+  {
+    const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected', slow: Infinity })] });
+    const c = clock();
+    const { setups } = await machine({ now: c.now, sleep: c.sleep });
+    const { reply, job } = await reconnecting(xo, setups, actor);
+    c.onPause.push(() => {
+      if (c.elapsed === 15_000) setups.cancel({ job, actor });
+    });
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled');
+    assert.match(end.text, /^Cancelled while reconnecting the servers\. What was already asked of Xen Orchestra stands/);
+    assert.equal(c.elapsed, 15_000, 'at the next pause, not three minutes later');
+    assert.deepEqual((await account(end, reply, xo.address)).servers.map((/** @type {any} */ s) => s.action), ['enabled']);
+    await letGo(xo);
+  }
+  {
+    // Each of these takes a minute: half of it waiting to let go, half
+    // asking again to be enabled. Ten minutes fit nine and a bit.
+    const many = 'ijklmnopqrst'.split('');
+    const xo = await standIn(t, { servers: many.map((id) => xenServer(id, { status: 'connecting', linger: 1000, busy: 1000 })) });
+    const c = clock();
+    const { setups } = await machine({ now: c.now, sleep: c.sleep });
+    const { reply, job } = await reconnecting(xo, setups, actor);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'failed');
+    assert.match(end.text, /^It stopped at the ten minutes this machine holds an admin session for, before any server it had no time to finish\. Which servers were touched is on your phone\.$/);
+    assert.ok(c.elapsed <= 10 * 60_000, `held for ${c.elapsed / 1000} seconds`);
+    const actions = (await account(end, reply, xo.address)).servers.map((/** @type {any} */ s) => s.action);
+    const begun = actions.filter((a) => a === 'failed').length;
+    assert.ok(begun >= 8 && begun < many.length, actions.join());
+    assert.deepEqual(actions.slice(begun), Array(many.length - begun).fill('left'), 'the rest were never touched');
+    assert.equal(new Set(asked(xo, 'server.disable')).size, begun, 'no server was turned off that there was no time to turn on again');
+    await letGo(xo);
+  }
+  {
+    // Cancelled while it was still reaching Xen Orchestra: before the sign-in.
+    const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected' })] });
+    const c = clock();
+    const { setups } = await machine({ now: c.now, sleep: c.sleep });
+    const { job } = await reconnecting(xo, setups, actor);
+    setups.cancel({ job, actor });
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled');
+    assert.equal(end.text, 'Cancelled before Signing in. Nothing was changed.');
+    assert.equal(end.result, undefined);
+    assert.ok(!xo.calls.some((/** @type {any} */ x) => x.method === 'session.signIn'), 'the sign-in was never sent');
+    await letGo(xo);
+  }
+});
+
+test('ten minutes after a reconnect began, its admin session is closed under whatever it is waiting on', { skip }, async (t) => {
+  // THE CLOCK ON THE WALL, not the job's: a timer the job cannot be busy
+  // through. Everything else here waits on setImmediate, because setTimeout
+  // is the test's from now on.
+  const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected', slow: Infinity })] });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const turn = () => new Promise((r) => setImmediate(r));
+  /** Turns until `done` says so, for at most five seconds of the real clock. @param {() => boolean} done */
+  const until = async (done) => {
+    for (const t0 = performance.now(); !done() && performance.now() - t0 < 5_000;) await turn();
+  };
+  /** @type {(() => void)|null} */
+  let parked = null;
+  const { setups } = await machine({ sleep: () => new Promise((r) => { parked = () => r(undefined); }) });
+  const actor = 'eli@example.com';
+  const { reply, job } = await reconnecting(xo, setups, actor);
+  await until(() => parked !== null);
+  assert.ok(parked, 'the job is waiting for the pools');
+  t.mock.timers.tick(10 * 60_000);
+  /** @type {() => void} */ (parked)();
+  /** @type {any} */
+  let end;
+  await until(() => (end = setups.status({ job, actor }).xosetup).state !== 'running');
+  assert.equal(end.state, 'failed');
+  assert.match(end.text, /^It stopped at the ten minutes this machine holds an admin session for/);
+  assert.deepEqual((await account(end, reply, xo.address)).servers.map((/** @type {any} */ s) => s.action), ['enabled']);
+  await until(() => xo.live() === 0);
+  assert.equal(xo.live(), 0, 'the admin session was closed');
+});
+
+test('a reconnect whose account cannot be sealed, or whose listener throws, still ends, and the journal says why', { skip }, async (t) => {
+  // A KEY THAT LOOKS LIKE ONE and is not a point on the curve, and a sidecar
+  // whose listener throws: neither may leave the job running, or become a
+  // rejection nobody catches in the process that holds every pool's token.
+  const xo = await standIn(t, { servers: [xenServer('a')] });
+  /** @type {string[]} */
+  const journal = [];
+  const c = clock();
+  const { setups } = await machine({ now: c.now, sleep: c.sleep, log: { info() {}, warn: (/** @type {string} */ m) => journal.push(m) }, onEnd: () => { throw new Error('the listener broke'); } });
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, purpose: 'reconnect', xo: { email: 'admin@admin.net', password: PASSWORD }, reply: 'B'.repeat(87) });
+  assert.equal((await setups.run({ job: begun.xosetup.job, sealed, actor })).ok, true);
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.equal(end.result, undefined);
+  for (let i = 0; i < 100 && journal.length < 2; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.ok(journal.some((m) => /could not seal what it did to the servers/.test(m)), journal.join('\n'));
+  assert.ok(journal.some((m) => /telling the sidecar failed: the listener broke/.test(m)), journal.join('\n'));
+  await letGo(xo);
+});
+
+test('a reconnect is refused before anything changes where Xen Orchestra cannot, has no servers, or the account is not an admin', { skip }, async (t) => {
+  const actor = 'eli@example.com';
+  for (const [opts, phase, words, reported] of /** @type {Array<[any, string, RegExp, boolean]>} */ ([
+    [{ servers: [xenServer('b', { status: 'disconnected' })], drop: ['server.enable'] }, 'servers', /does not offer server\.enable, so its servers cannot be reconnected from here\. Nothing was changed\./, true],
+    [{ servers: [] }, 'servers', /no servers to reconnect/, true],
+    // Before `servers`, nothing is reported: the person is looking at it.
+    [{ servers: [xenServer('b', { status: 'disconnected' })], admin: false }, 'sign-in', /not a Xen Orchestra admin, and reconnecting its servers needs one/, false],
+  ])) {
+    const xo = await standIn(t, opts);
+    const c = clock();
+    const { setups, events } = await machine({ now: c.now, sleep: c.sleep });
+    const { job } = await reconnecting(xo, setups, actor);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'failed');
+    assert.equal(end.phase, phase);
+    assert.match(end.text, words);
+    assert.equal(end.result, undefined, 'nothing was done, so there is nothing to hand back');
+    assert.equal(events.length > 0, reported);
+    assert.ok(!xo.calls.some((/** @type {any} */ x) => x.method === 'server.enable' || x.method === 'server.disable'));
+    await letGo(xo);
+  }
 });

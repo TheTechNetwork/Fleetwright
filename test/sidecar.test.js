@@ -16,6 +16,9 @@ import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 import { generateKeyPair, sign, verify, signingInput } from '../src/fleet/crypto.js';
 import { mkdtempSync, readFileSync } from 'node:fs';
+import { XoPools } from '../src/fleet/host/xo-pools.js';
+import { seal, newSealKey, xosetupAad } from '../src/fleet/seal.js';
+import { standIn, PASSWORD, skip as noStandIn } from './helpers/xo-stand-in.js';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -1038,6 +1041,62 @@ test('what a box reads of a pool’s edge routers rides on that pool’s entry i
   const { sidecar } = await setup(t, {}, { xoPools, edgeWatch });
   const health = /** @type {any} */ (await sidecar.health());
   assert.deepEqual(health.xo, [{ address: 'xo.lan', owner: 'eli@example.com', reachable: true, edges }, { address: 'other.lan', owner: 'eli@example.com', reachable: true }]);
+});
+
+test('after a pool’s servers are reconnected, the box looks again with the fleet’s own token and its health says what that saw', { skip: noStandIn }, async (t) => {
+  // THE FLEET'S OWN EYES: the limited token this box holds saw the pool,
+  // then saw none, and the health frame said so. A person's phone has the
+  // admin sign-in sent to reconnect the servers; the pool coming back must
+  // be reported by the same token that reported it gone.
+  const xo = await standIn(t, { servers: [{ id: 'b', label: 'Rack b', host: '10.0.0.2', status: 'disconnected', enabled: true, poolId: 'pool-1' }] });
+  const rack = { type: 'pool', id: 'pool-1', name_label: 'rack' };
+  /** @type {any[]} */
+  const fleetSees = [rack];
+  const fleetRpc = {
+    async call(/** @type {string} */ method, /** @type {any} */ params) {
+      if (method === 'session.signIn') return { id: 'u1', permission: 'none' };
+      if (method === 'xo.getAllObjects') return params.filter.type === 'pool' ? Object.fromEntries(fleetSees.map((o) => [o.id, o])) : {};
+      return true;
+    },
+    close() {},
+  };
+  const xoPools = new XoPools({ connect: /** @type {any} */ (async () => fleetRpc) });
+  xoPools.adopt([{ email: 'eli@example.com', items: [{ name: `hypervisor:${xo.address}`, value: JSON.stringify({ v: 1, address: xo.address, pin: xo.pin, token: 'xo-limited-token' }) }] }]);
+  await xoPools.refresh();
+  fleetSees.length = 0;
+  await xoPools.refresh();
+  const keys = await generateKeyPair();
+  const { sidecar, transport } = await setup(t, {}, {
+    vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ m) => sign(keys.privateJwk, m) },
+    xoStateDir: mkdtempSync(path.join(os.tmpdir(), 'sidecar-xo-')),
+    xoPools,
+  });
+  const lost = /** @type {any} */ (await sidecar.health()).xo[0];
+  assert.deepEqual([lost.reachable, lost.pools, lost.missing], [true, [], [{ id: 'pool-1', name: 'rack' }]]);
+  assert.equal(typeof lost.missingFor, 'number');
+
+  fleetSees.push(rack);
+  const actor = 'eli@example.com';
+  const begun = await sidecar.handle(intent({ id: 'idem-0000002', verb: 'xosetup', params: { phase: 'begin', address: xo.address, pin: xo.pin, trust: 'accepted' }, actor }));
+  assert.equal(begun.ok, true, begun.text);
+  const { job, key } = begun.xosetup;
+  const reply = await newSealKey();
+  const box = await seal({ to: key, aad: xosetupAad(job, xo.address), payload: { v: 1, purpose: 'reconnect', xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey } });
+  const ran = await sidecar.handle(intent({ id: 'idem-0000003', verb: 'xosetup', params: { phase: 'run', job, sealed: `${box.epk}.${box.iv}.${box.ct}` }, actor }));
+  assert.equal(ran.ok, true, ran.text);
+  // The box is not started, so nothing else looks at the pools: a frame
+  // with the pool in it is the look the job's end asked for.
+  /** @type {any} */
+  let back;
+  for (let i = 0; i < 300 && !back; i++) {
+    await new Promise((r) => setTimeout(r, 10));
+    back = transport.sent.map((/** @type {any} */ m) => m.kind === 'health' && m.health.xo?.[0]).find((/** @type {any} */ x) => x?.pools?.length);
+  }
+  assert.ok(back, 'a health frame saying what the fleet’s token saw was pushed once the job ended');
+  assert.deepEqual(back.pools, [{ id: 'pool-1', name: 'rack' }]);
+  assert.equal('missing' in back, false, 'nothing missing any more');
+  const end = await sidecar.handle(intent({ id: 'idem-0000004', verb: 'xosetup', params: { phase: 'status', job }, actor }));
+  assert.equal(end.xosetup.state, 'done', end.text);
 });
 
 test('a machine from a hypervisor hands its owner’s login to its hub once, then forgets the file', async (t) => {
