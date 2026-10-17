@@ -166,7 +166,10 @@ can read the run.
 **A run started by hand still uses the reusable runner token.** Both are
 first-class: dispatching needs a permanent host with GitHub connected, and
 pressing Run workflow needs neither. The enrolment route asks the prefix which
-store to consult, so one can never be accepted in place of the other.
+store to consult, so one can never be accepted in place of the other. What
+differs is private code: a runner started by hand is minted repository tokens
+only by a permanent box that can check who started it
+([below](#private-code-on-a-runner)).
 
 A runner token belongs to a person, so it is minted with a device credential
 rather than the admin token — the MCP server's, or a phone's. Both phones have
@@ -393,6 +396,23 @@ for read and write only for push; the token names one repository, and GitHub
 kills it in an hour. The runner holds it in memory until five minutes before it
 dies and mints again after that, so a long build does not notice.
 
+**And the account that started it is the runner's owner, or the minting
+Worker is not asked.** The Worker mints for whoever started the job, and a
+runner admitted with a reusable runner token belongs to whoever minted the
+token: with one member's `fwr_` as a shared repository's secret, another
+member pressing Run workflow there enrolled the first member's runner, and it
+was minted the second member's push for the first member's sessions. So the
+coordinator, which alone knows how a runner was admitted, asks the Worker only
+for a runner the fleet dispatched with a [ticket](#the-ticket), and only with
+a job token naming the GitHub account that started it when it enrolled. Every
+other runner is minted for by a permanent box, as its owner, which mints only
+when the job was started by the GitHub account connected for that person
+there; with no such box the refusal says why the Worker was passed over, and a
+runner started by hand reaches public code only. What a ticket does not prove
+is that whoever spent it is its owner: somebody who reads one out of a public
+run and spends it, within its window, from a run they start themselves, gives
+that person's runner their own reach, by their own act and nobody else's.
+
 **The coordinator carries it and cannot use it.** The answer is sealed to a key
 that exists only on the runner, for that one request ([`seal.js`](../src/fleet/seal.js)).
 Swapping in its own key, or a different repository, breaks GitHub's signature
@@ -441,9 +461,10 @@ or better an encrypted systemd credential named `github-app-key`;
 box answers "can you reach this" with the person's own GitHub connection
 rather than by asking GitHub about them, so it needs that connection too. The
 coordinator asks the minting Worker first and a box only when the Worker holds
-no key or cannot be reached; a refusal from the Worker is final. With neither,
-the refusal names what is missing in the fleet's events and in the runner's
-log. git itself only sees no answer.
+no key or cannot be reached; a refusal from the Worker is final. A runner the
+Worker is not asked for at all (above) goes to a box from the start. With
+neither, the refusal names what is missing in the fleet's events and in the
+runner's log. git itself only sees no answer.
 
 **The key github-app.md recorded as received should not be the one used.** It
 arrived through a chat transcript and was never installed anywhere; generate a
@@ -453,7 +474,7 @@ fresh one and delete the old one on github.com.
 
 | | |
 |---|---|
-| `git clone`, `fetch`, `push` over https to github.com | a token for that one repository, when the minting Worker holds the key (or a box does) and the person can reach the repository |
+| `git clone`, `fetch`, `push` over https to github.com | a token for that one repository, when the person can reach it and started the job: from the minting Worker for a runner the fleet dispatched for them, from a box holding the key and their GitHub connection for one started by hand |
 | `gh` | `eval "$(fleet-cred github owner/repo)"` first. It is not wired in automatically, because `gh` does not say which repository it is about to act on |
 | any other host | nothing — the helper is registered for github.com only, and answers nothing else |
 | a fleet with no minting Worker key and no minting box | public code, exactly as before; git gets no answer and falls through |

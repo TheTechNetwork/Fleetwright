@@ -563,6 +563,11 @@ export class Fleet {
         enrolledBy: `actions:${job.repository}`,
         owner: claimedOwner,
         ephemeral: true,
+        // WHICH CLAIM SAID WHOSE IT IS, and which account started the job:
+        // only a ticket's runner is minted for by the actor-keyed Worker. See
+        // CoordinatorCore#onRunnerMint.
+        admittedBy: ticket ? 'ticket' : 'runner-token',
+        actorId: job.actorId,
       });
       await this.#saveEnrollment();
       // The spent ticket, written down as well as the new host. Both halves or
