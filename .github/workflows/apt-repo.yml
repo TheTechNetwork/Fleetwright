@@ -144,7 +144,7 @@ jobs:
       - uses: actions/setup-node@v7.1.0
         if: steps.key.outputs.present == 'true'
         with:
-          node-version: '26.11.1'
+          node-version: '26.12.0'
 
       # The coordinator's wrangler, pinned in worker/package.json, so there is
       # one wrangler version in this repository and Renovate moves it once.
