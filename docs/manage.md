@@ -100,6 +100,9 @@ then **Pools**, **Hosts**, **VMs** and **Storage**, each a heading only when
 there is something under it, each row a card that opens the component's page.
 **Change what the fleet may use** is a row at the foot of the pool's page, for
 an admin, beside what it governs; it opens the same policy flow as before.
+**Reconnect its servers** is the row beside it, for an admin, drawn only once
+the page has loaded and shows no pool, or lacks a pool name this phone kept
+from setup (`hypervisors.md`, "When a pool goes missing").
 The Hypervisors section keeps its gate: it is drawn for a known admin, since
 the pools in it are the ones an admin set up from this phone.
 
@@ -224,6 +227,7 @@ so. What it costs to undo decides how it asks.
 | Grow a disk | `disk.resize`, else `vdi.set`, the host's order (`RESIZE_METHODS`) | **running or not**, never smaller | asks: nothing is lost, and it cannot be undone |
 | Enter, leave maintenance mode | `host.setMaintenanceMode`, else `host.disable` and `host.enable` | running; in maintenance mode | one tap |
 | Reboot a host | `host.restart` | running or in maintenance mode | names how many VMs this phone can see running on it |
+| Reconnect its servers, on the pool's page | not this token's: the admin sign-in sealed to one of your machines (`xosetup`, `purpose: reconnect`), which calls `server.enable`, or `server.disable` then `server.enable`, on each server that is not connected (`hypervisors.md`) | an admin's, once the page has loaded and shows no pool, or lacks a pool name kept from setup | Face ID or a fingerprint for a kept admin sign-in, else the admin password typed |
 
 **A clean shutdown needs the guest's tools.** Xen Orchestra asks the guest to
 shut itself down, and a guest with no agent cannot hear it, so when Xen

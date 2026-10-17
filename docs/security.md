@@ -366,6 +366,38 @@ machine of the fleet, through the coordinator.
   biometric unlock, and what is kept never leaves it: the fleet still
   receives only the sign-in sealed to one job's key. It is written only
   after the machine signed in with it, and is off unless turned on.
+- **Reconnecting a pool's servers uses the admin sign-in once, for one job**
+  (`docs/hypervisors.md`, "When a pool goes missing"). The phone opens the
+  kept sign-in with Face ID, Touch ID or a strong fingerprint or face check
+  (or the person types it) and seals it to one job's key on one machine,
+  saying `purpose: reconnect` inside the seal, where a coordinator cannot
+  change it; and only to a machine whose `begin` lists `reconnect`, because
+  an older one would run it as a whole setup. The machine holds the
+  signed-in session, not the password, for at most ten minutes. It calls
+  `server.enable` and `server.disable` and nothing else that changes
+  anything: only on servers that are not connected, or are connected with an
+  error Xen Orchestra recorded; never on a server a person turned off, which
+  stays off; and it keeps nothing afterwards. That is every server Xen
+  Orchestra lists, including pools outside the fleet's resource set, which
+  is what a person reconnecting by hand would touch. Which servers there are,
+  their addresses and what became of each is sealed to the phone under
+  `fleetwright-xosetup-reconnect/v1:<job>:<address>`; the coordinator relays
+  counts and the address. Only an admin can run it.
+- **A lost pool's push is bounded by whose pool it is.** It goes to the
+  owner's and the admins' phones only, once per pool per hour plus one
+  recovery, and to at most eight addresses per person in an hour, since the
+  addresses are a box's word; the event is the owner's, and other members do
+  not see it. Only a box that may act for the owner is listened to, and only
+  a look that reached Xen Orchestra. **A compromised coordinator can push a
+  "pool lost" that is not true**, as it can push anything, with a Reconnect
+  button for any address it likes. The worst that follows is a reconnect the
+  person approved with their face or their password: the phone opens a kept
+  sign-in only for the address it was kept for, the machine still holds the
+  sign-in to that address's pinned certificate, and the job only reconnects
+  servers that were not connected or carried an error. The category
+  `fleet.pool.reconnect` is in the clear to Apple and Google, as the prompt
+  categories are (`docs/push.md`): on a sealed push it says that a pool went
+  missing, never which.
 - **The edge router is built from a pinned image, with nobody's login.**
   The machine downloads OPNsense's published nano image, refuses it unless
   its SHA-256 is the one pinned in the source, and replaces only the default
