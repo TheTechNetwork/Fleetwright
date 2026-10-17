@@ -38,15 +38,22 @@ function fn(/** @type {string} */ source, /** @type {string} */ signature) {
 const AAD = typeof (/** @type {any} */ (seal).xosetupReconnectAad) === 'function'
   ? /** @type {any} */ (seal).xosetupReconnectAad('$job', '$address')
   : 'fleetwright-xosetup-reconnect/v1:$job:$address';
+const SIGNIN_AAD = typeof (/** @type {any} */ (seal).xosetupReconnectSigninAad) === 'function'
+  ? /** @type {any} */ (seal).xosetupReconnectSigninAad('$job', '$address')
+  : 'fleetwright-xosetup-reconnect-signin/v1:$job:$address';
 const STEPS = /** @type {any} */ (intents).XORECONNECT_STEPS ?? ['connect', 'sign-in', 'servers', 'reconnect', 'wait'];
 
-test('Android: the outcome opens under the machine’s binding, and the sign-in goes under setup’s', () => {
+test('Android: the outcome opens under the machine’s binding, and the sign-in goes under one of its own', () => {
   assert.ok(file('Seal.kt').includes(`fun xosetupReconnectAad(job: String, address: String) = "${AAD}"`), AAD);
   const reconnect = file('XoReconnect.kt');
   assert.ok(reconnect.includes('Seal.open(key, Seal.xosetupReconnectAad(job, address), box)'));
-  // `run` is opened before the machine knows what kind of job it is.
-  assert.ok(reconnect.includes('Seal.seal(key, XoSetup.aad(job, address), payload)'));
+  // Never under setup's, which a machine from before reconnect opens and runs
+  // as a whole setup: the machine tries this binding when setup's fails.
+  assert.ok(file('Seal.kt').includes(`fun xosetupReconnectSigninAad(job: String, address: String) = "${SIGNIN_AAD}"`), SIGNIN_AAD);
+  assert.ok(fn(reconnect, 'fun sealSignIn(').includes('Seal.seal(key, Seal.xosetupReconnectSigninAad(job, address), payload)'));
+  assert.ok(!fn(reconnect, 'fun sealSignIn(').includes('XoSetup.aad('), 'a reconnect sign-in is never sealed under setup’s binding');
   assert.ok(reconnect.includes('const val PURPOSE = "reconnect"'));
+  assert.ok(reconnect.includes('const val SIGNIN = "reconnect-signin"'));
   // The steps, in the protocol's order.
   const keys = [...reconnect.matchAll(/^ {8}"([a-z-]+)" to "/gm)].map((m) => m[1]);
   assert.deepEqual(keys, [...STEPS]);
@@ -65,9 +72,22 @@ test('Android: a reconnect sign-in goes only to a machine that says it can, aske
   // Refused, its job is let go rather than left holding a slot.
   assert.match(begin.slice(refuse), /refusal = olderThanReconnect\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);
   assert.ok(sheet.includes('"$hostId is older than reconnecting servers, so nothing was sent.'));
-  // And again at the last line before the seal.
+  // A machine that lists reconnect but not the binding the sign-in goes under
+  // is refused the same way, with its own sentence: a coordinator can add
+  // `reconnect` to an older machine's unsigned `can`, but not make it open a
+  // seal under a name it does not know.
+  const tooOld = begin.indexOf('reconnect && XoReconnect.SIGNIN !in setup.can ->');
+  assert.ok(tooOld > refuse, 'begin checks `can` for the reconnect sign-in after `reconnect`');
+  for (const later of ['XoSetup.verifyKeySig(', 'approved -> run(pending)', 'else -> unvouched = pending']) {
+    assert.ok(begin.indexOf(later) > tooOld, `the reconnect-signin check comes before ${later}`);
+  }
+  assert.match(begin.slice(tooOld), /refusal = olderThanReconnectSignin\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);
+  assert.ok(sheet.includes('"$hostId is too old for this app to send it a reconnect safely, so nothing was sent. Update it,'));
+  // And both again at the last line before the seal.
   const run = fn(sheet, 'suspend fun runReconnect(');
   assert.ok(run.indexOf('XoReconnect.PURPOSE !in p.setup.can') < run.indexOf('XoReconnect.sealSignIn('));
+  assert.match(run, /if \(XoReconnect\.SIGNIN !in p\.setup\.can\) \{\s*password = ""\s*refusal = olderThanReconnectSignin\(p\.hostId\)\s*return\s*\}/);
+  assert.ok(run.indexOf('XoReconnect.SIGNIN !in p.setup.can') < run.indexOf('XoReconnect.sealSignIn('));
   // A reconnect never takes the setup or the policy path.
   assert.match(fn(sheet, 'suspend fun run('), /if \(reconnect\) \{\s*runReconnect\(p\)\s*return\s*\}\s*if \(policy\)/);
 });

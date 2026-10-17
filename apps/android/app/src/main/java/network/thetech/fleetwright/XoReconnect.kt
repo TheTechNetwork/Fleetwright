@@ -23,7 +23,8 @@ import org.json.JSONObject
  *   1. The sealed sign-in carries `purpose: "reconnect"` INSIDE the seal, in
  *      exactly the shape a policy sign-in does, with a key made on this phone
  *      for the outcome to come back to. In memory only, as a policy job's is.
- *      [sealSignIn].
+ *      Sealed under a binding of its own, which only a machine whose `begin`
+ *      lists `reconnect-signin` opens. [sealSignIn].
  *   2. The machine refuses nothing it was not asked: it reconnects only the
  *      servers that are not connected, leaves a server somebody turned off
  *      off, and changes nothing else. A machine that can says so in `can`,
@@ -42,6 +43,17 @@ internal object XoReconnect {
 
     /** What the sealed sign-in names as its purpose, and what `can` must hold. Inside the seal, never a param. */
     const val PURPOSE = "reconnect"
+
+    /**
+     * What `can` must hold beside [PURPOSE] before a sign-in is sealed: the
+     * machine opens one under Seal.xosetupReconnectSigninAad. A machine that
+     * lists [PURPOSE] without it opens a reconnect sign-in only under setup's
+     * binding, and a sign-in under setup's binding is one a machine older
+     * still runs as a whole setup, so it is sent nothing. A coordinator that
+     * adds this word to an older machine's `can` gets it a seal it cannot
+     * open, which is the point.
+     */
+    const val SIGNIN = "reconnect-signin"
 
     /**
      * A reconnect's steps, in XORECONNECT_STEPS order (src/fleet/protocol/
@@ -64,11 +76,13 @@ internal object XoReconnect {
     }
 
     /**
-     * The admin sign-in for a reconnect, sealed to the job's key under
-     * setup's binding (XoSetup.aad), with [reply], the key the outcome comes
-     * back to, and the purpose beside it: XoPolicy.sealSignIn's shape with
-     * this purpose. Returned rather than kept: the caller clears the password
-     * the moment this returns.
+     * The admin sign-in for a reconnect, sealed to the job's key, with
+     * [reply], the key the outcome comes back to, and the purpose beside it:
+     * XoPolicy.sealSignIn's shape with this purpose. A RECONNECT ONLY UNDER
+     * ITS OWN BINDING (Seal.xosetupReconnectSigninAad), never setup's: under
+     * setup's, a machine from before reconnect opens it, ignores the purpose
+     * and runs a whole setup with the admin's sign-in. Returned rather than
+     * kept: the caller clears the password the moment this returns.
      */
     fun sealSignIn(key: String, job: String, address: String, email: String, password: String, reply: String): String {
         val payload = JSONObject()
@@ -76,7 +90,7 @@ internal object XoReconnect {
             .put("xo", JSONObject().put("email", email).put("password", password))
             .put("reply", reply)
             .put("purpose", PURPOSE)
-        return joined(Seal.seal(key, XoSetup.aad(job, address), payload))
+        return joined(Seal.seal(key, Seal.xosetupReconnectSigninAad(job, address), payload))
     }
 
     /** What the machine did to one server, in its words (`action` in the sealed result). */
