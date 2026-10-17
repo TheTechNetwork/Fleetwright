@@ -77,7 +77,7 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | Secret | At rest where | Readable by | Rotation | Revocation | Detection |
 |---|---|---|---|---|---|
 | **Device token** (`fwk_…`) | phone Keychain/Keystore; **hash only** in the DO | the phone; nobody via the DO | re-issue | `revoke(id)`, per-device | `lastSeenAt`, client list |
-| **Break-glass admin token** (`FLEETWRIGHT_API_TOKEN`) | Cloudflare secret | the Worker; whoever holds the Worker's secrets | `wrangler secret put` + redeploy | none — it is the floor | none; it is unattributed by design |
+| **Break-glass admin token** (`FLEETWRIGHT_API_TOKEN`) | Cloudflare secret | the Worker; whoever holds the Worker's secrets | `wrangler secret put` under this name + redeploy | delete the secret, which leaves no break-glass and never an older one (SEC-CRED-4) | none; it is unattributed by design |
 | **GitHub App client secret** | Cloudflare secret; on hosts, sidecar **memory only** — delivered on the config frame, never written (§9-G2, fixed) | the Worker; each connected sidecar on a box the operator runs, in memory (and root on that box, via process memory). Not a box a member enrolled, a pool's own machine or a runner (`actsFor`, `hosts.js`) | change in Cloudflare + redeploy; hosts pick it up on reconnect | none scoped | none |
 | **Host private key** (P-256) | `/var/lib/fleetwright-sidecar/host-key.json`, `0600` in `0700`, mode re-checked every load | the sidecar's own account (`fleetwright-sidecar`) only — not the session user, so neither the hub nor a session escape landing as it can read this (`hardening.md`) | re-enrol the host | `revoke` at coordinator, per-host | mode check refuses to start if loosened |
 | **Host public key** | coordinator DO | anyone who reads the DO (public half; harmless) | with re-enrol | with revoke | host list |
@@ -109,6 +109,19 @@ directory, and permissions SHOULD be re-checked on load, not only set on write.
 *Falsify:* `host/identity.js` re-checks and refuses, and so does the credential
 store now — `Connections` re-checks mode on every read, tightens, and warns
 (§9-G5, fixed; `test/connectors.test.js`).
+
+**SEC-CRED-4** — The coordinator Worker MUST read each secret under exactly one
+name. A deleted or blank secret is absent, and no other name stands in for it,
+least of all one from before the rename: a coordinator migrated off
+`AGENT_FLEET_*` still holds those copies, and when the Worker fell back to them,
+deleting `FLEETWRIGHT_API_TOKEN` brought the token it replaced back as admin.
+Removing or rotating a credential is only real if nothing else can supply it.
+*Falsify:* give the Worker `AGENT_FLEET_API_TOKEN` and a deleted or blank
+`FLEETWRIGHT_API_TOKEN`, and present the old value; it must be refused
+(`test/optional-admin-token.test.js`). The Durable Object must not read its
+sign-in settings or allowlist under an old name either (`test/fleet-do.test.js`),
+and the deploy's secret sync reads no `AGENT_FLEET_*` name
+(`.github/workflows/worker.yml`).
 
 ---
 
@@ -1258,6 +1271,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-CRED-1 | Coordinator holds no secret that derives a session credential |
 | SEC-CRED-2 | Refresh tokens never reach a session |
 | SEC-CRED-3 | Credential files 0600/0700, re-checked on load |
+| SEC-CRED-4 | The Worker reads each secret under one name; a removed one stays removed |
 | SEC-ID-1 | OIDC: issuer checked before key fetch |
 | SEC-ID-2 | `email_verified` required; relay addresses refused with remedy |
 | SEC-ID-3 | `actor` is carried, not verified; not local authorisation |

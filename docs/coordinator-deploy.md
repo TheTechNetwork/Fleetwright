@@ -58,18 +58,32 @@ issued their own, and hosts never have it at all. Once sign-in is configured
 you may run without it — the trade is having no way back when sign-in itself
 is what broke.
 
-**A coordinator deployed before the rename holds its secrets twice.** Its
-first secrets were put as `AGENT_FLEET_*`, and CI has since put the same ones
-as `FLEETWRIGHT_*`. The Worker still reads the old names, for a deploy that
-has only those (`src/fleet/legacy-names.js`), and it reads an old name whenever
-the new one is missing or empty. So with both present, deleting or blanking
-`FLEETWRIGHT_API_TOKEN` does not leave the fleet without a break-glass token:
-it brings back the `AGENT_FLEET_API_TOKEN` it replaced, and blanking
-`FLEETWRIGHT_AUTH_ALLOW` brings back the old allowlist. A rotation put under
-the old name does nothing at all. `npx wrangler secret list` shows which names
-the Worker holds; once each old one has a new one beside it, delete the old one
-with `npx wrangler secret delete`, and the same in the repository's Actions
-secrets, which the deploy falls back to.
+**A coordinator deployed before the rename holds its secrets twice, and reads
+only one of them.** Its first secrets were put as `AGENT_FLEET_*`, and CI has
+since put the same ones as `FLEETWRIGHT_*`. The Worker reads the new names and
+nothing else. It used to fall back to an old name whenever the new one was
+missing or empty, so deleting or blanking `FLEETWRIGHT_API_TOKEN` brought back
+the `AGENT_FLEET_API_TOKEN` it had replaced, and blanking
+`FLEETWRIGHT_AUTH_ALLOW` brought back the old allowlist. Now deleting the new
+name leaves the fleet without that secret, which is what deleting it means.
+The deploy reads only the new names from the repository's Actions secrets too.
+
+That makes the old copies inert, not gone. `npx wrangler secret list` shows
+which names the Worker holds; delete each `AGENT_FLEET_*` and `AGENT_HUB_*`
+one with `npx wrangler secret delete`, and the same names from the
+repository's Actions secrets and variables. Nothing in CI does this for you,
+because it changes a live deployment.
+
+**A coordinator that still has only the old names** loses each setting that has
+no new copy. With no `FLEETWRIGHT_API_TOKEN` there is no break-glass, and if
+sign-in is not configured either it answers 503 to everything and names both
+remedies. With no `FLEETWRIGHT_AUTH_ALLOW` a new sign-in is refused unless the
+person was invited, though phones already signed in keep their credentials.
+Without the push keys notifications go to the log, and without the client
+secrets a person links GitHub or Cloudflare by pasting a token rather than
+signing in to it. Put each one under its new name, with `wrangler secret put`
+or in the repository for the deploy to sync (a secret, or for the allowlist a
+variable), and it comes back.
 
 ### The Deploy to Cloudflare button
 

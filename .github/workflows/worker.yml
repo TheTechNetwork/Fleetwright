@@ -426,13 +426,22 @@ jobs:
       # Syncing them here means GitHub is the one place you manage them. Each is
       # optional and skipped when unset, so this does not force secrets on a
       # deployment that sets them with `wrangler secret put` directly.
+      #
+      # UNDER THEIR CURRENT NAMES ONLY, here and in the two steps that copy
+      # the same secrets to the relays and the minter. Each read
+      # `secrets.FLEETWRIGHT_X || secrets.AGENT_FLEET_X`, so a repository
+      # that still held an old-name secret (or, for the allowlist, variable)
+      # put it back under the new name on every deploy after its owner had
+      # deleted the new one. The Worker no longer reads the old names either
+      # (worker.js, `guarded`). Retiring the old copies, in Cloudflare and in
+      # this repository, is done by hand: docs/coordinator-deploy.md.
       - name: Sync the Worker's runtime secrets
         if: steps.creds.outputs.have == 'true'
         working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          FLEETWRIGHT_API_TOKEN: ${{ secrets.FLEETWRIGHT_API_TOKEN || secrets.AGENT_FLEET_API_TOKEN }}
+          FLEETWRIGHT_API_TOKEN: ${{ secrets.FLEETWRIGHT_API_TOKEN }}
           # WHO IS ALLOWED IN, and it is a secret rather than a var for one
           # reason: it decides who can reach a fleet, and this repository is
           # public. It was BOTH — synced here and also set in the committed
@@ -445,10 +454,10 @@ jobs:
           # same reason in the other direction: they are public identifiers,
           # they live in wrangler.production.toml as vars, and syncing them here
           # as well made a second home that the first one silently overwrote.
-          FLEETWRIGHT_AUTH_ALLOW: ${{ vars.FLEETWRIGHT_AUTH_ALLOW || vars.AGENT_FLEET_AUTH_ALLOW }}
-          FLEETWRIGHT_FCM_SERVICE_ACCOUNT: ${{ secrets.FLEETWRIGHT_FCM_SERVICE_ACCOUNT || secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
-          FLEETWRIGHT_APNS_KEY: ${{ secrets.FLEETWRIGHT_APNS_KEY || secrets.AGENT_FLEET_APNS_KEY }}
-          FLEETWRIGHT_APNS_KEY_ID: ${{ secrets.FLEETWRIGHT_APNS_KEY_ID || secrets.AGENT_FLEET_APNS_KEY_ID }}
+          FLEETWRIGHT_AUTH_ALLOW: ${{ vars.FLEETWRIGHT_AUTH_ALLOW }}
+          FLEETWRIGHT_FCM_SERVICE_ACCOUNT: ${{ secrets.FLEETWRIGHT_FCM_SERVICE_ACCOUNT }}
+          FLEETWRIGHT_APNS_KEY: ${{ secrets.FLEETWRIGHT_APNS_KEY }}
+          FLEETWRIGHT_APNS_KEY_ID: ${{ secrets.FLEETWRIGHT_APNS_KEY_ID }}
           # Reused rather than duplicated: the APNs team id is the same team id
           # the iOS build signs with, and two copies of one value is two chances
           # for them to disagree.
@@ -472,11 +481,11 @@ jobs:
           # tokens for every installation of the App, so the coordinator never
           # holds it. It goes to the minting Worker, in the step after this one.
           # See docs/github-app.md.
-          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
+          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET }}
           # The Cloudflare OAuth client's secret, for the same exchange against
           # the second provider. The client id and scope list are [vars] in
           # wrangler.production.toml; this is the half that must not be.
-          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET || secrets.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET }}
+          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET }}
         run: |
           set -u
           missing=""
@@ -522,11 +531,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_CONFIG: ${{ vars.WRANGLER_CONFIG }}
           MINT_CLIENT_ID: ${{ vars.FLEETWRIGHT_GITHUB_CLIENT_ID }}
-          FLEETWRIGHT_FCM_SERVICE_ACCOUNT: ${{ secrets.FLEETWRIGHT_FCM_SERVICE_ACCOUNT || secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
-          FLEETWRIGHT_APNS_KEY: ${{ secrets.FLEETWRIGHT_APNS_KEY || secrets.AGENT_FLEET_APNS_KEY }}
-          FLEETWRIGHT_APNS_KEY_ID: ${{ secrets.FLEETWRIGHT_APNS_KEY_ID || secrets.AGENT_FLEET_APNS_KEY_ID }}
+          FLEETWRIGHT_FCM_SERVICE_ACCOUNT: ${{ secrets.FLEETWRIGHT_FCM_SERVICE_ACCOUNT }}
+          FLEETWRIGHT_APNS_KEY: ${{ secrets.FLEETWRIGHT_APNS_KEY }}
+          FLEETWRIGHT_APNS_KEY_ID: ${{ secrets.FLEETWRIGHT_APNS_KEY_ID }}
           FLEETWRIGHT_APNS_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
+          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET }}
         run: |
           set -u
           config="${WRANGLER_CONFIG:-wrangler.toml}"
@@ -618,14 +627,11 @@ jobs:
           # THE APP'S CLIENT SECRET, a second copy for the minter: it finishes
           # a phone's own GitHub sign-in, so the person's token never comes
           # back through the coordinator. Optional, like the deposit key.
-          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
+          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET }}
           # AND CLOUDFLARE'S, for the same reason: the vault keeps a person's
           # Cloudflare sign-in and renews it in the minter, so it needs the
-          # client the coordinator signs them in with. Optional. Read under
-          # both names, as the coordinator's sync reads it: a repository that
-          # still keeps it as AGENT_FLEET_* gave the coordinator its copy and
-          # the minter nothing.
-          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET || secrets.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET }}
+          # client the coordinator signs them in with. Optional.
+          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET }}
         run: |
           set -u
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then

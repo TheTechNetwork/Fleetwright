@@ -29,7 +29,6 @@ import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
-import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
@@ -76,7 +75,10 @@ export class Fleet {
    * @param {Record<string, string|undefined>} env
    */
   constructor(state, env) {
-    env = withCurrentNames(env);
+    // The env as Cloudflare hands it, with no old name copied onto a new one:
+    // the front door says why (worker.js, `guarded`), and the allowlist read
+    // in #identify is the setting here that aliasing put back after it was
+    // blanked.
     this.state = state;
     this.env = env;
     const logger = {
