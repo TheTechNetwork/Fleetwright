@@ -6,7 +6,10 @@
 // something behind them. None of them changes anything. And none of them is
 // in COMMANDS, which is what keeps them out of /help and out of the sidecar's
 // gate: canonicalCommand() does not know these words, so the fleet refuses
-// them and only a person at this box, on its console or its CLI, finds them.
+// them from a phone or an agent, and only a person at this box finds them,
+// by typing one at its CLI: `fleetwright xyzzy`. Not on the console, which
+// shows the fleet and has nowhere to type; it has a hidden thing of its own,
+// in konami.js, and the two share the one line they both say.
 //
 // dispatch() asks here only after it has failed to find a real command, so an
 // egg can never shadow one.
