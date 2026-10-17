@@ -531,6 +531,24 @@ test('both apps register the scheme the callback returns to', async () => {
   assert.match(manifest, /android:launchMode="singleTask"/);
 });
 
+test('Android finishes a provider sign-in itself, as the person signed in on the phone', () => {
+  // The coordinator's callback page no longer connects anything: it hands the
+  // code back to whatever opened the provider's page, and that client finishes
+  // with its own credential. On Android that is the credentials sheet, which
+  // asks for the sign-in offer (the coordinator gives it only to a client that
+  // says it can finish), posts the finish when the redirect arrives, and shows
+  // the coordinator's own sentence, which is the refusal when the sign-in was
+  // somebody else's.
+  const code = (/** @type {string} */ src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const android = code(androidSources());
+  assert.match(android, /"oauthFinish" to true/, 'Android never asks for the sign-in offer, so it is shown the paste route');
+  assert.match(android, /"\/api\/oauth\/finish"/, 'Android opens the provider page and never finishes what comes back');
+  // A device's own sign-in comes back on the same hosts with a `d.` state, and
+  // belongs to the screen that started it, not to this one.
+  assert.match(android, /startsWith\("d\."\)/, 'Android would post a device sign-in to the box flow’s finish');
+  assert.match(android, /result = reply\.text\.ifBlank/, 'Android does not say what the coordinator answered');
+});
+
 test('the app flow is one tap on both phones, and the paste flow is not', () => {
   // "Why is update or login two clicks when we can do one in an embedded
   // browser." It was two because each app launched an external browser and

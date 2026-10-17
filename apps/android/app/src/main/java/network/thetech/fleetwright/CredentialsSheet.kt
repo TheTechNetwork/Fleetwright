@@ -97,7 +97,7 @@ fun CredentialsSheet(
     }
     LaunchedEffect(host, resumes) {
         busy = true
-        Fleet(settings).connections(host).connections?.let { connections = it }
+        Fleet(settings).connections(host, offeringSignIn = true).connections?.let { connections = it }
         busy = false
     }
 
@@ -112,8 +112,29 @@ fun CredentialsSheet(
     // The row underneath is the host's answer and is the one that is right.
     LaunchedEffect(Unit) {
         WebAuth.returned.collect {
-            // A box's connect flow only: `github` is this phone's own sign-in,
-            // which the runners screen is waiting for, not this one.
+            // THE CODE CAME BACK TO THIS SCREEN, and this screen finishes it,
+            // with this phone's credential: the coordinator's page no longer
+            // connects anything itself (Fleet.finishSignIn says why), so its
+            // answer is the sentence to show, success or refusal. A `d.` state
+            // is this phone's own sign-in, which the screen that started it is
+            // waiting for, not this one.
+            val state = it.getQueryParameter("state")
+            if ((it.host == "github" || it.host == "cloudflare") && state != null && !state.startsWith("d.")) {
+                val code = it.getQueryParameter("code")
+                val sealed = it.getQueryParameter("sealed")
+                if (code == null && sealed == null) return@collect
+                val came = pending
+                pending = null
+                secret = ""
+                busy = true
+                val reply = Fleet(settings).finishSignIn(it.host!!, state, code, sealed)
+                Fleet(settings).connections(host, offeringSignIn = true).connections?.let { c -> connections = c }
+                busy = false
+                result = reply.text.ifBlank { if (reply.ok) "Connected with ${came?.label ?: "the provider"}." else "Nothing was connected." }
+                return@collect
+            }
+            // A box's connect flow from a coordinator that still finishes on
+            // its own page, which says only that it is done.
             if (it.host != "connected") return@collect
             // CAPTURED BEFORE IT IS CLEARED, because it is the only record of
             // which provider this callback belongs to — the flow is global and
@@ -122,7 +143,7 @@ fun CredentialsSheet(
             pending = null
             secret = ""
             busy = true
-            Fleet(settings).connections(host).connections?.let { connections = it }
+            Fleet(settings).connections(host, offeringSignIn = true).connections?.let { connections = it }
             busy = false
             // SAY WHAT THE HOST FOUND, now that it has been asked.
             //
@@ -407,10 +428,10 @@ fun CredentialsSheet(
                         }
                         Text(p.hint, style = MaterialTheme.typography.bodySmall)
                         // NO PASTE FIELD FOR AN APP FLOW, because there is
-                        // nothing to copy. GitHub sends the result to the
-                        // coordinator, which hands it to the box over the
-                        // socket it already holds. A token field here would be
-                        // asking for something that does not exist.
+                        // nothing to copy. The provider sends the result back
+                        // through the coordinator's page to this screen, which
+                        // finishes it. A token field here would be asking for
+                        // something that does not exist.
                         if (!p.isAppFlow) Text(
                             if (p.isSignIn) "2. Come back and paste the code"
                             else "2. Come back and paste the token",
