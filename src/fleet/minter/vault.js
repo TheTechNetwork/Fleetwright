@@ -311,7 +311,7 @@ async function runDeviceOp(inside, config, key, who, email, at) {
 
   if (inside.op === 'put' || inside.op === 'forget') {
     const kind = itemKind(name);
-    if (kind === 'claude') return putClaude(store, key, who, at, inside.op === 'forget' ? null : String(inside.value ?? ''));
+    if (kind === 'claude') return putClaude(store, key, who, email, at, inside.op === 'forget' ? null : String(inside.value ?? ''));
     if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
     }
@@ -439,12 +439,15 @@ function label(name) {
 
 /**
  * The Claude item, in the row claude.js keeps it in, so a runner's hand-out
- * and a box's read the same token. The same checks as a deposit.
+ * and a box's read the same token. The same checks as a deposit, and the same
+ * fleet account kept beside it, which a runner's hand-out matches against the
+ * runner's owner (claude.js, answerLogin).
  *
  * @param {VaultStore} store @param {{ publicKey: string }} key
- * @param {{ userId: string, login: string }} who @param {number} at @param {string|null} token
+ * @param {{ userId: string, login: string }} who @param {string} email
+ * @param {number} at @param {string|null} token
  */
-async function putClaude(store, key, who, at, token) {
+async function putClaude(store, key, who, email, at, token) {
   if (token !== null && !CLAUDE_RE.test(token)) {
     return refuse('bad_token', 'That is not a Claude token. Paste the one line `claude setup-token` printed.');
   }
@@ -454,7 +457,7 @@ async function putClaude(store, key, who, at, token) {
     await store.put(`gh:${who.userId}`, { at, login: who.login, forgotten: true });
     return /** @type {const} */ ({ ok: true, text: 'Forgot your Claude login. Boxes and runners stop being given it.' });
   }
-  await store.put(`gh:${who.userId}`, { at, login: who.login, sealed: await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: { token } }) });
+  await store.put(`gh:${who.userId}`, { at, login: who.login, email, sealed: await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: { token } }) });
   return /** @type {const} */ ({ ok: true, text: 'Kept your Claude login for your runners and the boxes you approve.' });
 }
 

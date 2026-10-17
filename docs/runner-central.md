@@ -473,6 +473,17 @@ line that makes this different from a shared token in a repository secret: in
 the fleet's runner repository that would put one person's subscription under
 everybody's sessions, which is account sharing whoever the people are.
 
+**Who started it and whose it is must agree.** A runner's owner is the fleet
+account it enrolled for, from its ticket or the reusable runner token it
+presented, and with one member's `fwr_` as a shared repository's secret, a run
+somebody else starts by hand is still that member's runner. So the minter
+keeps the fleet account each deposit came from, and gives a login only when
+GitHub says its account started the job *and* the runner belongs to the fleet
+account that deposited it. Otherwise the runner uses its repository's API key,
+and the event log says why. A login deposited before the minter kept the fleet
+account names none, and no runner is given it until you deposit it again, by
+either route below.
+
 ### Depositing one
 
 ```sh

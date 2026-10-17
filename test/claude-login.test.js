@@ -222,9 +222,25 @@ test('a runner is told to use its API key whenever the login is not its owner’
   const theirKey = Buffer.from(await crypto.subtle.exportKey('raw', theirs.publicKey)).toString('base64url');
   // The last is caught by the runner itself: the minter answered, and what
   // arrived does not open, so the coordinator's record says it was given one.
-  /** @type {Array<[string, Parameters<typeof fleet>[0], Record<string, unknown>, RegExp|null]>} */
+  // A fifth entry, where there is one, is what was kept before the runner
+  // joined, in place of the owner's own deposit.
+  /** @type {Array<[string, Parameters<typeof fleet>[0], Record<string, unknown>, RegExp|null, ((f: any) => Promise<any>)?]>} */
   const cases = [
     ['a runner somebody else started', {}, { ...FLEET_REPO, actor: 'mallory', actor_id: 7 }, /mallory has not kept a Claude login/],
+    // THE OWNER'S RUNNER, STARTED BY SOMEBODY WHO KEPT ONE: a runner admitted
+    // with the owner's reusable token from a shared repository's secret, run
+    // by hand by another member. Their login is theirs, not this runner's.
+    ['a runner somebody else started, who kept a login of their own', {}, { ...FLEET_REPO, actor: 'mallory', actor_id: 7 },
+      /mallory started this runner, but it belongs to eli@example\.com/,
+      (f) => f.depositAs({ github: 'gho_mallory', person: 'mallory@example.com', claude: 'sk-ant-oat01-mallory-subscription-0123456789' })],
+    // A ROW AS DEPOSITS KEPT ONE BEFORE THEY NAMED A FLEET ACCOUNT, which
+    // cannot say whose runner it is for, so it waits for a deposit again.
+    ['a login kept before deposits named their fleet account', {}, {}, /until eli deposits it again/,
+      async (f) => {
+        const r = await f.depositAs();
+        for (const [k, row] of f.rows) f.rows.set(k, { at: row.at, login: row.login, sealed: row.sealed });
+        return r;
+      }],
     ['a runner in somebody else’s repository', {}, { repository: 'stranger/runners', repository_owner: 'stranger', repository_owner_id: 99,
       job_workflow_ref: 'stranger/runners/.github/workflows/runner-linux.yml@refs/heads/main' }, /neither eli.s own nor one this fleet mints for/],
     ['a workflow that is not a runner', {}, { job_workflow_ref: 'eli/runners/.github/workflows/ci.yml@refs/heads/main' }, /not one of the runner workflows/],
@@ -234,9 +250,9 @@ test('a runner is told to use its API key whenever the login is not its owner’
     // one, so the login opened and the case failed about that often.
     ['a coordinator that changes the answer', { tamper: { down: (fr) => (fr.sealed ? { ...fr, sealed: { ...fr.sealed, ct: `${fr.sealed.ct[0] === 'A' ? 'B' : 'A'}${fr.sealed.ct.slice(1)}` } } : fr) } }, {}, null],
   ];
-  for (const [name, opts, job, expected] of cases) {
+  for (const [name, opts, job, expected, kept = (f) => f.depositAs()] of cases) {
     const f = await fleet(opts);
-    assert.equal((await f.depositAs()).ok, true, name);
+    assert.equal((await kept(f)).ok, true, name);
     const { told } = await f.runnerJoins(job);
     f.restore();
     // "None, use the API key" is still an answer the hub is given — that is

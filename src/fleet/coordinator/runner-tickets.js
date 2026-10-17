@@ -35,7 +35,9 @@
 // anybody, and cannot use the runner — placement gives an ephemeral host to its
 // owner. The cost is "a fleet member is given a free machine they did not ask
 // for", once, within the window. That is the same bound the reusable claim has,
-// held for minutes instead of for ever.
+// held for minutes instead of for ever. Nor does the starter's Claude login go
+// with a runner attributed to somebody else: the minter gives one only to the
+// runner of the fleet account that deposited it (src/fleet/minter/claude.js).
 //
 // Not stored in full, for the same reason a device credential is not: the hash
 // is enough to recognise the one value that matters, and a store that can hand

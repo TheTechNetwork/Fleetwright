@@ -29,6 +29,20 @@
 //    repository the fleet mints for, or the account's own. The login goes to
 //    the account that started the job, sealed to that key.
 //
+// AND ONLY TO THAT PERSON'S OWN RUNNER, which is the one thing here that is
+// the coordinator's word, because only it knows whose a runner is. A runner
+// admitted with a reusable runner token (fwr_) belongs to whoever minted the
+// token, while GitHub's actor is whoever pressed Run workflow: with one
+// member's fwr_ as a shared repository's secret, another member's hand-started
+// run enrolled as the first member's runner and was handed the second
+// member's login, to run the first member's sessions on. So a deposit keeps
+// the fleet account the coordinator says sent it, and a hand-out names the
+// fleet account the runner belongs to; the two must be the same, or there is
+// no login. Taking the coordinator's word for both widens nothing: it already
+// decides whose a runner is, and this can only refuse a hand-out that GitHub's
+// half would have allowed. A login kept before deposits named their fleet
+// account names none, so it is refused until its person deposits it again.
+//
 // AT REST it is still sealed: to the deposit key, under the GitHub account id
 // it belongs to (seal.js, atRestAad). Reading the storage gives ciphertext;
 // only this Worker's secret opens it, and a row moved under another id does
@@ -97,6 +111,9 @@ const CLI_TOKEN_RE = /^(?:gho_|ghp_|github_pat_)/;
 /** @param {string} code @param {string} text */
 const refuse = (code, text) => ({ ok: false, error: { code }, text });
 
+/** A fleet account as the coordinator names one, compared without case. @param {unknown} s */
+const fleetEmail = (s) => String(s ?? '').trim().toLowerCase();
+
 /** @param {ClaudeConfig} config */
 function notConfigured(config) {
   return !config.depositKey || !config.logins
@@ -124,7 +141,8 @@ export async function depositKeyAnswer(config) {
 /**
  * A person deposits, replaces or forgets their Claude login.
  *
- * @param {unknown} ask  what the coordinator relayed: `{ sealed }`, opened here to
+ * @param {unknown} ask  what the coordinator relayed: `{ sealed, email }`, the
+ *   fleet account that sent it beside a seal opened here to
  *   `{ v: 1, github, claude: string|null, at }`
  * @param {ClaudeConfig} config
  */
@@ -134,6 +152,10 @@ export async function answerDeposit(ask, config) {
   const { fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = config;
   const sealed = /** @type {any} */ (ask)?.sealed;
   if (!sealed || typeof sealed !== 'object') return refuse('bad_params', 'That is not a sealed Claude login.');
+  // REFUSED, NOT KEPT FOR NOBODY: a login with no fleet account is one no
+  // runner is ever handed, and "kept for your runners" would not be true.
+  const email = fleetEmail(/** @type {any} */ (ask)?.email);
+  if (!email) return refuse('bad_params', 'The coordinator did not say which fleet account sent that deposit, so no runner could be given it. Nothing was changed.');
 
   let key;
   try {
@@ -182,7 +204,7 @@ export async function answerDeposit(ask, config) {
     return { ok: true, login: who.login, forgotten: true, text: `Forgot ${who.login}’s Claude login. Their runners use the runner repository’s API key from now on.` };
   }
   const stored = await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: { token: claude } });
-  await config.logins?.put(who.userId, { at, login: who.login, sealed: stored });
+  await config.logins?.put(who.userId, { at, login: who.login, email, sealed: stored });
   return {
     ok: true,
     login: who.login,
@@ -193,14 +215,16 @@ export async function answerDeposit(ask, config) {
 /**
  * A runner asks for its owner's Claude login.
  *
- * @param {unknown} ask  `{ job, key }`: the runner's job token and its one-request key
+ * @param {unknown} ask  `{ job, key, owner }`: the runner's job token, its
+ *   one-request key, and the fleet account the coordinator enrolled it for
  * @param {ClaudeConfig} config
  */
 export async function answerLogin(ask, config) {
   const a = /** @type {any} */ (ask) || {};
   const job = String(a.job || '');
   const runnerKey = String(a.key || '');
-  if (!JWT_RE.test(job) || job.length > 8192 || !SEAL_KEY_RE.test(runnerKey)) {
+  const owner = fleetEmail(a.owner);
+  if (!JWT_RE.test(job) || job.length > 8192 || !SEAL_KEY_RE.test(runnerKey) || !owner) {
     return refuse('bad_params', 'That request for a Claude login is not in the shape one takes.');
   }
   const missing = notConfigured(config);
@@ -230,6 +254,21 @@ export async function answerLogin(ask, config) {
     return refuse(
       'no_claude_login',
       `${claims.actor} has not kept a Claude login for their runners, so this runner falls back to its repository’s ANTHROPIC_API_KEY if it has one. Keep one under You › Credentials in the app.`,
+    );
+  }
+  // THE RUNNER'S OWNER, not only the job's actor: see the header. Which fleet
+  // account the login was kept for is not said, because that is the other
+  // person's, and the runner's owner is who reads this.
+  if (!held.email) {
+    return refuse(
+      'no_claude_login',
+      `The Claude login ${claims.actor} kept was deposited before logins named their fleet account, so no runner is given it until ${claims.actor} deposits it again. This runner falls back to its repository’s ANTHROPIC_API_KEY if it has one.`,
+    );
+  }
+  if (fleetEmail(held.email) !== owner) {
+    return refuse(
+      'not_the_owner',
+      `${claims.actor} started this runner, but it belongs to ${owner}, and ${claims.actor}’s Claude login is for their own runners only. This runner falls back to its repository’s ANTHROPIC_API_KEY if it has one.`,
     );
   }
   let token;
