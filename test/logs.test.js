@@ -141,6 +141,11 @@ test('a user who cannot read the journal is told that, not "no entries"', (t) =>
   assert.equal(r.ok, false);
   assert.match(r.text, /not allowed to see system logs/);
   assert.match(r.text, /systemd-journal/, 'and how to fix it');
+  // And the installer's way, without the checkout's installer: it said
+  // "Re-running install/install.sh", which on a checkout is a script the
+  // service user can rewrite, handed to root.
+  assert.doesNotMatch(r.text, /install\.sh/);
+  assert.match(r.text, /Putting back what the installer sets up does it too: the installer with --repair, run from a copy only root can write/);
 });
 
 test('a service that has never run says so plainly', (t) => {

@@ -481,8 +481,15 @@ So on such a box:
   would otherwise refuse) or removes the pin on the way to rolling, and runs
   `apt-get update`. The hub then reads the line
   again and reports the suite the box is on, not the one it asked for. The
-  next **Apply update** installs from the new suite. Without the upgrade
-  grant the channel is pinned and the answer says which command grants it.
+  next **Apply update** installs from the new suite when that is an upgrade.
+  **The way back to stable is not one:** the pin makes the last release apt's
+  candidate, but the package unit runs `apt-get -y install --only-upgrade`
+  without `--allow-downgrades`, and apt refuses a downgrade under `-y`. So the
+  box keeps the build of main it has until the next release is published,
+  which is an ordinary upgrade, and both `/channel` and `/update` say so
+  rather than offering an install that would fail (`apt-release.js`,
+  `candidateIsOlder`). Without the upgrade grant the channel is pinned and the
+  answer says which command grants it.
 - **The one-liner refuses**, and names the apt commands for each thing it
   would have done.
 - **Removing the package** and re-running the installer clears the source line,

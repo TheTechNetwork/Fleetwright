@@ -294,8 +294,23 @@ machine stays up.
    and carries none of the tags the sweep removes machines by. **The tags alone
    do not make it the pool's machine.** Anybody who may tag a VM could tag one,
    and the fleet's own user may tag every VM it creates; a machine counts only
-   when it also sits in no resource set, which only someone who administers the
-   pool can arrange (seventh audit, `xo-holder.js`).
+   when it also sits in no resource set (seventh audit) **and is on the list of
+   what the policy job made**, `fleetwright-made`, which only an admin of Xen
+   Orchestra can write (eighth audit, `xo-holder.js`, `isHolder`). Sitting in
+   no set says an admin made the VM, not who tagged it: tagging needs only
+   `administrate` on the VM, so somebody given that on one VM an admin made
+   could plant both tags, and the job then started it, the edge router sent
+   its logs to it, and the phone showed it in place of the real one. The job
+   lists the machine as soon as Xen Orchestra has made it.
+
+   **A machine made before the list is not taken for one.** It cannot be told
+   from a planted VM, and listing whichever is there at the next job would
+   list a planted one as readily, on any pool, for as long as the rule stood.
+   So the job passes it over: it is not started, the phone does not show it
+   and offers to make one, and the next edge build stops sending it logs.
+   Making one makes a new machine on the list. The old one is still an
+   enrolled host, and still holds the pool if you approved it; delete it in
+   Xen Orchestra once the new one has joined.
 
 Asking for one where the pool has no image also asks for Debian's image, and
 for the router the image is built behind.
@@ -742,9 +757,11 @@ purpose.
   addresses. Every inside network already blocks private destinations, the
   router's own addresses among them, so nothing behind it reaches the API.
 - **Syslog**, from the kernel (CARP's changes of master), Unbound, dnsmasq,
-  dpinger and Suricata, to UDP 5514 on the pool's own machine and on the
-  machine that ran the job: what happened before anybody looked, which the
-  router's memory-backed `/var` loses on a restart.
+  dpinger and Suricata, to UDP 5514 on the machine that ran the job and on the
+  pool's own machine: what happened before anybody looked, which the router's
+  memory-backed `/var` loses on a restart. The router keeps two destinations,
+  and the machine that ran the job is always the first: its address is one the
+  job knows, where a holder's is what its guest agent reports (`syslogTo`).
 
 **Where the key is kept.** On each router in Xen Orchestra, beside the pair's
 CARP password: Xen Orchestra's admins can read it, and the fleet's token

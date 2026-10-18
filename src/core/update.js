@@ -25,7 +25,8 @@
 // polkit rules; exiting needs nothing.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { log } from '../log.js';
 import { Connections } from './connectors.js';
@@ -46,9 +47,10 @@ const RESTART_DELAY_MS = 1500;
 /**
  * @param {string} cwd
  * @param {string[]} args
+ * @param {NodeJS.ProcessEnv} [env]
  */
-function git(cwd, args) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+function git(cwd, args, env = process.env) {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, env });
   return {
     status: r.status === null ? 1 : r.status,
     stdout: (r.stdout || '').trim(),
@@ -57,10 +59,92 @@ function git(cwd, args) {
 }
 
 /**
- * Where the deployment lives, and what state it is in.
- * @param {import('../config.js').Config} cfg
+ * Git for READING a tree's state, with nothing that could make it run a program.
+ *
+ * A repository's own config can name programs for git to run, and `git
+ * status` runs two of them without being asked: `core.fsmonitor`, on every
+ * call, and a clean filter when a file's stat has moved. Git's defence is to
+ * refuse a repository owned by another account, and the one thing that turns
+ * that off is `safe.directory`, read from the global and system config. So
+ * neither is read here — GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM, git 2.32
+ * and later — and fsmonitor is switched off on the command line, which beats
+ * every file. What is left is the repository's own config, which can only
+ * matter in a repository this account owns, where it is this account's own.
+ *
+ * The cost, for the owner: a global excludesFile no longer hides a stray file
+ * from this, so it shows up in `dirty` and an update refuses and names it.
+ * Refusing is the direction to be wrong in.
+ *
+ * @param {string} cwd
+ * @param {string[]} args
  */
-export function updateStatus(cfg) {
+function gitRead(cwd, args) {
+  return git(cwd, ['-c', 'core.fsmonitor=false', ...args], {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  });
+}
+
+/**
+ * The tree at `dir`, symlinks resolved, when this process owns it — and null
+ * when it does not, or it cannot be read.
+ *
+ * THE SIDECAR READ ITS VERSION WITH GIT IN A TREE THE SERVICE USER CONTROLS.
+ * Every health frame ran `git status` in the hub's install directory, as the
+ * sidecar's account, which holds the host key. The installer had given that
+ * account `safe.directory` for the checkout, and a converted box keeps that
+ * checkout, owned by the service user: point `current` at it, set
+ * `core.fsmonitor` in its config, and the next frame ran the program as the
+ * sidecar. So the rule is that nothing here runs git in a tree it does not
+ * own, whatever any config says.
+ *
+ * Checked on the real path, and git is run there rather than through the
+ * link, so the link cannot be moved between the two; the config gitRead
+ * strips is what holds if the real path itself is swapped. `.git` as well as
+ * the tree, because the config that names the program lives there.
+ *
+ * @param {string} dir
+ * @param {number|undefined} uid  undefined where there is no getuid (Windows),
+ *   which leaves git's own check, under gitRead's config, as the guard
+ * @returns {string|null}
+ */
+function ownedTree(dir, uid) {
+  try {
+    const real = realpathSync(dir);
+    if (uid === undefined) return real;
+    for (const p of [real, path.join(real, '.git')]) {
+      if (statSync(p).uid !== uid) return null;
+    }
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+/** This account's name, for a chown line; a placeholder when it has none. */
+function accountName() {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return '<the account this service runs as>';
+  }
+}
+
+/**
+ * Where the deployment lives, and what state it is in.
+ *
+ * `notOwned` when the checkout belongs to another account and git was not
+ * run in it (ownedTree says why). The sidecar is the caller that meets it on
+ * every checkout install, by design, and reports the version from its own
+ * package.json instead (src/fleet/host/running-version.js).
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ uid?: number }} [opts]  the account to compare the tree's owner
+ *   with; this process's own unless a test says otherwise, which is the only
+ *   way to stand for another owner without root
+ */
+export function updateStatus(cfg, { uid = process.getuid?.() } = {}) {
   const dir = cfg.installDir;
   if (!existsSync(path.join(dir, '.git'))) {
     // A RELEASE IS NOT A BROKEN CHECKOUT. This message was accurate and a dead
@@ -79,17 +163,31 @@ export function updateStatus(cfg) {
     }
     return { ok: false, dir, message: `${dir} is not a git checkout, so there is nothing to pull.` };
   }
-  const branch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const head = git(dir, ['rev-parse', '--short', 'HEAD']);
-  const dirty = git(dir, ['status', '--porcelain']);
+  const real = ownedTree(dir, uid);
+  if (!real) {
+    // The checkout is owned by whoever cloned it and the service runs as
+    // somebody else. It offered `safe.directory` as the other way out, which
+    // is the switch that lets the tree's config run programs as this account
+    // — and which gitRead no longer reads, so it would not work either.
+    return {
+      ok: false,
+      dir,
+      notOwned: true,
+      message:
+        `${dir} belongs to another user, so this account does not run git in it: its config could name a program for git to run as this account.\n` +
+        `If this service is the one that should own it:  sudo chown -R ${accountName()} ${dir}`,
+    };
+  }
+  const branch = gitRead(real, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const head = gitRead(real, ['rev-parse', '--short', 'HEAD']);
+  const dirty = gitRead(real, ['status', '--porcelain']);
   if (branch.status !== 0 || head.status !== 0) {
-    // Overwhelmingly this is git's "dubious ownership" refusal: the checkout is
-    // owned by whoever cloned it and the service runs as somebody else. Saying
-    // so beats the raw message, which sends people looking at permissions.
+    // Git's own "dubious ownership" refusal can still get here — a `.git`
+    // that is a file naming a directory somebody else owns — and saying so
+    // beats the raw message, which sends people looking at permissions.
     const detail = [branch.stderr, head.stderr].filter(Boolean).join(' ');
     const hint = /dubious ownership|safe\.directory/i.test(detail)
-      ? `\n${dir} is owned by another user. Either chown it to the user this service runs as, ` +
-        `or: git config --global --add safe.directory ${dir}`
+      ? `\n${dir} is owned by another user. Chown it to the user this service runs as:  sudo chown -R ${accountName()} ${dir}`
       : '';
     return { ok: false, dir, message: `Could not read the checkout at ${dir}: ${detail}${hint}` };
   }
@@ -281,17 +379,23 @@ const STEPS = [
         // "permission denied" there, so matching only that phrase meant this
         // whole branch was dead for the very failure it was written for, and
         // the operator got the raw porcelain instead of the fix.
+        //
+        // THE OWNERSHIP IS THE WHOLE FIX, so it is said alone. This led with
+        // `sudo <checkout>/install/install.sh`: the checkout's own installer,
+        // which the service user can rewrite, handed to root — in a sentence
+        // the service user can make appear by leaving one file it cannot
+        // write. Root is never pointed at a script that account can change
+        // (upgrades.js, repairCommand). The account named is this process's,
+        // which is the one that has to own the tree for a pull to work.
         if (looksLikeOwnershipProblem(output)) {
           return {
             ok: false,
             changed: false,
             text:
               `Cannot write to ${dir} — some of it belongs to another user.\n\n` +
-              'Usually a root-owned object left by a `sudo git pull`. Re-run the installer,\n' +
-              'which gives the whole checkout back to the account the service runs as:\n' +
-              `  sudo ${dir}/install/install.sh\n\n` +
-              'Or fix just the ownership:\n' +
-              `  sudo chown -R $(stat -c %U ${dir}/bin/fleetwright) ${dir}`,
+              'Usually a root-owned object left by a `sudo git pull`. Give the whole checkout back\n' +
+              'to the account the service runs as:\n' +
+              `  sudo chown -R ${accountName()} ${dir}`,
           };
         }
         return { ok: false, changed: false, text: `git pull failed: ${output.slice(0, 400)}` };
@@ -366,14 +470,15 @@ const STEPS = [
       }
       if (r.status !== 0) {
         const output = `${r.stderr || ''}${r.stdout || ''}`;
-        // Same ownership story as the git objects above, and the same fix.
+        // Same ownership story as the git objects above, and the same fix —
+        // which this said was the checkout's installer, as root, for the
+        // reason given there.
         if (looksLikeOwnershipProblem(output)) {
+          const modules = path.join(dir, 'node_modules');
           return {
             ok: false,
             changed: false,
-            text:
-              `Cannot write ${path.join(dir, 'node_modules')} — it belongs to another user.\n` +
-              `  sudo ${dir}/install/install.sh`,
+            text: `Cannot write ${modules} — it belongs to another user.\n  sudo chown -R ${accountName()} ${modules}`,
           };
         }
         return { ok: false, changed: false, text: `npm ci failed:\n${output.slice(0, 400)}` };

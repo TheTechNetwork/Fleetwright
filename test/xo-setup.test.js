@@ -20,7 +20,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits } from '../src/fleet/host/xo-setup.js';
+import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits, syslogTo } from '../src/fleet/host/xo-setup.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
 import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupPolicySigninAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
 import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
@@ -535,12 +535,17 @@ test('the machine image is built after the policy, on the way out’s pool, behi
 
 test('the pool’s own machine is made last, from its image, with a pin asked for this job, and the person told to approve it', { skip }, async (t) => {
   // ASKED FOR: "dedicated hypervisor VM on the pool". src/fleet/host/xo-holder.js.
+  const vms = /** @type {Record<string, any>} */ ({ edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } });
   const xo = await standIn(t, {
     sets: [{ ...chosenBefore(), objects: [...chosenBefore().objects, 'tpl'] }],
     more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
+    vms,
     templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
   });
+  // A VM an admin made, in no set, given both tags by somebody with
+  // `administrate` on it, which is all tag.add asks. Not on the admin's list,
+  // so not the pool's own machine: not shown, not started, not "already there".
+  vms.planted = { id: 'planted', type: 'VM', $pool: 'p1', name_label: 'holder-444444', power_state: 'Halted', mainIpAddress: '192.168.1.66', tags: ['fleetwright-holder', `fleetwright-holder-for:${xo.address}`] };
   /** @type {Array<[string, string]>} */
   const pinsFor = [];
   const { setups } = await machine({
@@ -551,7 +556,7 @@ test('the pool’s own machine is made last, from its image, with a pin asked fo
   const { begun, reply, state } = await choosing(xo, setups, actor);
   const [epk, iv, ct] = state.inventory.split('.');
   const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
-  assert.deepEqual(inventory.holders, [], 'none yet, so the phone offers one');
+  assert.deepEqual(inventory.holders, [], 'none yet — the planted one is not shown in its place — so the phone offers one');
   const job = begun.xosetup.job;
   // The secret the phone made, sealed with the rest of the choice.
   const secret = 'ab'.repeat(32);
@@ -567,6 +572,19 @@ test('the pool’s own machine is made last, from its image, with a pin asked fo
   assert.equal(made.as, 'admin@admin.net', 'with the admin sign-in, outside the fleet’s set');
   assert.equal(made.params.template, 'tpl');
   assert.deepEqual(made.params.VIFs, [{ network: 'net-dmz' }]);
+  assert.ok(!xo.calls.some((/** @type {any} */ c) => c.method === 'vm.start' && c.params.id === 'planted'), 'the planted one was started as the pool’s own');
+  const listed = xo.sets.find((/** @type {any} */ s) => s.name === 'fleetwright-made');
+  assert.deepEqual(listed?.objects, ['vm-made-1'], 'the one made is on the admin’s list, and nothing else is');
+});
+
+test('a router’s logs go to this box first, then to the pool’s own machines that are up, two at most kept by the router', () => {
+  // A holder's address is what its guest agent reports. It came first, so a
+  // second one — or one that was never the pool's own — pushed the box
+  // watching the router off a list the router keeps two of.
+  const up = (/** @type {string} */ id, /** @type {string} */ ip) => ({ id, $pool: 'p1', power_state: 'Running', mainIpAddress: ip });
+  assert.deepEqual(syslogTo([up('a', '192.168.1.66'), up('b', '192.168.1.67')], 'p1', '192.168.1.20'), ['192.168.1.20', '192.168.1.66', '192.168.1.67']);
+  assert.deepEqual(syslogTo([up('a', '192.168.1.20'), { ...up('c', '10.0.0.9'), $pool: 'p2' }, { ...up('d', '10.0.0.8'), power_state: 'Halted' }, up('e', '8.8.8.8')], 'p1', '192.168.1.20'), ['192.168.1.20'], 'each once, this pool’s, up, private');
+  assert.deepEqual(syslogTo([up('a', '192.168.1.66')], 'p1', null), ['192.168.1.66'], 'a box reaching Xen Orchestra through a relay has no address of its own here');
 });
 
 test('a Xen Orchestra without disk.resize builds the image through vdi.set, and one with neither says both names', { skip }, async (t) => {

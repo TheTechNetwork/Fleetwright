@@ -1494,8 +1494,21 @@ async function disksOf(admin, vm) {
  * Xen Orchestra's reading of XAPI's own mark on the templates it ships
  * (is_default_template, or other_config's default_template), which nothing
  * below a pool's admin sets; `$VBDs` empty is a template that brings no disk.
- * None, or more than one, is a stop that says so: which one to trust is not
- * something to guess at.
+ *
+ * AND MADE IN NO RESOURCE SET (xo-made.js, outsideSets). XCP-ng's own never
+ * is, and a copy made inside one — by the fleet's own user, or anybody else
+ * who works in a set — is somebody else's however it is marked: the mark is
+ * other_config, which a template made from a VM, or imported, can carry.
+ * Without this, one such copy was enough to stop every edge and image build
+ * on the pool with "2 built-in templates".
+ *
+ * MORE THAN ONE IS STILL A STOP, and says which, so an admin can delete the
+ * one that is not XCP-ng's. Preferring one was weighed and not done: what
+ * Xen Orchestra shows of a template gives nothing that tells XAPI's own from
+ * a copy made outside every set, and building the router from the wrong one
+ * hands it that template's settings. A copy outside every set takes
+ * somebody with rights over the pool's objects beyond the fleet's own user;
+ * a build that stops and names it costs that person's admin one deletion.
  *
  * Shared with the machine image (vm-image.js, ensureImage).
  *
@@ -1503,10 +1516,11 @@ async function disksOf(admin, vm) {
  * @param {string} pool @param {string} name @param {string} what  what is made from it, for the sentence
  */
 export function builtInTemplate(templates, pool, name, what) {
-  const found = templates.filter((t) => t?.$pool === pool && t?.name_label === name && t.isDefaultTemplate === true && Array.isArray(t.$VBDs) && t.$VBDs.length === 0);
+  const found = templates.filter((t) => t?.$pool === pool && t?.name_label === name && t.isDefaultTemplate === true && Array.isArray(t.$VBDs) && t.$VBDs.length === 0 && outsideSets(t));
   if (found.length === 1) return found[0];
   if (!found.length) throw new Error(`this pool has no built-in "${name}" template, XCP-ng’s own with no disks, to make ${what} from. Nothing was built`);
-  throw new Error(`this pool has ${found.length} built-in "${name}" templates where XCP-ng ships one, so which to make ${what} from cannot be told. Nothing was built`);
+  const ids = found.map((t) => String(t.id).slice(0, 36)).slice(0, 4).join(', ');
+  throw new Error(`this pool has ${found.length} built-in "${name}" templates where XCP-ng ships one (${ids}), so which to make ${what} from cannot be told. Delete the one that is not XCP-ng’s in Xen Orchestra and try again. Nothing was built`);
 }
 
 /**

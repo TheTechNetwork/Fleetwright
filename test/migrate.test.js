@@ -276,10 +276,13 @@ test('a Mac is not told to install a helper it can never have', () => {
   // will put it there" would send somebody round a loop: the installer, run
   // again, still would not. Both texts that name the missing helper say what
   // a Mac does instead — the root half of an update is the installer, by hand.
+  // From a fresh clone root owns: it said `sudo bash <checkout>/install/
+  // install.sh --upgrade`, a script the service user can rewrite, as root.
   const heal = healAfterRelease({ exists: () => false, platform: 'darwin', after: () => { throw new Error('must not schedule'); } });
   assert.equal(heal.scheduled, false);
   assert.match(heal.text, /still running the code they started from/);
-  assert.match(heal.text, /install\.sh --upgrade/);
+  assert.match(heal.text, /the installer itself, run by hand with --upgrade from a fresh clone only root can write,\nnever from the checkout/);
+  assert.doesNotMatch(heal.text, /install\.sh/);
   assert.doesNotMatch(heal.text, /every update after it will/, 'that promise is false on a Mac');
 
   const m = migrationState(cfg, { packaged: false }, READY, { ...ABSENT, platform: 'darwin' });

@@ -35,10 +35,12 @@ const HOLDER_TAGS = [HOLDER.tag, `${HOLDER.forPrefix}xo.lan`];
 
 /**
  * The admin's Xen Orchestra: objects by type, every call recorded, and its
- * resource sets, the fleet's holding both images unless told otherwise.
+ * resource sets, the fleet's holding both images and the list of what the job
+ * made holding the pool's own machines these tests stand up, unless told
+ * otherwise. vm.create answers the new VM's id, as Xen Orchestra does.
  * @param {any[]} objects @param {any[]} [sets]
  */
-function admin(objects, sets = [{ id: 'rs-fleet', name: 'fleetwright', objects: ['tpl-debian', 'tpl-ubuntu'] }]) {
+function admin(objects, sets = [{ id: 'rs-fleet', name: 'fleetwright', objects: ['tpl-debian', 'tpl-ubuntu'] }, { id: 'rs-made', name: 'fleetwright-made', objects: ['vm-h', 'vm-1', 'vm-stuck'] }]) {
   /** @type {Array<[string, any]>} */
   const calls = [];
   return {
@@ -47,6 +49,7 @@ function admin(objects, sets = [{ id: 'rs-fleet', name: 'fleetwright', objects: 
       calls.push([method, params]);
       if (method === 'xo.getAllObjects') return Object.fromEntries(objects.filter((o) => o.type === params.filter?.type).map((o) => [o.id, o]));
       if (method === 'resourceSet.getAll') return sets;
+      if (method === 'vm.create') return 'vm-new';
       return true;
     },
   };
@@ -82,6 +85,7 @@ test('a pool without one gets a machine from its Debian image, on the way out, o
   assert.equal(made.destroyCloudConfigVdiAfterBoot, true, 'the drive with the pin is gone once it has booted');
   assert.ok(made.cloudConfig.includes(`"pin":"${PIN}"`));
   assert.match(said, /Approve it under Machines/);
+  assert.deepEqual(xo.calls.filter(([m]) => m === 'resourceSet.addObject').map(([, p]) => [p.id, p.object]), [['rs-made', 'vm-new']], 'on the admin’s list, which is what makes it the pool’s own to the next job');
 });
 
 test('one already there is left alone, or started when it is off, and no pin is asked for', async () => {
@@ -113,12 +117,16 @@ test('a VM somebody else tagged is neither started nor deleted, and a template t
     { type: 'VM', id: 'vm-other-xo', name_label: 'holder-222222', $pool: 'p1', power_state: 'Halted', tags: [HOLDER.tag, `${HOLDER.forPrefix}xo.elsewhere`] },
     // Both tags, but made in the fleet's set, as its own user makes every VM.
     { type: 'VM', id: 'vm-in-set', name_label: 'holder-333333', $pool: 'p1', power_state: 'Halted', tags: HOLDER_TAGS, resourceSet: 'rs-fleet' },
+    // Both tags and made in no set, by an admin — and tagged by somebody given
+    // `administrate` on it, which is all tag.add asks for. Not on the list.
+    { type: 'VM', id: 'vm-planted', name_label: 'holder-444444', $pool: 'p1', power_state: 'Halted', tags: HOLDER_TAGS },
   ];
   for (const again of [false, true]) {
     const xo = admin([debian, ...foreign]);
     await ensureHolder({ ...spec(xo, pinner().askPin), again });
     assert.ok(!xo.calls.some(([m, p]) => ['vm.start', 'vm.stop', 'vm.delete'].includes(m) && String(p.id).startsWith('vm-')), `again: ${again}: ${JSON.stringify(xo.calls.filter(([m]) => m.startsWith('vm.')))}`);
     assert.equal(xo.calls.filter(([m]) => m === 'vm.create').length, 1, 'none of them is the pool’s own machine, so one is made');
+    assert.ok(!xo.calls.some(([m, p]) => m === 'resourceSet.addObject' && p.object !== 'vm-new'), 'and only the one made is listed');
   }
   // An image on no list of the fleet's, or made in its set: nothing to clone.
   const planted = { ...debian, id: 'tpl-planted' };
@@ -245,7 +253,7 @@ test('made again, the one there goes first, disk and all, and the new one boots 
   const xo = admin([debian, stuck]);
   const { asked, askPin } = pinner();
   const said = await ensureHolder({ ...spec(xo, askPin), secret: SECRET, again: true });
-  assert.deepEqual(xo.calls.filter(([m]) => m !== 'xo.getAllObjects' && m !== 'resourceSet.getAll').map(([m, p]) => `${m} ${p.id ?? p.name_label}`), ['vm.stop vm-stuck', 'vm.delete vm-stuck', `vm.create ${NAME}`]);
+  assert.deepEqual(xo.calls.filter(([m]) => m !== 'xo.getAllObjects' && m !== 'resourceSet.getAll').map(([m, p]) => `${m} ${p.id ?? p.name_label}`), ['vm.stop vm-stuck', 'vm.delete vm-stuck', `vm.create ${NAME}`, 'resourceSet.addObject rs-made']);
   assert.equal(asked.count, 1);
   const [, made] = /** @type {[string, any]} */ (xo.calls.find(([m]) => m === 'vm.create'));
   assert.ok(made.cloudConfig.includes(`"secret":"${SECRET}"`));

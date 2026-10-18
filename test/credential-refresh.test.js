@@ -196,6 +196,24 @@ test('a session whose account is not on the record asks the volume', async (t) =
   assert.equal(r.account, 'alice@example.com');
 });
 
+test('a member\'s volume naming somebody else does not get their credential', async (t) => {
+  // The volume is the session's own to write. A legacy record with no account
+  // took its word, so a member's session that wrote another linked person's
+  // email came back on that person's Claude login (eighth audit).
+  const s = stubPodman(t, {
+    volumes: ['claude-legacy', 'work-legacy'],
+    oauthAccount: { emailAddress: 'bob@example.com' },
+  });
+  s.link('alice@example.com');
+  s.link('bob@example.com');
+
+  const r = refreshSeededCredentials(s.cfg(), 'legacy', { account: null, actor: 'fleet:alice@example.com' });
+
+  assert.equal(r.refreshed, false);
+  assert.equal(r.account, null, 'cannot tell, rather than bob');
+  assert.equal(s.seeds().length, 0, 'bob\'s credential reached no volume');
+});
+
 test('a volume that cannot say whose it is keeps the credential it has', async (t) => {
   // Cannot-tell is not shared. Guessing here would silently move a session
   // onto a different account, which is worse than the staleness being fixed.

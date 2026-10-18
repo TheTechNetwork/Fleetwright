@@ -691,7 +691,7 @@ export async function ensureSandboxVolumes(cfg, name, actor = null, { account: r
  */
 export function refreshSeededCredentials(cfg, name, { account = null, actor = null } = {}) {
   const { claude } = sandboxNames(name);
-  const owner = account ?? volumeAccount(cfg, claude);
+  const owner = account ?? volumeClaim(cfg, claude, actor);
   if (!owner) {
     log.info(`sandbox: ${claude} does not say whose account it holds; leaving its credential alone`);
     return { refreshed: false, account: null, why: 'unknown account' };
@@ -754,6 +754,32 @@ export function credentialSourceForAccount(cfg, account) {
     return fromVault ? { source: null, tokenFile: fromVault, accountMeta: null, account: email } : null;
   }
   return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
+}
+
+/**
+ * The volume's word on whose account it holds, taken only where it cannot move
+ * the session onto somebody else's.
+ *
+ * The volume is the session's own: its conversation volume is mounted
+ * read-write as /root/.claude, so .oauth-account.json says whatever the session
+ * last wrote there. A record with no account (one written before the field
+ * existed) took that file's word, so a member's session that named another
+ * linked person came back on that person's Claude credential at its next resume
+ * (eighth audit). When a fleet person started the session, a volume naming a
+ * DIFFERENT linked person is cannot-tell, which keeps the credential it has.
+ * Naming the shared credential is not moving anywhere: every session from
+ * before one-account-per-person ran on it.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} volume
+ * @param {string|null} actor  the session's creator
+ * @returns {string|null}
+ */
+function volumeClaim(cfg, volume, actor) {
+  const claimed = volumeAccount(cfg, volume);
+  const creator = emailFromActor(actor ?? undefined);
+  if (!claimed || claimed === 'shared' || !creator) return claimed;
+  return claimed.toLowerCase() === creator.toLowerCase() ? claimed : null;
 }
 
 /**

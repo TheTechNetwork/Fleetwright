@@ -1151,10 +1151,10 @@ The test that would matter is the *absence* of egress control — see SEC-INJECT
 **SEC-INJECT-2** (BUILT, OPT-IN, NOT YET MEASURED) — Default-deny egress
 through a named allowlist is the control that bounds misuse to a set of
 destinations. It is built as `FLEETWRIGHT_SANDBOX_EGRESS=allowlist`
-(`src/core/egress.js`): sessions join a podman `--internal` network, which
-has no route out, and one CONNECT-only proxy container on both that network
-and the default one is the only path; the allowlist lives in the proxy
-because the network cannot express one. It is **off by default**, and until a
+(`src/core/egress.js`): each person's sessions join that person's own podman
+`--internal` network, which has no route out, and one CONNECT-only proxy
+container on every such network and the default one is the only path; the
+allowlist lives in the proxy because the network cannot express one. It is **off by default**, and until a
 box has been seen refusing `curl https://example.com` from a session while
 `claude` signs in and answers, the property stays unmeasured. Off, the
 posture of a session on untrusted input is still "trusted to the extent of
@@ -1163,10 +1163,14 @@ bytes in, bytes out, and the CLI needs `HTTPS_PROXY` and no CA bundle.
 Until the seventh audit it could not have been measured at all: the config said
 `FilterType fixed`, which tinyproxy 1.11 rejects as a syntax error, so the
 proxy never started and an allowlisted box had no way out. It is ERE now, one
-anchored line per host. And every session on such a box shares the one
-internal network, so each can reach the ports the others listen on (G9).
+anchored line per host. Until the eighth audit every session on such a box
+shared one internal network, so each could reach the ports the others listened
+on (G9). Now a person's sessions share only their own, and the proxy, the one
+container on all of them, is started with forwarding off and filters by
+hostname, so it joins none of them to another.
 *Falsify:* `egressArgs` in `egress.js` empty under `allowlist`; `sandboxArgv`
-in `claude.js` not spreading it; `test/egress.test.js`.
+in `claude.js` not spreading it; `ensureEgress` giving two people one network;
+`test/egress.test.js`.
 
 **SEC-INJECT-3** — Starting a session in dangerous mode on a repository the
 operator did not write is accepting that injected content in that repository may
@@ -1319,7 +1323,7 @@ SEC-INJECT-2.* `agent-egress` is one `--internal` network per box, so a session
 on it reaches any port another person's session has open (a dev server, a
 debugger, an MCP server bound to 0.0.0.0), a path the open default's per-container
 namespaces do not give it. **Correct:** one internal network per owner, or say so
-wherever the allowlist is offered.
+wherever the allowlist is offered. Corrected the first way; see the status row.
 
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
@@ -1337,7 +1341,7 @@ a box without podman.
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
 | **G8** | **stated, not fixed.** The scheduler still offers a direct box to members. The decision is the owner's; the migrate helper's root path it compounded is closed (`install-root-sources.test.js`). |
-| **G9** | **stated, not fixed.** One network per owner is the change; until then this row is the statement. |
+| **G9** | **fixed, not yet measured.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Like SEC-INJECT-2 as a whole, unmeasured until two people's sessions on one real box are seen unable to reach each other. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
 
 ---
 

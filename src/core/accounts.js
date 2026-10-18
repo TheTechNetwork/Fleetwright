@@ -15,6 +15,7 @@
 // charset guarantee lives in a different file and distance is how guarantees
 // rot.
 
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, existsSync, statSync, chmodSync } from 'node:fs';
 import { log } from '../log.js';
 import path from 'node:path';
@@ -157,6 +158,25 @@ export function normaliseEmail(value) {
 export function emailFromActor(actor) {
   const s = String(actor || '');
   return s.startsWith('fleet:') ? normaliseEmail(s.slice('fleet:'.length)) : null;
+}
+
+/**
+ * Whose a box resource is, in a form that can go into its name: the first
+ * sixteen hex digits of a hash of the person's email, because an address is
+ * not a podman name and `podman volume ls` need not spell out who uses the box.
+ * `box` for a session with no person behind it (the box's own surfaces),
+ * which is the operator's.
+ *
+ * ONE DERIVATION FOR EVERYTHING KEPT PER PERSON — the download cache
+ * (claude.js cacheVolumeFor) and the egress network (egress.js) — so the two
+ * can never disagree about who a session belongs to.
+ *
+ * @param {unknown} owner  an actor (`fleet:<email>`) or an email
+ * @returns {string}
+ */
+export function ownerTag(owner) {
+  const email = emailFromActor(owner) ?? normaliseEmail(String(owner ?? ''));
+  return email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : 'box';
 }
 
 /**

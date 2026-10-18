@@ -27,7 +27,7 @@
 // not built.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, readdirSync, readlinkSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, readdirSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
 import { RELEASES_DIR, decideRelease, fileUrl, releasePaths, releasesToPrune, verifyDownload } from './release.js';
 import { INSTALL_ROOT } from './resources.js';
@@ -91,6 +91,9 @@ export function releaseLayout(installDir) {
   return { ok: true, base };
 }
 
+/** Far more than any package.json this project ships, which is a few KiB. */
+const PACKAGE_JSON_MAX = 256 * 1024;
+
 /**
  * The version of the tree at `installDir`, from the package.json the release
  * ships.
@@ -106,10 +109,36 @@ export function releaseLayout(installDir) {
  * @param {string} installDir
  */
 export function installedVersion(installDir) {
+  // A BOUNDED READ OF A REGULAR FILE, never through a link. The sidecar asks
+  // this on every health frame about `current`, which is under a base the
+  // service user owns — and readFileSync followed whatever was there: a
+  // package.json linked to /dev/zero read until memory ran out, a FIFO blocked
+  // the sidecar's one thread for good, and a link to a file only the sidecar's
+  // account can read was parsed and its `version` sent with health. So the
+  // name is opened without following it and without waiting on it, and only
+  // a regular file of a package.json's size is read. `current` itself is still
+  // followed, being a link by design; the release directory it names is
+  // whatever the hub unpacked, and the file in it is what is checked.
+  let fd = -1;
   try {
-    return JSON.parse(readFileSync(path.join(installDir, 'package.json'), 'utf8')).version || 'unknown';
+    fd = openSync(path.join(installDir, 'package.json'), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > PACKAGE_JSON_MAX) return 'unknown';
+    const buf = Buffer.alloc(st.size);
+    let got = 0;
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, got);
+      if (n === 0) break;
+      got += n;
+    }
+    const v = JSON.parse(buf.subarray(0, got).toString('utf8')).version;
+    // A string, of a version's length: anything else would travel with
+    // health as whatever shape the file gave it.
+    return typeof v === 'string' && v && v.length <= 128 ? v : 'unknown';
   } catch {
     return 'unknown';
+  } finally {
+    if (fd >= 0) closeSync(fd);
   }
 }
 

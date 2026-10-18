@@ -956,13 +956,16 @@ test('a router without the key the job brings is rebuilt once, keeping its WAN M
 test('the edge router is made from XCP-ng’s own template, never one that only shares its name, and none or two of them is a stop', async () => {
   const named = { id: 'tpl-named', $pool: 'p1', name_label: 'Other install media', isDefaultTemplate: false, $VBDs: [] };
   const withDisk = { id: 'tpl-with-disk', $pool: 'p1', name_label: 'Other install media', isDefaultTemplate: true, $VBDs: ['vbd-planted'] };
-  const made = xo({ VM: [], 'VM-template': [named, withDisk, TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-1' });
+  // The mark and no disks, but made in a resource set — the fleet's own, here
+  // — as XCP-ng's never is. It stopped every build with "2 built-in templates".
+  const inSet = { ...TEMPLATE, id: 'tpl-in-set', resourceSet: 'rs-fleet' };
+  const made = xo({ VM: [], 'VM-template': [named, withDisk, inSet, TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-1' });
   await ensureEdge(edgeArgs(made).args);
-  assert.deepEqual(called(made, 'vm.create').map((p) => p.template), ['tpl-other'], 'made from a template that only has the name, or brings a disk');
+  assert.deepEqual(called(made, 'vm.create').map((p) => p.template), ['tpl-other'], 'made from a template that only has the name, brings a disk, or was made in a set');
 
   for (const [templates, said] of /** @type {Array<[any[], RegExp]>} */ ([
-    [[named, withDisk], /no built-in "Other install media" template, XCP-ng’s own with no disks, to make the edge router from\. Nothing was built/],
-    [[TEMPLATE, { ...TEMPLATE, id: 'tpl-second' }], /2 built-in "Other install media" templates where XCP-ng ships one/],
+    [[named, withDisk, inSet], /no built-in "Other install media" template, XCP-ng’s own with no disks, to make the edge router from\. Nothing was built/],
+    [[TEMPLATE, { ...TEMPLATE, id: 'tpl-second' }], /2 built-in "Other install media" templates where XCP-ng ships one \(tpl-other, tpl-second\).*Delete the one that is not XCP-ng’s/],
   ])) {
     const admin = xo({ VM: [], 'VM-template': templates, VIF: [] });
     let downloaded = false;

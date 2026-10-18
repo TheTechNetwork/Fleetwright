@@ -306,7 +306,9 @@ export function loadConfig(env = process.env) {
     // WHERE A SESSION MAY REACH. `open` (the default, and what every session
     // has had): anywhere. `allowlist`: only the hosts in core/egress.js plus
     // FLEETWRIGHT_SANDBOX_EGRESS_ALLOW, through a proxy container on an
-    // internal network — SEC-INJECT-2 in docs/security.md, built and opt-in.
+    // internal network per person — SEC-INJECT-2 in docs/security.md, built
+    // and opt-in. The subnet is the first person's network and the size of
+    // every one counted up from it (core/egress.js, "THE SUBNETS").
     sandboxEgress: str('FLEETWRIGHT_SANDBOX_EGRESS', 'open') === 'allowlist' ? 'allowlist' : 'open',
     sandboxEgressAllow: list('FLEETWRIGHT_SANDBOX_EGRESS_ALLOW'),
     sandboxEgressSubnet: str('FLEETWRIGHT_SANDBOX_EGRESS_SUBNET', '10.89.201.0/24'),

@@ -229,9 +229,16 @@ export function switchAptSuite(cfg, value, { exec = run } = {}) {
         ? 'This box now takes apt\'s rolling suite: the newest build of main, on every merge. A build of main is ' +
           'versioned as a prerelease of the next release, so the next Apply update installs the newest build as an ' +
           'ordinary upgrade, and any pin from an earlier move is gone.'
-        : 'This box now takes apt\'s stable suite: published releases, each once its rollout is complete. A build of ' +
-          'main is a prerelease of the next release and outranks the last one, so the package is pinned to the suite ' +
-          'and the next Apply update installs the newest release even though apt counts it as a downgrade.',
+        // NOT "the next Apply update installs the newest release". It said
+        // so, and the package unit runs apt-get -y without
+        // --allow-downgrades, which refuses the downgrade the pin asks for
+        // and installs nothing (apt-release.js, candidateIsOlder). What
+        // happens is that the box keeps the build it has until a release
+        // newer than it is published, which is an ordinary upgrade.
+        : 'This box now takes apt\'s stable suite: published releases, each once its rollout is complete. The build of ' +
+          'main it has is a prerelease of the next release, newer than the last one, and Apply update does not install ' +
+          'an older version (apt counts it as a downgrade), so the box stays on that build until the next release is ' +
+          'published, and takes each release from then on.',
   };
 }
 
