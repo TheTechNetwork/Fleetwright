@@ -289,17 +289,36 @@ if [ "$HEAL" = yes ]; then
   exit $?
 fi
 
-mkdir -p "$BASE/releases"
-rm -rf "$BASE/releases/.incoming-$VERSION"
-mkdir -p "$BASE/releases/.incoming-$VERSION"
-tar -xzf "$WORK/$FILE" -C "$BASE/releases/.incoming-$VERSION" --strip-components=1
-rm -rf "$BASE/releases/$VERSION"
-mv "$BASE/releases/.incoming-$VERSION" "$BASE/releases/$VERSION"
-
+# AS WHOEVER OWNS $BASE, which on a converted box is the service user — the
+# installer gives it to them so /update needs no root — and they can start
+# this. As root, every name below was theirs to point elsewhere first:
+# `releases` a link to /usr/local/sbin, `.incoming-<version>` swapped for a
+# link after the mkdir, and root's tar and mv went wherever it led. So root
+# opens the verified tarball and hands it over on stdin, and the owner of the
+# directory unpacks it and swaps `current`, reaching only what they could
+# reach anyway. A base that is still root's (a first conversion) is root's to
+# write. install.sh's lay-out does the same (run_as).
+#
 # Replaced atomically, for the reason install.sh gives: a symlink that briefly
 # does not exist is a service that briefly cannot start.
-ln -sfn "$BASE/releases/$VERSION" "$BASE/.current.new"
-mv -Tf "$BASE/.current.new" "$BASE/current"
+BASE_OWNER="$(stat -c %U "$BASE" 2>/dev/null || echo root)"
+as_base_owner() { # as_base_owner CMD [ARG...]
+  if [ "$BASE_OWNER" = root ] || [ "$BASE_OWNER" = "$(id -un)" ]; then "$@"
+  elif command -v runuser >/dev/null 2>&1; then runuser -u "$BASE_OWNER" -- "$@"
+  elif command -v sudo >/dev/null 2>&1; then sudo -u "$BASE_OWNER" -H -- "$@"
+  else return 1; fi
+}
+as_base_owner sh -c '
+  set -e
+  mkdir -p "$1/releases"
+  rm -rf "$1/releases/.incoming-$2"
+  mkdir -p "$1/releases/.incoming-$2"
+  tar -xzf - -C "$1/releases/.incoming-$2" --strip-components=1
+  rm -rf "$1/releases/$2"
+  mv "$1/releases/.incoming-$2" "$1/releases/$2"
+  ln -sfn "$1/releases/$2" "$1/.current.new"
+  mv -Tf "$1/.current.new" "$1/current"' sh "$BASE" "$VERSION" < "$WORK/$FILE" \
+  || die "could not lay $VERSION out in $BASE as $BASE_OWNER, whose directory it is."
 say "laid out $BASE/releases/$VERSION"
 
 # AND THE INSTALLER DOES THE REST. It already knows how to template units for a

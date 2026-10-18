@@ -1343,7 +1343,17 @@ runs `npm ci` and its lifecycle scripts in `current`. **Fixed on a packaged
 Linux box:** root's `fleetwright` is a root-owned wrapper that runs the
 sidecar's root-owned store with a node the service user cannot replace, or
 refuses in words (`install.sh`, "ROOT'S COMMAND IS ROOT'S CODE"); the rest are
-closed one by one (`install-root-sources.test.js`). **Not fixed, and stated:**
+closed one by one (`install-root-sources.test.js`). The ninth audit found the
+same class one level down: the service user owns `/var/lib/fleetwright`, so
+`profiles` in it is a name they control, and the heal's `install -d -o` on it
+followed a symlink to `/usr/local/sbin` and gave them the directory the
+migrate helper lives in. Root now does what it does inside a directory another
+account owns as that account (`install.sh`, "ROOT ACTS IN SOMEBODY'S DIRECTORY
+AS THEM"): the profiles, the release lay-out into a base that is theirs, the
+migrate helper's bring-forward, apt's tidy-up of old releases, the old
+workspace move, the sidecar's machine id and git config; unit templates and
+root helpers never fall back to the payload, and the installer's logs are no
+longer fixed names in `/tmp`. **Not fixed, and stated:**
 a checkout or a Mac has no root-owned tree, so `sudo fleetwright` there runs
 the service user's code and the installer says so; a box whose only node
 24+ is in the service user's home still has a person-run installer execute
@@ -1366,7 +1376,7 @@ a box without podman.
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
 | **G8** | **stated, not fixed.** The scheduler still offers a direct box to members. The decision is the owner's; the migrate helper's root path it compounded is closed (`install-root-sources.test.js`). |
 | **G9** | **fixed, not yet measured.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Like SEC-INJECT-2 as a whole, unmeasured until two people's sessions on one real box are seen unable to reach each other. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
-| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree. A checkout, a Mac, and a person-run install on a box with no system node are the remaining cases, each said by the installer. `install-root-sources.test.js`, `doctor.test.js`, `migrate.test.js`. |
+| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account. A checkout, a Mac, and a person-run install on a box with no system node are the remaining cases, each said by the installer. `install-root-sources.test.js`, `doctor.test.js`, `migrate.test.js`. |
 
 ---
 

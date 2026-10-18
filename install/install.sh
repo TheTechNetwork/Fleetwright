@@ -150,6 +150,36 @@ ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
+# Who owns a path. GNU stat spells it -c %U and BSD stat -f %Su; a Mac has the
+# second, and the first version of the two chown guards below asked GNU's
+# question there, got nothing back, and chowned a tree it did not need to on
+# every run. Empty when the path is missing.
+owner_of() { stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || true; }
+
+# ROOT ACTS IN SOMEBODY'S DIRECTORY AS THEM. Whoever owns a directory decides
+# what every name in it is, at every moment: a profile, a token, `releases`, a
+# file root is about to copy over can each be a symlink by the time root's
+# `install -d`, `cp`, `mkdir`, `>` or `chown` reaches it, and each of those
+# follows one — GNU `install -d` on a link to /usr/local/sbin fchmods and, as
+# root, fchowns the directory it lands on. So what root makes, writes, moves
+# or copies inside a directory another account owns, it does as that account,
+# with an argv and no login shell, and lands only where that account could
+# land anyway. sudo first and runuser second, because a minimal image may have
+# either; neither, and the step fails rather than falling back to root.
+run_as() { # run_as WHO CMD [ARG...]
+  local who="$1"
+  shift
+  if [ "$(id -un)" = "$who" ]; then
+    "$@"
+  elif command -v sudo >/dev/null; then
+    sudo -u "$who" -H -- "$@"
+  elif command -v runuser >/dev/null; then
+    runuser -u "$who" -- "$@"
+  else
+    return 1
+  fi
+}
+
 # A PAYLOAD IS A RELEASE, OR THIS DOES NOT RUN. FLEETWRIGHT_PAYLOAD is how a
 # verified installer is pointed at `current` — fleetwright-migrate's heal and
 # bring-forward, and root's `fleetwright` (section 6) — and `current` is the
@@ -539,14 +569,20 @@ USER_HOME="$(user_home "$RUN_USER")"
 # the registry recorded by its absolute path, and every shell sitting in one,
 # still resolves. Only when nobody chose the place: a workdir set in the env
 # file is a decision, and it stays where it was put.
+#
+# AS $RUN_USER, in their home (run_as): between root's look and root's `mv`,
+# fleetwright-runs could become a link to a directory of root's, and `mv` into
+# a directory moves INTO it.
 if [ "$(id -u)" = 0 ] && [ -n "$USER_HOME" ] && [ -d "$USER_HOME/agent-runs" ] && [ ! -L "$USER_HOME/agent-runs" ] \
    && [ ! -e "$USER_HOME/fleetwright-runs" ] \
    && ! grep -qE '^(FLEETWRIGHT|AGENT_HUB)_WORKDIR=.' "$ENV_FILE" 2>/dev/null; then
   case " $* " in *" --check "*|*" -n "*|*" --help "*|*" -h "*) ;; *)
-    mv "$USER_HOME/agent-runs" "$USER_HOME/fleetwright-runs"
-    ln -s fleetwright-runs "$USER_HOME/agent-runs"
-    chown -h "$RUN_USER" "$USER_HOME/agent-runs" 2>/dev/null || true
-    ok "~$RUN_USER/agent-runs → ~$RUN_USER/fleetwright-runs" ;;
+    if run_as "$RUN_USER" mv "$USER_HOME/agent-runs" "$USER_HOME/fleetwright-runs" \
+       && run_as "$RUN_USER" ln -s fleetwright-runs "$USER_HOME/agent-runs"; then
+      ok "~$RUN_USER/agent-runs → ~$RUN_USER/fleetwright-runs"
+    else
+      warn "could not move ~$RUN_USER/agent-runs to ~$RUN_USER/fleetwright-runs as $RUN_USER"
+    fi ;;
   esac
 fi
 USER_HOME="${USER_HOME:-$HOME}"
@@ -756,15 +792,40 @@ if [ "$PACKAGED" = 1 ]; then
   # release the hub runs with a root-owned one on every grant.
   PAYLOAD_IN_BASE=0
   case "$DIR/" in "${FLEET_BASE%/}"/*) PAYLOAD_IN_BASE=1 ;; esac
+  #
+  # AND AS WHOEVER OWNS $FLEET_BASE (run_as). On every box after the first
+  # install that is $RUN_USER — the end of this file gives it to them — and an
+  # apt upgrade they can start runs this from the deb's extract, outside the
+  # tree, so the copy runs. As root, `releases` was theirs to point anywhere
+  # before the `mkdir`, the `rm -rf` and the `cp -a` went through it. So root
+  # only reads its own tree, into a pipe, and the owner of the base unpacks
+  # it, under a name of this installer's own beside applyRelease's
+  # `.incoming-`, and swaps `current`. A base still root's (a first install)
+  # is root's to write.
   if [ "$DIR_REAL" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ] && [ "$GRANT_ONLY" != 1 ] && [ "$PAYLOAD_IN_BASE" = 0 ]; then
-    mkdir -p "$FLEET_BASE/releases"
-    rm -rf "$RELEASE_DIR"
-    cp -a "$DIR/." "$RELEASE_DIR"
-    # Replaced atomically. `ln -sfn` on an existing symlink is not atomic on
-    # every filesystem, and a symlink that briefly does not exist is a service
-    # that briefly cannot start.
-    ln -sfn "$RELEASE_DIR" "$FLEET_BASE/.current.new"
-    mv -Tf "$FLEET_BASE/.current.new" "$FLEET_BASE/current"
+    BASE_OWNER="$(owner_of "$FLEET_BASE")"
+    if [ -n "$BASE_OWNER" ] && [ "$BASE_OWNER" != root ]; then
+      # Replaced atomically. `ln -sfn` on an existing symlink is not atomic on
+      # every filesystem, and a symlink that briefly does not exist is a
+      # service that briefly cannot start.
+      tar -C "$DIR" -cf - . | run_as "$BASE_OWNER" sh -c '
+        set -e
+        mkdir -p "$1/releases"
+        rm -rf "$1/releases/.installing-$2"
+        mkdir "$1/releases/.installing-$2"
+        tar -xpf - -C "$1/releases/.installing-$2"
+        rm -rf "$1/releases/$2"
+        mv "$1/releases/.installing-$2" "$1/releases/$2"
+        ln -sfn "$1/releases/$2" "$1/.current.new"
+        mv -Tf "$1/.current.new" "$1/current"' sh "$FLEET_BASE" "$RELEASE_VERSION" \
+        || die "could not lay $RELEASE_VERSION out in $FLEET_BASE as $BASE_OWNER, whose directory it is."
+    else
+      mkdir -p "$FLEET_BASE/releases"
+      rm -rf "$RELEASE_DIR"
+      cp -a "$DIR/." "$RELEASE_DIR"
+      ln -sfn "$RELEASE_DIR" "$FLEET_BASE/.current.new"
+      mv -Tf "$FLEET_BASE/.current.new" "$FLEET_BASE/current"
+    fi
   fi
   # Everything below templates units and runs binaries from here, so it is the
   # symlink and not the versioned directory: that is what makes the next
@@ -1044,12 +1105,6 @@ refresh_sidecar_store() {
   return 0
 }
 
-# Who owns a path. GNU stat spells it -c %U and BSD stat -f %Su; a Mac has the
-# second, and the first version of the two chown guards below asked GNU's
-# question there, got nothing back, and chowned a tree it did not need to on
-# every run. Empty when the path is missing.
-owner_of() { stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || true; }
-
 # CAN $RUN_USER CHANGE WHAT THIS PATH IS? The question the sidecar's
 # separation stands or falls on, asked of its code, its node and the directory
 # it runs in, and of every tree root is about to copy into the store.
@@ -1076,12 +1131,15 @@ owner_of() { stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || true
 #
 # Returns 0 when $RUN_USER could change it — and when it cannot tell, because
 # a check that fails open is not a check.
-run_user_can_alter() { # run_user_can_alter PATH → 0 when $RUN_USER could change PATH or anything under it
+#
+# With `notree`, only the path and the thing itself are asked, not what is
+# under it: whether $RUN_USER decides what that name resolves to.
+run_user_can_alter() { # run_user_can_alter PATH [notree] → 0 when $RUN_USER could change PATH or anything under it
   local uid gids
   uid="$(id -u "$RUN_USER" 2>/dev/null)" || return 0
   [ "$uid" = 0 ] && return 0
   gids=" $(id -G "$RUN_USER" 2>/dev/null) "
-  RUA_UID="$uid" RUA_GIDS="$gids" _rua_walk "$1" 0
+  RUA_UID="$uid" RUA_GIDS="$gids" _rua_walk "$1" 0 "${2:-}"
 }
 # The permission bits that apply to $RUN_USER for one stat line, 7 for an
 # owner: an owner can chmod, so every bit is theirs whatever the mode says.
@@ -1241,20 +1299,13 @@ as_user() {
 }
 
 # The same with an argv instead of a line, and no login shell, for what WRITES
-# in $RUN_USER's home. Root must not do that itself: the home is theirs, and a
+# in $RUN_USER's home or any directory of theirs (run_as, at the top). Root
+# must not do that itself: the home is theirs, and a
 # symlink they leave at the path is followed by root's write and by root's
 # chown, which then lands on whatever it points at — /etc/passwd, say, on the
 # next heal, which the service user can start for itself.
 run_as_user() { # run_as_user CMD [ARG...]
-  if [ "$(id -un)" = "$RUN_USER" ]; then
-    "$@"
-  elif command -v sudo >/dev/null; then
-    sudo -u "$RUN_USER" -H -- "$@"
-  elif command -v runuser >/dev/null; then
-    runuser -u "$RUN_USER" -- "$@"
-  else
-    return 1
-  fi
+  run_as "$RUN_USER" "$@"
 }
 
 # The same, as the sidecar's account. Never `-l` on runuser and never su
@@ -1440,8 +1491,8 @@ install_upgrade_units() {
   # root-owned sources line, so it is a unit too, a template whose instance is
   # the suite, running a script outside the app's tree for the same reason
   # fleetwright-confirm lives there. The grant names the two instances.
+  # From this installer's tree only, never the payload, like the units.
   local channel_src="$SELF_DIR"
-  [ -f "$channel_src/install/fleetwright-apt-channel" ] || channel_src="$DIR"
   if [ -f "$channel_src/install/fleetwright-apt-channel" ]; then
     install -m 0755 -o root -g root "$channel_src/install/fleetwright-apt-channel" /usr/local/sbin/fleetwright-apt-channel
     install_unit fleetwright-apt-channel@
@@ -1954,10 +2005,13 @@ else
   # installer that stopped halfway.
   say "Installing the Claude Code CLI"
   command -v curl >/dev/null || pkg_install curl || true
+  # A log named by mktemp, root's own, rather than a fixed name in /tmp, where
+  # anybody can leave a link for root's `>` to follow. Same for the sandbox's.
+  CLAUDE_LOG="$(mktemp "${TMPDIR:-/tmp}/claude-install.XXXXXX")"
   if ! command -v curl >/dev/null; then
     warn "curl is not available ($(pkg_why)) — install claude yourself:"
     warn "  curl -fsSL https://claude.ai/install.sh | bash"
-  elif as_user 'curl -fsSL https://claude.ai/install.sh | bash' >/tmp/claude-install.log 2>&1; then
+  elif as_user 'curl -fsSL https://claude.ai/install.sh | bash' >"$CLAUDE_LOG" 2>&1; then
     for candidate in "$USER_HOME/.local/bin/claude" "$USER_HOME/.claude/local/claude" /usr/local/bin/claude; do
       [ -x "$candidate" ] && { CLAUDE_BIN="$candidate"; break; }
     done
@@ -1965,10 +2019,10 @@ else
       ok "installed claude $(as_user "'$CLAUDE_BIN' --version" 2>/dev/null | head -1) at $CLAUDE_BIN"
       warn "claude is NOT logged in yet — run 'fleetwright login', or connect an account from the app"
     else
-      warn "the claude installer finished but no binary was found — see /tmp/claude-install.log"
+      warn "the claude installer finished but no binary was found — see $CLAUDE_LOG"
     fi
   else
-    warn "could not install claude — see /tmp/claude-install.log. Install it yourself:"
+    warn "could not install claude — see $CLAUDE_LOG. Install it yourself:"
     warn "  curl -fsSL https://claude.ai/install.sh | bash"
   fi
 fi
@@ -2197,24 +2251,28 @@ if [ "$CHECK_ONLY" != 1 ]; then
   # box does) is not a checkout either, though $DIR has a .git: its units name
   # `current`. Only a box that RUNS its checkout keeps the line.
   SIDECAR_GITCONFIG=/var/lib/fleetwright-sidecar/.gitconfig
+  #
+  # BOTH AS $SIDECAR_USER (run_as), whose directory this is. Root's `git
+  # config --file` writes through a symlink at the name (git's lock file
+  # resolves it) and root's chown then follows it too, so whatever the account
+  # left there — the sidecar's own, or $RUN_USER's where no separate account
+  # could be made — became a root-written file handed to it.
   if [ -d "$DIR/.git" ] && { [ "$CONVERTED" != 1 ] || [ "$FROM_SOURCE" = 1 ]; } \
      && [ "$SIDECAR_USER" != "$RUN_USER" ] && command -v git >/dev/null; then
-    git config --file "$SIDECAR_GITCONFIG" --replace-all safe.directory "$DIR" 2>/dev/null \
-      && chown "$SIDECAR_USER" "$SIDECAR_GITCONFIG" 2>/dev/null \
-      && chmod 0600 "$SIDECAR_GITCONFIG" 2>/dev/null \
+    run_as "$SIDECAR_USER" sh -c 'cd / && git config --file "$1" --replace-all safe.directory "$2" && chmod 0600 "$1"' \
+      sh "$SIDECAR_GITCONFIG" "$DIR" 2>/dev/null \
       && ok "$SIDECAR_USER may read the checkout's git history" \
       || warn "could not write $SIDECAR_USER's git config — the sidecar will report no version"
   elif [ -f "$SIDECAR_GITCONFIG" ] && grep -q 'safe' "$SIDECAR_GITCONFIG" 2>/dev/null; then
     # Filtered rather than `git config --unset-all`, which needs a git this
     # box may not have; the file is the installer's alone, one [safe] section.
-    # Replaced by rename, never written through, so a symlink there is
-    # replaced and not followed.
-    gc_tmp="$(mktemp "$SIDECAR_GITCONFIG.XXXXXX")"
-    grep -v -e '^[[:space:]]*\[safe\][[:space:]]*$' -e '^[[:space:]]*directory[[:space:]]*=' "$SIDECAR_GITCONFIG" > "$gc_tmp" || true
-    if chown "$SIDECAR_USER" "$gc_tmp" 2>/dev/null; chmod 0600 "$gc_tmp" && mv -f "$gc_tmp" "$SIDECAR_GITCONFIG"; then
+    # Replaced by rename, never written through.
+    if run_as "$SIDECAR_USER" sh -c '
+         tmp="$(mktemp "$1.XXXXXX")" || exit 1
+         grep -v -e "^[[:space:]]*\[safe\][[:space:]]*\$" -e "^[[:space:]]*directory[[:space:]]*=" "$1" > "$tmp"
+         chmod 0600 "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; exit 1; }' sh "$SIDECAR_GITCONFIG"; then
       ok "$SIDECAR_USER no longer trusts a checkout's git config — this box does not run one"
     else
-      rm -f "$gc_tmp"
       warn "could not remove safe.directory from $SIDECAR_GITCONFIG — remove it by hand"
     fi
   fi
@@ -2236,27 +2294,47 @@ fi
 # NEVER OVERWRITTEN. Re-running the installer is how you upgrade, and clobbering
 # a profile somebody wrote would be an upgrade that changes what their sessions
 # are told to do.
+#
+# README.md is the note explaining the directory, not a profile — and
+# src/core/profiles.js excludes it by name for the same reason. It is not
+# copied at all: a note about the shipped examples belongs beside them in the
+# repository, not in the directory a session's instructions are read from.
+#
+# ALL OF IT AS $RUN_USER (run_as, at the top): the directory, the look for an
+# existing profile and every copy. $STATE_DIR is theirs, so `profiles` is a
+# name they control, and this was root's `install -d -o "$RUN_USER"` on it:
+# GNU install follows a symlink to a directory and fchmods and fchowns what it
+# lands on, so `ln -s /usr/local/sbin …/profiles` and the heal they can start
+# with `sudo -n fleetwright-migrate` handed them the directory the migrate
+# helper lives in. And $DIR is `current` on the heal, so a shipped example
+# that is a link to /etc/shadow was root's copy of /etc/shadow into their
+# directory. As them, a link reaches only what they could read anyway; a link
+# is still skipped, because a shipped example never is one.
 PROFILE_DIR="${FLEETWRIGHT_PROFILE_DIR:-$STATE_DIR/profiles}"
-install -d -o "$RUN_USER" -m 0750 "$PROFILE_DIR"
-for f in "$DIR"/install/profiles/*.md; do
-  [ -e "$f" ] || continue
-  base="$(basename "$f")"
-  # README.md is the note explaining the directory, not a profile — and
-  # src/core/profiles.js excludes it by name for the same reason. It is not
-  # copied at all: a note about the shipped examples belongs beside them in the
-  # repository, not in the directory a session's instructions are read from.
-  [ "$base" = "README.md" ] && continue
-  [ -e "$PROFILE_DIR/$base" ] && continue
-  install -m 0640 -o "$RUN_USER" "$f" "$PROFILE_DIR/$base"
-done
-ok "$PROFILE_DIR"
+if run_as_user sh -c '
+  umask 027
+  install -d -m 0750 "$1" || exit 1
+  for f in "$2"/install/profiles/*.md; do
+    [ -e "$f" ] && [ ! -L "$f" ] || continue
+    base="${f##*/}"
+    [ "$base" = README.md ] && continue
+    [ -e "$1/$base" ] || [ -L "$1/$base" ] && continue
+    cp "$f" "$1/$base" && chmod 0640 "$1/$base" || exit 1
+  done' sh "$PROFILE_DIR" "$DIR"; then
+  ok "$PROFILE_DIR"
+else
+  warn "could not make $PROFILE_DIR or copy the example profiles into it as $RUN_USER"
+fi
 
 # --- 3. environment file ----------------------------------------------------
 say "Configuration"
 if [ -f "$ENV_FILE" ]; then
   ok "$ENV_FILE already exists — left untouched"
 else
-  install -m 0600 "$DIR/install/fleetwright.env.example" "$ENV_FILE"
+  # THIS INSTALLER'S TEMPLATE, like the sidecar's below: on the heal $DIR is
+  # `current`, and a template there that is a link to /etc/shadow was root's
+  # copy of it into a file this installer later chowns to the service user.
+  install -m 0600 "$SELF_DIR/install/fleetwright.env.example" "$ENV_FILE"
   ok "wrote $ENV_FILE from the template"
   ok "edit it to change anything — the defaults work"
 fi
@@ -2610,8 +2688,15 @@ install_unit() { # install_unit NAME
   # the template from $DIR meant a release's own template decided the shape of
   # the unit, and an old release cannot know about a placeholder added after it
   # was built. SELF_DIR is what the one-liner just updated.
+  #
+  # AND NEVER FROM THE PAYLOAD AT ALL. This fell back to $DIR's template when
+  # SELF_DIR had none, and on the heal $DIR is `current`, the service user's: a
+  # unit is root's, and `User=root` in a template they wrote is a root service.
+  # A release's installer carries every template it names, so a missing one
+  # is an installer to refuse, not a gap to fill from somebody else's tree.
   local from="$SELF_DIR"
-  [ -f "$from/install/$1.service" ] || [ -f "$from/install/$1.plist" ] || from="$DIR"
+  [ -f "$from/install/$1.service" ] || [ -f "$from/install/$1.plist" ] \
+    || die "this installer has no template for $1 in $SELF_DIR — it is not a whole release"
   if [ "$PLATFORM" = macos ]; then
     src="$from/install/$1.plist"
     dest="/Library/LaunchDaemons/network.thetech.$1.plist"
@@ -2853,8 +2938,9 @@ if [ -n "${UNIT_DIR_SAVED:-}" ]; then DIR="$UNIT_DIR_SAVED"; unset UNIT_DIR_SAVE
 # `current` symlink to move back and nothing kept to revert to, so there is
 # nothing here to guard.
 if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ]; then
+  # From this installer's tree only, never the payload: a root helper copied
+  # out of `current` is the service user's code installed as root's.
   CONFIRM_SRC="$SELF_DIR"
-  [ -f "$CONFIRM_SRC/install/fleetwright-confirm" ] || CONFIRM_SRC="$DIR"
   if [ -f "$CONFIRM_SRC/install/fleetwright-confirm" ]; then
     # Owner root, mode 0755 — the watchdog must not be rewritable by the service
     # user it protects, or the thing being watched could edit its own watcher.
@@ -2873,8 +2959,9 @@ fi
 # Root-owned and outside the writable install tree, for the migrate rule's
 # reason — a helper the service can rewrite is not a narrow grant.
 if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ]; then
+  # From this installer's tree only, never the payload: a root helper copied
+  # out of `current` is the service user's code installed as root's.
   RECLAIM_SRC="$SELF_DIR"
-  [ -f "$RECLAIM_SRC/install/fleetwright-reclaim" ] || RECLAIM_SRC="$DIR"
   if [ -f "$RECLAIM_SRC/install/fleetwright-reclaim" ]; then
     install -m 0755 -o root -g root "$RECLAIM_SRC/install/fleetwright-reclaim" /usr/local/sbin/fleetwright-reclaim
     if write_reclaim_sudoers; then
@@ -3094,6 +3181,8 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${FLEETWRIGHT_BUILD_IMAGE:-1}" != "0" ]; then
   IMAGE_OWNER="${FLEETWRIGHT_SANDBOX_IMAGE_OWNER:-thetechnetwork}"
   IMAGE="${FLEETWRIGHT_SANDBOX_IMAGE:-ghcr.io/${IMAGE_OWNER}/fleetwright-session:latest}"
   say "Fetching the sandbox image"
+  PULL_LOG="$(mktemp "${TMPDIR:-/tmp}/fleetwright-session-pull.XXXXXX")"
+  BUILD_LOG="$(mktemp "${TMPDIR:-/tmp}/fleetwright-session-build.XXXXXX")"
   if as_user "podman image exists '$IMAGE'" 2>/dev/null \
      && [ "${FLEETWRIGHT_REBUILD_IMAGE:-0}" != "1" ]; then
     ok "$IMAGE already present for $RUN_USER"
@@ -3104,7 +3193,7 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${FLEETWRIGHT_BUILD_IMAGE:-1}" != "0" ]; then
     IMAGE=""
   elif [ "${IMAGE#localhost/}" != "$IMAGE" ]; then
     : # a localhost/ image can only be built, so fall through to the build below
-  elif as_user "podman pull '$IMAGE'" >/tmp/fleetwright-session-pull.log 2>&1; then
+  elif as_user "podman pull '$IMAGE'" >"$PULL_LOG" 2>&1; then
     ok "pulled $IMAGE"
     # WRITTEN ONLY IF A PERSON SAID IT. This line used to write the image on
     # every install, and it was writing the default — the same value the hub
@@ -3122,7 +3211,7 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${FLEETWRIGHT_BUILD_IMAGE:-1}" != "0" ]; then
     IMAGE=""
   else
     warn "could not pull $IMAGE — falling back to building it here."
-    warn "  $(tail -1 /tmp/fleetwright-session-pull.log 2>/dev/null || echo 'see /tmp/fleetwright-session-pull.log')"
+    warn "  $(tail -1 "$PULL_LOG" 2>/dev/null || echo "see $PULL_LOG")"
     IMAGE="localhost/fleetwright-session:latest"
   fi
 
@@ -3132,11 +3221,11 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${FLEETWRIGHT_BUILD_IMAGE:-1}" != "0" ]; then
   # unqualified-search-registries configured.
   if [ -n "$IMAGE" ]; then
     if as_user "podman build -t '$IMAGE' -f '$DIR/sandbox/Containerfile' '$DIR/sandbox'" \
-       >/tmp/fleetwright-session-build.log 2>&1; then
+       >"$BUILD_LOG" 2>&1; then
       ok "$IMAGE (built in $RUN_USER's image store)"
       set_env "$ENV_FILE" FLEETWRIGHT_SANDBOX_IMAGE "$IMAGE"
     else
-      warn "image build failed — see /tmp/fleetwright-session-build.log."
+      warn "image build failed — see $BUILD_LOG."
       warn "  Sandboxed sessions will not start until it succeeds; everything else works."
     fi
   fi
@@ -3414,8 +3503,9 @@ for pair in fleetwright:fleetwright fw:fleetwright \
   # be on a read-only mount, or owned by someone else, and the symlink above is
   # the part that matters. ONLY a checkout: in a release tree the path is the
   # service user's, and root's chmod follows whatever symlink they left there.
+  # And in a checkout as its owner (run_as), for the same reason.
   if [ -d "$tree/.git" ]; then
-    [ -x "$tree/bin/$cli" ] || chmod +x "$tree/bin/$cli" 2>/dev/null || \
+    [ -x "$tree/bin/$cli" ] || run_as "$(owner_of "$tree")" chmod +x "$tree/bin/$cli" 2>/dev/null || \
       warn "$tree/bin/$cli is not executable and could not be made so — check the checkout"
   fi
   ok "$BIN_DIR/$link -> $tree/bin/$cli"
@@ -3708,7 +3798,7 @@ if [ "$WIZARD" = yes ]; then
       # REPLACE the original, the old key can be put back, and the original
       # must then be destroyed rather than left running.
       STAMP="$(date +%Y%m%d%H%M%S)"
-      mv "$KEY_FILE_PATH" "$KEY_FILE_PATH.clone-$STAMP"
+      run_as "$SIDECAR_USER" mv "$KEY_FILE_PATH" "$KEY_FILE_PATH.clone-$STAMP"
       warn "THIS BOX IS A CLONE. It carried another machine's fleet identity."
       warn "  The key has been set aside as host-key.json.clone-$STAMP and a new"
       warn "  one will be made, so this box needs enrolling again."
@@ -3716,9 +3806,12 @@ if [ "$WIZARD" = yes ]; then
       warn "  the coordinator, or the two will disconnect each other for ever."
       warn "  Meant to replace the original? Move the file back and destroy the original."
     fi
-    printf '%s' "$THIS_MACHINE" > "$MACHINE_FILE"
-    chown "$SIDECAR_USER" "$MACHINE_FILE" 2>/dev/null || true
-    chmod 0600 "$MACHINE_FILE"
+    # AS $SIDECAR_USER (run_as): the directory is that account's, and root's
+    # `>` then chown followed a link left at the name — on a box whose sidecar
+    # had to fall back to $RUN_USER, a link to /etc/passwd was root writing a
+    # machine id over it and giving it away.
+    printf '%s' "$THIS_MACHINE" | run_as "$SIDECAR_USER" sh -c 'umask 077; cat > "$1" && chmod 0600 "$1"' sh "$MACHINE_FILE" \
+      || warn "could not write $MACHINE_FILE as $SIDECAR_USER — a clone of this box will not be recognised as one"
   fi
 
   # Sweep out the credential this replaced. It does nothing now — no coordinator
@@ -4016,6 +4109,17 @@ if [ "$PACKAGED" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
     warn "$OLD_DIR has uncommitted changes, so it was NOT removed.
        It is no longer what runs — the services point at $DIR.
        Remove it yourself when you have saved what you want:  rm -rf $OLD_DIR"
+  # AS $RUN_USER WHEN THE PATH TO IT IS THEIRS — a checkout in a directory of
+  # their home: rm -rf never follows the link it is handed, but a directory on
+  # the way that they can rename is a different tree by the time root gets
+  # there. A path of root's (/opt/fleetwright-src) is root's to remove, and
+  # GNU rm does not follow a link inside the tree it removes.
+  elif run_user_can_alter "$(dirname "$OLD_DIR")" notree; then
+    if run_as_user rm -rf "$OLD_DIR"; then
+      ok "removed the earlier install at $OLD_DIR"
+    else
+      warn "could not remove $OLD_DIR as $RUN_USER — it is no longer what runs; remove it yourself"
+    fi
   else
     rm -rf "$OLD_DIR"
     ok "removed the earlier install at $OLD_DIR"

@@ -139,7 +139,7 @@ test('the release lay-out never copies from inside the release tree, nor to a ve
     symlinkSync(path.join(base, 'theirs'), path.join(base, 'current'));
     const run = (/** @type {string} */ version) => {
       writeFileSync(path.join(base, 'theirs', 'package.json'), JSON.stringify({ version }));
-      return bash(`${fns([])}
+      return bash(`${fns(['owner_of', 'run_as'])}
 PACKAGED=1 CHECK_ONLY=0 GRANT_ONLY=0 FLEET_BASE="$X_BASE" DIR="$X_BASE/current"
 ${block}
 echo "DIR=$DIR"`, { X_BASE: base });
@@ -215,7 +215,7 @@ test('the sidecar trusts a checkout’s git config only on a box that runs that 
     mkdirSync(path.join(t, 'src', '.git'), { recursive: true });
     mkdirSync(path.join(t, 'release'));
     const gc = path.join(t, 'gitconfig');
-    const run = (/** @type {Record<string,string>} */ v) => bash(`${fns([])}
+    const run = (/** @type {Record<string,string>} */ v) => bash(`${fns(['run_as'])}
 SIDECAR_USER="$X_ME" RUN_USER=nobody
 ${block}`, { X_GC: gc, X_ME: userInfo().username, ...v });
     // A box that runs its checkout: written.
@@ -251,7 +251,7 @@ test('the hook is merged into settings.json as the service user, never through a
     const victim = path.join(t, 'passwd');
     writeFileSync(victim, 'root:x:0:0:root:/root:/bin/bash\n');
     symlinkSync(victim, path.join(home, '.claude', 'settings.json'));
-    const r = bash(`${fns(['run_as_user'])}
+    const r = bash(`${fns(['run_as', 'run_as_user'])}
 node_major() { echo 24; }
 RUN_USER=nobody CLAUDE_HOME="$X_HOME" DIR=/opt/fleetwright/current NODE_BIN="$X_NODE" UNIT_NODE_BIN="$X_NODE" NODE_FLOOR=24
 ${block}`, { X_HOME: home, X_NODE: /** @type {string} */ (nobodyNode) });
@@ -277,7 +277,7 @@ test('the installer asks the service user’s claude its version as them, and wr
     writeFileSync(rootrc, '# root\n');
     symlinkSync(rootrc, path.join(home, '.profile'));
     spawnSync('chown', ['-R', 'nobody', home]);
-    const r = bash(`${fns(['as_user', 'run_as_user'])}
+    const r = bash(`${fns(['as_user', 'run_as', 'run_as_user'])}
 RUN_USER=nobody CLAUDE_HOME="$X_HOME" USER_HOME="$X_HOME" CHECK_ONLY=0
 ${block}
 fi`, { X_HOME: home });
@@ -313,7 +313,7 @@ function linkTheClis(/** @type {Record<string,string>} */ vars) {
   writeFileSync(path.join(t, 'node'), '#!/bin/sh\nexec /bin/sh "$@"\n');
   chmodSync(path.join(t, 'node'), 0o755);
   mkdirSync(path.join(t, 'bin'));
-  const r = bash(`${fns([...ALTER_FNS, 'sidecar_tree'])}
+  const r = bash(`${fns([...ALTER_FNS, 'sidecar_tree', 'owner_of', 'run_as'])}
 MISSING=()
 PLATFORM=linux CHECK_ONLY=0 RUN_USER=nobody CONVERTED=0 FROM_SOURCE=0 CLI_NEEDS_WRAPPER=0 NODE_FLOOR=24
 FLEET_BASE="$X_T/base" DIR="$X_T/base/current" SIDECAR_BASE="$X_T/store"
@@ -442,13 +442,13 @@ test('the sidecar’s token is written as the service user, so a link they left 
     const target = path.join(t, 'profile.d', 'x.sh');
     symlinkSync(target, path.join(state, 'sidecar-token'));
     spawnSync('chown', ['-hR', 'nobody', state]);
-    const r = bash(`${fns(['run_as_user'])}
+    const r = bash(`${fns(['run_as', 'run_as_user'])}
 RUN_USER=nobody CHECK_ONLY=0 STATE_DIR="$X_STATE"
 ${block}`, { X_STATE: state });
     assert.equal(existsSync(target), false, `root created ${target} through the link:\n${r.stdout}${r.stderr}`);
     // An ordinary state directory still gets its token, and it is theirs.
     rmSync(path.join(state, 'sidecar-token'));
-    bash(`${fns(['run_as_user'])}
+    bash(`${fns(['run_as', 'run_as_user'])}
 RUN_USER=nobody CHECK_ONLY=0 STATE_DIR="$X_STATE"
 ${block}`, { X_STATE: state });
     const st = statSync(path.join(state, 'sidecar-token'));
@@ -496,6 +496,202 @@ PURGE=1 PURGE_DIR="$X_T/base"
 ${UN.slice(a, b + 4)}`, { X_T: t });
     assert.match(r.stdout, /is the filesystem root — not removing it/, r.stdout + r.stderr);
     assert.ok(existsSync(path.join(t, 'base')));
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+// --- what root makes inside a directory the service user owns ------------------------
+//
+// The ninth audit's. $STATE_DIR, $FLEET_BASE and `current` are the service
+// user's, so every name in them is theirs to turn into a symlink between
+// root's look and root's write — and GNU `install -d`, `cp`, `tar -C`, `mv`
+// into a directory and `rm -rf` through one all follow it. The heal and an apt
+// upgrade are routes they can start. So root does that work as the owner of
+// the directory (install.sh, run_as), and these run the installer's own lines.
+
+/** The profiles block, as the installer has it. */
+const profilesBlock = () => between('PROFILE_DIR="${FLEETWRIGHT_PROFILE_DIR:-$STATE_DIR/profiles}"\n', '\n# --- 3. environment file');
+
+test('a shipped profile that is a link is not copied into the state directory', () => {
+  // Unprivileged on purpose: the service user here is whoever runs the test.
+  // On the heal $DIR is `current`, whose install/profiles/*.md they write, and
+  // root's copy followed a link there to wherever it pointed.
+  const t = tmp('profiles');
+  try {
+    mkdirSync(path.join(t, 'payload', 'install', 'profiles'), { recursive: true });
+    writeFileSync(path.join(t, 'payload', 'install', 'profiles', 'orient.md'), 'look around\n');
+    writeFileSync(path.join(t, 'secret'), 'root:$6$hash:::\n');
+    symlinkSync(path.join(t, 'secret'), path.join(t, 'payload', 'install', 'profiles', 'leak.md'));
+    mkdirSync(path.join(t, 'state'));
+    const r = bash(`${fns(['run_as', 'run_as_user'])}
+RUN_USER="$(id -un)" STATE_DIR="$X_T/state" DIR="$X_T/payload" SELF_DIR="$X_T/payload"
+${profilesBlock()}`, { X_T: t });
+    assert.equal(readFileSync(path.join(t, 'state', 'profiles', 'orient.md'), 'utf8'), 'look around\n', r.stdout + r.stderr);
+    assert.equal(existsSync(path.join(t, 'state', 'profiles', 'leak.md')), false, 'the link was followed and its target copied in');
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('the profiles directory is made as the service user, so their link does not hand root’s directory to them', { skip: !canBeNobody && 'needs root, sudo and a nobody account' }, () => {
+  // `rm -rf …/profiles; ln -s /usr/local/sbin …/profiles; sudo -n
+  // fleetwright-migrate`: root's `install -d -o` followed it, and chowned and
+  // chmodded the directory the migrate helper lives in.
+  const t = tmp('profdir');
+  try {
+    mkdirSync(path.join(t, 'payload', 'install', 'profiles'), { recursive: true });
+    writeFileSync(path.join(t, 'payload', 'install', 'profiles', 'orient.md'), 'look around\n');
+    const sbin = path.join(t, 'sbin');
+    mkdirSync(sbin);
+    chmodSync(sbin, 0o755);
+    writeFileSync(path.join(sbin, 'fleetwright-migrate'), '#!/bin/sh\n');
+    const state = path.join(t, 'state');
+    mkdirSync(state);
+    symlinkSync(sbin, path.join(state, 'profiles'));
+    spawnSync('chown', ['-hR', 'nobody', state]);
+    const r = bash(`${fns(['run_as', 'run_as_user'])}
+RUN_USER=nobody STATE_DIR="$X_T/state" DIR="$X_T/payload" SELF_DIR="$X_T/payload"
+${profilesBlock()}`, { X_T: t });
+    const st = statSync(sbin);
+    assert.equal(st.uid, 0, `root gave its directory away through the link:\n${r.stdout}${r.stderr}`);
+    assert.equal(st.mode & 0o777, 0o755);
+    assert.deepEqual(readdirSync(sbin), ['fleetwright-migrate'], 'root wrote into its own directory through the link');
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('a release is laid out in the base as its owner, never through a `releases` link they planted', { skip: !canBeNobody && 'needs root, sudo and a nobody account' }, () => {
+  // An apt upgrade, which the service user can start, runs the lay-out from
+  // the deb's extract — outside the base, so the copy runs — into a base that
+  // is theirs.
+  const block = between('if [ "$PACKAGED" = 1 ]; then\n  RELEASE_VERSION=', '\n# Installing missing OS packages');
+  const t = tmp('baseowner');
+  try {
+    const payload = path.join(t, 'extract');
+    mkdirSync(path.join(payload, 'lib'), { recursive: true });
+    writeFileSync(path.join(payload, 'lib', 'fleetwright.mjs'), '');
+    writeFileSync(path.join(payload, 'package.json'), '{"version":"v2"}');
+    const run = (/** @type {string} */ base) => bash(`${fns(['owner_of', 'run_as'])}
+PACKAGED=1 CHECK_ONLY=0 GRANT_ONLY=0 RUN_USER=nobody FLEET_BASE="$X_BASE" DIR="$X_PAYLOAD"
+${block}
+echo "DIR=$DIR"`, { X_BASE: base, X_PAYLOAD: payload });
+    // Theirs, with `releases` pointing at a directory of root's.
+    const roots = path.join(t, 'roots');
+    mkdirSync(roots);
+    const base = path.join(t, 'base');
+    mkdirSync(base);
+    symlinkSync(roots, path.join(base, 'releases'));
+    spawnSync('chown', ['-hR', 'nobody', base]);
+    let r = run(base);
+    assert.deepEqual(readdirSync(roots), [], `root laid the release out through their link:\n${r.stdout}${r.stderr}`);
+    // And an ordinary base of theirs gets the release, theirs, with `current` at it.
+    const plain = path.join(t, 'plain');
+    mkdirSync(plain);
+    spawnSync('chown', ['nobody', plain]);
+    r = run(plain);
+    assert.match(r.stdout, /DIR=.*\/plain\/current$/m, r.stdout + r.stderr);
+    assert.equal(readFileSync(path.join(plain, 'current', 'package.json'), 'utf8'), '{"version":"v2"}');
+    assert.equal(String(statSync(path.join(plain, 'releases', 'v2')).uid), NOBODY);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('the migrate helper lays a release out in a base the service user owns as them', { skip: (!canBeNobody || spawnSync('sh', ['-c', 'command -v curl']).status !== 0) && 'needs root, sudo, nobody and curl' }, () => {
+  // The bring-forward, which the service user starts with `sudo -n
+  // fleetwright-migrate`: root's tar and mv went through `releases`.
+  const t = tmp('migbase');
+  try {
+    // A release, published over file://, whose installer only says it ran.
+    const stage = path.join(t, 'stage', 'fleetwright-host-v2');
+    mkdirSync(path.join(stage, 'install'), { recursive: true });
+    writeFileSync(path.join(stage, 'package.json'), '{"version":"v2"}');
+    writeFileSync(path.join(stage, 'install', 'install.sh'), `#!/bin/bash\necho "installer ran $*"\n`);
+    chmodSync(path.join(stage, 'install', 'install.sh'), 0o755);
+    const dist = path.join(t, 'dist');
+    mkdirSync(dist);
+    spawnSync('tar', ['-czf', path.join(dist, 'r.tar.gz'), '-C', path.dirname(stage), 'fleetwright-host-v2']);
+    const sha = spawnSync('sha256sum', [path.join(dist, 'r.tar.gz')], { encoding: 'utf8' }).stdout.split(' ')[0];
+    writeFileSync(path.join(dist, 'manifest.json'), `{\n  "version": "v2",\n  "file": "r.tar.gz",\n  "sha256": "${sha}"\n}\n`);
+    const helper = new URL('../install/fleetwright-migrate', import.meta.url).pathname;
+    const run = (/** @type {string} */ base) => {
+      // A converted box on v1, whose base is the service user's.
+      mkdirSync(path.join(base, 'old'), { recursive: true });
+      writeFileSync(path.join(base, 'old', 'package.json'), '{"version":"v1"}');
+      symlinkSync(path.join(base, 'old'), path.join(base, 'current'));
+      spawnSync('chown', ['-hR', 'nobody', base]);
+      const units = path.join(t, `units-${path.basename(base)}`);
+      mkdirSync(units);
+      writeFileSync(path.join(units, 'fleetwright.service'), `[Service]\nExecStart=/usr/bin/node ${base}/current/lib/fleetwright.mjs serve\n`);
+      const envFile = path.join(t, `env-${path.basename(base)}`);
+      writeFileSync(envFile, `FLEETWRIGHT_RELEASE_MANIFEST=file://${dist}/manifest.json\nFLEETWRIGHT_STATE_DIR=${t}/state\n`);
+      return spawnSync('sh', [helper], {
+        encoding: 'utf8',
+        env: { ...process.env, FLEETWRIGHT_ENV_FILE: envFile, FLEETWRIGHT_BASE: base, FLEETWRIGHT_UNIT_DIR: units },
+      });
+    };
+    const roots = path.join(t, 'roots');
+    mkdirSync(roots);
+    const base = path.join(t, 'base');
+    mkdirSync(base);
+    symlinkSync(roots, path.join(base, 'releases'));
+    let r = run(base);
+    assert.deepEqual(readdirSync(roots), [], `root unpacked through their link:\n${r.stdout}${r.stderr}`);
+    assert.notEqual(r.status, 0);
+    const plain = path.join(t, 'plain');
+    mkdirSync(plain);
+    r = run(plain);
+    assert.match(r.stdout, /installer ran --upgrade/, r.stdout + r.stderr);
+    assert.equal(String(statSync(path.join(plain, 'releases', 'v2')).uid), NOBODY);
+    assert.equal(readFileSync(path.join(plain, 'current', 'package.json'), 'utf8'), '{"version":"v2"}');
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('apt’s tidy-up of old releases runs as the base’s owner, so their `releases` link is not root’s rm -rf', { skip: !canBeNobody && 'needs root, sudo and a nobody account' }, () => {
+  const POSTINST = readFileSync(new URL('../install/deb/postinst', import.meta.url), 'utf8');
+  const a = POSTINST.indexOf('if [ -d "$BASE/releases" ]; then');
+  const b = POSTINST.indexOf('\nexit 0', a);
+  assert.ok(a > 0 && b > a, 'the tidy-up moved');
+  const t = tmp('prune');
+  try {
+    // Somewhere of root's that is not a release tree, and a base of theirs
+    // whose `releases` points at it.
+    const victim = path.join(t, 'usr');
+    for (const d of ['bin', 'lib']) mkdirSync(path.join(victim, d), { recursive: true });
+    const base = path.join(t, 'base');
+    mkdirSync(base);
+    symlinkSync(victim, path.join(base, 'releases'));
+    spawnSync('chown', ['-h', 'nobody', base, path.join(base, 'releases')]);
+    const r = spawnSync('sh', ['-c', `BASE="$X_BASE" BEFORE=""\n${POSTINST.slice(a, b)}`], { encoding: 'utf8', env: { ...process.env, X_BASE: base } });
+    assert.deepEqual(readdirSync(victim).sort(), ['bin', 'lib'], `root removed what their link pointed at:\n${r.stdout}${r.stderr}`);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('the machine id is written as the sidecar’s account, never through a link in its directory', { skip: !canBeNobody && 'needs root, sudo and a nobody account' }, () => {
+  // Where no separate account could be made the sidecar's directory is the
+  // service user's, and root's `>` and chown followed a link at the name.
+  const block = between('  MACHINE_FILE=/var/lib/fleetwright-sidecar/machine-id\n', '\n  # Sweep out the credential')
+    .replace('MACHINE_FILE=/var/lib/fleetwright-sidecar/machine-id', 'MACHINE_FILE="$X_SC/machine-id"');
+  const t = tmp('machine');
+  try {
+    const sc = path.join(t, 'sidecar');
+    mkdirSync(sc);
+    const victim = path.join(t, 'passwd');
+    writeFileSync(victim, 'root:x:0:0::/root:/bin/bash\n');
+    symlinkSync(victim, path.join(sc, 'machine-id'));
+    spawnSync('chown', ['-hR', 'nobody', sc]);
+    const r = bash(`${fns(['run_as'])}
+machine_id() { echo abc123; }
+SIDECAR_USER=nobody RUN_USER=nobody KEY_FILE_PATH="$X_SC/host-key.json"
+${block}`, { X_SC: sc });
+    assert.equal(readFileSync(victim, 'utf8'), 'root:x:0:0::/root:/bin/bash\n', `root wrote through the link:\n${r.stdout}${r.stderr}`);
+    assert.equal(statSync(victim).uid, 0);
   } finally {
     rmSync(t, { recursive: true, force: true });
   }
