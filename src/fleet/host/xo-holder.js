@@ -23,7 +23,7 @@
 // (`holder` in its health, core.js #vmHolders).
 
 import { VM_IMAGE, imageKeyOf, isFleetImage } from './vm-image.js';
-import { outsideSets, setsOf } from './xo-made.js';
+import { outsideSets, recordMade, setsOf } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { machineGrantsOf } from '../../core/grants.js';
 
@@ -40,20 +40,46 @@ export const HOLDER = Object.freeze({
 
 /**
  * WHETHER A VM IS THE POOL'S OWN MACHINE for the Xen Orchestra at `address`:
- * both of the tags it is made with, and made in no resource set. The first
- * tag alone was all it took, and the job, signed in as an admin, starts what
- * it finds or, made again, deletes it with its disks; a VM somebody else
- * tagged was one it would have started or deleted. `fleetwright-holder-for`
- * names this Xen Orchestra, and no resource set means it was made by somebody
- * at the pool's admin or above (xo-made.js, outsideSets), never by the fleet's
- * limited user, whose every VM is made in its set and cannot leave it. Also
- * what the phone is shown, and where the edge router sends its logs
+ * on the list of what the policy job made (xo-made.js, recordMade), with both
+ * of the tags it is made with, and made in no resource set. The first tag
+ * alone was all it took, and the job, signed in as an admin, starts what it
+ * finds or, made again, deletes it with its disks; a VM somebody else tagged
+ * was one it would have started or deleted.
+ *
+ * THE LIST, BECAUSE THE TAGS AND THE SET SAY WHO MADE THE VM AND NOT WHO
+ * TAGGED IT. tag.add asks only for `administrate` on the object, so anybody
+ * given that on one VM an admin made, which is in no set, could plant both
+ * tags; the edge router then sent its logs to that VM's guest-reported
+ * address ahead of the box watching it, the job started it and called it
+ * "already there", and the phone showed it in place of the real one. The list
+ * is written only by an admin of Xen Orchestra, which is what the machine
+ * images already rest on (vm-image.js, isFleetImage).
+ *
+ * A MACHINE MADE BEFORE THE LIST IS NOT TAKEN FOR ONE. Nothing tells it from
+ * a planted VM: both have the tags and no set, and recording whichever is
+ * there at the first job after this change would record a planted one as
+ * readily, with no end to the window — a VM planted on a pool that never had
+ * one would be recorded by the next job too. So the job passes it over: it is
+ * not started, its logs stop at the next edge build, the phone does not show
+ * it and offers to make one, and making one makes a new machine and lists
+ * it. The old one stays an enrolled host until somebody deletes it in Xen
+ * Orchestra; whether it holds the pool was always its owner's approval, which
+ * this does not touch (docs/hypervisors.md, "A machine of its own").
+ *
+ * Also what the phone is shown, and where the edge router sends its logs
  * (xo-setup.js).
  *
  * @param {any} v  a VM as xo.getAllObjects gave it @param {string} address
+ * @param {{ made: Set<string> }} sets  as xo-made.js reads them
  */
-export function isHolder(v, address) {
-  return Array.isArray(v?.tags) && v.tags.includes(HOLDER.tag) && v.tags.includes(`${HOLDER.forPrefix}${address}`) && outsideSets(v);
+export function isHolder(v, address, sets) {
+  return (
+    Array.isArray(v?.tags) &&
+    v.tags.includes(HOLDER.tag) &&
+    v.tags.includes(`${HOLDER.forPrefix}${address}`) &&
+    outsideSets(v) &&
+    sets.made.has(String(v?.id))
+  );
 }
 
 /**
@@ -112,8 +138,9 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret
  * @returns {Promise<string>} what was done, in a sentence for the phone
  */
 export async function ensureHolder({ admin, pool, egress, address, coordinatorUrl, askPin, secret = null, again = false, grants = null, say = () => {} }) {
+  const sets = await setsOf(admin);
   const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
-  const theirs = vms.filter((v) => v?.$pool === pool && isHolder(v, address));
+  const theirs = vms.filter((v) => v?.$pool === pool && isHolder(v, address, sets));
   const there = theirs[0];
   if (there && !again) {
     if (there.power_state === 'Halted') {
@@ -132,7 +159,6 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
   // FROM THE POOL'S MACHINE IMAGE: Debian where there is one, else any of
   // the fleet's, and only the fleet's (vm-image.js, isFleetImage): it boots
   // on the way out with a pin, and stays up as a permanent host.
-  const sets = await setsOf(admin);
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}))
     .filter((t) => t?.$pool === pool && Array.isArray(t.tags) && t.tags.includes(VM_IMAGE.tag) && isFleetImage(t, sets));
   const template = templates.find((t) => imageKeyOf(t) === HOLDER.image) ?? templates[0];
@@ -143,7 +169,7 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
     throw new Error(`the fleet gave no pin for the pool’s own machine: ${given?.text || 'it did not answer, which a coordinator from before this does not'}`);
   }
   say(`Making ${given.hostId} from ${String(template.name_label || 'the machine image').slice(0, 60)}.`);
-  await admin.call('vm.create', {
+  const made = await admin.call('vm.create', {
     template: template.id,
     name_label: given.hostId,
     name_description: `This pool’s own Fleetwright machine. It holds the pool for the fleet once its owner approves it, and stays up. Made by Fleetwright.`,
@@ -155,6 +181,11 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
     destroyCloudConfigVdiAfterBoot: true,
     bootAfterCreate: true,
   });
+  // ON THE LIST as soon as it exists, which is what makes it the pool's own
+  // machine to the next job (isHolder). Xen Orchestra answers vm.create with
+  // the new VM's id; anything else is a machine that would never be found.
+  if (typeof made !== 'string' || !made) throw new Error(`Xen Orchestra made ${given.hostId} without saying its id, so it cannot be listed as the pool’s own machine.`);
+  await recordMade(admin, made);
   return secret
     ? `${given.hostId} is starting on ${egress.name}. Once it is up it asks to join, and your phone asks you to let it in and hold this pool.`
     : `${given.hostId} is starting on ${egress.name}. Approve it under Machines once it joins, and it holds this pool from then on.`;

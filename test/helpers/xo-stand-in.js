@@ -273,6 +273,9 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
             break;
           }
           case 'network.create': answer('net-uplink'); break;
+          // The new VM's id, as Xen Orchestra answers; the pool's own
+          // machine is listed by it (xo-holder.js, ensureHolder).
+          case 'vm.create': answer(`vm-made-${calls.filter((c) => c.method === 'vm.create').length}`); break;
           case 'tag.add': tags.set(p.id, [...(tags.get(p.id) ?? []), p.tag]); answer(true); break;
           case 'tag.remove': tags.set(p.id, (tags.get(p.id) ?? []).filter((x) => x !== p.tag)); answer(true); break;
           case 'token.create':

@@ -1212,9 +1212,10 @@ export class XoSetups {
         const templates = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {});
         ctx.images = templates.filter((/** @type {any} */ t) => Array.isArray(t?.tags) && t.tags.includes(VM_IMAGE.tag) && isFleetImage(t, own));
         // AND EACH POOL'S OWN MACHINE, so the phone offers to make one only
-        // where there is none, by both its tags and where it was made
-        // (xo-holder.js, isHolder): the edge router sends its logs to it.
-        ctx.holders = vms.filter((/** @type {any} */ v) => isHolder(v, ctx.rec.address));
+        // where there is none, by the list only an admin writes as well as
+        // its tags and where it was made (xo-holder.js, isHolder): the edge
+        // router sends its logs to it.
+        ctx.holders = vms.filter((/** @type {any} */ v) => isHolder(v, ctx.rec.address, own));
         const inventory = inventoryOf(ctx, set);
         ctx.rec.choices = choicesOf(inventory);
         const box = await seal({ to: ctx.rec.reply, aad: xosetupInventoryAad(ctx.rec.job, ctx.rec.address), payload: inventory });
@@ -1555,15 +1556,12 @@ export class XoSetups {
     // THE KEY THE FLEET READS THE ROUTERS WITH (edge-credentials.js): the
     // one they were built with, so a rebuild keeps it and the person's vault
     // stays right, or a new one for routers that have none. Its logs go to
-    // the pool's own machine and to this one, which is on the way to Xen
-    // Orchestra and so, usually, on the routers' way out.
+    // this box, which is on the way to Xen Orchestra and so, usually, on the
+    // routers' way out, and to the pool's own machine (syslogTo).
     const onPool = (ctx.edges || []).filter((/** @type {any} */ v) => v?.$pool === way.$pool);
     ctx.watch = onPool.map(watchOf).find(Boolean) ?? newWatch({ now: this.now() });
     ctx.watchPool = way.$pool;
-    const syslog = [
-      ...(ctx.holders || []).filter((/** @type {any} */ v) => v?.$pool === way.$pool && v.power_state === 'Running').map((/** @type {any} */ v) => String(v.mainIpAddress || '')),
-      String(ctx.admin?.localAddress || ''),
-    ].filter((ip, i, all) => isPrivateV4(ip) && all.indexOf(ip) === i);
+    const syslog = syslogTo(ctx.holders, way.$pool, ctx.admin?.localAddress);
     return ensureEdge({
       admin: ctx.admin,
       pool: way.$pool,
@@ -2617,6 +2615,27 @@ function scrub(message, creds) {
     if (secret && secret.length >= 4) out = out.split(secret).join('…');
   }
   return out.slice(0, 300);
+}
+
+/**
+ * Where a pool's edge router sends its logs: this box first, then the pool's
+ * own machines that are up, private IPv4 addresses only and each once. The
+ * router keeps two (edge-credentials.js, watchConfig).
+ *
+ * THIS BOX FIRST, because it is the one address here the job knows rather
+ * than was told. A holder's is what its guest agent reports, which whoever
+ * runs inside it says; it came first, and with two holders, or one that was
+ * not the pool's own, the box watching the router was pushed off its list.
+ *
+ * @param {any[]|undefined} holders  as isHolder found them
+ * @param {string} pool @param {string|null|undefined} localAddress  this box's, on its way to Xen Orchestra
+ * @returns {string[]}
+ */
+export function syslogTo(holders, pool, localAddress) {
+  return [
+    String(localAddress || ''),
+    ...(holders || []).filter((/** @type {any} */ v) => v?.$pool === pool && v.power_state === 'Running').map((/** @type {any} */ v) => String(v.mainIpAddress || '')),
+  ].filter((ip, i, all) => isPrivateV4(ip) && all.indexOf(ip) === i);
 }
 
 /** A private IPv4 address, the only kind a router's syslog is sent to. @param {string} ip */
