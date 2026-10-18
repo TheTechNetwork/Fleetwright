@@ -103,7 +103,7 @@ test('iOS: the key what it did comes back to is made for the screen and kept now
 });
 
 test('iOS: the machine is asked whether it can open a reconnect’s sign-in before anything is sealed to it', () => {
-  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func approvedFingerprint('));
+  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func vaultApproval('));
   const askAt = begin.indexOf('if isReconnect, let why = XOReconnect.refusal(can: can, machine: machine) {');
   assert.ok(askAt > 0, 'begin does not ask the machine');
   assert.ok(askAt < begin.indexOf('await send()'), 'send is reachable before the machine is asked');
@@ -114,19 +114,39 @@ test('iOS: the machine is asked whether it can open a reconnect’s sign-in befo
   // `reconnect` alone is refused, in words that say to update that machine:
   // a relay can add it to a machine too old to know it. Which list gets
   // which sentence is run by XOReconnectTests.swift.
-  const refusal = IOS.slice(IOS.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
+  const RECONNECT = read('apps/ios/Fleetwright/XOReconnect.swift');
+  const refusal = RECONNECT.slice(RECONNECT.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
   assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("reconnect"\) \{\s*return "\\\(machine\) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent\."\s*\}\s*if !can\.contains\("reconnect-signin"\) \{\s*return "\\\(machine\) is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent\."\s*\}\s*return nil/);
   for (const at of [begin.slice(askAt), send.slice(refusedAt)]) assert.match(at, /refuse\("\\\(why\) Update that machine, then try again\."\)/);
 });
 
 test('iOS: a reconnect starts where it was asked from: the address named, the machine that noticed, the sign-in Face ID opens', () => {
   assert.match(SCREEN, /init\(settings: Settings, policyFor address: String\? = nil, reconnectFor pool: String\? = nil, via machine: String\? = nil\)/);
-  assert.match(SCREEN, /if isPolicy \|\| isReconnect, probes == nil, !probing \{ await openRemembered\(\) \}/);
+  assert.match(SCREEN, /guard isPolicy \|\| isReconnect, probes == nil, !probing else \{ return \}[\s\S]*?await openRemembered\(\)\s*\}/);
   // Never offered through this phone, and never an install: it is for a Xen
   // Orchestra the fleet already reaches.
   assert.match(SCREEN, /guard !isReconnect else \{ return false \}\s*guard !isPolicy, job == nil, let all = probes/);
   // On the Lock Screen while it runs, as a reconnect and not a setup.
   assert.match(fn(SCREEN, 'sendForReconnect'), /XOSetupActivities\.start\(fleet: fleet, job: begun\.job, hostId: begun\.hostId, address: begun\.address,\s*progress: answer\.xosetup, purpose: "reconnect"\)/);
+});
+
+test('iOS: a reconnect for an address this phone does not know asks the fleet nothing until the person asks for it by name', () => {
+  // A pool-lost push carries an address one of the person's machines chose.
+  // Opening on it probes nothing unless this phone holds that pool, kept a
+  // sign-in for it, or pinned its certificate.
+  const opening = bare(SCREEN.slice(SCREEN.indexOf('guard isPolicy || isReconnect, probes == nil, !probing else { return }'), SCREEN.indexOf('private static func knows(')));
+  assert.match(opening, /if isReconnect, !Self\.knows\(trimmedAddress\) \{\s*askFirst = true\s*return\s*\}\s*await openRemembered\(\)/);
+  const knows = bare(SCREEN.slice(SCREEN.indexOf('private static func knows('), SCREEN.indexOf('// MARK: In the fleet')));
+  for (const known of ['XOSetupHandoff.held().contains(address)', 'XOSaved.has(address)', 'XOSetupHandoff.pinnedCertificate(address) != nil']) {
+    assert.ok(knows.includes(known), `an address is known by ${known}`);
+  }
+  // The one way on is a button that names the address, after a sentence
+  // that says where it came from, and the probe it runs is the first thing
+  // anything asks of the fleet.
+  assert.match(SCREEN, /askFirst \? "Ask your machines to reach \\\(trimmedAddress\)"/);
+  assert.ok(SCREEN.includes('Text("This phone has not set up \\(trimmedAddress), kept a sign-in for it or pinned its certificate. "'));
+  assert.ok(SCREEN.includes('+ "The address came from one of your machines, so none of them is asked to reach it until you say so.")'));
+  assert.match(fn(SCREEN, 'probe'), /^private func probe\(\) async \{\s*probing = true\s*defer \{ probing = false \}\s*askFirst = false/);
 });
 
 test('iOS: every reconnect step has words, and its ends are the coordinator’s titles', () => {

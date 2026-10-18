@@ -25,6 +25,8 @@ import { signingInput } from '../src/fleet/crypto.js';
 const IOS = iosSources();
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const SCREEN = read('apps/ios/Fleetwright/AddHypervisorView.swift');
+/** Code without its commentary, so a rule is never confused with a note about one. */
+const uncommented = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 const PROJECT = read('apps/ios/project.yml');
 const WORKFLOW = read('.github/workflows/ios.yml');
 const WIDGET_DIR = 'apps/ios/FleetwrightActivity';
@@ -144,7 +146,7 @@ test('iOS: the key is checked as the machine’s before anything is sealed to it
 
   // ORDER: the signature is checked in `begin`, the seal happens in `send`,
   // and `begin` reaches `send` only past the check.
-  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func approvedFingerprint('));
+  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func vaultApproval('));
   const checkAt = begin.indexOf('XOSetupKey.isSigned(');
   assert.ok(checkAt > 0, 'begin does not check the signature');
   assert.ok(!begin.includes('Seal.seal('), 'begin seals before send');
@@ -153,14 +155,35 @@ test('iOS: the key is checked as the machine’s before anything is sealed to it
   assert.match(begin, /guard XOSetupKey\.isSigned\([^\n]*\) else \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)\s*refuse\("The key \\\(machine\) answered with did not come from that machine, so the sign-in was not sent\."\)/);
 
   // The fingerprint is the vault's fingerprint, worked out from the key the
-  // same way, and compared with what the vault approved for that machine.
+  // same way, and the key compared with what the vault approved for that
+  // machine (PhoneVault.approval, below).
   assert.match(begin, /let fingerprint = PhoneVault\.fingerprint\(hostKey\)/);
-  assert.match(begin, /if approved == fingerprint \{\s*await send\(\)/);
-  assert.match(begin, /\} else if approved != nil \{[\s\S]{0,300}?did not come from that machine: it is not the key this phone approved for it/);
-  assert.match(begin, /\} else \{\s*toCompare = fingerprint/);
+  assert.match(begin, /switch await vaultApproval\(of: machine, key: hostKey\) \{\s*case \.approved:\s*await send\(\)/);
+  assert.match(begin, /case \.anotherKey:[\s\S]{0,300}?did not come from that machine: it is not the key this phone approved for it/);
+  assert.match(begin, /case \.none:\s*toCompare = fingerprint/);
   // And when the vault has not vouched, the person compares it with the box.
   assert.ok(SCREEN.includes('fleetwright-sidecar identity'));
   assert.ok(SCREEN.includes('"They match"'));
+});
+
+test('iOS: only a whole-vault grant for that machine, by that whole key, skips the comparison; a pool machine’s scoped grant does not', () => {
+  const vault = read('apps/ios/Fleetwright/PhoneVault.swift');
+  // `only` is read off the minter's list, not dropped: it is how a pool's own
+  // machine is let in to hold its pool's record and nothing else.
+  assert.match(vault, /let only: \[String\]|var only: \[String\]/);
+  assert.match(vault, /only: \(\$0\["only"\] as\? \[Any\]\)/);
+  // The rule itself: no `only`, the name that answered, the whole hash the
+  // minter names the grant by (boxKeyHash), not the sixteen-character prefix.
+  const rule = uncommented(vault.slice(vault.indexOf('static func approval('), vault.indexOf('/// Seal one request')));
+  assert.match(rule, /grants\.filter \{ \$0\.only\.isEmpty && \$0\.label == hostId \}/);
+  assert.match(rule, /\$0\.key == keyHash\(key\)/);
+  assert.ok(!rule.includes('fingerprint'), 'approval compares the sixteen-character fingerprint');
+  assert.match(vault, /static func keyHash\(_ key: Fleet\.Host\.PublicKey\) -> String \{[\s\S]*?SHA256\.hash\(data: Data\(canonical\.utf8\)\)\.map/);
+  // Both screens that seal an admin's secret to a machine ask it the same way.
+  for (const screen of [SCREEN, read('apps/ios/Fleetwright/DeployXOView.swift')]) {
+    assert.match(screen, /return PhoneVault\.approval\(contents\.grants, hostId: hostId, key: key\)/);
+    assert.ok(!/grants\.first \{ \$0\.label == hostId \}/.test(screen), 'a grant is looked up by label alone');
+  }
 });
 
 test('iOS: the sign-in is sealed under the documented AAD, as the documented payload, and the password is gone the moment it is', () => {

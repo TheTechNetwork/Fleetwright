@@ -108,6 +108,10 @@ struct AddHypervisorView: View {
 
     @State private var address = ""
     @State private var probing = false
+    /// A reconnect for an address this phone knows nothing of, waiting for
+    /// the person to ask for it by name before the fleet is asked anything
+    /// (`knows`).
+    @State private var askFirst = false
     /// What every machine found, or nil until asked. Nil draws nothing; an
     /// empty answer and a failed one each say what they are.
     @State private var probes: [Fleet.Probe]?
@@ -317,8 +321,25 @@ struct AddHypervisorView: View {
         // The address is already known, so the first question is asked for
         // the person, starting from the machine that got through last time.
         .task {
-            if isPolicy || isReconnect, probes == nil, !probing { await openRemembered() }
+            guard isPolicy || isReconnect, probes == nil, !probing else { return }
+            // A RECONNECT FOR AN ADDRESS THIS PHONE DOES NOT KNOW IS ASKED
+            // FOR BY NAME FIRST. A pool-lost push carries an address one of
+            // the person's machines chose, and opening on it used to send the
+            // fleet-wide probe for it at once, with nobody having looked at
+            // it. A pool this phone holds, kept a sign-in for or pinned a
+            // certificate for opens as it always did.
+            if isReconnect, !Self.knows(trimmedAddress) {
+                askFirst = true
+                return
+            }
+            await openRemembered()
         }
+    }
+
+    /// Whether this phone has anything of its own for that address: a pool
+    /// it holds, a sign-in it kept, or a certificate it pinned at setup.
+    private static func knows(_ address: String) -> Bool {
+        XOSetupHandoff.held().contains(address) || XOSaved.has(address) || XOSetupHandoff.pinnedCertificate(address) != nil
     }
 
     // MARK: In the fleet
@@ -375,8 +396,16 @@ struct AddHypervisorView: View {
                     throughOffer = nil
                     endRelay()
                 }
-            Button(probing ? "Asking your machines…" : "Find a machine that can reach it") { Task { await probe() } }
-                .disabled(probing || busy || job != nil || !XOSetupKey.isAddress(trimmedAddress))
+            if askFirst {
+                Text("This phone has not set up \(trimmedAddress), kept a sign-in for it or pinned its certificate. "
+                     + "The address came from one of your machines, so none of them is asked to reach it until you say so.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            Button(probing ? "Asking your machines…" : askFirst ? "Ask your machines to reach \(trimmedAddress)" : "Find a machine that can reach it") {
+                Task { await probe() }
+            }
+            .disabled(probing || busy || job != nil || !XOSetupKey.isAddress(trimmedAddress))
             if !probeText.isBlank {
                 Text(probeText)
                     .fleetType(.label)
@@ -1583,6 +1612,7 @@ struct AddHypervisorView: View {
     private func probe() async {
         probing = true
         defer { probing = false }
+        askFirst = false
         viaMemory = false
         probes = nil
         chosen = nil
@@ -1900,10 +1930,12 @@ struct AddHypervisorView: View {
             // A POLICY CHANGE GOES ONLY TO A MACHINE THAT SAYS IT CAN TAKE
             // ONE, asked before anything is sealed: an older machine would
             // open the sign-in, ignore `purpose`, and run onboarding with it,
-            // making a token nobody asked for.
-            if isPolicy, !can.contains("policy") {
+            // making a token nobody asked for. And only to one that opens the
+            // policy sign-in's own binding, because `policy` alone is a word
+            // a relay can add (XOPolicy.refusal).
+            if isPolicy, let why = XOPolicy.refusal(can: can, machine: machine) {
                 _ = try? await fleet.cancelSetup(job: begunJob)
-                refuse("\(machine) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
+                refuse("\(why) Update that machine, then try again.")
                 return
             }
             // THE SAME FOR A RECONNECT: an older machine would run onboarding
@@ -1948,16 +1980,16 @@ struct AddHypervisorView: View {
             // approved.
             let fingerprint = PhoneVault.fingerprint(hostKey)
             begun = Begun(job: begunJob, hostId: machine, address: target, key: key, fingerprint: fingerprint, can: can)
-            let approved = await approvedFingerprint(of: machine)
-            if approved == fingerprint {
+            switch await vaultApproval(of: machine, key: hostKey) {
+            case .approved:
                 await send()
-            } else if approved != nil {
+            case .anotherKey:
                 // Approved under another key: a machine that was re-keyed
                 // would have been re-approved. Hard stop.
                 _ = try? await fleet.cancelSetup(job: begunJob)
                 begun = nil
                 refuse("The key \(machine) answered with did not come from that machine: it is not the key this phone approved for it. The sign-in was not sent.")
-            } else {
+            case .none:
                 toCompare = fingerprint
             }
         } catch {
@@ -1965,14 +1997,16 @@ struct AddHypervisorView: View {
         }
     }
 
-    /// The fingerprint this phone's vault approved for that machine, or nil
-    /// when it approved none, or cannot ask: no GitHub sign-in on this phone,
-    /// or a vault that did not answer. Nil asks the person; it never passes.
-    private func approvedFingerprint(of hostId: String) async -> String? {
+    /// What this phone's vault says about the key that machine answered
+    /// with (PhoneVault.approval), or `.none` when it cannot ask: no GitHub
+    /// sign-in on this phone, or a vault that did not answer. `.none` asks
+    /// the person; it never passes. A grant scoped by `only`, which is how a
+    /// pool's own machine is let in, is not approval to receive this sign-in.
+    private func vaultApproval(of hostId: String, key: Fleet.Host.PublicKey) async -> PhoneVault.Approval {
         guard PhoneGitHub(settings: settings).signedIn,
               let contents = try? await PhoneVault(settings: settings).list(fleet)
-        else { return nil }
-        return contents.grants.first { $0.label == hostId }?.fingerprint
+        else { return .none }
+        return PhoneVault.approval(contents.grants, hostId: hostId, key: key)
     }
 
     /// Seal the sign-in to the job's key and send it. The password is cleared
@@ -2063,9 +2097,10 @@ struct AddHypervisorView: View {
         }
     }
 
-    /// The sign-in for a policy job: the same seal to the same job key under
-    /// the same binding as onboarding's, saying `purpose: policy` inside it,
-    /// where the coordinator cannot change it.
+    /// The sign-in for a policy job: the same seal to the same job key as
+    /// onboarding's, under a binding of its own that a machine from before
+    /// policy jobs cannot open (Seal.xosetupPolicySigninAAD), saying
+    /// `purpose: policy` inside it, where the coordinator cannot change it.
     ///
     /// WHERE THE POOL COMES BACK TO is a key made here and held in this
     /// screen's memory and nowhere else: not XOSetupHandoff's, which waits in
@@ -2075,10 +2110,10 @@ struct AddHypervisorView: View {
     @MainActor
     private func sendForPolicy(_ begun: Begun) async {
         // Asked again here, where the seal is, so no path reaches it without.
-        guard begun.can.contains("policy") else {
+        if let why = XOPolicy.refusal(can: begun.can, machine: begun.hostId) {
             _ = try? await fleet.cancelSetup(job: begun.job)
             self.begun = nil
-            refuse("\(begun.hostId) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
+            refuse("\(why) Update that machine, then try again.")
             return
         }
         busy = true
@@ -2088,7 +2123,7 @@ struct AddHypervisorView: View {
         do {
             sealed = try Seal.seal(
                 to: begun.key,
-                aad: Seal.xosetupAAD(job: begun.job, address: begun.address),
+                aad: Seal.xosetupPolicySigninAAD(job: begun.job, address: begun.address),
                 payload: [
                     "v": 1,
                     "xo": ["email": email.trimmingCharacters(in: .whitespacesAndNewlines), "password": password],
