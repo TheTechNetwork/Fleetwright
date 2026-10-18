@@ -174,6 +174,26 @@ export function mayActFor(host, email) {
 }
 
 /**
+ * May this person administer this box: change its release channel, image or
+ * labels, update, upgrade or reboot it, or read its service journal? Each
+ * reaches everybody's work on the box, so the admin and the break-glass token
+ * (no requester) may on any box, and a member only on one that acts for them
+ * alone, which holds nobody's work but theirs. An operator's box acts for
+ * anyone, so it is not one of those.
+ *
+ * One rule in one place, because two places ask it: placement (scheduler.js),
+ * which refuses or leaves a box out, and the snapshot (core.js), which tells a
+ * phone where those controls do something so it draws them only there.
+ *
+ * @param {{ actsFor?: string|null }|null|undefined} host  a registry entry, which carries actsFor
+ * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+ */
+export function administers(host, requester) {
+  if (!requester || requester.admin) return true;
+  return Boolean(host?.actsFor) && mayActFor(host, requester.email);
+}
+
+/**
  * Whose a session is, as far as the fleet believes the box that reported it.
  *
  * `createdBy` arrives in a health frame or a reply, so it is the box's own

@@ -15,7 +15,7 @@
 import { HostRegistry, runsNoSessions, attributed } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
-import { HostIdentities, actsFor, mayActFor, believedCreator } from './hosts.js';
+import { HostIdentities, actsFor, mayActFor, believedCreator, administers } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { place } from './scheduler.js';
@@ -2969,10 +2969,16 @@ export class CoordinatorCore {
       // Only for replies that carried sessions, so the other fan-out verbs —
       // `profiles`, `connect`, `link` — keep the host's own words, and a host
       // that refused keeps its reason.
+      //
+      // AND FOR EVERY `list` A BOX SAYS IT ANSWERED, records or none. Leaving
+      // the records out was how a box chose not to be rewritten, so its own
+      // listing reached a member as the fleet's words (sixth audit). A box
+      // that answers `list` without them has told this member nothing of
+      // theirs, and that is what they read.
       const rendered = new Map(
         results.map((r) => [
           r.hostId,
-          filtering && Array.isArray(r.sessions)
+          filtering && (Array.isArray(r.sessions) || (spec.verb === 'list' && r.ok !== false))
             ? describeOwnSessions(sessions.filter((s) => s.hostId === r.hostId))
             : (r.text ?? ''),
         ]),
@@ -2993,7 +2999,13 @@ export class CoordinatorCore {
       // one. Undefined rather than [] when no host answered with the key at
       // all — a fleet of hosts too old to know the verb has not told us there
       // are no profiles, and null is cannot-tell.
-      const profiles = results.some((r) => Array.isArray(r.profiles))
+      //
+      // ONLY WHEN PROFILES WERE THE QUESTION, for a member: those are asked of
+      // the boxes that act for them (scheduler.js), and a box answering their
+      // `list` or `status` with a profiles key of its own put entries in their
+      // reply from wherever it was asked (sixth audit). Secrets the same.
+      const answers = (/** @type {string} */ verb) => !filtering || spec.verb === verb;
+      const profiles = answers('profiles') && results.some((r) => Array.isArray(r.profiles))
         ? results.flatMap((r) => (r.profiles || []).map((/** @type {any} */ p) => ({ ...p, hostId: r.hostId })))
         : undefined;
 
@@ -3002,7 +3014,7 @@ export class CoordinatorCore {
       // does not hold it is refused, so a picker that lost which machine each
       // name came from would send people at the wrong one. Names only — the host
       // never sends a value, and there is nothing here that could carry one.
-      const secrets = results.some((r) => Array.isArray(r.secrets))
+      const secrets = answers('secrets') && results.some((r) => Array.isArray(r.secrets))
         ? results.flatMap((r) => (r.secrets || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId })))
         : undefined;
 
@@ -5062,9 +5074,18 @@ export class CoordinatorCore {
       // start would reach (C-2): not one that is not reporting or degraded,
       // not somebody else's temporary machine, and never a pool's own
       // machine, which runs no sessions and says so (`holder`).
+      //
+      // AND WHETHER THIS PERSON ADMINISTERS IT, by the rule placement refuses
+      // with (hosts.js administers), so a machine's releases, image, labels,
+      // update and reboot are drawn only where they do something (C-2): every
+      // machine for the admin, a member's only on one that acts for them
+      // alone. Read from the registry entry, which carries `actsFor`; list()
+      // leaves it out. A coordinator too old to send it omits it, and absent
+      // is cannot-tell.
       hosts: this.registry.list().map((h) => ({
         ...visibleHost(h, requester, this.registry.hosts.get(h.hostId)),
         takesSessions: takesSessions(h, requester),
+        administers: administers(this.registry.hosts.get(h.hostId), requester),
         ...(runsNoSessions(h.hostId) ? { holder: true } : {}),
       })),
       devices: this.devices.size,
