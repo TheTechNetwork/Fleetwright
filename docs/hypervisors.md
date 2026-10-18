@@ -363,7 +363,13 @@ is let in.
 **Make it again** is on the policy screen for the one there, from a box that
 says `holder-ask`: Apply stops it, removes it with its disk, and makes a new one
 that asks to join (`holderAgain`). It is for a holder that never joined. One
-that has joined does not need it.
+that has joined does not need it. One that had joined and is made again anyway
+is also retired from the fleet: the job reports the name of the VM it removed
+(`xosetup.holder-removed`, a name of the coordinator's own shape only), and
+the coordinator revokes that host if it is a pool's own machine of the job's
+owner, so it does not sit under Machines as "not reporting" beside the new
+one. Asked for: "Recreating holder didn't delete old one", about a row the
+VM had already left behind.
 
 **It holds nothing until you approve it.** Without the asking, it joins the
 fleet like any box, and the pool's token reaches it only as the `hypervisor:`

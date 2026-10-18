@@ -252,8 +252,13 @@ test('made again, the one there goes first, disk and all, and the new one boots 
   const stuck = { type: 'VM', id: 'vm-stuck', name_label: 'holder-c09fcd', $pool: 'p1', power_state: 'Running', tags: HOLDER_TAGS };
   const xo = admin([debian, stuck]);
   const { asked, askPin } = pinner();
-  const said = await ensureHolder({ ...spec(xo, askPin), secret: SECRET, again: true });
+  /** @type {string[]} */
+  const removed = [];
+  const said = await ensureHolder({ ...spec(xo, askPin), secret: SECRET, again: true, removed: (name) => removed.push(name) });
   assert.deepEqual(xo.calls.filter(([m]) => m !== 'xo.getAllObjects' && m !== 'resourceSet.getAll').map(([m, p]) => `${m} ${p.id ?? p.name_label}`), ['vm.stop vm-stuck', 'vm.delete vm-stuck', `vm.create ${NAME}`, 'resourceSet.addObject rs-made']);
+  // THE FLEET IS TOLD WHICH HOST WENT, by the name the coordinator gave it:
+  // one that had joined sat under Machines as "not reporting" for good.
+  assert.deepEqual(removed, ['holder-c09fcd']);
   assert.equal(asked.count, 1);
   const [, made] = /** @type {[string, any]} */ (xo.calls.find(([m]) => m === 'vm.create'));
   assert.ok(made.cloudConfig.includes(`"secret":"${SECRET}"`));
