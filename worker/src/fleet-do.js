@@ -210,6 +210,10 @@ export class Fleet {
         // the minter refuses a device's sign-in from, which a box waiting out
         // an eviction would otherwise find empty (core.js #rememberBoxSignIn).
         this.state.storage.put('boxSignIns', this.core.serialiseBoxSignIns()),
+        // The people removed that one of the fleet's boxes has not yet said
+        // it forgot, each box's debt being a moment on its enrolment above
+        // (core.js #forgetOnBoxes).
+        this.state.storage.put('removals', this.core.serialiseRemovals()),
       ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
@@ -281,6 +285,7 @@ export class Fleet {
       this.core.restoreHolderJoins(await this.state.storage.get('holderJoins'));
       this.core.restorePushLimits(await this.state.storage.get('pushLimits'));
       this.core.restoreBoxSignIns(await this.state.storage.get('boxSignIns'));
+      this.core.restoreRemovals(await this.state.storage.get('removals'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       // Written straight back when a pin saved before pins had ids was given
       // one, so the id a listing shows still cancels it after the next restart.

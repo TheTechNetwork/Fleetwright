@@ -1198,6 +1198,39 @@ export const VERBS = Object.freeze({
     summary: 'Forget a stored credential on one host. Does not revoke it at the provider.',
   },
 
+  // SOMEBODY HAS LEFT THE FLEET: END WHAT THIS BOX DOES IN THEIR NAME.
+  //
+  // Sent by the coordinator to each of the fleet's own boxes when a person is
+  // removed (core.js #forgetOnBoxes), and to one that was away on its first
+  // report after it returns. Never by a caller: dispatch refuses it and no
+  // tool offers it (src/mcp/tools.js COORDINATOR_ONLY).
+  //
+  // A VERB AND NOT `stop` + `unlink` sent one by one, which is what a removal
+  // asked until now, for three reasons the box can answer and the coordinator
+  // cannot. Only sessions the coordinator's last report listed were stopped,
+  // so a box away at the removal, or one whose hub had not answered yet, kept
+  // them running. `stop` keeps a session's record, so it stayed resumable as
+  // that person. And `unlink` left the renewal material, so the box went on
+  // trading the person's refresh token for a fresh GitHub token every few
+  // hours and wrote it back. The box finds its own sessions by who started
+  // them and clears every store it holds for the person in one act.
+  //
+  // WHOSE: the actor, as `unlink` is aimed, and never a parameter, for the
+  // reason the note above VERBS gives. No parameters at all.
+  //
+  // THE BOUND IS UNCHANGED. Everything this does, `forget` on each of the
+  // person's sessions and `unlink` of each of their sign-ins could already be
+  // asked of the box by name; it writes no credential and starts nothing. A
+  // compromised coordinator gains no reach it lacked, and an older box
+  // answers `unknown_verb`, which the coordinator treats as not done.
+  forgetperson: {
+    params: {},
+    mutating: true,
+    summary:
+      'Sent by the coordinator when somebody is removed from the fleet: stop and bin every session of theirs on this box, ' +
+      'and delete the sign-ins, renewal material and vault copies kept here for them. Refused from anybody else.',
+  },
+
   // FINISH AN APP-FLOW AUTHORIZATION HERE, NOT AT THE COORDINATOR.
   //
   // The coordinator relays every authorization and used to perform the

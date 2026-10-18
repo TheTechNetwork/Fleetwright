@@ -56,6 +56,7 @@ const BASELINE = Object.freeze({
   link: { provider: 1, secret: 1, scope: 1 },
   verify: { provider: 1, scope: 1 },
   unlink: { provider: 1, scope: 1 },
+  forgetperson: {},
   renew: { provider: 1, clientId: 1, refresh: 1, client: 1 },
   exchange: { provider: 5, code: 5, clientId: 5, origin: 5 },
   provision: { platform: 1, minutes: 1, ticket: 1, repo: 6, template: 8, network: 9, group: 10 },

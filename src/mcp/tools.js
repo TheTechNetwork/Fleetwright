@@ -35,8 +35,11 @@ import { VERBS } from '../fleet/protocol/intents.js';
  * something, and an agent that answers it has decided on that person's behalf
  * that it knew what they wanted. Sometimes true. Never true by default.
  */
-/** Verbs only the coordinator sends. See the filter in toolsFor. */
-export const COORDINATOR_ONLY = Object.freeze(['mint']);
+/**
+ * Verbs only the coordinator sends. See the filter in toolsFor. `forgetperson`
+ * is sent when somebody is removed from the fleet (core.js #forgetOnBoxes).
+ */
+export const COORDINATOR_ONLY = Object.freeze(['mint', 'forgetperson']);
 
 /** @type {string[]} */
 export const DEFAULT_DENY = ([

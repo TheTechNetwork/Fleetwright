@@ -270,7 +270,7 @@ function listen(core) {
   /** @type {string[]} */
   const asked = [];
   core.send = async (/** @type {any} */ host, /** @type {any} */ spec) => {
-    asked.push(`${host.hostId} ${spec.verb} ${spec.params.name ?? spec.params.provider} for ${spec.actor}`);
+    asked.push(`${[host.hostId, spec.verb, spec.params.name ?? spec.params.provider].filter(Boolean).join(' ')} for ${spec.actor}`);
     return { ok: true, text: 'done' };
   };
   return asked;
@@ -289,12 +289,13 @@ async function restart(core) {
 const demotedSaid = (core) =>
   core.recentEvents({ email: 'nina@example.test', admin: false }).filter((/** @type {any} */ e) => e.event === 'host.demoted');
 
-test('a removed member’s sessions and sign-ins are asked back of the fleet’s own boxes, and of nobody else', async () => {
+test('a removed member is forgotten by the fleet’s own boxes, and asked of nobody else', async () => {
   // FOUND BY THE SEVENTH AUDIT: the hand-back above ran only for a box an
   // admin's removal demoted. A member removed kept their sessions running on
   // the operator's boxes under their own Claude sign-in, and their GitHub and
   // Cloudflare links on every one of them, revocation having stopped only
-  // their asking for more.
+  // their asking for more. Asked since the ninth as one `forgetperson`, which
+  // the box answers for every session and store it holds for them.
   const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
   const { admit } = await import('./helpers/enrolled-hosts.js');
   const core = new CoordinatorCore({ logger: LOGGER });
@@ -304,36 +305,121 @@ test('a removed member’s sessions and sign-ins are asked back of the fleet’s
   await admit(core, 'ops-box', { enrolledBy: 'boss@example.test' });
   await admit(core, 'nina-box', { enrolledBy: 'nina@example.test' });
   await admit(core, 'kim-box', { enrolledBy: 'kim@example.test' });
-  const report = (/** @type {Array<[string, string]>} */ sessions) => ({
-    hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: sessions.length, free: 5 - sessions.length, labels: [],
-    sessions: sessions.map(([name, who]) => ({ name, status: 'running', createdBy: `fleet:${who}@example.test` })),
-  });
-  core.registry.recordHealth('ops-box', report([['nina-job', 'nina'], ['boss-job', 'boss'], ['kim-job', 'kim']]));
-  core.registry.recordHealth('nina-box', report([['nina-own', 'nina']]));
-  core.registry.recordHealth('kim-box', report([['kim-own', 'kim']]));
   const asked = listen(core);
 
   core.revokeClient(nina.client.id);
-  assert.deepEqual(asked.sort(), [
-    'ops-box stop nina-job for nina@example.test',
-    'ops-box unlink claude for nina@example.test',
-    'ops-box unlink cloudflare for nina@example.test',
-    'ops-box unlink github for nina@example.test',
-  ], 'what was asked of the boxes when Nina was removed');
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(asked, ['ops-box forgetperson for nina@example.test'], 'what was asked of the boxes when Nina was removed');
   const said = core.recentEvents({ email: 'kim@example.test', admin: false }).filter((/** @type {any} */ e) => e.event === 'host.asked-back');
-  assert.deepEqual(said.map((/** @type {any} */ e) => e.hostId), ['ops-box'], 'the operator was not told the box was asked');
-  assert.match(said[0].text, /stop 1 session .*GitHub, Cloudflare and Claude/);
-  // AND NOT THAT THE BOX FORGETS WHAT IT HOLDS FROM HER VAULT, which `unlink`
-  // never reached: it said so until the eighth audit. The vault stops instead.
-  assert.match(said[0].text, /unlink the .* sign-ins they linked on it\. The vault gives no box anything of theirs/);
-  assert.equal(said[0].text.includes('nina'), false, 'a member was shown whose sessions they were');
+  assert.deepEqual(said.map((/** @type {any} */ e) => e.hostId), ['ops-box', 'ops-box'], 'the operator was not told what the box was asked and what it said');
+  assert.match(said[0].text, /asked to forget somebody removed .*GitHub, Cloudflare and Claude sign-ins .*renewal included\. The vault gives no box anything of theirs/);
+  assert.match(said[1].text, /says it has forgotten somebody/);
+  assert.equal(said.some((/** @type {any} */ e) => e.text.includes('nina')), false, 'a member was shown whose sessions they were');
+  assert.equal(core.hostIds.get('ops-box')?.forgetFrom, undefined, 'the box’s yes did not settle what it owed');
 
   // Withdrawing at Apple revokes every credential the person holds, and the
   // last of those already asked: once, not again for the withdrawal.
   asked.length = 0;
   core.revokePerson('kim@example.test', 'withdrew consent');
-  assert.deepEqual(asked.filter((l) => l.startsWith('ops-box stop')), ['ops-box stop kim-job for kim@example.test']);
-  assert.equal(asked.length, 4, `a withdrawal asked ${asked.length} things of the box`);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(asked, ['ops-box forgetperson for kim@example.test']);
+});
+
+test('a fleet box away when members are removed forgets them when it returns, across a restart', async () => {
+  // NINTH AUDIT: the box above was asked because it was connected, and only
+  // then. One away at the removal was never asked, then or when it came back,
+  // so the member's sessions restarted with it as theirs, and its hourly
+  // renewal kept their GitHub sign-in alive with the fleet's client secret.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const before = new CoordinatorCore({ logger: LOGGER });
+  await before.issueClient({ email: 'boss@example.test' }, 'phone');
+  const nina = /** @type {any} */ (await before.issueClient({ email: 'nina@example.test' }, 'phone'));
+  const kim = /** @type {any} */ (await before.issueClient({ email: 'kim@example.test' }, 'phone'));
+  await admit(before, 'ops-box', { enrolledBy: 'boss@example.test' });
+  before.hostDisconnected('ops-box', 'offline');
+  const early = listen(before);
+  before.revokeClient(nina.client.id);
+  before.revokeClient(kim.client.id);
+  assert.deepEqual(early, [], 'an offline box cannot be asked anything');
+  assert.match(before.recentEvents(null).find((/** @type {any} */ e) => e.event === 'host.asked-back')?.text ?? '', /offline, so it will be asked to forget/);
+
+  // The fleet's object evicted while the box is away, and Kim back meanwhile.
+  const core = await restart(before);
+  core.restoreRemovals(JSON.parse(JSON.stringify(before.serialiseRemovals())));
+  await core.issueClient({ email: 'kim@example.test' }, 'new phone');
+  const asked = listen(core);
+  core.hostConnected('ops-box', () => {});
+  await core.onHostMessage('ops-box', { kind: 'health', health: HUB_DOWN_REPORT });
+  assert.deepEqual(asked, [], 'asked of a box whose hub could not answer');
+  await core.onHostMessage('ops-box', { kind: 'health', health: { ...HUB_DOWN_REPORT, hub: { reachable: true }, sessions: [] } });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(asked, ['ops-box forgetperson for nina@example.test'], 'a box away at the removal was never asked to forget them, or was asked about somebody back in the fleet');
+
+  asked.length = 0;
+  await core.onHostMessage('ops-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  assert.deepEqual(asked, [], 'asked again after the box said it was done');
+});
+
+test('a box that does not forget somebody removed still owes it, and is asked what it understands meanwhile', async () => {
+  // A release from before the verb answers `unknown_verb`. Reported as asked,
+  // that reads as done, so it is asked what a removal asked until now and is
+  // still owed the rest, asked again once it reconnects, which is how an
+  // update ends.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: LOGGER });
+  await core.issueClient({ email: 'boss@example.test' }, 'phone');
+  const nina = /** @type {any} */ (await core.issueClient({ email: 'nina@example.test' }, 'phone'));
+  await admit(core, 'ops-box', { enrolledBy: 'boss@example.test' });
+  const report = { ...BOSS_BOX_REPORT, sessions: [{ name: 'nina-job', status: 'running', createdBy: 'fleet:nina@example.test' }] };
+  core.registry.recordHealth('ops-box', report);
+  /** @type {string[]} */
+  const asked = [];
+  let knows = false;
+  core.send = async (/** @type {any} */ host, /** @type {any} */ spec) => {
+    asked.push([host.hostId, spec.verb, spec.params.name ?? spec.params.provider].filter(Boolean).join(' '));
+    if (spec.verb === 'forgetperson' && !knows) return { ok: false, text: 'unknown verb "forgetperson"', error: { code: 'unknown_verb' } };
+    return { ok: true, text: 'done' };
+  };
+
+  core.revokeClient(nina.client.id);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(asked.sort(), [
+    'ops-box forgetperson',
+    'ops-box stop nina-job',
+    'ops-box unlink claude',
+    'ops-box unlink cloudflare',
+    'ops-box unlink github',
+  ]);
+  assert.equal(typeof core.hostIds.get('ops-box')?.forgetFrom, 'number', 'a refusal settled what the box owed');
+  assert.match(core.recentEvents(null).find((/** @type {any} */ e) => /too old/.test(e.text ?? ''))?.text ?? '', /asked again when it reconnects/);
+
+  asked.length = 0;
+  await core.onHostMessage('ops-box', { kind: 'health', health: report });
+  assert.deepEqual(asked, [], 'a box that refused the verb was asked it again on every report');
+
+  knows = true;
+  core.hostDisconnected('ops-box', 'updating');
+  core.hostConnected('ops-box', () => {});
+  await core.onHostMessage('ops-box', { kind: 'health', health: report });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(asked, ['ops-box forgetperson'], 'an updated box was not asked again');
+  assert.equal(core.hostIds.get('ops-box')?.forgetFrom, undefined);
+});
+
+test('forgetting a person is the coordinator’s alone to ask', async () => {
+  // An actor is a label from the break-glass token, so this verb through
+  // dispatch would bin anybody's work on every box the fleet runs.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: LOGGER });
+  await core.issueClient({ email: 'nina@example.test' }, 'phone');
+  await admit(core, 'ops-box');
+  const asked = listen(core);
+  const r = await core.dispatch({ verb: 'forgetperson', params: {}, actor: 'nina@example.test', requester: null });
+  assert.equal(r.error?.code, 'coordinator_only');
+  assert.deepEqual(asked, []);
 });
 
 test('a removed admin’s box that was offline at the removal is asked for back what it held on its first report after it returns', async () => {

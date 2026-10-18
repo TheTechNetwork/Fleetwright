@@ -109,6 +109,9 @@ const NONCE_SECRET_BYTES = 32;
  *   and is asked for back what it held then on its next report (core.js #forgetPerson):
  *   when it left, so it is asked for the people in the fleet then and nobody
  *   since (core.js #handBack), or `true` from before that was kept
+ * @property {number} [forgetFrom]  one of the fleet's own boxes that has not yet
+ *   said it forgot somebody removed since this moment (core.js #forgetOnBoxes),
+ *   asked on its next report and cleared by its own yes
  * @property {'ticket'|'runner-token'} [admittedBy]  for a RUNNER, which claim said
  *   whose it is: a ticket the fleet minted for one dispatch, or a reusable runner
  *   token whoever presses Run workflow spends
@@ -409,6 +412,7 @@ export class HostIdentities {
       // re-keyed or readmitted is the one that held other people's sign-ins
       // as the fleet's, and nothing else remembers to ask it for them back.
       ...(previous?.handBackPending ? { handBackPending: previous.handBackPending } : {}),
+      ...(typeof previous?.forgetFrom === 'number' ? { forgetFrom: previous.forgetFrom } : {}),
       // HOW A RUNNER WAS ADMITTED, AND WHO STARTED ITS JOB, which are two facts
       // and not one. A reusable runner token says whose runner it is and
       // nothing about who pressed Run workflow; the minting Worker mints for

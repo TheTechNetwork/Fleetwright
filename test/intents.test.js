@@ -61,6 +61,10 @@ test('the verb set is exactly what is documented', () => {
     'exchange',
     'files',
     'forget',
+    // Sent by the coordinator to the fleet's own boxes when somebody is
+    // removed, and refused from any caller. A new verb, so an older host
+    // answers `unknown_verb`, which the coordinator keeps as owed.
+    'forgetperson',
     'health',
     'labels',
     'link',
@@ -270,8 +274,10 @@ test('only state-changing verbs are marked mutating', () => {
     // what stops a retried stop reporting "not found" for one it just removed.
     // xoact deletes, stops and resizes VMs on a pool; a retried delete must
     // not come back as "no such VM" for the one it just removed.
+    // forgetperson bins a removed person's sessions and deletes their
+    // sign-ins; a retry must not report nothing done for what it just did.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xoact', 'xosetup'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'forgetperson', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xoact', 'xosetup'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

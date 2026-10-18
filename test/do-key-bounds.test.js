@@ -86,6 +86,8 @@ const BOUNDED = {
   // GitHub codes handed to boxes: a ten-minute window, and a refusal past
   // MAX_BOX_SIGN_INS.
   boxSignIns: 'src/fleet/coordinator/core.js',
+  // The people removed that a box has not yet said it forgot: MAX_REMOVALS_KEPT.
+  removals: 'src/fleet/coordinator/core.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */
@@ -262,4 +264,15 @@ test('a full store of spent push allowances still fits in one Durable Object val
   assert.ok(kept.pushes.length < FILL_CAP && kept.poolsLost.length < FILL_CAP, 'the store took every row it was given, so it has no ceiling');
   const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full store of push allowances is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full list of removals still fits in one Durable Object value', async () => {
+  // Every address as wide as restore admits, and more rows than are kept.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({});
+  core.restoreRemovals(Array.from({ length: FILL_CAP }, (_, i) => ({ email: `${String(i).padStart(300, 'e')}@d.example`, at: i })));
+  const kept = core.serialiseRemovals();
+  assert.ok(kept.length < FILL_CAP, 'the list took every row it was given, so it has no ceiling');
+  const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full list of removals is ${bytes} bytes, which does not fit in a DO value`);
 });
