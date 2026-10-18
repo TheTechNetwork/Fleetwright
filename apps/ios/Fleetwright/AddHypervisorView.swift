@@ -1900,10 +1900,12 @@ struct AddHypervisorView: View {
             // A POLICY CHANGE GOES ONLY TO A MACHINE THAT SAYS IT CAN TAKE
             // ONE, asked before anything is sealed: an older machine would
             // open the sign-in, ignore `purpose`, and run onboarding with it,
-            // making a token nobody asked for.
-            if isPolicy, !can.contains("policy") {
+            // making a token nobody asked for. And only to one that opens the
+            // policy sign-in's own binding, because `policy` alone is a word
+            // a relay can add (XOPolicy.refusal).
+            if isPolicy, let why = XOPolicy.refusal(can: can, machine: machine) {
                 _ = try? await fleet.cancelSetup(job: begunJob)
-                refuse("\(machine) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
+                refuse("\(why) Update that machine, then try again.")
                 return
             }
             // THE SAME FOR A RECONNECT: an older machine would run onboarding
@@ -2063,9 +2065,10 @@ struct AddHypervisorView: View {
         }
     }
 
-    /// The sign-in for a policy job: the same seal to the same job key under
-    /// the same binding as onboarding's, saying `purpose: policy` inside it,
-    /// where the coordinator cannot change it.
+    /// The sign-in for a policy job: the same seal to the same job key as
+    /// onboarding's, under a binding of its own that a machine from before
+    /// policy jobs cannot open (Seal.xosetupPolicySigninAAD), saying
+    /// `purpose: policy` inside it, where the coordinator cannot change it.
     ///
     /// WHERE THE POOL COMES BACK TO is a key made here and held in this
     /// screen's memory and nowhere else: not XOSetupHandoff's, which waits in
@@ -2075,10 +2078,10 @@ struct AddHypervisorView: View {
     @MainActor
     private func sendForPolicy(_ begun: Begun) async {
         // Asked again here, where the seal is, so no path reaches it without.
-        guard begun.can.contains("policy") else {
+        if let why = XOPolicy.refusal(can: begun.can, machine: begun.hostId) {
             _ = try? await fleet.cancelSetup(job: begun.job)
             self.begun = nil
-            refuse("\(begun.hostId) is older than changing what the fleet may use, so the sign-in was not sent. Update that machine, then try again.")
+            refuse("\(why) Update that machine, then try again.")
             return
         }
         busy = true
@@ -2088,7 +2091,7 @@ struct AddHypervisorView: View {
         do {
             sealed = try Seal.seal(
                 to: begun.key,
-                aad: Seal.xosetupAAD(job: begun.job, address: begun.address),
+                aad: Seal.xosetupPolicySigninAAD(job: begun.job, address: begun.address),
                 payload: [
                     "v": 1,
                     "xo": ["email": email.trimmingCharacters(in: .whitespacesAndNewlines), "password": password],

@@ -114,7 +114,8 @@ test('iOS: the machine is asked whether it can open a reconnect’s sign-in befo
   // `reconnect` alone is refused, in words that say to update that machine:
   // a relay can add it to a machine too old to know it. Which list gets
   // which sentence is run by XOReconnectTests.swift.
-  const refusal = IOS.slice(IOS.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
+  const RECONNECT = read('apps/ios/Fleetwright/XOReconnect.swift');
+  const refusal = RECONNECT.slice(RECONNECT.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
   assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("reconnect"\) \{\s*return "\\\(machine\) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent\."\s*\}\s*if !can\.contains\("reconnect-signin"\) \{\s*return "\\\(machine\) is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent\."\s*\}\s*return nil/);
   for (const at of [begin.slice(askAt), send.slice(refusedAt)]) assert.match(at, /refuse\("\\\(why\) Update that machine, then try again\."\)/);
 });

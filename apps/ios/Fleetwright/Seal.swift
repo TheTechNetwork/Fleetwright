@@ -56,6 +56,14 @@ enum Seal {
     /// the phone that saw the inventory and not from the coordinator
     /// (xosetupPolicyAad in src/fleet/seal.js).
     static func xosetupPolicyAAD(job: String, address: String) -> String { "fleetwright-xosetup-policy/v1:\(job):\(address)" }
+    /// A policy job's admin sign-in on its way to the machine, under a name
+    /// of its own and not the setup's, for the reconnect sign-in's reason: a
+    /// machine from before policy jobs opens anything under `xosetupAAD`,
+    /// ignores `purpose` and runs a whole setup with the admin's sign-in, and
+    /// the `can` that says it knows better is not signed. Under this name a
+    /// machine that does not know cannot open the seal at all
+    /// (xosetupPolicySigninAad in src/fleet/seal.js; XOPolicy.refusal).
+    static func xosetupPolicySigninAAD(job: String, address: String) -> String { "fleetwright-xosetup-policy-signin/v1:\(job):\(address)" }
 
     /// What an install's two passwords are sealed under: the job and the pool
     /// master's address, under a name of its own, so a sealed root password is

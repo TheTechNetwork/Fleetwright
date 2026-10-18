@@ -661,6 +661,28 @@ enum XOPolicy {
         }
     }
 
+    /// Why that machine is not sent a policy job's sign-in, from what its
+    /// `begin` says it can be, or nil when it may be sent one.
+    ///
+    /// A MACHINE THAT LISTS `policy` BUT NOT `policy-signin` IS STILL
+    /// REFUSED, for the reason XOReconnect.refusal gives. `can` is not
+    /// signed, so a relay can add `policy` to a machine from before policy
+    /// jobs, and that machine would open a sign-in sealed under the setup's
+    /// binding and run a whole setup with the admin's sign-in. So the
+    /// sign-in goes under a binding of its own
+    /// (Seal.xosetupPolicySigninAAD), only to a machine that lists
+    /// `policy-signin`; a relay that adds that too only gets an old machine
+    /// a seal it cannot open.
+    static func refusal(can: [String], machine: String) -> String? {
+        if !can.contains("policy") {
+            return "\(machine) is older than changing what the fleet may use, so the sign-in was not sent."
+        }
+        if !can.contains("policy-signin") {
+            return "\(machine) is too old to open the sign-in this app seals for a policy change, so the sign-in was not sent."
+        }
+        return nil
+    }
+
     /// The inventory a machine sealed to this phone's key, or nil for anything
     /// that does not open under this job and address with this key, is not
     /// the shape `inventoryOf` writes, or is about another address.

@@ -17,9 +17,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { iosSources } from './helpers/ios-sources.js';
-import { xosetupInventoryAad, xosetupPolicyAad } from '../src/fleet/seal.js';
+import * as seal from '../src/fleet/seal.js';
 
 const IOS = iosSources();
+const { xosetupInventoryAad, xosetupPolicyAad } = seal;
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const SCREEN = read('apps/ios/Fleetwright/AddHypervisorView.swift');
 const POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
@@ -49,6 +50,17 @@ test('iOS: the inventory and the choice travel under the bindings the host seals
   assert.match(fn(SCREEN, 'applyPolicy'), /Seal\.seal\(\s*to: policyJob\.key,\s*aad: Seal\.xosetupPolicyAAD\(job: job, address: policyJob\.address\),\s*payload: choice\.payload\(in: inv, holderSecret: secret\)/);
 });
 
+test('iOS: a policy job’s sign-in goes under a binding of its own, which a machine from before policy jobs cannot open', () => {
+  const m = /static func xosetupPolicySigninAAD\(job: String, address: String\) -> String \{ "([^"]+)" \}/.exec(IOS);
+  assert.ok(m, 'no xosetupPolicySigninAAD');
+  const built = m[1].replace('\\(job)', 'J0').replace('\\(address)', 'A0');
+  assert.equal(built, 'fleetwright-xosetup-policy-signin/v1:J0:A0');
+  const js = /** @type {any} */ (seal).xosetupPolicySigninAad;
+  if (typeof js === 'function') assert.equal(built, js('J0', 'A0'), 'xosetupPolicySigninAAD is not seal.js’s binding');
+  assert.notEqual(built, seal.xosetupAad('J0', 'A0'));
+  assert.ok(!bare(fn(SCREEN, 'sendForPolicy')).includes('Seal.xosetupAAD('), 'a policy sign-in is never sealed under setup’s binding');
+});
+
 test('iOS: the key the inventory comes back to is made for the screen and kept nowhere', () => {
   const send = fn(SCREEN, 'sendForPolicy');
   assert.match(send, /let reply = Seal\.newKey\(\)/);
@@ -72,7 +84,7 @@ test('iOS: `purpose: policy` is inside the seal, beside the sign-in and the repl
   const send = fn(SCREEN, 'sendForPolicy');
   assert.match(
     send,
-    /Seal\.seal\(\s*to: begun\.key,\s*aad: Seal\.xosetupAAD\(job: begun\.job, address: begun\.address\),\s*payload: \[\s*"v": 1,\s*"xo": \["email": [^\]]*, "password": password\],\s*"reply": reply\.publicKey,\s*"purpose": "policy",\s*\]/,
+    /Seal\.seal\(\s*to: begun\.key,\s*aad: Seal\.xosetupPolicySigninAAD\(job: begun\.job, address: begun\.address\),\s*payload: \[\s*"v": 1,\s*"xo": \["email": [^\]]*, "password": password\],\s*"reply": reply\.publicKey,\s*"purpose": "policy",\s*\]/,
   );
   // Sealed, then the password cleared, then sent.
   const sealAt = send.indexOf('Seal.seal(');
@@ -84,16 +96,23 @@ test('iOS: `purpose: policy` is inside the seal, beside the sign-in and the repl
   assert.match(IOS, /intent\("xosetup", params: \["phase": "policy", "job": job, "sealed": sealed\],/);
 });
 
-test('iOS: the machine is asked whether it can take a policy before anything is sealed to it', () => {
+test('iOS: the machine is asked whether it can open a policy sign-in before anything is sealed to it', () => {
   // In begin: the answer's `can`, before the key check and before send.
   const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func approvedFingerprint('));
-  const askAt = begin.indexOf('if isPolicy, !can.contains("policy") {');
+  const askAt = begin.indexOf('if isPolicy, let why = XOPolicy.refusal(can: can, machine: machine) {');
   assert.ok(askAt > 0, 'begin does not ask the machine');
   assert.ok(askAt < begin.indexOf('await send()'), 'send is reachable before the machine is asked');
-  assert.match(begin.slice(askAt), /^if isPolicy, !can\.contains\("policy"\) \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)\s*refuse\("\\\(machine\) is older than changing what the fleet may use, so the sign-in was not sent\. Update that machine, then try again\."\)\s*return/);
+  assert.match(begin.slice(askAt), /^if isPolicy, let why = XOPolicy\.refusal\(can: can, machine: machine\) \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)\s*refuse\("\\\(why\) Update that machine, then try again\."\)\s*return/);
   // And again where the seal is.
   const send = fn(SCREEN, 'sendForPolicy');
-  assert.ok(send.indexOf('guard begun.can.contains("policy") else') < send.indexOf('Seal.seal('));
+  const refusedAt = send.indexOf('if let why = XOPolicy.refusal(can: begun.can, machine: begun.hostId) {');
+  assert.ok(refusedAt > 0 && refusedAt < send.indexOf('Seal.seal('), 'the seal is reachable before the machine is asked');
+  assert.match(send.slice(refusedAt), /refuse\("\\\(why\) Update that machine, then try again\."\)/);
+  // `policy` alone is refused, in words that say to update that machine: a
+  // relay can add it to a machine from before policy jobs. Which list gets
+  // which sentence is run by XOPolicyTests.swift.
+  const refusal = POLICY.slice(POLICY.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
+  assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("policy"\) \{\s*return "\\\(machine\) is older than changing what the fleet may use, so the sign-in was not sent\."\s*\}\s*if !can\.contains\("policy-signin"\) \{\s*return "\\\(machine\) is too old to open the sign-in this app seals for a policy change, so the sign-in was not sent\."\s*\}\s*return nil/);
   // A machine that did not say is a machine that cannot.
   assert.match(SCREEN, /let can = setup\.can \?\? \[\]/);
 });

@@ -444,6 +444,31 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(Seal.xosetupPolicyAAD(job: "J", address: "A"), "fleetwright-xosetup-policy/v1:J:A")
     }
 
+    func testTheSignInGoesUnderABindingASetupDoesNotOpen() throws {
+        // The same string as xosetupPolicySigninAad in src/fleet/seal.js.
+        XCTAssertEqual(Seal.xosetupPolicySigninAAD(job: "J", address: "A"), "fleetwright-xosetup-policy-signin/v1:J:A")
+        // A machine from before policy jobs opens only the setup's binding,
+        // and the policy sign-in does not open under it.
+        let machine = Seal.newKey()
+        let box = try Seal.seal(to: machine.publicKey, aad: Seal.xosetupPolicySigninAAD(job: job, address: address),
+                                payload: ["v": 1, "purpose": "policy"])
+        XCTAssertThrowsError(try Seal.open(machine, aad: Seal.xosetupAAD(job: job, address: address), sealed: box))
+        XCTAssertEqual(try Seal.open(machine, aad: Seal.xosetupPolicySigninAAD(job: job, address: address), sealed: box)["purpose"] as? String,
+                       "policy")
+    }
+
+    func testOnlyAMachineThatOpensThatBindingIsSentTheSignIn() {
+        XCTAssertNil(XOPolicy.refusal(can: ["policy", "policy-signin", "edge"], machine: "deb132"))
+        XCTAssertEqual(XOPolicy.refusal(can: ["edge"], machine: "deb132"),
+                       "deb132 is older than changing what the fleet may use, so the sign-in was not sent.")
+        // `policy` alone is what a relay can add to a machine from before
+        // policy jobs, so it is not enough.
+        XCTAssertEqual(XOPolicy.refusal(can: ["policy", "edge"], machine: "deb132"),
+                       "deb132 is too old to open the sign-in this app seals for a policy change, so the sign-in was not sent.")
+        XCTAssertEqual(XOPolicy.refusal(can: ["policy-signin"], machine: "deb132"),
+                       "deb132 is older than changing what the fleet may use, so the sign-in was not sent.")
+    }
+
     func testTheInventoryOpensOnlyUnderItsJobItsAddressAndThisKey() throws {
         let key = Seal.newKey()
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: inventoryJSON()) as? [String: Any])
