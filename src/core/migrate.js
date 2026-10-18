@@ -30,10 +30,16 @@ export const MIGRATE_BIN = '/usr/local/sbin/fleetwright-migrate';
  * runs a packaged release's installer; a Mac has launchd daemons and a
  * checkout, and install.sh says so as it skips the helper. So on a Mac the
  * root half of an update stays what it was: the installer, run by hand.
+ *
+ * NOT THE CHECKOUT'S INSTALLER. This said `sudo bash <checkout>/install/
+ * install.sh --upgrade`, which is root running a script the service user can
+ * rewrite — the thing upgrades.js, repairCommand, says root is never pointed
+ * at. A fresh clone root owns is the copy to run it from, as /update says.
  */
 export const MAC_HAS_NO_HELPER =
   'On a Mac there is no helper to install: a Mac host is a checkout under launchd, and the root half\n' +
-  'of an update is the installer itself, run by hand: sudo bash <checkout>/install/install.sh --upgrade';
+  'of an update is the installer itself, run by hand with --upgrade from a fresh clone only root can write,\n' +
+  'never from the checkout, which the service user can rewrite.';
 
 /**
  * Can this box be moved onto packaged releases, and is there one to move to?

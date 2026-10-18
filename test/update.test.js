@@ -298,6 +298,62 @@ test('a checkout that pulled is told how to refresh what the installer generates
   assert.match(r.text, /run the installer with --repair from a copy only root can write/);
 });
 
+/**
+ * `name` on PATH for this test, answering `fails` with git's or npm's own
+ * ownership porcelain and handing everything else to the real one.
+ * Ownership itself cannot be broken without a second account — root writes
+ * anywhere — so the tool says what it says on a box where it is.
+ *
+ * @param {import('node:test').TestContext} t
+ * @param {string} name
+ * @param {string} fails  the first argument that fails
+ * @param {string} porcelain
+ */
+function ownershipFailure(t, name, fails, porcelain) {
+  const real = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
+  const bin = mkdtempSync(path.join(os.tmpdir(), 'fake-tool-'));
+  writeFileSync(
+    path.join(bin, name),
+    `#!/bin/sh\nif [ "$1" = ${fails} ]; then printf '%s\\n' '${porcelain}' >&2; exit 1; fi\nexec '${real}' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const saved = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${saved}`;
+  t.after(() => {
+    process.env.PATH = saved;
+    rmSync(bin, { recursive: true, force: true });
+  });
+}
+
+test('a pull the service cannot write gives the ownership back, and never points root at the checkout’s installer', async (t) => {
+  // It said `sudo <checkout>/install/install.sh` first: the service user's
+  // own script, as root, in a sentence that account can make appear.
+  const { cfg, clone, pushUpstream } = deployment(t);
+  pushUpstream('anything');
+  ownershipFailure(t, 'git', 'pull', 'error: insufficient permission for adding an object to repository database .git/objects');
+
+  const r = await runUpdate(cfg);
+  assert.equal(r.ok, false);
+  assert.match(r.message, new RegExp(`Give the whole checkout back\\s+to the account the service runs as:\\s+sudo chown -R \\S+ ${clone}$`));
+  assert.doesNotMatch(r.message, /install\.sh/);
+});
+
+test('packages the service cannot write give the ownership back, and never point root at the checkout’s installer', async (t) => {
+  const { cfg, origin, clone, pushUpstream } = deployment(t);
+  writeFileSync(path.join(origin, '.gitignore'), 'node_modules/\n');
+  writeFileSync(path.join(origin, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }));
+  git(origin, ['add', '-A']);
+  git(origin, ['commit', '-qm', 'add a manifest']);
+  pushUpstream('later');
+  ownershipFailure(t, 'npm', 'ci', 'npm ERR! Error: EACCES: permission denied, rmdir node_modules');
+
+  const r = await runUpdate(cfg);
+  assert.equal(r.ok, false);
+  const modules = path.join(clone, 'node_modules');
+  assert.match(r.message, new RegExp(`Cannot write ${modules} — it belongs to another user\\.\\n\\s+sudo chown -R \\S+ ${modules}$`));
+  assert.doesNotMatch(r.message, /install\.sh/);
+});
+
 // --- restarting -------------------------------------------------------------
 
 test('an update that changed nothing does not restart on its own', async (t) => {

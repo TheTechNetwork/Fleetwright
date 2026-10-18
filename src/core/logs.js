@@ -22,6 +22,7 @@ import { isValidName } from './names.js';
 import { hasSession, capturePane } from './tmux.js';
 import { podman, sandboxNames } from './podman.js';
 import { unitName } from '../fleet/legacy-paths.js';
+import { repairCommand } from './upgrades.js';
 
 /**
  * The services this can read, by the name someone would actually type.
@@ -262,7 +263,9 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
       text:
         `Cannot read ${unit}'s journal: this user is not allowed to see system logs.\n` +
         'Fix it with:  usermod -aG systemd-journal <user>   (then restart the service)\n' +
-        'Re-running install/install.sh does this for you.',
+        // Not "re-running install/install.sh", which read as the one in the
+        // checkout: a script the service user can rewrite, run as root.
+        `Putting back what the installer sets up does it too: ${repairCommand(cfg)}`,
     };
   }
 

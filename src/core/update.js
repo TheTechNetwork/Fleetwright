@@ -379,17 +379,23 @@ const STEPS = [
         // "permission denied" there, so matching only that phrase meant this
         // whole branch was dead for the very failure it was written for, and
         // the operator got the raw porcelain instead of the fix.
+        //
+        // THE OWNERSHIP IS THE WHOLE FIX, so it is said alone. This led with
+        // `sudo <checkout>/install/install.sh`: the checkout's own installer,
+        // which the service user can rewrite, handed to root — in a sentence
+        // the service user can make appear by leaving one file it cannot
+        // write. Root is never pointed at a script that account can change
+        // (upgrades.js, repairCommand). The account named is this process's,
+        // which is the one that has to own the tree for a pull to work.
         if (looksLikeOwnershipProblem(output)) {
           return {
             ok: false,
             changed: false,
             text:
               `Cannot write to ${dir} — some of it belongs to another user.\n\n` +
-              'Usually a root-owned object left by a `sudo git pull`. Re-run the installer,\n' +
-              'which gives the whole checkout back to the account the service runs as:\n' +
-              `  sudo ${dir}/install/install.sh\n\n` +
-              'Or fix just the ownership:\n' +
-              `  sudo chown -R $(stat -c %U ${dir}/bin/fleetwright) ${dir}`,
+              'Usually a root-owned object left by a `sudo git pull`. Give the whole checkout back\n' +
+              'to the account the service runs as:\n' +
+              `  sudo chown -R ${accountName()} ${dir}`,
           };
         }
         return { ok: false, changed: false, text: `git pull failed: ${output.slice(0, 400)}` };
@@ -464,14 +470,15 @@ const STEPS = [
       }
       if (r.status !== 0) {
         const output = `${r.stderr || ''}${r.stdout || ''}`;
-        // Same ownership story as the git objects above, and the same fix.
+        // Same ownership story as the git objects above, and the same fix —
+        // which this said was the checkout's installer, as root, for the
+        // reason given there.
         if (looksLikeOwnershipProblem(output)) {
+          const modules = path.join(dir, 'node_modules');
           return {
             ok: false,
             changed: false,
-            text:
-              `Cannot write ${path.join(dir, 'node_modules')} — it belongs to another user.\n` +
-              `  sudo ${dir}/install/install.sh`,
+            text: `Cannot write ${modules} — it belongs to another user.\n  sudo chown -R ${accountName()} ${modules}`,
           };
         }
         return { ok: false, changed: false, text: `npm ci failed:\n${output.slice(0, 400)}` };
