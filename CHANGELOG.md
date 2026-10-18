@@ -11,6 +11,22 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.15 — 2026-10-18
+
+**The release's screenshots finish, and the wrong ones already on the store
+are replaced rather than kept.**
+
+- **One simulator at a time.** 0.4.14 booted its three simulators at once
+  and none of them came up; the job sat past half an hour with the build
+  already in TestFlight. They boot in turn again, about fifteen minutes,
+  and the job gives up at thirty rather than holding the release open.
+- **Pictures Apple would refuse are replaced.** The version still held
+  0.4.13's phone screenshots at a size Apple rejects, and the uploader,
+  seeing the slots full, left them; Apple refused the whole submission for
+  them. The release now checks the size of what is already there against
+  what each slot accepts, and deletes and retakes a set that would be
+  refused.
+
 ## 0.4.14 — 2026-10-18
 
 **The release's screenshots come from the current phones, and a refused
