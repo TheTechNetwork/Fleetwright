@@ -155,7 +155,7 @@ test('Android: a reconnect for an address this phone does not know asks the flee
   const knows = sheet.slice(sheet.indexOf('val knowsAddress = remember(address) {'), sheet.indexOf('var askFirst by rememberSaveable'));
   assert.match(knows, /XoHandoff\.held\(settings\)\.any \{ it\.address == at \} \|\| XoSaved\.has\(settings, at\) \|\| XoHandoff\.pinnedCertificate\(settings, at\) != null/);
   // The screen opening on a push's address probes only one it knows.
-  assert.match(sheet, /openedOnce = true\s*(?:\/\/[^\n]*\s*)*if \(reconnect && !knowsAddress\) askFirst = true else openRemembered\(\)/);
+  assert.match(sheet, /openedOnce = true\s*(?:\/\/[^\n]*\n\s*)*if \(reconnect && !knowsAddress\) askFirst = true else openRemembered\(\)/);
   // The one way on names the address, after the same sentence iOS says.
   assert.ok(sheet.includes('askFirst -> "Ask your machines to reach $address"'));
   assert.ok(sheet.includes('"This phone has not set up $address, kept a sign-in for it or pinned its certificate. " +'));
