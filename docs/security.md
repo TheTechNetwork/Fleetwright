@@ -1370,6 +1370,17 @@ and run its installer as root knowingly; a box whose only node
 24+ is in the service user's home still has a person-run installer execute
 it as root, with a warning (the heal refuses).
 
+**G11 — An operator box can become a member's vault device.** *Narrows
+docs/vault.md's "a box you removed … cannot approve a key of its own".* An
+operator box finishes the device sign-ins it starts for people, and the minter
+records a sign-in by its token's hash, so that box's root or sidecar account
+can register itself as the person's device and approve a key against their
+vault (eighth audit, reproduced). It does not reach a member's own boxes. Fix
+options, each a change to the device model: device-key-signed vault operations,
+refusing code grants without the phone's own marker bound in the seal, or binding
+vault and deposit to the GitHub id already linked to the requester. **Decide**
+whether operator boxes are inside a member's vault boundary.
+
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
 a box without podman.
@@ -1388,6 +1399,7 @@ a box without podman.
 | **G8** | **stated, not fixed.** The scheduler still offers a direct box to members. The decision is the owner's; the migrate helper's root path it compounded is closed (`install-root-sources.test.js`). |
 | **G9** | **fixed, not yet measured.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Like SEC-INJECT-2 as a whole, unmeasured until two people's sessions on one real box are seen unable to reach each other. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
 | **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box with no system node are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`. |
+| **G11** | **stated, not fixed.** An owner decision; until then docs/vault.md says the device rule holds for a member's own boxes only. |
 
 ---
 
