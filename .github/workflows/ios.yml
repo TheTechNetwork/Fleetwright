@@ -774,9 +774,10 @@ jobs:
     name: submit to the App Store
     needs: [testflight, screenshots]
     # always(), so a screenshot job that failed does not also cancel the
-    # submission: the uploader skips a display type the version already has,
-    # and a version that has none is refused by Apple in words the job now
-    # relays — a red cross with the reason, rather than a job that never ran.
+    # submission: the uploader skips a display type the version already has
+    # in a size Apple accepts, and a version that has none is refused by Apple
+    # in words the job relays — a red cross with the reason, rather than a job
+    # that never ran.
     if: >-
       always()
       && github.event_name == 'release' && !github.event.release.prerelease
