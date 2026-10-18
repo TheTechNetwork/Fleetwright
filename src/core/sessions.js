@@ -539,9 +539,15 @@ export class SessionManager {
     /** @type {import('./runner-login.js').RunnerAuth|null} */
     let runnerAuth = null;
     // Whose session this is, off the record when it has one: a colleague who
-    // resumes it does not make it theirs. One value for the download cache and
-    // the egress network, so the two always name the same person.
+    // resumes it does not make it theirs. One value for the download cache, the
+    // egress network and every record this launch writes, so they always name
+    // the same person. The record used to be written with the actor pressing
+    // the button, so the first resume by an admin made a member's session the
+    // admin's, and the credential broker, which reads the creator on every
+    // request, handed the member's container the admin's GitHub token from
+    // then on (eighth audit).
     const owner = this.registry.get(name)?.createdBy ?? actor;
+    const creator = owner ? { createdBy: owner } : {};
     /** @type {import('./egress.js').EgressRoute|null} */
     let egress = null;
     if (this.cfg.sandbox) {
@@ -568,7 +574,7 @@ export class SessionManager {
       // No-op when egress is open.
       const way = await ensureEgress(this.cfg, owner);
       if (!way.ok) {
-        this.registry.upsert(name, { status: 'error', detail: way.message ?? 'egress setup failed', cwd, createdBy: actor });
+        this.registry.upsert(name, { status: 'error', detail: way.message ?? 'egress setup failed', cwd, ...creator });
         return { ok: false, message: `Could not prepare the egress proxy for "${name}": ${way.message}` };
       }
       egress = way;
@@ -577,7 +583,7 @@ export class SessionManager {
         createdBy: known?.createdBy ?? null,
       });
       if (!volumes.ok) {
-        this.registry.upsert(name, { status: 'error', detail: volumes.message ?? 'sandbox setup failed', cwd, createdBy: actor });
+        this.registry.upsert(name, { status: 'error', detail: volumes.message ?? 'sandbox setup failed', cwd, ...creator });
         return { ok: false, message: `Could not prepare the sandbox for "${name}": ${volumes.message}` };
       }
       seededAccount = volumes.account ?? null;
@@ -595,7 +601,7 @@ export class SessionManager {
       const known = this.registry.get(name);
       const staged = ensureDirectConfig(this.cfg, name, actor, { account: known?.account ?? null, cwd });
       if (!staged.ok) {
-        this.registry.upsert(name, { status: 'error', detail: staged.message, cwd, createdBy: actor });
+        this.registry.upsert(name, { status: 'error', detail: staged.message, cwd, ...creator });
         return { ok: false, message: `Could not start "${name}": ${staged.message}` };
       }
       if (staged.fresh) seededAccount = staged.account;
@@ -633,14 +639,14 @@ export class SessionManager {
       const spawned = newSession({ name, cwd, command });
       if (spawned.status !== 0) {
         const detail = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 300);
-        this.registry.upsert(name, { status: 'error', detail, cwd, createdBy: actor });
+        this.registry.upsert(name, { status: 'error', detail, cwd, ...creator });
         return { ok: false, message: `Could not start "${name}": ${detail}` };
       }
       if (!hasSession(name)) {
         // The pane died the instant it opened — almost always claude missing
         // from PATH, or unauthenticated.
         const detail = 'session exited immediately — is `claude` on PATH and logged in?';
-        this.registry.upsert(name, { status: 'error', detail, cwd, createdBy: actor });
+        this.registry.upsert(name, { status: 'error', detail, cwd, ...creator });
         return { ok: false, message: `Could not start "${name}": ${detail}` };
       }
 
@@ -671,7 +677,7 @@ export class SessionManager {
         ...(typeof seededAccount === 'string' ? { account: seededAccount } : {}),
         detail: `${verb}`,
         stoppedAt: null,
-        ...(actor ? { createdBy: actor } : {}),
+        ...creator,
         ...(resumeUuid ? { uuid: resumeUuid } : {}),
         // Only write the override on a fresh start. A resume passes the value
         // it read off the record, and writing null back on a plain resume
