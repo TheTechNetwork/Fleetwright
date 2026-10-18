@@ -62,7 +62,8 @@ export function migrationState(cfg, status, release, { exists = existsSync, plat
       reason: 'unconfigured',
       message:
         'This box does not know where its releases come from, so there is nothing to move it to.\n' +
-        'Set FLEETWRIGHT_RELEASE_MANIFEST in /etc/fleetwright.env, or re-run the installer with --upgrade.',
+        'Re-run the installer as root with --upgrade, and FLEETWRIGHT_RELEASE_MANIFEST=<manifest URL> if it cannot\n' +
+        'work the address out. Root moves a box only to an address the installer recorded, never to one in /etc/fleetwright.env.',
     };
   }
   // THE GRANT IS CHECKED BEFORE IT IS OFFERED. A button that fails with "sudo:

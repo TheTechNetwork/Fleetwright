@@ -125,6 +125,51 @@ test('a payload that is not a release is refused before anything is read out of 
   }
 });
 
+test('root’s release address is told or kept, never taken from the service user’s env file once it exists', () => {
+  // fleetwright-migrate runs as root and reads ONLY $RELEASE_MANIFEST_FILE for
+  // the address it fetches and runs from. This is the one place that writes
+  // it, and it runs as root unattended (apt's postinst), so what it copies in
+  // is what root acts on next. The env file is the service user's: once root
+  // has an address, a run must not take theirs, and the env file must end up
+  // saying root's — never the other way round.
+  const block = between('# A BOX THAT APT OWNS says so', '# THE MIGRATION HELPER, and the grant');
+  const t = tmp('manifest');
+  try {
+    const envFile = path.join(t, 'fleetwright.env');
+    const rootFile = path.join(t, 'usr', 'local', 'etc', 'fleetwright', 'release-manifest');
+    const REAL = 'https://github.com/o/r/releases/latest/download/manifest.json';
+    const EVIL = 'https://attacker.example/manifest.json';
+    const run = (/** @type {Record<string,string>} */ v = {}) => bash(`${fns(['get_env', 'set_env', 'put_env', 'release_manifest_url', 'record_release_manifest'])}
+install() { local a=(); while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) a+=("$1"); shift ;; esac; done; command install "\${a[@]}"; }
+set -euo pipefail
+PLATFORM=linux CHECK_ONLY=0 ENV_FILE="$X_ENV" RELEASE_MANIFEST_FILE="$X_ROOT" DIR="$X_T" NODE_BIN="$X_NODE"
+${block}`, { X_ENV: envFile, X_ROOT: rootFile, X_T: t, X_NODE: process.execPath, FLEETWRIGHT_RELEASE_MANIFEST: '', ...v });
+    const root = () => (existsSync(rootFile) ? readFileSync(rootFile, 'utf8').trim() : null);
+    const env = () => (readFileSync(envFile, 'utf8').match(/^FLEETWRIGHT_RELEASE_MANIFEST=(.*)$/m) ?? [])[1];
+
+    // First run after the change: seeded once, from what the box already had.
+    writeFileSync(envFile, `FLEETWRIGHT_RELEASE_MANIFEST=${REAL}\n`);
+    let r = run();
+    assert.equal(root(), REAL, `not seeded:\n${r.stdout}${r.stderr}`);
+    assert.equal((statSync(rootFile).mode & 0o777).toString(8), '644');
+
+    // The service user changes their file; root’s is kept, and theirs is put back.
+    writeFileSync(envFile, `FLEETWRIGHT_RELEASE_MANIFEST=${EVIL}\n`);
+    r = run();
+    assert.equal(root(), REAL, `root took the service user’s address:\n${r.stdout}${r.stderr}`);
+    assert.equal(env(), REAL, `the env file still names theirs:\n${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /root moves this box only to/);
+
+    // Told, by root’s own environment: that is how the address changes.
+    const NEW = 'https://github.com/o/fork/releases/latest/download/manifest.json';
+    r = run({ FLEETWRIGHT_RELEASE_MANIFEST: NEW });
+    assert.equal(root(), NEW, r.stdout + r.stderr);
+    assert.equal(env(), NEW, r.stdout + r.stderr);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
 test('the release lay-out never copies from inside the release tree, nor to a version that is a path', () => {
   const block = between('if [ "$PACKAGED" = 1 ]; then\n  RELEASE_VERSION=', '\n# Installing missing OS packages');
   const t = tmp('layout');
@@ -626,10 +671,14 @@ test('the migrate helper lays a release out in a base the service user owns as t
       mkdirSync(units);
       writeFileSync(path.join(units, 'fleetwright.service'), `[Service]\nExecStart=/usr/bin/node ${base}/current/lib/fleetwright.mjs serve\n`);
       const envFile = path.join(t, `env-${path.basename(base)}`);
-      writeFileSync(envFile, `FLEETWRIGHT_RELEASE_MANIFEST=file://${dist}/manifest.json\nFLEETWRIGHT_STATE_DIR=${t}/state\n`);
+      writeFileSync(envFile, `FLEETWRIGHT_STATE_DIR=${t}/state\n`);
+      // Root's copy of the address: the helper reads it from nowhere else.
+      const manifestFile = path.join(t, `manifest-${path.basename(base)}`);
+      writeFileSync(manifestFile, `file://${dist}/manifest.json\n`);
+      chmodSync(manifestFile, 0o644);
       return spawnSync('sh', [helper], {
         encoding: 'utf8',
-        env: { ...process.env, FLEETWRIGHT_ENV_FILE: envFile, FLEETWRIGHT_BASE: base, FLEETWRIGHT_UNIT_DIR: units },
+        env: { ...process.env, FLEETWRIGHT_ENV_FILE: envFile, FLEETWRIGHT_RELEASE_MANIFEST_FILE: manifestFile, FLEETWRIGHT_BASE: base, FLEETWRIGHT_UNIT_DIR: units },
       });
     };
     const roots = path.join(t, 'roots');

@@ -30,6 +30,10 @@ test('a box that does not know where its releases come from says so', () => {
   // sentence nobody can act on.
   assert.match(m.message, /FLEETWRIGHT_RELEASE_MANIFEST/);
   assert.match(m.message, /--upgrade/);
+  // Through the installer, as root: the migration fetches only the address
+  // root recorded, so an edit to the env file alone would move nothing.
+  assert.match(m.message, /installer as root/);
+  assert.doesNotMatch(m.message, /Set FLEETWRIGHT_RELEASE_MANIFEST in/);
 });
 
 const HERE = { exists: () => true };

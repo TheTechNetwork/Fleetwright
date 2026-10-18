@@ -508,15 +508,15 @@ test('the installer records the manifest the one-liner verified against, before 
   // hands the address down in the environment, and the installer writes that
   // one — the address the tarball was just checked against — ahead of the one
   // it would derive from a checkout's origin.
-  // Anchored on the start of the condition: it continues on a second line
-  // now, which skips the manifest entirely on a box apt owns.
-  const start = SH.indexOf('if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ]');
+  // Root's copy is decided first and the env file follows it; the order of
+  // the rest (told, kept, seeded) is driven in install-root-sources.test.js.
+  const start = SH.indexOf('ENV_MANIFEST="$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)"');
   assert.ok(start > 0, 'the manifest block is not where this test looks for it');
   const block = SH.slice(start);
   const told = block.indexOf('if [ -n "${FLEETWRIGHT_RELEASE_MANIFEST:-}" ]; then');
-  const guessed = block.indexOf('elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then');
+  const guessed = block.indexOf('ROOT_MANIFEST=$(release_manifest_url');
   assert.ok(told > 0 && guessed > told, 'the environment is consulted before the git remote');
-  assert.match(block.slice(told, guessed), /set_env "\$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "\$FLEETWRIGHT_RELEASE_MANIFEST"/);
+  assert.match(block.slice(told, guessed), /ROOT_MANIFEST="\$FLEETWRIGHT_RELEASE_MANIFEST"/);
 });
 
 test('any box retires a leftover local coordinator, and one that was its own fleet is told where to go', () => {

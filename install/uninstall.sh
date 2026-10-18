@@ -219,6 +219,14 @@ if [ -f /usr/local/sbin/fleetwright-migrate ]; then
   rm -f /usr/local/sbin/fleetwright-migrate
   ok "/usr/local/sbin/fleetwright-migrate"
 fi
+# And the address it reads, root's copy of where releases come from: left
+# behind, a reinstall that is not told an address keeps this one, from a box
+# that no longer exists, rather than learning the new box's.
+if [ -f /usr/local/etc/fleetwright/release-manifest ]; then
+  rm -f /usr/local/etc/fleetwright/release-manifest
+  ok "/usr/local/etc/fleetwright/release-manifest"
+fi
+rmdir /usr/local/etc/fleetwright 2>/dev/null || true
 if [ -f /usr/local/sbin/fleetwright-confirm ]; then
   rm -f /usr/local/sbin/fleetwright-confirm
   ok "/usr/local/sbin/fleetwright-confirm"

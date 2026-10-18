@@ -75,7 +75,9 @@ step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 [ -d /run/systemd/system ] || { echo "needs systemd as pid 1 — this asks it to start things"; exit 1; }
 
 # NOTHING OF SOMEBODY ELSE'S. A box with a real install is not a drill ground.
-for f in /etc/systemd/system/fleetwright.service /etc/fleetwright.env /var/lib/fleetwright; do
+# Root's copy of the release address, which the helper reads and nothing else.
+ROOT_MANIFEST_FILE=/usr/local/etc/fleetwright/release-manifest
+for f in /etc/systemd/system/fleetwright.service /etc/fleetwright.env /var/lib/fleetwright "$ROOT_MANIFEST_FILE"; do
   [ -e "$f" ] && { echo "refusing: $f exists — this machine has an install on it"; exit 1; }
 done
 
@@ -110,7 +112,8 @@ cleanup() {
          /usr/local/bin/fleetwright /usr/local/bin/fleetwright-sidecar \
          /usr/local/bin/fleetwright-coordinator /usr/local/sbin/fleetwright-migrate \
          /etc/sudoers.d/fleetwright-upgrade /etc/sudoers.d/fleetwright-reboot \
-         /etc/sudoers.d/fleetwright-migrate
+         /etc/sudoers.d/fleetwright-migrate "$ROOT_MANIFEST_FILE"
+  rmdir "${ROOT_MANIFEST_FILE%/*}" 2>/dev/null
   # The logs outlive the drill: a failure you cannot read afterwards is a
   # failure you get to reproduce.
   mkdir -p "${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
@@ -210,8 +213,8 @@ convert() {
   # and is a different problem entirely.
   [ -f "$CHECKOUT/install/fleetwright-migrate" ] \
     || { echo "no helper at $CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log"; return 1; }
-  [ -f /etc/fleetwright.env ] \
-    || { echo "no /etc/fleetwright.env — nothing says where releases come from" >"$WORK/migrate.log"; return 1; }
+  [ -s "$ROOT_MANIFEST_FILE" ] \
+    || { echo "no $ROOT_MANIFEST_FILE — nothing root trusts says where releases come from" >"$WORK/migrate.log"; return 1; }
   FLEETWRIGHT_ENV_FILE=/etc/fleetwright.env FLEETWRIGHT_BASE="$BASE" \
     sh "$CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log" 2>&1
 }
@@ -276,6 +279,13 @@ sed -i '/FLEETWRIGHT_RELEASE_MANIFEST/d' /etc/fleetwright.env
 # exactly that and blamed the migration.
 { printf '\n'; printf 'FLEETWRIGHT_RELEASE_MANIFEST=%s\n' "$MANIFEST"; printf 'FLEETWRIGHT_INSTALL_DIR=%s\n' "$CHECKOUT"; } >> /etc/fleetwright.env
 grep -q '^FLEETWRIGHT_RELEASE_MANIFEST=' /etc/fleetwright.env || { echo "the drill could not record the manifest URL"; exit 1; }
+# AND ROOT'S COPY, which is the one the helper fetches from: the env file is
+# the service user's, and the installer seeds root's file from it only when
+# there is none. One already written from the checkout's remote is kept, which
+# is the point, so the drill writes root's the way a told installer would.
+install -d -m 0755 "${ROOT_MANIFEST_FILE%/*}"
+printf '%s\n' "$MANIFEST" > "$ROOT_MANIFEST_FILE"
+chmod 0644 "$ROOT_MANIFEST_FILE"
 
 # AN ENROLLED BOX, because that is what converts. `--upgrade` refuses a machine
 # that was never in a fleet — correctly, since enrolling needs a pin somebody
@@ -605,11 +615,12 @@ step "14. the manifest cannot be reached"
 # A box with no network is the commonest reason to be here, and the one where
 # leaving it half-converted is least recoverable.
 install_from_checkout --from-source
-ENV_GOOD="$(grep '^FLEETWRIGHT_RELEASE_MANIFEST=' /etc/fleetwright.env)"
-sed -i 's|^FLEETWRIGHT_RELEASE_MANIFEST=.*|FLEETWRIGHT_RELEASE_MANIFEST=http://127.0.0.1:1/manifest.json|' /etc/fleetwright.env
+# Root's copy, because that is the address the helper fetches.
+ROOT_GOOD="$(cat "$ROOT_MANIFEST_FILE")"
+printf 'http://127.0.0.1:1/manifest.json\n' > "$ROOT_MANIFEST_FILE"
 refuses "unreachable manifest" "could not fetch"
 starts "after an unreachable manifest"
-sed -i "s|^FLEETWRIGHT_RELEASE_MANIFEST=.*|$ENV_GOOD|" /etc/fleetwright.env
+printf '%s\n' "$ROOT_GOOD" > "$ROOT_MANIFEST_FILE"
 
 step "15. the manifest is missing the fields that matter"
 cp "$DIST/manifest.json" "$WORK/manifest.good"

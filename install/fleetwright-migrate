@@ -17,26 +17,48 @@
 # touch, and the sudoers rule names this path exactly.
 #
 # NO ARGUMENTS, for the same reason the apt rule spells out its whole command
-# line: sudoers matches argv, and every argument is a widening. Everything this
-# needs it reads from /etc/fleetwright.env, which is root-owned and 0600.
+# line: sudoers matches argv, and every argument is a widening.
+#
+# TWO FILES, AND ONLY ONE OF THEM IS ROOT'S. This header used to say that
+# everything came from /etc/fleetwright.env, "root-owned and 0600". It is
+# 0600, and it is the SERVICE USER's: install.sh chowns it to them, because
+# the CLI runs as them and reads it, and an owner can rewrite it. So
+# a manifest URL read from there was an address the service user chose, and
+# the sha256 that "proves" the payload came from the manifest at that
+# address — theirs too. Their tarball's install.sh then ran as root, here, on
+# `sudo -n` with no person involved; and install.sh runs this helper as root
+# by itself on every apt upgrade, so they did not even need the sudo rule.
+#
+# The URL is therefore read from $MANIFEST_FILE below — written by install.sh
+# as root, in directories root made, and refused unless it is still root's —
+# and from nowhere else. The env file is still read, for settings that choose
+# between things root has already vouched for (see each one).
 #
 # WHAT THE SERVICE USER CAN INFLUENCE, stated plainly because a grant nobody
 # has bounded is a grant nobody can review:
 #
 #   WHEN this runs — that is the whole feature.
-#   WHICH CHANNEL, via <stateDir>/release-channel, which it owns. That chooses
-#     between two paths under the operator's own manifest URL and nothing else.
+#   WHICH CHANNEL, via <stateDir>/release-channel or FLEETWRIGHT_RELEASE_CHANNEL
+#     in the env file, both theirs. That chooses between two paths under
+#     root's manifest URL — stable or rolling, of the operator's own release
+#     host — and nothing else; the value is reduced to one of those two words
+#     before anything uses it, so it is never echoed back.
+#   WHETHER A CHECKOUT IS ASSUMED, via FLEETWRIGHT_INSTALL_DIR in the env file.
+#     It is only ever asked whether it has a .git; nothing is run or written
+#     there.
 #
-#   NOT the URL, which comes from the root-owned env file.
+#   NOT the URL, which comes from root's own file.
 #   NOT the payload, which is checked against the sha256 in that manifest.
 #   NOT what runs as root afterwards: the units it writes run AS THE SERVICE
 #     USER, exactly as they did before. Nothing here gives away a shell.
 set -eu
 
-# The box's configuration, and the only place this reads anything from. The
+# The box's configuration, which the service user owns (see the header): read
+# for choices between things root vouches for, never for the URL. The
 # override exists so the whole migration can be driven end to end by a test
 # against temporary directories — the path this file takes on a real box is the
-# one nothing ever ran until a machine ran it, five times, badly.
+# one nothing ever ran until a machine ran it, five times, badly. sudo's
+# env_reset strips it, so the service user cannot set it through the rule.
 # The old name on a box the installer has not migrated yet — this helper is
 # what runs the installer that migrates it. src/fleet/legacy-names.js.
 ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/fleetwright.env}"
@@ -62,8 +84,31 @@ env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | sed 's/^"\(.*
 # A setting written before the rename is AGENT_HUB_X; the new name wins.
 env_get_named() { v="$(env_get "$1")"; [ -n "$v" ] || v="$(env_get "AGENT_HUB_${1#FLEETWRIGHT_}")"; printf '%s' "$v"; }
 
-MANIFEST_URL="$(env_get_named FLEETWRIGHT_RELEASE_MANIFEST)"
-[ -n "$MANIFEST_URL" ] || die "FLEETWRIGHT_RELEASE_MANIFEST is not set in $ENV_FILE, so there is nothing to migrate to."
+# THE ADDRESS ROOT FETCHES FROM, from a file only root can have written.
+#
+# install.sh writes it as root, 0644, in directories it made as root, from the
+# address it was handed or the one the box already had (install.sh says which
+# and why). The checks are the property, not a formality: absent means there
+# is no address root wrote; not owned by whoever is running this — root, on a
+# box — means somebody else wrote it; writable by group or other means
+# somebody else could still change it. Each is refused rather than worked
+# around, and never by falling back to the env file, which is the hole this
+# file exists to close.
+#
+# The override is the same seam FLEETWRIGHT_ENV_FILE is, for the same tests,
+# and sudo's env_reset strips it the same way: the rule cannot be pointed at a
+# file the service user wrote.
+MANIFEST_FILE="${FLEETWRIGHT_RELEASE_MANIFEST_FILE:-/usr/local/etc/fleetwright/release-manifest}"
+REINSTALL='Re-run the installer as root — curl -fsSL <your coordinator>/install | sudo sh -s -- --repair — and it records the address again.'
+[ -f "$MANIFEST_FILE" ] \
+  || die "$MANIFEST_FILE does not exist, so root has no release address of its own to migrate to. $REINSTALL"
+[ -O "$MANIFEST_FILE" ] \
+  || die "$MANIFEST_FILE is not owned by $(id -un), so it is not an address root wrote, and it is not used. $REINSTALL"
+MODE="$(stat -c %a "$MANIFEST_FILE")"
+[ $((0$MODE & 022)) -eq 0 ] \
+  || die "$MANIFEST_FILE can be changed by accounts other than $(id -un) (mode $MODE), so it is not used. $REINSTALL"
+MANIFEST_URL="$(head -n 1 "$MANIFEST_FILE" | tr -d '[:space:]')"
+[ -n "$MANIFEST_URL" ] || die "$MANIFEST_FILE is empty, so there is nothing to migrate to. $REINSTALL"
 
 INSTALL_DIR="$(env_get_named FLEETWRIGHT_INSTALL_DIR)"
 [ -n "$INSTALL_DIR" ] || INSTALL_DIR=/opt/fleetwright-src
@@ -110,7 +155,7 @@ STATE_DIR="$(env_get_named FLEETWRIGHT_STATE_DIR)"
 # set this through the sudo rule; and even if it could, the only thing it
 # decides is whether this box is treated as already converted. The payload is
 # still checked against the manifest's sha256, the manifest URL still comes from
-# the root-owned env file, and the units still run as the service user.
+# root's own file, and the units still run as the service user.
 UNIT_DIR="${FLEETWRIGHT_UNIT_DIR:-/etc/systemd/system}"
 UNIT="$UNIT_DIR/fleetwright.service"
 [ -f "$UNIT" ] || [ ! -f "$UNIT_DIR/agent-hub.service" ] || UNIT="$UNIT_DIR/agent-hub.service"
@@ -157,13 +202,19 @@ if [ "$CONVERTED" = no ]; then
 fi
 
 # The channel picks the address, exactly as src/core/release.js does it. Two
-# paths under the operator's own URL — this cannot be pointed somewhere else.
+# paths under root's URL — this cannot be pointed somewhere else.
+#
+# REDUCED TO A WORD BEFORE IT IS USED. Both sources are the service user's,
+# and <stateDir>/release-channel was read with root's `cat` and printed in the
+# progress line below: a link from there to /etc/shadow, and a `current` whose
+# version did not match, and root read the file out to whoever ran the rule.
+# A bounded read, and only the two names that mean something survive it.
 CHANNEL="$(env_get_named FLEETWRIGHT_RELEASE_CHANNEL)"
-[ -n "$CHANNEL" ] || CHANNEL="$(cat "$STATE_DIR/release-channel" 2>/dev/null || echo stable)"
+[ -n "$CHANNEL" ] || CHANNEL="$(head -c 32 "$STATE_DIR/release-channel" 2>/dev/null || true)"
 case "$CHANNEL" in
   rolling|prerelease)
     MANIFEST_URL="$(printf '%s' "$MANIFEST_URL" | sed 's|/releases/latest/download/|/releases/download/rolling/|')" ;;
-  *) ;;
+  *) CHANNEL=stable ;;
 esac
 
 # A NODE OF ROOT'S for the installer below, when the box has one: the deb's,

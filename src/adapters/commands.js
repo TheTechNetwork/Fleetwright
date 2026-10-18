@@ -2076,7 +2076,8 @@ export const COMMANDS = {
             ok: false,
             text:
               `${status.dir} is a release.\n\n` +
-              'Set FLEETWRIGHT_RELEASE_MANIFEST to the URL of a release manifest and /update will fetch from it.',
+              'Re-run the installer as root with FLEETWRIGHT_RELEASE_MANIFEST=<manifest URL> and /update will fetch from it.\n' +
+              'Root moves a box only to an address the installer recorded, never to one in /etc/fleetwright.env.',
           };
         }
         // READ NOW, not at startup: the point of the channel verb is that it

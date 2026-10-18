@@ -72,7 +72,8 @@ export async function checkRelease(cfg, { fetch: doFetch = fetch, apt = checkApt
       ok: false,
       message:
         'This box does not know where its releases come from, so it cannot check for updates.\n' +
-        'Set FLEETWRIGHT_RELEASE_MANIFEST in /etc/fleetwright.env, or re-run the installer with --upgrade.',
+        'Re-run the installer as root with --upgrade, and FLEETWRIGHT_RELEASE_MANIFEST=<manifest URL> if it cannot\n' +
+        'work the address out. Root moves a box only to an address the installer recorded, never to one in /etc/fleetwright.env.',
     };
   }
 

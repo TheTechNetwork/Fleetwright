@@ -143,6 +143,11 @@ FLEET_BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 SERVICES_STARTED=0
 OLD_UNIT_BACKUP_DIR=""
 ENV_FILE=/etc/fleetwright.env
+# The release address root acts on, which is not $ENV_FILE: that file is the
+# service user's, chowned to them so the CLI can read it. See "WHERE ROOT
+# TAKES ITS RELEASES FROM" below, and install/fleetwright-migrate, which reads
+# only this.
+RELEASE_MANIFEST_FILE=/usr/local/etc/fleetwright/release-manifest
 SIDECAR_ENV=/etc/fleetwright-sidecar.env
 COORD_ENV=/etc/fleetwright-coordinator.env
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -2403,27 +2408,121 @@ elif [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" = "apt" ] && [ "$CHEC
   ok "the fleetwright package is gone — releases come from the manifest again"
 fi
 
-if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ] \
-   && [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" != "apt" ]; then
-  ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
-  # TOLD, BEFORE IT IS GUESSED. A fresh box installed from a release has no
-  # remote to read: bootstrap.sh fetched the manifest, verified the tarball
-  # against it, and hands the address down in the environment — the one
-  # address this release was just checked against is the one `/update` should
-  # read from. The remote is the answer for a checkout, where it is the only
-  # thing that knows which repository this is.
+# WHERE ROOT TAKES ITS RELEASES FROM, which is no longer the env file.
+#
+# fleetwright-migrate runs as root — on `sudo -n` at the service user's word,
+# and from refresh_release_if_converted whenever this installer runs as root,
+# which the deb's postinst does on every apt upgrade — and it fetches a
+# manifest, checks a tarball against that manifest's sha256, and runs the
+# tarball's install.sh as root. It read the address from $ENV_FILE, and that
+# file is the service user's: it is chowned to them further down so the CLI
+# can read it, and its owner can rewrite it. So the service user named the
+# manifest, the manifest named the sha256, and their install.sh ran as root.
+#
+# So root's address lives in $RELEASE_MANIFEST_FILE, root's own, written here
+# and nowhere else, and the helper reads nothing else for it. The order, and
+# why each step is allowed to write it:
+#
+#   TOLD. FLEETWRIGHT_RELEASE_MANIFEST in this installer's own environment:
+#     bootstrap.sh hands down the address it just verified a tarball against,
+#     or an operator passes one to change it. Either way it is root's
+#     environment, which the service user cannot reach. Written, every time.
+#
+#   KEPT. A file already there is left exactly as it is — NEVER refreshed from
+#     the env file or from the checkout's git remote, both of which the
+#     service user can write, because this runs as root unattended. The only
+#     way to change it is to tell it, above.
+#
+#   SEEDED, ONCE. No file yet: the box's first run after this change, or a
+#     first install. It takes what the box already has — the env file's value,
+#     or the checkout's origin — which is trust on first use, and argued
+#     rather than assumed: it adds no exposure the box did not already have,
+#     because until this run the helper read that same value as root, at the
+#     same service user's request. From the second run on it is kept.
+#
+# NOT ON A MAC, where there is no helper to read it (see "THE MIGRATION
+# HELPER" below) and /usr/local/etc is often the Homebrew user's directory.
+#
+# Called inside `if`, so a failure is a warning rather than the end of the run.
+record_release_manifest() { # record_release_manifest URL
+  local tmp
+  tmp="$(mktemp)" || return 1
+  printf '%s\n' "$1" > "$tmp"
+  if install -d -m 0755 -o root -g root "${RELEASE_MANIFEST_FILE%/*}" \
+     && install -m 0644 -o root -g root "$tmp" "$RELEASE_MANIFEST_FILE"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+ENV_MANIFEST="$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)"
+ROOT_MANIFEST=""
+if [ "$PLATFORM" != macos ]; then
+  MANIFEST_FROM=""
   if [ -n "${FLEETWRIGHT_RELEASE_MANIFEST:-}" ]; then
-    set_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "$FLEETWRIGHT_RELEASE_MANIFEST"
-    ok "releases come from $FLEETWRIGHT_RELEASE_MANIFEST"
-  elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then
-    set_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "$MANIFEST_URL"
-    ok "releases come from $MANIFEST_URL"
-  else
-    # Said rather than left silent. A box with no manifest URL is one whose
-    # /update can only report that it cannot update, and finding that out on
-    # the day it matters is the failure this whole line exists to avoid.
-    warn "could not tell which repository this came from, so FLEETWRIGHT_RELEASE_MANIFEST is unset"
-    warn "  set it in $ENV_FILE to the URL of a release manifest, or this box cannot take updates"
+    ROOT_MANIFEST="$FLEETWRIGHT_RELEASE_MANIFEST"
+    MANIFEST_FROM=told
+  elif [ -s "$RELEASE_MANIFEST_FILE" ]; then
+    ROOT_MANIFEST="$(head -n 1 "$RELEASE_MANIFEST_FILE" | tr -d '[:space:]')"
+    MANIFEST_FROM=kept
+  elif [ -n "$ENV_MANIFEST" ]; then
+    ROOT_MANIFEST="$ENV_MANIFEST"
+    MANIFEST_FROM=seeded
+  elif [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" != "apt" ] \
+       && ROOT_MANIFEST=$(release_manifest_url "$(git -C "$DIR" remote get-url origin 2>/dev/null || true)"); then
+    MANIFEST_FROM=seeded
+  fi
+  if [ -n "$ROOT_MANIFEST" ] && [ "$MANIFEST_FROM" != kept ]; then
+    if record_release_manifest "$ROOT_MANIFEST"; then
+      ok "root takes releases from $ROOT_MANIFEST ($RELEASE_MANIFEST_FILE)"
+    else
+      warn "could not write $RELEASE_MANIFEST_FILE — root will not move this box onto a release until it can"
+      ROOT_MANIFEST=""
+    fi
+  fi
+fi
+
+# AND THE ENV FILE, for `/update`, which runs as the service user and reads
+# cfg.releaseManifest from here. It is not what root trusts any more; it is
+# kept saying the same thing as root's file, because two addresses would be
+# two updaters — the hub laying out one release unprivileged and the heal it
+# asks for bringing the box "forward" to the other. A value set here by hand
+# is replaced with root's and the run says so: the way to change the address
+# is to tell the installer, which changes both.
+if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" != "apt" ]; then
+  if [ -n "$ROOT_MANIFEST" ]; then
+    if [ "$ENV_MANIFEST" != "$ROOT_MANIFEST" ]; then
+      [ -z "$ENV_MANIFEST" ] || {
+        warn "$ENV_FILE named $ENV_MANIFEST, and root moves this box only to $ROOT_MANIFEST — it says that now"
+        warn "  to change it: re-run this installer as root with FLEETWRIGHT_RELEASE_MANIFEST=<url>"
+      }
+      put_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "$ROOT_MANIFEST"
+    fi
+    ok "releases come from $ROOT_MANIFEST"
+  elif [ -z "$ENV_MANIFEST" ]; then
+    ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
+    # TOLD, BEFORE IT IS GUESSED. A fresh box installed from a release has no
+    # remote to read: bootstrap.sh fetched the manifest, verified the tarball
+    # against it, and hands the address down in the environment — the one
+    # address this release was just checked against is the one `/update` should
+    # read from. The remote is the answer for a checkout, where it is the only
+    # thing that knows which repository this is. (Off a Mac both were already
+    # answered above, as root's address; this is the Mac's, and the warning.)
+    if [ -n "${FLEETWRIGHT_RELEASE_MANIFEST:-}" ]; then
+      set_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "$FLEETWRIGHT_RELEASE_MANIFEST"
+      ok "releases come from $FLEETWRIGHT_RELEASE_MANIFEST"
+    elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then
+      set_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "$MANIFEST_URL"
+      ok "releases come from $MANIFEST_URL"
+    else
+      # Said rather than left silent. A box with no manifest URL is one whose
+      # /update can only report that it cannot update, and finding that out on
+      # the day it matters is the failure this whole line exists to avoid.
+      warn "could not tell which repository this came from, so FLEETWRIGHT_RELEASE_MANIFEST is unset"
+      warn "  re-run this installer as root with FLEETWRIGHT_RELEASE_MANIFEST=<url of a release manifest>, or this box cannot take updates"
+    fi
   fi
 fi
 
