@@ -301,6 +301,16 @@ internal fun HypervisorSheet(
     var pendingSave by remember { mutableStateOf<String?>(null) }
     var keepNote by remember { mutableStateOf("") }
     var openedOnce by rememberSaveable { mutableStateOf(false) }
+    // A RECONNECT FOR AN ADDRESS THIS PHONE DOES NOT KNOW: not a pool it
+    // holds, not one it kept a sign-in for, not one whose certificate it
+    // pinned. Such an address came in a push one of the person's machines
+    // sent, so nothing asks the fleet about it until the person taps the
+    // button that names it ([askFirst] until then).
+    val knowsAddress = remember(address) {
+        val at = address.trim()
+        XoHandoff.held(settings).any { it.address == at } || XoSaved.has(settings, at) || XoHandoff.pinnedCertificate(settings, at) != null
+    }
+    var askFirst by rememberSaveable { mutableStateOf(false) }
 
     // THROUGH THIS PHONE. The machine the fleet named that can reach the
     // address through this phone, when no machine reached it over its own
@@ -355,6 +365,7 @@ internal fun HypervisorSheet(
     fun probe() {
         scope.launch {
             probing = true
+            askFirst = false
             viaMemory = false
             probeText = ""
             probes = null
@@ -901,7 +912,10 @@ internal fun HypervisorSheet(
     LaunchedEffect(Unit) {
         if ((policy || reconnect) && job == null && !openedOnce) {
             openedOnce = true
-            openRemembered()
+            // Not for an address this phone does not know: a pool-lost push
+            // names one a machine chose, and opening on it used to send the
+            // fleet-wide probe for it with nobody having looked at it.
+            if (reconnect && !knowsAddress) askFirst = true else openRemembered()
         }
     }
 
@@ -1247,11 +1261,26 @@ internal fun HypervisorSheet(
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (askFirst) {
+                    Hint(
+                        "This phone has not set up $address, kept a sign-in for it or pinned its certificate. " +
+                            "The address came from one of your machines, so none of them is asked to reach it until you say so.",
+                        color = Design.Palette.ink.now,
+                    )
+                }
                 OutlinedButton(
                     enabled = !probing && !beginning && addressOk,
                     onClick = { probe() },
                     modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text(if (probing) "Asking every machine…" else "Find a machine that can reach it") }
+                ) {
+                    Text(
+                        when {
+                            probing -> "Asking every machine…"
+                            askFirst -> "Ask your machines to reach $address"
+                            else -> "Find a machine that can reach it"
+                        },
+                    )
+                }
                 if (probeText.isNotBlank()) Hint(probeText, color = Design.Palette.bad.now)
 
                 val found = probes

@@ -138,6 +138,20 @@ test('Android: Reconnect on a lost pool’s notification opens the app, for an a
   assert.match(file('MachinesScreen.kt'), /HypervisorSheet\(settings, reconnectFor = pool, via = reconnectVia,/);
 });
 
+test('Android: a reconnect for an address this phone does not know asks the fleet nothing until the person asks for it by name', () => {
+  const sheet = file('HypervisorSheet.kt');
+  // Known: a pool this phone holds, a sign-in it kept, a certificate it pinned.
+  const knows = sheet.slice(sheet.indexOf('val knowsAddress = remember(address) {'), sheet.indexOf('var askFirst by rememberSaveable'));
+  assert.match(knows, /XoHandoff\.held\(settings\)\.any \{ it\.address == at \} \|\| XoSaved\.has\(settings, at\) \|\| XoHandoff\.pinnedCertificate\(settings, at\) != null/);
+  // The screen opening on a push's address probes only one it knows.
+  assert.match(sheet, /openedOnce = true\s*(?:\/\/[^\n]*\s*)*if \(reconnect && !knowsAddress\) askFirst = true else openRemembered\(\)/);
+  // The one way on names the address, after the same sentence iOS says.
+  assert.ok(sheet.includes('askFirst -> "Ask your machines to reach $address"'));
+  assert.ok(sheet.includes('"This phone has not set up $address, kept a sign-in for it or pinned its certificate. " +'));
+  assert.ok(sheet.includes('"The address came from one of your machines, so none of them is asked to reach it until you say so."'));
+  assert.match(fn(sheet, 'fun probe('), /probing = true\s*askFirst = false/);
+});
+
 test('Android: the pool’s page offers it to an admin, only when what it read shows a pool gone', () => {
   const page = file('PoolPage.kt');
   assert.match(page, /val reconnect = XoReconnect\.offered\(admin, watch\.phase == PoolWatch\.Phase\.Live, seen, pool\.pools\)/);
