@@ -1182,11 +1182,13 @@ coordinator's own test (`hostReported`: its session events, `host.degraded`
 and `host.recovered`, the pool events), is quoted and attributed to the box,
 and a hub reason is cut to one line by the same rule as everything else a box
 sends (`oneLine`, `src/core/text.js`), line separators and bidirectional
-overrides included. None of this stops a box saying something false about
+overrides included. An event's link is a Remote Control link, the shape the
+hub finds one in (`RC_URL_RE`), or nothing (`rcLink`, `core.js`): it is the
+link a phone opens. None of this stops a box saying something false about
 itself; it stops one saying it in somebody else's voice.
 *Falsify:* `test/ownership.test.js` ("a member’s box writes no line of an
 admin’s list"), `test/mcp.test.js` ("a box’s labels reach fleet_health", "a
-box’s hub reason reaches fleet_events").
+box’s hub reason reaches fleet_events", "a session event’s link").
 
 ---
 

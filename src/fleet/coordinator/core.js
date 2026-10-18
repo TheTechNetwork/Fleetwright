@@ -19,6 +19,7 @@ import { HostIdentities, actsFor, mayActFor, believedCreator, administers } from
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
+import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -865,7 +866,12 @@ export class CoordinatorCore {
       // attribution and all (seventh audit). sessionLabel keeps one line for
       // the same reason.
       text: msg.text ? oneLine(msg.text, 500) : null,
-      url: msg.url ? String(msg.url).slice(0, 500) : null,
+      // A REMOTE CONTROL LINK OR NOTHING. It was kept as the box sent it, cut
+      // to 500 and no more, and it rides to the phones in the push and to an
+      // agent in the record: any text a member's box liked, newlines and all,
+      // in the field a screen opens (eighth audit). The hub finds the link
+      // with RC_URL_RE, so that is what a link is here too (rcLink).
+      url: rcLink(msg.url),
       // The NAME of the profile a session was started with, when the host
       // says. A name, never content — docs/wanted.md's rule for profiles —
       // and the one fact that says whether "back at its prompt" is a job
@@ -6761,6 +6767,20 @@ const HOST_EVENTS = 100;
 const HOST_EVENTS_EACH = 25;
 /** And how much one person's records may, as one host's (#makeRoom). */
 const ACTOR_EVENTS_EACH = 25;
+
+/**
+ * A Remote Control link as the hub finds one in a pane (src/core/pane.js
+ * RC_URL_RE), the whole of the value and over https, or null. What a box
+ * puts in an event's `url` is the box's word, and this is the only shape the
+ * field has ever carried (core.js onHostMessage, and fleet_events).
+ *
+ * @param {unknown} v
+ * @returns {string|null}
+ */
+export function rcLink(v) {
+  if (typeof v !== 'string' || v.length > 500 || !v.startsWith('https://')) return null;
+  return v.match(RC_URL_RE)?.[0] === v ? v : null;
+}
 
 /**
  * Did a host write this, rather than the coordinator? See HOST_EVENT_RE.

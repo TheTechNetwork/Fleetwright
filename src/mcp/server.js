@@ -23,7 +23,7 @@ import { toolsFor, DEFAULT_DENY } from './tools.js';
 import { dispatchRunner } from '../core/runners.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { oneLine, LABEL_RE } from '../core/text.js';
-import { hostReported } from '../fleet/coordinator/core.js';
+import { hostReported, rcLink } from '../fleet/coordinator/core.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -1128,8 +1128,12 @@ export class McpServer {
             : e.actor || 'the fleet';
           const where = e.hostId ? ` on ${e.hostId}` : '';
           const name = e.name ? oneLine(e.name, 80) : '';
+          // Its link too, which is the box's word and is said inside its
+          // report, and only when it is one (rcLink): a record from before
+          // the coordinator held the field to that kept whatever it was sent.
+          const link = boxSaid ? rcLink(e.url) : null;
           const what = boxSaid
-            ? `${e.event}${name ? ` — ${name}` : ''}${said ? `: “${said}”` : ''}`
+            ? `${e.event}${name ? ` — ${name}` : ''}${said ? `: “${said}”` : ''}${link ? ` (${link})` : ''}`
             : said || (name ? `${e.event} — ${name}` : e.event);
           return `${new Date(e.at).toISOString()}  ${what}${where} · ${who}`;
         })
