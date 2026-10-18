@@ -11,6 +11,27 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.13 — 2026-10-18
+
+**The iOS app reaches App Review without anyone opening App Store Connect:
+the release takes its own screenshots, writes the whole listing, and says
+in Apple's words when Apple refuses.**
+
+- **Screenshots are taken by the release.** A Mac in the pipeline builds the
+  app, photographs the Sessions, Machines and You tabs on the current Pro
+  Max, Pro and 13-inch iPad against the demo fleet, keeps the pictures with
+  the run, and attaches them before submitting. 0.4.12 was refused for want
+  of them, and the script that takes them named a display size Apple does
+  not have.
+- **The listing is written from the repository.** Keywords, the support
+  page, the privacy policy page and the copyright line join the description
+  and promotional text that already came from `apps/store-listing.md`. Who
+  App Review may call comes from four secrets, set once.
+- **A refused submission is a red cross, with the reason.** 0.4.12 reported
+  success while Apple had refused the version; the job now fails with
+  Apple's words. Release notes Apple will not take on a first version no
+  longer drop the description with them.
+
 ## 0.4.12 — 2026-10-18
 
 **The iOS app can finally reach App Review, a sign-in from your vault
