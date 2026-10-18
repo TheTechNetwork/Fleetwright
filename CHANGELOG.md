@@ -11,6 +11,24 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.14 — 2026-10-18
+
+**The release's screenshots come from the current phones, and a refused
+submission says in Apple's words what is missing.**
+
+- **Screenshots from the newest simulator.** 0.4.13's phone pictures came
+  from an iPhone 11 Pro and 11 Pro Max, the size of a 2019 screen, and
+  Apple refused them; the runner had the 17s, and the script took the
+  wrong one. The current Pro Max, Pro and 13-inch iPad are chosen by model
+  number now, every picture is checked against the size its slot accepts
+  before it is sent, and the three are taken at once, which takes the job
+  from eighteen minutes to about six.
+- **A refused submission lists what Apple wants.** Apple's "check
+  associated errors" came with the errors in the same reply, and the job
+  dropped them; it prints them now, one per line.
+- **A flaky test made honest.** The image-pull watcher's test changed a
+  counter file in two steps and once read it half-written.
+
 ## 0.4.13 — 2026-10-18
 
 **The iOS app reaches App Review without anyone opening App Store Connect:
