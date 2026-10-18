@@ -11,6 +11,60 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.12 — 2026-10-18
+
+**The iOS app can finally reach App Review, a sign-in from your vault
+counts as connected on the machine holding it, a build of main is named
+as what it is, and the seventh security audit's fixes tighten who may
+change a pool's policy, what a service account can rewrite, and what a
+box is told after its owner is removed.**
+
+- **The App Store submission works.** Every release since 0.4.9 stopped
+  one step short: App Store Connect keeps one version in preparation per
+  platform, the record's own "1.0" was it, and the pipeline asked for a
+  second. It now renames that version to the release and submits it. The
+  listing check that warned about a missing category and age rating on
+  every run, set or not, now reads what is actually there.
+- **A sign-in your vault gave a machine shows as connected on it.** The
+  app said a GitHub sign-in was "not on rpi-7550" while that machine held
+  it from the vault, because the listing counted only sign-ins made on the
+  machine itself. A vault-held one is listed as "from your vault"; one
+  linked on the machine still wins.
+- **A build of main is named as a prerelease of the next release.** A
+  rolling machine used to report `0.0.0~main.325` waiting; it now sees
+  `0.4.13~main.<run>`, above the release it follows and below the one it
+  names. Moving from stable to rolling is an ordinary upgrade; moving back
+  is the pinned downgrade. Needs this release on the machine.
+- **A pool's policy sign-in is sealed to the machine that may use it**,
+  and a vault grant scoped to one hypervisor no longer passes as approval
+  for a sign-in. The phone sends a policy change only to a machine updated
+  to this release, and says so otherwise. Update the fleet before the
+  apps.
+- **Reconnect from a push naming an address this phone never set up asks
+  first**, instead of asking your machines to reach it on open. On
+  Android, a pool opens from a tap only on a notification the app drew.
+- **The service account can no longer make itself root.** The root helper
+  and the sidecar are installed from a root-owned copy the service user
+  cannot rewrite, and the sidecar runs under its own account on a packaged
+  Linux machine. The next update on each box runs that path for the first
+  time.
+- **The egress allowlist actually starts.** The filter was written in a
+  form the shipped proxy refuses, so allowlisted machines had no way out
+  at all.
+- **A pool's policy job knows its own disks, images and machine.** It
+  starts builds only from XCP-ng's blank template and counts kept disks
+  only on the fleet's admin-only resource set, so a tag alone is not
+  evidence.
+- **Removing a person asks their sessions and sign-ins back from the
+  operator's machines too**, and a hand-back waits for a report that
+  lists sessions rather than being declared against nothing.
+- **Members reach only machines that act for them** for health and
+  updates, and see none of another member's admission details.
+- **The machine's log stops repeating the coordinator's settings** every
+  fifteen seconds; it logs them when they change.
+- **`/logs <session name>`** shows that session's pane rather than a
+  service journal.
+
 ## 0.4.11 — 2026-10-18
 
 **A machine installed from apt can move between the stable and rolling
