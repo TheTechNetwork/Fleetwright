@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { uploadScreenshots, DEFAULT_DIR } from '../tools/appstore-screenshots.mjs';
+import { uploadScreenshots, unacceptable, ACCEPTED, DEFAULT_DIR } from '../tools/appstore-screenshots.mjs';
 
 /** A directory of screenshots, laid out one folder per Apple display type. */
 function shots(types) {
@@ -27,7 +27,8 @@ function shots(types) {
  * A fake App Store Connect, recording every call.
  *
  * `existing` is what the version already has, which is the whole of the
- * "if needed" behaviour.
+ * "if needed" behaviour: `true` for a set with one picture Apple has not
+ * described, or an array of appScreenshots resources as Apple would answer.
  */
 function fakeApi({ existing = {} } = {}) {
   const calls = [];
@@ -44,7 +45,8 @@ function fakeApi({ existing = {} } = {}) {
     if (/\/appScreenshotSets\/(.+)\/appScreenshots\?/.test(p)) {
       const id = p.match(/\/appScreenshotSets\/([^/]+)\//)[1];
       const type = Object.keys(existing)[Number(id.split('-')[1])];
-      return { data: existing[type] ? [{ id: 'already' }] : [] };
+      const have = existing[type];
+      return { data: Array.isArray(have) ? have : have ? [{ id: 'already' }] : [] };
     }
     if (p === '/v1/appScreenshotSets') return { data: { id: 'set-new' } };
     if (p === '/v1/appScreenshots') {
@@ -84,6 +86,61 @@ test('and is replaced when explicitly forced', async (t) => {
 
   assert.equal(await uploadScreenshots({ api, localizationId: 'loc', dir, force: true }), 1);
   assert.ok(calls.some((c) => c.p === '/v1/appScreenshots'));
+});
+
+test('a set Apple would refuse is deleted and taken again', async (t) => {
+  // "Asset spec is incompatible with the placement", six times, was 0.4.14:
+  // the phone sets held pictures from the wrong simulator, the uploader saw
+  // the sets were full and left them, and every later release would have been
+  // refused for the same six files until somebody deleted them in a browser.
+  const dir = shots({ APP_IPHONE_67: { 'phone-01.png': 'abcde' } });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { api, calls } = fakeApi({
+    existing: {
+      APP_IPHONE_67: [
+        { id: 'old-1', attributes: { imageAsset: { width: 1242, height: 2688 }, assetDeliveryState: { state: 'COMPLETE' } } },
+        { id: 'old-2', attributes: { imageAsset: { width: 1290, height: 2796 }, assetDeliveryState: { state: 'COMPLETE' } } },
+      ],
+    },
+  });
+
+  assert.equal(await uploadScreenshots({ api, localizationId: 'loc', dir }), 1);
+  // THE WHOLE SET, not the one wrong picture: Apple refuses the version for
+  // any one of them, and the new pictures are a matched set.
+  const deleted = calls.filter((c) => c.method === 'DELETE').map((c) => c.p);
+  assert.deepEqual(deleted, ['/v1/appScreenshots/old-1', '/v1/appScreenshots/old-2']);
+  const first = calls.findIndex((c) => c.method === 'DELETE');
+  const upload = calls.findIndex((c) => c.p === '/v1/appScreenshots' && c.method === 'POST');
+  assert.ok(first < upload, 'the old pictures must go before the new ones arrive');
+});
+
+test('a set whose sizes Apple has not reported yet is not thrown away', async (t) => {
+  // null is CANNOT TELL. The dimensions arrive once Apple has processed the
+  // asset, and a picture is not deleted on a guess about one it has not.
+  const dir = shots({ APP_IPHONE_61: { 'phone-01.png': 'abcde' } });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { api, calls } = fakeApi({
+    existing: { APP_IPHONE_61: [{ id: 'fresh', attributes: { imageAsset: null, assetDeliveryState: { state: 'UPLOAD_COMPLETE' } } }] },
+  });
+
+  assert.equal(await uploadScreenshots({ api, localizationId: 'loc', dir }), 0);
+  assert.equal(calls.some((c) => c.method === 'DELETE'), false, 'it deleted on a guess');
+});
+
+test('what Apple accepts per display type is the same table the runner checks against', () => {
+  // scripts/ios-screenshots.sh refuses a wrong-sized picture as it is taken;
+  // this refuses one the store already holds. They must agree, or a picture
+  // the runner accepted is replaced on every release, for ever.
+  const sh = readFileSync('scripts/ios-screenshots.sh', 'utf8');
+  for (const [type, sizes] of Object.entries(ACCEPTED)) {
+    const line = sh.match(new RegExp(`${type}\\) echo "([^"]+)"`));
+    assert.ok(line, `${type} is not in the runner's accepts()`);
+    assert.deepEqual(line[1].split(' ').sort(), [...sizes].sort(), `${type}: the two tables differ`);
+  }
+  assert.equal(unacceptable('APP_IPHONE_67', { attributes: { imageAsset: { width: 2796, height: 1290 } } }), null, 'landscape is the same picture turned');
+  assert.match(unacceptable('APP_IPHONE_67', { attributes: { imageAsset: { width: 1242, height: 2688 } } }), /1242x2688/);
+  assert.equal(unacceptable('APP_IPHONE_67', { attributes: { assetDeliveryState: { state: 'FAILED' } } }), 'delivery failed');
+  assert.equal(unacceptable('APP_WATCH_ULTRA', { attributes: { imageAsset: { width: 1, height: 1 } } }), null, 'an unlisted type is cannot tell, not wrong');
 });
 
 test('the upload is reserve, send the ranges, then commit with a checksum', async (t) => {

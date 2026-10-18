@@ -14,6 +14,14 @@
 // Re-uploading identical bytes on every release would be minutes of nothing,
 // and worse, a window where the store has fewer screenshots than it did.
 //
+// UNLESS APPLE WOULD REFUSE THEM. A set is only worth keeping if every image
+// in it is a size the display type accepts; one that is not is refused at
+// submission as "Asset spec is incompatible with the placement", and leaving
+// it alone would leave every later release refused for the same six pictures
+// until somebody deleted them in a browser. So the dimensions Apple reports
+// for what is there are checked against the sizes it accepts, and a set with
+// a wrong one, or an asset whose delivery failed, is deleted and re-uploaded.
+//
 // THE UPLOAD IS THREE STEPS AND A CHECKSUM, which is the whole reason this file
 // exists rather than a curl:
 //
@@ -39,6 +47,41 @@ import path from 'node:path';
 //
 /** Where the images live, one directory per Apple display type. */
 export const DEFAULT_DIR = 'apps/ios/store/screenshots';
+
+/**
+ * The pixel sizes App Store Connect accepts per display type, portrait; the
+ * same table as `accepts()` in scripts/ios-screenshots.sh, which checks the
+ * pictures as they are taken. Here it checks what the store already holds.
+ * A type not listed is not checked, which is "cannot tell" and not "fine".
+ */
+export const ACCEPTED = {
+  APP_IPHONE_67: ['1320x2868', '1290x2796', '1260x2736', '1284x2778'],
+  APP_IPHONE_61: ['1206x2622', '1179x2556', '1170x2532'],
+  APP_IPAD_PRO_3GEN_129: ['2064x2752', '2048x2732'],
+};
+
+/**
+ * Why an existing screenshot cannot stay, or null if it can.
+ *
+ * Apple reports the dimensions once the asset is processed; a size it does
+ * not accept for the type is what "Asset spec is incompatible with the
+ * placement" means. Dimensions it has not reported yet are not a reason —
+ * `null` is cannot tell, and a picture is not thrown away on a guess.
+ *
+ * @param {string} type
+ * @param {any} shot an appScreenshots resource
+ */
+export function unacceptable(type, shot) {
+  const a = shot?.attributes || {};
+  if (a.assetDeliveryState?.state === 'FAILED') return 'delivery failed';
+  const sizes = ACCEPTED[type];
+  const w = a.imageAsset?.width;
+  const h = a.imageAsset?.height;
+  if (!sizes || !w || !h) return null;
+  const size = `${w}x${h}`;
+  const turned = `${h}x${w}`;
+  return sizes.includes(size) || sizes.includes(turned) ? null : `${size} is not a size ${type} accepts`;
+}
 
 /** @param {string} name */
 function env(name) {
@@ -187,14 +230,27 @@ export async function uploadScreenshots({ api, localizationId, dir = DEFAULT_DIR
     if (!files.length) continue;
 
     let set = (sets.data || []).find((/** @type {any} */ s) => s.attributes.screenshotDisplayType === type);
-    if (set && !force) {
-      const existing = await api(`/v1/appScreenshotSets/${set.id}/appScreenshots?limit=1`);
-      if ((existing.data || []).length) {
+    if (set) {
+      const existing = (await api(`/v1/appScreenshotSets/${set.id}/appScreenshots?limit=10`)).data || [];
+      const wrong = existing.map((/** @type {any} */ s) => unacceptable(type, s)).filter(Boolean);
+      if (existing.length && !force && !wrong.length) {
         // IF NEEDED. Re-uploading identical bytes on every release is minutes
         // of nothing, and worse: a window where the store has fewer
         // screenshots than it did a moment ago.
         console.log(`${type}: already has screenshots — left alone (SCREENSHOTS_FORCE=true to replace)`);
         continue;
+      }
+      if (existing.length) {
+        // REPLACED, NOT ADDED TO. Apple refuses the whole version for one
+        // wrong picture in a set, so the set goes before the new ones arrive;
+        // the window with fewer screenshots is the price of a version Apple
+        // will take. Forced replacement clears the set for the same reason.
+        console.log(
+          wrong.length
+            ? `${type}: replacing ${existing.length} screenshot${existing.length === 1 ? '' : 's'} Apple would refuse — ${wrong[0]}`
+            : `${type}: replacing ${existing.length} screenshot${existing.length === 1 ? '' : 's'} as forced`,
+        );
+        for (const s of existing) await api(`/v1/appScreenshots/${s.id}`, { method: 'DELETE' });
       }
     }
 
