@@ -294,6 +294,24 @@ test('only the machine running a job can report on it, and only in its known sha
   assert.equal(narrowProgress({ step: 0, of: 8, phase: 'connect', state: 'running', text: 'a\u0007b' })?.text, 'a b');
 });
 
+test('a machine that stops acting for a setup’s owner cannot report on it, and the setup ends', async () => {
+  // Removing the admin who enrolled a box changes neither its name nor its
+  // key, so another admin's setup on it kept taking the box's frames: its own
+  // words and a "Hypervisor added" with nothing behind it reached every
+  // admin's phone, from a machine its removed admin alone now runs (seventh
+  // audit). #retier records that change on the registry; this is it.
+  const { core, sent, activities } = fleet(['deb14'], machine);
+  await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.dispatch(begin(admin));
+  const token = 'c0ffee'.repeat(12);
+  assert.equal(core.registerSetupActivity(admin, { job: JOB, token }).ok, true);
+
+  core.registry.actFor('deb14', 'gone@example.com');
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: 8, of: 8, phase: 'done', state: 'done', text: 'Open https://example.invalid to finish.' });
+  assert.equal(sent.length + activities.length, 0, 'a box that no longer acts for the owner painted onto their job');
+  assert.equal(core.registerSetupActivity(admin, { job: JOB, token }).ok, false, 'the setup outlived the box acting for its owner');
+});
+
 test('the Live Activity route is the owner’s and takes a token, nothing else', () => {
   const { core } = fleet(['deb14'], machine);
   assert.equal(core.registerSetupActivity(admin, { job: 'nope', token: 'c0ffee'.repeat(12) }).error.code, 'bad_params');

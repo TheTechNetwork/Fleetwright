@@ -478,6 +478,17 @@ test('a member listing pins and enrolled hosts is not shown whose they are', asy
   assert.equal(seenByAlice.owner, 'alice@example.test');
   assert.equal((await hosts(admin))[0].enrolledBy, 'alice@example.test');
 
+  // And nothing the record grew after this was written: the GitHub account
+  // that started a runner sat beside the owner it hid (seventh audit), and
+  // handBackPending named a removed operator's boxes. Shown to the owner only.
+  Object.assign(f.core.hostIds.get('alice-box'), { admittedBy: 'ticket', actorId: '515151', handBackPending: true });
+  const [later] = await hosts(bob);
+  for (const field of ['actorId', 'admittedBy', 'handBackPending']) {
+    assert.equal(field in later, false, `a member was shown ${field} of a colleague's host`);
+  }
+  assert.equal((await hosts(alice))[0].actorId, '515151');
+  assert.equal((await hosts(admin))[0].actorId, '515151');
+
   // And the live host list the apps draw from, which handed every member the
   // owner of every temporary host (third Workers audit), before its first
   // health frame and after.

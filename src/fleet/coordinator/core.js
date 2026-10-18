@@ -258,6 +258,17 @@ function holds(host, email) {
 }
 
 /**
+ * A report that can say whose each session is: the hub answered, and listed
+ * them. A sidecar whose hub is down reports `sessions: null`, which is "cannot
+ * tell", never "none" (C-5), so a hand-back is never paid from one (#handBack).
+ *
+ * @param {any} health
+ */
+function listsSessions(health) {
+  return Boolean(health) && health.hub?.reachable !== false && Array.isArray(health.sessions);
+}
+
+/**
  * The same repository, apart from letter case, which GitHub ignores and
  * corrects. @param {unknown} answered @param {unknown} asked
  */
@@ -705,9 +716,16 @@ export class CoordinatorCore {
       // longer act for under its one person (believedCreator), after which
       // nobody could tell which session was whose. A box that is the fleet's
       // again, its admin back, owes nothing.
+      //
+      // ONLY A REPORT THAT CAN SAY WHOSE EACH SESSION IS PAYS IT. A sidecar
+      // pushes health as soon as its socket is up, so the first frame after a
+      // reboot often comes from a hub not yet answering: sessions null, which
+      // is "cannot tell", not "none". Read as none, it asked nothing, the debt
+      // was cleared, and the next full report filed the member's session under
+      // the removed admin (seventh audit). Such a frame leaves the debt owed.
       const owed = this.hostIds?.get(hostId);
       const entry = this.registry.hosts.get(hostId);
-      if (owed?.handBackPending && entry?.connected) {
+      if (owed?.handBackPending && entry?.connected && listsSessions(msg.health)) {
         if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true });
         delete owed.handBackPending;
         this.onStateChanged?.();
@@ -1742,9 +1760,22 @@ export class CoordinatorCore {
    */
   #setupOn(job, rec, hostId) {
     if (!rec || rec.hostId !== hostId) return false;
-    if ((rec.enrolment ?? null) === this.#enrolmentOf(hostId)) return true;
-    this.#endSetup(job, `${hostId} was re-enrolled since this setup began, so the setup ended.`);
-    return false;
+    if ((rec.enrolment ?? null) !== this.#enrolmentOf(hostId)) {
+      this.#endSetup(job, `${hostId} was re-enrolled since this setup began, so the setup ended.`);
+      return false;
+    }
+    // AND STILL ACTS FOR WHOEVER BEGAN IT. Removing the admin who enrolled a
+    // box changes neither its name nor its key, so a live admin's setup on it
+    // outlived its tier: the box, now its removed admin's alone, could still
+    // write that job's progress and a "done" with nothing behind it to every
+    // admin's phone, and mint its report tokens (seventh audit). The holder
+    // pin already asked this (#onHolderPin); every frame now does.
+    const entry = this.registry.hosts.get(hostId);
+    if (entry && !mayActFor(entry, rec.owner)) {
+      this.#endSetup(job, `${hostId} no longer acts for whoever began this setup, so the setup ended.`);
+      return false;
+    }
+    return true;
   }
 
   /** A setup job is over: forgotten, and any relay it held closed. @param {string} job @param {string} why */
@@ -2364,6 +2395,13 @@ export class CoordinatorCore {
    * them only when they are the member's own. An attribution naming nobody,
    * a repository's runner or a machine image, stays.
    *
+   * A member gets the fields a phone shows and nothing else, named here
+   * rather than by what is taken out. A record that hid two fields and passed
+   * the rest passed every field added after it: the GitHub account id that
+   * started somebody else's runner sat beside the owner it hid (seventh
+   * audit), and handBackPending named every box of an operator since removed.
+   * A runner's actor id is shown to the person whose runner it is.
+   *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
    */
   enrolledHostsFor(requester) {
@@ -2371,11 +2409,21 @@ export class CoordinatorCore {
     if (!requester || requester.admin) return all;
     const mine = String(requester.email || '').toLowerCase();
     /** @param {unknown} v `alice@…`, `holder:alice@…`, `actions:owner/repo` */
-    const shown = (v) => {
-      const who = emailOf(String(v || '').replace(/^[a-z]+:/i, ''));
-      return !who || who === mine ? v : null;
-    };
-    return all.map((h) => ({ ...h, enrolledBy: shown(h.enrolledBy), ...('owner' in h ? { owner: shown(h.owner) } : {}) }));
+    const who = (v) => emailOf(String(v || '').replace(/^[a-z]+:/i, ''));
+    /** @param {unknown} v */
+    const shown = (v) => (!who(v) || who(v) === mine ? v : null);
+    return all.map((h) => ({
+      hostId: h.hostId,
+      fingerprint: h.fingerprint,
+      publicJwk: h.publicJwk,
+      enrolledBy: shown(h.enrolledBy),
+      ...('owner' in h ? { owner: shown(h.owner) } : {}),
+      enrolledAt: h.enrolledAt,
+      lastSeenAt: h.lastSeenAt,
+      revokedAt: h.revokedAt,
+      ...('ephemeral' in h ? { ephemeral: h.ephemeral } : {}),
+      ...(h.actorId && h.owner && who(h.owner) === mine ? { actorId: h.actorId } : {}),
+    }));
   }
 
   /**
@@ -2497,8 +2545,30 @@ export class CoordinatorCore {
     // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
     // connected, whose tier was decided when it connected (#retier), and are
     // asked for back what that tier gave them (#handBack).
+    //
+    // Asked from the report it made as the fleet's, when there is one that
+    // says whose each session is. A connected box can have none: the Worker
+    // rebuilds the registry from live sockets on waking, with no reports
+    // until each box's next push, and a removal is itself a request that
+    // wakes it. Asked from nothing, it was asked to stop nobody and was never
+    // asked again (seventh audit), so it owes the hand-back like a box that
+    // was away, and pays it from its next report that lists its sessions.
+    const handedBack = new Set();
     for (const { entry, person, health } of this.#retier()) {
-      if (entry.connected) this.#handBack(entry, person, health);
+      if (!entry.connected) continue;
+      if (listsSessions(health)) {
+        this.#handBack(entry, person, health);
+        handedBack.add(entry.hostId);
+        continue;
+      }
+      const enrolled = this.hostIds.get(entry.hostId);
+      if (!enrolled) continue;
+      enrolled.handBackPending = true;
+      changed = true;
+      this.#recordDemoted(
+        entry.hostId,
+        'It has not reported its sessions since it connected, so it will be asked to stop other people’s sessions and to forget everybody else’s GitHub, Cloudflare and Claude sign-ins on its next report that lists them, which a box does only if it is honest.',
+      );
     }
     // AND THE ONES THAT ARE NOT HERE TO ASK, found from the enrolments rather
     // than the registry. Only a box connected at that moment was asked: one
@@ -2512,13 +2582,24 @@ export class CoordinatorCore {
       for (const enrolled of this.hostIds.hosts.values()) {
         if (enrolled.revokedAt || enrolled.ephemeral || enrolled.handBackPending) continue;
         if (actsFor(enrolled, (email) => this.#isOperator(email)) !== address) continue;
-        if (this.registry.hosts.get(enrolled.hostId)?.connected) continue;
+        if (handedBack.has(enrolled.hostId)) continue;
         enrolled.handBackPending = true;
         changed = true;
         this.#recordDemoted(
           enrolled.hostId,
           'It is offline, so it will be asked to stop other people’s sessions and to forget everybody else’s GitHub, Cloudflare and Claude sign-ins the first time it reports in, which a box does only if it is honest.',
         );
+      }
+    }
+    // AND EVERYBODY ELSE'S SETUPS ON A BOX THAT NO LONGER ACTS FOR THEM, said
+    // now rather than on the box's next frame (#setupOn), which an offline box
+    // may never send: the job would have sat in a state its owner could not
+    // cancel, every later phase refused, for the rest of its day.
+    for (const [job, rec] of [...this.setups]) {
+      const enrolled = this.hostIds.get(rec.hostId);
+      const person = enrolled && !enrolled.revokedAt ? actsFor(enrolled, (email) => this.#isOperator(email)) : null;
+      if (person !== null && emailOf(rec.owner) !== person) {
+        this.#endSetup(job, `${rec.hostId} no longer acts for whoever began this setup, so the setup ended.`);
       }
     }
     if (changed) this.onStateChanged?.();

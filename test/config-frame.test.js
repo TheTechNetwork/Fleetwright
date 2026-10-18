@@ -361,3 +361,56 @@ test('a box whose admin signs back in owes nothing it was not there for', async 
   await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
   assert.deepEqual(asked, [], 'the fleet’s own box was asked to forget the sign-ins it is there to hold');
 });
+
+// A REPORT THAT CANNOT SAY WHOSE EACH SESSION IS PAYS NOTHING. Both tests
+// below were how the hand-back was spent with nothing handed back (seventh
+// audit): `sessions` null, which a sidecar reports while its hub is not
+// answering, read as "none", and a box connected with no report at all,
+// which every box is on a Durable Object that has just woken. Each asked
+// nobody to stop anything, called the debt paid, and the next full report
+// filed the member's session under the removed admin.
+const HUB_DOWN_REPORT = {
+  hub: { reachable: false, code: 'hub_unreachable' }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: 0, free: 0, labels: [],
+  sessions: null,
+};
+
+test('a returning box whose hub is not answering yet still owes the hand-back', async () => {
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: LOGGER });
+  const boss = /** @type {any} */ (await core.issueClient({ email: 'boss@example.test' }, 'phone'));
+  await core.issueClient({ email: 'nina@example.test' }, 'phone');
+  await admit(core, 'boss-box', { enrolledBy: 'boss@example.test' });
+  core.registry.recordHealth('boss-box', BOSS_BOX_REPORT);
+  core.hostDisconnected('boss-box', 'offline');
+  core.revokeClient(boss.client.id);
+
+  const asked = listen(core);
+  core.hostConnected('boss-box', () => {});
+  await core.onHostMessage('boss-box', { kind: 'health', health: HUB_DOWN_REPORT });
+  assert.deepEqual(asked, [], 'asked from a report that could not list a session');
+  assert.equal(core.hostIds.get('boss-box')?.handBackPending, true, 'the debt was cleared by a report that could not pay it');
+
+  await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  assert.deepEqual(asked.sort(), HANDED_BACK);
+});
+
+test('a box connected with no report yet at the removal is asked on its first report', async () => {
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const before = new CoordinatorCore({ logger: LOGGER });
+  const boss = /** @type {any} */ (await before.issueClient({ email: 'boss@example.test' }, 'phone'));
+  await before.issueClient({ email: 'nina@example.test' }, 'phone');
+  await admit(before, 'boss-box', { enrolledBy: 'boss@example.test' });
+
+  // Woken by the removal itself: the socket is back, its report is not.
+  const core = await restart(before);
+  core.hostConnected('boss-box', () => {});
+  const asked = listen(core);
+  core.revokeClient(boss.client.id);
+  assert.deepEqual(asked, [], 'asked from no report at all');
+  assert.match(demotedSaid(core)[0]?.text ?? '', /next report that lists them/);
+
+  await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  assert.deepEqual(asked.sort(), HANDED_BACK, 'a box with no report at the removal was never asked again');
+});
