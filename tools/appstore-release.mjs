@@ -95,7 +95,23 @@ async function api(path, init = {}) {
     let detail = body.slice(0, 400);
     try {
       const parsed = JSON.parse(body);
-      detail = (parsed.errors || []).map((/** @type {any} */ e) => `${e.title}: ${e.detail}`).join('\n  ') || detail;
+      // THE ASSOCIATED ERRORS ARE THE MESSAGE. A version Apple will not take
+      // is refused with one line — "is not in valid state: This resource
+      // cannot be reviewed, please check associated errors to see why" — and
+      // the errors it points at travel in the same reply, under meta, keyed
+      // by the resource they are about: the missing screenshot size, the
+      // privacy answers never given, the field left empty. The first release
+      // to reach this line printed the one line and dropped the list, and
+      // the list was the whole point.
+      detail =
+        (parsed.errors || [])
+          .map((/** @type {any} */ e) => {
+            const assoc = Object.values(e.meta?.associatedErrors || {})
+              .flat()
+              .map((/** @type {any} */ a) => `- ${a.title}: ${a.detail}`);
+            return [`${e.title}: ${e.detail}`, ...assoc].join('\n  ');
+          })
+          .join('\n  ') || detail;
     } catch {}
     throw new Error(`${init.method || 'GET'} ${path} → ${res.status}\n  ${detail}`);
   }
