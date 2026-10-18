@@ -681,6 +681,19 @@ export class CoordinatorCore {
     if (!msg || typeof msg !== 'object') return;
 
     if (msg.kind === 'health' && msg.health) {
+      // A HAND-BACK OWED SINCE IT WAS AWAY, asked on the first report it makes
+      // after it returns (#forgetPerson), and asked from that report as the
+      // box made it: recordHealth below files every creator the box may no
+      // longer act for under its one person (believedCreator), after which
+      // nobody could tell which session was whose. A box that is the fleet's
+      // again, its admin back, owes nothing.
+      const owed = this.hostIds?.get(hostId);
+      const entry = this.registry.hosts.get(hostId);
+      if (owed?.handBackPending && entry?.connected) {
+        if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true });
+        delete owed.handBackPending;
+        this.onStateChanged?.();
+      }
       const moved = this.registry.recordHealth(hostId, msg.health);
       // The outcome, not just the input: recordHealth silently ignores a host
       // the registry does not know, and during the outage that silence was
@@ -2366,8 +2379,10 @@ export class CoordinatorCore {
       });
     }
     // Their last credential's revocation did this already; a person with none
-    // left still has their machines taken back.
-    const hosts = this.#forgetPerson(address);
+    // left still has their machines taken back. Neither is an operator leaving
+    // the tier here: the first was demoted by revokeClient, and the second,
+    // with no credential that works, was never an operator to begin with.
+    const hosts = this.#forgetPerson(address, false);
     return { revoked, devices, hosts };
   }
 
@@ -2395,9 +2410,11 @@ export class CoordinatorCore {
    * them back.
    *
    * @param {string} address  lower case
+   * @param {boolean} wasOperator  they were the fleet's operator until this
+   *   removal, so every box they enrolled has just left the operator's tier
    * @returns {string[]} the hosts revoked, for the caller to disconnect
    */
-  #forgetPerson(address) {
+  #forgetPerson(address, wasOperator) {
     if (!address) return [];
     const { extra } = /** @type {{ extra: string[] }} */ (this.vmStandby.set(address, { template: '', count: 0, network: null }));
     // As setVmStandby ends them: #vmctl refuses a requester without an email,
@@ -2451,7 +2468,30 @@ export class CoordinatorCore {
     // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
     // connected, whose tier was decided when it connected (#retier), and are
     // asked for back what that tier gave them (#handBack).
-    for (const { entry, person, health } of this.#retier()) this.#handBack(entry, person, health);
+    for (const { entry, person, health } of this.#retier()) {
+      if (entry.connected) this.#handBack(entry, person, health);
+    }
+    // AND THE ONES THAT ARE NOT HERE TO ASK, found from the enrolments rather
+    // than the registry. Only a box connected at that moment was asked: one
+    // offline was recorded as beyond asking and never asked when it returned,
+    // and one the registry did not hold, which after a restart or an eviction
+    // is every box that was offline (the Worker rebuilds it from live sockets
+    // alone), was not even named (sixth Workers audit). So each owes the
+    // hand-back until its first report after it returns, kept on the
+    // enrolment, which is the record that survives a restart.
+    if (wasOperator) {
+      for (const enrolled of this.hostIds.hosts.values()) {
+        if (enrolled.revokedAt || enrolled.ephemeral || enrolled.handBackPending) continue;
+        if (actsFor(enrolled, (email) => this.#isOperator(email)) !== address) continue;
+        if (this.registry.hosts.get(enrolled.hostId)?.connected) continue;
+        enrolled.handBackPending = true;
+        changed = true;
+        this.#recordDemoted(
+          enrolled.hostId,
+          'It is offline, so it will be asked to stop other people’s sessions and to forget everybody else’s GitHub, Cloudflare and Claude sign-ins the first time it reports in, which a box does only if it is honest.',
+        );
+      }
+    }
     if (changed) this.onStateChanged?.();
     return hosts;
   }
@@ -2492,11 +2532,23 @@ export class CoordinatorCore {
    * returning admin's boxes are the fleet's again without waiting for a
    * reconnect. The client secrets still arrive only on a connect.
    *
+   * A box that is the fleet's again no longer owes a hand-back it was not
+   * there for (#forgetPerson), connected or not: it may hold everybody's
+   * sign-ins again, and asking it to forget them would undo what the
+   * returning admin's fleet relies on.
+   *
    * @returns {Array<{ entry: any, person: string, health: any }>} the boxes
    *   that stopped being an operator's, each with the report it made as one
    *   (#handBack)
    */
   #retier() {
+    let settled = false;
+    for (const enrolled of this.hostIds.hosts.values()) {
+      if (!enrolled.handBackPending || actsFor(enrolled, (email) => this.#isOperator(email)) !== null) continue;
+      delete enrolled.handBackPending;
+      settled = true;
+    }
+    if (settled) this.onStateChanged?.();
     /** @type {Array<{ entry: any, person: string, health: any }>} */
     const demoted = [];
     for (const entry of this.registry.hosts.values()) {
@@ -2535,11 +2587,17 @@ export class CoordinatorCore {
    * DELETE is one step away; revoking it would also take away the only
    * channel these requests travel on.
    *
+   * Asked of a box that is connected, which is the only one anything can be
+   * asked of: at the removal, or on its first report after it returns when it
+   * was away for the removal (#forgetPerson, onHostMessage).
+   *
    * @param {any} entry  its registry entry
    * @param {string} person  who it acts for now
-   * @param {any} health  its last report, as attributed while it was the fleet's
+   * @param {any} health  a report made while it was the fleet's, or the first
+   *   it made after it returned, as it made it
+   * @param {{ back?: boolean }} [how]  `back`: it was away for the removal
    */
-  #handBack(entry, person, health) {
+  #handBack(entry, person, health, { back = false } = {}) {
     let stopped = 0;
     /** @param {string} verb @param {Record<string, string>} params @param {string} actor */
     const ask = (verb, params, actor) => {
@@ -2547,27 +2605,36 @@ export class CoordinatorCore {
         void this.send(entry, { verb, params, actor }, FANOUT_TIMEOUT_MS).catch(() => {});
       } catch { /* a name this protocol would not carry is not a session to stop */ }
     };
-    if (entry.connected) {
-      for (const s of Array.isArray(health?.sessions) ? health.sessions : []) {
-        const who = String(s?.createdBy || '').startsWith('fleet:') ? emailOf(s.createdBy) : null;
-        if (!who || who === person || typeof s.name !== 'string') continue;
-        ask('stop', { name: s.name }, who);
-        stopped++;
-      }
-      const others = new Set([...this.clients.clients.values()].map((c) => String(c.email || '').toLowerCase()));
-      for (const email of others) {
-        if (!email || email === person) continue;
-        for (const provider of ['github', 'cloudflare', 'claude']) ask('unlink', { provider }, email);
-      }
+    for (const s of Array.isArray(health?.sessions) ? health.sessions : []) {
+      const who = String(s?.createdBy || '').startsWith('fleet:') ? emailOf(s.createdBy) : null;
+      if (!who || who === person || typeof s.name !== 'string') continue;
+      ask('stop', { name: s.name }, who);
+      stopped++;
     }
-    const asked = entry.connected
-      ? `It was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} of other people and to forget everybody else’s GitHub, Cloudflare and Claude sign-ins, which a box does only if it is honest.`
-      : 'It is offline, so nothing could be asked of it.';
+    const others = new Set([...this.clients.clients.values()].map((c) => String(c.email || '').toLowerCase()));
+    for (const email of others) {
+      if (!email || email === person) continue;
+      for (const provider of ['github', 'cloudflare', 'claude']) ask('unlink', { provider }, email);
+    }
+    this.#recordDemoted(
+      entry.hostId,
+      `${back ? 'It came back and was' : 'It was'} asked to stop ${stopped} session${stopped === 1 ? '' : 's'} of other people and to forget everybody else’s GitHub, Cloudflare and Claude sign-ins, which a box does only if it is honest.`,
+    );
+  }
+
+  /**
+   * The record that a removed admin's box is not the fleet's, with what it
+   * was or will be asked, and what only the operator and the members can do
+   * about the rest. No actor, so every member sees it.
+   *
+   * @param {string} hostId @param {string} asked
+   */
+  #recordDemoted(hostId, asked) {
     this.record({
       event: 'host.demoted',
-      hostId: entry.hostId,
+      hostId,
       text:
-        `${entry.hostId} is no longer one of the fleet’s own machines: the admin who enrolled it was removed. ${asked} ` +
+        `${hostId} is no longer one of the fleet’s own machines: the admin who enrolled it was removed. ${asked} ` +
         'Rotate the GitHub and Cloudflare client secrets it was sent, and anyone who linked an account while it was the fleet’s should revoke that token with the provider.',
     });
   }
@@ -2585,6 +2652,9 @@ export class CoordinatorCore {
    *   `hosts`: temporary hosts revoked with the person's last credential, for the caller to disconnect
    */
   revokeClient(clientId) {
+    const email = String(this.clients.clients.get(clientId)?.email || '').toLowerCase();
+    // Asked before the revocation that may end it (#forgetPerson).
+    const wasOperator = this.#isOperator(email);
     const revoked = this.clients.revoke(clientId);
     let devices = 0;
     for (const [token, device] of this.devices) {
@@ -2597,8 +2667,7 @@ export class CoordinatorCore {
       this.record({ event: 'client.revoked', text: `a device credential was revoked, and ${devices} push registration${devices === 1 ? '' : 's'} with it` });
     }
     // THE PERSON'S LAST ONE is the person removed (#forgetPerson).
-    const email = String(this.clients.clients.get(clientId)?.email || '').toLowerCase();
-    const hosts = revoked && email && !this.#hasLiveCredential(email) ? this.#forgetPerson(email) : [];
+    const hosts = revoked && email && !this.#hasLiveCredential(email) ? this.#forgetPerson(email, wasOperator) : [];
     return { revoked, devices, hosts };
   }
 
