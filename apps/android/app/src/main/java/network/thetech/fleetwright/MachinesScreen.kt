@@ -663,27 +663,41 @@ private fun MachinePage(
             }
         }
 
+        // WHETHER THIS PERSON MAY CHANGE THE MACHINE AT ALL (C-2, C-5): its
+        // releases, image, labels, update, upgrade and reboot are the admin's
+        // everywhere and a member's only on a machine that acts for them
+        // alone, and the coordinator refuses the rest after the tap. Only an
+        // explicit false hides them; null is a coordinator too old to say, and
+        // draws them as before.
+        val administers = h?.administers != false
+
         if (h != null) {
             SectionHead("Software")
+            if (!administers) {
+                Hint("Only this fleet’s admin, or the one person this machine works for, can update it, reboot it or change how it is set up.")
+            }
             // CHECK ALWAYS; APPLY ONLY WHEN THERE IS SOMETHING TO APPLY.
             Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                 OutlinedButton(enabled = !busy, onClick = { run { it.updates(hostId) } }) { Text("Check") }
-                if (h.appPending) {
+                if (h.appPending && administers) {
                     OutlinedButton(enabled = !busy, onClick = { run { it.update(hostId, restart = true) } }) { Text("Apply update") }
                 }
             }
-            // ONLY WHERE IT WOULD WORK. Null is cannot tell (an older host) and
-            // keeps the button; the box's own refusal explains.
-            if (h.systemPending && h.grantUpgrades != false) {
-                OutlinedButton(enabled = !busy, onClick = { run { it.upgrade(hostId, apply = true) } }) { Text("Apply upgrade") }
-            }
-            // WHAT THIS BOX ALLOWS FROM THE APP, said only when it is off: the
-            // allowed case is the ordinary one and not news. Same words as iOS,
-            // held equal by test/grants-in-apps.test.js.
-            h.grantUpgrades?.let { allowed ->
-                if (!allowed) {
-                    Hint("System upgrades from the app: not allowed")
-                    GrantOff("Turning it on is one line on the box:", grantLine("upgrades"))
+            if (administers) {
+                // ONLY WHERE IT WOULD WORK. Null is cannot tell (an older host) and
+                // keeps the button; the box's own refusal explains.
+                if (h.systemPending && h.grantUpgrades != false) {
+                    OutlinedButton(enabled = !busy, onClick = { run { it.upgrade(hostId, apply = true) } }) { Text("Apply upgrade") }
+                }
+                // WHAT THIS BOX ALLOWS FROM THE APP, said only when it is off: the
+                // allowed case is the ordinary one and not news. Same words as iOS,
+                // held equal by test/grants-in-apps.test.js. Not said to somebody
+                // who could not act on it: the line is typed on the box.
+                h.grantUpgrades?.let { allowed ->
+                    if (!allowed) {
+                        Hint("System upgrades from the app: not allowed")
+                        GrantOff("Turning it on is one line on the box:", grantLine("upgrades"))
+                    }
                 }
             }
 
@@ -727,6 +741,8 @@ private fun MachinePage(
                 SectionHead("Releases")
                 if (h.channelPinned) {
                     Hint("$current, set on the box")
+                } else if (!administers) {
+                    Hint(current)
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                         listOf("stable" to "Stable", "rolling" to "Rolling").forEach { (value, label) ->
@@ -755,6 +771,8 @@ private fun MachinePage(
                     fontFamily = FontFamily.Monospace,
                     color = Design.Palette.inkDim.now,
                 )
+                // The answer without the choice, for somebody who may not make it.
+                !administers -> Hint(if (v == "browser") "Browser" else "No browser")
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     listOf("minimal" to "No browser", "browser" to "Browser").forEach { (value, label) ->
                         FilterChip(
@@ -774,23 +792,29 @@ private fun MachinePage(
             labels.forEach { label ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     // REMOVE APPEARS ON EXACTLY THE ONES IT WORKS FOR. The host
-                    // refuses to drop a label the machine derives itself.
+                    // refuses to drop a label the machine derives itself, and
+                    // the coordinator any label from somebody who does not
+                    // administer the machine.
                     if (label in setLabels) {
-                        InputChip(
-                            selected = false,
-                            enabled = !busy,
-                            onClick = { run { it.labels(hostId, remove = label) } },
-                            label = { Text(label) },
-                            trailingIcon = { Text("✕", Modifier.semantics { contentDescription = "Remove $label" }) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        )
+                        if (administers) {
+                            InputChip(
+                                selected = false,
+                                enabled = !busy,
+                                onClick = { run { it.labels(hostId, remove = label) } },
+                                label = { Text(label) },
+                                trailingIcon = { Text("✕", Modifier.semantics { contentDescription = "Remove $label" }) },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            )
+                        } else {
+                            InputChip(selected = false, enabled = false, onClick = {}, label = { Text(label) })
+                        }
                     } else {
                         InputChip(selected = false, enabled = false, onClick = {}, label = { Text(label) })
                         Hint("from the machine")
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (administers) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = newLabel,
                     onValueChange = { newLabel = it },
@@ -831,7 +855,9 @@ private fun MachinePage(
         if (hostId.startsWith("vm-")) {
             OpenRow("On your hypervisor: console, SSH, size and end") { poolPage = true }
         }
-        if (h != null) {
+        // NOR FOR ONE THE COORDINATOR REFUSES: a reboot's first step names
+        // every session on the box, whoever's, and its second ends them.
+        if (h != null && administers) {
             // NO BUTTON FOR A THING THE BOX REFUSES. Same words as iOS, held
             // equal by test/grants-in-apps.test.js.
             if (h.grantReboot == false) {

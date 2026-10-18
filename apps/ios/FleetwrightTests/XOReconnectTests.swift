@@ -30,6 +30,33 @@ final class XOReconnectTests: XCTestCase {
         ]
     }
 
+    // MARK: - what goes out
+
+    func testTheSignInGoesUnderABindingASetupDoesNotOpen() throws {
+        // The same string as xosetupReconnectSigninAad in src/fleet/seal.js.
+        XCTAssertEqual(Seal.xosetupReconnectSigninAAD(job: "J", address: "A"), "fleetwright-xosetup-reconnect-signin/v1:J:A")
+        // A machine too old to know reconnect opens only the setup's binding,
+        // and the reconnect's sign-in does not open under it.
+        let machine = Seal.newKey()
+        let box = try Seal.seal(to: machine.publicKey, aad: Seal.xosetupReconnectSigninAAD(job: job, address: address),
+                                payload: ["v": 1, "purpose": "reconnect"])
+        XCTAssertThrowsError(try Seal.open(machine, aad: Seal.xosetupAAD(job: job, address: address), sealed: box))
+        XCTAssertEqual(try Seal.open(machine, aad: Seal.xosetupReconnectSigninAAD(job: job, address: address), sealed: box)["purpose"] as? String,
+                       "reconnect")
+    }
+
+    func testOnlyAMachineThatOpensThatBindingIsSentTheSignIn() {
+        XCTAssertNil(XOReconnect.refusal(can: ["policy", "reconnect", "reconnect-signin"], machine: "deb132"))
+        XCTAssertEqual(XOReconnect.refusal(can: ["policy"], machine: "deb132"),
+                       "deb132 is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent.")
+        // `reconnect` alone is what a relay can add to a machine too old to
+        // know it, so it is not enough.
+        XCTAssertEqual(XOReconnect.refusal(can: ["policy", "reconnect"], machine: "deb132"),
+                       "deb132 is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent.")
+        XCTAssertEqual(XOReconnect.refusal(can: ["reconnect-signin"], machine: "deb132"),
+                       "deb132 is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent.")
+    }
+
     // MARK: - what comes back
 
     func testTheOutcomeOpensUnderItsOwnJobAndAddress() throws {

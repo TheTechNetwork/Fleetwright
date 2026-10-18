@@ -18,7 +18,10 @@
 // file to edit instead.
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+
+import { grantCommand } from './grants.js';
 
 /**
  * The only two answers. `stable` is what a box gets by saying nothing.
@@ -48,6 +51,18 @@ const ALIASES = Object.freeze({ prerelease: 'rolling' });
  * writes it (vm-image.js), and every machine cloned from the image keeps it.
  */
 export const APT_SOURCES = '/etc/apt/sources.list.d/fleetwright.list';
+
+/**
+ * The unit that moves an apt box between suites, a template whose instance is
+ * the suite: fleetwright-apt-channel@stable.service or @rolling.service. The
+ * sources line is root's and the hub is not, so the change is a named unit
+ * the upgrade grant lets the hub start (install/fleetwright-apt-channel@.service
+ * says what it does), and the grant names the two instances as two lines.
+ */
+export const APT_CHANNEL_UNIT = 'fleetwright-apt-channel@';
+
+/** @param {'stable'|'rolling'} suite */
+export const aptChannelUnit = (suite) => `${APT_CHANNEL_UNIT}${suite}.service`;
 
 /**
  * On a box apt updates, which suite its sources line names: `rolling` for a
@@ -120,10 +135,100 @@ function canonical(value) {
  * @param {import('../config.js').Config} cfg
  */
 export function pinnedByEnv(cfg) {
-  // And on an apt box, where the suite is set by its sources line and
-  // /channel cannot move it, so a picker would offer a choice that is refused.
-  if (cfg.releaseSource === 'apt') return true;
+  // AN APT BOX IS PINNED ONLY WITHOUT THE UPGRADE GRANT. Its suite is one word
+  // on a root-owned sources line, and moving it is a unit the grant lets the
+  // hub start; with no grant there is no way from here, and a picker would
+  // offer a choice that is refused. With it, the picker is the same as any
+  // other box's.
+  if (cfg.releaseSource === 'apt') return !cfg.systemUpgrade;
   return canonical(cfg.releaseChannel) !== null;
+}
+
+/**
+ * @param {string[]} argv
+ * @param {number} timeout
+ * @returns {{ status: number|null, stdout: string, stderr: string }}
+ */
+function run(argv, timeout) {
+  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout, env: { ...process.env, LC_ALL: 'C' } });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/**
+ * Move a box apt owns to the other suite.
+ *
+ * THE ANSWER IS READ BACK, NOT ASSUMED. The unit rewrites the sources line,
+ * pins or unpins the package and refreshes the lists, and then this reads the
+ * line again: the reply says which suite the box IS on, which is the only
+ * claim this file is allowed to make. A unit that ran and left the line as it
+ * was is reported as exactly that.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} value
+ * @param {{ exec?: typeof run }} [opts]  `exec` stands in for spawning so a test
+ *   can script sudo's answer and rewrite the fixture file the way the unit would
+ * @returns {{ ok: boolean, channel?: 'stable'|'rolling', message: string }}
+ */
+export function switchAptSuite(cfg, value, { exec = run } = {}) {
+  const wanted = canonical(value);
+  if (!wanted) {
+    return { ok: false, message: `"${String(value).slice(0, 30)}" is not a channel. It is one of: ${CHANNELS.join(', ')}.` };
+  }
+  const before = aptSuite(/** @type {any} */ (cfg));
+  if (before === wanted) {
+    return { ok: true, channel: wanted, message: `This box already takes apt's ${wanted} suite.` };
+  }
+  // THE GRANT, SAID OUT LOUD, the way an upgrade without one is. The unit is
+  // installed and permitted by the same decision, so there is nothing to try.
+  if (!cfg.systemUpgrade) {
+    return {
+      ok: false,
+      message:
+        'Moving an apt box between suites rewrites its sources line, which is root\'s, and this service runs ' +
+        'unprivileged on purpose. It needs the same rule system upgrades do:\n\n' +
+        `  ${grantCommand('upgrades', 'on')}\n\n` +
+        `Or by hand, as root: change the suite word in ${APT_SOURCES} to ${wanted}, ` +
+        (wanted === 'rolling'
+          ? 'pin the package to that suite above priority 1000 (a build of main sorts below every release), '
+          : 'remove the pin /etc/apt/preferences.d/fleetwright-channel if there is one, ') +
+        'and run apt-get update.',
+    };
+  }
+  const unit = aptChannelUnit(wanted);
+  const r = exec(['sudo', '-n', '/usr/bin/systemctl', 'start', unit], 180_000);
+  if (r.status !== 0) {
+    // sudo's refusal rather than the unit's failure: the grant predates the
+    // unit, which --repair puts right — the same shape as the package unit.
+    if (/not allowed|password is required|no tty/i.test(r.stderr)) {
+      return {
+        ok: false,
+        message:
+          `This box's sudoers rule predates the channel unit, so it cannot change suite from here yet.\n` +
+          `On the box: sudo ${cfg.installDir}/install/install.sh --repair puts the rule in place.`,
+      };
+    }
+    const why = (r.stderr || r.stdout).trim().split('\n').slice(-6).join('\n');
+    return { ok: false, message: `could not start ${unit}:\n${why || 'systemd said nothing about why.'}` };
+  }
+  const after = aptSuite(/** @type {any} */ (cfg));
+  if (after !== wanted) {
+    return {
+      ok: false,
+      channel: after,
+      message: `${unit} ran, but ${APT_SOURCES} still names the ${after} suite. The journal for fleetwright-apt-channel says what it did.`,
+    };
+  }
+  return {
+    ok: true,
+    channel: wanted,
+    message:
+      wanted === 'rolling'
+        ? 'This box now takes apt\'s rolling suite: the newest build of main, on every merge. A build of main sorts below ' +
+          'every release, so the package is pinned to the suite and the next Apply update installs the newest build ' +
+          'even though apt counts it as a downgrade.'
+        : 'This box now takes apt\'s stable suite: published releases, each once its rollout is complete. The pin is ' +
+          'gone, and the next Apply update installs the newest release, which outranks any build of main.',
+  };
 }
 
 /**

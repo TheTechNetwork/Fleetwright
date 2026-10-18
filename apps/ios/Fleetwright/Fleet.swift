@@ -2374,7 +2374,20 @@ struct Fleet {
         var takesSessions: Bool?
         /// A pool's own machine: it holds the pool and runs no sessions.
         var holder: Bool?
+        /// Whether this person may change its releases, image or labels,
+        /// update or upgrade it, or reboot it, by the rule placement refuses
+        /// those verbs with (hosts.js administers): every machine for the
+        /// admin, and for a member only one that runs their work alone. Nil
+        /// from a coordinator too old to say, which is cannot tell, so the
+        /// controls are drawn as before and a refusal says why.
+        var administers: Bool?
         var id: String { hostId }
+
+        /// Whether its page draws those controls (C-2): not where the
+        /// coordinator said no, because there they are refused. Nil draws
+        /// them as before, since hiding a control on a guess is a claim the
+        /// page cannot back (C-5).
+        var mayAdminister: Bool { administers != false }
 
         /// Is there anything of ours to apply? Asked once, so the version line
         /// and the buttons cannot disagree about whether this box is current.

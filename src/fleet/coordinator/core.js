@@ -22,6 +22,7 @@ import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
+import { fromB64Url } from '../crypto.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, handBack } from './oauth.js';
 import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
@@ -262,6 +263,23 @@ function holds(host, email) {
  */
 function sameRepo(answered, asked) {
   return typeof answered === 'string' && answered.toLowerCase() === String(asked ?? '').toLowerCase();
+}
+
+/**
+ * Which GitHub account a runner's job token says started the job, read
+ * without checking GitHub's signature, and empty when it cannot be read. Only
+ * ever compared against an account already recorded, to decide whether to ask
+ * the minting Worker at all; the Worker checks the signature, and mints for
+ * the account in this same token or for nobody.
+ * @param {string} job
+ */
+function jobActorId(job) {
+  try {
+    const claims = JSON.parse(new TextDecoder().decode(fromB64Url(job.split('.')[1])));
+    return String(claims?.actor_id ?? '');
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -4547,13 +4565,40 @@ export class CoordinatorCore {
     recent.push(now);
     this.mintAsks.set(hostId, recent);
 
-    // THE MINTING WORKER FIRST, a permanent box only when it cannot answer —
-    // it holds no key, or it is not there. A refusal from the Worker is final:
-    // it checked the request against GitHub, and asking a box the same
-    // question would only look for a second opinion on a no.
+    // THE MINTING WORKER ONLY FOR A RUNNER WHOSE OWNER STARTED ITS JOB. It
+    // mints for GitHub's actor, and only this knows whose runner it is. A
+    // reusable runner token says whose and not who started it: with one
+    // member's as a shared repository's secret, another member's Run workflow
+    // enrolled as the first member's runner, and the Worker minted it the
+    // second member's push for the first member's sessions. A TICKET is the
+    // fleet's own dispatch, handed to its owner's GitHub sign-in or to a box
+    // using their connection, so the account its job names is theirs — unless
+    // somebody spent it from a run they started themselves, which lends that
+    // person their own reach by their own act (runner-central.md). The job
+    // token asking must still name the account recorded at enrolment, because
+    // a session on a runner can read its job's token request and carry that
+    // token to another runner's socket; read unverified, which is enough, as
+    // the Worker verifies the same token and mints for the account in it.
+    // Every other runner goes to a box as its owner, which mints only when the
+    // job's actor is the GitHub account connected for them there (sidecar.js).
+    const enrolled = this.hostIds?.get(hostId);
+    const ownersJob = enrolled?.admittedBy === 'ticket' && Boolean(enrolled.actorId) && jobActorId(job) === enrolled.actorId;
+    const notTheWorker = ownersJob
+      ? null
+      : enrolled?.admittedBy === 'ticket'
+        ? 'the job token asking names a different GitHub account from the one that started this runner'
+        : enrolled?.admittedBy === 'runner-token'
+          ? 'this runner was admitted with a reusable runner token, which says whose runner it is but not who started its job, and the Worker mints for whoever started it'
+          : 'nothing says the fleet dispatched this runner for its owner';
+
+    // THE MINTING WORKER FIRST, when it may be asked, and a permanent box only
+    // when it cannot answer — it holds no key, or it is not there. A refusal
+    // from the Worker is final: it checked the request against GitHub, and
+    // asking a box the same question would only look for a second opinion on
+    // a no.
     /** @type {any} */
     let reply = null;
-    if (this.minter) {
+    if (this.minter && ownersJob) {
       reply = await this.minter.mint({ repo, job, key }).then(
         (r) => ({
           ok: r?.ok === true,
@@ -4578,6 +4623,12 @@ export class CoordinatorCore {
       // answer naming another is not the token this runner asked for.
       if (reply?.ok && !sameRepo(reply.repo, repo)) {
         reply = { ok: false, error: { code: 'refused' }, text: `${reply.hostId} answered for ${reply.repo || 'no repository'}, not ${repo}.` };
+      }
+      // WHY THE WORKER WAS PASSED OVER, when it was there and no box could
+      // stand in: "no box" alone sends an operator to install a key the
+      // fleet already has.
+      if (this.minter && notTheWorker && reply?.ok === false && reply.error?.code === 'no_minter') {
+        reply = { ...reply, text: `The minting Worker was not asked, because ${notTheWorker}. ${reply.text}` };
       }
     }
     // RECORDED EITHER WAY, by repository and outcome — never the token, which

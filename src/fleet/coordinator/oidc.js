@@ -155,7 +155,7 @@ async function keysFor(issuer) {
  *
  * @param {string} token
  * @param {{ audiences: string[], repositories: string[], workflowRef?: string|string[]|null }} opts
- * @returns {Promise<{ repository: string, runId: string, runAttempt: string, workflowRef: string, ref: string, actor: string }>}
+ * @returns {Promise<{ repository: string, runId: string, runAttempt: string, workflowRef: string, ref: string, actor: string, actorId: string }>}
  */
 export async function verifyActionsToken(token, { audiences, repositories, workflowRef = null }) {
   const raw = String(token || '');
@@ -207,6 +207,11 @@ export async function verifyActionsToken(token, { audiences, repositories, workf
     workflowRef: jobWorkflowRef,
     ref: String(payload.ref || ''),
     actor: String(payload.actor || ''),
+    // BY ID, as the minter mints for it: a login can be renamed and then
+    // taken by somebody else, and the number cannot. Kept on a runner's
+    // enrolment so a repository token is asked of the minting Worker only for
+    // the account that started the job (CoordinatorCore#onRunnerMint).
+    actorId: String(payload.actor_id ?? ''),
   };
 }
 

@@ -132,7 +132,8 @@ import kotlinx.coroutines.withContext
  * the face check are the whole of it when the sign-in was kept. It starts on
  * [via], the machine that noticed, when the path to it is known, and on the
  * machine that got through last time otherwise. `begin` must answer that the
- * machine can (`can` holds "reconnect"), checked before anything is sealed
+ * machine can (`can` holds "reconnect", and "reconnect-signin" for the
+ * binding the sign-in is sealed under), checked before anything is sealed
  * and again at the seal. The sign-in carries `purpose: "reconnect"` inside
  * the seal, in the policy sign-in's shape, with a key for the outcome kept in
  * this screen's memory alone; what each server came to, and the pools the
@@ -538,10 +539,14 @@ internal fun HypervisorSheet(
     fun olderThanReconnect(hostId: String) =
         "$hostId is older than reconnecting servers, so nothing was sent. Update it, or choose another machine that reaches $address."
 
+    fun olderThanReconnectSignin(hostId: String) =
+        "$hostId is too old for this app to send it a reconnect safely, so nothing was sent. Update it, or choose another machine that reaches $address."
+
     /**
-     * `run` for a reconnect: the policy sign-in's seal and binding, with
-     * this purpose inside it and a key for the outcome made here and kept
-     * only in memory, never XoHandoff's, for runPolicy's reason.
+     * `run` for a reconnect: the policy sign-in's seal under a binding of
+     * its own (XoReconnect.sealSignIn), with this purpose inside it and a key
+     * for the outcome made here and kept only in memory, never XoHandoff's,
+     * for runPolicy's reason.
      */
     suspend fun runReconnect(p: Pending) {
         val key = p.setup.key ?: return
@@ -550,6 +555,11 @@ internal fun HypervisorSheet(
         if (XoReconnect.PURPOSE !in p.setup.can) {
             password = ""
             refusal = olderThanReconnect(p.hostId)
+            return
+        }
+        if (XoReconnect.SIGNIN !in p.setup.can) {
+            password = ""
+            refusal = olderThanReconnectSignin(p.hostId)
             return
         }
         val reply = Seal.newKey()
@@ -706,6 +716,15 @@ internal fun HypervisorSheet(
                 reconnect && XoReconnect.PURPOSE !in setup.can -> {
                     password = ""
                     refusal = olderThanReconnect(hostId)
+                    runCatching { fleet.xosetup("cancel", job = setup.job) }
+                }
+                // AND ONLY TO ONE THAT OPENS A RECONNECT UNDER ITS OWN
+                // BINDING. One that lists reconnect without it takes the
+                // sign-in only under setup's, where a machine older still,
+                // whose `can` a coordinator padded, would run a whole setup.
+                reconnect && XoReconnect.SIGNIN !in setup.can -> {
+                    password = ""
+                    refusal = olderThanReconnectSignin(hostId)
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
                 // AND A SETUP ONLY TO A MACHINE NEW ENOUGH TO HAND THE TOKEN

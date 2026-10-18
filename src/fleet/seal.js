@@ -187,6 +187,23 @@ export function xosetupReconnectAad(job, address) {
 }
 
 /**
+ * What a reconnect's admin sign-in is sealed under on its way to the machine:
+ * a name of its own, so a machine too old to know a reconnect cannot open it,
+ * where under the setup's name it opened and was run as a whole setup. The
+ * begin reply's `can` says which a machine knows (`reconnect-signin`), and
+ * nothing signs `can`, so a relay that adds the word to an older machine's
+ * reply gets that machine a seal it cannot open, and no more. The machine
+ * opens anything under it only as a reconnect. src/fleet/host/xo-setup.js,
+ * run; the phones build the same string.
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function xosetupReconnectSigninAad(job, address) {
+  return `fleetwright-xosetup-reconnect-signin/v1:${job}:${address}`;
+}
+
+/**
  * What an install's passwords are sealed under: the pool master's root
  * password and the admin password the person chose for the Xen Orchestra the
  * machine installs, for one job at one pool master. Its own name, so a sealed

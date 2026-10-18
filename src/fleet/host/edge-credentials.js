@@ -141,8 +141,13 @@ export function selfSigned({ cn, now = Date.now() }) {
   const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const spki = publicKey.export({ type: 'spki', format: 'der' });
   const ecdsaSha256 = seq(oid('1.2.840.10045.4.3.2'));
+  // POSITIVE AND WITH NO LEADING ZERO, both of which DER requires of an
+  // INTEGER. Clearing the top bit alone left a first byte of zero one time in
+  // 128, and OpenSSL refuses that serial as "illegal padding" whenever the
+  // next byte would have stood on its own: a router in every 256 or so came
+  // up with a certificate its own web server could not load.
   const serial = randomBytes(16);
-  serial[0] &= 0x7f;
+  serial[0] = (serial[0] & 0x7f) | 0x40;
   const tbs = seq(
     der(0xa0, der(0x02, Buffer.from([2]))),
     der(0x02, serial),
