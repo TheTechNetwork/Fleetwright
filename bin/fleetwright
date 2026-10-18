@@ -27,6 +27,7 @@ import { accessSync, constants as fsConstants, mkdirSync } from 'node:fs';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
 import { Accounts } from '../src/core/accounts.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
+import { asServiceUser } from '../src/core/as-service-user.js';
 
 const argv = process.argv.slice(2);
 // HELP, NOT SERVE, when nothing is said. This is the command a person types
@@ -189,10 +190,15 @@ async function doctor({ repair = false } = {}) {
   const tmuxV = spawnSync('tmux', ['-V'], { encoding: 'utf8' });
   ok('tmux installed', tmuxV.status === 0, (tmuxV.stdout || '').trim() || 'apt install tmux');
 
-  const claudeV = spawnSync(cfg.claudeBin, ['--version'], { encoding: 'utf8' });
+  // AS THE SERVICE USER WHEN ROOT ASKS: the claude this names is usually in
+  // their home, and `sudo fleetwright doctor` is advice we print
+  // (src/core/as-service-user.js).
+  const claude = (/** @type {string[]} */ args) =>
+    spawnSync(...asServiceUser(cfg.claudeBin, args, { uid: process.getuid?.(), runUser: cfg.runUser }), { encoding: 'utf8' });
+  const claudeV = claude(['--version']);
   ok(`claude on PATH (${cfg.claudeBin})`, claudeV.status === 0, (claudeV.stdout || '').trim());
 
-  const auth = spawnSync(cfg.claudeBin, ['auth', 'status', '--json'], { encoding: 'utf8' });
+  const auth = claude(['auth', 'status', '--json']);
   let authOk = false;
   let authDetail = 'run: fleetwright login';
   try {

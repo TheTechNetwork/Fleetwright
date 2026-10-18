@@ -333,9 +333,10 @@ test('launch.mjs follows the hub’s release when root holds a copy of it, and o
 
 test('purge and uninstall reach the sidecar only through root’s copy', () => {
   const postrm = readFileSync(path.join(ROOT, 'install', 'deb', 'postrm'), 'utf8');
-  // The store's uninstaller first; `current` — the service user's — only on a box with none.
-  assert.ok(postrm.indexOf('"$STORE/current/install/uninstall.sh"') > 0);
-  assert.ok(postrm.indexOf('"$STORE/current/install/uninstall.sh"') < postrm.indexOf('"$BASE/current/install/uninstall.sh"'));
+  // The store's uninstaller, and never `current`'s — the service user's — even
+  // on a box with no store (install-root-sources.test.js runs that case).
+  assert.match(postrm, /bash "\$STORE\/current\/install\/uninstall\.sh" --purge/);
+  assert.doesNotMatch(postrm, /^\s*bash "\$BASE\//m);
   const un = readFileSync(path.join(ROOT, 'install', 'uninstall.sh'), 'utf8');
   // Run as the sidecar's account only from the store; the release tree only as the session user.
   assert.match(un, /sudo -u "\$SIDECAR_USER" "\$SIDECAR_BASE\/current\/bin\/fleetwright-sidecar" identity/);

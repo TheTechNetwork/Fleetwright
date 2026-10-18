@@ -2316,7 +2316,7 @@ export const COMMANDS = {
           text: [
             r.message,
             drift ? `This hub is still running ${drift.running}; ${drift.onDisk} is on disk and starts when it restarts (/update --restart).` : '',
-            describeHelper(helper, ctx.cfg.installDir),
+            describeHelper(helper, ctx.cfg),
           ].filter(Boolean).join('\n\n'),
         };
       } else if (status.ok && ctx.cfg.releaseManifest && migrationState(ctx.cfg, status, await checkRelease(ctx.cfg)).can) {

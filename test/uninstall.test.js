@@ -52,6 +52,7 @@ test('root’s half goes too: the migrate rule and the helper it names', () => {
 });
 
 test('the help and the header name the packaged path first', () => {
-  assert.match(SH, /sudo \/opt\/fleetwright\/current\/install\/uninstall\.sh --purge/);
+  // Root's copy in the store: `current` is the service user's to rewrite.
+  assert.match(SH, /sudo \/usr\/local\/lib\/fleetwright-sidecar\/current\/install\/uninstall\.sh --purge/);
   assert.match(SH, /--purge  also remove the code: every release under \/opt\/fleetwright, or the checkout/);
 });

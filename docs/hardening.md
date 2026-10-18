@@ -176,6 +176,32 @@ checkout is the usual case and is not a fault: it is a box somebody edits, and
 copy and no separation to have. The other half of the account — a compromised
 sidecar cannot read the session user's credentials — holds either way.
 
+**Root's commands run root's code, by the same store.** The product tells
+people to type `sudo fleetwright grant reboot on`, `sudo fleetwright join …`
+and `sudo fleetwright doctor --repair`, and on a packaged box the
+`/usr/local/bin` link those went through pointed into `current`, so root ran
+the session user's `bin/fleetwright` — and grant and join then ran
+`current`'s installer as root. Now `fleetwright`, `fw` and `agent-hub` there
+are a root-owned wrapper: as root it runs the store's copy with a node the
+session user cannot replace, telling the installer `current` is the payload
+(the heal's arrangement), and as anybody else it runs `current` as before.
+With no store, or no such node, root is refused with the reason and the
+command that fixes it. A checkout has no root-owned tree, so `sudo
+fleetwright` there runs the checkout, and the installer says so. doctor, run
+as root, asks claude as the session user, whose binary and credentials it is.
+
+**And the installer stopped acting in the session user's reach as root.** The
+heal is a route that user can start alone (`sudo -n fleetwright-migrate`), so
+everything it does as root has to be safe against them: it no longer runs
+their `claude` or a node from their home (a system node is used, or the heal
+refuses), writes the Claude hook and the sidecar's token as them rather than
+through paths they could point elsewhere, refuses a payload that is not a
+release instead of treating `current` as a checkout and running `npm` in it
+(and passes `--ignore-scripts` on a real checkout), never copies a release
+from inside `/opt/fleetwright` nor to a version that is a path, `chown`s
+their trees without following links, and drops the sidecar's
+`safe.directory` for a checkout the box no longer runs.
+
 **And it holds its own token.** The hub mints two: the operator's (`api-token`,
 which opens the web UI and every command) and the sidecar's (`sidecar-token`),
 and `install.sh` — root, the one party that can read both sides — copies the

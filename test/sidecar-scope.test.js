@@ -197,12 +197,13 @@ test('the sidecar reads its own token before the operator\'s, and the env file b
 test('root mints the sidecar token where the hub will find it, and copies it into the sidecar\'s env', () => {
   const sh = read('install/install.sh');
   // Minted right after the state directory, 0600 and owned by the hub's user
-  // — the hub's ensureSidecarToken reads what root wrote.
+  // — the hub's ensureSidecarToken reads what was written. Written AS that
+  // user, so root follows no link in their directory
+  // (install-root-sources.test.js runs it).
   const mint = sh.slice(sh.indexOf('SIDECAR_TOKEN_FILE="$STATE_DIR/sidecar-token"'), sh.indexOf('# --- 3. environment file'));
   assert.match(mint, /umask 077/);
   assert.match(mint, /\/dev\/urandom/);
-  assert.match(mint, /chown "\$RUN_USER" "\$SIDECAR_TOKEN_FILE"/);
-  assert.match(mint, /chmod 0600 "\$SIDECAR_TOKEN_FILE"/);
+  assert.match(mint, /run_as_user sh -c '.*chmod 0600 "\$1"' sh "\$SIDECAR_TOKEN_FILE"/);
   assert.match(mint, /\[ "\$CHECK_ONLY" != 1 \]/, '--check writes nothing');
   // Both places the sidecar's env is written prefer it over the operator's.
   assert.equal((sh.match(/FLEETWRIGHT_HUB_TOKEN: sidecarToken \|\| hub\.FLEETWRIGHT_TOKEN \|\| ''/g) || []).length, 2);

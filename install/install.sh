@@ -150,6 +150,25 @@ ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
+# A PAYLOAD IS A RELEASE, OR THIS DOES NOT RUN. FLEETWRIGHT_PAYLOAD is how a
+# verified installer is pointed at `current` — fleetwright-migrate's heal and
+# bring-forward, and root's `fleetwright` (section 6) — and `current` is the
+# service user's. Everything that decides what shape this box is reads $DIR,
+# so the service user decided it: delete current/lib/fleetwright.mjs, write the
+# manifest's version into current/package.json, `sudo -n fleetwright-migrate`,
+# and PACKAGED came out 0. The rest of this file then took the CHECKOUT branch
+# as root in `current`, which runs `npm ci` there, and npm runs a package's own
+# lifecycle scripts as the user that called it. No person needed.
+#
+# Nothing that names a payload means a checkout by it, so one that does not
+# hold a release is refused here, before anything has been read out of it.
+# Asked of PACKAGED, which was decided once at the top, and not of the file
+# again: a second look is a second answer the service user can race.
+if [ -n "${FLEETWRIGHT_PAYLOAD:-}" ] && [ "$PACKAGED" != 1 ]; then
+  die "FLEETWRIGHT_PAYLOAD=$DIR is not a release (it has no lib/fleetwright.mjs), and a payload is only ever
+       one. Nothing was changed. A checkout is installed by running its own install.sh."
+fi
+
 # --- the names from before the rename ---------------------------------------
 #
 # FLEETWRIGHT WAS agent-hub AND agent-fleet UNTIL THE RENAME, and a box
@@ -692,6 +711,14 @@ fi
 if [ "$PACKAGED" = 1 ]; then
   RELEASE_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/package.json" | head -1)"
   [ -n "$RELEASE_VERSION" ] || RELEASE_VERSION="unversioned"
+  # A NAME, NEVER A PATH — the rule fleetwright-migrate, release.js and the
+  # sidecar's store apply to the same string. On the heal it is read out of
+  # `current`, which the service user writes, and below it is a directory root
+  # removes and copies into: a version of ../../../etc/systemd/system was an
+  # `rm -rf` and a copy of the service user's tree there, as root.
+  case "$RELEASE_VERSION" in
+    .*|*[!A-Za-z0-9._+-]*) die "the release's version \"$RELEASE_VERSION\" is not a plain name — refusing to lay it out. Nothing was changed." ;;
+  esac
   RELEASE_DIR="$FLEET_BASE/releases/$RELEASE_VERSION"
 
   # RESOLVED, BECAUSE $DIR CAN BE THE SYMLINK POINTING AT $RELEASE_DIR, and
@@ -714,7 +741,22 @@ if [ "$PACKAGED" = 1 ]; then
   # `pwd -P` is the whole fix: it resolves symlinks, so a release installing
   # itself recognises itself and skips straight to the symlink it already is.
   DIR_REAL="$(cd "$DIR" 2>/dev/null && pwd -P)" || DIR_REAL="$DIR"
-  if [ "$DIR_REAL" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ]; then
+  #
+  # AND ONLY FROM A PAYLOAD OUTSIDE THE RELEASE TREE. The copy exists for a
+  # release unpacked somewhere root vouched for — the deb's extract, the
+  # tarball bootstrap.sh checked, root's own copy under /usr/local/lib — and
+  # never has a reason to run from inside $FLEET_BASE, which is the service
+  # user's: from there the source, the version that names the destination
+  # and every directory on the way to it (`releases` can be a symlink they
+  # planted) are theirs, and root would be removing and writing wherever they
+  # chose. The units name `current` either way.
+  #
+  # NOR FOR --grant, which changes one answer and lays nothing out. Run from
+  # root's copy (section 6), this block would otherwise have replaced the
+  # release the hub runs with a root-owned one on every grant.
+  PAYLOAD_IN_BASE=0
+  case "$DIR/" in "${FLEET_BASE%/}"/*) PAYLOAD_IN_BASE=1 ;; esac
+  if [ "$DIR_REAL" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ] && [ "$GRANT_ONLY" != 1 ] && [ "$PAYLOAD_IN_BASE" = 0 ]; then
     mkdir -p "$FLEET_BASE/releases"
     rm -rf "$RELEASE_DIR"
     cp -a "$DIR/." "$RELEASE_DIR"
@@ -947,6 +989,15 @@ refresh_sidecar_store() {
     case "$ver" in
       ''|.*|*[!A-Za-z0-9._+-]*) warn "the release's version \"$ver\" is not a plain name — not copying it for the sidecar"; ver="" ;;
     esac
+    # ALREADY ROOT'S COPY. Root's `fleetwright join` runs the installer out of
+    # this store (section 6), so the verified tree can be the copy itself, and
+    # copying a directory over itself would remove the tree this script is
+    # being read from on the way.
+    if [ -n "$ver" ] && [ "$(cd "$src" 2>/dev/null && pwd -P)" = "$(cd "$SIDECAR_BASE/releases/$ver" 2>/dev/null && pwd -P)" ]; then
+      ok "the sidecar runs $ver from $SIDECAR_BASE — this installer is root's copy of it"
+      SIDECAR_STORE=1
+      return 0
+    fi
     if [ -n "$ver" ]; then
       install -d -m 0755 -o root -g root "$SIDECAR_BASE" "$SIDECAR_BASE/releases"
       previous="$(basename "$(readlink "$SIDECAR_BASE/current" 2>/dev/null || true)")"
@@ -1102,6 +1153,17 @@ _rua_walk() { # _rua_walk PATH DEPTH [notree]
   return 1
 }
 
+# MAY ROOT EXECUTE THIS? Not when $RUN_USER could replace it: that is root
+# running their program. The question for every binary root runs out of
+# somewhere the service user reaches — a node in ~/.nvm, a claude in
+# ~/.local/bin — on every route, and most of all on the heal, which the service
+# user can start for itself with `sudo -n fleetwright-migrate`. Linux only,
+# like run_user_can_alter; a Mac is a checkout, which is $RUN_USER's whole.
+root_may_run() { # root_may_run PATH → 0 when root may execute PATH
+  [ "$PLATFORM" = linux ] && [ "$(id -u)" = 0 ] && [ "$RUN_USER" != root ] || return 0
+  ! run_user_can_alter "$1"
+}
+
 # IS THIS DAEMON RUNNING, BY LAUNCHD'S OWN WORD. `launchctl bootstrap`
 # returning 0 says the request was accepted, and nothing else: a job whose
 # spawn fails sits at "spawn scheduled" with KeepAlive retrying it, and
@@ -1173,6 +1235,23 @@ as_user() {
     sudo -u "$RUN_USER" -H bash -lc "$1"
   elif command -v runuser >/dev/null; then
     runuser -l "$RUN_USER" -c "$1"
+  else
+    return 1
+  fi
+}
+
+# The same with an argv instead of a line, and no login shell, for what WRITES
+# in $RUN_USER's home. Root must not do that itself: the home is theirs, and a
+# symlink they leave at the path is followed by root's write and by root's
+# chown, which then lands on whatever it points at — /etc/passwd, say, on the
+# next heal, which the service user can start for itself.
+run_as_user() { # run_as_user CMD [ARG...]
+  if [ "$(id -un)" = "$RUN_USER" ]; then
+    "$@"
+  elif command -v sudo >/dev/null; then
+    sudo -u "$RUN_USER" -H -- "$@"
+  elif command -v runuser >/dev/null; then
+    runuser -u "$RUN_USER" -- "$@"
   else
     return 1
   fi
@@ -1559,6 +1638,8 @@ if [ "$GRANT_ONLY" = 1 ]; then
   # hand-run of --grant gets whatever node is on PATH.
   NODE_BIN="${FLEETWRIGHT_NODE_BIN:-$(command -v node || true)}"
   [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ] || die "no node to record the answer with — run it as: sudo fleetwright grant …"
+  root_may_run "$NODE_BIN" || die "$NODE_BIN is a node $RUN_USER can replace, and recording the answer runs it as root. Nothing was changed.
+       Name a system one: sudo FLEETWRIGHT_NODE_BIN=/usr/bin/node $0 --grant …"
   if [ -n "$GRANT_UPGRADES" ]; then apply_grant upgrades "$GRANT_UPGRADES" || exit 1; fi
   if [ -n "$GRANT_REBOOT" ]; then apply_grant reboot "$GRANT_REBOOT" || exit 1; fi
   # THE SERVICE READS THE ANSWER AT START, so it restarts here rather than
@@ -1652,9 +1733,17 @@ find_node() {
   return 1
 }
 
+# Ask a node something, as $RUN_USER when it is theirs to replace. Finding a
+# node runs every candidate for its version, and the candidates include the
+# service user's own (their PATH, ~/.local/bin, the newest ~/.nvm): asked as
+# root, that was their program, run as root, on every heal.
+node_ask() { # node_ask NODE ARG...
+  if root_may_run "$1"; then "$@"; else as_user "$(printf '%q ' "$@")"; fi
+}
+
 # Major version, or empty if that is not a working node.
 node_major() {
-  major="$("$1" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+  major="$(node_ask "$1" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
   case "$major" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s\n' "$major"
 }
@@ -1675,7 +1764,7 @@ if [ -z "$NODE_BIN" ]; then
   else
     say "Installing node"
     if pkg_install nodejs && NODE_BIN="$(find_node || true)" && [ -n "$NODE_BIN" ]; then
-      ok "installed node $("$NODE_BIN" -v)"
+      ok "installed node $(node_ask "$NODE_BIN" -v)"
     else
       die "node is not installed and could not be installed automatically ($(pkg_why)).
        Install Node $NODE_FLOOR or newer and re-run. If \`node -v\` already works for you,
@@ -1720,7 +1809,39 @@ if [ -n "$NODE_BIN" ]; then
        Or install node any other way — nvm, fnm, a backport — and re-run. If
        you already have one that sudo cannot see:
            sudo FLEETWRIGHT_NODE_BIN=\$(command -v node) $0"
-  ok "node $("$NODE_BIN" -v) at $NODE_BIN"
+
+  # AND ROOT'S NODE IS ONE THE SERVICE USER CANNOT REPLACE. Everything below
+  # runs "$NODE_BIN" as root — the env files, the tokens, the sidecar's
+  # environment — and the one found above is often theirs: prereq.sh puts node
+  # in their ~/.nvm, and fleetwright-migrate's heal names none. So a system
+  # node is preferred for root's own work whenever the found one is theirs; the
+  # units' choice is made separately below, and the hook is written as them.
+  if ! root_may_run "$NODE_BIN"; then
+    ROOT_NODE_FOUND=""
+    for candidate in /usr/lib/fleetwright/node/bin/node "$(command -v node 2>/dev/null || true)" /usr/local/bin/node /usr/bin/node /snap/bin/node; do
+      [ -n "$candidate" ] && [ -x "$candidate" ] && root_may_run "$candidate" || continue
+      candidate_major="$(node_major "$candidate")" || continue
+      [ "$candidate_major" -ge "$NODE_FLOOR" ] || continue
+      ROOT_NODE_FOUND="$candidate"
+      break
+    done
+    if [ -n "$ROOT_NODE_FOUND" ]; then
+      ok "$NODE_BIN is $RUN_USER's to replace, so this installer runs $ROOT_NODE_FOUND instead"
+      NODE_BIN="$ROOT_NODE_FOUND"
+    elif [ -n "${FLEETWRIGHT_PAYLOAD:-}" ]; then
+      # THE ROUTE NOBODY IS WATCHING, which the service user can start: refused.
+      die "every node $NODE_FLOOR+ on this box is one $RUN_USER can replace ($NODE_BIN), and this installer
+       runs node as root, so this heal stops here. Install a system node $NODE_FLOOR or newer (a backport, or
+       the apt package of fleetwright, which brings its own) and the next update heals."
+    else
+      # A PERSON RAN THIS, as root, on a box whose only node is the service
+      # user's. Said, so it is a decision rather than a surprise.
+      warn "$NODE_BIN is the only node $NODE_FLOOR+ here and $RUN_USER can replace it — this run executes it as root"
+      warn "  a system node $NODE_FLOOR or newer ends that; the heal after an update refuses to run without one"
+      MISSING+=("a system node $NODE_FLOOR or newer: the only one here is $RUN_USER's, and root runs it")
+    fi
+  fi
+  ok "node $(node_ask "$NODE_BIN" -v) at $NODE_BIN"
 fi
 
 # The systemd unit hardcodes a node path, and that path has a different job from
@@ -1792,7 +1913,11 @@ done
 [ -z "$CLAUDE_BIN" ] && CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
 
 if [ -n "$CLAUDE_BIN" ]; then
-  ok "claude $("$CLAUDE_BIN" --version 2>/dev/null | head -1) at $CLAUDE_BIN"
+  # ITS VERSION AS $RUN_USER TOO. The first place looked is ~/.local/bin, the
+  # service user's own file, and asking it for a version as root ran whatever
+  # they had put there as root — on every heal, which they can start with
+  # `sudo -n fleetwright-migrate`.
+  ok "claude $(as_user "'$CLAUDE_BIN' --version" 2>/dev/null | head -1) at $CLAUDE_BIN"
   # as_user, not root: the credentials live in the service user's home, and
   # this script runs under sudo. Checking as root reports a logged-in box as
   # logged out, which is a scary line in the middle of a successful install.
@@ -1806,9 +1931,15 @@ if [ -n "$CLAUDE_BIN" ]; then
   if ! as_user 'command -v claude' >/dev/null 2>&1; then
     BIN_DIR="$(dirname "$CLAUDE_BIN")"
     PROFILE="$CLAUDE_HOME/.profile"
+    # Appended AS $RUN_USER: root's `>>` follows a ~/.profile that is a
+    # symlink to /root/.bashrc, and puts the service user's directory on
+    # root's PATH.
     if ! grep -qF "$BIN_DIR" "$PROFILE" 2>/dev/null; then
-      printf '\n# added by fleetwright install.sh\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$PROFILE"
-      ok "added $BIN_DIR to $PROFILE (it was missing from the login-shell PATH)"
+      if printf '\n# added by fleetwright install.sh\nexport PATH="%s:$PATH"\n' "$BIN_DIR" | run_as_user tee -a "$PROFILE" >/dev/null; then
+        ok "added $BIN_DIR to $PROFILE (it was missing from the login-shell PATH)"
+      else
+        warn "could not add $BIN_DIR to $PROFILE as $RUN_USER"
+      fi
     fi
   fi
 elif [ "$CHECK_ONLY" = 1 ]; then
@@ -1831,7 +1962,7 @@ else
       [ -x "$candidate" ] && { CLAUDE_BIN="$candidate"; break; }
     done
     if [ -n "$CLAUDE_BIN" ]; then
-      ok "installed claude $("$CLAUDE_BIN" --version 2>/dev/null | head -1) at $CLAUDE_BIN"
+      ok "installed claude $(as_user "'$CLAUDE_BIN' --version" 2>/dev/null | head -1) at $CLAUDE_BIN"
       warn "claude is NOT logged in yet — run 'fleetwright login', or connect an account from the app"
     else
       warn "the claude installer finished but no binary was found — see /tmp/claude-install.log"
@@ -2017,11 +2148,16 @@ ok "$STATE_DIR"
 # mints the second one where the hub will find it and copies it into the
 # sidecar's env below. Same file, same mode, whichever process wrote it first.
 SIDECAR_TOKEN_FILE="$STATE_DIR/sidecar-token"
+#
+# WRITTEN AS $RUN_USER, whose directory this is. Root writing it, then
+# chowning it, followed a symlink they left at the name: a dangling link to
+# /etc/profile.d/x.sh became a root-created file handed to them, which every
+# root login shell then sources.
 if [ "$CHECK_ONLY" != 1 ] && [ ! -s "$SIDECAR_TOKEN_FILE" ]; then
-  ( umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$SIDECAR_TOKEN_FILE" && echo >> "$SIDECAR_TOKEN_FILE" )
-  chown "$RUN_USER" "$SIDECAR_TOKEN_FILE"
-  chmod 0600 "$SIDECAR_TOKEN_FILE"
-  ok "minted the sidecar's token at $SIDECAR_TOKEN_FILE"
+  head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' \
+    | run_as_user sh -c 'umask 077; { cat; echo; } > "$1" && chmod 0600 "$1"' sh "$SIDECAR_TOKEN_FILE" \
+    && ok "minted the sidecar's token at $SIDECAR_TOKEN_FILE" \
+    || warn "could not write $SIDECAR_TOKEN_FILE as $RUN_USER — the hub mints it when it starts"
 fi
 
 # THE SIDECAR'S, owned by its own account. systemd's StateDirectory= fixes the
@@ -2051,12 +2187,36 @@ if [ "$CHECK_ONLY" != 1 ]; then
   # gives nothing away it had not already: the sidecar runs the checkout's own
   # code, which $RUN_USER can rewrite. Never on a packaged box, which has no
   # .git — and the end of this run says a checkout has no separation.
-  if [ -d "$DIR/.git" ] && [ "$SIDECAR_USER" != "$RUN_USER" ] && command -v git >/dev/null; then
-    git config --file /var/lib/fleetwright-sidecar/.gitconfig --replace-all safe.directory "$DIR" 2>/dev/null \
-      && chown "$SIDECAR_USER" /var/lib/fleetwright-sidecar/.gitconfig 2>/dev/null \
-      && chmod 0600 /var/lib/fleetwright-sidecar/.gitconfig 2>/dev/null \
+  #
+  # AND TAKEN BACK WHEN THE BOX STOPS BEING ONE. Nothing removed it, so a box
+  # converted to packaged releases kept trusting the checkout it left behind
+  # (/opt/fleetwright-src, still $RUN_USER's), while the sidecar now runs
+  # root's code that $RUN_USER cannot change — and a `core.fsmonitor` in that
+  # checkout's .git/config is a program git runs as whoever reads it. A
+  # converted box re-running the checkout's installer (the one-liner on an old
+  # box does) is not a checkout either, though $DIR has a .git: its units name
+  # `current`. Only a box that RUNS its checkout keeps the line.
+  SIDECAR_GITCONFIG=/var/lib/fleetwright-sidecar/.gitconfig
+  if [ -d "$DIR/.git" ] && { [ "$CONVERTED" != 1 ] || [ "$FROM_SOURCE" = 1 ]; } \
+     && [ "$SIDECAR_USER" != "$RUN_USER" ] && command -v git >/dev/null; then
+    git config --file "$SIDECAR_GITCONFIG" --replace-all safe.directory "$DIR" 2>/dev/null \
+      && chown "$SIDECAR_USER" "$SIDECAR_GITCONFIG" 2>/dev/null \
+      && chmod 0600 "$SIDECAR_GITCONFIG" 2>/dev/null \
       && ok "$SIDECAR_USER may read the checkout's git history" \
       || warn "could not write $SIDECAR_USER's git config — the sidecar will report no version"
+  elif [ -f "$SIDECAR_GITCONFIG" ] && grep -q 'safe' "$SIDECAR_GITCONFIG" 2>/dev/null; then
+    # Filtered rather than `git config --unset-all`, which needs a git this
+    # box may not have; the file is the installer's alone, one [safe] section.
+    # Replaced by rename, never written through, so a symlink there is
+    # replaced and not followed.
+    gc_tmp="$(mktemp "$SIDECAR_GITCONFIG.XXXXXX")"
+    grep -v -e '^[[:space:]]*\[safe\][[:space:]]*$' -e '^[[:space:]]*directory[[:space:]]*=' "$SIDECAR_GITCONFIG" > "$gc_tmp" || true
+    if chown "$SIDECAR_USER" "$gc_tmp" 2>/dev/null; chmod 0600 "$gc_tmp" && mv -f "$gc_tmp" "$SIDECAR_GITCONFIG"; then
+      ok "$SIDECAR_USER no longer trusts a checkout's git config — this box does not run one"
+    else
+      rm -f "$gc_tmp"
+      warn "could not remove safe.directory from $SIDECAR_GITCONFIG — remove it by hand"
+    fi
   fi
 fi
 
@@ -2770,7 +2930,14 @@ fi
 # authoritative rather than guessed.
 say "Installing the Claude Code SessionStart hook"
 SETTINGS="${CLAUDE_HOME:-$HOME}/.claude/settings.json"
-install -d -o "$RUN_USER" -m 0755 "$(dirname "$SETTINGS")"
+# AS $RUN_USER, the directory, the merge below and the file it writes: all of
+# it is in their home. This was root's `install -d -o`, a node script writing
+# a temp file beside settings.json, and a `chown` of settings.json afterwards,
+# and every one of those follows a symlink. `ln -s /etc/passwd
+# ~/.claude/settings.json`, `sudo -n fleetwright-migrate`, and the heal's
+# --repair handed /etc/passwd to the service user.
+run_as_user install -d -m 0755 "$(dirname "$SETTINGS")" \
+  || warn "could not make $(dirname "$SETTINGS") as $RUN_USER"
 # THE HOOK IS THE CLI WRAPPER'S PROBLEM IN ANOTHER PLACE. bin/fleetwright
 # starts `#!/usr/bin/env node`, and Claude runs the hook with the session's own
 # PATH — on a deb box that has no node at all, only the one under
@@ -2793,7 +2960,8 @@ fi
 
 # Merged with node rather than sed: settings.json holds the operator's own
 # hooks, theme and permissions, and a text-level edit would eventually eat one.
-SETTINGS="$SETTINGS" HOOK_CMD="$HOOK_CMD" "$NODE_BIN" <<'NODE'
+# `env`, because sudo hands the command a clean environment.
+run_as_user env SETTINGS="$SETTINGS" HOOK_CMD="$HOOK_CMD" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
 const file = process.env.SETTINGS;
 const cmd = process.env.HOOK_CMD;
@@ -2879,7 +3047,6 @@ if (dirty) {
   fs.renameSync(tmp, file);
 }
 NODE
-chown "$RUN_USER" "${CLAUDE_HOME:-$HOME}/.claude/settings.json" 2>/dev/null || true
 
 # --- 5b. the sandbox image --------------------------------------------------
 # Built here rather than left as a documented step, because a sandbox that is
@@ -3030,12 +3197,19 @@ else
   # refuses when package.json and the lock disagree, which is a state a fork or
   # a half-finished merge can be in, so `install` is the fallback rather than
   # the failure.
-  if (cd "$DIR" && "$NPM_BIN" ci --omit=dev --no-audit --no-fund >/dev/null 2>&1) \
-     || (cd "$DIR" && "$NPM_BIN" install --omit=dev --no-audit --no-fund >/dev/null 2>&1); then
+  #
+  # --ignore-scripts, because this is root and npm runs lifecycle scripts —
+  # the tree's own package.json's and every dependency's — as whoever called
+  # it. A checkout is $RUN_USER's to edit, so its `postinstall` is theirs; and
+  # FLEETWRIGHT_PAYLOAD (above) used to let them steer a heal down this branch
+  # in `current`. The two runtime dependencies, jose and oauth4webapi, are
+  # plain JavaScript with no install step, so nothing is lost by it.
+  if (cd "$DIR" && "$NPM_BIN" ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1) \
+     || (cd "$DIR" && "$NPM_BIN" install --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1); then
     # Owned by the service user, so `/update` can rewrite it after a pull that
     # changes a dependency. Root-owned node_modules is the same class of bug as
     # the root-owned .git objects the block below exists for.
-    chown -R "$RUN_USER" "$DIR/node_modules" 2>/dev/null || true
+    chown -Rh "$RUN_USER" "$DIR/node_modules" 2>/dev/null || true
     ok "installed $(cd "$DIR" && "$NPM_BIN" ls --omit=dev --depth=0 2>/dev/null | grep -c '^[├└]' || echo '?') runtime dependencies"
   else
     warn "npm install failed in $DIR — the sidecar on this box will not start.
@@ -3052,7 +3226,7 @@ fi
 # larger grant to solve a file-ownership problem, so: the deployment owns its
 # own deployment.
 if [ -d "$DIR/.git" ] && [ "$(owner_of "$DIR/.git")" != "$RUN_USER" ]; then
-  if chown -R "$RUN_USER" "$DIR" 2>/dev/null; then
+  if chown -Rh "$RUN_USER" "$DIR" 2>/dev/null; then
     ok "$DIR now belongs to $RUN_USER, so /update can pull"
   else
     warn "could not chown $DIR to $RUN_USER — /update will fail with a permissions error"
@@ -3089,8 +3263,12 @@ fi
 # /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, and
 # written from the installer's own tree rather than from this one, so a service
 # user who can rewrite the tree still cannot rewrite what runs as root.
+#
+# -h, and -R's default of never following a link: the tree is the service
+# user's, so a symlink in it is theirs, and a chown that followed one would
+# hand them whatever it points at. GNU and BSD chown both read it that way.
 if [ -d "$FLEET_BASE" ] && [ "$(owner_of "$FLEET_BASE")" != "$RUN_USER" ]; then
-  if chown -R "$RUN_USER" "$FLEET_BASE" 2>/dev/null; then
+  if chown -Rh "$RUN_USER" "$FLEET_BASE" 2>/dev/null; then
     ok "$FLEET_BASE now belongs to $RUN_USER, so updates can be applied without root"
   else
     warn "could not chown $FLEET_BASE to $RUN_USER — updates will fail with EACCES"
@@ -3141,6 +3319,44 @@ fi
 # shorter, and a second copy of the entry point would be a second thing to
 # keep in step. `fleetwright` is the name a person is told; the agent-* names
 # stay for every box, runbook and muscle memory that already uses them.
+# ROOT'S COMMAND IS ROOT'S CODE. The hub, the apps and these docs tell people
+# to type `sudo fleetwright grant reboot on`, `sudo fleetwright join …` and
+# `sudo fleetwright doctor --repair`, and on a packaged box the link those
+# went through pointed into `current`: the release tree this installer gives
+# $RUN_USER so /update can unpack into it. So root ran a file the service user
+# can rewrite — and grant and join then ran `current`'s install.sh as root on
+# top. The service user, or a session landing as it (security.md G8), edits
+# current/src/core/grants.js and waits for somebody to follow the advice.
+#
+# So on such a box the hub's commands are a wrapper, root's and written here,
+# that sends root to the sidecar's store: root's own copy of a verified
+# release (refresh_sidecar_store), run with a node $RUN_USER cannot replace,
+# and told `current` as its payload, which is the heal's arrangement — root's
+# installer, the service user's release. Everybody else runs `current`, as
+# before. And where root has no such copy, root is refused, in words, rather
+# than handed the service user's tree.
+#
+# NOT ON A CHECKOUT, OR A MAC (which is one). There, everything is $RUN_USER's
+# by design, the installer root runs included, and there is no root-owned
+# tree to send anybody to; the line below says so instead of implying a
+# boundary.
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+ROOT_GUARD=0 ROOT_TREE="" ROOT_NODE="" ROOT_WHY=""
+if [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ] && [ "$RUN_USER" != root ] \
+   && { [ "$PACKAGED" = 1 ] || { [ "$CONVERTED" = 1 ] && [ "$FROM_SOURCE" = 0 ]; }; }; then
+  ROOT_GUARD=1
+  if [ "$SIDECAR_STORE" = 1 ] && [ -f "$SIDECAR_BASE/current/bin/fleetwright" ] && ! run_user_can_alter "$SIDECAR_BASE"; then
+    for candidate in "${SIDECAR_NODE_BIN:-}" "${UNIT_NODE_BIN:-}" "${NODE_BIN:-}"; do
+      [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+      if ! run_user_can_alter "$candidate"; then ROOT_NODE="$candidate"; break; fi
+    done
+    if [ -n "$ROOT_NODE" ]; then ROOT_TREE="$SIDECAR_BASE/current"
+    else ROOT_WHY="every node on this box is one $RUN_USER can replace"; fi
+  else
+    ROOT_WHY="there is no root-owned copy of the release in $SIDECAR_BASE"
+  fi
+fi
+
 for pair in fleetwright:fleetwright fw:fleetwright \
             fleetwright-sidecar:fleetwright-sidecar \
             agent-hub:agent-hub agent-fleet-sidecar:agent-fleet-sidecar; do
@@ -3152,22 +3368,72 @@ for pair in fleetwright:fleetwright fw:fleetwright \
   tree="$DIR"; node="${UNIT_NODE_BIN:-}"
   case "$cli" in *-sidecar) tree="$(sidecar_tree)"; node="${SIDECAR_NODE_BIN:-$node}" ;; esac
   [ -f "$tree/bin/$cli" ] || continue
-  if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "$node" ]; then
-    rm -f "$BIN_DIR/$link"
+  # Never written through: the old entry may be a symlink into `current`, and
+  # `>` would follow it and overwrite the service user's file as root.
+  rm -f "$BIN_DIR/$link" "$BIN_DIR/.$link.new"
+  if [ "$ROOT_GUARD" = 1 ] && case "$cli" in *-sidecar) false ;; *) true ;; esac; then
+    {
+      printf '#!/bin/sh\n'
+      printf '# Written by install.sh. Root never runs %s, which %s can change:\n' "$tree" "$RUN_USER"
+      printf '# see "ROOT'"'"'S COMMAND IS ROOT'"'"'S CODE" in install.sh.\n'
+      printf 'if [ "$(id -u)" = 0 ]; then\n'
+      if [ -n "$ROOT_TREE" ] && [ -f "$ROOT_TREE/bin/$cli" ]; then
+        printf '  [ -f %s ] || { echo "%s: root'"'"'s copy of the release is gone (%s); sudo /usr/local/sbin/fleetwright-migrate makes it again" >&2; exit 1; }\n' \
+          "$(sq "$ROOT_TREE/bin/$cli")" "$link" "$ROOT_TREE"
+        printf '  FLEETWRIGHT_PAYLOAD=%s FLEETWRIGHT_USER=%s\n' "$(sq "$FLEET_BASE/current")" "$(sq "$RUN_USER")"
+        printf '  export FLEETWRIGHT_PAYLOAD FLEETWRIGHT_USER\n'
+        printf '  exec %s %s "$@"\n' "$(sq "$ROOT_NODE")" "$(sq "$ROOT_TREE/bin/$cli")"
+      else
+        printf '  echo %s >&2\n' "$(sq "$link: not as root on this box. Its code is $tree, which $RUN_USER can change, and ${ROOT_WHY:-root has no copy of $cli}.")"
+        if [ -n "$ROOT_NODE$ROOT_TREE" ] || [ "$SIDECAR_STORE" != 1 ]; then
+          printf '  echo %s >&2\n' "$(sq "  A verified install makes root's copy: sudo /usr/local/sbin/fleetwright-migrate, the one-liner, or apt.")"
+        else
+          printf '  echo %s >&2\n' "$(sq "  A system node (apt install nodejs, $NODE_FLOOR or newer) and a re-run of the installer give root one.")"
+        fi
+        printf '  exit 1\n'
+      fi
+      printf 'fi\n'
+      if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "$node" ]; then
+        printf 'exec %s %s "$@"\n' "$(sq "$node")" "$(sq "$tree/bin/$cli")"
+      else
+        printf 'exec %s "$@"\n' "$(sq "$tree/bin/$cli")"
+      fi
+    } > "$BIN_DIR/.$link.new"
+    chmod 0755 "$BIN_DIR/.$link.new"
+    mv -f "$BIN_DIR/.$link.new" "$BIN_DIR/$link"
+  elif [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "$node" ]; then
     printf '#!/bin/sh\n# Written by install.sh: the node on PATH is missing or older than this needs.\nexec %s %s "$@"\n' \
-      "'$node'" "'$tree/bin/$cli'" > "$BIN_DIR/$link"
-    chmod 0755 "$BIN_DIR/$link"
+      "$(sq "$node")" "$(sq "$tree/bin/$cli")" > "$BIN_DIR/.$link.new"
+    chmod 0755 "$BIN_DIR/.$link.new"
+    mv -f "$BIN_DIR/.$link.new" "$BIN_DIR/$link"
   else
     ln -sf "$tree/bin/$cli" "$BIN_DIR/$link"
   fi
   # Belt-and-braces: git already records the executable bit, so this only
   # matters for a checkout that lost it. Never fatal — the repo may legitimately
   # be on a read-only mount, or owned by someone else, and the symlink above is
-  # the part that matters.
-  [ -x "$tree/bin/$cli" ] || chmod +x "$tree/bin/$cli" 2>/dev/null || \
-    warn "$tree/bin/$cli is not executable and could not be made so — check the checkout"
+  # the part that matters. ONLY a checkout: in a release tree the path is the
+  # service user's, and root's chmod follows whatever symlink they left there.
+  if [ -d "$tree/.git" ]; then
+    [ -x "$tree/bin/$cli" ] || chmod +x "$tree/bin/$cli" 2>/dev/null || \
+      warn "$tree/bin/$cli is not executable and could not be made so — check the checkout"
+  fi
   ok "$BIN_DIR/$link -> $tree/bin/$cli"
 done
+# Said once, after the links, in the words a person needs before typing sudo.
+if [ "$ROOT_GUARD" = 1 ] && [ -n "$ROOT_TREE" ]; then
+  if run_user_can_alter "$BIN_DIR/fleetwright"; then
+    warn "$RUN_USER can change $BIN_DIR/fleetwright, so \`sudo fleetwright …\` is theirs to redirect"
+    MISSING+=("a $BIN_DIR that $RUN_USER cannot write, so root's \`fleetwright\` stays root's")
+  else
+    ok "as root, fleetwright runs $ROOT_TREE — root's copy — and never $DIR"
+  fi
+elif [ "$ROOT_GUARD" = 1 ]; then
+  warn "as root, fleetwright refuses to run here: $ROOT_WHY, and $DIR is $RUN_USER's"
+  MISSING+=("root's copy of the release, for \`sudo fleetwright grant\` and \`join\`: sudo /usr/local/sbin/fleetwright-migrate makes it")
+elif [ "$CHECK_ONLY" != 1 ] && [ "$RUN_USER" != root ]; then
+  warn "\`sudo fleetwright …\` runs $DIR as root, and $RUN_USER owns it — the same trust as running this installer from it"
+fi
 # A command from before the coordinator left points at nothing now, under either
 # name; a command that exists and fails to run is worse than one that does not.
 for stale in fleetwright-coordinator agent-fleet-coordinator; do
@@ -3740,7 +4006,10 @@ if [ "$PACKAGED" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
     # been seen to start would leave a box with neither.
     warn "the new services did not start, so $OLD_DIR was left alone.
        Fix the service, re-run this installer, and it will clean up then."
-  elif [ -d "$OLD_DIR/.git" ] && ! (cd "$OLD_DIR" && git diff --quiet HEAD 2>/dev/null); then
+  # The question asked AS $RUN_USER: git run by root in their repository runs
+  # what its config names (core.fsmonitor), and under sudo git trusts a
+  # repository owned by the account that ran sudo.
+  elif [ -d "$OLD_DIR/.git" ] && ! as_user "cd $(printf '%q' "$OLD_DIR") && git diff --quiet HEAD" 2>/dev/null; then
     # Somebody's working tree. This is a development box, and deleting
     # uncommitted work to tidy up a directory is not a trade this installer
     # gets to make on anybody's behalf.

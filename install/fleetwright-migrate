@@ -166,6 +166,14 @@ case "$CHANNEL" in
   *) ;;
 esac
 
+# A NODE OF ROOT'S for the installer below, when the box has one: the deb's,
+# which only dpkg writes. Otherwise the installer finds one, and refuses to run
+# as root on a node the service user could replace (install.sh, root_may_run)
+# — this runs at their request, with nobody watching.
+if [ -z "${FLEETWRIGHT_NODE_BIN:-}" ] && [ -x /usr/lib/fleetwright/node/bin/node ]; then
+  export FLEETWRIGHT_NODE_BIN=/usr/lib/fleetwright/node/bin/node
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 

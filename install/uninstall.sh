@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # Take this box back out of a fleet.
 #
-#   sudo /opt/fleetwright/current/install/uninstall.sh          services, config, identity
-#   sudo /opt/fleetwright/current/install/uninstall.sh --purge  the above plus the code
-#   sudo /opt/fleetwright/current/install/uninstall.sh --yes    do not ask
+#   sudo /usr/local/lib/fleetwright-sidecar/current/install/uninstall.sh          services, config, identity
+#   sudo /usr/local/lib/fleetwright-sidecar/current/install/uninstall.sh --purge  the above plus the code
+#   sudo /usr/local/lib/fleetwright-sidecar/current/install/uninstall.sh --yes    do not ask
+#
+# ROOT'S COPY, NOT THE ONE UNDER /opt/fleetwright/current. That tree is the
+# service user's — /update unpacks into it as them — so running its copy with
+# sudo runs whatever they left there, as root. The copy above is the sidecar's
+# store: root-owned, filled only from a release root verified (install.sh,
+# refresh_sidecar_store), and it knows the box exactly as well. On an apt box
+# `sudo apt purge fleetwright` runs it for you.
 #
 # (On a checkout install the script lives under /opt/fleetwright-src/install/ and
-# --purge removes that checkout instead.)
+# --purge removes that checkout instead. The checkout is the service user's
+# too; running its uninstaller as root trusts them exactly as far as running
+# its installer did.)
 #
 # WHY THIS EXISTS, beyond tidiness.
 #
@@ -236,8 +245,18 @@ done
 say "Removing the Claude Code hook"
 USER_HOME="$(eval printf '%s' "~$RUN_USER" 2>/dev/null || printf '%s' "/home/$RUN_USER")"
 SETTINGS="$USER_HOME/.claude/settings.json"
+# AS $RUN_USER: the file is in their home, and root's read of it, and root's
+# write of the temp file beside it, follow whatever symlink they left there —
+# a settings.json.tmp-fleetwright-uninstall pointing at /etc/shadow was root
+# writing JSON over it. As them, it reaches only what they could reach anyway.
+as_run_user() { # as_run_user CMD [ARG...]
+  if [ "$RUN_USER" = root ] || [ "$(id -un)" = "$RUN_USER" ]; then "$@"
+  elif command -v sudo >/dev/null; then sudo -u "$RUN_USER" -H -- "$@"
+  elif command -v runuser >/dev/null; then runuser -u "$RUN_USER" -- "$@"
+  else return 1; fi
+}
 if [ -f "$SETTINGS" ] && command -v node >/dev/null; then
-  node -e '
+  as_run_user "$(command -v node)" -e '
     const fs = require("fs");
     const f = process.argv[1];
     let s;
@@ -266,8 +285,19 @@ if [ "$PURGE" = 1 ]; then
   # Linux but leaves the shell somewhere that no longer exists. bash has the
   # script open, so the file going away under it does not stop it finishing.
   cd /
-  rm -rf "${PURGE_DIR:?}"
-  ok "$PURGE_DIR"
+  # THE PATH, NEVER WHAT A LINK AT IT POINTS TO. rm -rf removes a symlink
+  # operand itself, which is the behaviour wanted here — said, and refused for
+  # the one value that is never a fleetwright tree.
+  if [ "$(cd "$PURGE_DIR" 2>/dev/null && pwd -P)" = / ]; then
+    warn "$PURGE_DIR is the filesystem root — not removing it"
+  elif [ -L "$PURGE_DIR" ]; then
+    PURGE_TARGET="$(readlink "$PURGE_DIR" 2>/dev/null || echo 'elsewhere')"
+    rm -f "$PURGE_DIR"
+    ok "$PURGE_DIR (a link — what it pointed at, $PURGE_TARGET, was left)"
+  else
+    rm -rf "${PURGE_DIR:?}"
+    ok "$PURGE_DIR"
+  fi
 fi
 
 say "Removed."

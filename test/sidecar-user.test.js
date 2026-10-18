@@ -97,13 +97,6 @@ test('everything the installer runs as the sidecar runs as the sidecar', () => {
   assert.match(asSidecar, /su -s \/bin\/bash/);
 });
 
-test('a checkout stays readable to git under the other account', () => {
-  // "dubious ownership" would leave version and updates null on the health
-  // frame of every box installed from source. One safe.directory line, in the
-  // account's own config rather than /etc/gitconfig for everybody.
-  assert.match(SH, /git config --file \/var\/lib\/fleetwright-sidecar\/\.gitconfig --replace-all safe\.directory "\$DIR"/);
-});
-
 test('the hub user is read from the hub unit alone', () => {
   // The sidecar unit names a different account now; reading it for RUN_USER
   // would hand the sessions to the sidecar's account on a box missing the

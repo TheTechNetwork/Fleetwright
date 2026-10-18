@@ -1325,6 +1325,30 @@ debugger, an MCP server bound to 0.0.0.0), a path the open default's per-contain
 namespaces do not give it. **Correct:** one internal network per owner, or say so
 wherever the allowlist is offered. Corrected the first way; see the status row.
 
+**G10 — "The service user can rewrite the code it runs, and nothing else."**
+*Violates SEC-HOST-1's premise that root on a box is its own boundary.* The
+release tree is the service user's so updates need no root, and the installer
+said that gave it "nothing to escalate to". But root kept running things out of
+that account's reach. `sudo fleetwright grant …`, `join` and `doctor --repair`
+— advice the hub, the apps and these docs print — went through a link into
+`current`, so root ran the service user's `bin/fleetwright`, and grant and join
+then ran `current`'s `install.sh` as root. The installer itself, on every
+route including the heal the service user can start with `sudo -n
+fleetwright-migrate`, ran their `~/.local/bin/claude` and a node from their
+`~/.nvm` as root, wrote the Claude hook and the sidecar's token through paths
+in their reach and chowned the result (a symlink made that a chown of any file
+on the box), took the version that names the directory it `rm -rf`s from
+`current/package.json`, and could be steered into the checkout branch, which
+runs `npm ci` and its lifecycle scripts in `current`. **Fixed on a packaged
+Linux box:** root's `fleetwright` is a root-owned wrapper that runs the
+sidecar's root-owned store with a node the service user cannot replace, or
+refuses in words (`install.sh`, "ROOT'S COMMAND IS ROOT'S CODE"); the rest are
+closed one by one (`install-root-sources.test.js`). **Not fixed, and stated:**
+a checkout or a Mac has no root-owned tree, so `sudo fleetwright` there runs
+the service user's code and the installer says so; a box whose only node
+24+ is in the service user's home still has a person-run installer execute
+it as root, with a warning (the heal refuses).
+
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
 a box without podman.
@@ -1342,6 +1366,7 @@ a box without podman.
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
 | **G8** | **stated, not fixed.** The scheduler still offers a direct box to members. The decision is the owner's; the migrate helper's root path it compounded is closed (`install-root-sources.test.js`). |
 | **G9** | **fixed, not yet measured.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Like SEC-INJECT-2 as a whole, unmeasured until two people's sessions on one real box are seen unable to reach each other. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
+| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree. A checkout, a Mac, and a person-run install on a box with no system node are the remaining cases, each said by the installer. `install-root-sources.test.js`, `doctor.test.js`, `migrate.test.js`. |
 
 ---
 

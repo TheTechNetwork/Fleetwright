@@ -186,11 +186,15 @@ dated from when converting a checkout was the helper's only job, and left a
 packaged box with the helper it converted with, forever. A stale helper could
 not fix itself: refreshing it is the installer's job, and the stale helper was
 the one thing on the box that would not run the installer. A box on a release
-from before this change refreshes it once by hand:
+from before this change refreshes it once, with a verified installer run:
 
-    sudo install -m 0755 -o root -g root \
-      /opt/fleetwright/current/install/fleetwright-migrate \
-      /usr/local/sbin/fleetwright-migrate
+    curl -fsSL <your coordinator>/install | sudo sh -s -- --repair
+
+(or `sudo apt-get install --reinstall fleetwright` on an apt box). This page
+used to say `sudo install … /opt/fleetwright/current/install/fleetwright-migrate
+/usr/local/sbin/fleetwright-migrate`, and so did the hub: that is the service
+user's file, installed by root at the one path sudoers lets the service user
+run as root.
 
 A checkout gets no heal, deliberately: there is no verified copy of its
 installer for root to run. The update says so and names the command.
@@ -578,8 +582,17 @@ the three-day soak like every other advisory.
 
 It lives in `/usr/lib/fleetwright/node`, off `PATH`, so it neither shadows nor
 is shadowed by a distro nodejs. The units name it outright, and the CLIs in
-`/usr/local/bin` are two-line wrappers that name it too, written whenever the
-node on `PATH` is missing or below the floor.
+`/usr/local/bin` are short wrappers that name it too. It is also the node root
+runs: the installer will not execute one the service user can replace, and
+`fleetwright-migrate` hands this one to the installer it runs.
+
+**`fleetwright` in `/usr/local/bin` is root's own on a packaged box.** The
+release tree is the service user's, so the command does not point into it for
+root: as root it runs root's copy of the release from
+`/usr/local/lib/fleetwright-sidecar` (the sidecar's store, above), and as
+anybody else it runs `current`. That is what makes `sudo fleetwright grant`
+and `sudo fleetwright join` safe to tell somebody to type. A box with no
+root-owned copy refuses them as root, and says how to make one.
 
 ### Remove and purge
 

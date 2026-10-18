@@ -676,7 +676,9 @@ test('converting a box does not take away its ability to update itself', () => {
   // The base, not just the current release: an update mkdirs
   // `releases/.incoming-<v>`, replaces `releases/<v>` and swaps the symlink in
   // the base itself.
-  assert.match(sh, /chown -R "\$RUN_USER" "\$FLEET_BASE"/);
+  // -h: the tree is the service user's, so a link in it is theirs, and a
+  // chown that followed one would hand them what it points at.
+  assert.match(sh, /chown -Rh "\$RUN_USER" "\$FLEET_BASE"/);
 
   // RECURSIVE, and that is not tidiness. Pruning old releases REMOVES them, and
   // removing a root-owned tree needs write on the directories inside it rather
@@ -685,7 +687,7 @@ test('converting a box does not take away its ability to update itself', () => {
 
   // AND IT SAYS WHAT TO DO WHEN IT CANNOT. A silent failure here is an EACCES
   // hours later, on a box whose owner has no reason to connect the two.
-  const block = sh.slice(sh.indexOf('chown -R "$RUN_USER" "$FLEET_BASE"'));
+  const block = sh.slice(sh.indexOf('chown -Rh "$RUN_USER" "$FLEET_BASE"'));
   assert.match(block.slice(0, 600), /EACCES/);
   assert.match(block.slice(0, 600), /fleetwright-migrate/);
 });
