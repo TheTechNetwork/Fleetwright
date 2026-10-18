@@ -108,6 +108,10 @@ struct AddHypervisorView: View {
 
     @State private var address = ""
     @State private var probing = false
+    /// A reconnect for an address this phone knows nothing of, waiting for
+    /// the person to ask for it by name before the fleet is asked anything
+    /// (`knows`).
+    @State private var askFirst = false
     /// What every machine found, or nil until asked. Nil draws nothing; an
     /// empty answer and a failed one each say what they are.
     @State private var probes: [Fleet.Probe]?
@@ -317,8 +321,25 @@ struct AddHypervisorView: View {
         // The address is already known, so the first question is asked for
         // the person, starting from the machine that got through last time.
         .task {
-            if isPolicy || isReconnect, probes == nil, !probing { await openRemembered() }
+            guard isPolicy || isReconnect, probes == nil, !probing else { return }
+            // A RECONNECT FOR AN ADDRESS THIS PHONE DOES NOT KNOW IS ASKED
+            // FOR BY NAME FIRST. A pool-lost push carries an address one of
+            // the person's machines chose, and opening on it used to send the
+            // fleet-wide probe for it at once, with nobody having looked at
+            // it. A pool this phone holds, kept a sign-in for or pinned a
+            // certificate for opens as it always did.
+            if isReconnect, !Self.knows(trimmedAddress) {
+                askFirst = true
+                return
+            }
+            await openRemembered()
         }
+    }
+
+    /// Whether this phone has anything of its own for that address: a pool
+    /// it holds, a sign-in it kept, or a certificate it pinned at setup.
+    private static func knows(_ address: String) -> Bool {
+        XOSetupHandoff.held().contains(address) || XOSaved.has(address) || XOSetupHandoff.pinnedCertificate(address) != nil
     }
 
     // MARK: In the fleet
@@ -375,8 +396,16 @@ struct AddHypervisorView: View {
                     throughOffer = nil
                     endRelay()
                 }
-            Button(probing ? "Asking your machines…" : "Find a machine that can reach it") { Task { await probe() } }
-                .disabled(probing || busy || job != nil || !XOSetupKey.isAddress(trimmedAddress))
+            if askFirst {
+                Text("This phone has not set up \(trimmedAddress), kept a sign-in for it or pinned its certificate. "
+                     + "The address came from one of your machines, so none of them is asked to reach it until you say so.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            Button(probing ? "Asking your machines…" : askFirst ? "Ask your machines to reach \(trimmedAddress)" : "Find a machine that can reach it") {
+                Task { await probe() }
+            }
+            .disabled(probing || busy || job != nil || !XOSetupKey.isAddress(trimmedAddress))
             if !probeText.isBlank {
                 Text(probeText)
                     .fleetType(.label)
@@ -1583,6 +1612,7 @@ struct AddHypervisorView: View {
     private func probe() async {
         probing = true
         defer { probing = false }
+        askFirst = false
         viaMemory = false
         probes = nil
         chosen = nil
