@@ -17,12 +17,16 @@
 #   1. The sources line, rewritten in place and renamed over the old one. Only
 #      the suite word moves; the architecture, the keyring and the address are
 #      whatever the image or the installer wrote.
-#   2. The pin. A rolling build is `0.0.0~main.<run>`, which sorts below every
-#      release on purpose (docs/packaging.md, "Kept apart by suite, never by
-#      version"), so a box moving from stable to rolling is asking apt for a
-#      DOWNGRADE, and apt refuses one unless a pin above 1000 says so. The pin
-#      names the package and the suite, nothing else, and is removed on the
-#      way back: a release outranks any main build, so stable needs none.
+#   2. The pin. A build of main is `<base>+main.<run>`, above the release it
+#      follows and below the next (tools/build-host-deb.mjs, debVersion), so
+#      stable to rolling is an ordinary upgrade and needs nothing. Rolling to
+#      stable is the other way: the box is asking apt for a DOWNGRADE to the
+#      release, and apt refuses one unless a pin above 1000 says so. The pin
+#      names the package and the stable suite, nothing else, and is removed on
+#      the way to rolling. (Until 0.4.12 the build was 0.0.0~main.<run>, below
+#      every release, and the pin sat on the rolling side; a box that still has
+#      that pin loses it on its next move either way, since both suites write
+#      or remove the same file.)
 #   3. `apt-get update`, so the candidate the hub reads next is the new
 #      suite's and not the old lists'.
 #
@@ -64,14 +68,14 @@ sed -E "s/$LINE/\\1${suite}\\4/" "$SOURCES" > "$tmp"
 chmod 0644 "$tmp"
 mv "$tmp" "$SOURCES"
 
-if [ "$suite" = rolling ]; then
+if [ "$suite" = stable ]; then
   tmp="$PREFS.tmp"
   {
-    printf '# Written by fleetwright-apt-channel. A build of main is 0.0.0~main.<run>, which\n'
-    printf '# sorts below every release, so taking the rolling suite is a downgrade and apt\n'
-    printf '# needs a pin above 1000 to make one. Removed by `/channel stable`.\n'
+    printf '# Written by fleetwright-apt-channel. A build of main is <release>+main.<run>, above\n'
+    printf '# the release it follows, so going back to the stable suite is a downgrade and apt\n'
+    printf '# needs a pin above 1000 to make one. Removed by `/channel rolling`.\n'
     printf 'Package: fleetwright\n'
-    printf 'Pin: release o=Fleetwright,a=rolling\n'
+    printf 'Pin: release o=Fleetwright,a=stable\n'
     printf 'Pin-Priority: 1001\n'
   } > "$tmp"
   chmod 0644 "$tmp"

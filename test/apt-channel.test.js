@@ -51,34 +51,38 @@ function box(t, sources) {
   return { dir, env, run, calls, sources: () => readFileSync(env.FLEETWRIGHT_APT_SOURCES, 'utf8'), prefs: () => (existsSync(env.FLEETWRIGHT_APT_PREFS) ? readFileSync(env.FLEETWRIGHT_APT_PREFS, 'utf8') : null) };
 }
 
-test('stable to rolling: the suite word moves, the rest of the line stays, the package is pinned, the lists are refreshed', (t) => {
+test('stable to rolling: the suite word moves, the rest of the line stays, any pin goes, the lists are refreshed', (t) => {
   const b = box(t, STABLE);
+  // A pin from before 0.4.12, when the build sorted below every release and
+  // rolling was the side that needed one. It must not survive: with the build
+  // above the release it follows, rolling is an upgrade and the pin would only
+  // be a stale claim in /etc.
+  writeFileSync(b.env.FLEETWRIGHT_APT_PREFS, 'Package: fleetwright\nPin: release o=Fleetwright,a=rolling\nPin-Priority: 1001\n');
   const r = b.run('rolling');
   assert.equal(r.status, 0, r.stderr);
   // Only the one word: the architecture, the keyring and the address are
   // whatever the image or the installer wrote, and are not this script's.
   assert.equal(b.sources(), ROLLING);
-  // THE PIN IS WHAT MAKES ROLLING INSTALLABLE. A build of main is
-  // 0.0.0~main.<run>, below every release, so without a priority above 1000
-  // apt would refuse the downgrade and the box would report a suite it never
-  // takes from.
-  const prefs = b.prefs();
-  assert.ok(prefs, 'no pin was written');
-  assert.match(prefs, /^Package: fleetwright$/m);
-  assert.match(prefs, /^Pin: release o=Fleetwright,a=rolling$/m, 'the pin must name the suite the repository publishes (tools/build-apt-repo.sh)');
-  assert.match(prefs, /^Pin-Priority: 1001$/m);
+  assert.equal(b.prefs(), null, 'a build of main outranks the release it follows, so rolling needs no pin and keeps none');
   assert.deepEqual(b.calls(), ['update'], 'apt-get update, once, and nothing else');
   // The hub reads the same file the next apt-get does.
   assert.equal(aptSuite({ aptSources: b.env.FLEETWRIGHT_APT_SOURCES }), 'rolling');
 });
 
-test('rolling to stable: the word moves back, the pin goes, and a release outranks the build so no pin is needed', (t) => {
+test('rolling to stable: the word moves back and the package is pinned to stable, because the release is the downgrade now', (t) => {
   const b = box(t, ROLLING);
-  writeFileSync(b.env.FLEETWRIGHT_APT_PREFS, 'Package: fleetwright\nPin: release o=Fleetwright,a=rolling\nPin-Priority: 1001\n');
   const r = b.run('stable');
   assert.equal(r.status, 0, r.stderr);
   assert.equal(b.sources(), STABLE);
-  assert.equal(b.prefs(), null, 'the rolling pin outlived the move back and would make the next upgrade a downgrade again');
+  // THE PIN IS WHAT MAKES THE WAY BACK INSTALLABLE. A build of main is
+  // <base>+main.<run>, above the release it follows, so without a priority
+  // above 1000 apt would keep the build and the box would report a suite it
+  // never takes from.
+  const prefs = b.prefs();
+  assert.ok(prefs, 'no pin was written');
+  assert.match(prefs, /^Package: fleetwright$/m);
+  assert.match(prefs, /^Pin: release o=Fleetwright,a=stable$/m, 'the pin must name the suite the repository publishes (tools/build-apt-repo.sh)');
+  assert.match(prefs, /^Pin-Priority: 1001$/m);
   assert.deepEqual(b.calls(), ['update']);
   assert.equal(aptSuite({ aptSources: b.env.FLEETWRIGHT_APT_SOURCES }), 'stable');
 });
@@ -185,12 +189,13 @@ test('the switch starts exactly the granted unit, then reports the suite read ba
   assert.equal(r.ok, true, r.message);
   assert.equal(r.channel, 'rolling');
   assert.deepEqual(calls, ['sudo -n /usr/bin/systemctl start fleetwright-apt-channel@rolling.service'], 'the whole privilege is starting the one named instance');
-  assert.match(r.message, /downgrade/, 'says why a rolling build needs the pin');
+  assert.match(r.message, /ordinary upgrade/, 'a build of main outranks the release it follows');
   // What the hub reads next agrees with what it just said.
   assert.equal(readChannel(cfg), 'rolling');
 
   const back = switchAptSuite(cfg, 'stable', { exec });
   assert.equal(back.ok, true);
+  assert.match(back.message, /downgrade/, 'says why the way back needs the pin');
   assert.equal(readChannel(cfg), 'stable');
   assert.equal(calls.length, 2);
 });

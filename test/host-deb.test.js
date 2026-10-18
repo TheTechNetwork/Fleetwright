@@ -28,11 +28,17 @@ test('a release tag becomes a version dpkg orders the way semver does', () => {
   if (has('dpkg')) {
     assert.equal(spawnSync('dpkg', ['--compare-versions', '0.3.0~rc1', 'lt', '0.3.0']).status, 0);
   }
-  // A build of main — what the deb job sees on every push — sorts below any release.
-  assert.equal(debVersion('main-41'), '0.0.0~main.41');
+  // A build of main — what the deb job sees on every push — is versioned after
+  // the release it follows: above it, below the next. Both orderings are what
+  // the channel script's pin direction depends on (install/fleetwright-apt-channel).
+  assert.equal(debVersion('main-41', '0.4.11'), '0.4.11+main.41');
+  assert.match(debVersion('main-41'), /^\d+\.\d+\.\d+\+main\.41$/, 'the default base is package.json');
   if (has('dpkg')) {
-    assert.equal(spawnSync('dpkg', ['--compare-versions', '0.0.0~main.41', 'lt', '0.2.3']).status, 0);
+    assert.equal(spawnSync('dpkg', ['--compare-versions', '0.4.11+main.41', 'gt', '0.4.11']).status, 0);
+    assert.equal(spawnSync('dpkg', ['--compare-versions', '0.4.11+main.41', 'lt', '0.4.12']).status, 0);
+    assert.equal(spawnSync('dpkg', ['--compare-versions', '0.4.11+main.42', 'gt', '0.4.11+main.41']).status, 0);
   }
+  assert.throws(() => debVersion('main-41', 'v0.4.11'), /x\.y\.z/);
   assert.throws(() => debVersion('nightly'), /start with a digit/);
 });
 

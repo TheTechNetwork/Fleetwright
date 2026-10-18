@@ -195,7 +195,7 @@ test('the rolling channel is main, and it is published somewhere a host can poll
   // that names it a moment before the suite is republished.
   assert.match(job, /needs: \[package, deb\]/, 'the rolling release has no deb to publish');
   assert.match(job, /gh release upload rolling [^\n]*dist\/deb\/\*\.deb/);
-  assert.match(job, /tr '~' '\.'/, 'a `~` in a deb name goes to GitHub as it is');
+  assert.match(job, /tr '~\+' '\.\.'/, 'a `+` or `~` in a deb name goes to GitHub as it is (build-host-deb.mjs, debVersion)');
   assert.match(job, /keep="\$keep \$\{prev\}_amd64\.deb \$\{prev\}_arm64\.deb"/, 'the previous build is deleted as soon as the next uploads');
 
   // NOT A TAG CALLED `main`, which is what this shipped as for one afternoon.
