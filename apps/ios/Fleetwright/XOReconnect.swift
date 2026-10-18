@@ -10,8 +10,8 @@ import Foundation
 /// sign-in there is lives on this phone (XOSaved), behind Face ID. So the
 /// fleet notices, pushes, and the person's tap opens the kept sign-in and
 /// seals it to one job on one machine, exactly the way a policy change does:
-/// the same `begin`, the same key check, the same seal, saying
-/// `purpose: reconnect` inside it. The machine reconnects only the servers
+/// the same `begin`, the same key check, the same seal under a binding of
+/// its own (`refusal`), saying `purpose: reconnect` inside it. The machine reconnects only the servers
 /// that are not connected, leaves any a person turned off as they are,
 /// changes nothing else, and keeps nothing afterwards.
 ///
@@ -63,6 +63,28 @@ enum XOReconnect {
     static func decode(_ data: Data) -> Outcome? {
         guard let outcome = try? JSONDecoder().decode(Outcome.self, from: data), outcome.v == 1 else { return nil }
         return outcome
+    }
+
+    /// Why that machine is not sent a reconnect's sign-in, from what its
+    /// `begin` says it can be, or nil when it may be sent one.
+    ///
+    /// A MACHINE THAT LISTS `reconnect` BUT NOT `reconnect-signin` IS STILL
+    /// REFUSED. `can` is not signed, so a relay can add `reconnect` to a
+    /// machine too old to know it, and that machine would open a sign-in
+    /// sealed under the setup's binding and run a whole setup with it. One
+    /// that really lists `reconnect` alone cannot be told apart from that,
+    /// so the sign-in goes under a binding of its own
+    /// (Seal.xosetupReconnectSigninAAD), only to a machine that lists
+    /// `reconnect-signin`; a relay that adds that too only gets an old
+    /// machine a seal it cannot open.
+    static func refusal(can: [String], machine: String) -> String? {
+        if !can.contains("reconnect") {
+            return "\(machine) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent."
+        }
+        if !can.contains("reconnect-signin") {
+            return "\(machine) is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent."
+        }
+        return nil
     }
 
     /// A server's name as Xen Orchestra lists it: its label, else its

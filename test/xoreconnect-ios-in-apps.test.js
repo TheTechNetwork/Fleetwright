@@ -5,10 +5,11 @@
 //
 // A read of the sources, like xopolicy-ios-in-apps.test.js, whose begin, key
 // check and seal this flow reuses and which xosetup-in-apps.test.js pins. What
-// is pinned here is what a reconnect adds: its binding for what comes back,
-// held to the contract's text and to seal.js once seal.js has it; `purpose`
-// inside the seal beside the reply key; the machine asked whether it can
-// before anything is sealed; the key kept in memory; its words on the Lock
+// is pinned here is what a reconnect adds: its bindings for the sign-in that
+// goes out and for what comes back, held to the contract's text and to
+// seal.js once seal.js has them; `purpose` inside the seal beside the reply
+// key; the machine asked whether it can open that sign-in before anything is
+// sealed; the key kept in memory; its words on the Lock
 // Screen; the push's button; and the pool page's row, offered only when the
 // page shows the pool is not all there (C-2). What each server's outcome
 // reads as, and when the row is offered, is run by XOReconnectTests.swift.
@@ -59,12 +60,22 @@ test('iOS: what a reconnect did comes back under the binding the machine seals i
   assert.match(fn(SCREEN, 'applyReconnectState'), /XOReconnect\.open\(sealed, job: job, address: reconnectJob\.address, key: reconnectJob\.reply\)/);
 });
 
+test('iOS: a reconnect’s sign-in goes under a binding of its own, which a machine too old to know reconnect cannot open', () => {
+  const m = /static func xosetupReconnectSigninAAD\(job: String, address: String\) -> String \{ "([^"]+)" \}/.exec(IOS);
+  assert.ok(m, 'no xosetupReconnectSigninAAD');
+  const built = m[1].replace('\\(job)', 'J0').replace('\\(address)', 'A0');
+  assert.equal(built, 'fleetwright-xosetup-reconnect-signin/v1:J0:A0');
+  const js = /** @type {any} */ (seal).xosetupReconnectSigninAad;
+  if (typeof js === 'function') assert.equal(built, js('J0', 'A0'), 'xosetupReconnectSigninAAD is not seal.js’s binding');
+  assert.notEqual(built, seal.xosetupAad('J0', 'A0'));
+});
+
 test('iOS: `purpose: reconnect` is inside the seal, beside the sign-in and the reply key, and the password goes the moment it is sealed', () => {
   const send = fn(SCREEN, 'sendForReconnect');
   // The shape the host's `run` reads (xo-setup.js): v, xo, reply, purpose.
   assert.match(
     send,
-    /Seal\.seal\(\s*to: begun\.key,\s*aad: Seal\.xosetupAAD\(job: begun\.job, address: begun\.address\),\s*payload: \[\s*"v": 1,\s*"xo": \["email": [^\]]*, "password": password\],\s*"reply": reply\.publicKey,\s*"purpose": "reconnect",\s*\]/,
+    /Seal\.seal\(\s*to: begun\.key,\s*aad: Seal\.xosetupReconnectSigninAAD\(job: begun\.job, address: begun\.address\),\s*payload: \[\s*"v": 1,\s*"xo": \["email": [^\]]*, "password": password\],\s*"reply": reply\.publicKey,\s*"purpose": "reconnect",\s*\]/,
   );
   const sealAt = send.indexOf('Seal.seal(');
   const clearAt = send.indexOf('password = ""');
@@ -91,15 +102,21 @@ test('iOS: the key what it did comes back to is made for the screen and kept now
   assert.ok(apply.indexOf('if isReconnect {') > 0 && apply.indexOf('if isReconnect {') < apply.indexOf('XOSetupHandoff.collectAndKeep('));
 });
 
-test('iOS: the machine is asked whether it can reconnect before anything is sealed to it', () => {
+test('iOS: the machine is asked whether it can open a reconnect’s sign-in before anything is sealed to it', () => {
   const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func approvedFingerprint('));
-  const askAt = begin.indexOf('if isReconnect, !can.contains("reconnect") {');
+  const askAt = begin.indexOf('if isReconnect, let why = XOReconnect.refusal(can: can, machine: machine) {');
   assert.ok(askAt > 0, 'begin does not ask the machine');
   assert.ok(askAt < begin.indexOf('await send()'), 'send is reachable before the machine is asked');
-  assert.match(begin.slice(askAt), /^if isReconnect, !can\.contains\("reconnect"\) \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)/);
-  assert.ok(SCREEN.includes('is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent.'));
+  assert.match(begin.slice(askAt), /^if isReconnect, let why = XOReconnect\.refusal\(can: can, machine: machine\) \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)/);
   const send = fn(SCREEN, 'sendForReconnect');
-  assert.ok(send.indexOf('guard begun.can.contains("reconnect") else') < send.indexOf('Seal.seal('));
+  const refusedAt = send.indexOf('if let why = XOReconnect.refusal(can: begun.can, machine: begun.hostId) {');
+  assert.ok(refusedAt > 0 && refusedAt < send.indexOf('Seal.seal('), 'the seal is reachable before the machine is asked');
+  // `reconnect` alone is refused, in words that say to update that machine:
+  // a relay can add it to a machine too old to know it. Which list gets
+  // which sentence is run by XOReconnectTests.swift.
+  const refusal = IOS.slice(IOS.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
+  assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("reconnect"\) \{\s*return "\\\(machine\) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent\."\s*\}\s*if !can\.contains\("reconnect-signin"\) \{\s*return "\\\(machine\) is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent\."\s*\}\s*return nil/);
+  for (const at of [begin.slice(askAt), send.slice(refusedAt)]) assert.match(at, /refuse\("\\\(why\) Update that machine, then try again\."\)/);
 });
 
 test('iOS: a reconnect starts where it was asked from: the address named, the machine that noticed, the sign-in Face ID opens', () => {

@@ -313,6 +313,7 @@ struct MachinesView: View {
                 : "Not connected to the fleet. Reinstalled? Replace key mints the pin its new key needs."),
             enrolled: member,
             initialHolder: reporting?.holder == true,
+            mayAdminister: reporting?.mayAdminister ?? true,
             onChange: { await loadHosts() },
         )
     }

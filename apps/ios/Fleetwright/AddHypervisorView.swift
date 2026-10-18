@@ -1907,11 +1907,12 @@ struct AddHypervisorView: View {
                 return
             }
             // THE SAME FOR A RECONNECT: an older machine would run onboarding
-            // with the sign-in instead. The machine a push named is a first
-            // try, so when it is too old the others are asked.
-            if isReconnect, !can.contains("reconnect") {
+            // with the sign-in instead, and one that cannot open the
+            // reconnect's own binding is refused too (XOReconnect.refusal).
+            // The machine a push named is a first try, so when it is too old
+            // the others are asked.
+            if isReconnect, let why = XOReconnect.refusal(can: can, machine: machine) {
                 _ = try? await fleet.cancelSetup(job: begunJob)
-                let why = "\(machine) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent."
                 if viaMemory {
                     await self.probe()
                     refuse("\(why) Your other machines were asked instead.")
@@ -2134,19 +2135,20 @@ struct AddHypervisorView: View {
         }
     }
 
-    /// The sign-in for a reconnect: the same seal to the same job key under
-    /// the same binding as a policy change's, saying `purpose: reconnect`
-    /// inside it, where the coordinator cannot change it, beside the key what
-    /// it did comes back to. That key is made here and held in this screen's
-    /// memory alone, as a policy change's is: nothing comes back to it once
-    /// the screen is gone.
+    /// The sign-in for a reconnect: the same seal to the same job key as a
+    /// policy change's, under a binding of its own that a machine too old to
+    /// know reconnect cannot open (Seal.xosetupReconnectSigninAAD), saying
+    /// `purpose: reconnect` inside it, where the coordinator cannot change
+    /// it, beside the key what it did comes back to. That key is made here
+    /// and held in this screen's memory alone, as a policy change's is:
+    /// nothing comes back to it once the screen is gone.
     @MainActor
     private func sendForReconnect(_ begun: Begun) async {
         // Asked again here, where the seal is, so no path reaches it without.
-        guard begun.can.contains("reconnect") else {
+        if let why = XOReconnect.refusal(can: begun.can, machine: begun.hostId) {
             _ = try? await fleet.cancelSetup(job: begun.job)
             self.begun = nil
-            refuse("\(begun.hostId) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent. Update that machine, then try again.")
+            refuse("\(why) Update that machine, then try again.")
             return
         }
         busy = true
@@ -2156,7 +2158,7 @@ struct AddHypervisorView: View {
         do {
             sealed = try Seal.seal(
                 to: begun.key,
-                aad: Seal.xosetupAAD(job: begun.job, address: begun.address),
+                aad: Seal.xosetupReconnectSigninAAD(job: begun.job, address: begun.address),
                 payload: [
                     "v": 1,
                     "xo": ["email": email.trimmingCharacters(in: .whitespacesAndNewlines), "password": password],
