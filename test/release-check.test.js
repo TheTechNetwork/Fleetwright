@@ -286,8 +286,8 @@ test('the installer records where releases come from', () => {
   // inside somebody else's server 404s on every check and blames the check.
   assert.match(sh, /could not tell which repository this came from/);
 
-  // And it never overwrites an answer somebody already gave.
-  assert.match(sh, /if \[ -z "\$\(get_env "\$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST\)" \]/);
+  // Which answer wins — root's copy over the env file, which the service user
+  // can write — is driven, not read, in install-root-sources.test.js.
 });
 
 test('the manifest URL is built only from a remote it recognises', async () => {

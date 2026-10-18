@@ -175,7 +175,7 @@ test('a release that cannot install itself is refused before current moves', () 
   const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
 
   const smoke = mig.indexOf('install.sh" --help');
-  const move = mig.indexOf('mv "$BASE/releases/.incoming-$VERSION"');
+  const move = mig.indexOf('mv "$1/releases/.incoming-$2"');
   const link = mig.indexOf('ln -sfn');
   assert.ok(smoke > 0, 'the release installer is never tried before being adopted');
   assert.ok(smoke < move && smoke < link, 'the release is adopted before anything checks that it runs');
@@ -183,7 +183,7 @@ test('a release that cannot install itself is refused before current moves', () 
   // And a refusal leaves NOTHING behind: no half-adopted version directory, and
   // above all no moved symlink.
   const block = mig.slice(smoke - 400, move);
-  assert.match(block, /rm -rf "\$BASE\/releases\/\.incoming-\$VERSION"/);
+  assert.match(block, /rm -rf "\$1\/releases\/\.incoming-\$2"/);
   assert.match(block, /Nothing was changed/);
 });
 
@@ -268,7 +268,7 @@ test('a migration uses the installer the box already has', () => {
   // The smoke check still runs before `current` moves, because a release whose
   // installer cannot start is now one that cannot be adopted OR healed.
   const smoke = mig.indexOf('install.sh" --help');
-  const swap = mig.indexOf('mv -Tf "$BASE/.current.new" "$BASE/current"');
+  const swap = mig.indexOf('mv -Tf "$1/.current.new" "$1/current"');
   assert.ok(smoke > 0 && smoke < swap, 'the smoke check comes after the symlink moves');
 });
 
@@ -654,9 +654,10 @@ test('unit templates come from the installer, not from the payload', () => {
   assert.match(installUnit, /src="\$from\/install\/\$1\.service"/);
   assert.doesNotMatch(installUnit, /src="\$DIR\/install\//, 'the template is read from the payload again');
 
-  // And a box that IS a release still works: SELF_DIR is that release when
-  // somebody unpacks a tarball and runs its installer by hand.
-  assert.match(installUnit, /\|\| from="\$DIR"/);
+  // And never the payload's template, not even when this installer has none:
+  // on the heal the payload is `current`, the service user's, and a unit is
+  // root's. A tarball unpacked and run by hand is its own SELF_DIR anyway.
+  assert.doesNotMatch(installUnit, /from="\$DIR"/, 'a unit template is read from the payload again');
 });
 
 test('converting a box does not take away its ability to update itself', () => {
@@ -676,7 +677,9 @@ test('converting a box does not take away its ability to update itself', () => {
   // The base, not just the current release: an update mkdirs
   // `releases/.incoming-<v>`, replaces `releases/<v>` and swaps the symlink in
   // the base itself.
-  assert.match(sh, /chown -R "\$RUN_USER" "\$FLEET_BASE"/);
+  // -h: the tree is the service user's, so a link in it is theirs, and a
+  // chown that followed one would hand them what it points at.
+  assert.match(sh, /chown -Rh "\$RUN_USER" "\$FLEET_BASE"/);
 
   // RECURSIVE, and that is not tidiness. Pruning old releases REMOVES them, and
   // removing a root-owned tree needs write on the directories inside it rather
@@ -685,7 +688,7 @@ test('converting a box does not take away its ability to update itself', () => {
 
   // AND IT SAYS WHAT TO DO WHEN IT CANNOT. A silent failure here is an EACCES
   // hours later, on a box whose owner has no reason to connect the two.
-  const block = sh.slice(sh.indexOf('chown -R "$RUN_USER" "$FLEET_BASE"'));
+  const block = sh.slice(sh.indexOf('chown -Rh "$RUN_USER" "$FLEET_BASE"'));
   assert.match(block.slice(0, 600), /EACCES/);
   assert.match(block.slice(0, 600), /fleetwright-migrate/);
 });

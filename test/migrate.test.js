@@ -30,6 +30,10 @@ test('a box that does not know where its releases come from says so', () => {
   // sentence nobody can act on.
   assert.match(m.message, /FLEETWRIGHT_RELEASE_MANIFEST/);
   assert.match(m.message, /--upgrade/);
+  // Through the installer, as root: the migration fetches only the address
+  // root recorded, so an edit to the env file alone would move nothing.
+  assert.match(m.message, /installer as root/);
+  assert.doesNotMatch(m.message, /Set FLEETWRIGHT_RELEASE_MANIFEST in/);
 });
 
 const HERE = { exists: () => true };
@@ -323,8 +327,11 @@ test('a helper that exits 0 without running the installer is not called a succes
   assert.equal(warned.length, 1);
   assert.match(warned[0], /without running the release.s installer/);
   // WHAT TO DO, because the helper cannot refresh itself and nothing else on
-  // the box will: the one command, naming the release's own copy.
-  assert.match(warned[0], /sudo install -m 0755 -o root -g root .*install\/fleetwright-migrate \/usr\/local\/sbin\/fleetwright-migrate/);
+  // the box will: a verified installer run. Never a copy out of the install
+  // dir, which is this account's to rewrite and which root would be putting
+  // at the path sudoers lets this account run as root.
+  assert.match(warned[0], /curl -fsSL <your coordinator>\/install \| sudo sh -s -- --repair/);
+  assert.doesNotMatch(warned[0], /sudo install -m/);
   assert.match(warned[0], /nothing to do/, 'the helper’s own last words are in the log');
   // And the box still moves: the marker went down first, so the sidecar
   // restarts on its own, and the hub restarts itself as it always did.
@@ -378,21 +385,26 @@ test('no helper, or no copy to compare against, is cannot tell and not stale', (
   assert.equal(helperState({ installRoot: '/opt/x', bin: '/nowhere', read }), null, 'no helper at all');
 });
 
-test('the stale sentence says what it costs, then the one command with the real path', () => {
-  const text = describeHelper('stale', '/opt/fleetwright/releases/main-104');
+test('the stale sentence says what it costs, then the one command, which runs only verified code as root', () => {
+  const text = describeHelper('stale', {});
   assert.ok(text);
   // What still works comes first, so the reader knows this is one command and
   // not a broken box: updates land and the services restart from the marker.
   assert.match(text, /restarts the services/);
   assert.match(text, /refreshes nothing root owns/);
   assert.match(text, /once/);
-  // The real path, because the person reading it is going to type it.
-  assert.match(text, /sudo install -m 0755 -o root -g root \/opt\/fleetwright\/releases\/main-104\/install\/fleetwright-migrate \/usr\/local\/sbin\/fleetwright-migrate$/);
-  assert.equal(helperRefreshCommand('/opt/a'), `sudo install -m 0755 -o root -g root /opt/a/install/fleetwright-migrate ${MIGRATE_BIN}`);
+  // THE COMMAND REFRESHES THE HELPER FROM A VERIFIED RELEASE. It used to be
+  // `sudo install … <install dir>/install/fleetwright-migrate …`: the service
+  // user's file, installed by root at the path sudoers lets the service user
+  // run as root.
+  assert.match(text, /curl -fsSL <your coordinator>\/install \| sudo sh -s -- --repair$/);
+  assert.doesNotMatch(text, /sudo install -m|\/opt\/fleetwright/);
+  assert.equal(helperRefreshCommand({ releaseSource: 'apt' }), 'sudo apt-get install --reinstall fleetwright', 'apt’s own package on an apt box');
+  assert.equal(helperRefreshCommand(), helperRefreshCommand({ releaseSource: 'manifest' }));
 
   // And nothing at all for a current helper or an unknown one: a line about
   // root's half being fine is a line about a feature nobody is thinking about.
-  assert.equal(describeHelper('current', '/opt/a'), null);
-  assert.equal(describeHelper(null, '/opt/a'), null);
-  assert.equal(describeHelper(undefined, '/opt/a'), null);
+  assert.equal(describeHelper('current', {}), null);
+  assert.equal(describeHelper(null, {}), null);
+  assert.equal(describeHelper(undefined, {}), null);
 });

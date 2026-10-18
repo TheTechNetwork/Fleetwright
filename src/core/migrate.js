@@ -21,6 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { requestRestart } from './restart-watch.js';
+import { APT_REPAIR } from './apt-release.js';
 
 export const MIGRATE_BIN = '/usr/local/sbin/fleetwright-migrate';
 
@@ -61,7 +62,8 @@ export function migrationState(cfg, status, release, { exists = existsSync, plat
       reason: 'unconfigured',
       message:
         'This box does not know where its releases come from, so there is nothing to move it to.\n' +
-        'Set FLEETWRIGHT_RELEASE_MANIFEST in /etc/fleetwright.env, or re-run the installer with --upgrade.',
+        'Re-run the installer as root with --upgrade, and FLEETWRIGHT_RELEASE_MANIFEST=<manifest URL> if it cannot\n' +
+        'work the address out. Root moves a box only to an address the installer recorded, never to one in /etc/fleetwright.env.',
     };
   }
   // THE GRANT IS CHECKED BEFORE IT IS OFFERED. A button that fails with "sudo:
@@ -240,15 +242,30 @@ export function helperState({ installRoot, bin = MIGRATE_BIN, read = (p) => read
 /**
  * The one command, for the one time it is needed.
  *
- * Root-owned, 0755, written from the release's own copy: the same call the
- * installer makes, so the box ends up exactly where a heal would have left
- * it. Said with the real path rather than `<install dir>`, because the person
- * reading this is holding a phone and is going to type it once.
+ * NOT A COPY OUT OF THE RELEASE TREE, which is what this was:
+ * `sudo install … <install dir>/install/fleetwright-migrate /usr/local/sbin/…`.
+ * That tree is the service user's — applyRelease unpacks into it as them —
+ * so the sentence told a person to take a file the service user can rewrite
+ * and install it, as root, at the one path sudoers lets the service user run
+ * as root. It is #1188's hole, handed over as advice.
  *
- * @param {string} installRoot  the tree whose copy of the helper to install
+ * A verified installer run is what refreshes the helper, from its own tree:
+ * apt's package on an apt box, and on any other the one-liner, which fetches
+ * and checks a release and runs ITS installer. `--repair` asks nothing and
+ * puts back only what this box already agreed to.
+ *
+ * Including on a converted box, which keeps its old checkout and so used to
+ * send the one-liner down the checkout route: root's git in the service
+ * user's repository, then their install.sh. bootstrap.sh now uses a checkout
+ * as root only when root owns it outright, and a box whose units run the
+ * release fetches the release. Only packaged boxes are shown this; a checkout
+ * box's /update names its own way (commands.js, checkoutNote).
+ *
+ * @param {{ releaseSource?: string }} [cfg]
  */
-export function helperRefreshCommand(installRoot) {
-  return `sudo install -m 0755 -o root -g root ${path.join(installRoot, 'install', 'fleetwright-migrate')} ${MIGRATE_BIN}`;
+export function helperRefreshCommand(cfg) {
+  if (cfg?.releaseSource === 'apt') return APT_REPAIR;
+  return 'curl -fsSL <your coordinator>/install | sudo sh -s -- --repair';
 }
 
 /**
@@ -260,15 +277,15 @@ export function helperRefreshCommand(installRoot) {
  * type, so that the reader knows this is one command and not a broken box.
  *
  * @param {'current'|'stale'|null|undefined} state
- * @param {string} installRoot
+ * @param {{ releaseSource?: string }} [cfg]
  * @returns {string|null}
  */
-export function describeHelper(state, installRoot) {
+export function describeHelper(state, cfg) {
   if (state !== 'stale') return null;
   return (
     'The update helper on this box is older than the release it runs, so an update restarts the services ' +
     'and refreshes nothing root owns: the units, the hook and the sudoers rules stay as an earlier installer ' +
-    `left them. One shell command puts it right, once — every update after it keeps it current:\n${helperRefreshCommand(installRoot)}`
+    `left them. One shell command puts it right, once — every update after it keeps it current:\n${helperRefreshCommand(cfg)}`
   );
 }
 
@@ -374,8 +391,8 @@ export function healAfterRelease({
       // command that ends it. The marker above still restarts the services.
       logger.warn(
         `update: ${MIGRATE_BIN} exited 0 without running the release\u2019s installer, so nothing root owns ` +
-          'was refreshed. The helper on this box is older than the release. Refresh it once, from the release: ' +
-          `sudo install -m 0755 -o root -g root <install dir>/current/install/fleetwright-migrate ${MIGRATE_BIN} ` +
+          'was refreshed. The helper on this box is older than the release. Refresh it once, from a verified ' +
+          `release and never from the install dir, which this account can write: ${helperRefreshCommand()} ` +
           `\u2014 the services still restart from the marker.\n${tail}`,
       );
     } else {

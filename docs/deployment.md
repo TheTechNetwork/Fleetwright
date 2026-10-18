@@ -97,12 +97,18 @@ git clone https://github.com/TheTechNetwork/Fleetwright /opt/fleetwright-src
 sudo /opt/fleetwright-src/install/install.sh --check    # prerequisites only, changes nothing
 sudo /opt/fleetwright-src/install/install.sh
 
-sudo /opt/fleetwright/current/install/uninstall.sh         # take this box out of the fleet
-sudo /opt/fleetwright/current/install/uninstall.sh --purge # and remove the releases
+sudo /usr/local/lib/fleetwright-sidecar/current/install/uninstall.sh         # take this box out of the fleet
+sudo /usr/local/lib/fleetwright-sidecar/current/install/uninstall.sh --purge # and remove the releases
 ```
 
-On a checkout install the last two live under `/opt/fleetwright-src/install/`
-instead.
+That is root's copy of the release, which only root can change, and not the
+one under `/opt/fleetwright/current`: that tree belongs to the service user so
+updates can land without root, and running its script with `sudo` runs
+whatever the service user left there. On an apt box, `sudo apt purge
+fleetwright` does the same. On a checkout install the uninstaller lives under
+`/opt/fleetwright-src/install/` instead, and the checkout is the service
+user's too — running it as root trusts them as far as running its installer
+did.
 
 ### Updating
 
@@ -328,7 +334,9 @@ One script does everything:
   secret to hand-copy between files — the step people get wrong
 - installs the systemd unit and registers the Claude Code **SessionStart hook**
 - builds the sandbox image (`localhost/fleetwright-session:latest`) if podman is present
-- links `fleetwright`, `fw` and `fleetwright-sidecar`
+- links `fleetwright`, `fw` and `fleetwright-sidecar` — on a packaged box as
+  root-owned wrappers, so `sudo fleetwright …` runs root's copy of the release
+  and never the tree the service user can change
 
 It is idempotent — re-run it after `git pull` and it will never overwrite a
 config that already exists. `FLEETWRIGHT_REBUILD_IMAGE=1` forces an image

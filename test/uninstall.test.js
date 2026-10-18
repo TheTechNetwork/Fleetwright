@@ -44,6 +44,9 @@ test('root’s half goes too: the migrate rule and the helper it names', () => {
   // gone, on a box that is no longer in any fleet.
   assert.match(SH, /\/etc\/sudoers\.d\/fleetwright-migrate/);
   assert.match(SH, /rm -f \/usr\/local\/sbin\/fleetwright-migrate/);
+  // And root's copy of the address it fetches from, or a reinstall that is
+  // not told one would keep a box's that no longer exists.
+  assert.match(SH, /rm -f \/usr\/local\/etc\/fleetwright\/release-manifest/);
   // All three rules the installer can write, in one loop, so a fourth cannot
   // be added to the installer without this list being the next thing read.
   for (const rule of ['fleetwright-upgrade', 'fleetwright-reboot', 'fleetwright-migrate']) {
@@ -52,6 +55,7 @@ test('root’s half goes too: the migrate rule and the helper it names', () => {
 });
 
 test('the help and the header name the packaged path first', () => {
-  assert.match(SH, /sudo \/opt\/fleetwright\/current\/install\/uninstall\.sh --purge/);
+  // Root's copy in the store: `current` is the service user's to rewrite.
+  assert.match(SH, /sudo \/usr\/local\/lib\/fleetwright-sidecar\/current\/install\/uninstall\.sh --purge/);
   assert.match(SH, /--purge  also remove the code: every release under \/opt\/fleetwright, or the checkout/);
 });

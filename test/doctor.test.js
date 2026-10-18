@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, readFileSyn
 import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 
@@ -162,6 +162,10 @@ function envFor(b) {
     // ONLY the fixture's binaries, so the machine's own are never consulted.
     PATH: `${b.fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
     FLEETWRIGHT_CLAUDE_BIN: path.join(b.fakeBin, 'claude'),
+    // WHOEVER IS RUNNING THE SUITE is the service user, so root asks claude
+    // directly as it always did and nobody asks through sudo. Left to the
+    // default, a suite run as root would ask an account called `agent`.
+    FLEETWRIGHT_USER: userInfo().username,
     FLEETWRIGHT_SYSTEMCTL_BIN: path.join(b.fakeBin, 'systemctl'),
     FLEETWRIGHT_UNIT_DIR: b.unitDir,
     // Nothing of this machine's: doctor reads /etc/fleetwright.env otherwise,
@@ -331,4 +335,38 @@ test('a box with no unit is not a broken box', async (t) => {
   // The hub check speaks instead — one fact, once, and this is the half that
   // has something to say when there is no unit to point at.
   assert.match(out, /hub reachable at/, out.slice(0, 900));
+});
+
+// --- root asks as the service user -------------------------------------------
+
+test('root asks claude as the service user; anybody else asks as themselves', async () => {
+  // `sudo fleetwright doctor --repair` is advice this product prints, and the
+  // claude doctor asks is the installer's FLEETWRIGHT_CLAUDE_BIN — in the
+  // service user's ~/.local/bin. Run directly, root ran their file.
+  const { asServiceUser } = await import('../src/core/as-service-user.js');
+  assert.deepEqual(asServiceUser('/home/agent/.local/bin/claude', ['--version'], { uid: 0, runUser: 'agent' }),
+    ['sudo', ['-n', '-H', '-u', 'agent', '--', '/home/agent/.local/bin/claude', '--version']]);
+  assert.deepEqual(asServiceUser('claude', ['--version'], { uid: 1000, runUser: 'agent' }), ['claude', ['--version']]);
+  // A service that runs as root has no other account to ask on behalf of.
+  assert.deepEqual(asServiceUser('claude', ['--version'], { uid: 0, runUser: 'root' }), ['claude', ['--version']]);
+  assert.deepEqual(asServiceUser('claude', ['--version'], { uid: undefined, runUser: 'agent' }), ['claude', ['--version']]);
+});
+
+test('doctor run by root reaches claude only through sudo -u the service user', { skip: process.getuid?.() !== 0 && 'needs root: it is root\'s doctor' }, async (t) => {
+  const b = await box();
+  t.after(() => b.close());
+  // A sudo that records how it was asked and then does it, as the fixture's.
+  const said = path.join(b.work, 'sudo.log');
+  writeFileSync(path.join(b.fakeBin, 'sudo'), `#!/bin/sh\necho "$*" >> "$SUDO_LOG"\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`);
+  chmodSync(path.join(b.fakeBin, 'sudo'), 0o755);
+  const child = spawnSync(process.execPath, ['bin/fleetwright', 'doctor'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...envFor(b), FLEETWRIGHT_USER: 'svc', SUDO_LOG: said },
+    timeout: 30_000,
+  });
+  const log = existsSync(said) ? readFileSync(said, 'utf8') : '';
+  assert.match(log, /^-n -H -u svc -- \S+\/claude --version$/m, `${log}\n${child.stdout}${child.stderr}`);
+  assert.match(log, /^-n -H -u svc -- \S+\/claude auth status --json$/m);
+  assert.match(child.stdout, /9\.9\.9 \(Claude Code\)/, 'the answer still arrives');
 });

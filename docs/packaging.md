@@ -186,11 +186,15 @@ dated from when converting a checkout was the helper's only job, and left a
 packaged box with the helper it converted with, forever. A stale helper could
 not fix itself: refreshing it is the installer's job, and the stale helper was
 the one thing on the box that would not run the installer. A box on a release
-from before this change refreshes it once by hand:
+from before this change refreshes it once, with a verified installer run:
 
-    sudo install -m 0755 -o root -g root \
-      /opt/fleetwright/current/install/fleetwright-migrate \
-      /usr/local/sbin/fleetwright-migrate
+    curl -fsSL <your coordinator>/install | sudo sh -s -- --repair
+
+(or `sudo apt-get install --reinstall fleetwright` on an apt box). This page
+used to say `sudo install … /opt/fleetwright/current/install/fleetwright-migrate
+/usr/local/sbin/fleetwright-migrate`, and so did the hub: that is the service
+user's file, installed by root at the one path sudoers lets the service user
+run as root.
 
 A checkout gets no heal, deliberately: there is no verified copy of its
 installer for root to run. The update says so and names the command.
@@ -578,8 +582,17 @@ the three-day soak like every other advisory.
 
 It lives in `/usr/lib/fleetwright/node`, off `PATH`, so it neither shadows nor
 is shadowed by a distro nodejs. The units name it outright, and the CLIs in
-`/usr/local/bin` are two-line wrappers that name it too, written whenever the
-node on `PATH` is missing or below the floor.
+`/usr/local/bin` are short wrappers that name it too. It is also the node root
+runs: the installer will not execute one the service user can replace, and
+`fleetwright-migrate` hands this one to the installer it runs.
+
+**`fleetwright` in `/usr/local/bin` is root's own on a packaged box.** The
+release tree is the service user's, so the command does not point into it for
+root: as root it runs root's copy of the release from
+`/usr/local/lib/fleetwright-sidecar` (the sidecar's store, above), and as
+anybody else it runs `current`. That is what makes `sudo fleetwright grant`
+and `sudo fleetwright join` safe to tell somebody to type. A box with no
+root-owned copy refuses them as root, and says how to make one.
 
 ### Remove and purge
 
@@ -640,6 +653,20 @@ a box that was **already running** defaults to no, and with no terminal it
 never converts and names the command. And a repository that is not on GitHub,
 where there is no release address to derive and a guess would be a 404 blamed
 on the installer; it says so and clones.
+
+**As root, a checkout is used only when root owns it outright** — every
+directory from `/` down to it, and everything in it, writable by nobody else
+and with no link out of it — and root's git then reads no global or system
+config and runs no hook or `core.fsmonitor`. The installer gives a checkout to
+the service user so `/update` can pull, so after its first install it is
+theirs, and root running its `install.sh` (or git running its hooks) would be
+root running their code. A **converted** box, whose units run
+`/opt/fleetwright/current`, keeps its old checkout and now fetches and checks
+the release instead, which is what makes `curl … | sudo sh -s -- --repair`
+safe advice there. A box that **runs** its checkout is refused with the two
+ways on: `sudo /usr/local/sbin/fleetwright-migrate` onto releases, or reading
+the checkout and running its installer as root knowingly — the one place it
+stays the service user's (`security.md`, G10).
 
 **Development boxes still want the checkout.** `--from-source` keeps that, and
 the fallback in step 3 means the two can coexist indefinitely rather than

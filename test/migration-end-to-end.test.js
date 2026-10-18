@@ -19,7 +19,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, symlinkSync, cpSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -150,8 +150,15 @@ function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {})
       `FLEETWRIGHT_INSTALL_DIR=${checkout}\n` +
       `FLEETWRIGHT_STATE_DIR=${state}\n`,
   );
+  // ROOT'S COPY OF THE ADDRESS, which is the one the helper fetches: the env
+  // file above is the service user's. Owned by whoever runs this, as root's
+  // is by root on a box, and 0644 whatever the umask says.
+  const manifestFile = path.join(work, 'usr', 'local', 'etc', 'fleetwright', 'release-manifest');
+  mkdirSync(path.dirname(manifestFile), { recursive: true });
+  writeFileSync(manifestFile, `file://${path.join(dist, 'manifest.json')}\n`);
+  chmodSync(manifestFile, 0o644);
 
-  return { work, dist, checkout, state, envFile, base: path.join(work, 'opt', 'fleetwright') };
+  return { work, dist, checkout, state, envFile, manifestFile, base: path.join(work, 'opt', 'fleetwright') };
 }
 
 /** Run the helper the way install.sh does. */
@@ -161,6 +168,7 @@ function migrate(f, extraEnv = {}) {
     env: {
       ...process.env,
       FLEETWRIGHT_ENV_FILE: f.envFile,
+      FLEETWRIGHT_RELEASE_MANIFEST_FILE: f.manifestFile,
       FLEETWRIGHT_BASE: f.base,
       // A UNIT DIRECTORY OF ITS OWN, so "is this box converted" can be posed at
       // all. It was a literal /etc/systemd/system, which meant every converted
@@ -497,6 +505,88 @@ test('a converted box needs no checkout to be brought forward', (t) => {
     // No fallback message, because there is no fallback any more: the verified
     // release's installer is the only one either route runs.
     assert.match(out, /running the installer from the verified release/, out.slice(0, 800));
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+// --- whose address root fetches ---------------------------------------------
+
+test('root fetches the address root wrote, not the one in the service user\u2019s env file', (t) => {
+  // THE ESCALATION. /etc/fleetwright.env is the service user's — install.sh
+  // chowns it to them — and this helper read the manifest URL out of it, as
+  // root. So they wrote the address of a manifest of their own, whose sha256
+  // matched a tarball of their own, ran `sudo -n fleetwright-migrate`, and
+  // their tarball's install.sh ran as root: --help first, then --upgrade.
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    // Their release: the real one with its installer swapped, re-digested so
+    // the sha256 check passes, exactly as they could build it.
+    const evil = path.join(f.work, 'evil');
+    cpSync(f.dist, evil, { recursive: true });
+    rewriteReleaseInstaller(evil, path.join(f.work, 'evil-stage'),
+      `#!/bin/bash\ntouch ${JSON.stringify(path.join(f.work, 'attacker-ran'))}\n`);
+    writeFileSync(f.envFile, readFileSync(f.envFile, 'utf8')
+      .replace(/^FLEETWRIGHT_RELEASE_MANIFEST=.*$/m, `FLEETWRIGHT_RELEASE_MANIFEST=file://${evil}/manifest.json`));
+
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(existsSync(path.join(f.work, 'attacker-ran')), false, `their installer ran as root:\n${out.slice(0, 600)}`);
+    assert.doesNotMatch(out, new RegExp(`${evil}/`), 'their manifest was fetched');
+    assert.equal(r.status, 0, out.slice(0, 600));
+    assert.match(readFileSync(path.join(f.work, 'handoff-release'), 'utf8'), /args=--upgrade/);
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+test('with no address of root\u2019s own, or one others can change, the helper fetches nothing', (t) => {
+  // Refused, never answered from the env file instead: that fallback would be
+  // the hole again. Each refusal says what to do, because the person reading
+  // it from a phone needs the one command and not the reason alone.
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    for (const [label, arrange, why] of /** @type {const} */ ([
+      ['absent', () => rmSync(f.manifestFile), /does not exist/],
+      ['group-writable', () => { writeFileSync(f.manifestFile, `file://${f.dist}/manifest.json\n`); chmodSync(f.manifestFile, 0o664); }, /can be changed by accounts other than/],
+    ])) {
+      arrange();
+      const r = migrate(f);
+      const out = `${r.stdout}${r.stderr}`;
+      assert.notEqual(r.status, 0, `${label}: ${out.slice(0, 400)}`);
+      assert.match(out, why, `${label}: ${out.slice(0, 400)}`);
+      assert.match(out, /Re-run the installer as root/, label);
+      assert.doesNotMatch(out, /fetching/, `${label}: something was fetched`);
+      assert.equal(existsSync(path.join(f.base, 'current')), false, `${label}: the box was changed`);
+    }
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+test('the channel file is a choice between two words, never a file root reads out', (t) => {
+  // <stateDir>/release-channel is the service user's, and root `cat` it into
+  // the progress line. A link to a file only root can read, and a `current`
+  // whose version does not match (also theirs), and root printed that file
+  // to whoever ran the sudo rule.
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    const secret = path.join(f.work, 'shadow');
+    writeFileSync(secret, 'root:$y$only-root-reads-this:19000:0:99999:7:::\n');
+    symlinkSync(secret, path.join(f.state, 'release-channel'));
+    const old = path.join(f.base, 'releases', 'v0.0.1');
+    mkdirSync(path.join(old, 'lib'), { recursive: true });
+    writeFileSync(path.join(old, 'package.json'), JSON.stringify({ version: 'v0.0.1' }));
+    symlinkSync(old, path.join(f.base, 'current'));
+    declareConverted(f);
+
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.doesNotMatch(out, /only-root-reads-this/, out.slice(0, 600));
+    assert.match(out, /stable now has v9\.9\.9/, out.slice(0, 600));
   } finally {
     rmSync(f.work, { recursive: true, force: true });
   }

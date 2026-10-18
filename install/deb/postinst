@@ -129,17 +129,30 @@ fi
 # apt upgrade would leave another release under /opt for ever. The live one and
 # the one it replaced stay, because a rollback target that was tidied away is
 # not a rollback target.
+#
+# AS WHOEVER OWNS $BASE — the service user, once the installer above has run —
+# and never as root. `releases` is a name in their directory: a link from it
+# to /usr made this loop root's `rm -rf` of everything in /usr but the two
+# releases it was told to keep, on an upgrade they can start through the
+# package's own unit. As them, it removes only what they could.
+#
+# `*` skips dotfiles, and that is load-bearing: `.incoming-<version>` is a
+# release the manifest updater is unpacking right now.
 if [ -d "$BASE/releases" ]; then
-  LIVE="$(readlink -f "$BASE/current" 2>/dev/null || true)"
-  KEEP="$(readlink -f "$BEFORE" 2>/dev/null || true)"
-  # `*` skips dotfiles, and that is load-bearing: `.incoming-<version>` is a
-  # release the manifest updater is unpacking right now.
-  for r in "$BASE"/releases/*; do
-    [ -d "$r" ] || continue
-    case "$(basename "$r")" in .*) continue ;; esac
-    rr="$(readlink -f "$r")"
-    [ "$rr" = "$LIVE" ] || [ "$rr" = "$KEEP" ] || rm -rf "$r"
-  done
+  OWNER="$(stat -c %U "$BASE" 2>/dev/null || echo root)"
+  set -- sh -c '
+    LIVE="$(readlink -f "$1/current" 2>/dev/null || true)"
+    KEEP="$(readlink -f "$2" 2>/dev/null || true)"
+    for r in "$1"/releases/*; do
+      [ -d "$r" ] || continue
+      case "${r##*/}" in .*) continue ;; esac
+      rr="$(readlink -f "$r")"
+      [ "$rr" = "$LIVE" ] || [ "$rr" = "$KEEP" ] || rm -rf "$r"
+    done' sh "$BASE" "$BEFORE"
+  if [ "$OWNER" = root ]; then "$@"
+  elif command -v runuser >/dev/null 2>&1; then runuser -u "$OWNER" -- "$@"
+  else echo "fleetwright: no runuser to tidy old releases as $OWNER with — left in $BASE/releases" >&2
+  fi || true
 fi
 
 exit 0

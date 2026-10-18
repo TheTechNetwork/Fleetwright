@@ -72,7 +72,7 @@ test('what the sidecar owns moves to its account, once, on a box installed befor
   // contents are the private key written by the session user.
   assert.match(SH, /install -d -m 0700 -o "\$SIDECAR_USER" \/var\/lib\/fleetwright-sidecar/);
   assert.match(SH, /find \/var\/lib\/fleetwright-sidecar -mindepth 1 ! -user "\$SIDECAR_USER"[^\n]*\n\s+chown -R "\$SIDECAR_USER" \/var\/lib\/fleetwright-sidecar/);
-  assert.match(SH, /chown "\$SIDECAR_USER" "\$MACHINE_FILE"/);
+  assert.match(SH, /run_as "\$SIDECAR_USER" sh -c '[^']*' sh "\$MACHINE_FILE"/);
   assert.match(SH, /chown "\$SIDECAR_USER" "\$SIDECAR_ENV"/);
   assert.doesNotMatch(SH, /install -d -m 0700 -o "\$RUN_USER" \/var\/lib\/fleetwright-sidecar/);
   // And the session user's things stay the session user's.
@@ -95,13 +95,6 @@ test('everything the installer runs as the sidecar runs as the sidecar', () => {
   assert.match(asSidecar, /runuser -u "\$SIDECAR_USER" -- bash -lc/);
   assert.doesNotMatch(asSidecar, /runuser -l/);
   assert.match(asSidecar, /su -s \/bin\/bash/);
-});
-
-test('a checkout stays readable to git under the other account', () => {
-  // "dubious ownership" would leave version and updates null on the health
-  // frame of every box installed from source. One safe.directory line, in the
-  // account's own config rather than /etc/gitconfig for everybody.
-  assert.match(SH, /git config --file \/var\/lib\/fleetwright-sidecar\/\.gitconfig --replace-all safe\.directory "\$DIR"/);
 });
 
 test('the hub user is read from the hub unit alone', () => {

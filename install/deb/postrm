@@ -7,8 +7,11 @@
 # be one host to the coordinator), and with --purge every release under
 # /opt/fleetwright. /usr/lib/fleetwright is gone by the time postrm runs, so
 # it is taken from the sidecar's store — root's copy of a verified release,
-# install.sh's refresh_sidecar_store — and from `current` only on a box that
-# has none. `current` is the service user's to rewrite, and this runs as root.
+# install.sh's refresh_sidecar_store — and NEVER from `current`, which this
+# fell back to on a box with no store. `current` is the service user's to
+# rewrite and this runs as root, so the fallback was the service user's script
+# run as root by `apt purge`. A box with no store is told what was left and
+# where, and the person decides whether to read that script and run it.
 set -e
 BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 STORE="${FLEETWRIGHT_SIDECAR_BASE:-/usr/local/lib/fleetwright-sidecar}"
@@ -16,8 +19,12 @@ case "$1" in
   purge)
     if [ -f "$STORE/current/install/uninstall.sh" ]; then
       bash "$STORE/current/install/uninstall.sh" --purge --yes </dev/null || true
-    elif [ -x "$BASE/current/install/uninstall.sh" ]; then
-      bash "$BASE/current/install/uninstall.sh" --purge --yes </dev/null || true
+    elif [ -e "$BASE/current/install/uninstall.sh" ]; then
+      echo "fleetwright: this box has no root-owned copy of the uninstaller, and the one in" >&2
+      echo "  $BASE/current belongs to the service user, so it was not run as root." >&2
+      echo "  The units, sudoers rules, host key and $BASE are still there. Read" >&2
+      echo "  $BASE/current/install/uninstall.sh, and if it is what you expect:" >&2
+      echo "      sudo bash $BASE/current/install/uninstall.sh --purge" >&2
     fi
     if [ -e /usr/share/debconf/confmodule ]; then
       . /usr/share/debconf/confmodule
