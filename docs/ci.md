@@ -786,6 +786,15 @@ notes, then re-run the job (same build) or publish a fresh release (new
 build). Nothing needs to be re-typed — the listing fields persist across
 versions.
 
+**The job is red when Apple will not take the version**, and the log carries
+Apple's reason. It used to accept any 409 from the submission as "already
+submitted" and go green: the first release of a new app printed that, with
+the version refused for a missing description and no screenshots, and nobody
+knew until App Store Connect was opened. Likewise a first version refuses
+"What's New" (there is nothing it is newer than), and since the notes travel
+in one PATCH with the description, that refusal is retried without them
+rather than dropping the description too.
+
 ### The app icon is generated
 
 `tools/make-app-icon.py` writes `Assets.xcassets/AppIcon.appiconset/icon-1024.png`
