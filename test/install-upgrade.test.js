@@ -326,7 +326,7 @@ test('the migration rule names a path the service user cannot write', () => {
   // Installed as root, by root. The mode and the owner ARE the property — a
   // copy that inherited the checkout's ownership would defeat the paragraph
   // above while looking identical.
-  assert.match(SH, /install -m 0755 -o root -g root "\$DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
+  assert.match(SH, /install -m 0755 -o root -g root "\$SELF_DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
 
   // NO ARGUMENTS. sudoers matches argv, so every argument somebody could pass
   // is a widening of the grant — the same reason the apt rule spells its whole
@@ -339,7 +339,7 @@ test('the migration rule names a path the service user cannot write', () => {
   // the helper became the root half of every update, at which point a box that
   // never refreshed it was a box whose updates never refreshed anything. The
   // grant is the same either way: the path the rule names is the one written.
-  assert.match(SH, /if \[ "\$CHECK_ONLY" != 1 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]/);
+  assert.match(SH, /if \[ "\$CHECK_ONLY" != 1 \] && \[ -f "\$SELF_DIR\/install\/fleetwright-migrate" \]/);
 });
 
 test('the migration helper verifies before it unpacks, and refuses a path', () => {
@@ -495,12 +495,12 @@ test('the migrate helper is refreshed on a packaged box, and never by --check', 
   // installer having run, and the sidecar stayed on the old tree. The stale
   // helper could not fix itself: refreshing it is the installer's job, and
   // the stale helper is the one thing that would not run the installer.
-  assert.match(SH, /if \[ "\$CHECK_ONLY" != 1 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]; then/);
-  assert.doesNotMatch(SH, /\[ "\$PACKAGED" = 0 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]/, 'gated on being a checkout again');
+  assert.match(SH, /if \[ "\$CHECK_ONLY" != 1 \] && \[ -f "\$SELF_DIR\/install\/fleetwright-migrate" \]; then/);
+  assert.doesNotMatch(SH, /\[ "\$PACKAGED" = 0 \] && \[ -f "\$(SELF_)?DIR\/install\/fleetwright-migrate" \]/, 'gated on being a checkout again');
   // Still root-owned and 0755, still outside the tree the service user owns:
   // the sudoers rule names this path, and a rule naming a path that user can
   // write is root with extra steps.
-  assert.match(SH, /install -m 0755 -o root -g root "\$DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
+  assert.match(SH, /install -m 0755 -o root -g root "\$SELF_DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
 });
 
 test('the installer records the manifest the one-liner verified against, before it guesses from git', () => {

@@ -84,7 +84,7 @@ test('everything the installer runs as the sidecar runs as the sidecar', () => {
   const cli = SH.slice(SH.indexOf('sidecar_cli() {'), SH.indexOf('\n}\n', SH.indexOf('sidecar_cli() {')));
   assert.match(cli, /as_sidecar "FLEETWRIGHT_ENROL_QUIET=1/);
   assert.doesNotMatch(cli, /as_user /);
-  for (const m of SH.matchAll(/sudo -u (\$\w+) \$DIR\/bin\/fleetwright-sidecar enrol/g)) {
+  for (const m of SH.matchAll(/sudo -u (\$\w+) \$\(sidecar_tree\)\/bin\/fleetwright-sidecar enrol/g)) {
     assert.equal(m[1], '$SIDECAR_USER', `a fix-it line names the wrong account: ${m[0]}`);
   }
   for (const m of SH.matchAll(/sudo -u %s %s\/bin\/fleetwright-sidecar enrol <pin>\\n' "(\$\w+)"/g)) {
@@ -116,7 +116,7 @@ test('the hub user is read from the hub unit alone', () => {
 test('the account can be checked before the unit is written, and the unit falls back if it fails', () => {
   // A unit that dies at ExecStart with a permissions error attributed to node
   // is the failure this probe exists to catch before it is written.
-  assert.match(SH, /as_sidecar "test -r '\$\(unit_entry fleetwright-sidecar\)' && test -x '\$NODE_BIN'"/);
+  assert.match(SH, /as_sidecar "test -r '\$\(sidecar_entry\)' && test -x '\$SIDECAR_NODE_BIN'"/);
   const start = SH.indexOf("# CAN THE SIDECAR'S ACCOUNT RUN THE SIDECAR");
   assert.ok(start > 0, 'the probe is gone');
   const probe = SH.slice(start, SH.indexOf('\nfi\n', start));

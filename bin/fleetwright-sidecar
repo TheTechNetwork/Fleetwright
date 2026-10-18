@@ -307,10 +307,13 @@ const sidecar = new Sidecar({
         // it; a box whose helper the installer never refreshed restarts its
         // services on every update and refreshes nothing else, and the only
         // place that said so was the hub's journal. Compared against the
-        // tree this sidecar runs, for the reason helperState gives.
+        // tree this sidecar runs, for the reason helperState gives — which
+        // is INSTALL_ROOT by name: on a packaged Linux box hub.installDir is
+        // the hub's `current` (the unit says so) and this runs a root-owned
+        // copy elsewhere, so the two are no longer one directory.
         return v === 'unknown'
           ? null
-          : { head: v, branch: null, installed: currentVersion(hub.installDir), helper: helperState({ installRoot: hub.installDir }) };
+          : { head: v, branch: null, installed: currentVersion(hub.installDir), helper: helperState({ installRoot: INSTALL_ROOT }) };
       }
       return null;
     },

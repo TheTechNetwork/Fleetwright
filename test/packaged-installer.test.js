@@ -434,7 +434,8 @@ test('a unit names the module, so a bad shim in a release cannot stop it', () =>
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
   assert.match(sh, /unit_entry\(\) \{/);
   assert.match(sh, /if \[ -f "\$DIR\/lib\/\$1\.mjs" \]/, 'the entry is not derived from what the payload has');
-  assert.match(sh, /-e "s\|__ENTRY__\|\$\(unit_entry "\$1"\)\|g"/);
+  assert.match(sh, /uentry="\$\(unit_entry "\$1"\)"/);
+  assert.match(sh, /-e "s\|__ENTRY__\|\$uentry\|g"/);
 
   // No unit hardcodes bin/ any more — that is the substitution that could not
   // tell a checkout from a release.

@@ -463,6 +463,33 @@ RUN_USER="${FLEETWRIGHT_USER:-$(unit_user || printf '%s' "${SUDO_USER:-$(id -un)
 SIDECAR_USER="${FLEETWRIGHT_SIDECAR_USER:-fleetwright-sidecar}"
 [ "$PLATFORM" = macos ] && SIDECAR_USER="${FLEETWRIGHT_SIDECAR_USER:-$RUN_USER}"
 
+# WHERE THE SIDECAR'S CODE LIVES, WHICH IS NOT THE RELEASE TREE.
+#
+# A separate account is worth nothing if $RUN_USER can change what that
+# account runs. The release tree is $RUN_USER's on purpose — applyRelease
+# unpacks into releases/ and swaps `current` as that user — and the sidecar
+# unit used to run `node <base>/current/lib/fleetwright-sidecar.mjs` straight
+# out of it. So $RUN_USER, or a session escape landing as it, could rewrite
+# the sidecar's code, write the hub's restart marker, and be running as the
+# sidecar's account three seconds later with the host key in reach. #270's
+# line was a uid and not a boundary.
+#
+# So on a packaged Linux box the sidecar runs from a ROOT-OWNED copy here,
+#
+#   <store>/releases/<version>/   a read-only copy of a verified release
+#   <store>/current -> releases/<version>   the newest copy root made
+#   <store>/launch.mjs            picks which copy to run (see that file)
+#
+# written only by root, only from a tree root has verified and $RUN_USER cannot
+# reach — the deb's sha-checked extract, the tarball bootstrap.sh checked, the
+# copy fleetwright-migrate checked — and NEVER copied out of releases/, which
+# is the same "root reading what the service user can rewrite" this file's
+# header records about the installer itself. See refresh_sidecar_store.
+SIDECAR_BASE="${FLEETWRIGHT_SIDECAR_BASE:-/usr/local/lib/fleetwright-sidecar}"
+# 1 once this run has a usable copy in the store; the sidecar's unit, its CLI
+# link and every command run as the sidecar then point there.
+SIDECAR_STORE=0
+
 # Resolved once, up here, because finding node depends on it — sudo hides
 # anything a version manager put in this directory.
 #
@@ -860,11 +887,220 @@ refresh_release_if_converted() {
     || warn "could not refresh the release — carrying on with the one this box has"
 }
 
+# THE SIDECAR'S STORE, refreshed from the one tree this run can vouch for.
+#
+# WHICH TREE THAT IS: the installer's own, $SELF_DIR, when it is a release and
+# $RUN_USER cannot change it — checked, not assumed. Every root route into
+# this file that has a verified release arrives exactly that way: the deb's
+# postinst runs the installer out of its sha-checked extract, bootstrap.sh out
+# of the tarball it checked, fleetwright-migrate out of the one it checked,
+# each unpacked into a 0700 directory of root's. $DIR is never the source: on
+# all three it is, or becomes, `current`, which $RUN_USER can repoint.
+#
+# NO VERIFIED TREE, NO REFRESH. Root running the installer out of `current` by
+# hand, or a checkout's installer on a converted box, has nothing to vouch for,
+# so a store that is already there is kept and the sidecar goes on running the
+# copy it has. That is the version skew this design accepts, said plainly: an
+# update applied by $RUN_USER alone (/update with no fleetwright-migrate to
+# heal it) moves the hub and NOT the sidecar, which keeps its root-owned
+# release until root next runs a verified installer. The sidecar's health
+# frame says so — `head` is the tree it runs, `installed` is `current` — and
+# the apps already draw that gap. Where the heal does run, it IS such an
+# installer, so on an ordinary box the two move together.
+#
+# A CHECKOUT GETS NO STORE. It is a thing somebody edits and /update pulls into
+# as $RUN_USER, so there is no verified tree to copy, and a snapshot of
+# whatever is in it would only be a copy of what $RUN_USER chose. The sidecar
+# runs from the checkout and the check below says, in words, that the host key
+# is not protected from $RUN_USER on this box.
+refresh_sidecar_store() {
+  SIDECAR_STORE=0
+  [ "$PLATFORM" = linux ] && [ "$SIDECAR_USER" != "$RUN_USER" ] && [ "$CHECK_ONLY" != 1 ] && [ "$(id -u)" = 0 ] || return 0
+  # Only a box that runs packaged releases. --from-source is the way back to
+  # the checkout, and a store left over from before keeps nothing running.
+  { [ "$PACKAGED" = 1 ] || { [ "$CONVERTED" = 1 ] && [ "$FROM_SOURCE" = 0 ]; }; } || return 0
+
+  # THE STORE ITSELF HAS TO BE ROOT'S, all the way down. A FLEETWRIGHT_BASE or
+  # FLEETWRIGHT_SIDECAR_BASE that puts it inside the tree chowned to $RUN_USER
+  # would make every copy below a copy into their hands.
+  if [ -e "$SIDECAR_BASE" ] || [ -L "$SIDECAR_BASE" ]; then
+    if run_user_can_alter "$SIDECAR_BASE"; then
+      warn "$SIDECAR_BASE can be changed by $RUN_USER, so it cannot hold the sidecar's code"
+      return 0
+    fi
+  elif run_user_can_alter "$(dirname "$SIDECAR_BASE")"; then
+    warn "$(dirname "$SIDECAR_BASE") can be changed by $RUN_USER, so the sidecar's code cannot live under it"
+    return 0
+  fi
+
+  local src="$SELF_DIR" ver have="" previous r
+  if [ -f "$SIDECAR_BASE/launch.mjs" ] && [ -f "$SIDECAR_BASE/current/lib/fleetwright-sidecar.mjs" ]; then
+    have="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SIDECAR_BASE/current/package.json" 2>/dev/null | head -1 || true)"
+    have="${have:-a version that cannot be read}"
+  fi
+
+  if [ -f "$src/lib/fleetwright-sidecar.mjs" ] && [ -f "$src/install/fleetwright-sidecar-launch.mjs" ] \
+     && ! run_user_can_alter "$src"; then
+    ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$src/package.json" 2>/dev/null | head -1 || true)"
+    # A NAME, NEVER A PATH — the rule fleetwright-migrate and release.js apply
+    # to the same string, and launch.mjs applies again before it uses one.
+    case "$ver" in
+      ''|.*|*[!A-Za-z0-9._+-]*) warn "the release's version \"$ver\" is not a plain name — not copying it for the sidecar"; ver="" ;;
+    esac
+    if [ -n "$ver" ]; then
+      install -d -m 0755 -o root -g root "$SIDECAR_BASE" "$SIDECAR_BASE/releases"
+      previous="$(basename "$(readlink "$SIDECAR_BASE/current" 2>/dev/null || true)")"
+      rm -rf "$SIDECAR_BASE/releases/.incoming-$ver"
+      cp -a "$src/." "$SIDECAR_BASE/releases/.incoming-$ver"
+      # Whatever uid the archive carried, and nothing anybody else may write.
+      chown -R root:root "$SIDECAR_BASE/releases/.incoming-$ver"
+      chmod -R u+rwX,go+rX,go-w "$SIDECAR_BASE/releases/.incoming-$ver"
+      rm -rf "$SIDECAR_BASE/releases/$ver"
+      mv "$SIDECAR_BASE/releases/.incoming-$ver" "$SIDECAR_BASE/releases/$ver"
+      # Atomically, for the reason the release lay-out above gives.
+      ln -sfn "releases/$ver" "$SIDECAR_BASE/.current.new"
+      mv -Tf "$SIDECAR_BASE/.current.new" "$SIDECAR_BASE/current"
+      install -m 0644 -o root -g root "$SIDECAR_BASE/releases/$ver/install/fleetwright-sidecar-launch.mjs" "$SIDECAR_BASE/launch.mjs"
+      # THIS ONE AND THE ONE IT REPLACED, the deb's rule for releases/. The
+      # one before is what the commit-confirm watchdog points `current` back
+      # at, and launch.mjs follows `current` when root has a copy of it — so
+      # tidying it away would leave a revert that moves the hub and not the
+      # sidecar. Re-copying the live version replaced nothing, so nothing goes.
+      if [ -n "$previous" ] && [ "$previous" != "$ver" ]; then
+        for r in "$SIDECAR_BASE"/releases/*; do
+          [ -d "$r" ] || continue
+          case "$(basename "$r")" in "$ver"|"$previous") ;; *) rm -rf "$r" ;; esac
+        done
+      fi
+      ok "the sidecar runs $ver from $SIDECAR_BASE — root's copy of the verified release"
+      SIDECAR_STORE=1
+      return 0
+    fi
+  fi
+
+  if [ -n "$have" ]; then
+    SIDECAR_STORE=1
+    local hub
+    hub="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FLEET_BASE/current/package.json" 2>/dev/null | head -1 || true)"
+    if [ "$hub" = "$have" ]; then
+      ok "the sidecar runs $have from $SIDECAR_BASE, the release the hub runs"
+    else
+      warn "no verified copy of the release in this run ($src is not one), so the sidecar keeps running"
+      warn "  $have from $SIDECAR_BASE while the hub runs ${hub:-something else} — apt, the one-liner"
+      warn "  or sudo /usr/local/sbin/fleetwright-migrate brings it level"
+    fi
+  fi
+  return 0
+}
+
 # Who owns a path. GNU stat spells it -c %U and BSD stat -f %Su; a Mac has the
 # second, and the first version of the two chown guards below asked GNU's
 # question there, got nothing back, and chowned a tree it did not need to on
 # every run. Empty when the path is missing.
 owner_of() { stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || true; }
+
+# CAN $RUN_USER CHANGE WHAT THIS PATH IS? The question the sidecar's
+# separation stands or falls on, asked of its code, its node and the directory
+# it runs in, and of every tree root is about to copy into the store.
+#
+# "Writable" is not the question. A file can be 0644 root and still be
+# $RUN_USER's to replace, if any directory on the way to it is theirs: rename
+# the parent, put a tree of their own in its place. So every directory from /
+# down is asked, and a symlink on the way is followed and its target's path
+# asked too — `current` is exactly such a symlink, and the entry it lives in
+# decides where it points. Then, for a directory, everything under it.
+#
+# Two things make it NOT alterable on the way down, and both are load-bearing
+# for the cases this is used on:
+#   - a directory $RUN_USER cannot search: nothing below it can be reached.
+#     The deb's extract and fleetwright-migrate's copy sit in a 0700 root
+#     directory under /tmp, and that is what makes them safe to copy from.
+#   - a sticky directory (/tmp) protects an entry $RUN_USER does not own.
+#
+# Read from the mode bits with the owner/group/other precedence the kernel
+# applies, as GNU stat reports them — not by running `test -w` as the user,
+# which needs root and an account to test, and gets /tmp's sticky bit wrong.
+# ACLs are not read; a box that grants $RUN_USER write through one has said so
+# itself. Linux only, which is the only place the sidecar has its own account.
+#
+# Returns 0 when $RUN_USER could change it — and when it cannot tell, because
+# a check that fails open is not a check.
+run_user_can_alter() { # run_user_can_alter PATH → 0 when $RUN_USER could change PATH or anything under it
+  local uid gids
+  uid="$(id -u "$RUN_USER" 2>/dev/null)" || return 0
+  [ "$uid" = 0 ] && return 0
+  gids=" $(id -G "$RUN_USER" 2>/dev/null) "
+  RUA_UID="$uid" RUA_GIDS="$gids" _rua_walk "$1" 0
+}
+# The permission bits that apply to $RUN_USER for one stat line, 7 for an
+# owner: an owner can chmod, so every bit is theirs whatever the mode says.
+_rua_bits() { # _rua_bits UID GID MODE
+  local m=$((8#$3))
+  if [ "$1" = "$RUA_UID" ]; then echo 7
+  elif case "$RUA_GIDS" in *" $2 "*) true ;; *) false ;; esac; then echo $(((m >> 3) & 7))
+  else echo $((m & 7)); fi
+}
+_rua_walk() { # _rua_walk PATH DEPTH [notree]
+  local path="$1" depth="$2" notree="${3:-}" cur="/" next c rest i uid gid mode kind bits pbits puid sticky target g
+  local -a parts
+  [ "$depth" -lt 40 ] || return 0
+  case "$path" in /*) ;; *) path="$PWD/$path" ;; esac
+  IFS=/ read -r -a parts <<<"$path"
+  read -r uid gid mode kind < <(stat -c '%u %g %a %F' -- / 2>/dev/null) || return 0
+  [ "$uid" = "$RUA_UID" ] && return 0
+  for ((i = 0; i < ${#parts[@]}; i++)); do
+    c="${parts[$i]}"
+    case "$c" in ''|.) continue ;; ..) cur="$(dirname "$cur")"; continue ;; esac
+    read -r puid gid mode kind < <(stat -c '%u %g %a %F' -- "$cur" 2>/dev/null) || return 0
+    pbits="$(_rua_bits "$puid" "$gid" "$mode")"
+    sticky=$(((8#$mode) & 01000))
+    # Cannot search the directory: nothing in it is reachable, this included.
+    [ $((pbits & 1)) = 1 ] || return 1
+    next="${cur%/}/$c"
+    if ! read -r uid gid mode kind < <(stat -c '%u %g %a %F' -- "$next" 2>/dev/null); then
+      # Not there. Theirs to create if the directory is theirs to write.
+      [ $((pbits & 2)) = 2 ] && return 0
+      return 1
+    fi
+    # The entry itself: replaceable through a writable parent, unless the
+    # parent is sticky and the entry is somebody else's.
+    if [ $((pbits & 2)) = 2 ] && { [ "$sticky" = 0 ] || [ "$uid" = "$RUA_UID" ] || [ "$puid" = "$RUA_UID" ]; }; then
+      return 0
+    fi
+    [ "$uid" = "$RUA_UID" ] && return 0
+    if [ "$kind" = "symbolic link" ]; then
+      target="$(readlink -- "$next")" || return 0
+      case "$target" in /*) ;; *) target="${cur%/}/$target" ;; esac
+      rest="$(IFS=/; printf '%s' "${parts[*]:$((i + 1))}")"
+      _rua_walk "${target%/}${rest:+/$rest}" $((depth + 1)) "$notree"
+      return $?
+    fi
+    cur="$next"
+  done
+  # The thing itself, then — for a directory — everything under it.
+  read -r uid gid mode kind < <(stat -c '%u %g %a %F' -- "$cur" 2>/dev/null) || return 0
+  bits="$(_rua_bits "$uid" "$gid" "$mode")"
+  [ $((bits & 2)) = 2 ] && return 0
+  [ "$kind" = directory ] && [ -z "$notree" ] || return 1
+  # A directory they cannot search hides everything in it, as on the way down.
+  [ $((bits & 1)) = 1 ] || return 1
+  local -a groupw=()
+  for g in $RUA_GIDS; do groupw+=(-o -group "$g"); done
+  # Owned by them, or writable by everybody, or by a group they are in.
+  # Symlinks report 0777 and mean nothing by it, so they are followed instead.
+  if [ -n "$(find "$cur" \( -user "$RUA_UID" -o \( ! -type l \( -perm -0002 -o \( -perm -0020 \( -false "${groupw[@]}" \) \) \) \) \) -print -quit 2>/dev/null)" ]; then
+    return 0
+  fi
+  # A symlink in the tree is asked where it lands — the path to it and the
+  # thing itself, not a second walk of everything under it, and not at all
+  # when it lands inside the tree just scanned.
+  while IFS= read -r -d '' target; do
+    target="$(readlink -f -- "$target" 2>/dev/null)" || return 0
+    case "$target/" in "${cur%/}/"*) continue ;; esac
+    _rua_walk "$target" $((depth + 1)) notree && return 0
+  done < <(find "$cur" -type l -print0 2>/dev/null)
+  return 1
+}
 
 # IS THIS DAEMON RUNNING, BY LAUNCHD'S OWN WORD. `launchctl bootstrap`
 # returning 0 says the request was accepted, and nothing else: a job whose
@@ -1051,8 +1287,13 @@ previous_install() {
     local fp=""
     # As whichever account can read the key: the sidecar's on a box that has
     # been through this installer since #270, the session user's before it.
-    fp="$( { as_sidecar "'$DIR/bin/fleetwright-sidecar' identity" 2>/dev/null \
-            || as_user "'$DIR/bin/fleetwright-sidecar' identity" 2>/dev/null; } | awk '/fingerprint/ {print $2}' || true)"
+    # AS THE SIDECAR ONLY FROM ROOT'S COPY. $DIR is the payload, which on a
+    # packaged box is `current` — $RUN_USER's to rewrite — and code run as the
+    # sidecar's account is code that can read the key it is printing.
+    if [ -f "$SIDECAR_BASE/current/bin/fleetwright-sidecar" ] && ! run_user_can_alter "$SIDECAR_BASE"; then
+      fp="$(as_sidecar "'$SIDECAR_BASE/current/bin/fleetwright-sidecar' identity" 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
+    fi
+    [ -n "$fp" ] || fp="$(as_user "'$DIR/bin/fleetwright-sidecar' identity" 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
     FOUND+=("IDENTITY  /var/lib/fleetwright-sidecar/host-key.json${fp:+  fingerprint $fp}")
   fi
   for d in /var/lib/fleetwright /var/lib/fleetwright-coordinator; do
@@ -1746,7 +1987,10 @@ if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
         # One implementation, called rather than copied: the uninstaller is the
         # thing that knows how to take a box apart, and a second copy of that
         # knowledge here is the copy that goes stale.
-        "$DIR/install/uninstall.sh" --yes || die "cleanup failed — nothing further was changed"
+        #
+        # THIS INSTALLER'S COPY, which root may run: on a packaged route $DIR
+        # is `current` by now, and `current` is the service user's to rewrite.
+        "$SELF_DIR/install/uninstall.sh" --yes || die "cleanup failed — nothing further was changed"
         ok "cleaned — installing fresh"
       fi
       ;;
@@ -1801,6 +2045,12 @@ if [ "$CHECK_ONLY" != 1 ]; then
   # installed from source. The account's home is its state directory, so the
   # one line git needs goes there, for this account alone rather than in
   # /etc/gitconfig for everybody.
+  #
+  # It switches off the guard that stops $RUN_USER's .git/config running a
+  # program as this account, and that is only acceptable because a checkout
+  # gives nothing away it had not already: the sidecar runs the checkout's own
+  # code, which $RUN_USER can rewrite. Never on a packaged box, which has no
+  # .git — and the end of this run says a checkout has no separation.
   if [ -d "$DIR/.git" ] && [ "$SIDECAR_USER" != "$RUN_USER" ] && command -v git >/dev/null; then
     git config --file /var/lib/fleetwright-sidecar/.gitconfig --replace-all safe.directory "$DIR" 2>/dev/null \
       && chown "$SIDECAR_USER" /var/lib/fleetwright-sidecar/.gitconfig 2>/dev/null \
@@ -1961,6 +2211,18 @@ fi
 # helper that is running this installer keeps reading the file it started
 # from rather than the one that replaces it.
 #
+# FROM THIS INSTALLER'S TREE, NOT THE PAYLOAD — the rule the watchdog, the
+# reclaimer and the apt-channel script below already follow. On every packaged
+# route $DIR is `current` by now, which the service user can rewrite, and this
+# line was copying the service user's file into the one path sudoers lets the
+# service user run as root. fleetwright-migrate's heal runs this installer out
+# of a verified copy with `current` as the payload, so the whole of it was:
+# edit current/install/fleetwright-migrate, `sudo -n fleetwright-migrate`
+# (allowed, no arguments), and the next `sudo -n fleetwright-migrate` ran the
+# edit as root. $SELF_DIR is the deb's extract, bootstrap.sh's or the
+# helper's own verified copy on those routes, and the checkout on a checkout,
+# where it is the same tree as $DIR.
+#
 # NOT ON A MAC. The helper rewrites systemd units under /etc/systemd/system and
 # runs the packaged release's installer, and a Mac has neither the units nor
 # the packaged layout — /update there pulls the checkout and the operator
@@ -1970,8 +2232,8 @@ fi
 # the helper is not for this box is the honest answer, not a portable group.
 if [ "$PLATFORM" = macos ]; then
   say "the release-migration helper is systemd-only — a Mac updates by re-running this installer with --upgrade"
-elif [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
-  install -m 0755 -o root -g root "$DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
+elif [ "$CHECK_ONLY" != 1 ] && [ -f "$SELF_DIR/install/fleetwright-migrate" ]; then
+  install -m 0755 -o root -g root "$SELF_DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
   ok "installed /usr/local/sbin/fleetwright-migrate"
   if write_migrate_sudoers; then
     ok "the app can move this box onto packaged releases without a shell"
@@ -1999,8 +2261,11 @@ say "Configuring the fleet sidecar"
 if [ -f "$SIDECAR_ENV" ]; then
   ok "$SIDECAR_ENV already exists — left untouched"
 else
+  # The template from this installer's own tree: what lands here is the
+  # sidecar's environment, and a NODE_OPTIONS in it is code the sidecar runs.
+  # $DIR is `current` on a packaged route, which is the service user's.
   SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" SIDECAR_TOKEN_FILE="$SIDECAR_TOKEN_FILE" \
-  TEMPLATE="$DIR/install/fleetwright-sidecar.env.example" "$NODE_BIN" <<'NODE'
+  TEMPLATE="$SELF_DIR/install/fleetwright-sidecar.env.example" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
 
 // The sidecar's own token, minted above. Preferred over the operator's
@@ -2130,21 +2395,9 @@ refresh_release_if_converted
 
 say "Installing the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo "systemd units")"
 
-# CAN THE SIDECAR'S ACCOUNT RUN THE SIDECAR. Its unit names a node and an entry
-# that $RUN_USER can read by construction and another account can only read
-# if the directories on the way allow it — a checkout cloned into a 0750 home,
-# a node under ~/.nvm. Checked as that account, before a unit is written that
-# would die at ExecStart with a permissions error attributed to node.
-if [ "$SIDECAR_USER" != "$RUN_USER" ] && [ "$CHECK_ONLY" != 1 ]; then
-  if as_sidecar "test -r '$(unit_entry fleetwright-sidecar)' && test -x '$NODE_BIN'" >/dev/null 2>&1; then
-    ok "$SIDECAR_USER can read $DIR and run $NODE_BIN"
-  else
-    warn "$SIDECAR_USER cannot read $(unit_entry fleetwright-sidecar) or run $NODE_BIN — the sidecar will run as $RUN_USER"
-    MISSING+=("a separate account for the sidecar: make $DIR and $NODE_BIN readable by $SIDECAR_USER and re-run this")
-    SIDECAR_USER="$RUN_USER"
-    SIDECAR_USER_FALLBACK=1
-  fi
-fi
+# After the release is brought forward, so the store is filled from the
+# release this box is about to run. Before the units, which name what it made.
+refresh_sidecar_store
 
 # All three, not just fleetwright. Installing only the hub was a real bug with a
 # quiet symptom: the installer went on to call `systemctl enable --now
@@ -2210,18 +2463,28 @@ install_unit() { # install_unit NAME
   # code and its node live outside /home — which is every packaged box. A
   # checkout or a version-managed node under somebody's home would be invisible
   # to a unit that says yes, and the service would die at ExecStart.
+  # THE SIDECAR'S OWN THREE: its directory, its entry and its node are the
+  # store's and the node chosen for it below, not the hub's. __INSTALL_DIR__
+  # is the hub's tree either way — the sidecar reads which release `current`
+  # holds from it, and runs nothing out of it.
+  local udir="$DIR" uentry unode="$NODE_BIN"
+  uentry="$(unit_entry "$1")"
+  if [ "$1" = fleetwright-sidecar ]; then
+    udir="$(sidecar_dir)"; uentry="$(sidecar_entry)"; unode="${SIDECAR_NODE_BIN:-$NODE_BIN}"
+  fi
   local protect_home="ProtectHome=yes"
-  case "$DIR:$NODE_BIN" in
+  case "$udir:$unode" in
     /home/*|/root/*|*:/home/*|*:/root/*)
       protect_home="ProtectHome=read-only"
-      [ "$1" = fleetwright-sidecar ] && warn "$DIR or $NODE_BIN is under a home directory, so the sidecar's unit keeps ProtectHome=read-only" ;;
+      [ "$1" = fleetwright-sidecar ] && warn "$udir or $unode is under a home directory, so the sidecar's unit keeps ProtectHome=read-only" ;;
   esac
   sed -e "s|__USER__|$RUN_USER|g" \
       -e "s|__SIDECAR_USER__|$SIDECAR_USER|g" \
       -e "s|^ProtectHome=yes$|$protect_home|" \
-      -e "s|__ENTRY__|$(unit_entry "$1")|g" \
-      -e "s|__DIR__|$DIR|g" \
-      -e "s|__NODE__|$NODE_BIN|g" \
+      -e "s|__ENTRY__|$uentry|g" \
+      -e "s|__INSTALL_DIR__|$DIR|g" \
+      -e "s|__DIR__|$udir|g" \
+      -e "s|__NODE__|$unode|g" \
       -e "s|__PATH__|$(launchd_path)|g" \
       -e "s|__STATE_DIR__|$STATE_DIR|g" \
       -e "s|__FLEET_BASE__|$FLEET_BASE|g" \
@@ -2265,6 +2528,75 @@ install_unit() { # install_unit NAME
   fi
   ok "$dest"
 }
+
+# WHERE THE SIDECAR RUNS FROM: the store when this run has one, otherwise the
+# same tree as the hub — a checkout, or a packaged box no verified installer
+# has run on yet. Functions, because $DIR is swapped to `current` around the
+# unit writes on a converted box and the answer has to follow it.
+sidecar_dir() { if [ "$SIDECAR_STORE" = 1 ]; then printf '%s' "$SIDECAR_BASE"; else printf '%s' "$DIR"; fi; }
+sidecar_entry() { if [ "$SIDECAR_STORE" = 1 ]; then printf '%s/launch.mjs' "$SIDECAR_BASE"; else unit_entry fleetwright-sidecar; fi; }
+# The tree whose bin/fleetwright-sidecar the installer runs AS the sidecar —
+# enrol, identity, doctor — and the CLI link points at. The same rule as the
+# unit: those commands read the host key too.
+sidecar_tree() { if [ "$SIDECAR_STORE" = 1 ]; then printf '%s/current' "$SIDECAR_BASE"; else printf '%s' "$DIR"; fi; }
+
+# THE SIDECAR'S NODE, which $RUN_USER must not be able to replace either: a
+# node in their home is a binary they can swap, and the sidecar would then be
+# running their program with the key in reach. The system node the units
+# prefer if there is one they cannot touch, then the one this run found.
+SIDECAR_NODE_BIN="$NODE_BIN"
+if [ "$SIDECAR_USER" != "$RUN_USER" ] && [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ]; then
+  for candidate in "${UNIT_NODE_BIN:-}" "$NODE_BIN"; do
+    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    if ! run_user_can_alter "$candidate"; then SIDECAR_NODE_BIN="$candidate"; break; fi
+  done
+fi
+
+# CAN THE SIDECAR'S ACCOUNT RUN THE SIDECAR. Its unit names a node and an entry
+# that $RUN_USER can read by construction and another account can only read
+# if the directories on the way allow it — a checkout cloned into a 0750 home,
+# a node under ~/.nvm. Checked as that account, before a unit is written that
+# would die at ExecStart with a permissions error attributed to node.
+#
+# HERE, AFTER unit_entry EXISTS. This probe sat above that function's
+# definition, so `$(unit_entry …)` was "command not found", the test read an
+# empty path and failed, and EVERY Linux box took the branch below: the
+# sidecar has run as $RUN_USER since #682 shipped, with a warning saying so
+# that read like a permissions problem on the box. Nothing here was the
+# boundary it was written to be until this moved.
+if [ "$SIDECAR_USER" != "$RUN_USER" ] && [ "$CHECK_ONLY" != 1 ]; then
+  if as_sidecar "test -r '$(sidecar_entry)' && test -x '$SIDECAR_NODE_BIN'" >/dev/null 2>&1; then
+    ok "$SIDECAR_USER can read $(sidecar_dir) and run $SIDECAR_NODE_BIN"
+  else
+    warn "$SIDECAR_USER cannot read $(sidecar_entry) or run $SIDECAR_NODE_BIN — the sidecar will run as $RUN_USER"
+    MISSING+=("a separate account for the sidecar: make $(sidecar_dir) and $SIDECAR_NODE_BIN readable by $SIDECAR_USER and re-run this")
+    SIDECAR_USER="$RUN_USER"
+    SIDECAR_USER_FALLBACK=1
+  fi
+fi
+
+# AND CAN $RUN_USER CHANGE WHAT IT RUNS. Reading is the account's half; this is
+# the half the separation is for. Nothing the sidecar executes — its entry,
+# the tree it runs in, its node — nor any directory or symlink on the way to
+# them may be $RUN_USER's to change, or $RUN_USER runs code as the sidecar and
+# reads the host key through it.
+#
+# SAID, NOT REFUSED. The account still keeps a compromised sidecar out of
+# $RUN_USER's credentials, which is half of #270 and holds either way, and a
+# checkout is a legitimate box for somebody who edits it. What the box must
+# not do is claim the other half, so it is said here and again at the end.
+SIDECAR_EXPOSED=""
+if [ "$SIDECAR_USER" != "$RUN_USER" ] && [ "$CHECK_ONLY" != 1 ] && [ "$PLATFORM" = linux ]; then
+  for p in "$(sidecar_entry)" "$(sidecar_dir)" "$SIDECAR_NODE_BIN"; do
+    run_user_can_alter "$p" && SIDECAR_EXPOSED="$SIDECAR_EXPOSED $p"
+  done
+  if [ -z "$SIDECAR_EXPOSED" ]; then
+    ok "nothing the sidecar runs can be changed by $RUN_USER — the host key is out of its reach"
+  else
+    warn "$RUN_USER can change what the sidecar runs:$SIDECAR_EXPOSED"
+    warn "  so the host key is NOT protected from $RUN_USER, or a session escape landing as it"
+  fi
+fi
 
 # KEPT BEFORE THEY ARE OVERWRITTEN, because the old ExecStart is the only
 # record of where the previous install lived — and install_unit is about to
@@ -2744,13 +3076,19 @@ fi
 # `current` symlink, and PRUNES old releases — and removing a root-owned tree
 # needs write on the directories inside it, not only on their parent.
 #
-# THE GRANT IS THE SAME ONE THE CHECKOUT ALREADY HAD, which is the reason this
-# is not a widening. The service user can replace the code it runs; it could
-# always do that, and it IS the thing running that code, so there is nothing to
-# escalate to. What stays out of reach is unchanged: the units are root-owned in
-# /etc, the env file is root-owned and 0600, and the sudoers rule names
-# /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, so that
-# a service user who can rewrite the tree still cannot rewrite what runs as root.
+# THE GRANT IS THE SAME ONE THE CHECKOUT ALREADY HAD, and it is a grant over
+# the HUB'S code: the service user can replace what the service user runs,
+# which gives it nothing it did not have. It is not a grant over anything
+# another account runs, and this said "there is nothing to escalate to" for
+# years while the sidecar — a different account, holding the host key — ran
+# straight out of this tree. That is why the sidecar now runs from root's store
+# (refresh_sidecar_store), filled from a verified release and never from here.
+#
+# What else stays out of reach: the units are root-owned in /etc, the sidecar's
+# env file is its account's and 0600, and the sudoers rule names
+# /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, and
+# written from the installer's own tree rather than from this one, so a service
+# user who can rewrite the tree still cannot rewrite what runs as root.
 if [ -d "$FLEET_BASE" ] && [ "$(owner_of "$FLEET_BASE")" != "$RUN_USER" ]; then
   if chown -R "$RUN_USER" "$FLEET_BASE" 2>/dev/null; then
     ok "$FLEET_BASE now belongs to $RUN_USER, so updates can be applied without root"
@@ -2807,22 +3145,28 @@ for pair in fleetwright:fleetwright fw:fleetwright \
             fleetwright-sidecar:fleetwright-sidecar \
             agent-hub:agent-hub agent-fleet-sidecar:agent-fleet-sidecar; do
   link="${pair%%:*}"; cli="${pair#*:}"
-  [ -f "$DIR/bin/$cli" ] || continue
-  if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "${UNIT_NODE_BIN:-}" ]; then
+  # THE SIDECAR'S COMMAND IS THE STORE'S. `sudo -u fleetwright-sidecar
+  # fleetwright-sidecar enrol` is what the installer tells people to type, and
+  # through a link into `current` that ran $RUN_USER's file as the account
+  # holding the key.
+  tree="$DIR"; node="${UNIT_NODE_BIN:-}"
+  case "$cli" in *-sidecar) tree="$(sidecar_tree)"; node="${SIDECAR_NODE_BIN:-$node}" ;; esac
+  [ -f "$tree/bin/$cli" ] || continue
+  if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "$node" ]; then
     rm -f "$BIN_DIR/$link"
     printf '#!/bin/sh\n# Written by install.sh: the node on PATH is missing or older than this needs.\nexec %s %s "$@"\n' \
-      "'$UNIT_NODE_BIN'" "'$DIR/bin/$cli'" > "$BIN_DIR/$link"
+      "'$node'" "'$tree/bin/$cli'" > "$BIN_DIR/$link"
     chmod 0755 "$BIN_DIR/$link"
   else
-    ln -sf "$DIR/bin/$cli" "$BIN_DIR/$link"
+    ln -sf "$tree/bin/$cli" "$BIN_DIR/$link"
   fi
   # Belt-and-braces: git already records the executable bit, so this only
   # matters for a checkout that lost it. Never fatal — the repo may legitimately
   # be on a read-only mount, or owned by someone else, and the symlink above is
   # the part that matters.
-  [ -x "$DIR/bin/$cli" ] || chmod +x "$DIR/bin/$cli" 2>/dev/null || \
-    warn "$DIR/bin/$cli is not executable and could not be made so — check the checkout"
-  ok "$BIN_DIR/$link -> $DIR/bin/$cli"
+  [ -x "$tree/bin/$cli" ] || chmod +x "$tree/bin/$cli" 2>/dev/null || \
+    warn "$tree/bin/$cli is not executable and could not be made so — check the checkout"
+  ok "$BIN_DIR/$link -> $tree/bin/$cli"
 done
 # A command from before the coordinator left points at nothing now, under either
 # name; a command that exists and fails to run is worse than one that does not.
@@ -2916,7 +3260,7 @@ sidecar_cli() {
            FLEETWRIGHT_COORDINATOR_URL='$ENROL_URL' \
            FLEETWRIGHT_HOST_ID='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_ID)' \
            FLEETWRIGHT_HOST_KEY='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_KEY)' \
-           '$UNIT_NODE_BIN' '$DIR/bin/fleetwright-sidecar' $sub$quoted"
+           '$SIDECAR_NODE_BIN' '$(sidecar_tree)/bin/fleetwright-sidecar' $sub$quoted"
 }
 
 # --- joining the fleet -------------------------------------------------------
@@ -2979,14 +3323,14 @@ enrol_host() {
   # Six digits or nothing. A pin is not free text and never was.
   pin="$(printf '%s' "$pin" | tr -cd '0-9')"
   if [ ${#pin} -ne 6 ]; then
-    warn "that is not a six-digit pin — enrol later with: sudo -u $SIDECAR_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
+    warn "that is not a six-digit pin — enrol later with: sudo -u $SIDECAR_USER $(sidecar_tree)/bin/fleetwright-sidecar enrol <pin>"
     return 0
   fi
   if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
     ok "enrolled at $ENROL_URL"
     ENROLLED=1
   else
-    warn "enrolment failed — run: sudo -u $SIDECAR_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
+    warn "enrolment failed — run: sudo -u $SIDECAR_USER $(sidecar_tree)/bin/fleetwright-sidecar enrol <pin>"
   fi
 }
 
@@ -3306,7 +3650,10 @@ if [ "$WIZARD" = yes ]; then
     printf '\n'
     if confirm "Log this box into a Claude account now?" Y; then
       sleep 2 # let the hub finish binding its port
-      if LOGIN_OUT="$("$DIR/bin/fleetwright" login 2>&1)"; then
+      # AS THE SERVICE USER, which owns the login it is starting and the
+      # config it reads: run as root, this was root executing a file in
+      # `current`, which that user can rewrite.
+      if LOGIN_OUT="$(as_user "'$UNIT_NODE_BIN' '$DIR/bin/fleetwright' login" 2>&1)"; then
         printf '%s\n' "$LOGIN_OUT"
         # Only ask for a code if there is a page to get one from. `login` on an
         # already-authenticated box answers "Already logged in", and asking for
@@ -3323,7 +3670,7 @@ if [ "$WIZARD" = yes ]; then
         if ! printf '%s' "$LOGIN_OUT" | grep -q 'Already logged in'; then
           ask AUTH_CODE "Paste the code from that page (blank to do it later)"
           if [ -n "$AUTH_CODE" ]; then
-            "$DIR/bin/fleetwright" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
+            as_user "'$UNIT_NODE_BIN' '$DIR/bin/fleetwright' code $(printf '%q' "$AUTH_CODE")" 2>&1 | sed 's/^/  /' || true
           fi
         else
           ok "nothing to do — this box is already logged in"
@@ -3526,7 +3873,14 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   # failure described above — silently, on exactly the boxes an upgrade puts
   # most at risk. The release states the protocol it speaks in its package.json,
   # which is the same number the manifest carries.
-  UPGRADE_MINE="$("$NODE_BIN" -e "import('$DIR/src/fleet/protocol/intents.js').then(m => console.log(m.PROTOCOL_VERSION))" 2>/dev/null || true)"
+  #
+  # AS THE SERVICE USER, NOT AS ROOT. That import executes a file in $DIR, and
+  # on a packaged box $DIR is `current`: a release ships no src/, so the
+  # service user could add one, ask for the heal (`sudo -n fleetwright-migrate`
+  # runs this with --repair), and have root import it. Reading a number does
+  # not need root, and the service user running its own file gains nothing.
+  UPGRADE_MINE="$(as_user "'$NODE_BIN' -e \"import('$DIR/src/fleet/protocol/intents.js').then(m => console.log(m.PROTOCOL_VERSION))\"" 2>/dev/null | tail -1 || true)"
+  case "$UPGRADE_MINE" in *[!0-9]*) UPGRADE_MINE="" ;; esac
   # GUARDED, BECAUSE A FALLBACK MUST NOT BE ABLE TO END THE SCRIPT. As
   # `[ -n "$X" ] || VAR=$(sed ... | head -1)` this was a landmine: sed exits 2
   # on a file it cannot read, pipefail promotes that through the pipeline, and
@@ -3583,6 +3937,28 @@ if [ ${#MISSING[@]} -gt 0 ]; then
   for m in "${MISSING[@]}"; do printf '    - %s\n' "$m"; done
   printf '\n  Everything else above is installed and working. Mac host support is\n'
   printf '  being filled in — see docs/wanted.md.\n'
+fi
+
+# THE ONE THING THIS BOX MUST NOT CLAIM, at the end where it is read. Found
+# by the check before the units were written; see SIDECAR_EXPOSED.
+if [ -n "${SIDECAR_EXPOSED:-}" ]; then
+  say "The host key is not protected from $RUN_USER"
+  printf '  The sidecar runs as %s, which keeps it out of %s'"'"'s credentials,\n' "$SIDECAR_USER" "$RUN_USER"
+  printf '  but %s can change what it runs:\n\n' "$RUN_USER"
+  for p in $SIDECAR_EXPOSED; do printf '    %s\n' "$p"; done
+  if [ "$SIDECAR_STORE" != 1 ] && [ -d "$DIR/.git" ]; then
+    printf '\n  This box runs from a git checkout, which %s owns so that /update can\n' "$RUN_USER"
+    printf '  pull, so there is no separation to have here. That is right for a box\n'
+    printf '  somebody edits. Packaged releases keep the sidecar'"'"'s code root-owned:\n'
+    printf '      sudo /usr/local/sbin/fleetwright-migrate\n'
+  elif [ "$SIDECAR_STORE" != 1 ]; then
+    printf '\n  No verified copy of a release has been through this installer yet, so the\n'
+    printf '  sidecar runs out of the tree %s updates. Any of these makes the copy:\n' "$RUN_USER"
+    printf '      sudo /usr/local/sbin/fleetwright-migrate      (or apt, or the one-liner)\n'
+  else
+    printf '\n  Its node is the usual cause: one in %s'"'"'s home is a binary they can\n' "$RUN_USER"
+    printf '  replace. Install a system node (apt install nodejs, %s or newer) and re-run.\n' "$NODE_FLOOR"
+  fi
 fi
 
 # --- what the rename stopped, started again ---------------------------------
@@ -3656,7 +4032,7 @@ if [ "$WIZARD" = yes ]; then
   if [ "$HAVE_SYSTEMD" != 1 ]; then
     printf '\n  systemd is not running here, so nothing was started. Run them directly:\n'
     printf '      %s %s/bin/fleetwright serve\n' "$UNIT_NODE_BIN" "$DIR"
-    printf '      %s %s/bin/fleetwright-sidecar\n' "$UNIT_NODE_BIN" "$DIR"
+    printf '      %s %s/bin/fleetwright-sidecar\n' "$SIDECAR_NODE_BIN" "$(sidecar_tree)"
   elif [ "${STARTED:-0}" != 1 ]; then
     printf '\n  Start them when you are ready:\n'
     printf '      systemctl enable --now fleetwright fleetwright-sidecar\n'
@@ -3667,7 +4043,7 @@ if [ "$WIZARD" = yes ]; then
   # connects and is refused on every try.
   if [ -n "$ENROL_URL" ] && [ "${ENROLLED:-0}" != 1 ]; then
     printf '\n  This box has not joined %s yet. With a six-digit pin from the app:\n' "$ENROL_URL"
-    printf '      sudo -u %s %s/bin/fleetwright-sidecar enrol <pin>\n' "$SIDECAR_USER" "$DIR"
+    printf '      sudo -u %s %s/bin/fleetwright-sidecar enrol <pin>\n' "$SIDECAR_USER" "$(sidecar_tree)"
     printf '  Until then the sidecar is refused on every try.\n'
   fi
 

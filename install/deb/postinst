@@ -65,6 +65,14 @@ if [ -z "$want" ] || [ "$want" != "$have" ]; then
   exit 1
 fi
 
+# ROOT'S ALONE, AND THAT IS WHAT THE SIDECAR RUNS. mktemp -d makes this 0700,
+# so the service user cannot reach the tree between the check above and the
+# installer below — and the installer copies the sidecar's code out of exactly
+# this tree into its root-owned store (install.sh, refresh_sidecar_store),
+# because the copy it lays out under /opt is the service user's the moment it
+# lands. It checks that the tree is out of the service user's reach before it
+# copies, so loosening this directory turns the copy off rather than trusting
+# it.
 WORK="$(mktemp -d /tmp/fleetwright-deb.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 tar -xzf "$TARBALL" -C "$WORK"

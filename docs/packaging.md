@@ -121,6 +121,24 @@ exist is a service that briefly cannot start.
 A checkout install still runs where it sits. A checkout is a thing somebody
 edits, and moving it under them would be its own kind of rude.
 
+**The hub's unit points at `current`; the sidecar's does not.** The tree above
+is the service user's, so the sidecar — a different account, holding the host
+key — runs from root's own copy instead:
+
+```
+/usr/local/lib/fleetwright-sidecar/releases/main-41/   the one before
+/usr/local/lib/fleetwright-sidecar/releases/main-42/   root's copy of a verified release
+/usr/local/lib/fleetwright-sidecar/current -> releases/main-42
+/usr/local/lib/fleetwright-sidecar/launch.mjs          what the unit runs
+```
+
+Root writes it only from a release it has verified and the service user cannot
+reach, which makes it part of root's half below rather than of the symlink
+swap: an update applied without root moves the hub and leaves the sidecar on
+its release until the heal (or apt, or the one-liner) runs. `launch.mjs`
+follows `current` whenever root holds a copy of that release, so a rollback
+moves both. `hardening.md` has the reasoning.
+
 ## Root's half follows the release
 
 Everything above is unprivileged, and that is the design. But an update also
