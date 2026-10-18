@@ -37,7 +37,8 @@ the thing it had been waiting on since the sender was written.
 `design.md` explains why validating any of the sandbox work on macOS proves less
 than it looks like it does. A Mac installs too — launchd daemons instead of
 systemd units, Homebrew for what is missing, and CI installs one for real on
-every change to the installer — but its sessions run unsandboxed and nothing
+every change to the installer — but its sessions run unsandboxed, so a member
+starts one there only on a Mac that acts for them alone (§3 below), and nothing
 applies from chat there; [`hardening.md`](./hardening.md) says what that costs.
 
 The installer installs what is missing — tmux, podman, git, curl — from the
@@ -211,7 +212,9 @@ Removing that directory is the one step that needs root, and it is automatic and
 app-driven — no shell. `/usr/local/sbin/fleetwright-reclaim` is a root-owned
 helper installed alongside one narrow sudoers rule, and the hub runs it on the
 next start whenever a `.stale-` directory is present. It is scoped exactly — it
-removes only `<base>/releases/.stale-*`, nothing else, even as root — and doubly
+removes only `<base>/releases/.stale-*`, nothing else, even as root, with
+`<base>` the default `/opt/fleetwright` or `FLEETWRIGHT_BASE` and never a value
+from the service user's env file — and doubly
 gated: a normal removal has to fail *first* for anything to be quarantined, and
 then the helper can touch only that quarantine.
 
@@ -573,6 +576,15 @@ minimal rather than pre-loaded with a toolchain.
 tmux does not move: `capture-pane` reads the TUI podman is drawing and
 `send-keys` types into it, so resume-dialog detection, the Remote Control retry
 and `peek` all keep working untouched.
+
+**Turning it on is also what opens the box to members.** Without it a session
+is a pane under the service user, which holds everybody's credentials on the
+box, so the coordinator places a member's session only on a box that reports
+`sandboxed: true` or that acts for that member alone; on an operator's box
+running sessions directly, only an admin can start or resume one. The box
+reports `true` only with the sandbox on and no `FLEETWRIGHT_SANDBOX_ARGS` that
+end containment (`--privileged` among them), and a box too old to report it is
+treated as unsandboxed until it is updated ([security.md](./security.md) G8).
 
 Two things to know:
 

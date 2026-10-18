@@ -103,7 +103,11 @@ it does NOT "seed it into the sandbox the way credentials are seeded today" —
 that would freeze the value at start and put it in the container. Serving it
 from the broker instead is the version that keeps the value out of the
 environment and lets a rotation reach a running session. See
-`docs/credential-broker.md`.
+`docs/credential-broker.md`. Protocol 14 narrowed whose store resolves the
+name: the box's own only for a session whose owner administers the box (the
+coordinator's `boxSecrets`) or one started on the box itself, then the owner's
+vault; every other session, a member's on an operator's box among them, is
+answered from its owner's vault alone (`docs/security.md` G12).
 
 **Envelope, when the value must travel.** If a secret genuinely has to come from
 a phone — pasted once, never stored on a host — then it is encrypted to the

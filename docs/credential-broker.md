@@ -98,13 +98,26 @@ was not given and cannot probe which secrets exist by asking — a name it was n
 granted never touches the store. The value is read at the moment of the request,
 logged by name, and never enters the container's environment or filesystem.
 
+**Which store answers** turns on whose session it is, not on the grant. Two
+stores hold named secrets: the box's, which its operator placed, and the
+owner's vault ([vault.md](./vault.md)). The box's answers first only for a
+session whose record says its owner administers the box (`boxSecrets`, which
+the coordinator sets on `start` and `resume` from protocol 14) or one started
+by somebody on the box itself; every other session, a member's on an
+operator's box among them, is answered from its owner's vault alone
+(`sessionSecret`, `src/core/secret-store.js`). It used to read the box's
+first for everyone, so a member who named `DEPLOY_KEY` on an operator's box
+got the operator's ([security.md](./security.md) G12).
+
 `secrets` (the verb) lists the names a box holds, so the phones and the CLI
-offer a picker instead of blind entry — the value is never in that listing. See
-`docs/trust.md`.
+offer a picker instead of blind entry — the value is never in that listing. A
+member is shown the names only of the boxes they administer, since no other
+box's would answer them. See `docs/trust.md`.
 
 Its refusals mirror the five above: `not_granted` (this session was not given
-that name), `no_secret` (granted, but this box does not hold it — an operator
-gap on this host), and `no_name` (nothing asked for).
+that name), `no_secret` (granted, but no store this session may read holds it —
+an operator gap on this host, or a name missing from the owner's vault), and
+`no_name` (nothing asked for).
 
 ## What this is not
 

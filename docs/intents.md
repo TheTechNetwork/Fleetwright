@@ -112,9 +112,9 @@ and "dead host" is the one it retries.
 | `status` | `name?` | | `/status [name]` |
 | `peek` | `name`, `lines?` (1–500) | | sidecar-local — `GET /api/peek` |
 | `health` | — | | sidecar-local — `GET /api/state` + `os` |
-| `start` | `name?`, `mode?` (`safe`\|`dangerous`), `title?`, `brief?` (stored, never delivered), `profile?`, `archive?` (`owner/repo`, v11, set by the coordinator) | ✅ | `/new [name] [--safe\|--dangerous] [--profile=<name>] [--archive=<owner/repo>]` |
+| `start` | `name?`, `mode?` (`safe`\|`dangerous`), `title?`, `brief?` (stored, never delivered), `profile?`, `archive?` (`owner/repo`, v11, set by the coordinator), `boxSecrets?` (`yes`\|`no`, v14, set by the coordinator) | ✅ | `/new [name] [--safe\|--dangerous] [--profile=<name>] [--archive=<owner/repo>] [--box-secrets=yes\|no]` |
 | `profiles` | — | | `/profiles` |
-| `resume` | `name`, `choice?` (`summary`\|`full`) | ✅ | `/resume <name> [summary\|full]` |
+| `resume` | `name`, `choice?` (`summary`\|`full`), `boxSecrets?` (`yes`\|`no`, v14, set by the coordinator) | ✅ | `/resume <name> [summary\|full] [--box-secrets=yes\|no]` |
 | `stop` | `name` | ✅ | `/stop <name>` |
 | `forget` | `name` | ✅ | `/forget <name>` — bins for seven days |
 | `restore` | `name` | ✅ | `/restore <name>` |
@@ -132,6 +132,7 @@ and "dead host" is the one it retries.
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
 | `verify` | `provider`, `scope?` | | `/verify <provider>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
+| `forgetperson` | — (the person is the actor) | ✅ | sidecar-local — `POST /api/forget-person` on the hub's loopback: every session the person started here stopped and binned, and their Claude account, sign-ins, renewal material and vault copies deleted. Coordinator only |
 | `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
 | `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — exchanged with the host's PKCE verifier, then `/link` and `/renew` |
 | `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket`, `repo?` (v6) | ✅ | `/provision <platform> [minutes]` |
@@ -172,7 +173,18 @@ is kept on the session's record. A host older than 11 is not handed it, and the
 start goes ahead with a reply saying the session will not be archived. See
 [linked-repos.md](./linked-repos.md).
 
-`mint` is the one verb nobody calls. A runner sends a `mint` **frame** up its
+Protocol 14 gave `start` and `resume` a `boxSecrets` the same way: `yes` when
+the session's owner administers the box, `no` otherwise, set by the coordinator
+once the box is chosen and removed from anything a caller sent, and decided
+again on a resume for the session's owner rather than whoever pressed it. The
+hub keeps it on the record and answers a `fleet-secret` from the box's own
+store only on `yes`, or for a session somebody on the box started; every other
+session gets its owner's vault alone. Absent, from an older coordinator, is
+`no` for anybody the fleet started. A host older than 14 is not handed it, so a
+`secret` start for somebody who does not administer such a box is refused
+`host_outdated` rather than sent. See [security.md](./security.md) G12.
+
+`mint` is one of two verbs nobody calls. A runner sends a `mint` **frame** up its
 own socket when one of its sessions' git asks for a repository; the coordinator
 relays the ask to the minting Worker, a separate script that holds the fleet's
 GitHub App key, over a service binding — that is not this verb at all. Only
@@ -185,6 +197,20 @@ own keys, checks that its audience binds this `repo` to this `key`, asks the hub
 only `/githubaccess <repo>`, and seals the token it mints to `key`. So the reply
 the coordinator relays is ciphertext. See
 [runner-central.md](./runner-central.md#private-code-on-a-runner).
+
+`forgetperson` is the other. The coordinator sends it to each of the fleet's own
+boxes when somebody is removed, with the person as the actor and no params, and
+keeps sending it until the box says it is done; `dispatch` refuses it from any
+caller with `coordinator_only`, and the MCP server does not offer it
+(`COORDINATOR_ONLY`). The sidecar takes the address from the actor alone and
+asks the hub on `/api/forget-person`, a loopback route no command surface
+reaches, which stops and bins every session the person started there, marked
+not to resume on boot, and deletes their Claude account, their GitHub and
+Cloudflare sign-ins with the renewal material, and what the vault gave the box
+for them. It adds no reach: `forget` of each session and `unlink` of each
+sign-in could already be asked by name. An older box answers `unknown_verb`,
+which the coordinator treats as not done: it asks that box the old `stop` and
+`unlink` meanwhile, and `forgetperson` again when it reconnects. See [security.md](./security.md) G13.
 
 `renew` is the odd one and is worth a sentence. Every other verb here is
 somebody asking a host to do something; this one is the coordinator **handing a
