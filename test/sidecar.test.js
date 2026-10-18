@@ -894,6 +894,38 @@ test('while fleetwright is unreachable the frame keeps the last labels and drops
   assert.equal(r.health.channel, undefined, 'the live block is not sent when there is nothing live to say');
 });
 
+// --- the config frame's journal line -------------------------------------------
+
+test('the keys the coordinator supplied are logged when they change, not on every frame', async (t) => {
+  // SEEN ON A BOX: "sidecar: coordinator supplied githubClientSecret,
+  // cloudflareClientSecret" four times a minute, forever, which is what the
+  // journal was made of when somebody opened it to see whether the vault had
+  // handed the box a credential. The frame arrives on every connect and every
+  // fifteen seconds; what it says only changes when a secret is rotated.
+  const infos = /** @type {string[]} */ ([]);
+  const { sidecar } = await setup(t, {}, {
+    logger: { debug() {}, info: (/** @type {any[]} */ ...m) => infos.push(m.join(' ')), warn() {}, error() {} },
+  });
+  const supplied = () => infos.filter((l) => l.startsWith('sidecar: coordinator supplied'));
+  const frame = (/** @type {Record<string, string>} */ values) => ({ v: PROTOCOL_VERSION, kind: 'config', values });
+
+  await sidecar.handle(frame({ githubClientSecret: 'shh-1' }));
+  await sidecar.handle(frame({ githubClientSecret: 'shh-1' }));
+  await sidecar.handle(frame({ githubClientSecret: 'shh-1' }));
+  assert.deepEqual(supplied(), ['sidecar: coordinator supplied githubClientSecret'], 'once for three identical frames');
+
+  // A new key, beside an unchanged one: only the new key is named.
+  await sidecar.handle(frame({ githubClientSecret: 'shh-1', cloudflareClientSecret: 'cf-1' }));
+  assert.equal(supplied().at(-1), 'sidecar: coordinator supplied cloudflareClientSecret');
+
+  // A rotated value is news again, and the value itself is never in the line.
+  await sidecar.handle(frame({ githubClientSecret: 'shh-2', cloudflareClientSecret: 'cf-1' }));
+  assert.equal(supplied().length, 3);
+  assert.equal(supplied().at(-1), 'sidecar: coordinator supplied githubClientSecret');
+  assert.equal(infos.some((l) => l.includes('shh-') || l.includes('cf-1')), false);
+  assert.equal(sidecar.config.get('githubClientSecret'), 'shh-2', 'the value is held either way');
+});
+
 // --- whose runner repository -------------------------------------------------
 
 test('a dispatch goes to the repository the coordinator named for this person', async (t) => {
