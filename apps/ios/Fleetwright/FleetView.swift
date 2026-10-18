@@ -317,7 +317,7 @@ struct FleetView: View {
                     // at the top of the list, off screen for the sixth card
                     // of eight. The card answers, stops, resumes and opens;
                     // the page does the rest, with its reply beside it.
-                    SessionRow(session: session, busy: busy, fleet: fleet,
+                    SessionRow(session: session, busy: busy, resumeKept: resumeKept(session), fleet: fleet,
                                stop: { await act { try await fleet.stop(session.name) } },
                                resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
                                answer: { option in
@@ -424,7 +424,8 @@ struct FleetView: View {
                 }
             }
             .navigationDestination(item: $opened) { session in
-                SessionView(fleet: fleet, initial: session, onChange: { await refresh(keepStatus: true) })
+                SessionView(fleet: fleet, initial: session, resumeKept: resumeKept(session),
+                            onChange: { await refresh(keepStatus: true) })
             }
         }
     }
@@ -549,8 +550,10 @@ struct FleetView: View {
                 // BY WHAT THE FLEET SAID, not by whether it answered. A refusal
                 // is an answer, and "Session ready" over "unknown (connected,
                 // no health report yet)" told somebody to go and look at a
-                // session that did not exist.
-                LocalNotice.post(title: reply.ok == false ? "Could not start a session" : "Session ready", body: text)
+                // session that did not exist. And by WHICH refusal: one that
+                // is a setting on the machine is titled as that, not as a
+                // failure to try again (Fleet.Reply.refusedStartTitle).
+                LocalNotice.post(title: reply.ok == false ? reply.refusedStartTitle : "Session ready", body: text)
             } catch {
                 // A TIMEOUT IS NOT A FAILURE: `start` is mutating and carries
                 // an idempotency key, so the session may well exist. Saying
@@ -632,6 +635,13 @@ struct FleetView: View {
         }
     }
 
+    /// Why a session is not offered Resume, as its machine last reported, or
+    /// nil where it is. A machine missing from the list has said nothing this
+    /// can read, so Resume stays and the fleet's answer says why if it is no.
+    private func resumeKept(_ session: Fleet.Session) -> String? {
+        fleetHosts.first { $0.hostId == session.hostId }?.resumeKept
+    }
+
     /// Run one verb and quote what came back.
     ///
     /// `nothingSaid` is for the verbs whose whole job is to bring text back. A
@@ -661,6 +671,8 @@ struct FleetView: View {
 private struct SessionRow: View {
     let session: Fleet.Session
     let busy: Bool
+    /// Why Resume is not offered here, or nil where it is (Fleet.FleetHost.resumeKept).
+    let resumeKept: String?
     /// The client, for the one action that is a DESTINATION rather than a
     /// closure: browsing pushes a screen, and a screen needs something to call
     /// while it is open.
@@ -693,7 +705,7 @@ private struct SessionRow: View {
             // Forget. The row keeps answering and stopping, so the list stays
             // the place to act on what is asking; the page is where to look.
             NavigationLink {
-                SessionView(fleet: fleet, initial: session, onChange: changed)
+                SessionView(fleet: fleet, initial: session, resumeKept: resumeKept, onChange: changed)
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
                     Text(session.label)
@@ -827,6 +839,13 @@ private struct SessionRow: View {
                         // driving the session. The same words as its page.
                         Link("Continue in Remote Control", destination: link)
                     }
+                } else if session.isResumable, let why = resumeKept {
+                    // WHY, IN PLACE OF A BUTTON THE FLEET WOULD REFUSE (C-2):
+                    // the machine runs sessions without the sandbox, or has not
+                    // said, and this person does not administer it.
+                    Text(why)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else if session.isResumable {
                     Button("Resume") { Task { await resume() } }.disabled(busy)
                 }

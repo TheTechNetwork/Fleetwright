@@ -48,7 +48,9 @@ test('iOS: New session says so when a new machine is chosen with no login kept, 
 });
 
 test('iOS: a refused start is not announced as a ready session', () => {
-  assert.match(IOS, /LocalNotice\.post\(title: reply\.ok == false \? "Could not start a session" : "Session ready", body: text\)/);
+  // Titled by which refusal (Fleet.Reply.refusedStartTitle): see
+  // unsandboxed-resume-ios-in-apps.test.js for the titles.
+  assert.match(IOS, /LocalNotice\.post\(title: reply\.ok == false \? reply\.refusedStartTitle : "Session ready", body: text\)/);
   assert.doesNotMatch(IOS, /LocalNotice\.post\(title: "Session ready"/);
 });
 

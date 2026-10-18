@@ -429,6 +429,38 @@ struct Fleet {
         var relay: RelayOffer?
         /// Where a hypervisor setup has got to, or what `begin` handed back.
         var xosetup: SetupState?
+        /// The coordinator's `error.code` on a refusal, as DATA, for the same
+        /// reason as everything above: a screen that decided from the sentence
+        /// would decide from this week's wording.
+        var error: Refusal?
+
+        struct Refusal: Codable, Hashable {
+            let code: String?
+
+            /// AN OBJECT ON THE FLEET'S OWN REFUSALS, `{ code }`, and a bare
+            /// sentence on a few older routes, which carry no code. Read either
+            /// way, because a reply that failed to decode over the shape of a
+            /// field it does not need would lose the text that it does.
+            init(from decoder: Decoder) throws {
+                let keyed = try? decoder.container(keyedBy: CodingKeys.self)
+                code = (try? keyed?.decodeIfPresent(String.self, forKey: .code)) ?? nil
+            }
+        }
+
+        /// The title over a start the fleet refused. Two refusals are a setting
+        /// on the machine and not a fault in the asking, and asking again
+        /// changes neither: `unsandboxed`, a machine that runs sessions without
+        /// the sandbox and so only for its admins (G8), and `host_outdated`, one
+        /// too old to carry what was asked. Those are titled as the reason, and
+        /// the coordinator's sentence beneath says which setting; anything else
+        /// is a start that could not happen.
+        var refusedStartTitle: String {
+            switch error?.code {
+            case "unsandboxed": return "Not started: only admins run sessions there"
+            case "host_outdated": return "Not started: the machine needs an update"
+            default: return "Could not start a session"
+            }
+        }
 
         struct RelayOffer: Codable, Hashable {
             let hostId: String
@@ -2228,6 +2260,13 @@ struct Fleet {
             let pinned: Bool?
         }
         let sandbox: Sandbox?
+        /// Whether a session here is contained: the sandbox on, and nothing
+        /// let through that ends it (http.js #hostFacts). NOT `sandbox`
+        /// above, which a box from before that report sent whether or not it
+        /// used one. The coordinator lets a member's session onto a machine
+        /// they do not administer only on true (hosts.js runsSessionsFor), so
+        /// nil, a box too old to say, is read the way it reads it: not.
+        let sandboxed: Bool?
         /// What `tag` matches on for this box: os, architecture, distribution,
         /// whether its image has a browser, plus anything set here or in
         /// FLEETWRIGHT_LABELS.
@@ -2317,7 +2356,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2326,7 +2365,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2339,7 +2378,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2354,7 +2393,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
             )
         }
     }
@@ -2388,6 +2427,26 @@ struct Fleet {
         /// them as before, since hiding a control on a guess is a claim the
         /// page cannot back (C-5).
         var mayAdminister: Bool { administers != false }
+
+        /// Why a session here is not offered Resume, in one line, or nil where
+        /// it is (C-2). The coordinator resumes a session only on a machine
+        /// whose sessions are sandboxed or that this person administers
+        /// (hosts.js runsSessionsFor, docs/security.md G8), because without
+        /// the sandbox a session is a pane under the account that holds
+        /// everyone's credentials there.
+        ///
+        /// THE SAME RULE, read off the same two answers the snapshot carries.
+        /// A box that has not said whether it is sandboxed is not, as the
+        /// coordinator reads it, and the line says it has not said rather than
+        /// that it is off (C-5). A coordinator too old to send `administers`
+        /// is older than the rule too, so nil offers Resume as before, and a
+        /// refusal still says why.
+        var resumeKept: String? {
+            guard administers == false, health?.sandboxed != true else { return nil }
+            return health?.sandboxed == false
+                ? "\(hostId) runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+                : "\(hostId) has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+        }
 
         /// Is there anything of ours to apply? Asked once, so the version line
         /// and the buttons cannot disagree about whether this box is current.

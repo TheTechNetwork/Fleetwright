@@ -35,6 +35,9 @@ struct SessionView: View {
     /// is not read again: a page that starts blank to ask a question it was
     /// handed the answer to is the fault HostView's header describes.
     let initial: Fleet.Session
+    /// Why Resume is not offered, as the list last read the session's machine
+    /// (Fleet.FleetHost.resumeKept), or nil where it is.
+    var resumeKept: String? = nil
     /// Called when this page changes something the list should know about.
     var onChange: () async -> Void = {}
 
@@ -65,9 +68,10 @@ struct SessionView: View {
     static let slowLooks = 9
     static let slowInterval: Duration = .seconds(10)
 
-    init(fleet: Fleet, initial: Fleet.Session, onChange: @escaping () async -> Void = {}) {
+    init(fleet: Fleet, initial: Fleet.Session, resumeKept: String? = nil, onChange: @escaping () async -> Void = {}) {
         self.fleet = fleet
         self.initial = initial
+        self.resumeKept = resumeKept
         self.onChange = onChange
         _session = State(initialValue: initial)
     }
@@ -202,7 +206,10 @@ struct SessionView: View {
                         .fleetType(.bodySmall)
                         .foregroundStyle(Design.Palette.inkDim)
                 } else {
-                    Text("Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back.")
+                    // Resume is promised only where it is offered.
+                    Text(resumeKept == nil
+                         ? "Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back."
+                         : "Not running, so there is no screen to read. Output has what it printed.")
                         .fleetType(.bodySmall)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
@@ -226,6 +233,11 @@ struct SessionView: View {
             Section {
                 if session.isRunning {
                     Button("Stop") { act { try await fleet.stop(session.name) } }.disabled(busy)
+                } else if session.isResumable, let why = resumeKept {
+                    // The reason, where the fleet would refuse the button (C-2).
+                    Text(why)
+                        .fleetType(.bodySmall)
+                        .foregroundStyle(Design.Palette.inkDim)
                 } else if session.isResumable {
                     Button("Resume") { act { try await fleet.resume(session.name, choice: "summary") } }.disabled(busy)
                 }

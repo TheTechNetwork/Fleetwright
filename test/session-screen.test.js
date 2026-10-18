@@ -64,7 +64,7 @@ test('Remote Control is front and centre when nothing is being asked, and the qu
 
 test('the row is the way in, and the page tells the list when it changed something', () => {
   const list = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
-  assert.match(list, /NavigationLink \{\s*SessionView\(fleet: fleet, initial: session, onChange: changed\)/);
+  assert.match(list, /NavigationLink \{\s*SessionView\(fleet: fleet, initial: session, resumeKept: resumeKept, onChange: changed\)/);
   assert.match(list, /changed: \{ await refresh\(keepStatus: true\) \}/);
   // The page's own actions go through one place that reloads the session
   // and tells the list, so a Stop moves the sentence and the row alike.
