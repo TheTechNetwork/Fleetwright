@@ -84,35 +84,67 @@ xcodebuild build \
 APP="$DERIVED/Build/Products/Debug-iphonesimulator/$APP_NAME.app"
 [ -d "$APP" ] || { echo "no app at $APP"; exit 1; }
 
-for entry in "${DEVICES[@]}"; do
-  TYPE="${entry%%:*}"
-  PATTERN="${entry#*:}"
-  # The newest device type whose name matches. simctl lists them oldest
-  # first, so the last match is the current phone.
+# THE RUNTIME, once: the newest iOS the runner has.
+RUNTIME="$(xcrun simctl list runtimes --json | python3 -c "
+import json,sys
+rs=[r for r in json.load(sys.stdin)['runtimes'] if r.get('isAvailable') and 'iOS' in r['name']]
+print(rs[-1]['identifier'] if rs else '')
+")"
+[ -n "$RUNTIME" ] || { echo "no iOS runtime available"; exit 1; }
+
+# WHAT EACH SLOT ACCEPTS, in pixels, portrait. App Store Connect refuses a
+# picture of the wrong size at submission — "1 or more screenshots don't meet
+# the required specifications" — and the API's upload says nothing, so the
+# check has to be here, where the device was chosen. 0.4.13 shipped an
+# iPhone 11 Pro's 1125×2436 into the 6.1" slot and an 11 Pro Max's 1242×2688
+# into the 6.7" one, and the first anyone knew was Apple's refusal.
+accepts() {
+  case "$1" in
+    APP_IPHONE_67) echo "1320x2868 1290x2796 1260x2736 1284x2778" ;;
+    APP_IPHONE_61) echo "1206x2622 1179x2556 1170x2532" ;;
+    APP_IPAD_PRO_3GEN_129) echo "2064x2752 2048x2732" ;;
+    *) echo "" ;;
+  esac
+}
+pixels() { python3 -c "
+import struct,sys
+with open(sys.argv[1],'rb') as h:
+    h.seek(16); w,hh=struct.unpack('>II',h.read(8))
+print(f'{w}x{hh}')
+" "$1"; }
+
+# One display type, start to finish: its own simulator, its own log (so the
+# three running at once read as three stories rather than one interleaved
+# one), and a non-zero exit when its pictures are not the size its slot
+# takes. Returns 0 with no pictures when the runner has no such device.
+shoot() {
+  local TYPE="$1" PATTERN="$2" DEVICE UDID shot NAME TAB got ok
+  # THE NEWEST MATCH BY MODEL NUMBER, not by position. simctl's list is not
+  # in age order: the first version of this took the LAST match and got an
+  # iPhone 11 Pro on a runner that also had the 17s, which is how 0.4.13's
+  # phone screenshots came out the size of a 2019 screen. The number in the
+  # name is the generation; the highest wins, and a tie goes to the later
+  # name (M5 over M4).
   DEVICE="$(xcrun simctl list devicetypes --json | python3 -c "
 import json,re,sys
 pat=re.compile(sys.argv[1])
-ds=[d['identifier'] for d in json.load(sys.stdin)['devicetypes'] if pat.search(d['name'])]
-print(ds[-1] if ds else '')
+ds=[d for d in json.load(sys.stdin)['devicetypes'] if pat.search(d['name'])]
+def gen(d):
+    m=re.search(r'\d+', d['name']); return (int(m.group()) if m else 0, d['name'])
+ds.sort(key=gen)
+print(ds[-1]['identifier'] if ds else '')
 " "$PATTERN")"
   if [ -z "$DEVICE" ]; then
     echo "::warning::no simulator for '$PATTERN' — skipping $TYPE"
-    continue
+    return 0
   fi
 
   # A SIMULATOR OF OUR OWN, deleted afterwards. Reusing whatever is on the
   # machine makes the screenshots depend on somebody else's device list, and
   # on whatever state that device was left in.
-  RUNTIME="$(xcrun simctl list runtimes --json | python3 -c "
-import json,sys
-rs=[r for r in json.load(sys.stdin)['runtimes'] if r.get('isAvailable') and 'iOS' in r['name']]
-print(rs[-1]['identifier'] if rs else '')
-")"
-  [ -n "$RUNTIME" ] || { echo "no iOS runtime available"; exit 1; }
-
   if ! UDID="$(xcrun simctl create "fleetwright-shots-$TYPE" "$DEVICE" "$RUNTIME" 2>/dev/null)"; then
     echo "::warning::no simulator for '$DEVICE' on this runtime — skipping $TYPE"
-    continue
+    return 0
   fi
   say "$TYPE on $DEVICE"
   xcrun simctl boot "$UDID"
@@ -123,6 +155,7 @@ print(rs[-1]['identifier'] if rs else '')
   xcrun simctl status_bar "$UDID" override --time "09:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
   xcrun simctl install "$UDID" "$APP"
 
+  ok=0
   mkdir -p "$OUT/$TYPE"
   for shot in "${SHOTS[@]}"; do
     NAME="${shot%%:*}"
@@ -134,12 +167,37 @@ print(rs[-1]['identifier'] if rs else '')
     # the screen, which is the UI test this file exists to avoid.
     sleep 6
     xcrun simctl io "$UDID" screenshot "$OUT/$TYPE/$NAME.png" >/dev/null
-    echo "  $TYPE/$NAME.png"
+    got="$(pixels "$OUT/$TYPE/$NAME.png")"
+    case " $(accepts "$TYPE") " in
+      *" $got "*) echo "  $TYPE/$NAME.png ($got)" ;;
+      *) echo "::error::$TYPE/$NAME.png is ${got}, which App Store Connect does not take for $TYPE (one of: $(accepts "$TYPE")) — the wrong simulator, $DEVICE"; ok=1 ;;
+    esac
   done
 
   xcrun simctl shutdown "$UDID" >/dev/null
   xcrun simctl delete "$UDID" >/dev/null
+  if [ "$ok" != 0 ]; then rm -rf "$OUT/$TYPE"; fi
+  return "$ok"
+}
+
+# ALL THREE AT ONCE. A simulator boot is the slow part — three to four minutes
+# each on a hosted runner — and three in a row made this job the long pole of
+# the release, longer than the archive and upload it runs beside. The logs are
+# kept apart and printed in order once every device is done.
+mkdir -p "$OUT"
+pids=()
+for entry in "${DEVICES[@]}"; do
+  TYPE="${entry%%:*}"
+  shoot "$TYPE" "${entry#*:}" >"$OUT/.log-$TYPE" 2>&1 &
+  pids+=("$!")
 done
+failed=0
+for i in "${!pids[@]}"; do
+  wait "${pids[$i]}" || failed=1
+  TYPE="${DEVICES[$i]%%:*}"
+  cat "$OUT/.log-$TYPE"; rm -f "$OUT/.log-$TYPE"
+done
+[ "$failed" = 0 ] || { echo "a display type came out the wrong size; see above"; exit 1; }
 
 say "Done"
 echo "  $OUT"

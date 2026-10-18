@@ -74,14 +74,38 @@ test('it uses a simulator of its own and deletes it', () => {
   assert.match(SH, /simctl delete "\$UDID"/);
 });
 
-test('the simulator is chosen by pattern, newest first, not by name', () => {
+test('the simulator is chosen by pattern and the highest model number, not by position', () => {
   // "iPhone 17 Pro Max" is a job that breaks when the runner image moves to
   // the next phone. A pattern over simctl's device types picks whatever the
-  // current Pro Max, Pro and 13-inch iPad are.
+  // current Pro Max, Pro and 13-inch iPad are — by the NUMBER in the name.
+  // simctl's list is not in age order: taking the last match gave 0.4.13 an
+  // iPhone 11 Pro on a runner that had the 17s.
   assert.match(SH, /simctl list devicetypes --json/);
   assert.match(SH, /\^iPhone \[0-9\]\+ Pro Max\$/);
   assert.match(SH, /\^iPad Pro 13-inch/);
-  assert.match(SH, /ds\[-1\]/, 'the newest matching device type is no longer the one used');
+  assert.match(SH, /ds\.sort\(key=gen\)/, 'the matches are no longer ordered by model number');
+  assert.match(SH, /re\.search\(r'\\d\+', d\['name'\]\)/);
+});
+
+test('a picture the wrong size for its slot fails the run, and never reaches the store', () => {
+  // The API's upload says nothing about size; App Store Connect refuses at
+  // submission, in the browser, after the release has gone red for the wrong
+  // reason. 0.4.13's phone sets were 1125×2436 and 1242×2688 — a 2019 screen
+  // — and nothing between the simulator and Apple noticed.
+  assert.match(SH, /APP_IPHONE_67\) echo "1320x2868 1290x2796 1260x2736 1284x2778"/);
+  assert.match(SH, /APP_IPHONE_61\) echo "1206x2622 1179x2556 1170x2532"/);
+  assert.match(SH, /APP_IPAD_PRO_3GEN_129\) echo "2064x2752 2048x2732"/);
+  assert.match(SH, /struct\.unpack\('>II'/, 'the size is read from the PNG itself');
+  assert.match(SH, /::error::\$TYPE\/\$NAME\.png is \$\{got\}/);
+  assert.match(SH, /rm -rf "\$OUT\/\$TYPE"/, 'a wrong-sized set is left where the uploader will find it');
+  assert.match(SH, /exit 1/);
+});
+
+test('the three devices run at once, with their logs kept apart', () => {
+  // A boot is three to four minutes on a hosted runner; three in a row made
+  // this the long pole of the release.
+  assert.match(SH, /shoot "\$TYPE" "\$\{entry#\*:\}" >"\$OUT\/\.log-\$TYPE" 2>&1 &/);
+  assert.match(SH, /wait "\$\{pids\[\$i\]\}"/);
 });
 
 test('a device the machine does not have is skipped, not fatal', () => {
@@ -89,7 +113,7 @@ test('a device the machine does not have is skipped, not fatal', () => {
   // because half the screenshots is better than none and the message says
   // which half.
   assert.match(SH, /::warning::no simulator for/);
-  assert.match(SH, /continue/);
+  assert.match(SH, /return 0/);
 });
 
 test('nothing here uploads — that is a separate decision on a full release', () => {
