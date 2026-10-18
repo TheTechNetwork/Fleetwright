@@ -728,7 +728,7 @@ export class CoordinatorCore {
       const owed = this.hostIds?.get(hostId);
       const entry = this.registry.hosts.get(hostId);
       if (owed?.handBackPending && entry?.connected && listsSessions(msg.health)) {
-        if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true });
+        if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true, asOf: owed.handBackPending });
         delete owed.handBackPending;
         this.onStateChanged?.();
       }
@@ -2639,7 +2639,7 @@ export class CoordinatorCore {
       }
       const enrolled = this.hostIds.get(entry.hostId);
       if (!enrolled) continue;
-      enrolled.handBackPending = true;
+      enrolled.handBackPending = this.now();
       changed = true;
       this.#recordDemoted(
         entry.hostId,
@@ -2659,7 +2659,7 @@ export class CoordinatorCore {
         if (enrolled.revokedAt || enrolled.ephemeral || enrolled.handBackPending) continue;
         if (actsFor(enrolled, (email) => this.#isOperator(email)) !== address) continue;
         if (handedBack.has(enrolled.hostId)) continue;
-        enrolled.handBackPending = true;
+        enrolled.handBackPending = this.now();
         changed = true;
         this.#recordDemoted(
           enrolled.hostId,
@@ -2802,9 +2802,11 @@ export class CoordinatorCore {
    * @param {string} person  who it acts for now
    * @param {any} health  a report made while it was the fleet's, or the first
    *   it made after it returned, as it made it
-   * @param {{ back?: boolean }} [how]  `back`: it was away for the removal
+   * @param {{ back?: boolean, asOf?: unknown }} [how]  `back`: it was away
+   *   for the removal; `asOf`: when it stopped being the fleet's, which is
+   *   now unless it was away (the enrolment's handBackPending)
    */
-  #handBack(entry, person, health, { back = false } = {}) {
+  #handBack(entry, person, health, { back = false, asOf = this.now() } = {}) {
     let stopped = 0;
     for (const s of Array.isArray(health?.sessions) ? health.sessions : []) {
       const who = String(s?.createdBy || '').startsWith('fleet:') ? emailOf(s.createdBy) : null;
@@ -2812,9 +2814,30 @@ export class CoordinatorCore {
       this.#askBack(entry, 'stop', { name: s.name }, who);
       stopped++;
     }
-    const others = new Set([...this.clients.clients.values()].map((c) => String(c.email || '').toLowerCase()));
-    for (const email of others) {
+    // EVERYBODY IN THE FLEET WHEN IT STOPPED BEING THE FLEET'S, AND NOBODY
+    // SINCE. Each unlink names its person, so this was every row in the
+    // credential store when the debt was paid: a removed admin's box that
+    // kept sending reports with no sessions in them put the debt off for as
+    // long as it liked, and was then sent the email of everybody who had
+    // joined in the meantime, and of everybody removed before it, revoked
+    // rows included (eighth audit). It held none of their sign-ins: a box
+    // stops being sent anybody's the moment it leaves the operator's tier.
+    //
+    // So a person is asked for whose credential was live at that moment,
+    // read from the rows rather than kept on the enrolment, where a list of
+    // emails per box owed would be the store's largest thing
+    // (test/do-key-bounds.test.js): issued by then, and not revoked by then.
+    // A debt recorded before this knew the moment is `true`, and asks for
+    // whoever holds a live credential now, revoked rows still left out.
+    const at = typeof asOf === 'number' ? asOf : null;
+    const others = new Set();
+    for (const c of this.clients.clients.values()) {
+      const email = String(c.email || '').toLowerCase();
       if (!email || email === person) continue;
+      if (at === null ? c.revokedAt : c.createdAt > at || (c.revokedAt && c.revokedAt <= at)) continue;
+      others.add(email);
+    }
+    for (const email of others) {
       for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, email);
     }
     this.#recordDemoted(

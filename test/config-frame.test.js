@@ -436,7 +436,7 @@ test('a returning box whose hub is not answering yet still owes the hand-back', 
   core.hostConnected('boss-box', () => {});
   await core.onHostMessage('boss-box', { kind: 'health', health: HUB_DOWN_REPORT });
   assert.deepEqual(asked, [], 'asked from a report that could not list a session');
-  assert.equal(core.hostIds.get('boss-box')?.handBackPending, true, 'the debt was cleared by a report that could not pay it');
+  assert.ok(core.hostIds.get('boss-box')?.handBackPending, 'the debt was cleared by a report that could not pay it');
 
   await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
   assert.deepEqual(asked.sort(), HANDED_BACK);
@@ -460,4 +460,44 @@ test('a box connected with no report yet at the removal is asked on its first re
 
   await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
   assert.deepEqual(asked.sort(), HANDED_BACK, 'a box with no report at the removal was never asked again');
+});
+
+test('a hand-back put off is asked for the people in the fleet at the removal, and nobody since', async () => {
+  // Eighth audit: each unlink names its person, and the list was every row
+  // in the credential store when the debt was paid. A removed admin's box
+  // that kept reporting with its hub down put it off as long as it liked,
+  // then learned the email of everybody who joined meanwhile, and of
+  // everybody removed before, revoked rows and all. It holds none of their
+  // sign-ins: nothing is sent to a box outside the operator's tier.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  let clock = 1_000_000;
+  const core = new CoordinatorCore({ logger: LOGGER, now: () => clock });
+  const tick = () => { clock += 1000; };
+  const boss = /** @type {any} */ (await core.issueClient({ email: 'boss@example.test' }, 'phone'));
+  const gone = /** @type {any} */ (await core.issueClient({ email: 'left.before@example.test' }, 'phone'));
+  tick();
+  core.revokeClient(gone.client.id);
+  tick();
+  await core.issueClient({ email: 'nina@example.test' }, 'phone');
+  const later = /** @type {any} */ (await core.issueClient({ email: 'leaves.later@example.test' }, 'phone'));
+  await admit(core, 'boss-box', { enrolledBy: 'boss@example.test' });
+  core.hostConnected('boss-box', () => {});
+  tick();
+  core.revokeClient(boss.client.id);
+  const asked = listen(core);
+  await core.onHostMessage('boss-box', { kind: 'health', health: HUB_DOWN_REPORT });
+
+  // Weeks of hub-down reports, while people join and leave.
+  tick();
+  await core.issueClient({ email: 'newcomer@example.test' }, 'phone');
+  tick();
+  core.revokeClient(later.client.id);
+  await core.onHostMessage('boss-box', { kind: 'health', health: HUB_DOWN_REPORT });
+  assert.deepEqual(asked, []);
+
+  tick();
+  await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  const unlinked = [...new Set(asked.filter((l) => l.includes(' unlink ')).map((l) => l.split(' for ')[1]))].sort();
+  assert.deepEqual(unlinked, ['leaves.later@example.test', 'nina@example.test'], asked.join('\n'));
 });
