@@ -46,7 +46,20 @@ removed, or a session on it, cannot approve a key of its own and hold your
 vault again. A phone signed in before this was asked for signs out of GitHub
 there and signs in again, once. A Claude deposit is held to the same rule,
 except for the tokens a person's own command line has (`gho_`, `ghp_`,
-`github_pat_`), which `fleetwright-claude-login` sends. The request also names the fleet account it is for, and the coordinator
+`github_pat_`), which `fleetwright-claude-login` sends.
+
+**Except a box of the operator's.** A device sign-in is recorded by the token's
+hash, not by who finished it, and an operator box finishes the sign-ins it
+started for people (the PKCE verifier is on the box; `#offerChallenges`,
+`#exchange`). So the root or sidecar account of one of the operator's boxes can
+complete a sign-in that the minter then records as a device of the person who
+signed in, and approve a key of its own against that person's vault, removed
+from their list or not, because connects are still placed on operator boxes
+(`mayActFor`). The eighth audit reproduced it (`githubDeviceToken`,
+`vaultDevice`). Whether the operator's boxes sit inside a member's vault
+boundary is the owner's decision, and docs/security.md's G11 is where it is
+recorded; until it is made, the sentence above holds for a member's own boxes
+and not for the operator's. The request also names the fleet account it is for, and the coordinator
 says which signed-in account sent it; the minter refuses unless the two agree.
 The answer comes back sealed to a key the phone made for that one request.
 Each change carries its time and is refused if it is older than ten minutes or
