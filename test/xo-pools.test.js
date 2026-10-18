@@ -680,11 +680,20 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
     // The pull, while apt-get installs: seen, bytes arrive (and some on the
     // loopback, which is not a download), reported, and then it is gone.
     const until = (/** @type {string} */ seen) => `for _ in $(seq 400); do grep -q '${seen}' "$CALLS" && break; command sleep 0.05; done`;
+    // A COUNTER CHANGES IN ONE STEP. `echo 5000 >file` truncates the file and
+    // then writes it, and the watcher reads these every few milliseconds here
+    // (every=0): a read that lands in the gap sees an empty file, counts it as
+    // nothing, and reports `-1000`, which this test then fails on — once in
+    // many runs, on whichever Node happened to schedule it so. A real
+    // /sys/class/net counter is never half-written, so the fixture must not
+    // be either: written beside, then renamed over.
+    const counter = (/** @type {string} */ nic, /** @type {number} */ n) =>
+      `echo ${n} >'${dir}/net/${nic}/statistics/rx_bytes.next' && mv -f '${dir}/net/${nic}/statistics/rx_bytes.next' '${dir}/net/${nic}/statistics/rx_bytes'`;
     const holdPull = [
       'if [ "$*" = "install -y fleetwright" ]; then',
       `  mkdir -p '${dir}/proc/4242'; printf 'podman\\0pull\\0ghcr.io/x/y:latest\\0' >'${dir}/proc/4242/cmdline'`,
       `  ${until('image:0/262144000')}`,
-      `  echo 5000 >'${dir}/net/eth0/statistics/rx_bytes'; echo 9000000 >'${dir}/net/lo/statistics/rx_bytes'`,
+      `  ${counter('eth0', 5000)}; ${counter('lo', 9000000)}`,
       `  ${until('image:4000/262144000')}`,
       `  rm -rf '${dir}/proc/4242'`,
       `  for _ in $(seq 400); do [ "$(grep -c 'image:4000/262144000' "$CALLS")" -ge 2 ] && break; command sleep 0.05; done`,
