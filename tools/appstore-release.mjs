@@ -203,6 +203,105 @@ async function listingGaps(appId, versionString) {
   return gaps;
 }
 
+/**
+ * Copyright on the version, the privacy policy URL on the app info, and the
+ * App Review contact — the fields the first submission was refused for that
+ * are neither the description nor a picture.
+ *
+ * @param {string} appId @param {string} versionId
+ */
+async function writeVersionFacts(appId, versionId) {
+  /** @type {ReturnType<typeof storeListing> | null} */
+  let listing = null;
+  try {
+    listing = storeListing();
+  } catch (e) {
+    console.log(`::warning::store listing not read: ${reason(e)}`);
+  }
+
+  if (listing) {
+    try {
+      await api(`/v1/appStoreVersions/${versionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ data: { type: 'appStoreVersions', id: versionId, attributes: { copyright: listing.copyright } } }),
+      });
+      console.log(`copyright: ${listing.copyright}`);
+    } catch (e) {
+      console.log(`::warning::copyright not set: ${reason(e)}`);
+    }
+
+    try {
+      // The privacy policy URL lives on the app INFO's localisation, which is
+      // per app rather than per version; there can be two infos (the one on
+      // the store and the one in preparation), and the URL is written to
+      // every en-US localisation that will take it.
+      const infos = await api(`/v1/apps/${appId}/appInfos?limit=2`);
+      let written = 0;
+      for (const info of infos.data || []) {
+        const locs = await api(`/v1/appInfos/${info.id}/appInfoLocalizations?limit=50`);
+        const en = (locs.data || []).find((/** @type {any} */ l) => l.attributes?.locale === 'en-US');
+        if (!en || en.attributes?.privacyPolicyUrl === listing.privacyPolicyUrl) continue;
+        try {
+          await api(`/v1/appInfoLocalizations/${en.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              data: { type: 'appInfoLocalizations', id: en.id, attributes: { privacyPolicyUrl: listing.privacyPolicyUrl } },
+            }),
+          });
+          written++;
+        } catch (e) {
+          // The info already on the store is read-only; the one in
+          // preparation is the one that matters.
+          console.log(`::debug::privacy policy URL not written on app info ${info.id}: ${reason(e)}`);
+        }
+      }
+      if (written) console.log(`privacy policy URL: ${listing.privacyPolicyUrl}`);
+    } catch (e) {
+      console.log(`::warning::privacy policy URL not set: ${reason(e)}`);
+    }
+  }
+
+  // WHO APP REVIEW MAY CALL. Four secrets, set once. Without them the job says
+  // what to set rather than inventing a person, and Apple holds the version
+  // until the contact exists.
+  const contact = {
+    contactFirstName: process.env.ASC_REVIEW_FIRST_NAME || '',
+    contactLastName: process.env.ASC_REVIEW_LAST_NAME || '',
+    contactPhone: process.env.ASC_REVIEW_PHONE || '',
+    contactEmail: process.env.ASC_REVIEW_EMAIL || '',
+  };
+  if (Object.values(contact).some((v) => !v)) {
+    console.log(
+      '::warning::no App Review contact — set ASC_REVIEW_FIRST_NAME, ASC_REVIEW_LAST_NAME, ASC_REVIEW_PHONE and ASC_REVIEW_EMAIL (secrets), or type it once in App Store Connect',
+    );
+    return;
+  }
+  try {
+    const existing = await api(`/v1/appStoreVersions/${versionId}/appStoreReviewDetail`).catch(() => null);
+    const current = existing?.data;
+    if (current) {
+      await api(`/v1/appStoreReviewDetails/${current.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ data: { type: 'appStoreReviewDetails', id: current.id, attributes: contact } }),
+      });
+    } else {
+      await api('/v1/appStoreReviewDetails', {
+        method: 'POST',
+        body: JSON.stringify({
+          data: {
+            type: 'appStoreReviewDetails',
+            attributes: { ...contact, demoAccountRequired: false },
+            relationships: { appStoreVersion: { data: { type: 'appStoreVersions', id: versionId } } },
+          },
+        }),
+      });
+    }
+    console.log(`review contact: ${contact.contactFirstName} ${contact.contactLastName}`);
+  } catch (e) {
+    console.log(`::warning::review contact not set: ${reason(e)}`);
+  }
+}
+
 async function main() {
   const apps = await api(`/v1/apps?filter[bundleId]=${encodeURIComponent(BUNDLE_ID)}&limit=1`);
   const app = apps.data[0];
@@ -346,6 +445,15 @@ async function main() {
   });
   console.log(`build ${BUILD_NUMBER} attached to ${versionString}`);
 
+  // THE REST OF WHAT A FIRST SUBMISSION IS REFUSED FOR, written from the
+  // repository and the environment rather than typed: the copyright line
+  // (an attribute of the version), the privacy policy URL (on the app's
+  // info, not the version) and who App Review may call (a record of its
+  // own, hung off the version). Each warns and goes on when refused; the
+  // submission below is where Apple says, in its words, what is still
+  // missing, and that is the message worth failing on.
+  await writeVersionFacts(app.id, version.id);
+
   // "What's New in This Version" — the public one, on the listing. Apple
   // refuses the field on an app's FIRST version (there is nothing it is newer
   // than), and that refusal must not sink the submission: notes are a nicety,
@@ -372,6 +480,11 @@ async function main() {
     // version — so the same sentence lands in the place it belongs on each
     // store rather than being invented twice.
     attributes.promotionalText = listing.short;
+    // The two fields App Store Connect still wanted typed after the
+    // description arrived. Both are localisation attributes, so they travel
+    // in the same PATCH.
+    attributes.keywords = listing.keywords;
+    attributes.supportUrl = listing.supportUrl;
   } catch (e) {
     // A LISTING THAT CANNOT BE READ IS NOT A REASON TO DROP A RELEASE. The copy
     // already on the store is what stays, and it says so.

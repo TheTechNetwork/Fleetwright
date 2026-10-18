@@ -169,3 +169,17 @@ test("warnings carry Apple's reason, not only the request that was refused", () 
   assert.match(fn, /lines\.slice\(1\)/);
   assert.doesNotMatch(SRC, /String\(e\.message\)\.split\('\\n'\)\[0\]\}`\)/, 'a warning still prints only the request line');
 });
+
+test('the App Review contact comes from secrets, and is never invented', () => {
+  // Four values, all or nothing: a half-filled contact is a refusal with
+  // Apple's wording, and a made-up one is worse. Without them the job names
+  // the secrets to set and goes on to the submission, which says the rest.
+  const fn = SRC.slice(SRC.indexOf('async function writeVersionFacts('), SRC.indexOf('async function main()'));
+  for (const name of ['ASC_REVIEW_FIRST_NAME', 'ASC_REVIEW_LAST_NAME', 'ASC_REVIEW_PHONE', 'ASC_REVIEW_EMAIL']) {
+    assert.match(fn, new RegExp(name));
+  }
+  assert.match(fn, /some\(\(v\) => !v\)/);
+  assert.match(fn, /::warning::no App Review contact/);
+  assert.match(fn, /\/v1\/appStoreReviewDetails/);
+  assert.doesNotMatch(fn, /throw /, 'a refused fact sinks the release instead of letting Apple say what is missing');
+});

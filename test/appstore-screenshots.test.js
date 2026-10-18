@@ -69,18 +69,18 @@ test('a display type that already has screenshots is left alone', async (t) => {
   // "IF NEEDED". Re-uploading identical bytes on every release is minutes of
   // nothing, and worse: a window where the store has FEWER screenshots than it
   // did a moment ago, on a version about to be submitted.
-  const dir = shots({ APP_IPHONE_69: { 'phone-01.png': 'abcde' } });
+  const dir = shots({ APP_IPHONE_67: { 'phone-01.png': 'abcde' } });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const { api, calls } = fakeApi({ existing: { APP_IPHONE_69: true } });
+  const { api, calls } = fakeApi({ existing: { APP_IPHONE_67: true } });
 
   assert.equal(await uploadScreenshots({ api, localizationId: 'loc', dir }), 0);
   assert.equal(calls.some((c) => c.p === '/v1/appScreenshots'), false, 'it uploaded anyway');
 });
 
 test('and is replaced when explicitly forced', async (t) => {
-  const dir = shots({ APP_IPHONE_69: { 'phone-01.png': 'abcde' } });
+  const dir = shots({ APP_IPHONE_67: { 'phone-01.png': 'abcde' } });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const { api, calls } = fakeApi({ existing: { APP_IPHONE_69: true } });
+  const { api, calls } = fakeApi({ existing: { APP_IPHONE_67: true } });
 
   assert.equal(await uploadScreenshots({ api, localizationId: 'loc', dir, force: true }), 1);
   assert.ok(calls.some((c) => c.p === '/v1/appScreenshots'));
@@ -91,7 +91,7 @@ test('the upload is reserve, send the ranges, then commit with a checksum', asyn
   // bytes and leaves the asset in a state that never becomes usable, and the
   // version is refused later for a screenshot that LOOKS present.
   const body = 'abcde';
-  const dir = shots({ APP_IPHONE_69: { 'phone-01.png': body } });
+  const dir = shots({ APP_IPHONE_67: { 'phone-01.png': body } });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const { api, calls, puts } = fakeApi();
 
@@ -120,7 +120,7 @@ test('the upload is reserve, send the ranges, then commit with a checksum', asyn
 test('files go up in name order, because that is the order on the page', async (t) => {
   // readdir's order is the filesystem's. The names carry the sequence —
   // phone-01, phone-02 — for exactly this reason.
-  const dir = shots({ APP_IPHONE_69: { 'phone-03.png': 'c', 'phone-01.png': 'a', 'phone-02.png': 'b' } });
+  const dir = shots({ APP_IPHONE_67: { 'phone-03.png': 'c', 'phone-01.png': 'a', 'phone-02.png': 'b' } });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const { api, calls } = fakeApi();
 
@@ -139,7 +139,7 @@ test('no directory is not a failure', async () => {
 });
 
 test('a non-image is not uploaded', async (t) => {
-  const dir = shots({ APP_IPHONE_69: { 'phone-01.png': 'a', 'README.md': 'why these five' } });
+  const dir = shots({ APP_IPHONE_67: { 'phone-01.png': 'a', 'README.md': 'why these five' } });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const { api, calls } = fakeApi();
   await uploadScreenshots({ api, localizationId: 'loc', dir });
@@ -176,8 +176,30 @@ test('it runs on a full release only, where the App Store job runs', () => {
   assert.doesNotMatch(yml, /appstore-screenshots\.mjs/, 'a second job would need the condition repeated');
 });
 
+test('a macOS runner takes the screenshots on a full release, and the submission waits for them', () => {
+  // The script needs Xcode and a simulator — a laptop's tools — and no laptop
+  // ever ran it, so the first submission was refused for want of a picture.
+  // Now a macOS job takes them where the submission is, as a run artifact
+  // the submit job downloads; committed ones still win.
+  const yml = readFileSync(new URL('../.github/workflows/ios.yml', import.meta.url), 'utf8');
+  const shots = yml.slice(yml.indexOf('  screenshots:'), yml.indexOf('  release-app-store:'));
+  assert.match(shots, /runs-on: macos-latest/);
+  assert.match(shots, /!github\.event\.release\.prerelease/, 'screenshots would be taken on a prerelease, which has no store page');
+  assert.match(shots, /\.\/scripts\/ios-screenshots\.sh/);
+  assert.match(shots, /upload-artifact@/);
+  assert.match(shots, /name: ios-screenshots/);
+  const submit = yml.slice(yml.indexOf('  release-app-store:'));
+  assert.match(submit, /needs: \[testflight, screenshots\]/);
+  // always(): a failed screenshot job must not cancel the submission, whose
+  // own refusal from Apple is the message worth seeing.
+  assert.match(submit, /always\(\)/);
+  assert.match(submit, /download-artifact@/);
+  assert.match(submit, /continue-on-error: true/);
+  assert.match(submit, /if \[ ! -d apps\/ios\/store\/screenshots \]/, 'committed screenshots no longer win over the runner\'s');
+});
+
 test('the default directory is named per Apple display type', () => {
-  // The directory name IS the display type — APP_IPHONE_69, APP_IPHONE_65 — so
+  // The directory name IS the display type — APP_IPHONE_67, APP_IPHONE_65 — so
   // adding a size is a folder rather than a code change.
   assert.equal(DEFAULT_DIR, 'apps/ios/store/screenshots');
 });

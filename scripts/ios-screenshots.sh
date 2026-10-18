@@ -8,11 +8,14 @@
 # which is exactly what tools/appstore-screenshots.mjs uploads — the directory
 # name IS the display type, so adding a size is a line in DEVICES below.
 #
-# COMMITTED, NOT GENERATED AT RELEASE TIME, and that is the same argument this
-# repository makes about the listing copy: what the store shows should be
-# reviewable in a pull request. A screenshot generated inside the release job
-# is one nobody looks at until it is public. Android's are committed for the
-# same reason.
+# TAKEN ON A macOS RUNNER ON EVERY FULL RELEASE, and uploaded as a run
+# artifact so they can be looked at. The first version of this file wanted
+# them committed, on the argument that what the store shows should be
+# reviewable in a pull request — and then no Mac ever ran it, the directory
+# never existed, and the first submission was refused for want of a picture.
+# A release the pipeline cannot finish on its own is the thing this project
+# keeps declining. Committed screenshots still win over the runner's, for
+# when somebody wants different shots; see the release-app-store job.
 #
 # NO UI TEST TARGET. The app takes two launch arguments — see Screenshots.swift
 # — so each screen is a separate launch rather than a sequence of taps. A UI
@@ -31,17 +34,29 @@ OUT="${SCREENSHOTS_DIR:-$ROOT/apps/ios/store/screenshots}"
 APP_NAME=Fleetwright
 BUNDLE_ID=network.thetech.fleetwright
 
-# Apple's display type, and a simulator that has that screen. The names are
-# App Store Connect's own — appScreenshotSets is keyed on them — so a size is
-# added here and nowhere else.
+# Apple's display type, and a PATTERN for a simulator that has that screen.
+# The display types are App Store Connect's own — appScreenshotSets is keyed
+# on them — so a size is added here and nowhere else. They are the API's
+# ScreenshotDisplayType values, and there is no APP_IPHONE_69: the 6.9" phones
+# upload under APP_IPHONE_67, the 6.3" ones under APP_IPHONE_61, and the
+# 13" iPad under APP_IPAD_PRO_3GEN_129. The first version of this list named a
+# type that does not exist, which Apple would have refused on the first upload.
 #
-# 6.9" and 6.5" are the two Apple currently requires for iPhone; anything else
-# is derived from them, which is why this list is short on purpose.
+# THE THREE APP STORE CONNECT ASKS FOR on a new app, in its words: the large
+# and the medium "iPhone with Dynamic Island", and the 13-inch iPad. Every
+# smaller display is scaled from these.
+#
+# THE SIMULATOR IS A PATTERN, NOT A NAME. "iPhone 17 Pro Max" is a job that
+# breaks when the runner image moves to the next phone, which happens without
+# warning and reads as a code failure. The newest device type matching the
+# pattern is used, so the screenshots are taken on whatever the current Pro
+# Max, Pro and 13-inch iPad are — which is also what the store page shows them
+# on.
 DEVICES=(
-  "APP_IPHONE_69:iPhone 17 Pro Max"
-  "APP_IPHONE_65:iPhone 16 Plus"
+  "APP_IPHONE_67:^iPhone [0-9]+ Pro Max$"
+  "APP_IPHONE_61:^iPhone [0-9]+ Pro$"
+  "APP_IPAD_PRO_3GEN_129:^iPad Pro 13-inch"
 )
-
 # One launch per screen. The name becomes the filename, and the NUMBER is the
 # order they appear on the store page — appstore-screenshots.mjs sorts by name
 # because readdir's order is the filesystem's.
@@ -71,7 +86,19 @@ APP="$DERIVED/Build/Products/Debug-iphonesimulator/$APP_NAME.app"
 
 for entry in "${DEVICES[@]}"; do
   TYPE="${entry%%:*}"
-  DEVICE="${entry#*:}"
+  PATTERN="${entry#*:}"
+  # The newest device type whose name matches. simctl lists them oldest
+  # first, so the last match is the current phone.
+  DEVICE="$(xcrun simctl list devicetypes --json | python3 -c "
+import json,re,sys
+pat=re.compile(sys.argv[1])
+ds=[d['identifier'] for d in json.load(sys.stdin)['devicetypes'] if pat.search(d['name'])]
+print(ds[-1] if ds else '')
+" "$PATTERN")"
+  if [ -z "$DEVICE" ]; then
+    echo "::warning::no simulator for '$PATTERN' — skipping $TYPE"
+    continue
+  fi
 
   # A SIMULATOR OF OUR OWN, deleted afterwards. Reusing whatever is on the
   # machine makes the screenshots depend on somebody else's device list, and
@@ -84,7 +111,7 @@ print(rs[-1]['identifier'] if rs else '')
   [ -n "$RUNTIME" ] || { echo "no iOS runtime available"; exit 1; }
 
   if ! UDID="$(xcrun simctl create "fleetwright-shots-$TYPE" "$DEVICE" "$RUNTIME" 2>/dev/null)"; then
-    echo "::warning::no simulator for '$DEVICE' — skipping $TYPE"
+    echo "::warning::no simulator for '$DEVICE' on this runtime — skipping $TYPE"
     continue
   fi
   say "$TYPE on $DEVICE"
@@ -116,4 +143,6 @@ done
 
 say "Done"
 echo "  $OUT"
-echo "  Review them, then commit — they are what the store will show."
+echo "  On a full release the iOS workflow takes these on a macOS runner and"
+echo "  attaches them before submitting; committed ones under apps/ios/store/"
+echo "  screenshots win over the runner's, for when somebody wants different shots."

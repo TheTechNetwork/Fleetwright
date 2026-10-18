@@ -103,6 +103,43 @@ on a different Worker entirely.
 
 ---
 
+## Keywords (100 char max)
+
+App Store only — Play has no keyword field. Comma-separated, no spaces after
+the commas (Apple counts them), and nothing already in the name.
+
+```
+claude,fleet,sessions,servers,xen orchestra,xcp-ng,remote,devops,agents,ssh
+```
+
+## Support URL
+
+Where App Store Connect sends "Support" on the store page. The issue tracker
+is where support actually happens.
+
+```
+https://github.com/TheTechNetwork/Fleetwright/issues
+```
+
+## Privacy policy URL
+
+The same page both stores are given.
+
+```
+https://fleet.thetech.network/privacy
+```
+
+## Copyright
+
+The App Store shows this line under the description. The year is whatever
+the release is cut in; update it when it changes.
+
+```
+© 2026 The Tech Network
+```
+
+---
+
 ## Category and tags
 
 - **App category:** Tools (Developer tools is not a Play category; Tools is where clients like this land)

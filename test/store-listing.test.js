@@ -18,6 +18,14 @@ import path from 'node:path';
 
 import { storeListing, LISTING_PATH } from '../tools/store-listing.mjs';
 
+/** The sections every document now has to carry, for fixtures about other things. */
+const TAIL = [
+  '## Keywords (100 char max)', '', '```', 'a,b', '```', '',
+  '## Support URL', '', '```', 'https://example.test/support', '```', '',
+  '## Privacy policy URL', '', '```', 'https://example.test/privacy', '```', '',
+  '## Copyright', '', '```', '© 2026 Example', '```', '',
+].join('\n');
+
 /** Write a listing document and read it back. */
 function parse(md) {
   const dir = mkdtempSync(path.join(tmpdir(), 'listing-'));
@@ -54,7 +62,7 @@ test('the FIRST block wins, because the alternates are alternates', () => {
     '**Primary**', '', '```', 'the one that ships', '```', '',
     'Alternates:', '', '```', 'not this one', '```', '',
     '## Full description (4000 char max)', '', '```', 'body', '```', '',
-  ].join('\n'));
+  ].join('\n') + TAIL);
   assert.equal(l.short, 'the one that ships');
 });
 
@@ -89,7 +97,7 @@ test('the store limits are checked here, not discovered on upload', () => {
       '## App name (30 char max)', '', '```', 'x'.repeat(31), '```', '',
       '## Short description (80 char max)', '', '```', 'short', '```', '',
       '## Full description (4000 char max)', '', '```', 'body', '```', '',
-    ].join('\n')),
+    ].join('\n') + TAIL),
     /App name is 31 characters; the limit is 30/,
   );
 });
@@ -109,6 +117,25 @@ test('the release applies the listing, and never dies for want of it', () => {
   // half-updated when the second failed.
   const block = src.slice(src.indexOf('const attributes = {}'), src.indexOf('// Submission, via'));
   assert.equal((block.match(/method: 'PATCH'/g) || []).length, 1, 'the listing is written in more than one request');
+});
+
+test('the fields App Store Connect wanted typed come from the document too', () => {
+  // The first submission was refused for keywords, a support URL and a
+  // copyright line, with the description already applied from this file.
+  const l = storeListing();
+  assert.ok(l.keywords.length > 0 && l.keywords.length <= 100);
+  assert.doesNotMatch(l.keywords, /, /, 'Apple counts the space after a comma');
+  assert.match(l.supportUrl, /^https:\/\/\S+$/);
+  assert.match(l.privacyPolicyUrl, /^https:\/\/fleet\.thetech\.network\/privacy$/);
+  assert.match(l.copyright, /^© \d{4} /);
+
+  const src = readFileSync(new URL('../tools/appstore-release.mjs', import.meta.url), 'utf8');
+  assert.match(src, /attributes\.keywords = listing\.keywords/);
+  assert.match(src, /attributes\.supportUrl = listing\.supportUrl/);
+  assert.match(src, /copyright: listing\.copyright/);
+  assert.match(src, /privacyPolicyUrl: listing\.privacyPolicyUrl/);
+  // Written before the submission, which is where Apple checks them.
+  assert.ok(src.indexOf('await writeVersionFacts(') < src.indexOf("'/v1/reviewSubmissionItems'"));
 });
 
 test('the document is where both stores read from, not one of them', () => {
