@@ -180,21 +180,19 @@ print(ds[-1]['identifier'] if ds else '')
   return "$ok"
 }
 
-# ALL THREE AT ONCE. A simulator boot is the slow part — three to four minutes
-# each on a hosted runner — and three in a row made this job the long pole of
-# the release, longer than the archive and upload it runs beside. The logs are
-# kept apart and printed in order once every device is done.
+# ONE AT A TIME, on purpose. The version before this booted all three at
+# once to save the release ten minutes, and on the hosted runner the three
+# never came up at all: 0.4.14's job sat for over half an hour with every
+# other job finished, and the submission waited behind it. A boot takes
+# three to four minutes alone and the runner has few cores to give three;
+# serial is slower by the clock and the only shape that is known to finish.
+# Each device still gets its own log, printed as it ends, and the job's
+# timeout-minutes in ios.yml is the wall this can never climb past.
 mkdir -p "$OUT"
-pids=()
+failed=0
 for entry in "${DEVICES[@]}"; do
   TYPE="${entry%%:*}"
-  shoot "$TYPE" "${entry#*:}" >"$OUT/.log-$TYPE" 2>&1 &
-  pids+=("$!")
-done
-failed=0
-for i in "${!pids[@]}"; do
-  wait "${pids[$i]}" || failed=1
-  TYPE="${DEVICES[$i]%%:*}"
+  shoot "$TYPE" "${entry#*:}" >"$OUT/.log-$TYPE" 2>&1 || failed=1
   cat "$OUT/.log-$TYPE"; rm -f "$OUT/.log-$TYPE"
 done
 [ "$failed" = 0 ] || { echo "a display type came out the wrong size; see above"; exit 1; }

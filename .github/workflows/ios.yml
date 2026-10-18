@@ -741,6 +741,13 @@ jobs:
     name: store screenshots
     if: github.event_name == 'release' && !github.event.release.prerelease
     runs-on: macos-latest
+    # A WALL. A simulator that never finishes booting is a job that never
+    # ends, and the submission waits behind this job: 0.4.14 sat for over
+    # half an hour that way with everything else done. Three boots in a row
+    # take about fifteen minutes; anything past this is a hang, and the
+    # submit job then runs without the pictures and relays Apple's refusal,
+    # which is a red cross with a reason rather than a release held open.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Install XcodeGen
