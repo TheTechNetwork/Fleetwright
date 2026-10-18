@@ -296,6 +296,48 @@ test('the payload a picker is built from carries both kinds of credential', asyn
   assert.equal(JSON.stringify(reply.connections).includes(GH), false);
 });
 
+test('a credential the vault gave this box shows as connected, and a link on the box wins over it', async () => {
+  // REPORTED FROM A PHONE: "GitHub — not on rpi-7550, connect again to include
+  // it", about a box whose sidecar journal said "holding vault credentials
+  // for" that very person. The listing said only what was linked on the box,
+  // so a box approved from the phone, which the broker already serves from
+  // the vault, counted as having nothing.
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const { applyVault } = await import('../src/core/vault-store.js');
+  const state = dir();
+  const cfg = { stateDir: state, hostname: 'rpi-7550', loginEnabled: true };
+  const ctx = /** @type {any} */ ({ cfg, actor: 'fleet:me@example.com', login: { status: () => ({ loggedIn: false }) } });
+
+  applyVault(cfg, { accounts: [{ email: 'me@example.com', login: 'octocat', items: [
+    { name: 'github', value: GH, expiresAt: Date.now() + 3_600_000 },
+    { name: 'cloudflare', value: 'cf-token-value-0000000000', expiresAt: null },
+    { name: 'secret:DEPLOY_KEY', value: 'x', expiresAt: null },
+  ], problems: [] }] });
+
+  const mine = (await dispatch(ctx, '/connect')).connections.connected;
+  assert.deepEqual(mine.map((c) => [c.provider, c.account, c.vault]), [['cloudflare', null, true], ['github', 'octocat', true]]);
+  assert.equal(mine[1].missing, null, 'the vault reports no scopes, and null is cannot tell');
+  assert.equal(JSON.stringify(mine).includes(GH), false, 'never a token');
+
+  // Another person's row sees nothing of it, and neither does the box's own.
+  assert.deepEqual((await dispatch({ ...ctx, actor: 'fleet:you@example.com' }, '/connect')).connections.connected, []);
+  assert.deepEqual((await dispatch({ ...ctx, actor: 'fleet:me@example.com' }, '/connect --host')).connections.connected, []);
+
+  // A LINK ON THE BOX WINS, as it does for the broker: the row is the linked
+  // one, with its account and no vault flag.
+  new Connections(state).save('me@example.com', 'github', GH, 'octocat-here');
+  const linked = (await dispatch(ctx, '/connect')).connections.connected.find((c) => c.provider === 'github');
+  assert.equal(linked.account, 'octocat-here');
+  assert.equal(linked.vault, undefined);
+
+  // A COPY THAT HAS RUN OUT IS NOT A CONNECTION: the next sidecar pass
+  // replaces it, and until then a session would get a 401 from it.
+  applyVault(cfg, { accounts: [{ email: 'me@example.com', login: 'octocat', items: [
+    { name: 'cloudflare', value: 'cf-token-value-0000000000', expiresAt: Date.now() - 1 },
+  ], problems: [] }] });
+  assert.equal((await dispatch(ctx, '/connect')).connections.connected.some((c) => c.provider === 'cloudflare'), false);
+});
+
 test('a linked Claude account shows as connected for the person who linked it', async () => {
   const { dispatch } = await import('../src/adapters/commands.js');
   const { Accounts } = await import('../src/core/accounts.js');
