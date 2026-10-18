@@ -3,9 +3,9 @@
 //
 //   node --test test/repo-tokens.test.js
 //
-// Driven end to end through the real pieces — the runner's sidecar, the
-// coordinator core, the minting box's sidecar — with only GitHub and the hub
-// standing in. The contract under test is what docs/runner-central.md claims:
+// Driven end to end through the real pieces — the runner's sidecar, the Worker
+// coordinator that enrols it, the minting box's sidecar — with only GitHub and
+// the hub standing in. The contract under test is what docs/runner-central.md claims:
 // the token cannot exceed the person or the repository, and the coordinator in
 // the middle relays it without being able to read, redirect or re-aim it.
 import test from 'node:test';
@@ -18,8 +18,9 @@ import { join } from 'node:path';
 import { jwtVerify } from 'jose';
 
 import { Sidecar } from '../src/fleet/host/sidecar.js';
-import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { forgetJwks } from '../src/fleet/coordinator/oidc.js';
+import { generateKeyPair } from '../src/fleet/crypto.js';
+import { Fleet } from '../worker/src/fleet-do.js';
 import { actionsIssuer } from './helpers/actions-issuer.js';
 import { loadMinter } from '../src/fleet/host/minter-config.js';
 import { serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
@@ -58,15 +59,23 @@ const FLEET_JOB = {
 };
 
 /**
- * The whole path, wired: runner sidecar → coordinator → the minting Worker or a
- * minting box → back.
+ * The whole path, wired: runner enrolment → runner sidecar → coordinator → the
+ * minting Worker or a minting box → back.
  *
- * `worker` binds the real minting Worker (worker/src/minter.js) to the
- * coordinator, with these env values over the defaults; `box: false` connects
- * no permanent box at all, which is the case the Worker exists for.
+ * The runner is admitted as one is, through the Worker coordinator's
+ * /api/enroll/actions, by the job it runs as and the claim it presents: a
+ * ticket the fleet minted for OWNER (`claim: 'ticket'`, the default) or OWNER's
+ * reusable runner token (`claim: 'runner-token'`). `enrolAs` is that job when
+ * it is not the one asking for tokens. `worker` binds the real minting Worker
+ * (worker/src/minter.js) to the coordinator, with these env values over the
+ * defaults; `box: false` connects no permanent box at all, which is the case
+ * the Worker exists for. `people` is who GitHub says may do what on acme/app,
+ * by login, when that is more than eli.
  *
- * @param {{ job?: Record<string, unknown>, access?: any, owners?: string[], minter?: boolean,
+ * @param {{ job?: Record<string, unknown>, enrolAs?: Record<string, unknown>, claim?: 'ticket'|'runner-token',
+ *   access?: any, owners?: string[], minter?: boolean,
  *   worker?: Record<string, string>, box?: boolean, role?: string, permissionUserId?: number,
+ *   people?: Record<string, { role: string, id: number }>,
  *   tamper?: { up?: (frame: any) => any, down?: (frame: any) => any } }} [opts]
  */
 async function fleet(opts = {}) {
@@ -83,9 +92,11 @@ async function fleet(opts = {}) {
     const lower = path.toLowerCase();
     if (lower === '/repos/acme/app/installation') return json(200, { id: 9 });
     // What the minting Worker asks with its probe token, and only with it.
-    if (lower === '/repos/acme/app/collaborators/eli/permission') {
+    const about = /^\/repos\/acme\/app\/collaborators\/([^/]+)\/permission$/.exec(lower);
+    if (about) {
       if (bearer !== 'ghs_probe') return json(401, {});
-      return json(200, { permission: opts.role ?? 'write', user: { id: opts.permissionUserId ?? 42, login: 'eli' } });
+      const who = (opts.people ?? { eli: { role: opts.role ?? 'write', id: opts.permissionUserId ?? 42 } })[about[1]];
+      return who ? json(200, { permission: who.role, user: { id: who.id, login: about[1] } }) : json(404, {});
     }
     if (path === '/app/installations/9/access_tokens') {
       const body = JSON.parse(init.body);
@@ -124,14 +135,28 @@ async function fleet(opts = {}) {
     FLEETWRIGHT_GITHUB_MINT_OWNERS: 'acme',
     ...(opts.worker || {}),
   };
-  const core = new CoordinatorCore({
-    minter: opts.worker
-      ? {
-          mint: async (ask) =>
-            (await minterWorker.fetch(new Request('https://minter.internal/mint', { method: 'POST', body: JSON.stringify(ask) }), workerEnv)).json(),
-        }
-      : null,
+  /** @type {Map<string, any>} */
+  const storage = new Map();
+  /** @type {Promise<unknown>} */
+  let restored = Promise.resolve();
+  const state = /** @type {any} */ ({
+    storage: {
+      get: async (/** @type {string} */ k) => storage.get(k),
+      put: async (/** @type {string} */ k, /** @type {any} */ v) => { storage.set(k, JSON.parse(JSON.stringify(v))); },
+    },
+    blockConcurrencyWhile: (/** @type {() => Promise<any>} */ fn) => (restored = fn()),
+    getWebSockets: () => [],
+    setAlarm: () => {},
   });
+  const enrolAs = { ...RUNNER_JOB, ...(opts.enrolAs || opts.job || {}) };
+  const fleetDo = new Fleet(state, {
+    FLEETWRIGHT_ACTIONS_REPOS: String(enrolAs.repository),
+    ...(opts.worker
+      ? { MINTER: { fetch: async (/** @type {string} */ url, /** @type {RequestInit} */ init) => minterWorker.fetch(new Request(url, init), workerEnv) } }
+      : {}),
+  });
+  await restored;
+  const core = fleetDo.core;
   const box = new Sidecar({
     hub,
     transport: /** @type {any} */ ({ origin: 'https://fleet.test' }),
@@ -146,27 +171,41 @@ async function fleet(opts = {}) {
     });
   }
 
+  const claim =
+    opts.claim === 'runner-token'
+      ? /** @type {any} */ (await core.runnerTokens.issue(String(enrolAs.repository), { email: OWNER })).token
+      : (await core.runnerTickets.mint({ owner: OWNER, platform: 'linux' }))?.token;
+  const enrolled = /** @type {any} */ (
+    await (
+      await fleetDo.fetch(
+        new Request('https://fleet.test/api/enroll/actions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: await issuer.sign({ ...enrolAs, aud: 'fleetwright' }), claim, publicJwk: (await generateKeyPair()).publicJwk }),
+        }),
+      )
+    ).json()
+  );
+  assert.equal(enrolled.ok, true, enrolled.text);
+  const hostId = String(enrolled.hostId);
+
   /** Every frame the runner was sent, as it arrived. @type {any[]} */
   const down = [];
   const runner = new Sidecar({
     hub: /** @type {any} */ ({}),
     transport: /** @type {any} */ ({
       origin: 'https://fleet.test',
-      send: (/** @type {any} */ frame) => core.onHostMessage('gha-runners-99-1', opts.tamper?.up ? opts.tamper.up(frame) : frame),
+      send: (/** @type {any} */ frame) => core.onHostMessage(hostId, opts.tamper?.up ? opts.tamper.up(frame) : frame),
     }),
-    hostId: 'gha-runners-99-1',
+    hostId,
     watch: false,
     jobToken: async (audience) => issuer.sign({ ...RUNNER_JOB, ...(opts.job || {}), aud: audience }),
   });
-  core.registry.connect(
-    'gha-runners-99-1',
-    (/** @type {any} */ frame) => {
-      const f = opts.tamper?.down ? opts.tamper.down(frame) : frame;
-      down.push(f);
-      void runner.handle(f);
-    },
-    { ephemeral: true, owner: OWNER },
-  );
+  core.hostConnected(hostId, (/** @type {any} */ frame) => {
+    const f = opts.tamper?.down ? opts.tamper.down(frame) : frame;
+    down.push(f);
+    void runner.handle(f);
+  });
   return { core, runner, appCalls, hubAsks, down, publicKey: createPublicKey(app.privateKey), restore: issuer.restore };
 }
 
@@ -194,7 +233,7 @@ test('a runner gets a token for the one repository it asked for, and the coordin
   assert.equal(f.down.length, 1);
   assert.ok(!JSON.stringify(f.down).includes('ghs_minted_secret'));
   const event = f.core.events.find((e) => e.event === 'runner.token');
-  assert.match(String(event?.text), /eli@example\.com.s runner gha-runners-99-1 was given a token for Acme\/App by box/);
+  assert.match(String(event?.text), /eli@example\.com.s runner gha-eli-runners-99-1 was given a token for Acme\/App by box/);
 
   // Held for the hour: a second fetch in the same repository mints nothing.
   const again = await f.runner.repoCredential({ provider: 'github', repo: 'Acme/App' });
@@ -295,6 +334,8 @@ test('a box half-configured as a minter says which half, and an empty owner list
 });
 
 test('with the minting Worker, a runner is minted for with no permanent box at all', async (t) => {
+  // A runner the fleet dispatched with a ticket, whose job its owner started:
+  // the one the Worker, which mints for whoever started the job, is asked for.
   const f = await fleet({ worker: {}, box: false });
   t.after(f.restore);
 
@@ -344,6 +385,52 @@ test('the minting Worker mints no wider than GitHub says the account can reach',
       assert.equal(got.ok, true, name);
       assert.deepEqual(final.map((c) => c.body.permissions), [perms], name);
     }
+  }
+});
+
+test('a runner is minted its owner’s reach and never that of whoever started its job', async () => {
+  // ELI'S REUSABLE RUNNER TOKEN AS THE FLEET RUNNER REPOSITORY'S SECRET, and
+  // mallory, who can push to acme/app where eli cannot, pressing Run workflow
+  // there: the runner is eli's, and the minting Worker mints for the job's
+  // actor, so it was minted mallory's push for eli's sessions (audit run 6).
+  const mallorys = { ...FLEET_JOB, actor: 'mallory', actor_id: 7 };
+  const people = { mallory: { role: 'write', id: 7 } };
+  /** @type {Array<[string, Parameters<typeof fleet>[0], RegExp|null]>} */
+  const cases = [
+    [
+      'eli’s runner token, mallory starting the job',
+      { worker: {}, box: false, claim: 'runner-token', job: mallorys, people },
+      /minting Worker was not asked, because this runner was admitted with a reusable runner token/,
+    ],
+    // A box can check who started it, with the owner's own connection.
+    [
+      'the same, with a box holding eli’s connection',
+      { worker: {}, claim: 'runner-token', job: mallorys, people },
+      /started by mallory.*connection here is eli/,
+    ],
+    // A session on mallory's runner can ask her job for a token, and carry it
+    // to the socket of a runner the fleet dispatched for eli.
+    [
+      'a ticket runner eli started, asking with mallory’s job token',
+      { worker: {}, box: false, enrolAs: { ...FLEET_JOB }, job: mallorys, people },
+      /names a different GitHub account from the one that started this runner/,
+    ],
+    // Eli pressing Run workflow with his own token: a box checks it is him.
+    ['eli’s runner token, eli starting the job', { worker: {}, claim: 'runner-token', job: FLEET_JOB }, null],
+  ];
+  for (const [name, opts, expected] of cases) {
+    const f = await fleet(opts);
+    const got = await f.runner.repoCredential({ provider: 'github', repo: 'acme/app' });
+    f.restore();
+    assert.ok(!f.appCalls.some((c) => c.path.includes('/collaborators/')), `${name}: the minting Worker was not asked about anybody`);
+    if (!expected) {
+      assert.equal(got.ok, true, `${name}: ${got.ok ? '' : got.message}`);
+      assert.match(String(f.core.events.find((e) => e.event === 'runner.token')?.text), /by box$/, name);
+      continue;
+    }
+    assert.equal(got.ok, false, name);
+    assert.match(got.ok ? '' : got.message, expected, name);
+    assert.equal(f.appCalls.filter((c) => c.path.endsWith('/access_tokens')).length, 0, `${name}: nothing was minted`);
   }
 });
 

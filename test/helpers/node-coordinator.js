@@ -744,6 +744,9 @@ export class Coordinator {
         enrolledBy: `actions:${job.repository}`,
         owner,
         ephemeral: true,
+        // Which claim, and who started the job — see the Worker's copy.
+        admittedBy: ticket ? 'ticket' : 'runner-token',
+        actorId: job.actorId,
       });
       this.saveState();
       if (!result.ok || !result.host) {

@@ -203,6 +203,19 @@ runner has no profiles. This is the one place something verifies an identity
 the coordinator relayed rather than trusting it, which is why it holds here when
 nothing else in this section does.
 
+**Whose reach a runner is given is the coordinator's word**, because only it
+knows whose a runner is. The minting Worker mints for the account that started
+the job, so the coordinator asks it only for a runner the fleet dispatched
+with a ticket, with a job token naming the account that started it at
+enrolment, and sends one admitted with a reusable runner token to a box as its
+owner, which mints only when the job was started by the GitHub account
+connected for that person there. The two accounts differ when one member's
+runner token is a shared repository's secret and another member presses Run
+workflow; that runner was minted the starter's push for the token owner's
+sessions. Under this compromise the check can be skipped, which hands such a
+runner the starter's reach again; the minter's own checks still hold it to what
+GitHub says the starter can do, for a runner job the starter started.
+
 **A person's Claude login on their runner, and what it adds.** Not a verb: a
 `claude-login` frame a runner sends, and `PUT /api/claude-login`, which a
 person's own computer calls to deposit their `claude setup-token` with the
