@@ -22,7 +22,7 @@ import { isValidName, nameError, generateName } from './names.js';
 import { titleFromCwd, cleanTitle } from './titles.js';
 import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { resolveWorkdir } from './trust.js';
-import { ensureDirectConfig, removeDirectConfig } from './direct-config.js';
+import { directConfigDir, ensureDirectConfig, removeDirectConfig } from './direct-config.js';
 import { noRemoteControl } from './runner-auth-words.js';
 import { onRunner } from './runner-login.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
@@ -33,7 +33,7 @@ import { phaseFor, advancePhases } from './activity.js';
 import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
 import { SpentReader } from './spent.js';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 
@@ -1261,7 +1261,15 @@ export class SessionManager {
     // overwrite one somebody set on purpose.
     const clean = cleanTitle(title);
     const existing = this.registry.get(name);
-    const transcript = cleanTranscriptPath(transcriptPath);
+    // ABOUT A SESSION THIS BOX STARTED, and no more than which conversation it
+    // is on. The report is the session's word, and on the HTTP path anybody on
+    // the box could send it: it made records for names that never existed, moved
+    // a record's working directory, which its next resume opens and trusts, and
+    // pointed its transcript at another session's, which its archive then took
+    // (seventh audit). So it names a record the hub already has, never moves its
+    // cwd, and a transcript counts only inside the session's own directory.
+    if (!existing) return { ok: false, message: `There is no session called "${name}" on this box.` };
+    const transcript = ownTranscript(this.cfg, name, cleanTranscriptPath(transcriptPath));
     if (existing?.transcriptPath && existing.transcriptPath !== transcript) {
       this.contexts.forget(existing.transcriptPath);
       this.spentReader.forget(existing.transcriptPath);
@@ -1270,7 +1278,7 @@ export class SessionManager {
       uuid,
       status: hasSession(name) ? 'running' : 'stopped',
       transcriptPath: transcript,
-      ...(cwd ? { cwd } : {}),
+      ...(cwd && !existing.cwd ? { cwd } : {}),
       ...(clean && !existing?.titlePinned ? { title: clean } : {}),
     });
     log.info(`hook: ${name} → ${uuid}`);
@@ -1418,4 +1426,27 @@ function renderDialogPrompt(name, dialog) {
   return lines.join('\n');
 
 
+}
+
+/**
+ * A transcript path from a session's own report, kept only when it is inside
+ * that session's own directory, where a direct session's Claude keeps its
+ * conversations (direct-config.js), followed through any link to where it
+ * really is. Anywhere else is another session's, or nobody's, and its archive
+ * and its context reading would have taken it as this one's (seventh audit).
+ *
+ * @param {import('../config.js').Config} cfg @param {string} name @param {string|null} transcript
+ * @returns {string|null}
+ */
+function ownTranscript(cfg, name, transcript) {
+  if (!transcript) return null;
+  const dir = directConfigDir(cfg, name);
+  const inside = (/** @type {string} */ p, /** @type {string} */ root) => p.startsWith(root + path.sep);
+  if (!inside(path.resolve(transcript), path.resolve(dir))) return null;
+  try {
+    if (existsSync(transcript) && !inside(realpathSync(transcript), realpathSync(dir))) return null;
+  } catch {
+    return null;
+  }
+  return transcript;
 }

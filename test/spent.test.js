@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -177,8 +177,12 @@ function manager(t) {
 }
 
 test('a session on the box: the hub reads the figure off the transcript the hook named', (t) => {
-  const { sm, registry } = manager(t);
-  const file = transcript(t, [costState(0.75)]);
+  const { sm, registry, cfg } = manager(t);
+  // Where a direct session's Claude keeps it: the session's own directory.
+  const dir = path.join(cfg.stateDir, 'direct', 'local', 'projects', '-w');
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${UUID}.jsonl`);
+  writeFileSync(file, `${costState(0.75)}\n`);
   registry.upsert('local', { status: 'running', cwd: '/w' });
   sm.recordUuid({ name: 'local', uuid: UUID, transcriptPath: file });
   registry.upsert('local', { status: 'running' });

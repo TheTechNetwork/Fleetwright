@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +34,15 @@ function assistant(usage, extra = {}) {
 function transcript(t, lines) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ctx-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, `${UUID}.jsonl`);
+  writeFileSync(file, `${lines.join('\n')}\n`);
+  return file;
+}
+
+/** The same, where a direct session's Claude really keeps it: its own directory. */
+function ownTranscript(cfg, name, lines) {
+  const dir = path.join(cfg.stateDir, 'direct', name, 'projects', '-w');
+  mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${UUID}.jsonl`);
   writeFileSync(file, `${lines.join('\n')}\n`);
   return file;
@@ -169,12 +178,12 @@ function manager(t) {
   const sm = new SessionManager(cfg, registry, null);
   // tmux is not the question here.
   sm.reconcile = () => {};
-  return { sm, registry };
+  return { sm, registry, cfg };
 }
 
 test('a session on the box: the hook names the transcript and the hub reads the window off it', (t) => {
-  const { sm, registry } = manager(t);
-  const file = transcript(t, [assistant({ input_tokens: 100, cache_read_input_tokens: 900 })]);
+  const { sm, registry, cfg } = manager(t);
+  const file = ownTranscript(cfg, 'local', [assistant({ input_tokens: 100, cache_read_input_tokens: 900 })]);
   registry.upsert('local', { status: 'running', cwd: '/w' });
 
   const r = sm.recordUuid({ name: 'local', uuid: UUID, transcriptPath: file });
@@ -220,8 +229,8 @@ test('a session that is not running has no context, whatever was recorded', (t) 
 });
 
 test('a SessionStart that names no transcript clears the one from the session\'s other life', (t) => {
-  const { sm, registry } = manager(t);
-  const file = transcript(t, [assistant({ input_tokens: 100 })]);
+  const { sm, registry, cfg } = manager(t);
+  const file = ownTranscript(cfg, 'mover', [assistant({ input_tokens: 100 })]);
   registry.upsert('mover', { status: 'running', cwd: '/w' });
   sm.recordUuid({ name: 'mover', uuid: UUID, transcriptPath: file });
   assert.equal(registry.get('mover')?.transcriptPath, file);
@@ -229,6 +238,22 @@ test('a SessionStart that names no transcript clears the one from the session\'s
   assert.equal(registry.get('mover')?.transcriptPath, null);
   sm.recordUuid({ name: 'mover', uuid: UUID, transcriptPath: '/etc/passwd' });
   assert.equal(registry.get('mover')?.transcriptPath, null, 'not a transcript');
+});
+
+test('the hook\'s report is about a session this box has, and moves nothing but which conversation it is on', (t) => {
+  // On the HTTP path anybody on the box could send it: it made records for
+  // names that never existed, moved a cwd the next resume opens, and pointed a
+  // transcript at another session's for its archive to take (seventh audit).
+  const { sm, registry, cfg } = manager(t);
+  assert.equal(sm.recordUuid({ name: 'ghost', uuid: UUID }).ok, false);
+  assert.equal(registry.get('ghost'), null, 'no record made');
+
+  registry.upsert('mine', { status: 'running', cwd: '/w' });
+  registry.upsert('theirs', { status: 'running', cwd: '/x' });
+  const theirs = ownTranscript(cfg, 'theirs', [assistant({ input_tokens: 100 })]);
+  assert.equal(sm.recordUuid({ name: 'mine', uuid: UUID, cwd: '/etc', transcriptPath: theirs }).ok, true);
+  assert.equal(registry.get('mine')?.cwd, '/w', 'its own cwd kept');
+  assert.equal(registry.get('mine')?.transcriptPath, null, 'another session\'s transcript is not this one\'s');
 });
 
 // --- the two implementations must agree ------------------------------------------

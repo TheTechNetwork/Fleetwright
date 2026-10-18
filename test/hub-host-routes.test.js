@@ -63,6 +63,7 @@ async function hub(t, over = {}) {
   return {
     cfg,
     stateDir,
+    auth,
     state: async () => (await fetch(`http://127.0.0.1:${port}/api/state`, { headers: auth })).json(),
     /** @param {string} p */
     get: (p) => fetch(`http://127.0.0.1:${port}${p}`, { headers: auth }),
@@ -285,6 +286,49 @@ test('the SessionStart hook on this box may say where the transcript is, and the
   assert.equal(r.status, 200);
   assert.equal(recorded[0].transcriptPath, transcriptPath);
   assert.equal(recorded[0].uuid, uuid);
+});
+
+test('the session-start route answers the hook alone: never a page in a browser, never a form', async (t) => {
+  // Loopback is any page a browser on this box opens. A text/plain POST from
+  // one rewrote a session's cwd and transcript path (seventh audit).
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), 'hostroutes-hook-'));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const cfg = /** @type {any} */ ({ stateDir, bind: '127.0.0.1', port: 0, token: '', hostname: 'testbox', workdir: path.join(stateDir, 'work'), maxSessions: 5, loginEnabled: true, sandbox: false, sandboxCredentialsFile: '', sandboxImage: 'x:latest', sandboxImagePinned: false, releaseChannel: '', rulesFile: path.join(stateDir, 'CLAUDE.md') });
+  /** @type {any[]} */
+  const recorded = [];
+  const sessions = /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [], recordUuid: (/** @type {any} */ r) => { recorded.push(r); return { ok: true, message: 'recorded' }; } });
+  const login = /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null });
+  const adapter = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg) });
+  await adapter.start();
+  t.after(() => adapter.server?.close());
+  const port = /** @type {any} */ (adapter.server).address().port;
+  const body = JSON.stringify({ name: 'local', cwd: '/tmp/elsewhere', uuid: '11111111-2222-3333-4444-555555555555' });
+  const send = (/** @type {Record<string,string>} */ headers) =>
+    fetch(`http://127.0.0.1:${port}/internal/session-start`, { method: 'POST', headers, body });
+
+  for (const headers of [
+    { 'content-type': 'text/plain' },
+    { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
+    { 'content-type': 'application/json', 'sec-fetch-site': 'same-site' },
+  ]) {
+    const r = await send(headers);
+    assert.equal(r.status, 403, JSON.stringify(headers));
+  }
+  assert.equal(recorded.length, 0, 'nothing reached the record');
+  assert.equal((await send({ 'content-type': 'application/json' })).status, 200, 'the hook itself still gets through');
+});
+
+test('a change to the box comes as JSON from its own page, not as a form from another port', async (t) => {
+  // SameSite ignores the port, so the cookie rode a text/plain POST from a dev
+  // server on another port of this box (seventh audit). The token in the
+  // header does not excuse it either: the check is on the shape of the request.
+  const h = await hub(t);
+  const plain = await h.post('/api/command', { command: '/list' }, { ...h.auth, 'content-type': 'text/plain' });
+  assert.equal(plain.status, 403);
+  const sameSite = await h.post('/api/command', { command: '/list' }, { ...h.auth, 'sec-fetch-site': 'same-site' });
+  assert.equal(sameSite.status, 403);
+  const ownPage = await h.post('/api/update-evidence', { which: 'coord' }, { ...h.auth, 'sec-fetch-site': 'same-origin' });
+  assert.notEqual(ownPage.status, 403, 'its own page is not refused');
 });
 
 test('/coffee is a teapot, and an address that is nothing says so as prose', async (t) => {

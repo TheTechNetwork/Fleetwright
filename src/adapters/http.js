@@ -136,8 +136,17 @@ export class HttpAdapter {
     // Loopback only, and never token-gated: the hook runs as a child of a
     // claude process on this same box, and making it carry the operator token
     // would mean writing that token into a world-readable hook script.
+    //
+    // NOT FROM A BROWSER, and only about a session this box already has. Loopback
+    // is every account on the box and any page a browser on it opens: a text/plain
+    // POST from another origin rewrote a session's cwd and transcript path, which
+    // its archive and its next resume then trusted, and made records for names
+    // that did not exist (seventh audit). The hook is Node's fetch and sends
+    // JSON, no Origin and no Sec-Fetch-Site; recordUuid keeps the record's own
+    // cwd and takes a transcript only from inside the session's own directory.
     if (p === '/internal/session-start' && method === 'POST') {
       if (!isLoopback(req)) return json(res, 403, { error: 'loopback only' });
+      if (fromABrowser(req) || !isJson(req)) return json(res, 403, { error: 'the session-start hook only' });
       const body = await readJson(req);
       const r = this.sessions.recordUuid({
         name: String(body.name || ''),
@@ -154,6 +163,14 @@ export class HttpAdapter {
     }
 
     // --- everything below is operator surface ------------------------------
+    // A CHANGE COMES AS JSON FROM THIS PAGE OR A CLIENT, never as a form from
+    // another one. The token cookie is SameSite=Strict, and "same site" ignores
+    // the port, so a page on any other port of this box, a dev server a session
+    // started for one, rode it with a text/plain POST to /api/command (seventh
+    // audit). Every real caller (this page, hub-client.js, the CLI) sends JSON.
+    if (method === 'POST' && (!isJson(req) || crossSite(req))) {
+      return json(res, 403, { error: 'A change to this box is sent as JSON from its own page or a client.' });
+    }
     const principal = this.#principal(req, url);
     if (!principal) {
       if (p === '/' || p === '/index.html') {
@@ -1009,6 +1026,22 @@ function json(res, status, body) {
   const text = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(text);
+}
+
+/** Sent by a browser on another page's behalf. @param {import('node:http').IncomingMessage} req */
+function fromABrowser(req) {
+  return Boolean(req.headers.origin || req.headers['sec-fetch-site']);
+}
+
+/** Said by the browser to come from another origin. @param {import('node:http').IncomingMessage} req */
+function crossSite(req) {
+  const site = String(req.headers['sec-fetch-site'] || '');
+  return Boolean(site) && site !== 'same-origin' && site !== 'none';
+}
+
+/** @param {import('node:http').IncomingMessage} req */
+function isJson(req) {
+  return /^application\/json\b/i.test(String(req.headers['content-type'] || ''));
 }
 
 /**
