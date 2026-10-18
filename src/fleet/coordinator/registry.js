@@ -319,6 +319,16 @@ export class HostRegistry {
             'whole fleet range. That is what half a deploy looks like — hosts upgrade first and the ' +
             'coordinator follows. The fleet cannot fix this one from inside itself: it is waiting for its ' +
             'own coordinator to be deployed.';
+      // THE INTEGERS ARE THE BOX'S, so they are not the fault. Left to fall back
+      // on the sentence, the fault carried whatever number the box sent, and a
+      // box sending a new one in every frame made every frame a new fault: 200
+      // frames from a member's box were 200 pushes to the admin's phone (sixth
+      // Workers audit), as the hub reason had been before. The fault is the
+      // sentence up to the first word the box chose, as the hub's is, because
+      // #onHostState finds an announcement in the ring by `startsWith` and a
+      // fault that is not the reason's own opening would be re-announced by
+      // every deploy.
+      fault = hostMax < PROTOCOL_MIN ? 'speaks protocol up to' : 'speaks protocol from';
     } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
       // The one reason in this file the box writes itself, so it is cut to a
