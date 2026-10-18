@@ -23,6 +23,7 @@ import { PassThrough, Readable } from 'node:stream';
 
 import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf, writeIntoDisk } from '../src/fleet/host/edge-router.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
+import { XOBUILD_DOING } from '../src/fleet/protocol/intents.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 import { EDGE_WATCH, newWatch, watchOf } from '../src/fleet/host/edge-credentials.js';
 import { VM_IMAGE } from '../src/fleet/host/vm-image.js';
@@ -599,6 +600,14 @@ test('the disk goes where the person chose, and the build says where and how far
   for (let i = 1; i < parts.length; i++) assert.ok(parts[i].fill >= parts[i - 1].fill, `the bar went back at ${i}`);
   assert.ok(parts.at(-1).fill >= 980 && parts.at(-1).fill <= 1000);
   assert.ok(parts.some((p) => p.fill > 0 && p.fill < 500), 'the download moved the bar');
+  // WHAT THE BYTES ARE DOING, beside the bar: a key from XOBUILD_DOING and
+  // the megabytes, so a Lock Screen can say "Writing the edge router's
+  // disk: 1536 of 3072 MB" without the sentence, which names the storage.
+  const doing = parts.filter((p) => p.doing);
+  assert.deepEqual([...new Set(doing.map((p) => p.doing))], ['download', 'write'], 'the download, then the disk');
+  assert.ok(doing.every((p) => XOBUILD_DOING.includes(p.doing) && Number.isInteger(p.done) && Number.isInteger(p.total) && p.done <= p.total));
+  assert.deepEqual(doing.find((p) => p.doing === 'write'), { stage: 2, stages: 3, fill: doing.find((p) => p.doing === 'write').fill, doing: 'write', done: 1536, total: 3072 });
+  assert.ok(parts.filter((p) => !p.doing).every((p) => !('done' in p)), 'a part that moves no bytes says no megabytes');
 });
 
 test('cancel stops the build where it is and removes the partial disk, and only that one', async () => {

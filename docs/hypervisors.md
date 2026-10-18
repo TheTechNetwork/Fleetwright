@@ -1084,6 +1084,18 @@ throttles. Now news (a new step, part, build or state, and the end) goes at
 once at 10, and the bar moving goes at 5, no more than every thirty seconds,
 which is what priority 5 is for.
 
+**It says what the bytes are doing.** Asked for, with the app's screen and the
+Lock Screen side by side: the screen said "Reading the blocks the
+configuration goes in from OPNsense 26.7: 192 of 2238 MB" and the Lock Screen
+only "part 2 of 3". That sentence is the host's and names the release and the
+storage, so it is never pushed. Beside a part whose bytes are moving the host
+now reports a key from `XOBUILD_DOING` (`download`, `read`, `keep` or
+`write`) and the megabytes done and in all (`doing`, `done`, `total`), and
+the phones word the key themselves: "Reading the blocks the configuration
+goes in: 192 of 2238 MB". A part that moves no bytes, such as the install on
+the image, carries none, and a key a phone has never met still gets its
+megabytes said.
+
 **Cancel stops it where it is.** The download, the unpack and the upload are
 torn down, and what was made is removed: the VM with its disk, the disk on
 its own, or a partial disk an upload left (attached to nothing, named for

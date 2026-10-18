@@ -211,6 +211,22 @@ export const XOSETUP_STEPS = Object.freeze([
 ]);
 
 /**
+ * What a build in parts is doing with its bytes, by key, while a part that
+ * moves bytes runs: the host reports one of these beside the part with the
+ * megabytes done and in all, and each app words the key itself, so a Lock
+ * Screen can say "Reading the blocks the configuration goes in: 192 of
+ * 2238 MB" without the host's sentence, which may name the storage and the
+ * release and is never pushed (push.js, ActivityUpdate). Append only: an
+ * app that has never heard of a key still says the megabytes.
+ */
+export const XOBUILD_DOING = Object.freeze([
+  'download', // the image, from where it is published
+  'read', // the blocks the edge router's configuration goes in, out of the image
+  'keep', // the image as published onto the pool's storage, kept for the next build
+  'write', // the machine's own disk onto the pool's storage
+]);
+
+/**
  * What changing a pool's policy does, in order, by key: the same first three
  * as onboarding, then the person's choice and applying it. A policy job is
  * driven from a screen that is open, so it reports no progress events, and
