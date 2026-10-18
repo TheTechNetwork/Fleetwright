@@ -2501,11 +2501,14 @@ export class CoordinatorCore {
     if (!address) return { revoked: 0, devices: 0, hosts: [] };
     let revoked = 0;
     let devices = 0;
+    /** @type {string[]} */
+    const hosts = [];
     for (const client of [...this.clients.clients.values()]) {
       if (String(client.email || '').toLowerCase() !== address || client.revokedAt) continue;
       const r = this.revokeClient(client.id);
       if (r.revoked) revoked++;
       devices += r.devices;
+      hosts.push(...r.hosts);
     }
     if (revoked) {
       this.record({
@@ -2514,11 +2517,13 @@ export class CoordinatorCore {
         text: `${address} ${why}; ${revoked} credential${revoked === 1 ? '' : 's'} revoked`,
       });
     }
-    // Their last credential's revocation did this already; a person with none
-    // left still has their machines taken back. Neither is an operator leaving
-    // the tier here: the first was demoted by revokeClient, and the second,
-    // with no credential that works, was never an operator to begin with.
-    const hosts = this.#forgetPerson(address, false);
+    // Their last credential's revocation did this already, and ONCE: run
+    // again, every box of the fleet's was asked their work back twice
+    // (#handBackPerson), and the hosts it revoked were dropped for an empty
+    // list. A person with none left still has their machines taken back. Not
+    // an operator leaving the tier: with no credential that works, they were
+    // never an operator to begin with.
+    if (!revoked) hosts.push(...this.#forgetPerson(address, false));
     return { revoked, devices, hosts };
   }
 
@@ -2661,6 +2666,9 @@ export class CoordinatorCore {
         this.#endSetup(job, `${rec.hostId} no longer acts for whoever began this setup, so the setup ended.`);
       }
     }
+    // AND THEIR OWN WORK ON THE FLEET'S BOXES, after #retier so a removed
+    // admin's boxes, theirs alone now, are not among them.
+    this.#handBackPerson(address);
     if (changed) this.onStateChanged?.();
     return hosts;
   }
@@ -2768,22 +2776,16 @@ export class CoordinatorCore {
    */
   #handBack(entry, person, health, { back = false } = {}) {
     let stopped = 0;
-    /** @param {string} verb @param {Record<string, string>} params @param {string} actor */
-    const ask = (verb, params, actor) => {
-      try {
-        void this.send(entry, { verb, params, actor }, FANOUT_TIMEOUT_MS).catch(() => {});
-      } catch { /* a name this protocol would not carry is not a session to stop */ }
-    };
     for (const s of Array.isArray(health?.sessions) ? health.sessions : []) {
       const who = String(s?.createdBy || '').startsWith('fleet:') ? emailOf(s.createdBy) : null;
       if (!who || who === person || typeof s.name !== 'string') continue;
-      ask('stop', { name: s.name }, who);
+      this.#askBack(entry, 'stop', { name: s.name }, who);
       stopped++;
     }
     const others = new Set([...this.clients.clients.values()].map((c) => String(c.email || '').toLowerCase()));
     for (const email of others) {
       if (!email || email === person) continue;
-      for (const provider of ['github', 'cloudflare', 'claude']) ask('unlink', { provider }, email);
+      for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, email);
     }
     this.#recordDemoted(
       entry.hostId,
@@ -2806,6 +2808,69 @@ export class CoordinatorCore {
         `${hostId} is no longer one of the fleet’s own machines: the admin who enrolled it was removed. ${asked} ` +
         'Rotate the GitHub and Cloudflare client secrets it was sent, and anyone who linked an account while it was the fleet’s should revoke that token with the provider.',
     });
+  }
+
+  /**
+   * One request a box is asked to give something back with, sent and not
+   * waited on: the removal that asks it is somebody's request, and a box that
+   * never answers must not hold it open (#handBack, #handBackPerson).
+   *
+   * @param {any} entry @param {string} verb @param {Record<string, string>} params @param {string} actor
+   */
+  #askBack(entry, verb, params, actor) {
+    try {
+      void this.send(entry, { verb, params, actor }, FANOUT_TIMEOUT_MS).catch(() => {});
+    } catch { /* a name this protocol would not carry is not a session to stop */ }
+  }
+
+  /**
+   * WHAT A REMOVED PERSON LEFT ON THE FLEET'S OWN BOXES, asked back as
+   * #handBack asks it of a removed admin's box for everybody else. Revoking
+   * their credentials stopped them asking the fleet for anything and left
+   * what they had already asked for: their sessions went on running on the
+   * operator's machines under their own Claude sign-in, and the GitHub and
+   * Cloudflare accounts they linked stayed on every one of those boxes, each
+   * able to push and deploy as somebody no longer in the fleet (seventh
+   * audit).
+   *
+   * So every connected box in the operator's tier, which is where a person's
+   * links fan out and their work is placed (hosts.js mayActFor), is asked to
+   * stop each session its last report filed under them and to unlink their
+   * three sign-ins. Not their own boxes: those act for them, hold nobody
+   * else's, and have nothing to give back to the fleet. Not another member's:
+   * none of theirs went there. Recorded with no actor and no session name, so
+   * the operator, and every member, sees that it was asked.
+   *
+   * A BOX THAT IS NOT HERE IS NOT ASKED. An offline box owes it, and nothing
+   * asks it when it returns: a removed admin's box keeps that debt on its
+   * enrolment (handBackPending), but the debt there is a box's to everybody,
+   * and this one would be a list of removed people per box kept for good.
+   * Their links stay on such a box until an admin unlinks them there, and a
+   * session there until an admin stops it. Nor is a session named that the
+   * box's last report did not list, the first frame of a hub still starting
+   * among them (listsSessions): the sign-ins are still unlinked.
+   *
+   * @param {string} person  lower case
+   */
+  #handBackPerson(person) {
+    for (const entry of this.registry.reachable()) {
+      if ((entry.actsFor ?? null) !== null) continue;
+      const listed = listsSessions(entry.health);
+      let stopped = 0;
+      for (const s of listed ? /** @type {any} */ (entry.health).sessions : []) {
+        if (typeof s?.name !== 'string' || !String(s.createdBy || '').startsWith('fleet:') || emailOf(s.createdBy) !== person) continue;
+        this.#askBack(entry, 'stop', { name: s.name }, person);
+        stopped++;
+      }
+      for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, person);
+      this.record({
+        event: 'host.asked-back',
+        hostId: entry.hostId,
+        text: listed
+          ? `${entry.hostId} was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} somebody removed from the fleet had running there, and to forget their GitHub, Cloudflare and Claude sign-ins.`
+          : `${entry.hostId} was asked to forget the GitHub, Cloudflare and Claude sign-ins of somebody removed from the fleet. It has not reported its sessions since it connected, so any of theirs still running there were not named; an admin can stop them.`,
+      });
+    }
   }
 
   /**
@@ -6679,6 +6744,9 @@ const POOLS_LOST_EACH = 8;
  * admin sign-in behind Face ID or the fingerprint. Both apps register it.
  */
 const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
+
+/** The sign-ins a box is asked to forget for somebody it holds them for no longer (#handBack, #handBackPerson). */
+const HANDED_BACK_SIGN_INS = Object.freeze(['github', 'cloudflare', 'claude']);
 
 /**
  * How often a box's sessions may buzz a phone (#mayPush).

@@ -289,6 +289,50 @@ async function restart(core) {
 const demotedSaid = (core) =>
   core.recentEvents({ email: 'nina@example.test', admin: false }).filter((/** @type {any} */ e) => e.event === 'host.demoted');
 
+test('a removed member’s sessions and sign-ins are asked back of the fleet’s own boxes, and of nobody else', async () => {
+  // FOUND BY THE SEVENTH AUDIT: the hand-back above ran only for a box an
+  // admin's removal demoted. A member removed kept their sessions running on
+  // the operator's boxes under their own Claude sign-in, and their GitHub and
+  // Cloudflare links on every one of them, revocation having stopped only
+  // their asking for more.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: LOGGER });
+  await core.issueClient({ email: 'boss@example.test' }, 'phone');
+  const nina = /** @type {any} */ (await core.issueClient({ email: 'nina@example.test' }, 'phone'));
+  await core.issueClient({ email: 'kim@example.test' }, 'phone');
+  await admit(core, 'ops-box', { enrolledBy: 'boss@example.test' });
+  await admit(core, 'nina-box', { enrolledBy: 'nina@example.test' });
+  await admit(core, 'kim-box', { enrolledBy: 'kim@example.test' });
+  const report = (/** @type {Array<[string, string]>} */ sessions) => ({
+    hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: sessions.length, free: 5 - sessions.length, labels: [],
+    sessions: sessions.map(([name, who]) => ({ name, status: 'running', createdBy: `fleet:${who}@example.test` })),
+  });
+  core.registry.recordHealth('ops-box', report([['nina-job', 'nina'], ['boss-job', 'boss'], ['kim-job', 'kim']]));
+  core.registry.recordHealth('nina-box', report([['nina-own', 'nina']]));
+  core.registry.recordHealth('kim-box', report([['kim-own', 'kim']]));
+  const asked = listen(core);
+
+  core.revokeClient(nina.client.id);
+  assert.deepEqual(asked.sort(), [
+    'ops-box stop nina-job for nina@example.test',
+    'ops-box unlink claude for nina@example.test',
+    'ops-box unlink cloudflare for nina@example.test',
+    'ops-box unlink github for nina@example.test',
+  ], 'what was asked of the boxes when Nina was removed');
+  const said = core.recentEvents({ email: 'kim@example.test', admin: false }).filter((/** @type {any} */ e) => e.event === 'host.asked-back');
+  assert.deepEqual(said.map((/** @type {any} */ e) => e.hostId), ['ops-box'], 'the operator was not told the box was asked');
+  assert.match(said[0].text, /stop 1 session .*GitHub, Cloudflare and Claude/);
+  assert.equal(said[0].text.includes('nina'), false, 'a member was shown whose sessions they were');
+
+  // Withdrawing at Apple revokes every credential the person holds, and the
+  // last of those already asked: once, not again for the withdrawal.
+  asked.length = 0;
+  core.revokePerson('kim@example.test', 'withdrew consent');
+  assert.deepEqual(asked.filter((l) => l.startsWith('ops-box stop')), ['ops-box stop kim-job for kim@example.test']);
+  assert.equal(asked.length, 4, `a withdrawal asked ${asked.length} things of the box`);
+});
+
 test('a removed admin’s box that was offline at the removal is asked for back what it held on its first report after it returns', async () => {
   const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
   const { admit } = await import('./helpers/enrolled-hosts.js');
