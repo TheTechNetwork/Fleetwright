@@ -44,6 +44,9 @@ const health = (patch = {}) => ({
   loggedIn: true,
   claudeAccounts: 1,
   hub: { reachable: true },
+  // A box whose sessions run in the sandbox, which is the one a member may
+  // start on without administering it (hosts.js runsSessionsFor).
+  sandboxed: true,
   ...patch,
 });
 

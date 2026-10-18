@@ -16,7 +16,9 @@ function registry(hosts) {
 const host = (hostId, extra = {}) => ({
   hostId,
   connected: true,
-  health: { free: 3, claudeAccounts: 1 },
+  // Sandboxed, so a member may start here without administering it
+  // (hosts.js runsSessionsFor): these tests are about whose machine it is.
+  health: { free: 3, claudeAccounts: 1, sandboxed: true },
   healthAt: Date.now(),
   ...extra,
 });
@@ -82,7 +84,7 @@ test('a box another member enrolled is not spare capacity either, named or not',
   await admit(core, 'alice-box', { enrolledBy: 'alice@example.test' });
   const report = (/** @type {string} */ hostId, /** @type {number} */ free, claudeAccounts = 1) => core.onHostMessage(hostId, {
     kind: 'health',
-    health: { hostId, protocol: PROTOCOL_VERSION, maxSessions: 4, running: 4 - free, free, sessions: [], loadavg: [0, 0, 0], loggedIn: true, claudeAccounts, hub: { reachable: true } },
+    health: { hostId, protocol: PROTOCOL_VERSION, maxSessions: 4, running: 4 - free, free, sessions: [], loadavg: [0, 0, 0], loggedIn: true, claudeAccounts, hub: { reachable: true }, sandboxed: true },
   });
   await report('ops-box', 1);
   await report('alice-box', 4);

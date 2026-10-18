@@ -373,8 +373,22 @@ export const XORECONNECT_STEPS = Object.freeze([
 // it to do one of the things the page offers. New verbs, so an older host
 // answers `unknown_verb`; the coordinator sends them only to a box that
 // speaks 13 and reported holding the pool. docs/manage.md, "From away".
+//
+// v14, 18 Oct 2026: A BOX'S OWN SECRETS ARE FOR THOSE WHO ADMINISTER IT.
+// `start` and `resume` gained `boxSecrets`, set by the coordinator and never by
+// the caller, the way `start.archive` is: `yes` when the person the session
+// belongs to administers the box (hosts.js administers), so a `fleet-secret`
+// request may be answered from the named secrets its operator placed there,
+// and `no` otherwise, so it is answered from that person's own vault alone.
+// The hub could not decide this: it sees an actor and no role, and only the
+// coordinator knows who administers a box. Absent, from an older coordinator,
+// is `no` for anybody the fleet started, and a person on the box itself keeps
+// what they always had. A host from before it is not handed one (`since:
+// 14`) and would serve its own secrets to any session granted the name, so
+// the coordinator refuses a `secret` start for somebody who does not
+// administer such a box rather than send it. docs/security.md, G8.
 /** @type {number} */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -744,6 +758,23 @@ export const VERBS = Object.freeze({
           'Set by the fleet from your linked archive repository; anything sent here is replaced. Where this ' +
           'session is pushed, on a branch of its own, before it stops.',
       },
+      // WHETHER THE BOX'S OWN NAMED SECRETS MAY ANSWER THIS SESSION, as well
+      // as its owner's vault. SET BY THE COORDINATOR, `yes` only when the
+      // starter administers the box (hosts.js administers), and removed from
+      // anything a caller sent, like `archive` above: a box's secrets are put
+      // there by its operator, and `start { secret }` naming one is a grant
+      // any member could otherwise make themselves on an operator's box. An
+      // enum and not a boolean because the protocol has none, and `update`'s
+      // `restart` already spells a yes or no this way.
+      boxSecrets: {
+        type: 'enum',
+        required: false,
+        values: ['yes', 'no'],
+        since: 14,
+        describe:
+          'Set by the fleet from whether you administer the machine; anything sent here is replaced. Whether ' +
+          'a `secret` may be answered from the ones its operator keeps on it, or only from your own vault.',
+      },
     },
     mutating: true,
     // SELF-CONTAINED, because this string is now read out of context. The MCP
@@ -882,6 +913,19 @@ export const VERBS = Object.freeze({
     params: {
       name: { type: 'name', required: true },
       choice: { type: 'enum', required: false, values: ['summary', 'full'] },
+      // `start.boxSecrets` again, decided afresh for the session's owner, so a
+      // person who has stopped administering the box since the start (an
+      // admin removed, a box re-enrolled) is not served its secrets by a
+      // resume. Set by the coordinator; anything a caller sent is replaced.
+      boxSecrets: {
+        type: 'enum',
+        required: false,
+        values: ['yes', 'no'],
+        since: 14,
+        describe:
+          'Set by the fleet from whether the session\'s owner administers the machine; anything sent here is ' +
+          'replaced.',
+      },
     },
     mutating: true,
     summary: 'Resume a stopped session, optionally answering the resume dialog.',

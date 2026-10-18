@@ -202,6 +202,33 @@ export function administers(host, requester) {
 }
 
 /**
+ * May this box run this person's session: start one, or resume one? On a box
+ * whose sessions are sandboxed, anyone it acts for (mayActFor, asked
+ * separately). On a box that runs them directly, only someone who administers
+ * it, because there a session is a tmux pane under the service user, which
+ * owns the loopback token, the hub, the tmux server and every person's
+ * credentials on the box. A member who could start one there would hold all of
+ * that, as any actor, without escaping anything (docs/security.md G8).
+ *
+ * THE BOX'S OWN WORD, `health.sandboxed`, and only `true` counts. A box too old
+ * to send it has not said, which is cannot tell (C-5) and never "sandboxed":
+ * the `sandbox` field beside it does not answer the question, because a
+ * sidecar from before #681 sent a variant and an image whether or not the box
+ * used them. So an older box takes members' work again when it is updated and
+ * says so, and until then only from those who administer it.
+ *
+ * One rule in one place, for the reason administers is: placement refuses or
+ * leaves a box out by it (scheduler.js), and the snapshot (core.js) tells a
+ * phone where a start would land by it.
+ *
+ * @param {{ actsFor?: string|null, health?: { sandboxed?: unknown }|null }|null|undefined} host  a registry entry
+ * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+ */
+export function runsSessionsFor(host, requester) {
+  return administers(host, requester) || host?.health?.sandboxed === true;
+}
+
+/**
  * Whose a session is, as far as the fleet believes the box that reported it.
  *
  * `createdBy` arrives in a health frame or a reply, so it is the box's own

@@ -15,7 +15,7 @@
 import { HostRegistry, runsNoSessions, attributed } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
-import { HostIdentities, actsFor, mayActFor, believedCreator, administers } from './hosts.js';
+import { HostIdentities, actsFor, mayActFor, believedCreator, administers, runsSessionsFor } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
@@ -105,6 +105,8 @@ const ENDED_SETUP = new Set(['done', 'failed', 'cancelled']);
 const RELAY_PROTOCOL = 12;
 /** The protocol a box speaks to read or work a pool's page for a phone away from it (`xolook`, `xoact`). */
 const POOL_PAGE_PROTOCOL = 13;
+/** The protocol a box speaks to keep its own named secrets from sessions of people who do not administer it (`boxSecrets`, v14). */
+const BOX_SECRETS_PROTOCOL = 14;
 /**
  * How long a probe through a phone may take. Longer than the fan-out's ten
  * seconds: every round trip of the TLS handshake crosses the coordinator twice
@@ -3200,8 +3202,17 @@ export class CoordinatorCore {
       /** @type {Record<string, any>} */
       const params = { ...shaped.params };
       delete params.archive;
+      // And whether the box's own secrets may answer it, which is decided once
+      // the box is (below, #boxSecrets): never the caller's to say.
+      delete params.boxSecrets;
       const archive = this.linkedRepos.get(spec.requester?.email, 'archive')?.repo;
       if (archive) params.archive = archive;
+      spec = { ...spec, params };
+    }
+    if (spec.verb === 'resume') {
+      /** @type {Record<string, any>} */
+      const params = { ...shaped.params };
+      delete params.boxSecrets;
       spec = { ...spec, params };
     }
     if (spec.verb === 'provision' && (shaped.params.platform === 'vm' || shaped.params.platform === 'lab')) return this.#provisionVm(spec, shaped.params);
@@ -3258,6 +3269,24 @@ export class CoordinatorCore {
     }
 
 
+    if (placement.kind === 'fanout' && spec.verb === 'secrets' && !(placement.hosts || []).length) {
+      // NONE THAT ARE THEIRS TO USE, which is an answer and not a refusal: a
+      // member administers no connected box, and a box's own secrets go only
+      // to sessions of those who do (scheduler.js). Empty, so a picker shows
+      // nothing to choose rather than no picker; what they keep in their own
+      // vault is theirs on every box and is not a box's to list.
+      return {
+        ok: true,
+        fanout: true,
+        secrets: [],
+        sessions: [],
+        hosts: [],
+        text:
+          'No machine you administer is connected, so no named secrets kept on a machine are yours to grant. ' +
+          'A machine’s own secrets go only to sessions started by the people who administer it; a secret ' +
+          'in your own vault reaches your sessions by the same name.',
+      };
+    }
     if (placement.kind === 'fanout') {
       // A SHORT deadline of its own, not the intent timeout. This was the full
       // 60 seconds per host under Promise.all — so one connected-but-mute host
@@ -3464,6 +3493,7 @@ export class CoordinatorCore {
       };
     }
 
+    if ((spec.verb === 'start' || spec.verb === 'resume') && placement.host) spec = this.#boxSecrets(spec, placement.host);
     const outdated = placement.host ? this.#cannotCarry(placement.host, spec) : null;
     if (outdated) return outdated;
 
@@ -4614,6 +4644,39 @@ export class CoordinatorCore {
   }
 
   /**
+   * Whether the box's own named secrets may answer this session, written onto
+   * a `start` or `resume` once the box is chosen: `yes` when the person the
+   * session belongs to administers it (hosts.js administers), `no` otherwise.
+   *
+   * DECIDED HERE because this is where the knowledge is. The hub knows whose
+   * session it serves and which secret it was granted, and sees an actor with
+   * no role; only the coordinator knows who administers a box. So the
+   * decision travels as a flag the hub keeps on the record and consults on
+   * every `fleet-secret` request (src/core/secret-store.js), which is also
+   * what lets a rotation on the box reach a running session and the flag
+   * stay put. A coordinator refusal of every member's `secret` start would
+   * have been simpler and would have taken their own vault secrets with it.
+   *
+   * THE SESSION'S OWNER, not whoever pressed resume: an admin resuming a
+   * member's session must not open the box's secrets to it. A start's owner
+   * is its starter. The owner of an unattributed session is nobody the fleet
+   * knows, which the hub treats as somebody on the box (and the flag is then
+   * not consulted).
+   *
+   * @param {any} spec @param {any} host  the registry entry placement chose
+   */
+  #boxSecrets(spec, host) {
+    const requester = spec.requester ?? null;
+    let owner = requester;
+    if (spec.verb === 'resume') {
+      const claim = this.registry.findSessions(String(spec.params?.name || '')).find((c) => c.host?.hostId === host?.hostId);
+      const email = emailOf(claim?.createdBy);
+      if (email && email !== emailOf(requester?.email)) owner = { email, admin: this.#isOperator(email) };
+    }
+    return { ...spec, params: { ...spec.params, boxSecrets: administers(host, owner) ? 'yes' : 'no' } };
+  }
+
+  /**
    * A box too old to carry somebody's own runner repository, refused here
    * rather than sent. `buildIntent` drops a param newer than the host speaks,
    * which is right for an optional capability and wrong for this one: the
@@ -4649,6 +4712,25 @@ export class CoordinatorCore {
           `${host?.hostId} is too old to show a pool\u2019s page from away \u2014 it speaks protocol ` +
           `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${POOL_PAGE_PROTOCOL}. Update it and ask again.`,
       };
+    }
+    // A SECRET FOR SOMEBODY WHO DOES NOT ADMINISTER THE BOX, on a box too old
+    // to be told so: it would answer the session from the secrets its
+    // operator keeps there before the person's own vault, which is the leak
+    // `boxSecrets` exists to close. Dropping the flag is not an option either
+    // way round, so the start is refused and says what would let it through.
+    // Without a `secret` nothing is granted and the start goes ahead.
+    if (spec.verb === 'start' && spec.params?.secret && spec.params?.boxSecrets === 'no') {
+      const speaks = Number(host?.health?.protocol);
+      if (!(Number.isInteger(speaks) && speaks >= BOX_SECRETS_PROTOCOL)) {
+        return {
+          ok: false,
+          error: { code: 'host_outdated' },
+          text:
+            `${host?.hostId} is too old to keep the secrets its operator placed on it apart from yours \u2014 it ` +
+            `speaks protocol ${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ` +
+            `${BOX_SECRETS_PROTOCOL}. Start without a secret, or ask whoever runs it to update it.`,
+        };
+      }
     }
     // A TASK, for the same reason: dropped, the session starts idle — the thing
     // `task` exists to end — and the reply says it started.
@@ -5617,7 +5699,7 @@ export class CoordinatorCore {
       // is cannot-tell.
       hosts: this.registry.list().map((h) => ({
         ...visibleHost(h, requester, this.registry.hosts.get(h.hostId)),
-        takesSessions: takesSessions(h, requester),
+        takesSessions: takesSessions(h, requester, this.registry.hosts.get(h.hostId)),
         administers: administers(this.registry.hosts.get(h.hostId), requester),
         ...(runsNoSessions(h.hostId) ? { holder: true } : {}),
       })),
@@ -6810,12 +6892,22 @@ function boxSaid(hostId, text) {
  * Whether a host would take a new session from this person now: the filter
  * placement applies (registry.js `schedulable`, scheduler.js) before it ranks.
  *
+ * AND THE TWO RULES ABOUT WHO, which it left out: a box another member
+ * enrolled acts only for them (hosts.js mayActFor), and a box whose sessions
+ * are not sandboxed, or that has not said, runs only the sessions of those who
+ * administer it (hosts.js runsSessionsFor, G8). Without them a phone offered a
+ * member machines a start refused. Both read the registry entry, which carries
+ * `actsFor`; list() leaves it out.
+ *
  * @param {any} host
- * @param {{ email?: string|null }|null} requester
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @param {any} entry  the host's registry entry
  */
-function takesSessions(host, requester) {
+function takesSessions(host, requester, entry) {
   if (!host?.connected || host.state !== 'healthy' || !host.health || runsNoSessions(host.hostId)) return false;
-  return !(host.ephemeral && host.owner && host.owner !== requester?.email);
+  if (host.ephemeral && host.owner && host.owner !== requester?.email) return false;
+  const whose = requester ? requester.email ?? null : null;
+  return mayActFor(entry, whose) && runsSessionsFor(entry, requester);
 }
 
 /**

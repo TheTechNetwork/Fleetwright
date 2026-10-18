@@ -165,7 +165,8 @@ test('the machine enrols with its ticket once, as its owner’s temporary host, 
   assert.equal((await core.enrolVm({ ticket, publicJwk: key.publicJwk })).status, 403, 'single use');
 
   // ITS FIRST FRAME, before it can take work: the start is held, not lost.
-  core.registry.connect(r.vm, () => {}, { ephemeral: true, owner: ELI });
+  // Acting for its owner, as hostConnected decides from the enrolment.
+  core.registry.connect(r.vm, () => {}, { ephemeral: true, owner: ELI, actsFor: ELI });
   asked.length = 0;
   await core.onHostMessage(r.vm, { kind: 'health', health: { hub: { reachable: true }, protocol: 8, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth: null, labels: [] } });
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -321,7 +322,7 @@ async function joinReady(core, vm, /** @type {string} */ ticket) {
   const key = await generateKeyPair();
   const enrolled = await core.enrolVm({ ticket, publicJwk: key.publicJwk });
   assert.equal(enrolled.status, 200, JSON.stringify(enrolled.body));
-  core.registry.connect(vm, () => {}, { ephemeral: true, owner: ELI });
+  core.registry.connect(vm, () => {}, { ephemeral: true, owner: ELI, actsFor: ELI });
   core.registry.recordHealth(vm, { hub: { reachable: true }, protocol: 9, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth: 'owner', labels: [] });
 }
 

@@ -585,7 +585,7 @@ test('a member cannot start a new session under a name another member holds', as
     },
   });
   core.registry.recordHealth('ops-box', {
-    hostId: 'ops-box', hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], claudeAccounts: 2,
+    hostId: 'ops-box', hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], claudeAccounts: 2, sandboxed: true,
     sessions: [
       { name: 'bjob', status: 'stopped', createdBy: 'fleet:b@example.com' },
       { name: 'cli', status: 'stopped', createdBy: null },
@@ -695,16 +695,31 @@ test('a member’s profiles and secrets are asked only of the boxes that act for
   // came back merged into alice's picker: a list of things on a box that
   // takes no work from her, and the one way a member could read them.
   const { core, delivered } = await forgedFleet();
-  for (const verb of ['profiles', 'secrets']) {
-    delivered.length = 0;
-    const r = await core.dispatch({ verb, params: {}, actor: 'alice@example.com', requester: ALICE });
-    assert.deepEqual(r.hosts.map((/** @type {any} */ h) => h.hostId), ['ops-box'], verb);
-    assert.deepEqual(delivered, [], `alice’s ${verb} went to a box that does not act for her`);
-  }
+  delivered.length = 0;
+  const profiles = await core.dispatch({ verb: 'profiles', params: {}, actor: 'alice@example.com', requester: ALICE });
+  assert.deepEqual(profiles.hosts.map((/** @type {any} */ h) => h.hostId), ['ops-box']);
+  assert.deepEqual(delivered, [], 'alice’s profiles went to a box that does not act for her');
   // mallory still asks her own box, and the admin every box.
   const hers = await core.dispatch({ verb: 'profiles', params: {}, actor: 'mallory@example.com', requester: { email: 'mallory@example.com', admin: false } });
   assert.deepEqual(hers.hosts.map((/** @type {any} */ h) => h.hostId).sort(), ['mal-box', 'ops-box']);
   assert.equal((await core.dispatch({ verb: 'secrets', params: {}, requester: ADMIN })).hosts.length, 2);
+});
+
+test('a member is shown only the named secrets of boxes she administers', async () => {
+  // A box's own named secrets are its operator's, and a member's session on
+  // the operator's box is served her own vault secret of a name and never the
+  // box's (start's `boxSecrets`). Listing the box's names to her offered a
+  // grant she could not have, and told her what the operator keeps there.
+  const { core, delivered } = await forgedFleet();
+  delivered.length = 0;
+  const alices = await core.dispatch({ verb: 'secrets', params: {}, actor: 'alice@example.com', requester: ALICE });
+  assert.equal(alices.ok, true, String(alices.text));
+  assert.deepEqual(alices.secrets, [], 'none is hers to grant, and that is an answer');
+  assert.deepEqual(alices.hosts, [], 'the operator’s box was asked for its secret names on her behalf');
+  assert.deepEqual(delivered, []);
+  // mallory administers her own box, and only that one is asked.
+  const mallorys = await core.dispatch({ verb: 'secrets', params: {}, actor: 'mallory@example.com', requester: { email: 'mallory@example.com', admin: false } });
+  assert.deepEqual(mallorys.hosts.map((/** @type {any} */ h) => h.hostId), ['mal-box']);
 });
 
 test('a box that does not act for a member writes nothing into her list or status', async () => {
@@ -773,7 +788,7 @@ test('a start is refused over a name only where it could have landed', async () 
   const core = new CoordinatorCore({ log: quiet });
   /** @type {string[]} */
   const delivered = [];
-  const room = { hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], claudeAccounts: 2 };
+  const room = { hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], claudeAccounts: 2, sandboxed: true };
   for (const [hostId, enrolledBy] of [['ops-box', null], ['mal-box', 'mallory@example.com']]) {
     await admit(core, hostId, {
       enrolledBy,

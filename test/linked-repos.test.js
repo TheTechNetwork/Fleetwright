@@ -129,7 +129,8 @@ function fleet(boxes, reply = () => ({ ok: true, text: 'Started.', sessions: [] 
   const core = new CoordinatorCore(opts);
   for (const [hostId, protocol] of boxes) {
     core.registry.connect(hostId, () => {});
-    core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol, maxSessions: 5, running: 0, free: 5, labels: [] });
+    // Sandboxed, so a member's start may land (hosts.js runsSessionsFor).
+    core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol, maxSessions: 5, running: 0, free: 5, labels: [], sandboxed: true });
   }
   /** @type {Array<{ hostId: string, spec: any }>} */
   const sent = [];
