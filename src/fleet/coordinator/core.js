@@ -258,6 +258,21 @@ function holds(host, email) {
 }
 
 /**
+ * Text a box wrote, as one line: control characters, line and paragraph
+ * separators and the bidirectional overrides become spaces, so nothing it
+ * says can start a line of its own or reorder the line it is on.
+ *
+ * @param {unknown} v @param {number} max
+ */
+function oneLine(v, max) {
+  return String(v)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+/**
  * A report that can say whose each session is: the hub answered, and listed
  * them. A sidecar whose hub is down reports `sessions: null`, which is "cannot
  * tell", never "none" (C-5), so a hand-back is never paid from one (#handBack).
@@ -858,7 +873,12 @@ export class CoordinatorCore {
       hostId,
       event: type,
       name: msg.name,
-      text: msg.text ? String(msg.text).slice(0, 500) : null,
+      // ONE LINE, as the box wrote it and no more. This text reaches an admin's
+      // agent through fleet_events, and with its newlines kept a member's box
+      // could write a second line laid out as a fleet record of its own,
+      // attribution and all (seventh audit). sessionLabel keeps one line for
+      // the same reason.
+      text: msg.text ? oneLine(msg.text, 500) : null,
       url: msg.url ? String(msg.url).slice(0, 500) : null,
       // The NAME of the profile a session was started with, when the host
       // says. A name, never content — docs/wanted.md's rule for profiles —

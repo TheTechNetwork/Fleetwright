@@ -1097,9 +1097,18 @@ export class McpServer {
     return this.#text(
       events
         .map((/** @type {any} */ e) => {
-          const who = e.actor || 'the fleet';
+          // A SESSION EVENT IS THE BOX'S WORD, said as the box's word: quoted,
+          // after the event and session it is about, and attributed to the box.
+          // It read as the fleet's, so a member's box could write an
+          // instruction an admin's agent took for the fleet's own record
+          // (seventh audit). The coordinator's own records stay as written.
+          const boxSaid = String(e.event || '').startsWith('session.') && !e.actor;
+          const said = String(e.text || '').replace(/[\r\n\u2028\u2029]+/g, ' ');
+          const who = e.actor || (boxSaid && e.hostId ? `as ${e.hostId} reported it` : 'the fleet');
           const where = e.hostId ? ` on ${e.hostId}` : '';
-          const what = e.text || (e.name ? `${e.event} — ${e.name}` : e.event);
+          const what = boxSaid
+            ? `${e.event} — ${e.name}${said ? `: “${said}”` : ''}`
+            : said || (e.name ? `${e.event} — ${e.name}` : e.event);
           return `${new Date(e.at).toISOString()}  ${what}${where} · ${who}`;
         })
         .join('\n'),

@@ -450,10 +450,21 @@ export class Fleet {
         const extra = {};
         for (const [k, v] of Object.entries(answer.headers || {})) if (v != null) extra[k] = String(v);
 
+        // NEVER IN SOMEBODY ELSE'S FRAME. The page this serves is the MCP
+        // sign-in, where a person's Google or Apple sign-in becomes a fleet
+        // credential for the client named on it: framed on a page that hid that
+        // line, a click signed them in for the framer's client (seventh audit).
+        // The relay's own sign-in page says the same for the same reason.
         if (answer.html !== undefined) {
           return new Response(answer.html, {
             status: answer.status,
-            headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...extra },
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              'cache-control': 'no-store',
+              'x-frame-options': 'DENY',
+              'content-security-policy': "frame-ancestors 'none'",
+              ...extra,
+            },
           });
         }
         // 202 and nothing to say — a batch that was all notifications. A body
