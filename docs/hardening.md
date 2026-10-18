@@ -132,6 +132,50 @@ rules the sidecar used to read out of fleetwright's state directory ride on
 evidence and a renewed provider token — are requests to fleetwright, which
 owns the files. With nothing left to read, `ProtectHome=yes` follows.
 
+**And it runs code the session user cannot change.** A separate uid is only a
+boundary if the other side cannot rewrite what that uid runs, and for a while
+it could: the unit ran the sidecar straight out of the release tree, which
+belongs to the session user so `/update` can unpack releases and swap
+`current`. Rewrite the sidecar's bundle, write the restart marker the hub
+already lets you write, and three seconds later `Restart=always` is running
+your code as `fleetwright-sidecar`, host key in reach. The installer's own
+comment on that chown said "there is nothing to escalate to", which was true of
+the hub and false of the sidecar. (And until the same change, the installer's
+account check ran before a function it called existed, failed on every box,
+and quietly put the sidecar back on the session user's uid — so the boundary
+had never been in place on any Linux host. The check now runs where it can.)
+
+So on a packaged Linux box the sidecar runs from a **root-owned store**,
+`/usr/local/lib/fleetwright-sidecar`: `releases/<version>/` holding read-only
+copies of verified releases, `current` pointing at the newest, and `launch.mjs`,
+which the unit runs. Root fills it from one source only, the installer's own
+tree, and only when the installer can see that tree is out of the session
+user's reach: the deb's sha-checked extract, the tarball `bootstrap.sh`
+checked, or the one `fleetwright-migrate` checked, each in a `0700` directory
+of root's. It is never copied out of `releases/`. Every root-run route
+refreshes it: `apt` upgrades, the one-liner, `--repair`, and the heal every
+in-app update ends with, which is `fleetwright-migrate` running the verified
+installer.
+
+**The skew this accepts, said plainly.** An update the session user applies
+without root, on a box where the heal cannot run, moves the hub and not the
+sidecar: the sidecar keeps its root-owned release until root next runs a
+verified installer. Its health frame reports both (`head` is what it runs,
+`installed` is `current`) and the apps draw the gap. The store keeps the
+release root last copied and the one before it, and `launch.mjs` follows the
+hub's `current` when root has a copy of that release, so the commit-confirm
+watchdog pointing `current` back after a failed update moves the sidecar back
+with it.
+
+**Where it cannot hold, the installer says so.** It checks the sidecar's
+entry, the directory it runs in and its node, and every directory and symlink
+on the way to them, and when the session user could change any of them it
+prints that the host key is not protected from that user, and why. A git
+checkout is the usual case and is not a fault: it is a box somebody edits, and
+`/update` pulls into it as the session user, so there is no verified tree to
+copy and no separation to have. The other half of the account — a compromised
+sidecar cannot read the session user's credentials — holds either way.
+
 **And it holds its own token.** The hub mints two: the operator's (`api-token`,
 which opens the web UI and every command) and the sidecar's (`sidecar-token`),
 and `install.sh` — root, the one party that can read both sides — copies the

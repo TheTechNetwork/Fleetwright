@@ -331,11 +331,17 @@ export function healAfterRelease({
           'and log files were not refreshed. ' + MAC_HAS_NO_HELPER,
       };
     }
+    // AND THE SIDECAR STAYS WHERE IT IS. On a packaged Linux box it runs
+    // root's copy of a verified release (install.sh, refresh_sidecar_store),
+    // which this process cannot write by design — so without the root step it
+    // restarts onto the release it already had. Said, because "the services
+    // restart on the new code" would be true of one of them.
     return {
       scheduled: false,
       text:
         `${MIGRATE_BIN} is not installed, so the units, hook and sudoers rules this release's installer ` +
-        'writes were not refreshed. Re-run the installer once with --upgrade and every update after it will.',
+        'writes were not refreshed, and a sidecar running root\u2019s copy of a release stays on that release. ' +
+        'Re-run the installer once with --upgrade and every update after it will.',
     };
   }
   after(() => {

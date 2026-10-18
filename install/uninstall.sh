@@ -79,6 +79,10 @@ RUN_USER="${FLEETWRIGHT_USER:-${SUDO_USER:-root}}"
 # directory. That home is how this script tells an account it made from one
 # somebody else did, so that only the former is removed.
 SIDECAR_USER="${FLEETWRIGHT_SIDECAR_USER:-fleetwright-sidecar}"
+# Where install.sh keeps the sidecar's root-owned copy of the release. Code, but
+# not the release tree's: it goes whenever the sidecar's unit does, --purge or
+# not, because a store with no unit is root-owned code nothing runs.
+SIDECAR_BASE="${FLEETWRIGHT_SIDECAR_BASE:-/usr/local/lib/fleetwright-sidecar}"
 # The old names too: a box can be uninstalled without ever having been migrated
 # off agent-hub, and a service left running under its old name is still a host
 # in somebody's fleet. src/fleet/legacy-names.js has the whole list.
@@ -92,9 +96,14 @@ say "About to remove"
 printf '  host     %s\n' "$(hostname 2>/dev/null || echo unknown)"
 if [ -f /var/lib/fleetwright-sidecar/host-key.json ] || [ -f /var/lib/agent-fleet/host-key.json ]; then
   # As whichever account can read the key: the sidecar's since #270, the
-  # session user's on a box installed before it.
-  FP="$( { sudo -u "$SIDECAR_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null \
-          || sudo -u "$RUN_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null; } | awk '/fingerprint/ {print $2}' || true)"
+  # session user's on a box installed before it. AS THE SIDECAR, ONLY ROOT'S
+  # COPY: $DIR is `current` on a packaged box, which the session user can
+  # rewrite, and what runs as the sidecar's account can read the key.
+  FP=""
+  if [ -f "$SIDECAR_BASE/current/bin/fleetwright-sidecar" ]; then
+    FP="$(sudo -u "$SIDECAR_USER" "$SIDECAR_BASE/current/bin/fleetwright-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
+  fi
+  [ -n "$FP" ] || FP="$(sudo -u "$RUN_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
   printf '  identity %s\n' "${FP:-present, could not read fingerprint}"
   printf '           THIS IS THE FLEET IDENTITY. Removing it means this box\n'
   printf '           gets a new one and must be enrolled again — and if this\n'
@@ -208,6 +217,12 @@ fi
 if [ -f /usr/local/sbin/fleetwright-reclaim ]; then
   rm -f /usr/local/sbin/fleetwright-reclaim
   ok "/usr/local/sbin/fleetwright-reclaim"
+fi
+# The sidecar's store, for the same reason: root-owned and outside the tree on
+# purpose, so purging the tree never reached it.
+if [ -d "$SIDECAR_BASE" ] && [ ! -L "$SIDECAR_BASE" ]; then
+  rm -rf "${SIDECAR_BASE:?}"
+  ok "$SIDECAR_BASE"
 fi
 
 say "Removing the CLIs"

@@ -5,13 +5,18 @@
 # `purge` runs the release's own uninstall.sh, which already knows what this
 # box was given: units, sudoers rules, the host key (a clone carrying it would
 # be one host to the coordinator), and with --purge every release under
-# /opt/fleetwright. It is taken from `current` because /usr/lib/fleetwright is
-# gone by the time postrm runs.
+# /opt/fleetwright. /usr/lib/fleetwright is gone by the time postrm runs, so
+# it is taken from the sidecar's store — root's copy of a verified release,
+# install.sh's refresh_sidecar_store — and from `current` only on a box that
+# has none. `current` is the service user's to rewrite, and this runs as root.
 set -e
 BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
+STORE="${FLEETWRIGHT_SIDECAR_BASE:-/usr/local/lib/fleetwright-sidecar}"
 case "$1" in
   purge)
-    if [ -x "$BASE/current/install/uninstall.sh" ]; then
+    if [ -f "$STORE/current/install/uninstall.sh" ]; then
+      bash "$STORE/current/install/uninstall.sh" --purge --yes </dev/null || true
+    elif [ -x "$BASE/current/install/uninstall.sh" ]; then
       bash "$BASE/current/install/uninstall.sh" --purge --yes </dev/null || true
     fi
     if [ -e /usr/share/debconf/confmodule ]; then

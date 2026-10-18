@@ -10,7 +10,8 @@ After=fleetwright.service
 
 [Service]
 Type=simple
-# __USER__ / __DIR__ / __NODE__ / __ENTRY__ are substituted by install.sh.
+# __SIDECAR_USER__ / __DIR__ / __NODE__ / __ENTRY__ / __INSTALL_DIR__ are
+# substituted by install.sh.
 #
 # __ENTRY__ IS WHAT NODE RUNS, and it is computed rather than written here
 # because the answer differs between the two shapes an install can take. A
@@ -28,9 +29,21 @@ Type=simple
 # escape landing as the service user could read the host key — #270. Two uids,
 # and each can only read its own half. Everything the sidecar used to read out
 # of fleetwright's state directory it now asks fleetwright for over the loopback.
+#
+# AND IT RUNS CODE THAT ACCOUNT CANNOT HAVE CHANGED UNDER IT. On a packaged
+# Linux box __DIR__ is a root-owned store (/usr/local/lib/fleetwright-sidecar)
+# and __ENTRY__ its launch.mjs, which runs a root-owned copy of a verified
+# release — not the release tree, which fleetwright's user owns so it can
+# apply updates, and from which it could otherwise rewrite this process's code
+# and restart it with the host key in reach. install.sh says plainly when a
+# box cannot have that (a checkout, a node in somebody's home), and why.
 User=__SIDECAR_USER__
 WorkingDirectory=__DIR__
 EnvironmentFile=/etc/fleetwright-sidecar.env
+# The hub's tree, which is not this process's: read for which release
+# `current` holds — launch.mjs follows it when root has a copy, and the health
+# frame reports it beside the release this runs — and nothing run out of it.
+Environment=FLEETWRIGHT_INSTALL_DIR=__INSTALL_DIR__
 ExecStart=__NODE__ __ENTRY__
 
 Restart=always
