@@ -31,6 +31,7 @@ import { log } from '../log.js';
  * @property {string|null} [profile]       the NAME of the profile it was started with, never its content — the watcher reads it to say whose "back at its prompt" is news
  * @property {boolean} [tasked]          whether it was started on a task in words (protocol v7) — a flag for the same watcher, never the words
  * @property {string|null} [secret]        the NAME of the secret it was granted at start, never its value — the credential broker reads it to scope a runtime fetch to what was granted
+ * @property {boolean|null} [boxSecrets]   whether this box's own named secrets may answer that fetch, as the coordinator decided from who administers the box (protocol v14); null when nobody said, which for a fleet session is no (secret-store.js boxSecretsServed)
  * @property {string|null} [account]       whose Claude account was seeded: an email, or "shared"
  * @property {string|null} detail         last human-readable outcome
  * @property {string|null} rcUrl          claude.ai/code URL, when Remote Control came online
@@ -162,6 +163,10 @@ export class Registry {
           profile: patch.profile ?? null,
           tasked: patch.tasked ?? false,
           secret: patch.secret ?? null,
+          // And whether this box's own secrets may answer it: dropped here, a
+          // fresh start's `yes` was lost and its session read as one nobody
+          // had said anything about.
+          boxSecrets: patch.boxSecrets ?? null,
           // Where it is pushed before it goes. Named here like every field a
           // FIRST upsert may carry: this branch builds the record from a list,
           // and a field left off it is dropped on a fresh start without a word.

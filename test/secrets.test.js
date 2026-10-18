@@ -43,6 +43,17 @@ test('the sidecar maps the secrets verb to /secrets', () => {
   assert.equal(toCommandLine({ verb: 'secrets', params: {} }), '/secrets');
 });
 
+test('the coordinator’s word on the box’s own secrets reaches the hub on a start and a resume', () => {
+  // v14's `boxSecrets`: dropped here, the hub would read every fleet start
+  // as one an older coordinator sent, and serve nobody the box's secrets.
+  assert.equal(
+    toCommandLine({ verb: 'start', params: { name: 'job', secret: 'DEPLOY_KEY', boxSecrets: 'no' } }),
+    '/new job --secret=DEPLOY_KEY --box-secrets=no',
+  );
+  assert.equal(toCommandLine({ verb: 'resume', params: { name: 'job', choice: 'full', boxSecrets: 'yes' } }), '/resume job full --box-secrets=yes');
+  assert.equal(toCommandLine({ verb: 'resume', params: { name: 'job' } }), '/resume job');
+});
+
 test('/secrets lists the names a box holds, and offers each as a tap', async () => {
   const dir = store(['github-deploy', 'npm-publish']);
   const { ctx } = ctxWith(dir);
