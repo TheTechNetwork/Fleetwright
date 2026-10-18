@@ -160,12 +160,14 @@ export function proxyConfig(hosts, { port = PROXY_PORT } = {}) {
  * The filter file: one line per host, anchored at both ends and with its dots
  * escaped, so `api.anthropic.com` matches that host and not
  * `api.anthropic.com.attacker.net` or `apiXanthropic.com`. HOST_RE has already
- * kept everything but letters, digits, dots and hyphens out.
+ * kept everything but letters, digits, dots and hyphens out; every other
+ * regex character is escaped all the same, so the line is a literal whatever
+ * a later change lets through.
  *
  * @param {string[]} hosts
  */
 export function allowListText(hosts) {
-  return hosts.map((h) => `^${h.replace(/\./g, '\\.')}$\n`).join('');
+  return hosts.map((h) => `^${h.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$\n`).join('');
 }
 
 /**
