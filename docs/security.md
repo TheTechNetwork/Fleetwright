@@ -1343,7 +1343,7 @@ runs `npm ci` and its lifecycle scripts in `current`. **Fixed on a packaged
 Linux box:** root's `fleetwright` is a root-owned wrapper that runs the
 sidecar's root-owned store with a node the service user cannot replace, or
 refuses in words (`install.sh`, "ROOT'S COMMAND IS ROOT'S CODE"); the rest are
-closed one by one (`install-root-sources.test.js`). The ninth audit found the
+closed one by one (`install-root-sources.test.js`). The eighth audit found the
 same class one level down: the service user owns `/var/lib/fleetwright`, so
 `profiles` in it is a name they control, and the heal's `install -d -o` on it
 followed a symlink to `/usr/local/sbin` and gave them the directory the
@@ -1361,7 +1361,16 @@ so its `post-checkout` hook, with git trusting a repository owned by whoever
 ran sudo) and then its `install.sh`. `bootstrap.sh` now uses a checkout as
 root only when root owns it outright, runs git with no global or system
 config, hooks or fsmonitor, and on a box whose units run the release fetches
-the release instead. **Not fixed, and stated:**
+the release instead. The migrate helper itself trusted the wrong file: it
+read the manifest address from `/etc/fleetwright.env`, which its header called
+root-owned and which is the service user's (the hub writes it), so they could
+name a manifest of their own and have root run that release's `install.sh`,
+and its channel fallback printed any file a symlink in their state directory
+named. Root now takes the address only from
+`/usr/local/etc/fleetwright/release-manifest`, root's, written by the installer
+from what it was told or seeded once from what the box already had, and never
+refreshed from the env file afterwards; the channel is read as one of two words
+(`fleetwright-migrate`, `migration-end-to-end.test.js`). **Not fixed, and stated:**
 a checkout or a Mac has no root-owned tree, so `sudo fleetwright` there runs
 the service user's code and the installer says so, and the one-liner as root
 refuses a checkout the service user owns and names the two ways on — move to
@@ -1398,7 +1407,7 @@ a box without podman.
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
 | **G8** | **stated, not fixed.** The scheduler still offers a direct box to members. The decision is the owner's; the migrate helper's root path it compounded is closed (`install-root-sources.test.js`). |
 | **G9** | **fixed, not yet measured.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Like SEC-INJECT-2 as a whole, unmeasured until two people's sessions on one real box are seen unable to reach each other. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
-| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box with no system node are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`. |
+| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box; and the migrate helper takes the manifest address from a file root owns, not the service user's env file. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box with no system node are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`, `migration-end-to-end.test.js`. |
 | **G11** | **stated, not fixed.** An owner decision; until then docs/vault.md says the device rule holds for a member's own boxes only. |
 
 ---

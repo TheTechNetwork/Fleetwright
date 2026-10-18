@@ -279,6 +279,21 @@ value rather than two that have to agree.
 
 Unset on a checkout, which updates by git and always will.
 
+**Two copies, and root reads only one.** The hub reads the value above from
+`/etc/fleetwright.env` for its own unprivileged update. The migrate helper,
+which runs as root, reads it only from `/usr/local/etc/fleetwright/release-manifest`,
+because the env file belongs to the service user and an address they choose
+would be a release root runs. The installer writes root's copy from a value it
+is given, keeps it otherwise, and puts the env file back to match it, so editing
+the env file by hand changes nothing for long. To move a box to another release
+host, tell the installer as root. The one-liner takes it as `FLEETWRIGHT_MANIFEST`,
+verifies the release there, and hands that address down; a repair through the
+one-liner without it records the address it verified against, which is ours.
+
+```sh
+curl -fsSL <your coordinator>/install | sudo FLEETWRIGHT_MANIFEST=https://releases.example/fleet/manifest.json sh -s -- --repair
+```
+
 ## Channels and staged rollouts
 
 Two fields on the manifest, both defaulting to "everybody", so a release built
