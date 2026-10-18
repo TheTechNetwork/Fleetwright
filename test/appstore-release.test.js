@@ -183,3 +183,13 @@ test('the App Review contact comes from secrets, and is never invented', () => {
   assert.match(fn, /\/v1\/appStoreReviewDetails/);
   assert.doesNotMatch(fn, /throw /, 'a refused fact sinks the release instead of letting Apple say what is missing');
 });
+
+test("a refusal prints Apple's associated errors, which are the reason", () => {
+  // "This resource cannot be reviewed, please check associated errors to see
+  // why" is the whole of Apple's first line; the errors it points at ride in
+  // the same reply under meta.associatedErrors. 0.4.13 printed the line and
+  // dropped the list.
+  const fn = SRC.slice(SRC.indexOf('async function api('), SRC.indexOf('const sleep ='));
+  assert.match(fn, /meta\?\.associatedErrors/);
+  assert.match(fn, /\.flat\(\)/, 'the errors are keyed by resource and must be flattened, not printed as objects');
+});
