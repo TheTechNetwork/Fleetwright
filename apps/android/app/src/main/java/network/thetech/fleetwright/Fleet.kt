@@ -543,6 +543,15 @@ class Fleet(
         val sandboxImage: String? = null,
         val sandboxPinned: Boolean = false,
         /**
+         * Whether a session here is contained: the sandbox on, and nothing let
+         * through that ends it (http.js #hostFacts). NOT [sandboxVariant],
+         * which a box from before that report sent whether or not it used one.
+         * The coordinator lets a member's session onto a machine they do not
+         * administer only on true (hosts.js runsSessionsFor), so null, a box
+         * too old to say, is read the way it reads it: not.
+         */
+        val sandboxed: Boolean? = null,
+        /**
          * What `tag` matches on for this box: os, architecture, distribution,
          * whether its image has a browser, plus anything set from an app or in
          * FLEETWRIGHT_LABELS.
@@ -631,6 +640,31 @@ class Fleet(
          */
         val rootHalfBehind: Boolean
             get() = helper == "stale"
+
+        /**
+         * Why a session here is not offered Resume, in one line, or null where
+         * it is (C-2). The coordinator resumes a session only on a machine
+         * whose sessions are sandboxed or that this person administers
+         * (hosts.js runsSessionsFor, docs/security.md G8), because without the
+         * sandbox a session is a pane under the account that holds everyone's
+         * credentials there.
+         *
+         * THE SAME RULE, read off the same two answers the snapshot carries,
+         * and the same words as iOS's `FleetHost.resumeKept`. A box that has
+         * not said whether it is sandboxed is not, as the coordinator reads
+         * it, and the line says it has not said rather than that it is off
+         * (C-5). A coordinator too old to send [administers] is older than
+         * the rule too, so null offers Resume as before, and a refusal still
+         * says why.
+         */
+        val resumeKept: String?
+            get() = when {
+                administers != false || sandboxed == true -> null
+                sandboxed == false ->
+                    "$hostId runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+                else ->
+                    "$hostId has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+            }
 
         val appPending: Boolean
             get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
@@ -835,7 +869,24 @@ class Fleet(
          * setup poll to stop asking.
          */
         val code: String? = null,
-    )
+    ) {
+        /**
+         * The title over a start the fleet refused. Two refusals are a
+         * setting on the machine and not a fault in the asking, and asking
+         * again changes neither: `unsandboxed`, a machine that runs sessions
+         * without the sandbox and so only for its admins (G8), and
+         * `host_outdated`, one too old to carry what was asked. Those are
+         * titled as the reason, and the coordinator's sentence beneath says
+         * which setting; anything else is a start that could not happen.
+         * The same words as iOS's `Fleet.Reply.refusedStartTitle`.
+         */
+        val refusedStartTitle: String
+            get() = when (code) {
+                "unsandboxed" -> "Not started: only admins run sessions there"
+                "host_outdated" -> "Not started: the machine needs an update"
+                else -> "Could not start a session"
+            }
+    }
 
     /**
      * One machine's answer to `xoprobe`. `xo` is three-valued on purpose:
@@ -2807,6 +2858,9 @@ class Fleet(
                     sandboxVariant = health?.optJSONObject("sandbox")?.optString("variant")?.takeIf { it.isNotBlank() && it != "null" },
                     sandboxImage = health?.optJSONObject("sandbox")?.optString("image")?.takeIf { it.isNotBlank() && it != "null" },
                     sandboxPinned = health?.optJSONObject("sandbox")?.optBoolean("pinned") == true,
+                    // `has` first: optBoolean turns a missing answer into false,
+                    // and a box too old to say has not said it is off.
+                    sandboxed = health?.takeIf { it.has("sandboxed") && !it.isNull("sandboxed") }?.optBoolean("sandboxed"),
                     labels = health?.optJSONArray("labels")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
                     } ?: emptyList(),
