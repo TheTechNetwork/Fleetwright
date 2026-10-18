@@ -14,6 +14,19 @@
 // The bar for a sentence being here: could it be wrong in six months without
 // anybody noticing? If yes, it links out instead.
 
+/**
+ * NEVER IN SOMEBODY ELSE'S FRAME, for every page a browser is handed. The
+ * MCP sign-in page learned it first (seventh audit): framed on a page that
+ * hid what it said, a click there signed a person in for the framer. The
+ * rest had no such button yet and went without, and a page is given one
+ * long after anybody remembers which headers it lacks (eighth audit). So
+ * the pair is one value, here where both Workers already import from.
+ */
+export const NOT_FRAMED = Object.freeze({
+  'x-frame-options': 'DENY',
+  'content-security-policy': "frame-ancestors 'none'",
+});
+
 export const PRIVACY = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

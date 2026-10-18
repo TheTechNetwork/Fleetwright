@@ -27,7 +27,7 @@
 // only ever pass is a check nobody maintains.
 
 import { demoReply } from './demo.js';
-import { DOCS, PRIVACY } from './pages.js';
+import { DOCS, PRIVACY, NOT_FRAMED } from './pages.js';
 
 /**
  * @param {any} body
@@ -49,6 +49,7 @@ const page = (html) =>
       // reason to set them is that somebody will later add a form.
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
+      ...NOT_FRAMED,
     },
   });
 

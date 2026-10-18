@@ -592,6 +592,19 @@ async function providerFleet(t) {
   return { f, as, stored, connect };
 }
 
+test('a provider callback’s page cannot be framed', async () => {
+  // Eighth audit: the page a provider sends a browser back to hands the code
+  // on to whatever opened it, and only the MCP sign-in page carried the
+  // frame-ancestors pair (#1186). Each callback, whatever it answers.
+  const { fleet: f } = fleet();
+  for (const path of ['/oauth/github/callback?code=c0de&state=s', '/oauth/github/relayed?state=s&sealed=x', '/oauth/cloudflare/callback?code=c0de&state=s']) {
+    const page = await call(f, path);
+    assert.match(page.headers.get('content-type') || '', /text\/html/, path);
+    assert.equal(page.headers.get('x-frame-options'), 'DENY', path);
+    assert.match(page.headers.get('content-security-policy') || '', /frame-ancestors 'none'/, path);
+  }
+});
+
 test('a forwarded GitHub or Cloudflare link connects nothing for the person who started it', async (t) => {
   // Mallory, a member, started a connect on a box she enrolled, kept the
   // provider's authorize URL and forwarded it. Whoever authorized it came back

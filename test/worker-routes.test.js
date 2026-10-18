@@ -44,6 +44,24 @@ test('the privacy policy is public, because App Store Connect requires one', asy
   assert.match(String(res.headers.get('content-type')), /text\/html/);
 });
 
+test('no page either Worker hands a browser can be framed', async () => {
+  // Eighth audit: the frame-ancestors pair the MCP sign-in page carries
+  // (#1186) was on no other page, /me among them, where a member pastes a
+  // token. The demo Worker's pages too, which have no form yet.
+  for (const path of ['/privacy', '/me']) {
+    const res = await get(path);
+    assert.equal(res.status, 200, path);
+    assert.equal(res.headers.get('x-frame-options'), 'DENY', path);
+    assert.match(res.headers.get('content-security-policy') || '', /frame-ancestors 'none'/, path);
+  }
+  const { default: demo } = await import('../worker/src/demo-worker.js');
+  for (const path of ['/', '/privacy']) {
+    const res = await demo.fetch(new Request(`https://demo.example${path}`), /** @type {any} */ ({}));
+    assert.equal(res.headers.get('x-frame-options'), 'DENY', `demo ${path}`);
+    assert.match(res.headers.get('content-security-policy') || '', /frame-ancestors 'none'/, `demo ${path}`);
+  }
+});
+
 test('the install one-liner carries this fleet\'s address into the installer', async () => {
   // A box being installed has no credential — acquiring one is what the install
   // is for — so this has to sit above the token gate.

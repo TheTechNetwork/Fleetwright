@@ -946,6 +946,16 @@ is one to revoke when the Shortcut is retired rather than one to keep.
 *Falsify:* grep the two apps for `queryItems` and `?token` — they must build
 none; `credentialFrom` in `credential.js` is the only reader.
 
+**No page a browser is handed may be framed by another site.** The MCP sign-in
+page, `/me`, the provider callback pages, `/privacy` and the demo Worker's
+pages all carry `X-Frame-Options: DENY` and `frame-ancestors 'none'`, one value
+in `worker/src/pages.js` (`NOT_FRAMED`); the relay's sign-in page carries the
+same pair itself. A framed page whose button means something is a click the
+framer chose.
+*Falsify:* `test/worker-routes.test.js` ("no page either Worker hands a browser
+can be framed"), `test/fleet-do.test.js` ("a provider callback’s page cannot
+be framed").
+
 ### 4.9 Malicious contributor / compromised dependency
 
 **Bound:** high, and mostly out of band. A malicious change to `intents.js`,
