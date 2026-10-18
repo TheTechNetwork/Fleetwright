@@ -1950,16 +1950,16 @@ struct AddHypervisorView: View {
             // approved.
             let fingerprint = PhoneVault.fingerprint(hostKey)
             begun = Begun(job: begunJob, hostId: machine, address: target, key: key, fingerprint: fingerprint, can: can)
-            let approved = await approvedFingerprint(of: machine)
-            if approved == fingerprint {
+            switch await vaultApproval(of: machine, key: hostKey) {
+            case .approved:
                 await send()
-            } else if approved != nil {
+            case .anotherKey:
                 // Approved under another key: a machine that was re-keyed
                 // would have been re-approved. Hard stop.
                 _ = try? await fleet.cancelSetup(job: begunJob)
                 begun = nil
                 refuse("The key \(machine) answered with did not come from that machine: it is not the key this phone approved for it. The sign-in was not sent.")
-            } else {
+            case .none:
                 toCompare = fingerprint
             }
         } catch {
@@ -1967,14 +1967,16 @@ struct AddHypervisorView: View {
         }
     }
 
-    /// The fingerprint this phone's vault approved for that machine, or nil
-    /// when it approved none, or cannot ask: no GitHub sign-in on this phone,
-    /// or a vault that did not answer. Nil asks the person; it never passes.
-    private func approvedFingerprint(of hostId: String) async -> String? {
+    /// What this phone's vault says about the key that machine answered
+    /// with (PhoneVault.approval), or `.none` when it cannot ask: no GitHub
+    /// sign-in on this phone, or a vault that did not answer. `.none` asks
+    /// the person; it never passes. A grant scoped by `only`, which is how a
+    /// pool's own machine is let in, is not approval to receive this sign-in.
+    private func vaultApproval(of hostId: String, key: Fleet.Host.PublicKey) async -> PhoneVault.Approval {
         guard PhoneGitHub(settings: settings).signedIn,
               let contents = try? await PhoneVault(settings: settings).list(fleet)
-        else { return nil }
-        return contents.grants.first { $0.label == hostId }?.fingerprint
+        else { return .none }
+        return PhoneVault.approval(contents.grants, hostId: hostId, key: key)
     }
 
     /// Seal the sign-in to the job's key and send it. The password is cleared

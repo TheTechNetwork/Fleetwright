@@ -103,7 +103,7 @@ test('iOS: the key what it did comes back to is made for the screen and kept now
 });
 
 test('iOS: the machine is asked whether it can open a reconnect’s sign-in before anything is sealed to it', () => {
-  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func approvedFingerprint('));
+  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func vaultApproval('));
   const askAt = begin.indexOf('if isReconnect, let why = XOReconnect.refusal(can: can, machine: machine) {');
   assert.ok(askAt > 0, 'begin does not ask the machine');
   assert.ok(askAt < begin.indexOf('await send()'), 'send is reachable before the machine is asked');

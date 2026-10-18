@@ -98,7 +98,7 @@ test('iOS: `purpose: policy` is inside the seal, beside the sign-in and the repl
 
 test('iOS: the machine is asked whether it can open a policy sign-in before anything is sealed to it', () => {
   // In begin: the answer's `can`, before the key check and before send.
-  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func approvedFingerprint('));
+  const begin = SCREEN.slice(SCREEN.indexOf('private func begin('), SCREEN.indexOf('private func vaultApproval('));
   const askAt = begin.indexOf('if isPolicy, let why = XOPolicy.refusal(can: can, machine: machine) {');
   assert.ok(askAt > 0, 'begin does not ask the machine');
   assert.ok(askAt < begin.indexOf('await send()'), 'send is reachable before the machine is asked');

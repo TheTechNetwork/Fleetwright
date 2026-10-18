@@ -25,10 +25,44 @@ struct PhoneVault {
     }
 
     struct Grant: Hashable {
+        /// The whole SHA-256 of the box's key, as the minter names the grant
+        /// (`keyHash`); `fingerprint` is its first sixteen characters.
         let key: String
         let fingerprint: String
         let label: String
         let email: String
+        /// The items a box approved for some of the vault may hold, by name:
+        /// the vault's `only`, as `approveHolder` writes it for a pool's own
+        /// machine. Empty is the whole vault.
+        var only: [String] = []
+    }
+
+    /// What this vault says about the key a machine answered with.
+    enum Approval: Equatable {
+        /// Approved for the whole vault, under that machine's name, by that key.
+        case approved
+        /// Approved for the whole vault under that machine's name, by another
+        /// key: a machine that was re-keyed would have been re-approved.
+        case anotherKey
+        /// Nothing that counts, which asks the person.
+        case none
+    }
+
+    /// Whether these grants approve `key` as `hostId`'s for an admin's
+    /// sign-in, which is the person's word that it is that machine's key.
+    ///
+    /// A GRANT SCOPED BY `only` IS NOT THAT WORD. It is the one this phone
+    /// writes when it lets a pool's own machine in to hold its pool's record
+    /// and nothing else (`approveHolder`), and nobody compared a key for it
+    /// the way the comparison card asks. Counted, a machine holding a pool's
+    /// record was handed the Xen Orchestra admin's sign-in without anyone
+    /// being asked. So only a whole-vault grant counts, under the name that
+    /// answered, by the whole hash of the key and not its sixteen-character
+    /// prefix; anything else is `.none` and the person compares.
+    static func approval(_ grants: [Grant], hostId: String, key: Fleet.Host.PublicKey) -> Approval {
+        let named = grants.filter { $0.only.isEmpty && $0.label == hostId }
+        if named.contains(where: { $0.key == keyHash(key) }) { return .approved }
+        return named.isEmpty ? .none : .anotherKey
     }
 
     struct Contents: Hashable {
@@ -67,7 +101,8 @@ struct PhoneVault {
         }
         let grants = (answer["grants"] as? [[String: Any]] ?? []).map {
             Grant(key: $0["key"] as? String ?? "", fingerprint: $0["fingerprint"] as? String ?? "",
-                  label: $0["label"] as? String ?? "", email: $0["email"] as? String ?? "")
+                  label: $0["label"] as? String ?? "", email: $0["email"] as? String ?? "",
+                  only: ($0["only"] as? [Any])?.map { "\($0)" } ?? [])
         }
         return Contents(items: items, grants: grants)
     }
@@ -149,8 +184,14 @@ struct PhoneVault {
     /// as src/fleet/crypto.js `fingerprint` makes it and `fleetwright-sidecar
     /// identity` prints it.
     static func fingerprint(_ key: Fleet.Host.PublicKey) -> String {
+        String(keyHash(key).prefix(16))
+    }
+
+    /// The whole of that SHA-256, in hex: what the minter names a grant by
+    /// (boxKeyHash in src/fleet/minter/vault.js), and `Grant.key`.
+    static func keyHash(_ key: Fleet.Host.PublicKey) -> String {
         let canonical = "{\"crv\":\"\(key.crv)\",\"kty\":\"\(key.kty)\",\"x\":\"\(key.x)\",\"y\":\"\(key.y)\"}"
-        return SHA256.hash(data: Data(canonical.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// How a vault item is named to a person.
