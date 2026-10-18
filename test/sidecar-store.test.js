@@ -36,11 +36,11 @@ const SH_PATH = path.join(ROOT, 'install', 'install.sh');
 const SH = readFileSync(SH_PATH, 'utf8');
 
 const sh = (/** @type {string} */ script, /** @type {Record<string,string>} */ env = {}) =>
-  spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000 });
+  spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, FW_INSTALL_SH: SH_PATH, ...env }, timeout: 120_000 });
 
 /** A preamble that defines the named installer functions, as the installer has them. */
 const functions = (/** @type {string[]} */ names) => `
-fn() { awk -v name="$1" '$0 ~ "^"name"\\\\(\\\\) \\\\{" {p=1} p {print} p && /^}/ {exit}' ${JSON.stringify(SH_PATH)}; }
+fn() { awk -v name="$1" '$0 ~ "^"name"\\\\(\\\\) \\\\{" {p=1} p {print} p && /^}/ {exit}' "$FW_INSTALL_SH"; }
 ${names.map((n) => `eval "$(fn ${n})"`).join('\n')}
 ok() { printf 'ok   %s\\n' "$*"; }; warn() { printf 'warn %s\\n' "$*"; }
 `;
@@ -85,10 +85,10 @@ test('the service user can change a path through any directory on the way to it'
     ];
     const script = `${functions(ALTER)}
 RUN_USER=nobody
-for q in ${cases.map(([q]) => JSON.stringify(q)).join(' ')}; do
+while IFS= read -r q; do
   if run_user_can_alter "$q"; then echo "yes $q"; else echo "no  $q"; fi
-done`;
-    const r = sh(script);
+done <<< "$CASES"`;
+    const r = sh(script, { CASES: cases.map(([q]) => q).join('\n') });
     const answers = new Map(r.stdout.trim().split('\n').map((l) => [l.slice(4), l.startsWith('yes')]));
     for (const [q, want, why] of cases) {
       assert.equal(answers.get(/** @type {string} */ (q)), want, `${why}: ${q}\n${r.stdout}${r.stderr}`);
@@ -105,7 +105,7 @@ test('a file the service user owns is theirs wherever it sits', { skip: !(root &
     mkdirSync(path.join(t, 'tree'));
     writeFileSync(path.join(t, 'tree', 'f'), '');
     spawnSync('chown', ['nobody', path.join(t, 'tree', 'f')]);
-    const r = sh(`${functions(ALTER)}\nRUN_USER=nobody\nrun_user_can_alter ${JSON.stringify(path.join(t, 'tree'))} && echo yes || echo no`);
+    const r = sh(`${functions(ALTER)}\nRUN_USER=nobody\nrun_user_can_alter "$P" && echo yes || echo no`, { P: path.join(t, 'tree') });
     assert.equal(r.stdout.trim(), 'yes', r.stderr);
   } finally {
     rmSync(t, { recursive: true, force: true });
@@ -156,7 +156,7 @@ test('root fills the store only from a release the service user cannot reach', {
     assert.equal(statSync(path.join(store, 'launch.mjs')).uid, 0);
     const loose = spawnSync('find', [store, '!', '-type', 'l', '(', '!', '-user', '0', '-o', '-perm', '/022', ')'], { encoding: 'utf8' });
     assert.equal(loose.stdout, '', `left changeable in the store:\n${loose.stdout}`);
-    assert.equal(sh(`${functions(ALTER)}\nRUN_USER=nobody\nrun_user_can_alter ${JSON.stringify(store)} && echo yes || echo no`).stdout.trim(), 'no');
+    assert.equal(sh(`${functions(ALTER)}\nRUN_USER=nobody\nrun_user_can_alter "$P" && echo yes || echo no`, { P: store }).stdout.trim(), 'no');
 
     // THE RELEASE TREE IS NEVER A SOURCE. A tree the service user can reach —
     // here, one of its files left world-writable in a directory anybody can
@@ -201,14 +201,14 @@ function renderSidecarUnit(/** @type {{ store: boolean, dir: string, base: strin
       return SH.slice(start, end);
     })
     .join('\n')
-    .replaceAll('/etc/systemd/system/', `${out}/`);
+    .replaceAll('/etc/systemd/system/', '$X_OUT/');
   const r = sh(`set -euo pipefail
 ok() { :; }; warn() { :; }
 ${fns}
-PLATFORM=linux SELF_DIR=${JSON.stringify(ROOT)} DIR=${JSON.stringify(o.dir)} FLEET_BASE=${JSON.stringify(o.base)}
-RUN_USER=alice SIDECAR_USER=fleetwright-sidecar NODE_BIN=/usr/bin/node SIDECAR_NODE_BIN=${JSON.stringify(o.node)} UNIT_NODE_BIN=/usr/bin/node CLAUDE_BIN=
-STATE_DIR=/var/lib/fleetwright SIDECAR_BASE=${JSON.stringify(o.sidecarBase)} SIDECAR_STORE=${o.store ? 1 : 0}
-install_unit fleetwright-sidecar`);
+PLATFORM=linux SELF_DIR="$X_SELF" DIR="$X_DIR" FLEET_BASE="$X_BASE"
+RUN_USER=alice SIDECAR_USER=fleetwright-sidecar NODE_BIN=/usr/bin/node SIDECAR_NODE_BIN="$X_NODE" UNIT_NODE_BIN=/usr/bin/node CLAUDE_BIN=
+STATE_DIR=/var/lib/fleetwright SIDECAR_BASE="$X_SIDECAR_BASE" SIDECAR_STORE=${o.store ? 1 : 0}
+install_unit fleetwright-sidecar`, { X_OUT: out, X_SELF: ROOT, X_DIR: o.dir, X_BASE: o.base, X_NODE: o.node, X_SIDECAR_BASE: o.sidecarBase });
   const unit = readFileSync(path.join(out, 'fleetwright-sidecar.service'), 'utf8');
   return { unit, out, r };
 }
@@ -260,10 +260,10 @@ test('the account check names what the service user could change, rather than cl
     writeFileSync(path.join(t, 'store', 'launch.mjs'), '');
     const run = () => sh(`${functions(ALTER)}
 PLATFORM=linux RUN_USER=nobody SIDECAR_USER=fleetwright-sidecar CHECK_ONLY=0 SIDECAR_NODE_BIN=/usr/bin/env
-sidecar_entry() { printf '%s/store/launch.mjs' ${JSON.stringify(t)}; }
-sidecar_dir() { printf '%s/store' ${JSON.stringify(t)}; }
+sidecar_entry() { printf '%s/store/launch.mjs' "$T"; }
+sidecar_dir() { printf '%s/store' "$T"; }
 ${block}
-echo "EXPOSED=$SIDECAR_EXPOSED"`);
+echo "EXPOSED=$SIDECAR_EXPOSED"`, { T: t });
     let r = run();
     assert.match(r.stdout, /^EXPOSED=$/m, r.stdout + r.stderr);
     assert.match(r.stdout, /out of its reach/);
