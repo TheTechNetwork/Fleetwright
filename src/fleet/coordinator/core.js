@@ -973,6 +973,8 @@ export class CoordinatorCore {
     this.#pushedAt.set(key, now);
     recent.push(now);
     this.#pushesBy.set(who, recent);
+    // Spent where storage can see it (serialisePushLimits).
+    this.onStateChanged?.();
     return true;
   }
 
@@ -980,6 +982,62 @@ export class CoordinatorCore {
   #pushedAt = new Map();
   /** When each person's, or operator box's, pushes in the last hour were sent (#mayPush). @type {Map<string, number[]>} */
   #pushesBy = new Map();
+
+  /**
+   * The hour's allowances already spent, for storage: each person's pushes
+   * (#mayPush) and the pool losses said to each (#poolLost).
+   *
+   * THEY LIVED ONLY IN MEMORY, and a Durable Object is rebuilt on every
+   * deploy and whenever it is evicted between messages. So HOST_PUSHES_EACH
+   * and POOLS_LOST_EACH were each an allowance per rebuild rather than per
+   * hour, and the relay's 600 an hour that they share out was as safe as the
+   * object was long-lived (seventh audit).
+   *
+   * Only the times still inside their window, and at most
+   * MAX_PUSH_LIMIT_ROWS of each, the most recently spent first. A person
+   * dropped past that starts their hour again after a rebuild, which is what
+   * everybody did before this was kept. The 30-second repeat quiet and the
+   * hour's quiet on a host's fault are not here: the first is over before a
+   * rebuild matters, and the second is read from the event ring as well
+   * (#onHostState).
+   *
+   * @returns {{ pushes: Array<[string, number[]]>, poolsLost: Array<[string, number]> }}
+   */
+  serialisePushLimits() {
+    const now = this.now();
+    const pushes = [...this.#pushesBy]
+      .map(([who, times]) => /** @type {[string, number[]]} */ ([who, times.filter((t) => now - t < HOST_PUSH_WINDOW_MS)]))
+      .filter(([, times]) => times.length)
+      .sort((a, b) => b[1][b[1].length - 1] - a[1][a[1].length - 1])
+      .slice(0, MAX_PUSH_LIMIT_ROWS);
+    const poolsLost = [...this.#poolLostSaidAt]
+      .filter(([, at]) => now - at < POOL_LOST_QUIET_MS)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_PUSH_LIMIT_ROWS);
+    return { pushes, poolsLost };
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it, and only
+   * what is still inside its window.
+   *
+   * @param {unknown} saved
+   */
+  restorePushLimits(saved) {
+    const now = this.now();
+    const rows = (/** @type {unknown} */ list) => (Array.isArray(list) ? list.slice(0, MAX_PUSH_LIMIT_ROWS) : []);
+    const at = (/** @type {unknown} */ t, /** @type {number} */ window) => typeof t === 'number' && Number.isFinite(t) && t <= now && now - t < window;
+    const s = /** @type {any} */ (saved);
+    for (const row of rows(s?.pushes)) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || row[0].length > 260 || !Array.isArray(row[1])) continue;
+      const times = row[1].filter((/** @type {unknown} */ t) => at(t, HOST_PUSH_WINDOW_MS)).sort((/** @type {number} */ a, /** @type {number} */ b) => a - b).slice(-HOST_PUSHES_EACH);
+      if (times.length) this.#pushesBy.set(row[0], times);
+    }
+    for (const row of rows(s?.poolsLost)) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || row[0].length > 520 || !row[0].includes('\n') || !at(row[1], POOL_LOST_QUIET_MS)) continue;
+      this.#poolLostSaidAt.set(row[0], row[1]);
+    }
+  }
 
   /**
    * A host changed state. Say so, once, in words about what it means.
@@ -1182,6 +1240,7 @@ export class CoordinatorCore {
       return;
     }
     this.#poolLostSaidAt.set(key, now);
+    this.onStateChanged?.();
     // OPEN UNTIL IT SHOWS AGAIN, so the recovery is said once. Bounded per
     // person as the announcements are: their oldest open loss goes first.
     const open = [...this.#poolsLost].filter(([k]) => k.startsWith(`${owner}\n`));
@@ -6639,6 +6698,14 @@ const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
 const HOST_PUSH_QUIET_MS = 30_000;
 const HOST_PUSHES_EACH = 60;
 const HOST_PUSH_WINDOW_MS = 60 * 60_000;
+/**
+ * How many people's spent allowances are kept across a rebuild, and how many
+ * pool losses (serialisePushLimits): 64 people at a full hour each and 64 of
+ * the longest owner-and-address keys restore admits are 105 KB, inside the
+ * 128 KiB a Durable Object value holds (test/do-key-bounds.test.js measures
+ * it).
+ */
+const MAX_PUSH_LIMIT_ROWS = 64;
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set([

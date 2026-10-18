@@ -80,6 +80,9 @@ const BOUNDED = {
   // A pool's own machine asking to join: a refusal past MAX_RESERVATIONS, a
   // day's window, and MAX_REQUESTS per name.
   holderJoins: 'src/fleet/coordinator/holder-joins.js',
+  // The hour's pushes each person has had and the pool losses said to them:
+  // a window, and MAX_PUSH_LIMIT_ROWS of each.
+  pushLimits: 'src/fleet/coordinator/core.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */
@@ -239,4 +242,21 @@ test('a full store of machines kept ready still fits in one Durable Object value
   assert.equal(kept.wishes.size, MAX_PEOPLE);
   const bytes = new TextEncoder().encode(JSON.stringify(kept.serialise())).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full store of machines kept ready is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full store of spent push allowances still fits in one Durable Object value', async () => {
+  // Every row as wide as restore admits, every person at a full hour of
+  // pushes, and more rows than are kept.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({});
+  const now = Date.now();
+  const hour = Array.from({ length: 60 }, (_, i) => now - i * 1000);
+  core.restorePushLimits({
+    pushes: Array.from({ length: FILL_CAP }, (_, i) => [String(i).padStart(260, 'e'), hour]),
+    poolsLost: Array.from({ length: FILL_CAP }, (_, i) => [`${String(i).padStart(254, 'e')}\n${'a'.repeat(265)}`, now]),
+  });
+  const kept = core.serialisePushLimits();
+  assert.ok(kept.pushes.length < FILL_CAP && kept.poolsLost.length < FILL_CAP, 'the store took every row it was given, so it has no ceiling');
+  const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full store of push allowances is ${bytes} bytes, which does not fit in a DO value`);
 });

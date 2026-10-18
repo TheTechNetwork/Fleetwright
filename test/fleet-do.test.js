@@ -801,6 +801,54 @@ test('a health frame heavier than any honest one is neither kept nor served agai
   }
 });
 
+test('an hour’s push allowances are still spent after the object is rebuilt', async () => {
+  // Sixty pushes a person an hour and eight pool losses (core.js #mayPush,
+  // #poolLost) were counted in memory, and this object is rebuilt on every
+  // deploy and every eviction: each rebuild handed every member a fresh hour,
+  // and the relay's 600 that those allowances share out went with it
+  // (seventh audit).
+  const { fleet: f, state } = fleet();
+  /** @type {any[]} */
+  const sent = [];
+  const pusher = /** @type {any} */ ({ send: async (/** @type {any[]} */ d, /** @type {any} */ m) => { sent.push(m); return { sent: d.length, dead: [] }; } });
+  const boxes = { 'sam-1': 'sam@example.test', 'sam-2': 'sam@example.test', 'kim-1': 'kim@example.test' };
+  for (const [box, enrolledBy] of Object.entries(boxes)) await admit(f.core, box, { enrolledBy });
+  f.core.onStateChanged?.();
+  const ready = async (/** @type {Fleet} */ x) => {
+    x.core.push = pusher;
+    await x.core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
+    for (const box of Object.keys(boxes)) x.core.hostConnected(box, () => {});
+  };
+  const frame = (/** @type {Fleet} */ x, /** @type {string} */ hostId, /** @type {any} */ body) =>
+    x.webSocketMessage(/** @type {any} */ ({ deserializeAttachment: () => ({ hostId }) }), JSON.stringify(body));
+  const asking = (/** @type {string} */ name) => ({ kind: 'event', event: 'session.awaiting-input', name, text: 'flood' });
+  const lostAt = (/** @type {string[]} */ addresses) => ({
+    kind: 'health',
+    health: { hub: { reachable: true }, protocol: 7, maxSessions: 5, running: 0, free: 5, labels: [], xo: addresses.map((address) => ({ address, owner: 'sam@example.test', reachable: true, pools: [], missing: [{ id: 'p', name: 'pool' }], missingFor: 60 * 60_000 })) },
+  });
+  const pools = () => new Set(sent.filter((m) => m.data?.kind === 'pool-lost').map((m) => m.data.address)).size;
+  await ready(f);
+
+  for (let i = 0; i < 70; i++) await frame(f, i % 2 ? 'sam-1' : 'sam-2', asking(`flood-${i}`));
+  await frame(f, 'sam-1', lostAt(Array.from({ length: 10 }, (_, i) => `xo${i}.lan`)));
+  assert.equal(sent.filter((m) => m.data?.name?.startsWith('flood-')).length, 60, 'the allowance was not spent to begin with');
+  assert.equal(pools(), 8);
+  await new Promise((r) => setTimeout(r, 0));
+
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await new Promise((r) => setTimeout(r, 0));
+  await ready(revived);
+  sent.length = 0;
+  await frame(revived, 'sam-2', asking('after-the-deploy'));
+  await frame(revived, 'sam-1', lostAt(['xo10.lan']));
+  assert.deepEqual(sent.map((m) => m.data?.name), [], 'a rebuild gave Sam a fresh hour');
+
+  // The negative control: Kim's box was never spent, so the refusal above is
+  // Sam's hour and not a rebuilt object that pushes nothing.
+  await frame(revived, 'kim-1', asking('kims-question'));
+  assert.equal(sent.at(-1)?.data?.name, 'kims-question');
+});
+
 test('one member’s machines fill their own share of the fleet, not everybody’s', async () => {
   // HostIdentities refused any new machine once 200 were live, and nothing
   // bounded how many one person added: a member minting and spending pins one
