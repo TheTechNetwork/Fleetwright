@@ -22,7 +22,7 @@ import path from 'node:path';
 
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits } from '../src/fleet/host/xo-setup.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
-import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
+import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupPolicySigninAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
 import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
@@ -337,11 +337,12 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
+    ['policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
-  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' });
+  // Sealed as an updated phone seals a policy change: under its own binding.
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' }, xosetupPolicySigninAad);
   const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
   assert.equal(ran.ok, true, ran.text);
   /** @type {any} */
@@ -1381,6 +1382,10 @@ test('a reconnect’s sign-in opens under its own binding only as a reconnect, a
     [xosetupReconnectSigninAad, 'policy'],
     [xosetupReconnectSigninAad, 'rebuild'],
     [xosetupAad, 'rebuild'],
+    // And a policy change's own binding opens only a policy change.
+    [xosetupPolicySigninAad, undefined],
+    [xosetupPolicySigninAad, 'reconnect'],
+    [xosetupPolicySigninAad, 'rebuild'],
   ])) {
     const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected' })] });
     const { setups } = await machine();
@@ -1388,7 +1393,7 @@ test('a reconnect’s sign-in opens under its own binding only as a reconnect, a
     const reply = await newSealKey();
     const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, ...(purpose ? { purpose } : {}), xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey }, aad);
     const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
-    const which = `${aad === xosetupAad ? 'setup' : 'reconnect-signin'} / ${purpose}`;
+    const which = `${aad === xosetupAad ? 'setup' : aad === xosetupPolicySigninAad ? 'policy-signin' : 'reconnect-signin'} / ${purpose}`;
     assert.equal(ran.ok, false, which);
     assert.match(ran.text, /^The sign-in was sealed for a kind of job this machine does not run, so nothing was started\./, which);
     assert.equal(ran.xosetup?.state, 'failed', `${which}: the job is over and its key spent`);

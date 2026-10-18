@@ -124,8 +124,21 @@ const oid = (dotted) => {
   }
   return der(0x06, Buffer.from(bytes));
 };
-/** @param {Date} d */
-const utcTime = (d) => der(0x17, Buffer.from(`${d.toISOString().replace(/[-:T]/g, '').slice(2, 14)}Z`, 'ascii'));
+/**
+ * A certificate's time, as RFC 5280 requires it: UTCTime through 2049 and
+ * GeneralizedTime from 2050. UTCTime has a two-digit year read as 1950-2049,
+ * so a twenty-year certificate made from 2030 on said it had expired in 1950.
+ * The box pins the certificate and never reads its dates; anything that does
+ * would refuse it.
+ *
+ * @param {Date} d
+ */
+const certTime = (d) => {
+  const digits = d.toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  return d.getUTCFullYear() >= 2050
+    ? der(0x18, Buffer.from(`${digits}Z`, 'ascii'))
+    : der(0x17, Buffer.from(`${digits.slice(2)}Z`, 'ascii'));
+};
 const name = (/** @type {string} */ cn) => seq(der(0x31, seq(oid('2.5.4.3'), der(0x0c, Buffer.from(cn, 'utf8')))));
 
 /**
@@ -153,7 +166,7 @@ export function selfSigned({ cn, now = Date.now() }) {
     der(0x02, serial),
     ecdsaSha256,
     name(cn),
-    seq(utcTime(new Date(now - 86_400_000)), utcTime(new Date(now + 20 * 365 * 86_400_000))),
+    seq(certTime(new Date(now - 86_400_000)), certTime(new Date(now + 20 * 365 * 86_400_000))),
     name(cn),
     spki,
   );

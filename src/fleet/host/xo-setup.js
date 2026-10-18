@@ -113,7 +113,7 @@ import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
-import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupPolicySigninAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { machineGrantsOf } from '../../core/grants.js';
@@ -605,8 +605,12 @@ export class XoSetups {
         // `reconnect` to an older machine's list; under its own binding the
         // sign-in does not open there, where under the setup's it was run as
         // a whole setup.
+        // `policy-signin`: the same for a policy change's sign-in
+        // (xosetupPolicySigninAad), which under the setup's name a machine
+        // from before policy changes ran as a whole setup, resetting the
+        // pool's resource set (seventh audit).
         can: [
-          'policy', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
+          'policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
           ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder', 'holder-ask'] : []),
         ],
@@ -692,44 +696,42 @@ export class XoSetups {
     let inside;
     const deploy = rec.purpose === 'deploy';
     const box = { epk: parts[0], iv: parts[1], ct: parts[2] };
-    // UNDER THE SETUP'S NAME, OR A RECONNECT'S OWN: a phone that knows this
-    // machine lists `reconnect-signin` seals a reconnect under the second,
-    // which a machine too old to know a reconnect cannot open (seal.js).
-    let underReconnect = false;
+    // UNDER THE SETUP'S NAME, OR A RECONNECT'S OR A POLICY CHANGE'S OWN: a
+    // phone that knows this machine lists `reconnect-signin` and
+    // `policy-signin` seals each under its own name, which a machine too old
+    // to know the job cannot open (seal.js).
+    /** @type {'setup'|'reconnect'|'policy'} */
+    let under = 'setup';
+    /** @param {string} aad */
+    const tryOpen = (aad) => openSealed({ privateKey: rec.key.privateKey, publicKey: rec.key.publicKey, aad, sealed: box });
     try {
-      inside = await openSealed({
-        privateKey: rec.key.privateKey,
-        publicKey: rec.key.publicKey,
-        aad: deploy ? xodeployAad(job, rec.address) : xosetupAad(job, rec.address),
-        sealed: box,
-      });
+      inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : xosetupAad(job, rec.address));
     } catch {
       if (deploy) return { ok: false, text: 'The passwords did not open with this job’s key. Start again from the app.' };
-      try {
-        inside = await openSealed({
-          privateKey: rec.key.privateKey,
-          publicKey: rec.key.publicKey,
-          aad: xosetupReconnectSigninAad(job, rec.address),
-          sealed: box,
-        });
-        underReconnect = true;
-      } catch {
-        return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
+      for (const [name, aad] of /** @type {const} */ ([['reconnect', xosetupReconnectSigninAad(job, rec.address)], ['policy', xosetupPolicySigninAad(job, rec.address)]])) {
+        try {
+          inside = await tryOpen(aad);
+          under = name;
+          break;
+        } catch { /* the next name, or none */ }
       }
+      if (under === 'setup') return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
     }
     // ONE USE: the key goes as soon as it has opened the one thing it exists
     // for, which for a policy job is two things (below).
     const jobKey = rec.key;
     rec.key = null;
-    // A RECONNECT ONLY UNDER ITS OWN BINDING, and no purpose this machine
-    // does not know taken for a whole setup. Under the reconnect's name the
-    // phone asked for a reconnect and nothing else, so anything else in it is
-    // refused. Under the setup's name a setup carries no purpose at all, a
-    // policy change says `policy`, and a reconnect from a phone not yet
-    // updated says `reconnect` and is run as one, which is safe here because
-    // this machine knows it. Checked here, before #execute, which chooses
-    // its steps from `rec.purpose` and runs a whole setup for anything else.
-    if (!deploy && (underReconnect ? inside?.purpose !== 'reconnect' : ![undefined, 'policy', 'reconnect'].includes(inside?.purpose))) {
+    // EACH JOB ONLY UNDER ITS OWN BINDING, and no purpose this machine does
+    // not know taken for a whole setup. Under the reconnect's or the policy
+    // change's name the phone asked for that and nothing else, so anything
+    // else in it is refused. Under the setup's name a setup carries no
+    // purpose at all, and a policy change or a reconnect from a phone not yet
+    // updated says `policy` or `reconnect` and is run as one, which is safe
+    // here because this machine knows both. Checked here, before #execute,
+    // which chooses its steps from `rec.purpose` and runs a whole setup for
+    // anything else.
+    const allowed = under === 'setup' ? [undefined, 'policy', 'reconnect'] : [under];
+    if (!deploy && !allowed.includes(inside?.purpose)) {
       rec.state = 'failed';
       rec.text = 'The sign-in was sealed for a kind of job this machine does not run, so nothing was started. Update the app and this machine, then try again.';
       this.#ended(rec);

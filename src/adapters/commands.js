@@ -1937,16 +1937,29 @@ export const COMMANDS = {
     short: 'Recent service or session logs',
     help: 'The last lines of a service log, or of a session — /logs <name> shows what that session printed. '
       + 'Defaults to the session manager, 40 lines.',
-    run: (ctx, args) => {
+    run: (ctx, args, _flags, values) => {
       // Either order, because nobody remembers which comes first.
       const words = args.filter(Boolean);
       const lines = words.map(Number).find((n) => Number.isFinite(n) && n > 0) ?? null;
+
+      // `--session=<name>` IS A SESSION AND NOTHING ELSE. The sidecar sends a
+      // fleet `logs <name>` this way, because the coordinator has already
+      // checked that the name is the asker's own session, and read as a bare
+      // word a session called `hub` or `sidecar` was the service journal:
+      // everybody's work on the box, which a member may not read (seventh
+      // audit). A name with no such session here is said to be one.
+      const named = values?.get('session');
+      if (named !== undefined) {
+        if (!ctx.sessions.get?.(named)) return { ok: false, text: `There is no session called "${named}" on this machine.` };
+        const r = readSessionLogs(ctx.cfg, named, lines ?? 60);
+        return { ok: r.ok, text: r.text };
+      }
       const source = words.find((w) => resolveSource(w)) ?? null;
 
       // A SESSION NAME beats a service name, and is checked against the
-      // registry rather than guessed at: "is this a service word" already has
-      // an answer, so anything else that names a real session is a session.
-      const sessionWord = words.find((w) => !resolveSource(w) && !Number.isFinite(Number(w)) && ctx.sessions.get?.(w));
+      // registry rather than guessed at: anything that names a real session
+      // is a session, a service word included.
+      const sessionWord = words.find((w) => !Number.isFinite(Number(w)) && ctx.sessions.get?.(w));
       if (sessionWord) {
         const r = readSessionLogs(ctx.cfg, sessionWord, lines ?? 60);
         return { ok: r.ok, text: r.text };

@@ -204,6 +204,23 @@ export function xosetupReconnectSigninAad(job, address) {
 }
 
 /**
+ * What a policy change's admin sign-in is sealed under on its way to the
+ * machine, for the reason the reconnect's has a name of its own (above): a
+ * machine from before policy changes opens the setup's name, ignores the
+ * purpose, and runs a whole setup with the sign-in, which resets the pool's
+ * resource set to defaults. `can` lists `policy-signin` where this is known,
+ * and a relay that adds the word to an older machine's reply gets it a seal
+ * it cannot open. The machine opens anything under it only as a policy
+ * change. src/fleet/host/xo-setup.js, run; the phones build the same string.
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function xosetupPolicySigninAad(job, address) {
+  return `fleetwright-xosetup-policy-signin/v1:${job}:${address}`;
+}
+
+/**
  * What an install's passwords are sealed under: the pool master's root
  * password and the admin password the person chose for the Xen Orchestra the
  * machine installs, for one job at one pool master. Its own name, so a sealed
