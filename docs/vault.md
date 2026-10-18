@@ -29,7 +29,8 @@ boxes at the same moment and counts one renewal).
 ## Who may ask, and how each one is checked
 
 None of it is the coordinator's word. The coordinator relays ciphertext both
-ways and adds one fact the minter checks against something else.
+ways and adds one fact the minter checks against something else, and one it
+can only take away with: who is still in the fleet ([below](#when-somebody-leaves-the-fleet)).
 
 **A person**, from their phone, under *Runners from this phone*, *Your vault*.
 Every request is sealed on the phone to the minter's key, which the phone asks
@@ -73,7 +74,8 @@ box ──── signed by the box key: { hostKey, at, reply } ──┐        
                                          `vault` frame   │                   │
                                                          ▼                   ▼
                                     coordinator: relays, adds who sent it,
-                                    checks the box key is the one it enrolled
+                                    checks the box key is the one it enrolled,
+                                    lists who is still in the fleet
                                                          │
                                                          ▼
                         minting Worker, one Durable Object:
@@ -98,6 +100,39 @@ without `only`, labelled with that box and carrying its whole key hash, counts.
 A pool's own machine, let in for its one record, used to pass that check for
 any sign-in, because the phone matched the first sixteen characters of the key
 and ignored the scope (seventh audit, `PhoneVault`).
+
+## When somebody leaves the fleet
+
+A person is removed in the coordinator: their last credential is revoked, by
+an admin or by their own withdrawal. The minter keeps their vault and their
+approvals as they were, and beside every box's ask the coordinator lists each
+fleet account that still holds a credential that works. A grant gives nothing
+while the account that made it is not on that list: no item, no Claude login,
+and no renewal, so their refresh token is not rotated again. The person drops
+out of the box's answer, and the box deletes what it held for them on that
+ask, as it does for a box removed from a phone. That is every box they
+approved, their own included, within ten minutes.
+
+Until the eighth audit the minter never heard of a removal. The hand-back
+asked the fleet's boxes to `unlink` the person's sign-ins, which clears a
+box's own links and not its copy from the vault, and the next ask wrote that
+copy back, freshly renewed, for as long as the refresh token lasted. Nor
+could the removed person withdraw a grant, because their vault requests need
+a credential that works.
+
+**Asked every time, not told once.** A forget sent to the minter at the
+removal would be lost if the minter was unreachable then; a list sent with
+every ask cannot be. **Filtered, not deleted.** A person who signs in again
+is served again, with nothing to approve twice. **It can only take away.**
+Leaving a member off denies, which dropping the request already could, and
+listing somebody removed gives what every box was given before the list
+existed. A coordinator from before the list sends none, and is served as
+before.
+
+What it does not do: delete anything. The refresh token stays sealed in the
+minter, renewed by nothing, until the person signs in again or forgets it,
+and an access token a box already handed a session lasts until it expires.
+Revoking at GitHub or Cloudflare ends it there.
 
 ## On the box
 

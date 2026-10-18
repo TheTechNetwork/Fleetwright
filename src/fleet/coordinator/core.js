@@ -2693,6 +2693,24 @@ export class CoordinatorCore {
     return hosts;
   }
 
+  /**
+   * Everybody in the fleet, by address: each one #hasLiveCredential says yes
+   * for, which is the test a removal is (revokeClient). For the minter, which
+   * serves a vault grant only to a box of somebody on it (#onHostVault). Not
+   * the allowlist, which says who may sign in and is a domain on many fleets,
+   * and not emailHasAdmin, which counts revoked rows. At most the 150 live
+   * credentials clients.js holds, so it needs no bound of its own.
+   */
+  #members() {
+    /** @type {Set<string>} */
+    const all = new Set();
+    for (const c of this.clients.clients.values()) {
+      const email = String(c.email || '').toLowerCase();
+      if (!c.revokedAt && email) all.add(email);
+    }
+    return [...all].sort();
+  }
+
   /** Does anybody hold a credential for this address that still works? @param {string} address */
   #hasLiveCredential(address) {
     for (const c of this.clients.clients.values()) {
@@ -2861,6 +2879,16 @@ export class CoordinatorCore {
    * none of theirs went there. Recorded with no actor and no session name, so
    * the operator, and every member, sees that it was asked.
    *
+   * UNLINK IS THE BOX'S OWN LINKS AND NOTHING ELSE (commands.js): what a box
+   * holds from their vault is not a link, and its next vault ask wrote it
+   * back, freshly renewed, on every box they had approved. This header and
+   * the record both said those sign-ins were asked to be forgotten (eighth
+   * audit, r8-leads-1). What ends those is the minter, which is told who is
+   * still in the fleet on every box's ask and gives nothing for a grant of
+   * somebody who is not (#onHostVault), on any box, their own included; the
+   * box then deletes its copy on that ask, as it does when a grant is
+   * withdrawn from a phone. So the record says the two apart.
+   *
    * A BOX THAT IS NOT HERE IS NOT ASKED. An offline box owes it, and nothing
    * asks it when it returns: a removed admin's box keeps that debt on its
    * enrolment (handBackPending), but the debt there is a box's to everybody,
@@ -2887,8 +2915,8 @@ export class CoordinatorCore {
         event: 'host.asked-back',
         hostId: entry.hostId,
         text: listed
-          ? `${entry.hostId} was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} somebody removed from the fleet had running there, and to forget their GitHub, Cloudflare and Claude sign-ins.`
-          : `${entry.hostId} was asked to forget the GitHub, Cloudflare and Claude sign-ins of somebody removed from the fleet. It has not reported its sessions since it connected, so any of theirs still running there were not named; an admin can stop them.`,
+          ? `${entry.hostId} was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} somebody removed from the fleet had running there, and to unlink the GitHub, Cloudflare and Claude sign-ins they linked on it. ${VAULT_AFTER_REMOVAL}`
+          : `${entry.hostId} was asked to unlink the GitHub, Cloudflare and Claude sign-ins somebody removed from the fleet linked on it. ${VAULT_AFTER_REMOVAL} It has not reported its sessions since it connected, so any of theirs still running there were not named; an admin can stop them.`,
       });
     }
   }
@@ -4979,6 +5007,22 @@ export class CoordinatorCore {
    * refuses a box that presents somebody else's key, and a dishonest one gains
    * nothing by skipping the check, because the answer is sealed to the box.
    *
+   * AND ONE FACT ONLY THIS HOLDS: who is still in the fleet (#members). A
+   * removal is made here and the minter never heard of it, so every box a
+   * removed person had approved went on being given their sign-ins, renewed
+   * by the minter each time, and written back by the box over whatever the
+   * hand-back's `unlink` had cleared, which reaches a box's own links and not
+   * its copy from the vault (#handBackPerson; eighth audit, r8-leads-1). Sent
+   * with every ask rather than once at the removal, so a removal made while
+   * the minter was unreachable is not missed, and a person who signs in again
+   * is served again. The minter gives nothing for a grant whose account is
+   * not listed (minter/vault.js, answerVaultBox).
+   *
+   * The one other relay that hands out a vault item is a runner's Claude
+   * login (#onRunnerClaude), and it needs no list: the minter gives it only
+   * to a runner of the account that kept it, and a removed person's runners
+   * are revoked with them (#forgetPerson).
+   *
    * @param {string} hostId @param {any} msg
    */
   async #onHostVault(hostId, msg) {
@@ -5019,7 +5063,7 @@ export class CoordinatorCore {
     }
     recent.push(now);
     this.claudeAsks.set(key, recent);
-    const r = await this.minter.vault('box', { request, signature }).then(
+    const r = await this.minter.vault('box', { request, signature, members: this.#members() }).then(
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
@@ -6767,6 +6811,13 @@ const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
 
 /** The sign-ins a box is asked to forget for somebody it holds them for no longer (#handBack, #handBackPerson). */
 const HANDED_BACK_SIGN_INS = Object.freeze(['github', 'cloudflare', 'claude']);
+/**
+ * What a removal does to the sign-ins a box holds from the person's vault,
+ * which no `unlink` reaches (#handBackPerson). Said as the minter does it
+ * and the box is asked to: the deleting is the box's, on its next ask.
+ */
+const VAULT_AFTER_REMOVAL =
+  'The vault gives no box anything of theirs from now on, and a box deletes what it held from there on its next ask, within ten minutes, which a box does only if it is honest.';
 
 /**
  * How often a box's sessions may buzz a phone (#mayPush).

@@ -87,7 +87,7 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Host public key** | coordinator DO | anyone who reads the DO (public half; harmless) | with re-enrol | with revoke | host list |
 | **Box Claude credential** | **gone as a standing store** — adopted once into `${stateDir}/accounts/<email>.json` and handed to the member it belonged to; a session with no linked account is refused, not given a shared one (`one-account-per-person.md`) | — | — | — | — |
 | **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink` | `/api/state` per-account |
-| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which a removal also asks of a box it takes out of the operator's tier, for every other person, then or, for a box away at the time, on its first report after it returns (`#handBack`); provider revoke (real) | `verify` verb |
+| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which a removal also asks of a box it takes out of the operator's tier, for every other person, then or, for a box away at the time, on its first report after it returns (`#handBack`), and of the fleet's own boxes for the person removed (`#handBackPerson`). A copy held from the person's vault is not a link and `unlink` does not reach it; it stops because the minter serves no grant of somebody no longer in the fleet, and the box deletes it on that ask (`#onHostVault`, [vault.md](./vault.md)); provider revoke (real) | `verify` verb |
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`; provider revoke | renewal-failure log |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry; `DELETE /api/enroll/{id}` by its minter or an admin; dropped when its minter is removed (`#forgetPerson`) | `outstanding()` (masked) |
 | **Telegram bot token** (archived) | host env (`FLEETWRIGHT_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `fleetwright doctor` names it |
@@ -752,6 +752,21 @@ secrets through the coordinator, so they are accounted for here
   secrets, never a refresh token, in 0600 files the box's own sessions are
   given through the broker. That is less than a box holding a linked
   connection, which keeps the refresh token.
+- **A person removed from the fleet** is served to no box. A removal is the
+  coordinator's, so beside each box's request it lists every fleet account
+  with a credential that still works, and the minter gives nothing for a
+  grant whose account is not on it: no item, no Claude login, and no renewal
+  of their refresh token. Until the eighth audit the minter never heard of a
+  removal, and every box the person had approved went on being given their
+  sign-ins, renewed on each ask, while the hand-back's `unlink` cleared only
+  the box's own links (r8-leads-1). The list can only take away: a dishonest
+  coordinator that lists somebody removed gets what every box got before the
+  list existed, and one that leaves a member off denies, which dropping the
+  request already could. A coordinator from before the list sends none and
+  is served as before. Grants are filtered, not deleted, so a person who
+  signs in again is served again, and their refresh token stays sealed in the
+  minter, renewed by nothing, until then; revoking it at the provider is the
+  person's, or the operator's.
 
 **Where the minter's key comes from.** Every phone request and every Claude
 deposit is sealed to the minter's deposit key, which the minter makes and

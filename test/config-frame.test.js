@@ -323,6 +323,9 @@ test('a removed member’s sessions and sign-ins are asked back of the fleet’s
   const said = core.recentEvents({ email: 'kim@example.test', admin: false }).filter((/** @type {any} */ e) => e.event === 'host.asked-back');
   assert.deepEqual(said.map((/** @type {any} */ e) => e.hostId), ['ops-box'], 'the operator was not told the box was asked');
   assert.match(said[0].text, /stop 1 session .*GitHub, Cloudflare and Claude/);
+  // AND NOT THAT THE BOX FORGETS WHAT IT HOLDS FROM HER VAULT, which `unlink`
+  // never reached: it said so until the eighth audit. The vault stops instead.
+  assert.match(said[0].text, /unlink the .* sign-ins they linked on it\. The vault gives no box anything of theirs/);
   assert.equal(said[0].text.includes('nina'), false, 'a member was shown whose sessions they were');
 
   // Withdrawing at Apple revokes every credential the person holds, and the

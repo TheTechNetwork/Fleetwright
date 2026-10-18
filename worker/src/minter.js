@@ -28,7 +28,8 @@
 //   POST /vault/device    a person reads or changes their vault, sealed on
 //                         their own device (src/fleet/minter/vault.js)
 //   POST /vault/box       a box asks for what its people approved it to hold,
-//                         signed with the box's own key
+//                         signed with the box's own key, beside the
+//                         coordinator's list of who is still in the fleet
 //
 // ONE THING ON THE INTERNET, and it is a public key:
 //
