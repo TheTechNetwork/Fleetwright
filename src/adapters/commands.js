@@ -121,6 +121,7 @@ import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
+import { heldFor } from '../core/vault-store.js';
 import { runnerAuthKind, runnerAuthFor } from '../core/runner-login.js';
 import { checkClaudeAuth, describeTokenCheck } from '../core/claude-token-check.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
@@ -421,6 +422,39 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
   const store = new Connections(ctx.cfg.stateDir);
   /** @type {Array<Record<string, any>>} */
   const connected = row === null ? [] : store.list(row);
+
+  // WHAT THE VAULT GAVE THIS BOX FOR THIS PERSON, where nothing linked here
+  // covers it. A box approved from a phone holds the person's GitHub and
+  // Cloudflare without any link made on it, and the broker hands them to a
+  // session the same way (src/core/vault-store.js, "A link on the box
+  // wins"). This listing used to say only what was linked here, so the
+  // coordinator counted every vault-only box as not having the credential,
+  // and a phone said "not on rpi-7550 — connect again to include it" about a
+  // box whose journal said it was holding exactly that. A copy a session
+  // would get is a connection; `vault: true` says which kind, because the
+  // vault's is renewed in the minter and has no permissions to report, so
+  // `missing` is null (cannot tell) and not an empty list. The box's own row
+  // has no vault: a vault is a person's.
+  if (!host && email) {
+    const held = heldFor(ctx.cfg, email);
+    const now = Date.now();
+    for (const [provider, item] of Object.entries(held?.items || {})) {
+      if (!isProvider(provider) || connected.some((c) => c.provider === provider)) continue;
+      if (item.expiresAt !== null && item.expiresAt <= now) continue;
+      connected.push({
+        provider,
+        label: PROVIDERS[/** @type {keyof typeof PROVIDERS} */ (provider)].label,
+        // The vault records whose GitHub sign-in it holds; for Cloudflare it
+        // records nothing an account could be named from.
+        account: provider === 'github' && held?.login ? held.login : null,
+        updatedAt: Number(held?.at) || 0,
+        missing: null,
+        needsReconnect: false,
+        vault: true,
+      });
+    }
+    connected.sort((a, b) => String(a.provider).localeCompare(String(b.provider)));
+  }
 
   // Claude's row. For a member it is "have you linked your own account"; for
   // an actor with no email it is the box's own login, which is the same
@@ -1518,7 +1552,7 @@ export const COMMANDS = {
           text: catalogue(host)
             .map((c) => {
               const it = have.get(c.provider);
-              return `${c.label}: ${it ? `connected${it.account ? ` as ${it.account}` : ''}` : 'not connected'}\n  /connect ${c.provider}`;
+              return `${c.label}: ${it ? `connected${it.account ? ` as ${it.account}` : ''}${it.vault ? ' (from your vault)' : ''}` : 'not connected'}\n  /connect ${c.provider}`;
             })
             .join('\n'),
         };

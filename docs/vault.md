@@ -108,6 +108,7 @@ the more specific decision:
 | reader | from the vault when |
 |---|---|
 | the broker (`git`, `gh`, `wrangler`, `fleet-cred`) | nothing for that provider is linked here |
+| the person's connections listing (`/connect`, what a phone's Credentials shows) | nothing for that provider is linked here; the row says `vault: true`, so a box holding only the vault's copy counts as having it and is not named as "not on" |
 | a session's Claude login | no Claude account is linked here: a direct session gets `CLAUDE_CODE_OAUTH_TOKEN` with `ANTHROPIC_API_KEY` unset, a sandboxed one is seeded `.claude-token` for its entrypoint to export |
 | `fleet-secret NAME` | the box has no secret of that name |
 
