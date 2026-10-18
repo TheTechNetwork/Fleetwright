@@ -117,9 +117,10 @@ import kotlinx.coroutines.withContext
  * phone already keeps a token for ([policyFor]): the same probe, machine,
  * certificate, sign-in and key check, because the job is begun exactly as a
  * setup is, then a form where the steps would be. It differs where XoPolicy
- * says. `begin` must answer that the machine can (`can` holds "policy"),
- * checked before anything is sealed, because an older machine would run a
- * policy sign-in as a setup. The sign-in carries the purpose inside the
+ * says. `begin` must answer that the machine can (`can` holds "policy", and
+ * "policy-signin" for the binding the sign-in is sealed under), checked
+ * before anything is sealed and again at the seal, because an older machine
+ * would run a policy sign-in as a setup. The sign-in carries the purpose inside the
  * seal, and a key for the pool to come back to that lives in this screen's
  * memory alone: not saveable, not the Keystore, gone when the screen goes. So
  * a screen rebuilt while the machine waits says it can no longer open what
@@ -300,6 +301,16 @@ internal fun HypervisorSheet(
     var pendingSave by remember { mutableStateOf<String?>(null) }
     var keepNote by remember { mutableStateOf("") }
     var openedOnce by rememberSaveable { mutableStateOf(false) }
+    // A RECONNECT FOR AN ADDRESS THIS PHONE DOES NOT KNOW: not a pool it
+    // holds, not one it kept a sign-in for, not one whose certificate it
+    // pinned. Such an address came in a push one of the person's machines
+    // sent, so nothing asks the fleet about it until the person taps the
+    // button that names it ([askFirst] until then).
+    val knowsAddress = remember(address) {
+        val at = address.trim()
+        XoHandoff.held(settings).any { it.address == at } || XoSaved.has(settings, at) || XoHandoff.pinnedCertificate(settings, at) != null
+    }
+    var askFirst by rememberSaveable { mutableStateOf(false) }
 
     // THROUGH THIS PHONE. The machine the fleet named that can reach the
     // address through this phone, when no machine reached it over its own
@@ -354,6 +365,7 @@ internal fun HypervisorSheet(
     fun probe() {
         scope.launch {
             probing = true
+            askFirst = false
             viaMemory = false
             probeText = ""
             probes = null
@@ -536,6 +548,9 @@ internal fun HypervisorSheet(
     fun olderThanPolicy(hostId: String) =
         "$hostId is older than changing a policy, so nothing was sent. Update it, or choose another machine that reaches $address."
 
+    fun olderThanPolicySignin(hostId: String) =
+        "$hostId is too old for this app to send it a policy change safely, so nothing was sent. Update it, or choose another machine that reaches $address."
+
     fun olderThanReconnect(hostId: String) =
         "$hostId is older than reconnecting servers, so nothing was sent. Update it, or choose another machine that reaches $address."
 
@@ -579,8 +594,9 @@ internal fun HypervisorSheet(
     }
 
     /**
-     * `run` for a policy job: the same seal, under the same binding, with the
-     * purpose inside it and a reply key made here and kept only in memory.
+     * `run` for a policy job: the same seal, under a binding of its own
+     * (XoPolicy.sealSignIn), with the purpose inside it and a reply key made
+     * here and kept only in memory.
      * Never XoHandoff's key, which is written down so a token can be
      * collected with the app closed: what comes back here is for this screen
      * to show now, and nothing comes back afterwards to collect.
@@ -592,6 +608,11 @@ internal fun HypervisorSheet(
         if (XoPolicy.PURPOSE !in p.setup.can) {
             password = ""
             refusal = olderThanPolicy(p.hostId)
+            return
+        }
+        if (XoPolicy.SIGNIN !in p.setup.can) {
+            password = ""
+            refusal = olderThanPolicySignin(p.hostId)
             return
         }
         val reply = Seal.newKey()
@@ -711,6 +732,15 @@ internal fun HypervisorSheet(
                     refusal = olderThanPolicy(hostId)
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
+                // AND ONLY TO ONE THAT OPENS A POLICY SIGN-IN UNDER ITS OWN
+                // BINDING. `policy` alone is a word a coordinator can add to
+                // the `can` of a machine from before policy jobs, which would
+                // open a sign-in under setup's and run a whole setup with it.
+                policy && XoPolicy.SIGNIN !in setup.can -> {
+                    password = ""
+                    refusal = olderThanPolicySignin(hostId)
+                    runCatching { fleet.xosetup("cancel", job = setup.job) }
+                }
                 // A RECONNECT the same way: an older machine would read the
                 // sign-in as a setup and add the pool again.
                 reconnect && XoReconnect.PURPOSE !in setup.can -> {
@@ -753,8 +783,12 @@ internal fun HypervisorSheet(
                     // the machine's, the other is not.
                     val listed = runCatching { fleet.enrolledHosts() }.getOrDefault(emptyList())
                         .firstOrNull { it.hostId == hostId }?.publicJwk?.let { PhoneVault.fingerprint(it) }
+                    // APPROVED only by a whole-vault grant for this machine,
+                    // by this whole key: a pool machine's grant, scoped by
+                    // `only`, is not the person's word (PhoneVault.approves).
                     val approved = PhoneGitHub(settings).signedIn &&
-                        runCatching { PhoneVault(settings).list(fleet) }.getOrNull()?.grants?.any { it.fingerprint == fingerprint } == true
+                        runCatching { PhoneVault(settings).list(fleet) }.getOrNull()?.grants
+                            ?.let { PhoneVault.approves(it, hostId, setup.hostKey!!) } == true
                     val pending = Pending(setup, hostId, where, who)
                     when {
                         listed != null && listed != fingerprint -> {
@@ -878,7 +912,10 @@ internal fun HypervisorSheet(
     LaunchedEffect(Unit) {
         if ((policy || reconnect) && job == null && !openedOnce) {
             openedOnce = true
-            openRemembered()
+            // Not for an address this phone does not know: a pool-lost push
+            // names one a machine chose, and opening on it used to send the
+            // fleet-wide probe for it with nobody having looked at it.
+            if (reconnect && !knowsAddress) askFirst = true else openRemembered()
         }
     }
 
@@ -1224,11 +1261,26 @@ internal fun HypervisorSheet(
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (askFirst) {
+                    Hint(
+                        "This phone has not set up $address, kept a sign-in for it or pinned its certificate. " +
+                            "The address came from one of your machines, so none of them is asked to reach it until you say so.",
+                        color = Design.Palette.ink.now,
+                    )
+                }
                 OutlinedButton(
                     enabled = !probing && !beginning && addressOk,
                     onClick = { probe() },
                     modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text(if (probing) "Asking every machine…" else "Find a machine that can reach it") }
+                ) {
+                    Text(
+                        when {
+                            probing -> "Asking every machine…"
+                            askFirst -> "Ask your machines to reach $address"
+                            else -> "Find a machine that can reach it"
+                        },
+                    )
+                }
                 if (probeText.isNotBlank()) Hint(probeText, color = Design.Palette.bad.now)
 
                 val found = probes

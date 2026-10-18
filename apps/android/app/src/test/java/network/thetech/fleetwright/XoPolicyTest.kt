@@ -502,12 +502,18 @@ class XoPolicyTest {
     }
 
     @Test
-    fun thePurposeIsInsideTheSealedSignIn() {
+    fun thePurposeIsInsideTheSealedSignInUnderItsOwnBinding() {
+        // The same string as xosetupPolicySigninAad in src/fleet/seal.js.
+        assertEquals("fleetwright-xosetup-policy-signin/v1:J:A", Seal.xosetupPolicySigninAad("J", "A"))
         val jobKey = Seal.newKey()
         val reply = Seal.newKey()
         val parts = XoPolicy.sealSignIn(jobKey.publicKey, job, address, "admin@xo.lan", "pw", reply.publicKey).split(".")
         val box = JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2])
-        val inside = Seal.open(jobKey, XoSetup.aad(job, address), box)
+        // NOT UNDER SETUP'S BINDING: a machine from before policy jobs opens a
+        // sign-in under it, ignores the purpose and runs a whole setup with
+        // the admin's sign-in. Under this one it opens nothing.
+        assertFalse(runCatching { Seal.open(jobKey, XoSetup.aad(job, address), box) }.isSuccess)
+        val inside = Seal.open(jobKey, Seal.xosetupPolicySigninAad(job, address), box)
         assertEquals("policy", inside.getString("purpose"))
         assertEquals(reply.publicKey, inside.getString("reply"))
         assertEquals("admin@xo.lan", inside.getJSONObject("xo").getString("email"))

@@ -91,11 +91,33 @@ test('Android: the key is verified against the documented signing input before a
   // A key the fleet lists for that machine that differs is the same stop.
   assert.ok(sheet.includes('That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent.'));
   // Approved in the vault and matching: proceed. Otherwise the person compares.
-  assert.match(sheet, /grants\?\.any \{ it\.fingerprint == fingerprint \}/);
+  assert.match(sheet, /grants\s*\?\.let \{ PhoneVault\.approves\(it, hostId, setup\.hostKey!!\) \} == true/);
   assert.match(sheet, /approved -> run\(pending\)/);
   assert.ok(sheet.includes('Compare this with what fleetwright-sidecar identity prints on ${waitingOn.hostId}.'));
   assert.ok(sheet.includes('Text("They match")'));
   assert.ok(sheet.includes('If they differ, cancel: the sign-in has not left this phone, and will not.'));
+});
+
+test('Android: only a whole-vault grant for that machine, by that whole key, skips the comparison; a pool machine’s scoped grant does not', () => {
+  const vault = file('PhoneVault.kt');
+  // `only` is read off the minter's list, not dropped: it is how a pool's own
+  // machine is let in to hold its pool's record and nothing else.
+  assert.match(vault, /data class Grant\([^\n]*val only: List<String>/);
+  assert.match(vault, /val only = it\.optJSONArray\("only"\)/);
+  // The rule: no `only`, the name that answered, and the whole hash the
+  // minter names the grant by (boxKeyHash), not any grant whose
+  // sixteen-character prefix matches. Which grant counts is run by
+  // PhoneVaultTest.kt.
+  const rule = vault.slice(vault.indexOf('fun approves('), vault.indexOf('/** How a vault item is named'));
+  assert.match(rule, /grants\.any \{ it\.only\.isEmpty\(\) && it\.label == hostId && it\.key == hash \}/);
+  assert.match(rule, /val hash = keyHash\(jwk\)/);
+  assert.match(vault, /fun keyHash\(jwk: JSONObject\): String \{[\s\S]*?return digest\.joinToString\(""\)/);
+  // Both sheets that seal an admin's secret to a machine ask it the same way.
+  for (const name of ['HypervisorSheet.kt', 'XoDeploySheet.kt']) {
+    const sheet = file(name);
+    assert.ok(sheet.includes('PhoneVault.approves(it, hostId, setup.hostKey!!)'), name);
+    assert.ok(!/grants\?\.any \{ it\.fingerprint == fingerprint \}/.test(sheet), `${name} approves any grant with the same prefix`);
+  }
 });
 
 test('Android: the sign-in is sealed with the app’s own seal, to the job’s key, under the documented AAD', () => {

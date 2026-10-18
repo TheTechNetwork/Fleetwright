@@ -134,8 +134,33 @@ test('Android: Reconnect on a lost pool’s notification opens the app, for an a
   // on the reconnect for that address, starting on the machine that noticed.
   const main = file('MainActivity.kt');
   assert.equal(main.match(/notifiedPool\.value = poolNamedBy\(intent\)/g)?.length, 2);
+  // ONLY A TAP ON ONE THIS APP DREW. MainActivity is exported, so another
+  // app can start it with the same extras: without a word PoolNotice put in
+  // its own notification, and spent by the tap, no pool is named.
+  assert.match(fn(main, 'private fun poolNamedBy('), /^private fun poolNamedBy\(intent: Intent\?\): PoolTap\? \{\s*if \(!PoolNotice\.redeem\(this, intent\?\.getStringExtra\(PoolNotice\.EXTRA_NONCE\)\)\) return null\s*return PoolNotice\.tap\(/);
+  assert.match(notice, /val nonce = issue\(context\)/);
+  assert.match(fn(notice, 'private fun openIntent('), /intent\.putExtra\(EXTRA_NONCE, nonce\)/);
+  // Both of a notification's intents, the body's and Reconnect's, carry it.
+  assert.equal(notice.match(/openIntent\(context, kind, address, hostId, id, nonce, action = /g)?.length, 2);
+  assert.match(fn(notice, 'fun redeem('), /if \(nonce\.isNullOrBlank\(\)\) return false[\s\S]*?if \(nonce !in all\) return false[\s\S]*?all - nonce/);
+  assert.match(notice, /ByteArray\(16\)\.also \{ random\.nextBytes\(it\) \}/);
+  assert.match(notice, /private val random = SecureRandom\(\)/);
   assert.match(file('MachinesScreen.kt'), /if \(tap\.reconnect\) \{\s*reconnectVia = tap\.hostId\s*reconnectFor = tap\.address/);
   assert.match(file('MachinesScreen.kt'), /HypervisorSheet\(settings, reconnectFor = pool, via = reconnectVia,/);
+});
+
+test('Android: a reconnect for an address this phone does not know asks the fleet nothing until the person asks for it by name', () => {
+  const sheet = file('HypervisorSheet.kt');
+  // Known: a pool this phone holds, a sign-in it kept, a certificate it pinned.
+  const knows = sheet.slice(sheet.indexOf('val knowsAddress = remember(address) {'), sheet.indexOf('var askFirst by rememberSaveable'));
+  assert.match(knows, /XoHandoff\.held\(settings\)\.any \{ it\.address == at \} \|\| XoSaved\.has\(settings, at\) \|\| XoHandoff\.pinnedCertificate\(settings, at\) != null/);
+  // The screen opening on a push's address probes only one it knows.
+  assert.match(sheet, /openedOnce = true\s*(?:\/\/[^\n]*\n\s*)*if \(reconnect && !knowsAddress\) askFirst = true else openRemembered\(\)/);
+  // The one way on names the address, after the same sentence iOS says.
+  assert.ok(sheet.includes('askFirst -> "Ask your machines to reach $address"'));
+  assert.ok(sheet.includes('"This phone has not set up $address, kept a sign-in for it or pinned its certificate. " +'));
+  assert.ok(sheet.includes('"The address came from one of your machines, so none of them is asked to reach it until you say so."'));
+  assert.match(fn(sheet, 'fun probe('), /probing = true\s*askFirst = false/);
 });
 
 test('Android: the pool’s page offers it to an admin, only when what it read shows a pool gone', () => {

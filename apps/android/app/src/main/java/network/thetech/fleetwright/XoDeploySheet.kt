@@ -168,8 +168,12 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                     val fingerprint = PhoneVault.fingerprint(setup.hostKey!!)
                     val listed = runCatching { fleet.enrolledHosts() }.getOrDefault(emptyList())
                         .firstOrNull { it.hostId == hostId }?.publicJwk?.let { PhoneVault.fingerprint(it) }
+                    // APPROVED only by a whole-vault grant for this machine,
+                    // by this whole key: a pool machine's grant, scoped by
+                    // `only`, is not the person's word (PhoneVault.approves).
                     val approved = PhoneGitHub(settings).signedIn &&
-                        runCatching { PhoneVault(settings).list(fleet) }.getOrNull()?.grants?.any { it.fingerprint == fingerprint } == true
+                        runCatching { PhoneVault(settings).list(fleet) }.getOrNull()?.grants
+                            ?.let { PhoneVault.approves(it, hostId, setup.hostKey!!) } == true
                     val begun = Begun(setup, hostId, where)
                     when {
                         listed != null && listed != fingerprint -> {
