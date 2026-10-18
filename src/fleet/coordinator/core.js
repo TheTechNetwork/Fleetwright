@@ -21,7 +21,7 @@ import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
 import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -1936,9 +1936,10 @@ export class CoordinatorCore {
     // THE LIVE ACTIVITY: numbers and keys, never words a lock screen should
     // not show — see ActivityUpdate in push.js for why it cannot be sealed.
     // NEWS AT ONCE, THE BAR AT A PACE (ACTIVITY_FILL_EVERY_MS): a change of
-    // step, part, build or state is sent now at priority 10; the bar moving
-    // is sent at priority 5, at most every thirty seconds.
-    const news = `${progress.step}|${progress.phase}|${progress.state}|${progress.build}|${progress.stage}`;
+    // step, part, build, what the bytes are doing or state is sent now at
+    // priority 10; the bar moving, and the megabytes with it, at priority 5,
+    // at most every thirty seconds.
+    const news = `${progress.step}|${progress.phase}|${progress.state}|${progress.build}|${progress.stage}|${progress.doing}`;
     const fresh = ended || news !== rec.activityNews;
     const due = fresh || this.now() - (rec.activityAt ?? 0) >= ACTIVITY_FILL_EVERY_MS;
     if (rec.activities.length && this.push.activity && due) {
@@ -1955,6 +1956,7 @@ export class CoordinatorCore {
             ...(progress.fill === null ? {} : { fill: progress.fill }),
             ...(progress.build === null ? {} : { build: progress.build }),
             ...(progress.stage === null || progress.stages === null ? {} : { stage: progress.stage, stages: progress.stages }),
+            ...(progress.doing === null || progress.done === null || progress.total === null ? {} : { doing: progress.doing, done: progress.done, total: progress.total }),
           },
           priority: fresh ? 10 : 5,
           ...(ended ? { dismissAt: this.now() + 15 * 60_000 } : {}),
@@ -1992,6 +1994,7 @@ export class CoordinatorCore {
           ...(progress.fill === null ? {} : { fill: String(progress.fill) }),
           ...(progress.build === null ? {} : { build: progress.build }),
           ...(progress.stage === null || progress.stages === null ? {} : { stage: String(progress.stage), stages: String(progress.stages) }),
+          ...(progress.doing === null ? {} : { doing: progress.doing, done: String(progress.done), total: String(progress.total) }),
           phase: progress.phase,
           state: progress.state,
           purpose: progress.purpose,
@@ -6995,6 +6998,9 @@ const RECONNECT_TITLES = Object.freeze({ running: 'Reconnecting Xen Orchestra\u2
  * @property {'edge'|'image'|'holder'|null} build  what the step is building, from a fixed list, or null
  * @property {number|null} stage  which part of that build is running, from 1, or null
  * @property {number|null} stages  how many parts it has, or null
+ * @property {string|null} doing  what the part's bytes are doing, from XOBUILD_DOING, or null while none move
+ * @property {number|null} done   megabytes moved so far, or null with `doing`
+ * @property {number|null} total  megabytes in all, or null with `doing`
  * @property {string} text   one sentence for the person, never shown on a Live Activity
  * @property {number} at
  */
@@ -7057,8 +7063,22 @@ export function narrowProgress(msg) {
     // thing a Live Activity may carry (push.js, ActivityUpdate).
     build: ['edge', 'image', 'holder'].includes(msg?.build) ? msg.build : null,
     ...stageOf(msg),
+    // WHAT THE BYTES ARE DOING, and how many of how many, in megabytes:
+    // the sentence beside them names the release and the storage and never
+    // reaches a Lock Screen, so this is what one says instead. A key from
+    // the fixed list and two counts, held to each other and to a terabyte.
+    ...doingOf(msg),
     at: Date.now(),
   };
+}
+
+/** @param {any} msg @returns {{ doing: string|null, done: number|null, total: number|null }} */
+function doingOf(msg) {
+  const done = Number(msg?.done);
+  const total = Number(msg?.total);
+  return XOBUILD_DOING.includes(msg?.doing) && Number.isInteger(done) && Number.isInteger(total) && total >= 1 && total <= 1_000_000 && done >= 0 && done <= total
+    ? { doing: msg.doing, done, total }
+    : { doing: null, done: null, total: null };
 }
 
 /** @param {any} msg @returns {{ stage: number|null, stages: number|null }} */
