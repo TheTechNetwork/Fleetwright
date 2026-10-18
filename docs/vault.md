@@ -92,6 +92,13 @@ its own"). The fingerprint step above is done by the phone there, against a
 secret it made, because nobody can run a command on that machine to compare.
 A grant without `only` is every item, as before.
 
+**A grant with `only` is not approval for anything else.** When a phone checks
+whether a box is already approved before it seals a sign-in to it, only a grant
+without `only`, labelled with that box and carrying its whole key hash, counts.
+A pool's own machine, let in for its one record, used to pass that check for
+any sign-in, because the phone matched the first sixteen characters of the key
+and ignored the scope (seventh audit, `PhoneVault`).
+
 ## On the box
 
 The sidecar asks (`Sidecar#syncVault`) and hands the answer to fleetwright,

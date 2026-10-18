@@ -291,7 +291,11 @@ machine stays up.
    against the fleet's limits, and the limited user the fleet works with can
    neither see it nor remove it.
 5. It is tagged `fleetwright-holder` and `fleetwright-holder-for:<address>`,
-   and carries none of the tags the sweep removes machines by.
+   and carries none of the tags the sweep removes machines by. **The tags alone
+   do not make it the pool's machine.** Anybody who may tag a VM could tag one,
+   and the fleet's own user may tag every VM it creates; a machine counts only
+   when it also sits in no resource set, which only someone who administers the
+   pool can arrange (seventh audit, `xo-holder.js`).
 
 Asking for one where the pool has no image also asks for Debian's image, and
 for the router the image is built behind.
@@ -1187,6 +1191,17 @@ across the network once more.
   copy-on-write clone that takes seconds, the same way a session's machine is
   made from the image. The build skips the download and the upload, and says
   so.
+- **The job keeps its own list of what it made.** A resource set named
+  `fleetwright-made`, with no subjects, holds the id of every kept disk and
+  image the job builds. Creating and changing a resource set takes an
+  administrator, and one with no subjects is invisible to the fleet's limited
+  user, so a template somebody else tagged `fleetwright-base` or
+  `fleetwright-image` is never taken for the fleet's: the build downloads and
+  checks the disk as if nothing were kept, and the inventory does not show it
+  (seventh audit, `xo-made.js`). Kept disks from before the list existed are
+  passed over once and stay for a person to delete. The machine a build starts
+  from is XCP-ng's own blank template, the one marked as a default with no
+  disks, and the copy it makes must have exactly one disk.
 - **One is kept per image, build and storage.** A clone is fast only on the
   storage the template's disk is on, so a build put on other storage keeps
   its own copy there. A newer pinned build replaces the older one's copy.
@@ -1929,6 +1944,12 @@ other machines instead; Android says so and asks for another machine that
 reaches the pool. A machine that does open it runs it only as a reconnect,
 and refuses a purpose it does not know before anything reaches Xen
 Orchestra.
+
+**A policy change's sign-in is bound the same way** since the seventh audit:
+sealed under `xosetupPolicySigninAad`, only to a machine whose `can` lists
+`policy-signin`, and opened there only as a policy change. A machine that
+lists `policy` alone is told it is too old and sent nothing, so a phone with
+this release changes no policy until the machine it asks has updated.
 
 **Every server Xen Orchestra lists.** `server.getAll` is every pool master
 Xen Orchestra is registered with, not only the pool the fleet uses, so the
