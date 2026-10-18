@@ -2030,12 +2030,22 @@ export class Sidecar {
       this.log.warn(`sidecar: ignored a config frame — ${read.error}`);
       return { kind: 'none' };
     }
-    for (const [key, value] of Object.entries(read.values)) this.config.set(key, value);
+    // ONLY WHAT CHANGED IS NEWS. The coordinator sends the frame on every
+    // connect and again every fifteen seconds, and this logged every one of
+    // them: four lines a minute, forever, saying the same thing, which is
+    // what buried "sidecar: vault: holding vault credentials for …" when
+    // somebody opened the journal to find out whether a box had been given
+    // a credential. A key that arrives for the first time, or with a value
+    // that differs from the one held, is logged; a frame that repeats what
+    // this process already has says nothing.
+    //
     // The KEYS are logged, never the values. Knowing what arrived is how
     // somebody diagnoses a renewal that is not happening; knowing the value is
     // how a journal that now reaches a phone becomes a credential leak.
-    if (Object.keys(read.values).length) {
-      this.log.info(`sidecar: coordinator supplied ${Object.keys(read.values).join(', ')}`);
+    const changed = Object.entries(read.values).filter(([key, value]) => this.config.get(key) !== value).map(([key]) => key);
+    for (const [key, value] of Object.entries(read.values)) this.config.set(key, value);
+    if (changed.length) {
+      this.log.info(`sidecar: coordinator supplied ${changed.join(', ')}`);
     }
     for (const key of read.dropped) {
       this.log.warn(`sidecar: config frame carried "${key}", which this host does not recognise — dropped`);
