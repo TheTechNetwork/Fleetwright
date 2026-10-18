@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import tls from 'node:tls';
 import { X509Certificate } from 'node:crypto';
 
-import { EDGE_WATCH, newWatch, sha512Crypt, watchConfig, watchOf } from '../src/fleet/host/edge-credentials.js';
+import { EDGE_WATCH, newWatch, selfSigned, sha512Crypt, watchConfig, watchOf } from '../src/fleet/host/edge-credentials.js';
 import { connectPinnedTls } from '../src/fleet/host/xo-ws.js';
 import { xenStoreAsXo } from './helpers/xo-stand-in.js';
 
@@ -36,6 +36,18 @@ test('the router’s certificate is one TLS serves, and a box holds the connecti
   const ok = await connectPinnedTls({ host: '127.0.0.1', port, pin: w.pin });
   ok.destroy();
   await assert.rejects(connectPinnedTls({ host: '127.0.0.1', port, pin: newWatch().pin }), 'another certificate is not this router');
+});
+
+test('every certificate made is one OpenSSL reads, whatever its random serial', () => {
+  // A serial whose first byte came out zero was written with that zero in
+  // front, which DER forbids: OpenSSL refused about one certificate in 256 with
+  // "illegal padding", so one router build in that many had a certificate its
+  // own web server could not load, and the edge-watch tests failed as often.
+  // Three thousand leave the old code about one chance in a hundred thousand.
+  for (let i = 0; i < 3000; i++) {
+    const { crt } = selfSigned({ cn: 'fleetwright-edge' });
+    assert.doesNotThrow(() => new X509Certificate(crt), `certificate ${i} was not one OpenSSL reads`);
+  }
 });
 
 test('what a router is given: one user with only the status pages and the key’s hash, its certificate, and syslog to private addresses', () => {
