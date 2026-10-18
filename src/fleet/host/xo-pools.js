@@ -36,7 +36,7 @@ import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain } from './xo-ws.js';
 import { EDGE, GROUP_PREFIX, LAB, labsEachOf } from './edge-router.js';
-import { VM_IMAGE } from './vm-image.js';
+import { JOIN_RUNCMD, VM_IMAGE } from './vm-image.js';
 import { HOLDER } from './xo-holder.js';
 import { seal, xolookAad } from '../seal.js';
 import { xoActionArgs } from '../protocol/intents.js';
@@ -1120,7 +1120,7 @@ export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, claude
       : []),
     'runcmd:',
     ...(net ? ['  - [systemctl, daemon-reload]', '  - [systemctl, enable, --now, fleetwright-net.service]'] : []),
-    '  - [/opt/fleetwright/current/install/fleetwright-vm-join, /run/fleetwright/join.json]',
+    JOIN_RUNCMD,
     '',
   ].join('\n');
 }

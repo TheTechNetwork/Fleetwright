@@ -64,6 +64,31 @@ test('runGrant: reports without root, refuses to change without root, and runs t
   assert.throws(() => runGrant(['reboot', 'on'], { ...base, uid: 0, spawn: undefined }), /needs a spawn/);
 });
 
+test('`sudo fleetwright grant` hands the installer the environment it was given, never the env file folded in', { skip: process.getuid?.() !== 0 && 'changing a grant runs the installer only as root' }, () => {
+  // The env file is the service user's, and the installer takes the
+  // environment it is run with as root's own word: FLEETWRIGHT_GRANT_UPGRADES
+  // =yes in that file made `sudo fleetwright grant reboot on` grant upgrades
+  // too, and its FLEETWRIGHT_RELEASE_MANIFEST was root being told an address.
+  // The CLI itself, as root, with a `bash` that only says what it was given.
+  const dir = mkdtempSync(path.join(tmpdir(), 'grant-env-'));
+  try {
+    const envFile = path.join(dir, 'fleetwright.env');
+    writeFileSync(envFile, 'FLEETWRIGHT_GRANT_UPGRADES=yes\nFLEETWRIGHT_RELEASE_MANIFEST=https://attacker.example/manifest.json\nFLEETWRIGHT_SYSTEM_UPGRADE=1\n');
+    writeFileSync(path.join(dir, 'bash'), `#!/bin/sh\nenv > "${path.join(dir, 'seen')}"\necho "$@" >> "${path.join(dir, 'seen')}"\n`, { mode: 0o755 });
+    execFileSync(process.execPath, [here('bin/fleetwright'), 'grant', 'reboot', 'on'], {
+      encoding: 'utf8',
+      env: { PATH: `${dir}:${process.env.PATH}`, HOME: dir, FLEETWRIGHT_ENV_FILE: envFile },
+    });
+    const seen = readFileSync(path.join(dir, 'seen'), 'utf8');
+    assert.match(seen, /--grant reboot=on$/m, seen);
+    assert.doesNotMatch(seen, /^FLEETWRIGHT_GRANT_UPGRADES=/m, 'the service user’s file told root to grant upgrades');
+    assert.doesNotMatch(seen, /^FLEETWRIGHT_RELEASE_MANIFEST=/m, 'the service user’s file told root an address');
+    assert.match(seen, /^FLEETWRIGHT_NODE_BIN=/m, 'and the node it runs on is still named');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('grantPlan keeps a node somebody already named', () => {
   const p = grantPlan({ name: 'upgrades', to: 'off', root: '/r', node: '/n', env: { FLEETWRIGHT_NODE_BIN: '/mine' } });
   assert.equal(p.env.FLEETWRIGHT_NODE_BIN, '/mine');

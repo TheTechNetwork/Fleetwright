@@ -149,11 +149,17 @@ export function grantPlan({ name, to, root, node, env = process.env }) {
  * as root, which writes or removes the rule, records the answer and restarts
  * the service.
  *
+ * `env` is what the installer runs with, and the installer takes it as root's
+ * own word — an answer in it is applied (install.sh, "WHAT ROOT HAS
+ * GRANTED") — so the CLI passes the environment it was started with, never
+ * one with the service user's env file folded in (bin/fleetwright).
+ *
  * @param {string[]} args
  * @param {{ cfg: { systemUpgrade?: boolean, systemReboot?: boolean }, root: string, node: string, uid?: number,
- *   spawn?: (cmd: string, argv: string[], opts: object) => { status: number|null }, out?: (s: string) => void, err?: (s: string) => void }} o
+ *   spawn?: (cmd: string, argv: string[], opts: object) => { status: number|null }, out?: (s: string) => void, err?: (s: string) => void,
+ *   env?: NodeJS.ProcessEnv }} o
  */
-export function runGrant(args, { cfg, root, node, uid, spawn, out = console.log, err = console.error }) {
+export function runGrant(args, { cfg, root, node, uid, spawn, out = console.log, err = console.error, env = process.env }) {
   if (!args.length) {
     out(`What this box allows from chat:\n\n${describeGrants(cfg)}`);
     return 0;
@@ -167,7 +173,7 @@ export function runGrant(args, { cfg, root, node, uid, spawn, out = console.log,
     err(`changing a grant writes /etc/sudoers.d, so it needs root:\n      ${grantCommand(parsed.name, parsed.to)}`);
     return 1;
   }
-  const plan = grantPlan({ name: parsed.name, to: parsed.to, root, node });
+  const plan = grantPlan({ name: parsed.name, to: parsed.to, root, node, env });
   if (!spawn) throw new Error('runGrant needs a spawn to run the installer');
   const r = spawn(plan.argv[0], plan.argv.slice(1), { stdio: 'inherit', env: plan.env });
   return r.status ?? 1;

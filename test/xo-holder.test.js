@@ -142,7 +142,7 @@ test('its cloud-init is its name and one join file with the pin, the name and th
   assert.match(config, new RegExp(`^#cloud-config\\nhostname: ${NAME}\\n`));
   const join = JSON.parse(/** @type {string} */ (/content: \|\n {6}(\{.*\})/.exec(config)?.[1]));
   assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', pin: PIN, hostId: NAME, holder: 'xo.lan' });
-  assert.match(config, /fleetwright-vm-join, \/run\/fleetwright\/join.json/);
+  assert.match(config, /^ {2}- \[sh, -c, 'j=\/usr\/local\/sbin\/fleetwright-vm-join;.*', \/run\/fleetwright\/join\.json\]$/m, 'root’s copy of the join script (vm-image.js, JOIN_RUNCMD)');
   assert.throws(() => holderCloudConfig({ hostId: 'build-server', pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan' }), /not a name/);
   assert.throws(() => holderCloudConfig({ hostId: NAME, pin: 'abc', coordinatorUrl: 'https://fleet.test', address: 'xo.lan' }), /not an enrolment pin/);
   const withSecret = JSON.parse(/** @type {string} */ (/content: \|\n {6}(\{.*\})/.exec(holderCloudConfig({ hostId: NAME, pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan', secret: SECRET }))?.[1]));

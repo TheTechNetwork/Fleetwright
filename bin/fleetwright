@@ -48,6 +48,12 @@ if (sub === 'join') {
 // The old path on a box the installer has not migrated yet. The override is
 // read after adopting legacy names, so the old variable still works too.
 adoptLegacyEnv(process.env);
+// THE ENVIRONMENT THIS WAS GIVEN, before the env file is folded into it. That
+// file is the service user's (install.sh chowns it to them), and `sudo
+// fleetwright grant` hands the installer its environment as root's own word:
+// FLEETWRIGHT_GRANT_UPGRADES=yes in their file made `grant reboot on` grant
+// upgrades too. What runs as root gets this, never the file.
+const givenEnv = { ...process.env };
 loadEnvFile(process.env.FLEETWRIGHT_ENV_FILE || preferExisting('/etc/fleetwright.env', '/etc/agent-hub.env'));
 const cfg = loadConfig();
 const base = `http://${cfg.bind === '0.0.0.0' || cfg.bind === '::' ? '127.0.0.1' : cfg.bind}:${cfg.port}`;
@@ -68,7 +74,7 @@ switch (sub) {
     const { runGrant } = await import('../src/core/grants.js');
     const { INSTALL_ROOT } = await import('../src/core/resources.js');
     const { spawnSync: spawn } = await import('node:child_process');
-    process.exit(runGrant(argv.slice(1), { cfg, root: INSTALL_ROOT, node: process.execPath, uid: process.getuid?.(), spawn }));
+    process.exit(runGrant(argv.slice(1), { cfg, root: INSTALL_ROOT, node: process.execPath, uid: process.getuid?.(), spawn, env: givenEnv }));
   }
   case 'help':
   case '--help':

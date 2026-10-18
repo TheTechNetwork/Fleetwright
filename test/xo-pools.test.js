@@ -247,7 +247,7 @@ test('a machine is made from the person’s own image, on the uplink, with its t
   // longest it can be given; its end is the box's to keep, by the tag, so an
   // extension needs nothing from inside the machine.
   assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: CLAUDE, minutes: 380 });
-  assert.match(made.cloudConfig, /fleetwright-vm-join, \/run\/fleetwright\/join.json/);
+  assert.match(made.cloudConfig, /fleetwright-vm-join.*, \/run\/fleetwright\/join\.json\]$/m);
   // ON THE UPLINK, FENCED: the network file, the script and its unit, and
   // the unit started before the join script starts anything that listens.
   const net = JSON.parse(/** @type {string} */ (made.cloudConfig.split('\n').find((/** @type {string} */ l) => l.trim().startsWith('{"v":1,"isolate"'))).trim());
@@ -263,6 +263,33 @@ test('a machine is made from the person’s own image, on the uplink, with its t
   assert.equal(refused.ok, false);
   assert.equal(refused.unreachable, undefined);
   assert.match(refused.text, /limit exceeded/);
+});
+
+test('a machine joins with root’s copy of the join script, and one cloned from an older image with the copy that has', () => {
+  // `current` is the run user's on the image, as on every box, and root ran
+  // the join script out of it on the machine's first boot. Run here as
+  // cloud-init runs it — the argv on the runcmd line — with the two places
+  // it looks pointed at this test's directories.
+  const config = machineCloudConfig({ name: 'm', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60 });
+  const line = config.split('\n').find((l) => l.includes('fleetwright-vm-join')) ?? '';
+  const argv = /^ {2}- \[sh, -c, '([^']*)', (\/run\/fleetwright\/join\.json)\]$/.exec(line);
+  assert.ok(argv, `cloud-init does not run root’s copy: ${line}`);
+  const dir = mkdtempSync(join(tmpdir(), 'fw-join-runcmd-'));
+  try {
+    const roots = join(dir, 'sbin');
+    const theirs = join(dir, 'current');
+    for (const [d, said] of [[roots, 'root’s'], [theirs, 'current’s']]) {
+      mkdirSync(d);
+      writeFileSync(join(d, 'fleetwright-vm-join'), `#!/bin/sh\necho "${said} $1"\n`, { mode: 0o755 });
+    }
+    const script = argv[1].replaceAll('/usr/local/sbin/', `${roots}/`).replaceAll('/opt/fleetwright/current/install/', `${theirs}/`);
+    const run = () => spawnSync('sh', ['-c', script, argv[2]], { encoding: 'utf8' });
+    assert.equal(run().stdout, 'root’s /run/fleetwright/join.json\n');
+    rmSync(join(roots, 'fleetwright-vm-join'));
+    assert.equal(run().stdout, 'current’s /run/fleetwright/join.json\n', 'an image from before root’s copy existed still joins');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a machine can go on a network of the pool the person chose, and on no other', async () => {
