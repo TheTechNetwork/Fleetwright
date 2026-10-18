@@ -243,17 +243,17 @@ jobs:
         with:
           name: fleetwright-deb
           path: dist/deb
-      # A NAME GITHUB KEEPS AS IT IS. A build of main is `<base>+main.<run>` to
+      # A NAME GITHUB KEEPS AS IT IS. A build of main is `<next>~main.<run>` to
       # dpkg (build-host-deb.mjs, debVersion), and GitHub renames an asset with
-      # a `~` or a `+` in it. The keep list below compares names, so it would
-      # have kept the name on disk and deleted the one just uploaded. The
-      # version dpkg reads is inside the package; the file name is only where
-      # apt finds it, and apt-ftparchive writes whatever name it is given.
+      # a `~` in it. The keep list below compares names, so it would have kept
+      # the name on disk and deleted the one just uploaded. The version dpkg
+      # reads is inside the package; the file name is only where apt finds it,
+      # and apt-ftparchive writes whatever name it is given.
       - name: Name the debs the way GitHub will
         run: |
-          for f in dist/deb/*[~+]*.deb; do
+          for f in dist/deb/*~*.deb; do
             [ -e "$f" ] || continue
-            mv "$f" "dist/deb/$(basename "$f" | tr '~+' '..')"
+            mv "$f" "dist/deb/$(basename "$f" | tr '~' '.')"
           done
           ls -1 dist/deb
       # THE TAG IS `rolling`, AND IT WAS `main` FOR ONE AFTERNOON.

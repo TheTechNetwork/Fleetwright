@@ -17,8 +17,9 @@
 #   1. The sources line, rewritten in place and renamed over the old one. Only
 #      the suite word moves; the architecture, the keyring and the address are
 #      whatever the image or the installer wrote.
-#   2. The pin. A build of main is `<base>+main.<run>`, above the release it
-#      follows and below the next (tools/build-host-deb.mjs, debVersion), so
+#   2. The pin. A build of main is a prerelease of the next release,
+#      `<next>~main.<run>`, above the release it follows and below the one it
+#      names (tools/build-host-deb.mjs, debVersion), so
 #      stable to rolling is an ordinary upgrade and needs nothing. Rolling to
 #      stable is the other way: the box is asking apt for a DOWNGRADE to the
 #      release, and apt refuses one unless a pin above 1000 says so. The pin
@@ -71,8 +72,8 @@ mv "$tmp" "$SOURCES"
 if [ "$suite" = stable ]; then
   tmp="$PREFS.tmp"
   {
-    printf '# Written by fleetwright-apt-channel. A build of main is <release>+main.<run>, above\n'
-    printf '# the release it follows, so going back to the stable suite is a downgrade and apt\n'
+    printf '# Written by fleetwright-apt-channel. A build of main is a prerelease of the next\n'
+    printf '# release, above the last one, so going back to stable is a downgrade and apt\n'
     printf '# needs a pin above 1000 to make one. Removed by `/channel rolling`.\n'
     printf 'Package: fleetwright\n'
     printf 'Pin: release o=Fleetwright,a=stable\n'

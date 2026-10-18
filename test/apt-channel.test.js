@@ -75,7 +75,7 @@ test('rolling to stable: the word moves back and the package is pinned to stable
   assert.equal(r.status, 0, r.stderr);
   assert.equal(b.sources(), STABLE);
   // THE PIN IS WHAT MAKES THE WAY BACK INSTALLABLE. A build of main is
-  // <base>+main.<run>, above the release it follows, so without a priority
+  // <next>~main.<run>, above the release it follows, so without a priority
   // above 1000 apt would keep the build and the box would report a suite it
   // never takes from.
   const prefs = b.prefs();

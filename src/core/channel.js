@@ -189,7 +189,7 @@ export function switchAptSuite(cfg, value, { exec = run } = {}) {
         `  ${grantCommand('upgrades', 'on')}\n\n` +
         `Or by hand, as root: change the suite word in ${APT_SOURCES} to ${wanted}, ` +
         (wanted === 'stable'
-          ? 'pin the package to that suite above priority 1000 (a build of main sorts above the release it follows, so this is a downgrade), '
+          ? 'pin the package to that suite above priority 1000 (a build of main is a prerelease of the next release, so this is a downgrade), '
           : 'remove the pin /etc/apt/preferences.d/fleetwright-channel if there is one, ') +
         'and run apt-get update.',
     };
@@ -224,11 +224,11 @@ export function switchAptSuite(cfg, value, { exec = run } = {}) {
     message:
       wanted === 'rolling'
         ? 'This box now takes apt\'s rolling suite: the newest build of main, on every merge. A build of main is ' +
-          'versioned after the release it follows, so the next Apply update installs the newest build as an ordinary ' +
-          'upgrade, and any pin from an earlier move is gone.'
+          'versioned as a prerelease of the next release, so the next Apply update installs the newest build as an ' +
+          'ordinary upgrade, and any pin from an earlier move is gone.'
         : 'This box now takes apt\'s stable suite: published releases, each once its rollout is complete. A build of ' +
-          'main outranks the release it follows, so the package is pinned to the suite and the next Apply update ' +
-          'installs the newest release even though apt counts it as a downgrade.',
+          'main is a prerelease of the next release and outranks the last one, so the package is pinned to the suite ' +
+          'and the next Apply update installs the newest release even though apt counts it as a downgrade.',
   };
 }
 

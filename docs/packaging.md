@@ -397,12 +397,14 @@ change merged reaches the pool's machines without a release being cut first.
   (`tools/build-apt-repo.sh`). Stable is still drawn only from published,
   non-prerelease releases whose rollout is complete; a run with no rolling
   debs writes stable alone.
-- **Kept apart by suite, and versioned after the release they follow.** A
-  build of main is `<base>+main.<run>`, with `<base>` the version in
-  `package.json` at that commit: `0.4.11+main.330` sits above 0.4.11 and below
-  0.4.12, where the code is, so `apt list --upgradable` on a rolling box reads
-  as a version and moving stable to rolling is an upgrade. Each `<run>` is
-  higher than the last, so a box on rolling takes every build in turn. It was
+- **Kept apart by suite, and versioned as prereleases of the next release.**
+  A build of main is `<next>~main.<run>`, with `<next>` the version in
+  `package.json` at that commit plus one patch, the same `~` an rc gets:
+  `0.4.12~main.330` sits above 0.4.11 and below 0.4.12, where the code is, so
+  `apt list --upgradable` on a rolling box reads as a version and moving stable
+  to rolling is an upgrade. Each `<run>` is higher than the last, so a box on
+  rolling takes every build in turn. A release that raises the minor instead
+  still outranks them; the name guessed the number, not the order. It was
   `0.0.0~main.<run>`, below every release, while a box could carry both suite
   lines; since `/channel` moves the one word, nothing needed that, and what it
   cost was "0.0.0~main.325 is waiting (this box has 0.4.11)" about the commit
@@ -456,9 +458,9 @@ So on such a box:
   `@rolling.service`, granted as two exact lines beside the upgrade units and
   installed with them, runs `install/fleetwright-apt-channel`, which rewrites
   the one suite word, pins the package to the stable suite above priority
-  1000 on the way back (a build of main is `<base>+main.<run>` and outranks
-  the release it follows, so returning to one is a downgrade apt would
-  otherwise refuse) or removes the pin on the way to rolling, and runs
+  1000 on the way back (a build of main is a prerelease of the next release
+  and outranks the last one, so returning to a release is a downgrade apt
+  would otherwise refuse) or removes the pin on the way to rolling, and runs
   `apt-get update`. The hub then reads the line
   again and reports the suite the box is on, not the one it asked for. The
   next **Apply update** installs from the new suite. Without the upgrade
