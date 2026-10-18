@@ -82,13 +82,18 @@ of them is open.
 5. **Screenshots for both classes.** `Screenshots.swift` already drives the
    store shots; it needs a folded and an unfolded run.
 
-### Android has the same question
+### Android foldables are out of scope, and why
 
-`docs/app-parity.md` holds the two phones to the same behaviour. Android
-foldables report a window size class the same way, and Compose has its own
-list-and-detail scaffold. If step 2 ships on iOS only, the parity tests will
-not catch it, because they compare rules, not layouts. Decide whether Android
-foldables are in this piece of work or explicitly next, and write that down.
+`docs/app-parity.md` holds the two phones to the same behaviour, so this is a
+decision rather than an omission: **there is no Android foldable to test on,**
+and layout written for a screen nobody can open is the REVIEWED BUT UNRUN
+problem without the excuse of a deadline. Android foldables report a window size
+class the same way and Compose has its own list-and-detail scaffold, so the work
+is there to pick up when a device is.
+
+Until then the iOS list-and-detail layout is a known difference between the
+phones. The parity tests will not flag it, because they compare rules, not
+layouts, and the rules (what a row says, which buttons exist) stay shared.
 
 ## Apple Watch
 
@@ -143,7 +148,8 @@ forget are not decisions to make from a glance.
   `FleetwrightActivity` is so CI's one build type-checks it. `Design.swift`
   joins its sources as it already does for the extension, which keeps
   `test/design-parity.test.js` covering the wrist without a fourth token file.
-- **Android has Wear OS**, and the same parity question as the Duo section.
+- **Wear OS is out of scope** for the reason Android foldables are: nothing to
+  test it on.
 
 ### What to build, in order
 
@@ -161,7 +167,6 @@ forget are not decisions to make from a glance.
   The app is where the credential and push questions above become real work.
 - **Duo layout:** list and detail side by side in regular width (recommended),
   or the current single column with a readable width cap.
-- **Android:** foldables and Wear OS in this work, or explicitly after it.
 
 ## Sources
 
