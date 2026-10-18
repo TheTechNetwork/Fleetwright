@@ -15,12 +15,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { xosetupAad, xosetupInventoryAad, xosetupPolicyAad } from '../src/fleet/seal.js';
+import * as seal from '../src/fleet/seal.js';
 import { XOPOLICY_STEPS } from '../src/fleet/protocol/intents.js';
 import { STEP_WORDS } from '../src/fleet/host/xo-setup.js';
 
 const DIR = new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/', import.meta.url);
 const file = (/** @type {string} */ name) => readFileSync(new URL(name, DIR), 'utf8');
+const { xosetupAad, xosetupInventoryAad, xosetupPolicyAad } = seal;
+// The host names the policy sign-in's binding in seal.js; until a branch with
+// it is merged, the contract's text stands in, as the reconnect test does.
+const SIGNIN_AAD = typeof (/** @type {any} */ (seal).xosetupPolicySigninAad) === 'function'
+  ? /** @type {any} */ (seal).xosetupPolicySigninAad('$job', '$address')
+  : 'fleetwright-xosetup-policy-signin/v1:$job:$address';
 
 /** One function, from its signature to its closing brace at its own indentation. */
 function fn(/** @type {string} */ source, /** @type {string} */ signature) {
@@ -43,10 +49,14 @@ test('Android: the pool and the choice are sealed under the machine’s own bind
   // Opened and sealed with the app's one seal, under those bindings.
   assert.ok(policy.includes('Seal.open(key, inventoryAad(job, address), box)'));
   assert.ok(policy.includes('Seal.seal(key, policyAad(job, address), payload(inv, c, holderSecret))'));
-  // The sign-in goes under setup's binding: it is `run`, and the machine
-  // opens it before it knows which kind of job it is.
-  assert.equal(xosetupAad('J', 'A'), 'fleetwright-xosetup/v1:J:A');
-  assert.ok(policy.includes('Seal.seal(key, XoSetup.aad(job, address), payload)'));
+  // The sign-in goes under a binding of its own, never setup's: a machine
+  // from before policy jobs opens setup's, ignores the purpose and runs a
+  // whole setup with the admin's sign-in.
+  assert.ok(file('Seal.kt').includes(`fun xosetupPolicySigninAad(job: String, address: String) = "${SIGNIN_AAD}"`), SIGNIN_AAD);
+  assert.notEqual(SIGNIN_AAD.replace('$job', 'J').replace('$address', 'A'), xosetupAad('J', 'A'));
+  const signIn = fn(policy, 'fun sealSignIn(');
+  assert.ok(signIn.includes('Seal.seal(key, Seal.xosetupPolicySigninAad(job, address), payload)'));
+  assert.ok(!signIn.includes('XoSetup.aad('), 'a policy sign-in is never sealed under setup’s binding');
 });
 
 test('Android: the purpose rides inside the seal, never beside it', () => {
@@ -94,9 +104,23 @@ test('Android: a policy sign-in goes only to a machine that says it can, asked b
     assert.ok(begin.indexOf(later) > refuse, `the can check comes before ${later}`);
   }
   assert.ok(sheet.includes('"$hostId is older than changing a policy, so nothing was sent.'));
-  // And again at the last line before the seal.
+  // A machine that lists `policy` but not the binding the sign-in goes under
+  // is refused the same way, with its own sentence: a coordinator can add
+  // `policy` to an older machine's unsigned `can`, but not make it open a
+  // seal under a name it does not know.
+  assert.ok(file('XoPolicy.kt').includes('const val SIGNIN = "policy-signin"'));
+  const tooOld = begin.indexOf('policy && XoPolicy.SIGNIN !in setup.can ->');
+  assert.ok(tooOld > refuse, 'begin checks `can` for the policy sign-in after `policy`');
+  for (const later of ['XoSetup.verifyKeySig(', 'approved -> run(pending)', 'else -> unvouched = pending']) {
+    assert.ok(begin.indexOf(later) > tooOld, `the policy-signin check comes before ${later}`);
+  }
+  assert.match(begin.slice(tooOld), /refusal = olderThanPolicySignin\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);
+  assert.ok(sheet.includes('"$hostId is too old for this app to send it a policy change safely, so nothing was sent. Update it,'));
+  // And both again at the last line before the seal.
   const runPolicy = fn(sheet, 'suspend fun runPolicy(');
   assert.ok(runPolicy.indexOf('XoPolicy.PURPOSE !in p.setup.can') < runPolicy.indexOf('XoPolicy.sealSignIn('));
+  assert.match(runPolicy, /if \(XoPolicy\.SIGNIN !in p\.setup\.can\) \{\s*password = ""\s*refusal = olderThanPolicySignin\(p\.hostId\)\s*return\s*\}/);
+  assert.ok(runPolicy.indexOf('XoPolicy.SIGNIN !in p.setup.can') < runPolicy.indexOf('XoPolicy.sealSignIn('));
   // A setup never takes the policy path, nor a policy job setup's.
   assert.match(fn(sheet, 'suspend fun run('), /if \(policy\) \{\s*runPolicy\(p\)\s*return\s*\}/);
 });

@@ -93,6 +93,17 @@ internal object Seal {
      */
     fun xosetupReconnectSigninAad(job: String, address: String) = "fleetwright-xosetup-reconnect-signin/v1:$job:$address"
 
+    /**
+     * A policy job's admin sign-in on its way to the machine, under a name of
+     * its own rather than setup's, for the reconnect sign-in's reason
+     * (xosetupPolicySigninAad in src/fleet/seal.js; XoPolicy.sealSignIn). A
+     * machine from before policy jobs would open a sign-in under setup's
+     * binding, ignore the purpose and run a whole setup with it, and the
+     * `policy` in its `can` is a word a coordinator could add. Under this
+     * name such a machine opens nothing at all.
+     */
+    fun xosetupPolicySigninAad(job: String, address: String) = "fleetwright-xosetup-policy-signin/v1:$job:$address"
+
     /** An uncompressed P-256 public key, base64url without padding: 87 characters. */
     val KEY_RE = Regex("^[A-Za-z0-9_-]{87}$")
 

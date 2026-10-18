@@ -51,7 +51,7 @@ class XoReconnectTest {
         assertFalse(runCatching { open(sealed, XoSetup.aad(job, address)) }.isSuccess)
         // The machine reads `purpose` and `reply` from inside exactly as it
         // does a policy sign-in's: the same keys, nothing more.
-        val policy = open(XoPolicy.sealSignIn(jobKey.publicKey, job, address, "admin@xo.lan", "pw", reply.publicKey), XoSetup.aad(job, address))
+        val policy = open(XoPolicy.sealSignIn(jobKey.publicKey, job, address, "admin@xo.lan", "pw", reply.publicKey), Seal.xosetupPolicySigninAad(job, address))
         assertEquals(policy.keys().asSequence().toSet(), inside.keys().asSequence().toSet())
         assertEquals("reconnect", inside.getString("purpose"))
         assertEquals(1, inside.getInt("v"))

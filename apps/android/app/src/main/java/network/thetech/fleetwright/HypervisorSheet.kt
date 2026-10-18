@@ -117,9 +117,10 @@ import kotlinx.coroutines.withContext
  * phone already keeps a token for ([policyFor]): the same probe, machine,
  * certificate, sign-in and key check, because the job is begun exactly as a
  * setup is, then a form where the steps would be. It differs where XoPolicy
- * says. `begin` must answer that the machine can (`can` holds "policy"),
- * checked before anything is sealed, because an older machine would run a
- * policy sign-in as a setup. The sign-in carries the purpose inside the
+ * says. `begin` must answer that the machine can (`can` holds "policy", and
+ * "policy-signin" for the binding the sign-in is sealed under), checked
+ * before anything is sealed and again at the seal, because an older machine
+ * would run a policy sign-in as a setup. The sign-in carries the purpose inside the
  * seal, and a key for the pool to come back to that lives in this screen's
  * memory alone: not saveable, not the Keystore, gone when the screen goes. So
  * a screen rebuilt while the machine waits says it can no longer open what
@@ -536,6 +537,9 @@ internal fun HypervisorSheet(
     fun olderThanPolicy(hostId: String) =
         "$hostId is older than changing a policy, so nothing was sent. Update it, or choose another machine that reaches $address."
 
+    fun olderThanPolicySignin(hostId: String) =
+        "$hostId is too old for this app to send it a policy change safely, so nothing was sent. Update it, or choose another machine that reaches $address."
+
     fun olderThanReconnect(hostId: String) =
         "$hostId is older than reconnecting servers, so nothing was sent. Update it, or choose another machine that reaches $address."
 
@@ -579,8 +583,9 @@ internal fun HypervisorSheet(
     }
 
     /**
-     * `run` for a policy job: the same seal, under the same binding, with the
-     * purpose inside it and a reply key made here and kept only in memory.
+     * `run` for a policy job: the same seal, under a binding of its own
+     * (XoPolicy.sealSignIn), with the purpose inside it and a reply key made
+     * here and kept only in memory.
      * Never XoHandoff's key, which is written down so a token can be
      * collected with the app closed: what comes back here is for this screen
      * to show now, and nothing comes back afterwards to collect.
@@ -592,6 +597,11 @@ internal fun HypervisorSheet(
         if (XoPolicy.PURPOSE !in p.setup.can) {
             password = ""
             refusal = olderThanPolicy(p.hostId)
+            return
+        }
+        if (XoPolicy.SIGNIN !in p.setup.can) {
+            password = ""
+            refusal = olderThanPolicySignin(p.hostId)
             return
         }
         val reply = Seal.newKey()
@@ -709,6 +719,15 @@ internal fun HypervisorSheet(
                 policy && XoPolicy.PURPOSE !in setup.can -> {
                     password = ""
                     refusal = olderThanPolicy(hostId)
+                    runCatching { fleet.xosetup("cancel", job = setup.job) }
+                }
+                // AND ONLY TO ONE THAT OPENS A POLICY SIGN-IN UNDER ITS OWN
+                // BINDING. `policy` alone is a word a coordinator can add to
+                // the `can` of a machine from before policy jobs, which would
+                // open a sign-in under setup's and run a whole setup with it.
+                policy && XoPolicy.SIGNIN !in setup.can -> {
+                    password = ""
+                    refusal = olderThanPolicySignin(hostId)
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
                 // A RECONNECT the same way: an older machine would read the

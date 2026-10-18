@@ -38,8 +38,19 @@ import kotlin.math.roundToLong
  */
 internal object XoPolicy {
 
-    /** What the sealed sign-in names as its purpose. Inside the seal, never a param. */
+    /** What the sealed sign-in names as its purpose, and what `can` must hold. Inside the seal, never a param. */
     const val PURPOSE = "policy"
+
+    /**
+     * What `can` must hold beside [PURPOSE] before a sign-in is sealed: the
+     * machine opens one under Seal.xosetupPolicySigninAad. [PURPOSE] alone is
+     * a word a coordinator can add to the unsigned `can` of a machine from
+     * before policy jobs, which would open a sign-in under setup's binding
+     * and run a whole setup with it, so that machine is sent nothing. One
+     * that has this word added as well gets a seal it cannot open, which is
+     * the point. XoReconnect.SIGNIN is the same rule for a reconnect.
+     */
+    const val SIGNIN = "policy-signin"
 
     const val GIB = 1024L * 1024L * 1024L
 
@@ -431,10 +442,13 @@ internal object XoPolicy {
     }
 
     /**
-     * The admin sign-in for a policy job, sealed to the job's key under the
-     * same binding as setup's (XoSetup.aad), with [reply], the key the pool
-     * comes back to, and the purpose beside it. Returned rather than kept:
-     * the caller clears the password the moment this returns.
+     * The admin sign-in for a policy job, sealed to the job's key, with
+     * [reply], the key the pool comes back to, and the purpose beside it. A
+     * POLICY ONLY UNDER ITS OWN BINDING (Seal.xosetupPolicySigninAad), never
+     * setup's: under setup's, a machine from before policy jobs opens it,
+     * ignores the purpose and runs a whole setup with the admin's sign-in.
+     * Returned rather than kept: the caller clears the password the moment
+     * this returns.
      */
     fun sealSignIn(key: String, job: String, address: String, email: String, password: String, reply: String): String {
         val payload = JSONObject()
@@ -442,7 +456,7 @@ internal object XoPolicy {
             .put("xo", JSONObject().put("email", email).put("password", password))
             .put("reply", reply)
             .put("purpose", PURPOSE)
-        return joined(Seal.seal(key, XoSetup.aad(job, address), payload))
+        return joined(Seal.seal(key, Seal.xosetupPolicySigninAad(job, address), payload))
     }
 
     /**
