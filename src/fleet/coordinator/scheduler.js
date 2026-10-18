@@ -722,9 +722,15 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // the task, the actor and the archive's name on a machine where that member
   // has root. Naming it worked too. SEC-HOST-1.
   //
-  // Not `health` or `updates`, which fall through to here and are questions
-  // about one box, like `logs`: asking one hands it nothing of the asker's.
-  const actsForThem = verb === 'health' || verb === 'updates'
+  // `health` and `updates` were let through for anybody, as questions about
+  // one box that hand it nothing of the asker's. They hand it the asker's
+  // email, which members do not see of each other, and the box writes the
+  // reply: an unnamed one went to whichever box reported the most free slots,
+  // which a member's own box reports for itself, so it answered every other
+  // member's question in its own words (seventh audit, the sixth's rule for
+  // list and status). An admin and the break-glass token may still ask any box.
+  const anyBox = (verb === 'health' || verb === 'updates') && !(requester && !requester.admin);
+  const actsForThem = anyBox
     ? () => true
     : (/** @type {import('./registry.js').HostEntry} */ h) => mayActFor(h, whose);
 

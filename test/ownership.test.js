@@ -603,13 +603,51 @@ test('a box’s health, asked of it directly, is filtered like the host list', a
   assert.deepEqual(fromOps.resumable, ['alice-work']);
   assert.deepEqual(fromOps.bin, [], 'and their bin');
   assert.equal(fromOps.free, 3, 'capacity is the box’s, and still answered');
-  const fromCarol = (await health(ALICE, 'carol-box')).health;
-  assert.deepEqual(fromCarol.sessions, [], 'a box another member enrolled answered with their sessions, or filed one under alice');
+  // A box another member enrolled is not asked at all (seventh audit, below).
+  const fromCarol = await health(ALICE, 'carol-box');
+  assert.equal(fromCarol.error?.code, 'host_unavailable', 'a box another member enrolled answered a member’s health');
 
   // Its owner sees what is hers, and the admin the box's own words.
   const forCarol = (await health({ email: 'carol@example.com', admin: false }, 'carol-box')).health;
   assert.deepEqual(forCarol.sessions.map((/** @type {any} */ s) => s.name), ['carol-work', 'planted']);
   assert.equal((await health(ADMIN, 'ops-box')).health.sessions.length, 2);
+});
+
+test('a member’s health and updates go only to boxes that act for her', async () => {
+  // Seventh audit: both were let through to any box as questions that hand it
+  // nothing of the asker's. They hand it her email, which members are not
+  // shown of each other, and the box writes the answer: an unnamed one went to
+  // whichever box reported the most free slots, which mallory's box reports
+  // for itself, so it answered every member's health and updates in its words.
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ log: quiet });
+  /** @type {string[]} */
+  const delivered = [];
+  for (const [hostId, enrolledBy, free] of [['ops-box', null, 1], ['mal-box', 'mallory@example.com', 40]]) {
+    await admit(core, hostId, {
+      enrolledBy,
+      send: (/** @type {any} */ intent) => {
+        delivered.push(`${hostId} ${intent.verb} for ${intent.actor}`);
+        queueMicrotask(() => core.onHostMessage(hostId, { kind: 'reply', id: intent.id, ok: true, text: `${hostId} says` }));
+      },
+    });
+    core.registry.recordHealth(hostId, { hub: { reachable: true }, maxSessions: 41, running: 0, free, labels: [], sessions: [] });
+  }
+  for (const verb of ['health', 'updates']) {
+    delivered.length = 0;
+    const unnamed = await core.dispatch({ verb, params: {}, actor: ALICE.email, requester: ALICE });
+    assert.equal(unnamed.ok, true, verb);
+    assert.deepEqual(delivered, [`ops-box ${verb} for alice@example.com`], `alice’s unnamed ${verb} went to a box that does not act for her`);
+    delivered.length = 0;
+    const named = await core.dispatch({ verb, params: {}, actor: ALICE.email, requester: ALICE, preferHost: 'mal-box' });
+    assert.equal(named.error?.code, 'host_unavailable', verb);
+    assert.deepEqual(delivered, [], `alice’s ${verb} reached mallory’s box by naming it`);
+  }
+  // mallory asks her own box, and the admin any box.
+  delivered.length = 0;
+  await core.dispatch({ verb: 'health', params: {}, actor: 'mallory@example.com', requester: { email: 'mallory@example.com', admin: false }, preferHost: 'mal-box' });
+  await core.dispatch({ verb: 'updates', params: {}, actor: ADMIN.email, requester: ADMIN, preferHost: 'mal-box' });
+  assert.deepEqual(delivered.map((d) => d.split(' ')[0]), ['mal-box', 'mal-box']);
 });
 
 test('a member’s profiles and secrets are asked only of the boxes that act for them', async () => {

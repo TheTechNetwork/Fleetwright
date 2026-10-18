@@ -258,6 +258,32 @@ function holds(host, email) {
 }
 
 /**
+ * Text a box wrote, as one line: control characters, line and paragraph
+ * separators and the bidirectional overrides become spaces, so nothing it
+ * says can start a line of its own or reorder the line it is on.
+ *
+ * @param {unknown} v @param {number} max
+ */
+function oneLine(v, max) {
+  return String(v)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+/**
+ * A report that can say whose each session is: the hub answered, and listed
+ * them. A sidecar whose hub is down reports `sessions: null`, which is "cannot
+ * tell", never "none" (C-5), so a hand-back is never paid from one (#handBack).
+ *
+ * @param {any} health
+ */
+function listsSessions(health) {
+  return Boolean(health) && health.hub?.reachable !== false && Array.isArray(health.sessions);
+}
+
+/**
  * The same repository, apart from letter case, which GitHub ignores and
  * corrects. @param {unknown} answered @param {unknown} asked
  */
@@ -705,9 +731,16 @@ export class CoordinatorCore {
       // longer act for under its one person (believedCreator), after which
       // nobody could tell which session was whose. A box that is the fleet's
       // again, its admin back, owes nothing.
+      //
+      // ONLY A REPORT THAT CAN SAY WHOSE EACH SESSION IS PAYS IT. A sidecar
+      // pushes health as soon as its socket is up, so the first frame after a
+      // reboot often comes from a hub not yet answering: sessions null, which
+      // is "cannot tell", not "none". Read as none, it asked nothing, the debt
+      // was cleared, and the next full report filed the member's session under
+      // the removed admin (seventh audit). Such a frame leaves the debt owed.
       const owed = this.hostIds?.get(hostId);
       const entry = this.registry.hosts.get(hostId);
-      if (owed?.handBackPending && entry?.connected) {
+      if (owed?.handBackPending && entry?.connected && listsSessions(msg.health)) {
         if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true });
         delete owed.handBackPending;
         this.onStateChanged?.();
@@ -840,7 +873,12 @@ export class CoordinatorCore {
       hostId,
       event: type,
       name: msg.name,
-      text: msg.text ? String(msg.text).slice(0, 500) : null,
+      // ONE LINE, as the box wrote it and no more. This text reaches an admin's
+      // agent through fleet_events, and with its newlines kept a member's box
+      // could write a second line laid out as a fleet record of its own,
+      // attribution and all (seventh audit). sessionLabel keeps one line for
+      // the same reason.
+      text: msg.text ? oneLine(msg.text, 500) : null,
       url: msg.url ? String(msg.url).slice(0, 500) : null,
       // The NAME of the profile a session was started with, when the host
       // says. A name, never content — docs/wanted.md's rule for profiles —
@@ -955,6 +993,8 @@ export class CoordinatorCore {
     this.#pushedAt.set(key, now);
     recent.push(now);
     this.#pushesBy.set(who, recent);
+    // Spent where storage can see it (serialisePushLimits).
+    this.onStateChanged?.();
     return true;
   }
 
@@ -962,6 +1002,62 @@ export class CoordinatorCore {
   #pushedAt = new Map();
   /** When each person's, or operator box's, pushes in the last hour were sent (#mayPush). @type {Map<string, number[]>} */
   #pushesBy = new Map();
+
+  /**
+   * The hour's allowances already spent, for storage: each person's pushes
+   * (#mayPush) and the pool losses said to each (#poolLost).
+   *
+   * THEY LIVED ONLY IN MEMORY, and a Durable Object is rebuilt on every
+   * deploy and whenever it is evicted between messages. So HOST_PUSHES_EACH
+   * and POOLS_LOST_EACH were each an allowance per rebuild rather than per
+   * hour, and the relay's 600 an hour that they share out was as safe as the
+   * object was long-lived (seventh audit).
+   *
+   * Only the times still inside their window, and at most
+   * MAX_PUSH_LIMIT_ROWS of each, the most recently spent first. A person
+   * dropped past that starts their hour again after a rebuild, which is what
+   * everybody did before this was kept. The 30-second repeat quiet and the
+   * hour's quiet on a host's fault are not here: the first is over before a
+   * rebuild matters, and the second is read from the event ring as well
+   * (#onHostState).
+   *
+   * @returns {{ pushes: Array<[string, number[]]>, poolsLost: Array<[string, number]> }}
+   */
+  serialisePushLimits() {
+    const now = this.now();
+    const pushes = [...this.#pushesBy]
+      .map(([who, times]) => /** @type {[string, number[]]} */ ([who, times.filter((t) => now - t < HOST_PUSH_WINDOW_MS)]))
+      .filter(([, times]) => times.length)
+      .sort((a, b) => b[1][b[1].length - 1] - a[1][a[1].length - 1])
+      .slice(0, MAX_PUSH_LIMIT_ROWS);
+    const poolsLost = [...this.#poolLostSaidAt]
+      .filter(([, at]) => now - at < POOL_LOST_QUIET_MS)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_PUSH_LIMIT_ROWS);
+    return { pushes, poolsLost };
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it, and only
+   * what is still inside its window.
+   *
+   * @param {unknown} saved
+   */
+  restorePushLimits(saved) {
+    const now = this.now();
+    const rows = (/** @type {unknown} */ list) => (Array.isArray(list) ? list.slice(0, MAX_PUSH_LIMIT_ROWS) : []);
+    const at = (/** @type {unknown} */ t, /** @type {number} */ window) => typeof t === 'number' && Number.isFinite(t) && t <= now && now - t < window;
+    const s = /** @type {any} */ (saved);
+    for (const row of rows(s?.pushes)) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || row[0].length > 260 || !Array.isArray(row[1])) continue;
+      const times = row[1].filter((/** @type {unknown} */ t) => at(t, HOST_PUSH_WINDOW_MS)).sort((/** @type {number} */ a, /** @type {number} */ b) => a - b).slice(-HOST_PUSHES_EACH);
+      if (times.length) this.#pushesBy.set(row[0], times);
+    }
+    for (const row of rows(s?.poolsLost)) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || row[0].length > 520 || !row[0].includes('\n') || !at(row[1], POOL_LOST_QUIET_MS)) continue;
+      this.#poolLostSaidAt.set(row[0], row[1]);
+    }
+  }
 
   /**
    * A host changed state. Say so, once, in words about what it means.
@@ -1164,6 +1260,7 @@ export class CoordinatorCore {
       return;
     }
     this.#poolLostSaidAt.set(key, now);
+    this.onStateChanged?.();
     // OPEN UNTIL IT SHOWS AGAIN, so the recovery is said once. Bounded per
     // person as the announcements are: their oldest open loss goes first.
     const open = [...this.#poolsLost].filter(([k]) => k.startsWith(`${owner}\n`));
@@ -1742,9 +1839,22 @@ export class CoordinatorCore {
    */
   #setupOn(job, rec, hostId) {
     if (!rec || rec.hostId !== hostId) return false;
-    if ((rec.enrolment ?? null) === this.#enrolmentOf(hostId)) return true;
-    this.#endSetup(job, `${hostId} was re-enrolled since this setup began, so the setup ended.`);
-    return false;
+    if ((rec.enrolment ?? null) !== this.#enrolmentOf(hostId)) {
+      this.#endSetup(job, `${hostId} was re-enrolled since this setup began, so the setup ended.`);
+      return false;
+    }
+    // AND STILL ACTS FOR WHOEVER BEGAN IT. Removing the admin who enrolled a
+    // box changes neither its name nor its key, so a live admin's setup on it
+    // outlived its tier: the box, now its removed admin's alone, could still
+    // write that job's progress and a "done" with nothing behind it to every
+    // admin's phone, and mint its report tokens (seventh audit). The holder
+    // pin already asked this (#onHolderPin); every frame now does.
+    const entry = this.registry.hosts.get(hostId);
+    if (entry && !mayActFor(entry, rec.owner)) {
+      this.#endSetup(job, `${hostId} no longer acts for whoever began this setup, so the setup ended.`);
+      return false;
+    }
+    return true;
   }
 
   /** A setup job is over: forgotten, and any relay it held closed. @param {string} job @param {string} why */
@@ -2364,6 +2474,13 @@ export class CoordinatorCore {
    * them only when they are the member's own. An attribution naming nobody,
    * a repository's runner or a machine image, stays.
    *
+   * A member gets the fields a phone shows and nothing else, named here
+   * rather than by what is taken out. A record that hid two fields and passed
+   * the rest passed every field added after it: the GitHub account id that
+   * started somebody else's runner sat beside the owner it hid (seventh
+   * audit), and handBackPending named every box of an operator since removed.
+   * A runner's actor id is shown to the person whose runner it is.
+   *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
    */
   enrolledHostsFor(requester) {
@@ -2371,11 +2488,21 @@ export class CoordinatorCore {
     if (!requester || requester.admin) return all;
     const mine = String(requester.email || '').toLowerCase();
     /** @param {unknown} v `alice@…`, `holder:alice@…`, `actions:owner/repo` */
-    const shown = (v) => {
-      const who = emailOf(String(v || '').replace(/^[a-z]+:/i, ''));
-      return !who || who === mine ? v : null;
-    };
-    return all.map((h) => ({ ...h, enrolledBy: shown(h.enrolledBy), ...('owner' in h ? { owner: shown(h.owner) } : {}) }));
+    const who = (v) => emailOf(String(v || '').replace(/^[a-z]+:/i, ''));
+    /** @param {unknown} v */
+    const shown = (v) => (!who(v) || who(v) === mine ? v : null);
+    return all.map((h) => ({
+      hostId: h.hostId,
+      fingerprint: h.fingerprint,
+      publicJwk: h.publicJwk,
+      enrolledBy: shown(h.enrolledBy),
+      ...('owner' in h ? { owner: shown(h.owner) } : {}),
+      enrolledAt: h.enrolledAt,
+      lastSeenAt: h.lastSeenAt,
+      revokedAt: h.revokedAt,
+      ...('ephemeral' in h ? { ephemeral: h.ephemeral } : {}),
+      ...(h.actorId && h.owner && who(h.owner) === mine ? { actorId: h.actorId } : {}),
+    }));
   }
 
   /**
@@ -2394,11 +2521,14 @@ export class CoordinatorCore {
     if (!address) return { revoked: 0, devices: 0, hosts: [] };
     let revoked = 0;
     let devices = 0;
+    /** @type {string[]} */
+    const hosts = [];
     for (const client of [...this.clients.clients.values()]) {
       if (String(client.email || '').toLowerCase() !== address || client.revokedAt) continue;
       const r = this.revokeClient(client.id);
       if (r.revoked) revoked++;
       devices += r.devices;
+      hosts.push(...r.hosts);
     }
     if (revoked) {
       this.record({
@@ -2407,11 +2537,13 @@ export class CoordinatorCore {
         text: `${address} ${why}; ${revoked} credential${revoked === 1 ? '' : 's'} revoked`,
       });
     }
-    // Their last credential's revocation did this already; a person with none
-    // left still has their machines taken back. Neither is an operator leaving
-    // the tier here: the first was demoted by revokeClient, and the second,
-    // with no credential that works, was never an operator to begin with.
-    const hosts = this.#forgetPerson(address, false);
+    // Their last credential's revocation did this already, and ONCE: run
+    // again, every box of the fleet's was asked their work back twice
+    // (#handBackPerson), and the hosts it revoked were dropped for an empty
+    // list. A person with none left still has their machines taken back. Not
+    // an operator leaving the tier: with no credential that works, they were
+    // never an operator to begin with.
+    if (!revoked) hosts.push(...this.#forgetPerson(address, false));
     return { revoked, devices, hosts };
   }
 
@@ -2497,8 +2629,30 @@ export class CoordinatorCore {
     // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
     // connected, whose tier was decided when it connected (#retier), and are
     // asked for back what that tier gave them (#handBack).
+    //
+    // Asked from the report it made as the fleet's, when there is one that
+    // says whose each session is. A connected box can have none: the Worker
+    // rebuilds the registry from live sockets on waking, with no reports
+    // until each box's next push, and a removal is itself a request that
+    // wakes it. Asked from nothing, it was asked to stop nobody and was never
+    // asked again (seventh audit), so it owes the hand-back like a box that
+    // was away, and pays it from its next report that lists its sessions.
+    const handedBack = new Set();
     for (const { entry, person, health } of this.#retier()) {
-      if (entry.connected) this.#handBack(entry, person, health);
+      if (!entry.connected) continue;
+      if (listsSessions(health)) {
+        this.#handBack(entry, person, health);
+        handedBack.add(entry.hostId);
+        continue;
+      }
+      const enrolled = this.hostIds.get(entry.hostId);
+      if (!enrolled) continue;
+      enrolled.handBackPending = true;
+      changed = true;
+      this.#recordDemoted(
+        entry.hostId,
+        'It has not reported its sessions since it connected, so it will be asked to stop other people’s sessions and to forget everybody else’s GitHub, Cloudflare and Claude sign-ins on its next report that lists them, which a box does only if it is honest.',
+      );
     }
     // AND THE ONES THAT ARE NOT HERE TO ASK, found from the enrolments rather
     // than the registry. Only a box connected at that moment was asked: one
@@ -2512,7 +2666,7 @@ export class CoordinatorCore {
       for (const enrolled of this.hostIds.hosts.values()) {
         if (enrolled.revokedAt || enrolled.ephemeral || enrolled.handBackPending) continue;
         if (actsFor(enrolled, (email) => this.#isOperator(email)) !== address) continue;
-        if (this.registry.hosts.get(enrolled.hostId)?.connected) continue;
+        if (handedBack.has(enrolled.hostId)) continue;
         enrolled.handBackPending = true;
         changed = true;
         this.#recordDemoted(
@@ -2521,6 +2675,20 @@ export class CoordinatorCore {
         );
       }
     }
+    // AND EVERYBODY ELSE'S SETUPS ON A BOX THAT NO LONGER ACTS FOR THEM, said
+    // now rather than on the box's next frame (#setupOn), which an offline box
+    // may never send: the job would have sat in a state its owner could not
+    // cancel, every later phase refused, for the rest of its day.
+    for (const [job, rec] of [...this.setups]) {
+      const enrolled = this.hostIds.get(rec.hostId);
+      const person = enrolled && !enrolled.revokedAt ? actsFor(enrolled, (email) => this.#isOperator(email)) : null;
+      if (person !== null && emailOf(rec.owner) !== person) {
+        this.#endSetup(job, `${rec.hostId} no longer acts for whoever began this setup, so the setup ended.`);
+      }
+    }
+    // AND THEIR OWN WORK ON THE FLEET'S BOXES, after #retier so a removed
+    // admin's boxes, theirs alone now, are not among them.
+    this.#handBackPerson(address);
     if (changed) this.onStateChanged?.();
     return hosts;
   }
@@ -2628,22 +2796,16 @@ export class CoordinatorCore {
    */
   #handBack(entry, person, health, { back = false } = {}) {
     let stopped = 0;
-    /** @param {string} verb @param {Record<string, string>} params @param {string} actor */
-    const ask = (verb, params, actor) => {
-      try {
-        void this.send(entry, { verb, params, actor }, FANOUT_TIMEOUT_MS).catch(() => {});
-      } catch { /* a name this protocol would not carry is not a session to stop */ }
-    };
     for (const s of Array.isArray(health?.sessions) ? health.sessions : []) {
       const who = String(s?.createdBy || '').startsWith('fleet:') ? emailOf(s.createdBy) : null;
       if (!who || who === person || typeof s.name !== 'string') continue;
-      ask('stop', { name: s.name }, who);
+      this.#askBack(entry, 'stop', { name: s.name }, who);
       stopped++;
     }
     const others = new Set([...this.clients.clients.values()].map((c) => String(c.email || '').toLowerCase()));
     for (const email of others) {
       if (!email || email === person) continue;
-      for (const provider of ['github', 'cloudflare', 'claude']) ask('unlink', { provider }, email);
+      for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, email);
     }
     this.#recordDemoted(
       entry.hostId,
@@ -2666,6 +2828,69 @@ export class CoordinatorCore {
         `${hostId} is no longer one of the fleet’s own machines: the admin who enrolled it was removed. ${asked} ` +
         'Rotate the GitHub and Cloudflare client secrets it was sent, and anyone who linked an account while it was the fleet’s should revoke that token with the provider.',
     });
+  }
+
+  /**
+   * One request a box is asked to give something back with, sent and not
+   * waited on: the removal that asks it is somebody's request, and a box that
+   * never answers must not hold it open (#handBack, #handBackPerson).
+   *
+   * @param {any} entry @param {string} verb @param {Record<string, string>} params @param {string} actor
+   */
+  #askBack(entry, verb, params, actor) {
+    try {
+      void this.send(entry, { verb, params, actor }, FANOUT_TIMEOUT_MS).catch(() => {});
+    } catch { /* a name this protocol would not carry is not a session to stop */ }
+  }
+
+  /**
+   * WHAT A REMOVED PERSON LEFT ON THE FLEET'S OWN BOXES, asked back as
+   * #handBack asks it of a removed admin's box for everybody else. Revoking
+   * their credentials stopped them asking the fleet for anything and left
+   * what they had already asked for: their sessions went on running on the
+   * operator's machines under their own Claude sign-in, and the GitHub and
+   * Cloudflare accounts they linked stayed on every one of those boxes, each
+   * able to push and deploy as somebody no longer in the fleet (seventh
+   * audit).
+   *
+   * So every connected box in the operator's tier, which is where a person's
+   * links fan out and their work is placed (hosts.js mayActFor), is asked to
+   * stop each session its last report filed under them and to unlink their
+   * three sign-ins. Not their own boxes: those act for them, hold nobody
+   * else's, and have nothing to give back to the fleet. Not another member's:
+   * none of theirs went there. Recorded with no actor and no session name, so
+   * the operator, and every member, sees that it was asked.
+   *
+   * A BOX THAT IS NOT HERE IS NOT ASKED. An offline box owes it, and nothing
+   * asks it when it returns: a removed admin's box keeps that debt on its
+   * enrolment (handBackPending), but the debt there is a box's to everybody,
+   * and this one would be a list of removed people per box kept for good.
+   * Their links stay on such a box until an admin unlinks them there, and a
+   * session there until an admin stops it. Nor is a session named that the
+   * box's last report did not list, the first frame of a hub still starting
+   * among them (listsSessions): the sign-ins are still unlinked.
+   *
+   * @param {string} person  lower case
+   */
+  #handBackPerson(person) {
+    for (const entry of this.registry.reachable()) {
+      if ((entry.actsFor ?? null) !== null) continue;
+      const listed = listsSessions(entry.health);
+      let stopped = 0;
+      for (const s of listed ? /** @type {any} */ (entry.health).sessions : []) {
+        if (typeof s?.name !== 'string' || !String(s.createdBy || '').startsWith('fleet:') || emailOf(s.createdBy) !== person) continue;
+        this.#askBack(entry, 'stop', { name: s.name }, person);
+        stopped++;
+      }
+      for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, person);
+      this.record({
+        event: 'host.asked-back',
+        hostId: entry.hostId,
+        text: listed
+          ? `${entry.hostId} was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} somebody removed from the fleet had running there, and to forget their GitHub, Cloudflare and Claude sign-ins.`
+          : `${entry.hostId} was asked to forget the GitHub, Cloudflare and Claude sign-ins of somebody removed from the fleet. It has not reported its sessions since it connected, so any of theirs still running there were not named; an admin can stop them.`,
+      });
+    }
   }
 
   /**
@@ -6540,6 +6765,9 @@ const POOLS_LOST_EACH = 8;
  */
 const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
 
+/** The sign-ins a box is asked to forget for somebody it holds them for no longer (#handBack, #handBackPerson). */
+const HANDED_BACK_SIGN_INS = Object.freeze(['github', 'cloudflare', 'claude']);
+
 /**
  * How often a box's sessions may buzz a phone (#mayPush).
  *
@@ -6558,6 +6786,14 @@ const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
 const HOST_PUSH_QUIET_MS = 30_000;
 const HOST_PUSHES_EACH = 60;
 const HOST_PUSH_WINDOW_MS = 60 * 60_000;
+/**
+ * How many people's spent allowances are kept across a rebuild, and how many
+ * pool losses (serialisePushLimits): 64 people at a full hour each and 64 of
+ * the longest owner-and-address keys restore admits are 105 KB, inside the
+ * 128 KiB a Durable Object value holds (test/do-key-bounds.test.js measures
+ * it).
+ */
+const MAX_PUSH_LIMIT_ROWS = 64;
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set([
