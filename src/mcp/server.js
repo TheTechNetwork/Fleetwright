@@ -319,12 +319,16 @@ function howLong(ms) {
  * reporting a dialog and the watcher first seeing one. A host older than that
  * sends nothing, and this answers null, which is what every host did before.
  *
+ * A TIMESTAMP, AND ONLY ONE. This took whatever `Number()` made of the
+ * field, a string included, and the box chooses it; a millisecond count a
+ * Date can hold is the whole of what the host sends (eighth audit).
+ *
  * @param {any} session
  * @returns {number|null}
  */
 function awaitingSince(session) {
-  const since = Number(session?.awaitingSince);
-  return Number.isFinite(since) && since > 0 ? since : null;
+  const since = session?.awaitingSince;
+  return Number.isSafeInteger(since) && since > 0 && since <= 8.64e15 ? since : null;
 }
 
 /**
@@ -336,11 +340,18 @@ function awaitingSince(session) {
  * so a session waiting on a trust dialog was announced as saying "resumed
  * (summary)" — the same bug watcher.js records fixing for the phone.
  *
+ * AS THE BOX'S WORD, on one line and no longer than a question is. A box a
+ * member enrolled writes this field however it likes, and it was printed
+ * trimmed and nothing else, on a line of its own in fleet_await's reply and
+ * after "It says:" in the watcher's notification, where its newlines laid
+ * out lines of the server's own and an instruction read as this server's
+ * (eighth audit). Both now quote it and say whose it is.
+ *
  * @param {any} session
  */
 function askingFrom(session) {
   const q = session?.prompt?.question;
-  return typeof q === 'string' ? q.trim() : '';
+  return typeof q === 'string' ? oneLine(q, 300) : '';
 }
 
 export class McpServer {
@@ -476,7 +487,7 @@ export class McpServer {
             const asking = askingFrom(session);
             this.#notify(
               'warning',
-              `${name} is waiting for an answer and will not go further without one.${asking ? ` It says: ${asking}` : ''}`,
+              `${name} is waiting for an answer and will not go further without one.${asking ? ` Its box reports the question as “${asking}”.` : ''}`,
               { session: name, state: 'awaiting', since, ...(asking ? { asking } : {}) },
             );
           } else if (status === 'error') {
@@ -560,7 +571,7 @@ export class McpServer {
           (waited < 60_000
             ? `${name} is waiting for an answer`
             : `${name} has been waiting for an answer for at least ${howLong(waited)}`) +
-            `${asking ? `:\n${asking}` : ', and the host could not read the question off its pane.'}\n\n` +
+            `${asking ? `, and its box reports the question as “${asking}”.` : ', and the host could not read the question off its pane.'}\n\n` +
             'It will not go further until somebody answers. Read it with fleet_read_log if you need the whole story.',
         );
       }
