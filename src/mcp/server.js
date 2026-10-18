@@ -22,6 +22,8 @@
 import { toolsFor, DEFAULT_DENY } from './tools.js';
 import { dispatchRunner } from '../core/runners.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
+import { oneLine, LABEL_RE } from '../core/text.js';
+import { hostReported, rcLink } from '../fleet/coordinator/core.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -181,12 +183,22 @@ function describeHealth(h) {
   // I closed that issue (#311) on the strength of the same commit that fixed
   // the login banner, and the banner was all it fixed. Caught by running the
   // tool afterwards rather than by re-reading the diff.
-  if (h.hostId) lines.push(String(h.hostId));
+  //
+  // THE BOX WROTE THIS FRAME, so what it names is held to one line and its
+  // tags to what a tag is (text.js LABEL_RE), whatever the coordinator in
+  // front of it did. Joined as sent, a box's labels were lines of its own in
+  // an admin's agent's fleet_health (eighth audit). The coordinator drops
+  // such a label too (registry.js attributed); this is the renderer not
+  // relying on it.
+  if (h.hostId) lines.push(oneLine(h.hostId, 64));
   if (typeof h.running === 'number' && typeof h.maxSessions === 'number') {
     lines.push(`${h.running}/${h.maxSessions} sessions running, ${h.free ?? '?'} free`);
   }
   if (Array.isArray(h.loadavg) && h.loadavg.length) lines.push(`load ${h.loadavg.map(Number).join(' ')}`);
-  if (Array.isArray(h.labels)) lines.push(`tags: ${h.labels.length ? h.labels.join(', ') : 'none'}`);
+  if (Array.isArray(h.labels)) {
+    const tags = h.labels.filter((/** @type {unknown} */ l) => typeof l === 'string' && LABEL_RE.test(l));
+    lines.push(`tags: ${tags.length ? tags.join(', ') : 'none'}`);
+  }
   // WHETHER A SESSION CAN ACTUALLY RUN — and `loggedIn` is not that fact.
   //
   // This said "NOT LOGGED IN — a session here cannot do anything" whenever
@@ -307,12 +319,16 @@ function howLong(ms) {
  * reporting a dialog and the watcher first seeing one. A host older than that
  * sends nothing, and this answers null, which is what every host did before.
  *
+ * A TIMESTAMP, AND ONLY ONE. This took whatever `Number()` made of the
+ * field, a string included, and the box chooses it; a millisecond count a
+ * Date can hold is the whole of what the host sends (eighth audit).
+ *
  * @param {any} session
  * @returns {number|null}
  */
 function awaitingSince(session) {
-  const since = Number(session?.awaitingSince);
-  return Number.isFinite(since) && since > 0 ? since : null;
+  const since = session?.awaitingSince;
+  return Number.isSafeInteger(since) && since > 0 && since <= 8.64e15 ? since : null;
 }
 
 /**
@@ -324,11 +340,18 @@ function awaitingSince(session) {
  * so a session waiting on a trust dialog was announced as saying "resumed
  * (summary)" — the same bug watcher.js records fixing for the phone.
  *
+ * AS THE BOX'S WORD, on one line and no longer than a question is. A box a
+ * member enrolled writes this field however it likes, and it was printed
+ * trimmed and nothing else, on a line of its own in fleet_await's reply and
+ * after "It says:" in the watcher's notification, where its newlines laid
+ * out lines of the server's own and an instruction read as this server's
+ * (eighth audit). Both now quote it and say whose it is.
+ *
  * @param {any} session
  */
 function askingFrom(session) {
   const q = session?.prompt?.question;
-  return typeof q === 'string' ? q.trim() : '';
+  return typeof q === 'string' ? oneLine(q, 300) : '';
 }
 
 export class McpServer {
@@ -464,7 +487,7 @@ export class McpServer {
             const asking = askingFrom(session);
             this.#notify(
               'warning',
-              `${name} is waiting for an answer and will not go further without one.${asking ? ` It says: ${asking}` : ''}`,
+              `${name} is waiting for an answer and will not go further without one.${asking ? ` Its box reports the question as “${asking}”.` : ''}`,
               { session: name, state: 'awaiting', since, ...(asking ? { asking } : {}) },
             );
           } else if (status === 'error') {
@@ -548,7 +571,7 @@ export class McpServer {
           (waited < 60_000
             ? `${name} is waiting for an answer`
             : `${name} has been waiting for an answer for at least ${howLong(waited)}`) +
-            `${asking ? `:\n${asking}` : ', and the host could not read the question off its pane.'}\n\n` +
+            `${asking ? `, and its box reports the question as “${asking}”.` : ', and the host could not read the question off its pane.'}\n\n` +
             'It will not go further until somebody answers. Read it with fleet_read_log if you need the whole story.',
         );
       }
@@ -1102,13 +1125,27 @@ export class McpServer {
           // It read as the fleet's, so a member's box could write an
           // instruction an admin's agent took for the fleet's own record
           // (seventh audit). The coordinator's own records stay as written.
-          const boxSaid = String(e.event || '').startsWith('session.') && !e.actor;
-          const said = String(e.text || '').replace(/[\r\n\u2028\u2029]+/g, ' ');
-          const who = e.actor || (boxSaid && e.hostId ? `as ${e.hostId} reported it` : 'the fleet');
+          //
+          // AND EVERY EVENT THE BOX IS THE AUTHOR OF, by the coordinator's own
+          // test of which those are (hostReported): `host.degraded` carries
+          // the box's hub reason inside the coordinator's sentence, and the
+          // pool events the names it gave its pools. They read as the
+          // fleet's, `· the fleet` and all (eighth audit). A pool event names
+          // a person, whose pool it is, and is still the box's report.
+          const boxSaid = hostReported(e);
+          const said = oneLine(e.text || '', 1000);
+          const who = boxSaid
+            ? `as ${e.hostId ? oneLine(e.hostId, 64) : 'a box'} reported it${e.actor ? `, for ${e.actor}` : ''}`
+            : e.actor || 'the fleet';
           const where = e.hostId ? ` on ${e.hostId}` : '';
+          const name = e.name ? oneLine(e.name, 80) : '';
+          // Its link too, which is the box's word and is said inside its
+          // report, and only when it is one (rcLink): a record from before
+          // the coordinator held the field to that kept whatever it was sent.
+          const link = boxSaid ? rcLink(e.url) : null;
           const what = boxSaid
-            ? `${e.event} — ${e.name}${said ? `: “${said}”` : ''}`
-            : said || (e.name ? `${e.event} — ${e.name}` : e.event);
+            ? `${e.event}${name ? ` — ${name}` : ''}${said ? `: “${said}”` : ''}${link ? ` (${link})` : ''}`
+            : said || (name ? `${e.event} — ${name}` : e.event);
           return `${new Date(e.at).toISOString()}  ${what}${where} · ${who}`;
         })
         .join('\n'),

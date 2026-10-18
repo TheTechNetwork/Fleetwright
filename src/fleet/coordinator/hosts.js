@@ -105,8 +105,10 @@ const NONCE_SECRET_BYTES = 32;
  * @property {number|null} lastSeenAt
  * @property {number|null} revokedAt
  * @property {boolean} [ephemeral]  expected to vanish; see docs/ephemeral-hosts.md
- * @property {boolean} [handBackPending]  left the operator's tier while away,
- *   and is asked for back what it held then on its next report (core.js #forgetPerson)
+ * @property {number|boolean} [handBackPending]  left the operator's tier while away,
+ *   and is asked for back what it held then on its next report (core.js #forgetPerson):
+ *   when it left, so it is asked for the people in the fleet then and nobody
+ *   since (core.js #handBack), or `true` from before that was kept
  * @property {'ticket'|'runner-token'} [admittedBy]  for a RUNNER, which claim said
  *   whose it is: a ticket the fleet minted for one dispatch, or a reusable runner
  *   token whoever presses Run workflow spends
@@ -379,7 +381,7 @@ export class HostIdentities {
       // AND WHAT IT STILL OWES, which a new key does not settle: the machine
       // re-keyed or readmitted is the one that held other people's sign-ins
       // as the fleet's, and nothing else remembers to ask it for them back.
-      ...(previous?.handBackPending ? { handBackPending: true } : {}),
+      ...(previous?.handBackPending ? { handBackPending: previous.handBackPending } : {}),
       // HOW A RUNNER WAS ADMITTED, AND WHO STARTED ITS JOB, which are two facts
       // and not one. A reusable runner token says whose runner it is and
       // nothing about who pressed Run workflow; the minting Worker mints for

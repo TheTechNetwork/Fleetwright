@@ -28,6 +28,23 @@
 //    request SIGNED by that key, and gets the credentials of every person who
 //    approved that exact key, sealed to a one-request key of its own.
 //
+// AND ONLY WHILE THEY ARE IN THE FLEET, which is the coordinator's to say. A
+// person is removed there, by revoking their last credential, and nothing of
+// that reached this Worker: every box they had approved went on being given
+// their items, OAuth tokens renewed here every ten minutes for as long as the
+// refresh token lasted, and the removed person could not withdraw a grant,
+// because their requests need a credential that works (eighth audit,
+// r8-leads-1). So the coordinator lists who is in the fleet beside each box's
+// request, and a grant gives nothing while its fleet account is not on the
+// list (answerVaultBox). Asked on every request rather than told once at the
+// removal, because a removal made while this Worker was unreachable would
+// have been missed for good, and filtered rather than deleted, so a person
+// who signs in again is served again with nothing to approve twice.
+//
+// That list is the coordinator's word, and it can only take away: listing
+// somebody removed gives what every request was given before the list, and
+// leaving a member off denies, which dropping the request already could.
+//
 // So a compromised coordinator can drop and delay, and can offer a phone a key
 // of its own to approve, which is why the phone shows a fingerprint and the
 // docs say to compare it. What it cannot do is approve a key, read a vault, or
@@ -89,6 +106,15 @@ export const HYPERVISOR_ADDRESS_RE = /^(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9][A-
 
 /** How large a named secret may be. A key file, not a database. */
 const MAX_SECRET = 8192;
+
+/**
+ * How many fleet accounts the coordinator may list as members beside a box's
+ * request. It holds at most 150 live credentials (clients.js, MAX_LIVE), so
+ * this never binds an honest one; it bounds what one request makes this
+ * Worker read, at an address's 320 characters each.
+ */
+const MAX_MEMBERS = 512;
+const MEMBER_MAX_LENGTH = 320;
 
 /** Renewed when it has less than this left, so a box that asks every ten minutes is never handed a dying token. */
 export const REFRESH_AHEAD_MS = 30 * 60_000;
@@ -484,9 +510,20 @@ async function describe(row, store, userId) {
 }
 
 /**
- * A box asks for everything it has been approved to hold.
+ * A box asks for everything it has been approved to hold, from the people
+ * still in the fleet.
  *
- * @param {unknown} ask  `{ request: { v: 1, hostKey, at, reply }, signature }`,
+ * `members` is the coordinator's, beside the box's signed request, which the
+ * box cannot make: every fleet account with a credential that still works
+ * (core.js, #onHostVault). A grant whose account is not among them gives
+ * nothing and renews nothing, and its person drops out of the answer, which
+ * is what makes an honest box delete what it held for them (vault-store.js,
+ * applyVault). ABSENT, it is a coordinator from before the list, and every
+ * grant counts as it always did, so the two Workers deploy in either order;
+ * this repository's coordinator always sends it. Present and not a list of
+ * addresses is refused: guessing at it either way is the wrong one.
+ *
+ * @param {unknown} ask  `{ request: { v: 1, hostKey, at, reply }, signature, members? }`,
  *   the signature being the box's key over signingInput('vault-box', request)
  * @param {VaultConfig} config
  */
@@ -500,6 +537,15 @@ export async function answerVaultBox(ask, config) {
   const at = Number(req?.at);
   if (req?.v !== 1 || !jwk || !Number.isFinite(at) || !SEAL_KEY_RE.test(String(req?.reply || '')) || !SIGNATURE_RE.test(signature)) {
     return refuse('bad_params', 'That is not a box’s vault request.');
+  }
+  const listed = /** @type {any} */ (ask)?.members;
+  /** @type {Set<string>|null} */
+  let members = null;
+  if (listed !== undefined) {
+    if (!Array.isArray(listed) || listed.length > MAX_MEMBERS || listed.some((e) => typeof e !== 'string' || e.length > MEMBER_MAX_LENGTH)) {
+      return refuse('bad_params', 'The fleet’s list of who is in it is not in the shape one takes.');
+    }
+    members = new Set(listed.map(normaliseEmail).filter(Boolean));
   }
   if (Math.abs(now() - at) > DEPOSIT_MAX_AGE_MS) return refuse('stale', 'That request is more than ten minutes old. The box’s clock is wrong, or it is a replay.');
   // SIGNED BY THE KEY IT NAMES. Replaying a genuine request gets an answer
@@ -519,7 +565,7 @@ export async function answerVaultBox(ask, config) {
   const accounts = [];
   for (const userId of Object.keys(index.accounts || {})) {
     if (!/^[0-9]{1,20}$/.test(userId)) continue;
-    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now }));
+    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now }, members));
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
@@ -528,16 +574,24 @@ export async function answerVaultBox(ask, config) {
 
 /**
  * One person's items for one box, renewing what is close to running out. Null
- * when their approval of this box is gone or is for a different key.
+ * when their approval of this box is gone or is for a different key, or when
+ * the fleet account that made it is no longer in the fleet.
  *
  * @param {string} userId @param {string} hash @param {{ x: string, y: string }} jwk
  * @param {VaultStore} store @param {{ privateKey: CryptoKey, publicKey: string }} key
  * @param {VaultConfig & { fetchImpl: typeof fetch, now: () => number }} config
+ * @param {Set<string>|null} members  who is in the fleet, or null from a
+ *   coordinator that does not say (answerVaultBox)
  */
-async function itemsFor(userId, hash, jwk, store, key, config) {
+async function itemsFor(userId, hash, jwk, store, key, config, members) {
   const row = emptyRow(await store.get(`v:${userId}`));
   const grant = row.grants[hash];
   if (!grant || grant.revoked || grant.jwk?.x !== jwk.x || grant.jwk?.y !== jwk.y) return null;
+  // BEFORE ANYTHING IS OPENED OR RENEWED: a removed person's refresh token is
+  // not rotated for a box that will not be given the result. A grant has
+  // named its fleet account since grants began, so one naming nobody is
+  // nobody's on the list.
+  if (members && !members.has(normaliseEmail(grant.email))) return null;
   /** @type {Array<{ name: string, value: string, expiresAt: number|null }>} */
   const items = [];
   /** @type {string[]} */

@@ -18,6 +18,8 @@ import { Invites } from './invites.js';
 import { HostIdentities, actsFor, mayActFor, believedCreator, administers } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
+import { oneLine } from '../../core/text.js';
+import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -255,21 +257,6 @@ function xoFor(host, email) {
  */
 function holds(host, email) {
   return xoFor(host, email).some((/** @type {any} */ e) => e?.holder === true);
-}
-
-/**
- * Text a box wrote, as one line: control characters, line and paragraph
- * separators and the bidirectional overrides become spaces, so nothing it
- * says can start a line of its own or reorder the line it is on.
- *
- * @param {unknown} v @param {number} max
- */
-function oneLine(v, max) {
-  return String(v)
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g, ' ')
-    .replace(/ {2,}/g, ' ')
-    .trim()
-    .slice(0, max);
 }
 
 /**
@@ -741,7 +728,7 @@ export class CoordinatorCore {
       const owed = this.hostIds?.get(hostId);
       const entry = this.registry.hosts.get(hostId);
       if (owed?.handBackPending && entry?.connected && listsSessions(msg.health)) {
-        if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true });
+        if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true, asOf: owed.handBackPending });
         delete owed.handBackPending;
         this.onStateChanged?.();
       }
@@ -879,7 +866,12 @@ export class CoordinatorCore {
       // attribution and all (seventh audit). sessionLabel keeps one line for
       // the same reason.
       text: msg.text ? oneLine(msg.text, 500) : null,
-      url: msg.url ? String(msg.url).slice(0, 500) : null,
+      // A REMOTE CONTROL LINK OR NOTHING. It was kept as the box sent it, cut
+      // to 500 and no more, and it rides to the phones in the push and to an
+      // agent in the record: any text a member's box liked, newlines and all,
+      // in the field a screen opens (eighth audit). The hub finds the link
+      // with RC_URL_RE, so that is what a link is here too (rcLink).
+      url: rcLink(msg.url),
       // The NAME of the profile a session was started with, when the host
       // says. A name, never content — docs/wanted.md's rule for profiles —
       // and the one fact that says whether "back at its prompt" is a job
@@ -2647,7 +2639,7 @@ export class CoordinatorCore {
       }
       const enrolled = this.hostIds.get(entry.hostId);
       if (!enrolled) continue;
-      enrolled.handBackPending = true;
+      enrolled.handBackPending = this.now();
       changed = true;
       this.#recordDemoted(
         entry.hostId,
@@ -2667,7 +2659,7 @@ export class CoordinatorCore {
         if (enrolled.revokedAt || enrolled.ephemeral || enrolled.handBackPending) continue;
         if (actsFor(enrolled, (email) => this.#isOperator(email)) !== address) continue;
         if (handedBack.has(enrolled.hostId)) continue;
-        enrolled.handBackPending = true;
+        enrolled.handBackPending = this.now();
         changed = true;
         this.#recordDemoted(
           enrolled.hostId,
@@ -2691,6 +2683,24 @@ export class CoordinatorCore {
     this.#handBackPerson(address);
     if (changed) this.onStateChanged?.();
     return hosts;
+  }
+
+  /**
+   * Everybody in the fleet, by address: each one #hasLiveCredential says yes
+   * for, which is the test a removal is (revokeClient). For the minter, which
+   * serves a vault grant only to a box of somebody on it (#onHostVault). Not
+   * the allowlist, which says who may sign in and is a domain on many fleets,
+   * and not emailHasAdmin, which counts revoked rows. At most the 150 live
+   * credentials clients.js holds, so it needs no bound of its own.
+   */
+  #members() {
+    /** @type {Set<string>} */
+    const all = new Set();
+    for (const c of this.clients.clients.values()) {
+      const email = String(c.email || '').toLowerCase();
+      if (!c.revokedAt && email) all.add(email);
+    }
+    return [...all].sort();
   }
 
   /** Does anybody hold a credential for this address that still works? @param {string} address */
@@ -2792,9 +2802,11 @@ export class CoordinatorCore {
    * @param {string} person  who it acts for now
    * @param {any} health  a report made while it was the fleet's, or the first
    *   it made after it returned, as it made it
-   * @param {{ back?: boolean }} [how]  `back`: it was away for the removal
+   * @param {{ back?: boolean, asOf?: unknown }} [how]  `back`: it was away
+   *   for the removal; `asOf`: when it stopped being the fleet's, which is
+   *   now unless it was away (the enrolment's handBackPending)
    */
-  #handBack(entry, person, health, { back = false } = {}) {
+  #handBack(entry, person, health, { back = false, asOf = this.now() } = {}) {
     let stopped = 0;
     for (const s of Array.isArray(health?.sessions) ? health.sessions : []) {
       const who = String(s?.createdBy || '').startsWith('fleet:') ? emailOf(s.createdBy) : null;
@@ -2802,9 +2814,30 @@ export class CoordinatorCore {
       this.#askBack(entry, 'stop', { name: s.name }, who);
       stopped++;
     }
-    const others = new Set([...this.clients.clients.values()].map((c) => String(c.email || '').toLowerCase()));
-    for (const email of others) {
+    // EVERYBODY IN THE FLEET WHEN IT STOPPED BEING THE FLEET'S, AND NOBODY
+    // SINCE. Each unlink names its person, so this was every row in the
+    // credential store when the debt was paid: a removed admin's box that
+    // kept sending reports with no sessions in them put the debt off for as
+    // long as it liked, and was then sent the email of everybody who had
+    // joined in the meantime, and of everybody removed before it, revoked
+    // rows included (eighth audit). It held none of their sign-ins: a box
+    // stops being sent anybody's the moment it leaves the operator's tier.
+    //
+    // So a person is asked for whose credential was live at that moment,
+    // read from the rows rather than kept on the enrolment, where a list of
+    // emails per box owed would be the store's largest thing
+    // (test/do-key-bounds.test.js): issued by then, and not revoked by then.
+    // A debt recorded before this knew the moment is `true`, and asks for
+    // whoever holds a live credential now, revoked rows still left out.
+    const at = typeof asOf === 'number' ? asOf : null;
+    const others = new Set();
+    for (const c of this.clients.clients.values()) {
+      const email = String(c.email || '').toLowerCase();
       if (!email || email === person) continue;
+      if (at === null ? c.revokedAt : c.createdAt > at || (c.revokedAt && c.revokedAt <= at)) continue;
+      others.add(email);
+    }
+    for (const email of others) {
       for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, email);
     }
     this.#recordDemoted(
@@ -2861,6 +2894,16 @@ export class CoordinatorCore {
    * none of theirs went there. Recorded with no actor and no session name, so
    * the operator, and every member, sees that it was asked.
    *
+   * UNLINK IS THE BOX'S OWN LINKS AND NOTHING ELSE (commands.js): what a box
+   * holds from their vault is not a link, and its next vault ask wrote it
+   * back, freshly renewed, on every box they had approved. This header and
+   * the record both said those sign-ins were asked to be forgotten (eighth
+   * audit, r8-leads-1). What ends those is the minter, which is told who is
+   * still in the fleet on every box's ask and gives nothing for a grant of
+   * somebody who is not (#onHostVault), on any box, their own included; the
+   * box then deletes its copy on that ask, as it does when a grant is
+   * withdrawn from a phone. So the record says the two apart.
+   *
    * A BOX THAT IS NOT HERE IS NOT ASKED. An offline box owes it, and nothing
    * asks it when it returns: a removed admin's box keeps that debt on its
    * enrolment (handBackPending), but the debt there is a box's to everybody,
@@ -2887,8 +2930,8 @@ export class CoordinatorCore {
         event: 'host.asked-back',
         hostId: entry.hostId,
         text: listed
-          ? `${entry.hostId} was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} somebody removed from the fleet had running there, and to forget their GitHub, Cloudflare and Claude sign-ins.`
-          : `${entry.hostId} was asked to forget the GitHub, Cloudflare and Claude sign-ins of somebody removed from the fleet. It has not reported its sessions since it connected, so any of theirs still running there were not named; an admin can stop them.`,
+          ? `${entry.hostId} was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} somebody removed from the fleet had running there, and to unlink the GitHub, Cloudflare and Claude sign-ins they linked on it. ${VAULT_AFTER_REMOVAL}`
+          : `${entry.hostId} was asked to unlink the GitHub, Cloudflare and Claude sign-ins somebody removed from the fleet linked on it. ${VAULT_AFTER_REMOVAL} It has not reported its sessions since it connected, so any of theirs still running there were not named; an admin can stop them.`,
       });
     }
   }
@@ -3298,12 +3341,26 @@ export class CoordinatorCore {
       // listing reached a member as the fleet's words (sixth audit). A box
       // that answers `list` without them has told this member nothing of
       // theirs, and that is what they read.
+      //
+      // AND FOR AN ADMIN TOO, from every box that sent its records. An
+      // admin's `list` and `status` are asked of every box, members' among
+      // them (scheduler.js), and the box's prose went into the reply as it
+      // wrote it: a member's box answered with lines laid out as other
+      // hosts' lines and an instruction to stop every session, which an
+      // agent holding the admin's credential read as the fleet's listing
+      // (eighth audit). The records say everything the prose did that
+      // anybody acts on — what runs, what can be resumed, whose, and the
+      // link to drive it — so the admin loses no answer, only the box's
+      // choice of words. A box that sent none has said nothing the
+      // coordinator can vouch for, and is quoted below as its own.
+      /** @param {any} r */
+      const ours = (r) =>
+        (spec.verb === 'list' && r.ok !== false && Array.isArray(r.sessions))
+        || (filtering && (Array.isArray(r.sessions) || (spec.verb === 'list' && r.ok !== false)));
       const rendered = new Map(
         results.map((r) => [
           r.hostId,
-          filtering && (Array.isArray(r.sessions) || (spec.verb === 'list' && r.ok !== false))
-            ? describeOwnSessions(sessions.filter((s) => s.hostId === r.hostId))
-            : (r.text ?? ''),
+          ours(r) ? describeSessions(sessions.filter((s) => s.hostId === r.hostId), filtering) : (r.text ?? ''),
         ]),
       );
 
@@ -3380,7 +3437,15 @@ export class CoordinatorCore {
         // cannot be acted on.
         sessions,
         hosts: results.map(({ hostId, ok, error }) => ({ hostId, ok, text: rendered.get(hostId) ?? '', error })),
-        text: results.map((r) => `${r.hostId}: ${rendered.get(r.hostId) ?? ''}`).join('\n'),
+        // EVERYTHING ELSE A BOX SAID IS QUOTED AS ITS OWN, on one line under
+        // its name: an unnamed `status`, its profiles, a refusal. Merged as
+        // `host: text`, a box's newlines started lines of the merged reply,
+        // and one laid out as `ops-box: …` was another host's answer to
+        // whoever read it (eighth audit). `hosts` keeps each box's words in
+        // a field that names it, where a line cannot pass for another's.
+        text: results
+          .map((r) => (ours(r) ? `${r.hostId}: ${rendered.get(r.hostId) ?? ''}` : boxSaid(r.hostId, r.text)))
+          .join('\n'),
       };
     }
 
@@ -4979,6 +5044,22 @@ export class CoordinatorCore {
    * refuses a box that presents somebody else's key, and a dishonest one gains
    * nothing by skipping the check, because the answer is sealed to the box.
    *
+   * AND ONE FACT ONLY THIS HOLDS: who is still in the fleet (#members). A
+   * removal is made here and the minter never heard of it, so every box a
+   * removed person had approved went on being given their sign-ins, renewed
+   * by the minter each time, and written back by the box over whatever the
+   * hand-back's `unlink` had cleared, which reaches a box's own links and not
+   * its copy from the vault (#handBackPerson; eighth audit, r8-leads-1). Sent
+   * with every ask rather than once at the removal, so a removal made while
+   * the minter was unreachable is not missed, and a person who signs in again
+   * is served again. The minter gives nothing for a grant whose account is
+   * not listed (minter/vault.js, answerVaultBox).
+   *
+   * The one other relay that hands out a vault item is a runner's Claude
+   * login (#onRunnerClaude), and it needs no list: the minter gives it only
+   * to a runner of the account that kept it, and a removed person's runners
+   * are revoked with them (#forgetPerson).
+   *
    * @param {string} hostId @param {any} msg
    */
   async #onHostVault(hostId, msg) {
@@ -5019,7 +5100,7 @@ export class CoordinatorCore {
     }
     recent.push(now);
     this.claudeAsks.set(key, recent);
-    const r = await this.minter.vault('box', { request, signature }).then(
+    const r = await this.minter.vault('box', { request, signature, members: this.#members() }).then(
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
@@ -6570,20 +6651,31 @@ function ownedBy(owner, requester) {
  * "nothing of yours" and never "no sessions": the box may be holding a dozen,
  * and a screen may not report a state it does not know (C-5).
  *
- * @param {any[]} sessions  already filtered to the requester
+ * AN ADMIN'S IS THE SAME LISTING OVER EVERY RECORD, with whose each one is,
+ * as the fleet believes the box that said it (hosts.js believedCreator). Its
+ * empty listing is the box's own report of none, which is what it says.
+ *
+ * @param {any[]} sessions  already filtered to the requester when `own`
+ * @param {boolean} own  the caller is a member, and these are theirs
  */
-function describeOwnSessions(sessions) {
-  if (!sessions.length) return 'nothing of yours';
+function describeSessions(sessions, own) {
+  if (!sessions.length) return own ? 'nothing of yours' : 'no sessions reported';
   const running = sessions.filter((s) => String(s?.status || '') === 'running');
   const rest = sessions.filter((s) => String(s?.status || '') !== 'running');
-  const lines = [`${running.length} of your sessions running, ${rest.length} resumable`, ''];
+  const lines = [own ? `${running.length} of your sessions running, ${rest.length} resumable` : `${running.length} running, ${rest.length} resumable`, ''];
+  /** @param {any} s */
+  const whose = (s) => (own || !s?.createdBy ? '' : ` · ${oneLine(String(s.createdBy).replace(/^fleet:/, ''), 128)}`);
   // The Remote Control URL rides along on a running session, the way the
   // host's listing carries it: it is the caller's own session, and it is the
-  // link they would otherwise ask for next.
-  for (const s of running) lines.push(`▶ ${sessionLabel(s)}${s?.rcUrl ? `\n   ${s.rcUrl}` : ''}`);
+  // link they would otherwise ask for next. Only an https link, which is all
+  // a Remote Control URL is: on a line of its own, anything else a box put
+  // there was a line of its choosing in the listing.
+  /** @param {any} s */
+  const link = (s) => (typeof s?.rcUrl === 'string' && /^https:\/\/\S{1,500}$/.test(s.rcUrl) ? `\n   ${s.rcUrl}` : '');
+  for (const s of running) lines.push(`▶ ${sessionLabel(s)}${whose(s)}${link(s)}`);
   if (rest.length) {
     lines.push('', 'Resumable:');
-    for (const s of rest) lines.push(`◼ ${sessionLabel(s)}`);
+    for (const s of rest) lines.push(`◼ ${sessionLabel(s)}${whose(s)}`);
   }
   return lines.join('\n');
 }
@@ -6592,12 +6684,30 @@ function describeOwnSessions(sessions) {
  * A session on one line. A title is a label, not a transcript — somebody
  * pasted a whole task in as one, and the listing rendered its first paragraph.
  *
+ * AND ONE LINE WHATEVER THE BOX SENT. This split on `\n` alone, so a title
+ * or a name carrying `\r`, U+2028 or a bidirectional override still broke
+ * the line or reordered it, in a listing an admin's agent now reads from
+ * every box (eighth audit).
+ *
  * @param {any} s
  */
 function sessionLabel(s) {
-  const title = s?.title ? String(s.title).split('\n')[0].trim() : '';
+  const title = s?.title ? oneLine(String(s.title).split(/[\r\n\u2028\u2029]/)[0], 200) : '';
   const short = title.length > 48 ? `${title.slice(0, 47)}…` : title;
-  return short ? `${s.name} · ${short}` : String(s?.name ?? '');
+  const name = oneLine(s?.name ?? '', 40);
+  return short ? `${name} · ${short}` : name;
+}
+
+/**
+ * What a box said in a fan-out reply, quoted and attributed on one line:
+ * `deb13 said: “…”`. Its words still reach the reader, who asked for them,
+ * and cannot be read as anybody else's (dispatch, the merged `text`).
+ *
+ * @param {string} hostId @param {unknown} text
+ */
+function boxSaid(hostId, text) {
+  const said = text == null ? '' : oneLine(text, 2000);
+  return said ? `${hostId} said: “${said}”` : `${hostId} said nothing`;
 }
 
 /**
@@ -6680,6 +6790,20 @@ const HOST_EVENTS = 100;
 const HOST_EVENTS_EACH = 25;
 /** And how much one person's records may, as one host's (#makeRoom). */
 const ACTOR_EVENTS_EACH = 25;
+
+/**
+ * A Remote Control link as the hub finds one in a pane (src/core/pane.js
+ * RC_URL_RE), the whole of the value and over https, or null. What a box
+ * puts in an event's `url` is the box's word, and this is the only shape the
+ * field has ever carried (core.js onHostMessage, and fleet_events).
+ *
+ * @param {unknown} v
+ * @returns {string|null}
+ */
+export function rcLink(v) {
+  if (typeof v !== 'string' || v.length > 500 || !v.startsWith('https://')) return null;
+  return v.match(RC_URL_RE)?.[0] === v ? v : null;
+}
 
 /**
  * Did a host write this, rather than the coordinator? See HOST_EVENT_RE.
@@ -6767,6 +6891,13 @@ const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
 
 /** The sign-ins a box is asked to forget for somebody it holds them for no longer (#handBack, #handBackPerson). */
 const HANDED_BACK_SIGN_INS = Object.freeze(['github', 'cloudflare', 'claude']);
+/**
+ * What a removal does to the sign-ins a box holds from the person's vault,
+ * which no `unlink` reaches (#handBackPerson). Said as the minter does it
+ * and the box is asked to: the deleting is the box's, on its next ask.
+ */
+const VAULT_AFTER_REMOVAL =
+  'The vault gives no box anything of theirs from now on, and a box deletes what it held from there on its next ask, within ten minutes, which a box does only if it is honest.';
 
 /**
  * How often a box's sessions may buzz a phone (#mayPush).

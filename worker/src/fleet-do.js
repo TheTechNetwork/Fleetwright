@@ -26,6 +26,7 @@ import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
+import { NOT_FRAMED } from './pages.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
@@ -461,8 +462,7 @@ export class Fleet {
             headers: {
               'content-type': 'text/html; charset=utf-8',
               'cache-control': 'no-store',
-              'x-frame-options': 'DENY',
-              'content-security-policy': "frame-ancestors 'none'",
+              ...NOT_FRAMED,
               ...extra,
             },
           });
@@ -1744,13 +1744,14 @@ function requesterFor(client) {
 
 /**
  * A provider callback's page. `no-referrer` because the address carries the
- * code the page hands back.
+ * code the page hands back, and never framed (pages.js NOT_FRAMED), because
+ * the page hands that code on to whatever opened it.
  * @param {Parameters<typeof callbackPage>[0]} result
  */
 function callbackResponse(result) {
   return new Response(callbackPage(result), {
     status: result.ok ? 200 : 400,
-    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', ...NOT_FRAMED },
   });
 }
 

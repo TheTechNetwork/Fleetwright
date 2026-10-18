@@ -32,6 +32,9 @@ const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 const ELI = 'eli@example.com';
+/** A second person, whose GitHub sign-in is due for renewal on every ask, so a renewal skipped is a renewal counted. */
+const DANA = 'dana@example.com';
+const DANA_REFRESH = `ghr_dana${'5'.repeat(60)}`;
 const REFRESH_1 = `ghr_one${'1'.repeat(60)}`;
 const REFRESH_2 = `ghr_two${'2'.repeat(60)}`;
 const PHONE_REFRESH = `ghr_phone${'3'.repeat(60)}`;
@@ -55,8 +58,8 @@ async function minter(extra = {}) {
   env.LOGINS = { idFromName: () => 'logins', get: () => ({ fetch: (/** @type {string} */ u, /** @type {any} */ i) => instance.fetch(new Request(u, i)) }) };
 
   /** Who each token belongs to, as GitHub would say. @type {Record<string, { id: number, login: string }>} */
-  const users = { ghu_eli_phone: { id: 42, login: 'eli' }, ghu_eli_phone2: { id: 42, login: 'eli' }, ghu_eli_coordinator: { id: 42, login: 'eli' }, ghu_eli_box: { id: 42, login: 'eli' }, gho_eli_other_app: { id: 42, login: 'eli' }, ghu_mallory: { id: 7, login: 'mallory' } };
-  const calls = { refresh: 0 };
+  const users = { ghu_eli_phone: { id: 42, login: 'eli' }, ghu_eli_phone2: { id: 42, login: 'eli' }, ghu_eli_coordinator: { id: 42, login: 'eli' }, ghu_eli_box: { id: 42, login: 'eli' }, gho_eli_other_app: { id: 42, login: 'eli' }, ghu_mallory: { id: 7, login: 'mallory' }, ghu_dana_phone: { id: 43, login: 'dana' }, ghu_dana_box: { id: 43, login: 'dana' } };
+  const calls = { refresh: 0, dana: 0 };
   const real = globalThis.fetch;
   globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init = {}) => {
     const u = new URL(String(url));
@@ -72,6 +75,10 @@ async function minter(extra = {}) {
       // The phone renewing, and a refresh token the coordinator's own exchange kept.
       if (f.grant_type === 'refresh_token' && f.refresh_token === PHONE_REFRESH) return json(200, { access_token: 'ghu_eli_phone2', expires_in: 28800, refresh_token: REFRESH_2 });
       if (f.grant_type === 'refresh_token' && f.refresh_token === COORDINATOR_REFRESH) return json(200, { access_token: 'ghu_eli_coordinator', expires_in: 28800 });
+      if (f.grant_type === 'refresh_token' && f.refresh_token === DANA_REFRESH) {
+        calls.dana += 1;
+        return json(200, { access_token: 'ghu_dana_box', expires_in: 60 });
+      }
       if (f.grant_type === 'refresh_token') {
         calls.refresh += 1;
         // Slow on purpose, so two boxes asking at once are both inside it.
@@ -83,6 +90,8 @@ async function minter(extra = {}) {
       if (f.code === 'mallorycode1') return json(200, { access_token: 'ghu_mallory', expires_in: 28800, refresh_token: REFRESH_2 });
       // The phone's own sign-in (src/fleet/minter/github.js), not the vault's.
       if (f.code === 'phonecode12' && f.code_verifier === 'p'.repeat(64)) return json(200, { access_token: 'ghu_eli_phone', expires_in: 28800, refresh_token: PHONE_REFRESH });
+      if (f.code === 'danaphone12' && f.code_verifier === 'p'.repeat(64)) return json(200, { access_token: 'ghu_dana_phone', expires_in: 28800 });
+      if (f.code === 'danacode123' && f.code_verifier === 'v'.repeat(64)) return json(200, { access_token: 'ghu_dana_box', expires_in: 60, refresh_token: DANA_REFRESH });
       return f.code === 'goodcode123' && f.code_verifier === 'v'.repeat(64)
         ? json(200, { access_token: 'ghu_eli_box', expires_in: 60, refresh_token: REFRESH_1 })
         : json(200, { error: 'bad_verification_code' });
@@ -100,17 +109,20 @@ async function minter(extra = {}) {
   const call = async (path, body) =>
     /** @type {any} */ (await (await minterWorker.fetch(new Request(`https://minter.internal${path}`, { method: 'POST', body: JSON.stringify(body) }), env)).json());
 
-  /** The phone's GitHub sign-in, finished through the minter as PhoneGitHub does it, once. @type {string|null} */
-  let signedIn = null;
-  /** @param {string} to */
-  const signIn = async (to) => {
-    if (signedIn) return signedIn;
+  /** Each person's phone's GitHub sign-in, finished through the minter as PhoneGitHub does it, once. @type {Map<string, string>} */
+  const signedIn = new Map();
+  /** @param {string} to @param {string} [email] */
+  const signIn = async (to, email = ELI) => {
+    const held = signedIn.get(email);
+    if (held) return held;
     const reply = await newSealKey();
-    const sealed = await seal({ to, aad: GITHUB_REQUEST_AAD, payload: { v: 1, grant: 'code', code: 'phonecode12', verifier: 'p'.repeat(64), redirectUri: 'https://fleet.test/oauth/github/callback', at: Date.now(), reply: reply.publicKey } });
+    const code = email === DANA ? 'danaphone12' : 'phonecode12';
+    const sealed = await seal({ to, aad: GITHUB_REQUEST_AAD, payload: { v: 1, grant: 'code', code, verifier: 'p'.repeat(64), redirectUri: 'https://fleet.test/oauth/github/callback', at: Date.now(), reply: reply.publicKey } });
     const r = await call('/github/token', { sealed });
     assert.equal(r.ok, true, r.text);
-    signedIn = String((await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: GITHUB_REPLY_AAD, sealed: r.sealed })).accessToken);
-    return signedIn;
+    const token = String((await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: GITHUB_REPLY_AAD, sealed: r.sealed })).accessToken);
+    signedIn.set(email, token);
+    return token;
   };
   /** A renewal through the minter, as PhoneGitHub makes one. @param {string} refreshToken */
   const renew = async (refreshToken) => {
@@ -121,22 +133,23 @@ async function minter(extra = {}) {
     return String((await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: GITHUB_REPLY_AAD, sealed: r.sealed })).accessToken);
   };
 
-  /** A phone's request, sealed as the phone seals it. @param {Record<string, unknown>} body @param {{ email?: string, as?: string, at?: number, to?: string, github?: string }} [o] */
+  /** A phone's request, sealed as the phone seals it: Eli's, or `person`'s. @param {Record<string, unknown>} body @param {{ email?: string, as?: string, at?: number, to?: string, github?: string, person?: string }} [o] */
   const phone = async (body, o = {}) => {
     const reply = await newSealKey();
-    const github = o.github ?? (await signIn(o.to ?? deposit.publicKey));
-    const sealed = await seal({ to: o.to ?? deposit.publicKey, aad: VAULT_REQUEST_AAD, payload: { v: 1, github, email: ELI, at: o.at ?? Date.now(), reply: reply.publicKey, ...body } });
-    const r = await call('/vault/device', { sealed, email: o.as ?? o.email ?? ELI });
+    const person = o.person ?? ELI;
+    const github = o.github ?? (await signIn(o.to ?? deposit.publicKey, person));
+    const sealed = await seal({ to: o.to ?? deposit.publicKey, aad: VAULT_REQUEST_AAD, payload: { v: 1, github, email: person, at: o.at ?? Date.now(), reply: reply.publicKey, ...body } });
+    const r = await call('/vault/device', { sealed, email: o.as ?? o.email ?? person });
     if (r.ok) r.answer = await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: VAULT_REPLY_AAD, sealed: r.sealed });
     return r;
   };
 
-  /** A box asking, signed with its key. @param {{ publicJwk: any, privateJwk: any }} keys @param {{ at?: number, tamper?: boolean }} [o] */
+  /** A box asking, signed with its key, with who is in the fleet beside it when `members` is given. @param {{ publicJwk: any, privateJwk: any }} keys @param {{ at?: number, tamper?: boolean, members?: unknown }} [o] */
   const box = async (keys, o = {}) => {
     const reply = await newSealKey();
     const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: keys.publicJwk.x, y: keys.publicJwk.y }, at: o.at ?? Date.now(), reply: reply.publicKey };
     const signature = await sign(keys.privateJwk, signingInput('vault-box', o.tamper ? { ...request, at: request.at + 1 } : request));
-    const r = await call('/vault/box', { request, signature });
+    const r = await call('/vault/box', { request, signature, ...('members' in o ? { members: o.members } : {}) });
     if (r.ok) r.answer = await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: VAULT_BOX_AAD, sealed: r.sealed });
     return r;
   };
@@ -296,6 +309,46 @@ test('two boxes asking at once renew one refresh token once', async (t) => {
   assert.equal(m.calls.refresh, 1);
 });
 
+test('a box is given nothing of somebody the fleet has removed, and nothing of theirs is renewed', async (t) => {
+  // FOUND IN THE EIGHTH AUDIT (r8-leads-1). A removal is the coordinator's,
+  // and the minter never heard of one: every box Dana had approved went on
+  // being given her sign-ins and her Claude login, GitHub renewed here on
+  // each ask, for as long as her refresh token lasted. The coordinator now
+  // lists who is in the fleet beside each box's request (core.js,
+  // #onHostVault), and the minter holds a grant to it.
+  const m = await minter();
+  t.after(m.restore);
+  const office = await generateKeyPair();
+  const dana = { person: DANA };
+  await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_eli' });
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office-box' });
+  await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_dana' }, dana);
+  await m.phone({ op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}` }, dana);
+  assert.equal((await m.phone({ op: 'connect', provider: 'github', code: 'danacode123', verifier: 'v'.repeat(64), redirectUri: 'https://fleet.test/oauth/github/callback' }, dana)).ok, true);
+  assert.equal((await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office-box' }, dana)).ok, true);
+  const whose = (/** @type {any} */ r) => r.answer.accounts.map((/** @type {any} */ a) => a.email).sort();
+
+  // DANA REMOVED: Eli's items come, none of Dana's, and her GitHub sign-in, a
+  // minute from running out, is not renewed for a box that will not get it.
+  const removed = await m.box(office, { members: ['boss@example.com', ELI] });
+  assert.equal(removed.ok, true, removed.text);
+  assert.deepEqual(whose(removed), [ELI]);
+  assert.equal(removed.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'secret:NPM_TOKEN')?.value, 'npm_eli');
+  assert.ok(!/npm_dana|sk-ant-oat01-d|ghu_dana/.test(JSON.stringify(removed.answer)), 'something of Dana’s was handed to the box');
+  assert.equal(m.calls.dana, 0, 'a removed person’s refresh token was rotated');
+
+  // STILL IN THE FLEET: given, and renewed, so the zero above is a renewal skipped.
+  assert.deepEqual(whose(await m.box(office, { members: ['boss@example.com', DANA, ELI] })), [DANA, ELI]);
+  assert.equal(m.calls.dana, 1);
+
+  // A COORDINATOR FROM BEFORE THE LIST says nothing, and every grant counts as it did.
+  assert.deepEqual(whose(await m.box(office)), [DANA, ELI]);
+  // A list that is not one is refused, never read as no list at all.
+  for (const members of [DANA, Array(513).fill(ELI)]) {
+    assert.equal((await m.box(office, { members })).error?.code, 'bad_params');
+  }
+});
+
 test('a minter nobody gave a key makes its own once, and a phone finds it at the fleet address', async (t) => {
   // No operator step: the first ask makes the key, every later ask, from any
   // route and after the object restarts, gets that same key, and what a phone
@@ -335,8 +388,10 @@ test('a box asks for its vault through the coordinator, and its sessions use wha
   const keys = await generateKeyPair();
   await m.phone({ op: 'grant', hostKey: keys.publicJwk, label: 'office-box' });
 
-  // The coordinator, with this box enrolled under that key.
+  // The coordinator, with this box enrolled under that key, and Eli in the
+  // fleet: the minter serves a grant only to a box of somebody who is.
   const core = new CoordinatorCore({ minter: /** @type {any} */ (m.binding) });
+  await core.issueClient({ email: ELI }, 'phone');
   const hostId = 'office-box';
   assert.equal((await core.hostIds.enrol({ hostId, publicJwk: keys.publicJwk, enrolledBy: ELI })).ok, true);
 
@@ -426,6 +481,50 @@ test('a box asks for its vault through the coordinator, and its sessions use wha
   const relayed = await core.vaultDevice({ email: 'mallory@example.com' }, { sealed: { epk: 'x', iv: 'y', ct: 'z' } });
   assert.equal(relayed.ok, false);
   assert.equal((await core.vaultDevice(null, { sealed: {} })).error?.code, 'not_signed_in');
+});
+
+test('removing somebody from the fleet ends what their vault gives the fleet’s boxes, and signing in again brings it back', async (t) => {
+  // FOUND IN THE EIGHTH AUDIT (r8-leads-1). Removing Dana asked the fleet's
+  // boxes to unlink her sign-ins, which reaches a box's own links: the next
+  // vault ask, every ten minutes, wrote her vault's copies back.
+  const m = await minter();
+  t.after(m.restore);
+  const keys = await generateKeyPair();
+  await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_eli' });
+  await m.phone({ op: 'grant', hostKey: keys.publicJwk, label: 'ops-box' });
+  await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_dana' }, { person: DANA });
+  await m.phone({ op: 'grant', hostKey: keys.publicJwk, label: 'ops-box' }, { person: DANA });
+
+  const core = new CoordinatorCore({ minter: /** @type {any} */ (m.binding) });
+  await core.issueClient({ email: 'boss@example.com' }, 'phone');
+  await core.issueClient({ email: ELI }, 'phone');
+  const danaPhone = /** @type {any} */ (await core.issueClient({ email: DANA }, 'phone'));
+  await core.hostIds.enrol({ hostId: 'ops-box', publicJwk: keys.publicJwk, enrolledBy: 'boss@example.com' });
+  /** @type {any[]} */
+  const handed = [];
+  const sidecar = new Sidecar({
+    hub: /** @type {any} */ ({ vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; } }),
+    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { void core.onHostMessage('ops-box', f); return true; } }),
+    hostId: 'ops-box',
+    watch: false,
+    healthIntervalMs: 0,
+    renewIntervalMs: 0,
+    vaultIntervalMs: 600_000,
+    vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ msg) => sign(keys.privateJwk, msg) },
+  });
+  // Only the vault's answers reach it: the hand-back's own requests are the hub's.
+  core.registry.connect('ops-box', (/** @type {any} */ f) => { if (f.kind === 'minted') void sidecar.handle(f); }, {});
+  const held = async () => {
+    await sidecar.syncVault();
+    return handed.at(-1).accounts.map((/** @type {any} */ a) => a.email).sort();
+  };
+
+  assert.deepEqual(await held(), [DANA, ELI]);
+  core.revokeClient(danaPhone.client.id);
+  assert.deepEqual(await held(), [ELI], 'the box was handed Dana’s vault after she was removed');
+  // NOT DELETED: signed in again, she is served again, with nothing to approve twice.
+  await core.issueClient({ email: DANA }, 'phone');
+  assert.deepEqual(await held(), [DANA, ELI]);
 });
 
 test('the coordinator refuses what it should before the minter is asked, and says why', async () => {

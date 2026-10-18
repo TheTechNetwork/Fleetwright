@@ -26,16 +26,14 @@
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
-
-/**
- * The charset, and it is the intents protocol's `name` type on purpose.
- *
- * A label crosses the wire as a `tag` in an envelope and is compared against
- * this list by the scheduler; two validators disagreeing about what a label may
- * contain is how a label gets stored that nothing can ever match. Bounded at 40
- * for the same reason names are.
- */
-const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/;
+// The charset, and it is the intents protocol's `name` type on purpose.
+//
+// A label crosses the wire as a `tag` in an envelope and is compared against
+// this list by the scheduler; two validators disagreeing about what a label may
+// contain is how a label gets stored that nothing can ever match. Bounded at 40
+// for the same reason names are. Kept in text.js, which imports nothing, so
+// the coordinator holds a box's report to the same rule (registry.js).
+import { LABEL_RE } from './text.js';
 
 /** How many a box may carry. A bound rather than a judgement: this file is read
  * on a path taken per health frame, and an unbounded list is a way to make that

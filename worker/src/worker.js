@@ -18,7 +18,7 @@ import { isMcpPath } from '../../src/mcp/routes.js';
 import { memberRoutes, isMemberPath, signInClients } from '../../src/fleet/coordinator/member-page.js';
 import * as Sentry from '@sentry/cloudflare';
 import { sentryOptions } from './sentry.js';
-import { PRIVACY } from './pages.js';
+import { PRIVACY, NOT_FRAMED } from './pages.js';
 import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
 import { normaliseOrigin } from '../../src/fleet/coordinator/oauth.js';
 
@@ -170,7 +170,7 @@ const handler = {
     // describes, and cannot rot separately from it.
     if (url.pathname === '/privacy') {
       return new Response(PRIVACY, {
-        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=3600' },
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=3600', ...NOT_FRAMED },
       });
     }
 
@@ -193,9 +193,16 @@ const handler = {
         }),
       });
       if (answer) {
+        // The page is where a member pastes a token and finishes a
+        // provider's sign-in, so it is never framed (pages.js NOT_FRAMED).
         return new Response(answer.body, {
           status: answer.status,
-          headers: { 'content-type': answer.contentType, 'cache-control': 'no-store', ...(answer.headers || {}) },
+          headers: {
+            'content-type': answer.contentType,
+            'cache-control': 'no-store',
+            ...(answer.contentType.startsWith('text/html') ? NOT_FRAMED : {}),
+            ...(answer.headers || {}),
+          },
         });
       }
     }

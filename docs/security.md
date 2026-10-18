@@ -87,7 +87,7 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Host public key** | coordinator DO | anyone who reads the DO (public half; harmless) | with re-enrol | with revoke | host list |
 | **Box Claude credential** | **gone as a standing store** — adopted once into `${stateDir}/accounts/<email>.json` and handed to the member it belonged to; a session with no linked account is refused, not given a shared one (`one-account-per-person.md`) | — | — | — | — |
 | **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink` | `/api/state` per-account |
-| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which a removal also asks of a box it takes out of the operator's tier, for every other person, then or, for a box away at the time, on its first report after it returns (`#handBack`); provider revoke (real) | `verify` verb |
+| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which a removal also asks of a box it takes out of the operator's tier, for every other person whose credential was live at the removal and nobody who joined since, then or, for a box away at the time, on its first report after it returns: each request names its person, so a box that put the debt off was otherwise told the emails of everybody who joined meanwhile (`#handBack`), and of the fleet's own boxes for the person removed (`#handBackPerson`). A copy held from the person's vault is not a link and `unlink` does not reach it; it stops because the minter serves no grant of somebody no longer in the fleet, and the box deletes it on that ask (`#onHostVault`, [vault.md](./vault.md)); provider revoke (real) | `verify` verb |
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`; provider revoke | renewal-failure log |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry; `DELETE /api/enroll/{id}` by its minter or an admin; dropped when its minter is removed (`#forgetPerson`) | `outstanding()` (masked) |
 | **Telegram bot token** (archived) | host env (`FLEETWRIGHT_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `fleetwright doctor` names it |
@@ -752,6 +752,21 @@ secrets through the coordinator, so they are accounted for here
   secrets, never a refresh token, in 0600 files the box's own sessions are
   given through the broker. That is less than a box holding a linked
   connection, which keeps the refresh token.
+- **A person removed from the fleet** is served to no box. A removal is the
+  coordinator's, so beside each box's request it lists every fleet account
+  with a credential that still works, and the minter gives nothing for a
+  grant whose account is not on it: no item, no Claude login, and no renewal
+  of their refresh token. Until the eighth audit the minter never heard of a
+  removal, and every box the person had approved went on being given their
+  sign-ins, renewed on each ask, while the hand-back's `unlink` cleared only
+  the box's own links (r8-leads-1). The list can only take away: a dishonest
+  coordinator that lists somebody removed gets what every box got before the
+  list existed, and one that leaves a member off denies, which dropping the
+  request already could. A coordinator from before the list sends none and
+  is served as before. Grants are filtered, not deleted, so a person who
+  signs in again is served again, and their refresh token stays sealed in the
+  minter, renewed by nothing, until then; revoking it at the provider is the
+  person's, or the operator's.
 
 **Where the minter's key comes from.** Every phone request and every Claude
 deposit is sealed to the minter's deposit key, which the minter makes and
@@ -930,6 +945,16 @@ for the one client that cannot, and a credential that has travelled in a URL
 is one to revoke when the Shortcut is retired rather than one to keep.
 *Falsify:* grep the two apps for `queryItems` and `?token` — they must build
 none; `credentialFrom` in `credential.js` is the only reader.
+
+**No page a browser is handed may be framed by another site.** The MCP sign-in
+page, `/me`, the provider callback pages, `/privacy` and the demo Worker's
+pages all carry `X-Frame-Options: DENY` and `frame-ancestors 'none'`, one value
+in `worker/src/pages.js` (`NOT_FRAMED`); the relay's sign-in page carries the
+same pair itself. A framed page whose button means something is a click the
+framer chose.
+*Falsify:* `test/worker-routes.test.js` ("no page either Worker hands a browser
+can be framed"), `test/fleet-do.test.js` ("a provider callback’s page cannot
+be framed").
 
 ### 4.9 Malicious contributor / compromised dependency
 
@@ -1151,6 +1176,33 @@ MUST make that mode legible (`psychology.md §5`: word + symbol, not colour), an
 SHOULD make safe mode reachable without editing host config.
 *Falsify:* `start` carries `mode`; the apps render it. Check that a per-session
 `--safe` is offered, since the box default is dangerous.
+
+**What a box says reaches an agent as the box's, never as the fleet's.** The
+other direction of the same problem: an agent holding an admin's credential
+reads text a member's box wrote, and a box is a machine somebody else has root
+on. `list`, a nameless `status` and `profiles` asked by an admin go to every
+box, members' included (`scheduler.js`). A box's listing is rewritten from its
+records by the coordinator for every caller, with whose each session is as the
+fleet believes it, and anything else a fan-out reply says is quoted on one line
+under the box's name, `deb13 said: “…”` (`describeSessions`, `boxSaid`,
+`core.js`). A box's labels are held to the hub's label rule where its frame
+comes in (`attributed`, `registry.js`), so `fleet_health` prints tags and
+nothing else. In `fleet_events`, every event the box is the author of, by the
+coordinator's own test (`hostReported`: its session events, `host.degraded`
+and `host.recovered`, the pool events), is quoted and attributed to the box,
+and a hub reason is cut to one line by the same rule as everything else a box
+sends (`oneLine`, `src/core/text.js`), line separators and bidirectional
+overrides included. An event's link is a Remote Control link, the shape the
+hub finds one in (`RC_URL_RE`), or nothing (`rcLink`, `core.js`): it is the
+link a phone opens. The question a waiting session asks, in `fleet_await` and
+the MCP server's notification, is quoted on one line as its box's report, and
+when it went up is a timestamp or nothing (`askingFrom`, `awaitingSince`,
+`src/mcp/server.js`). None of this stops a box saying something false about
+itself; it stops one saying it in somebody else's voice.
+*Falsify:* `test/ownership.test.js` ("a member’s box writes no line of an
+admin’s list"), `test/mcp.test.js` ("a box’s labels reach fleet_health", "a
+box’s hub reason reaches fleet_events", "a session event’s link", "a box’s
+question is quoted as its own").
 
 ---
 

@@ -22,6 +22,7 @@
 import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
 import { HOLDER_ID_RE } from '../protocol/holder-join.js';
 import { believedCreator } from './hosts.js';
+import { LABEL_RE, oneLine } from '../../core/text.js';
 
 /**
  * A POOL'S OWN MACHINE RUNS NO SESSIONS. It is made to stay up and hold the
@@ -95,6 +96,14 @@ export function runsNoSessions(hostId) {
  * copy of a box's health that reaches a person without being stored first,
  * the `health` verb's reply (core.js dispatch).
  *
+ * AND ITS LABELS HELD TO THE HUB'S RULE (text.js LABEL_RE), here because this
+ * is the one door both copies come through. A label set from an app is held
+ * to it on the box (labels.js); a frame was not, so a box reported any
+ * strings it liked, any length, newlines included, and fleet_health printed
+ * them to an admin's agent as the box's tags (eighth audit). A label that is
+ * not one is dropped rather than repaired, as labels.js drops one, and no
+ * more than LABELS_MAX are kept: `tag` can match nothing else.
+ *
  * @param {{ actsFor?: string|null }} host
  * @param {HostHealth} health
  * @returns {HostHealth}
@@ -106,12 +115,24 @@ export function attributed(host, health) {
     Array.isArray(list)
       ? list.map((s) => (s && typeof s === 'object' && 'createdBy' in s ? { ...s, createdBy: believedCreator(host, s.createdBy) } : s))
       : list;
+  /** @param {unknown} list */
+  const labels = (list) =>
+    Array.isArray(list) ? list.filter((l) => typeof l === 'string' && LABEL_RE.test(l)).slice(0, LABELS_MAX) : [];
   return {
     ...health,
     ...('sessions' in health ? { sessions: each(health.sessions) } : {}),
     ...('bin' in health ? { bin: each(health.bin) } : {}),
+    ...('labels' in health ? { labels: labels(health.labels) } : {}),
+    ...('setLabels' in health ? { setLabels: labels(/** @type {any} */ (health).setLabels) } : {}),
   };
 }
+
+/**
+ * How many labels a box's report may carry: what may be set from an app
+ * (labels.js, 64) and as many again for the machine's own facts and
+ * FLEETWRIGHT_LABELS, which no box comes near.
+ */
+const LABELS_MAX = 128;
 
 /** How stale a health report may be before the host becomes `unknown`. */
 export const HEALTH_STALE_MS = 45_000;
@@ -335,7 +356,12 @@ export class HostRegistry {
       // line here: it is shown on every phone and was taken whole, any length
       // and any characters, into the record #onHostState writes (third
       // Workers audit). An error message fits in 200 with room to spare.
-      const said = String(health.hub.reason ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+      //
+      // ONE LINE BY THE SAME RULE AS EVERY OTHER WORD A BOX SENDS (text.js
+      // oneLine). This took out the C0 controls and kept U+2028, U+2029 and
+      // the bidirectional overrides, which break or reorder a line as surely
+      // as a newline, in a push and in fleet_events (eighth audit).
+      const said = oneLine(health.hub.reason ?? '', 200);
       host.reason = `session manager unreachable: ${said || 'no reason given'}`;
       fault = 'session manager unreachable';
     } else if (host.ephemeral && health.claudeAccounts === 0 && health.runnerAuth == null) {
