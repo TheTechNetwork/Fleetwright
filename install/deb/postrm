@@ -12,13 +12,45 @@
 # rewrite and this runs as root, so the fallback was the service user's script
 # run as root by `apt purge`. A box with no store is told what was left and
 # where, and the person decides whether to read that script and run it.
+#
+# UNLESS THE SERVICE USER IS ROOT. A box installed with root running the
+# sessions (a container, a server nobody sudo'd on) has no store: the
+# installer makes one only for a service user other than root, since root's
+# copy of root's own tree would guard nothing. `current` there is root's —
+# install.sh chowned it to the service user, who is root — so running it
+# trusts nobody new, and refusing it left every release under /opt behind on
+# exactly the box the package's own install test is. Checked file by file,
+# never assumed from the base: owned by uid 0 and writable by nobody else,
+# the whole way from the base to the script.
 set -e
 BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 STORE="${FLEETWRIGHT_SIDECAR_BASE:-/usr/local/lib/fleetwright-sidecar}"
+# roots_own PATH... → 0 when every path is owned by uid 0 with no group or
+# other write bit. A symlink is judged by what it points at, which is what
+# runs; the link itself sits in a directory this has already judged.
+roots_own() {
+  for p in "$@"; do
+    st="$(stat -L -c '%u %a' "$p" 2>/dev/null)" || return 1
+    case "$st" in
+      "0 "*) ;;
+      *) return 1 ;;
+    esac
+    mode="${st#0 }"
+    # The last two octal digits are group and other; 2, 3, 6 and 7 carry w.
+    case "$mode" in
+      *[2367]?|*[2367]) return 1 ;;
+    esac
+  done
+  return 0
+}
 case "$1" in
   purge)
     if [ -f "$STORE/current/install/uninstall.sh" ]; then
       bash "$STORE/current/install/uninstall.sh" --purge --yes </dev/null || true
+    elif [ -f "$BASE/current/install/uninstall.sh" ] \
+         && roots_own "$BASE" "$BASE/current" "$BASE/current/install" "$BASE/current/install/uninstall.sh"; then
+      # Root's own tree, as above: the service user is root.
+      bash "$BASE/current/install/uninstall.sh" --purge --yes </dev/null || true
     elif [ -e "$BASE/current/install/uninstall.sh" ]; then
       echo "fleetwright: this box has no root-owned copy of the uninstaller, and the one in" >&2
       echo "  $BASE/current belongs to the service user, so it was not run as root." >&2
