@@ -476,6 +476,38 @@ test('an install reaches the Lock Screen as one, through its own steps and onboa
   assert.equal(narrowProgress({ step: image, of, phase: 'image', state: 'running' }), null);
 });
 
+test('a holder the job removed to make it again is retired, and only the owner’s own', async () => {
+  // ASKED FOR: "Recreating holder didn't delete old one". The VM was gone;
+  // the host under its name sat under Machines as "not reporting" beside
+  // the new one, for good. The job reports the name it removed, and the
+  // coordinator retires that host, held to the job's box and its owner.
+  const { admit, makeAdmin } = await import('./helpers/enrolled-hosts.js');
+  const { core } = fleet(['deb14', 'rpi-7550'], machine);
+  await makeAdmin(core, admin.email);
+  await admit(core, 'holder-a1b2c3', { enrolledBy: `holder:${admin.email}` });
+  await admit(core, 'holder-b2c3d4', { enrolledBy: 'holder:somebody-else@example.com' });
+  await core.dispatch(begin(admin, { preferHost: 'deb14' }));
+  const gone = (/** @type {string} */ name) => core.hostIds.get(name)?.revokedAt != null;
+  // Not from a box that is not running the job, not a name that is not a
+  // holder's, not another person's holder, and never the box itself.
+  await core.onHostMessage('rpi-7550', { kind: 'event', event: 'xosetup.holder-removed', job: JOB, hostId: 'holder-a1b2c3' });
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.holder-removed', job: JOB, hostId: 'rpi-7550' });
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.holder-removed', job: JOB, hostId: 'holder-b2c3d4' });
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.holder-removed', job: JOB, hostId: 'deb14' });
+  assert.deepEqual([gone('holder-a1b2c3'), gone('holder-b2c3d4'), gone('rpi-7550'), gone('deb14')], [false, false, false, false]);
+  // The owner's own, from the box running the job: revoked, off the list a
+  // phone reads, and the ring says why.
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.holder-removed', job: JOB, hostId: 'holder-a1b2c3' });
+  assert.equal(gone('holder-a1b2c3'), true);
+  assert.ok(!core.hostIds.list().some((/** @type {any} */ h) => h.hostId === 'holder-a1b2c3'), 'still listed');
+  assert.ok(!core.registry.hosts.has('holder-a1b2c3'));
+  assert.ok(core.events.some((/** @type {any} */ e) => e.event === 'host.retired' && e.hostId === 'holder-a1b2c3' && /removed by deb14/.test(e.text)));
+  // Said once: a second report of the same name is nothing to do.
+  const before = core.events.length;
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.holder-removed', job: JOB, hostId: 'holder-a1b2c3' });
+  assert.equal(core.events.length, before);
+});
+
 test('a reconnect runs on the pool’s own machine and reaches the Lock Screen as one', async () => {
   // ASKED FOR: "When Xen shows no pool, reconnecting all hosts usually fixes
   // it. Why don't we do it instead of me logging in?" A reconnect is a setup
