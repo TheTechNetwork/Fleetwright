@@ -351,6 +351,41 @@ test('a box finishing somebody’s GitHub sign-in cannot make it their device, b
   assert.equal(own.ok, true, own.text);
 });
 
+test('a sign-in recorded before G11 was closed is no device’s, nor is its renewal, until the phone signs in again (G11)', async (t) => {
+  // A record holds token hashes and nothing about which flow made them, so one
+  // a box forged before the fix cannot be told from a phone's. Every record
+  // from before is ended instead; the vault itself is not touched.
+  const m = await minter();
+  t.after(m.restore);
+  await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' });
+  const kept = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'grant', hostKey: kept.publicJwk, label: 'eli-box' })).ok, true);
+  const phoneToken = await m.signIn();
+
+  // The record as it was written before the epoch: the same, unmarked.
+  const { v: _epoch, ...before } = m.rows.get('signin:42');
+  m.rows.set('signin:42', before);
+  assert.equal((await m.phone({ op: 'list' }, { github: phoneToken })).error?.code, 'not_a_device');
+  assert.equal((await m.deposit(phoneToken, `sk-ant-oat01-${'m'.repeat(40)}`)).error?.code, 'not_a_device');
+  // Renewing its refresh token still renews, into no device's token.
+  assert.equal((await m.phone({ op: 'list' }, { github: await m.renew(PHONE_REFRESH) })).error?.code, 'not_a_device');
+
+  // The phone signs in once more, and is a device again.
+  const reply = await newSealKey();
+  const key = String((await m.lookup()).key);
+  const sealed = await seal({ to: key, aad: GITHUB_REQUEST_AAD, payload: { v: 1, grant: 'code', code: 'phonecode12', verifier: 'p'.repeat(64), redirectUri: 'https://fleet.test/oauth/github/callback', at: Date.now(), reply: reply.publicKey } });
+  const fresh = /** @type {any} */ (await (await m.service.fetch('https://minter.internal/github/token', { method: 'POST', body: JSON.stringify({ sealed }) })).json());
+  assert.equal(fresh.ok, true, fresh.text);
+  const again = String((await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: GITHUB_REPLY_AAD, sealed: fresh.sealed })).accessToken);
+  const listed = await m.phone({ op: 'list' }, { github: again });
+  assert.equal(listed.ok, true, listed.text);
+
+  // And nothing in the vault moved: the item, the approval, and what the box is given.
+  assert.deepEqual(listed.answer.items.map((/** @type {any} */ i) => i.name), ['secret:NPM_TOKEN']);
+  assert.deepEqual(listed.answer.grants.map((/** @type {any} */ g) => g.label), ['eli-box']);
+  assert.deepEqual((await m.box(kept)).answer.accounts[0].items.map((/** @type {any} */ i) => i.value), ['npm_abc']);
+});
+
 test('two boxes asking at once renew one refresh token once', async (t) => {
   const m = await minter();
   t.after(m.restore);
