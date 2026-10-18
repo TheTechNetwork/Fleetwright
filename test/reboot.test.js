@@ -91,6 +91,43 @@ test('the wrong hostname is refused, which is the mistake worth preventing', () 
   assert.match(r.text, /Nothing was done/);
 });
 
+test('the fleet name confirms too, because it is the only name the apps have', () => {
+  // A box whose kernel hostname is RPI-7550-ARM joined its fleet as rpi-7550.
+  // The apps confirm with the fleet name — it is the name on the screen — and
+  // the box refused every one of them: "This box is RPI-7550-ARM, not
+  // rpi-7550". Either name is this machine, so either one finishes it, and a
+  // refusal names both so the person is not left guessing.
+  const fleetName = 'rpi-7550';
+  const { pin } = begin({ fleetName });
+  let ran = false;
+  const r = reboot(CFG, [pin, fleetName], { actor: 'telegram:1', fleetName, exec: () => { ran = true; return ok(); } });
+  assert.equal(r.ok, true, r.text);
+  assert.equal(ran, true, 'the fleet name is this box');
+
+  const { pin: again } = begin({ fleetName });
+  const wrong = reboot(CFG, [again, 'some-other-box'], { actor: 'telegram:1', fleetName, exec: ok });
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.text, new RegExp(`This box is ${os.hostname()} \\(rpi-7550 in the fleet\\), not some-other-box`));
+
+  // The same name twice is one name: no "(x in the fleet)" when they agree.
+  begin({ fleetName: os.hostname() });
+  const same = reboot(CFG, ['000000', 'nope'], { actor: 'telegram:1', fleetName: os.hostname(), exec: ok });
+  assert.match(same.text, /PIN does not match/);
+  const empty = (cancelReboot(), reboot(CFG, [], { actor: 'telegram:1', sessions: [], fleetName: os.hostname(), exec: ok }));
+  assert.match(empty.text, new RegExp(`Reboot ${os.hostname()}\\?`));
+  const refused = reboot(CFG, ['nope'], { actor: 'telegram:1', fleetName: os.hostname(), exec: ok });
+  assert.doesNotMatch(refused.text, /in the fleet/);
+});
+
+test('an empty host takes the fleet name as well', () => {
+  cancelReboot();
+  reboot(CFG, [], { actor: 'fleet:a@b.com', sessions: [], fleetName: 'rpi-7550', exec: ok });
+  let ran = false;
+  const r = reboot(CFG, ['rpi-7550'], { actor: 'fleet:a@b.com', fleetName: 'rpi-7550', exec: () => { ran = true; return ok(); } });
+  assert.equal(r.ok, true, r.text);
+  assert.equal(ran, true);
+});
+
 test('somebody else cannot finish your reboot', () => {
   // Two people in a chat is the normal case, and a stranger answering a prompt
   // they did not read is a coincidence rather than a confirmation.

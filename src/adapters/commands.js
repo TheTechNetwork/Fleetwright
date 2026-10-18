@@ -128,7 +128,7 @@ import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageL
 import { fetchNotes, describeNotes, changelogRepo } from '../core/changelog.js';
 import { grantsOf, grantCommand } from '../core/grants.js';
 import { reboot } from '../core/reboot.js';
-import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
+import { identity as fleetIdentity, enrol as fleetEnrol, sidecarConfig } from '../core/fleet-identity.js';
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 import { readHouseRules, describeHouseRules } from '../core/rules.js';
 import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/files.js';
@@ -2432,7 +2432,14 @@ export const COMMANDS = {
       'Every running session dies — a reboot takes the tmux server with it.',
     run: async (ctx, args) => {
       const running = (await ctx.sessions.list()).filter((s) => s.status === 'running').map((s) => s.name);
-      const r = reboot(ctx.cfg, args, { actor: ctx.actor, sessions: running });
+      // THE NAME THE APPS SHOW, so the confirmation they send is accepted. The
+      // hub does not read the sidecar's env and so does not know this box's
+      // fleet name on its own (see update's hostKey); reboot.js says why the
+      // name matters. A box that cannot read it keeps the kernel hostname
+      // alone, which is what every box had before.
+      let fleetName = null;
+      try { fleetName = sidecarConfig().hostId ?? null; } catch { /* a checkout with no sidecar config: hostname alone */ }
+      const r = reboot(ctx.cfg, args, { actor: ctx.actor, sessions: running, fleetName });
       // THE COUNTS AS DATA, so a screen can size its own ceremony rather than
       // reading a number out of the sentence. An empty host asks for a
       // fingerprint; a host with work on it asks for the pin the box issued.
