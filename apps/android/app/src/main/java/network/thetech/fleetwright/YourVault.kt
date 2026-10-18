@@ -176,7 +176,14 @@ internal fun YourVault(settings: Settings) {
             // WORKED OUT HERE, from the keys the fleet listed, never the
             // fingerprints the fleet says beside them.
             val inFleet = boxes.mapNotNull { b -> b.publicJwk?.let { PhoneVault.fingerprint(it) to b.hostId } }.toMap()
-            val holders = kept.grants.mapNotNull { inFleet[it.fingerprint] }.sorted()
+            // A box approved for part of the vault (`only`, a pool's own machine
+            // and its one record) says so, rather than "Held by" as if it held
+            // everything (eighth audit).
+            val holders = kept.grants.mapNotNull { g ->
+                inFleet[g.fingerprint]?.let { name ->
+                    if (g.only.isEmpty()) name else "$name (${g.only.joinToString(", ") { PhoneVault.label(it) }} only)"
+                }
+            }.sorted()
             Text("Boxes", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
             Hint(
                 if (holders.isEmpty()) "No box holds your credentials yet. Approve one from its page under Machines."
@@ -225,7 +232,12 @@ internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
 
     suspend fun reload() {
         runCatching { vault.list(Fleet(settings)) }
-            .onSuccess { c -> grant = c.grants.firstOrNull { it.fingerprint == fingerprint } }
+            // The whole key hash, as the minter names the grant, not its
+            // sixteen-character start.
+            .onSuccess { c ->
+                val whole = host.publicJwk?.let { PhoneVault.keyHash(it) }
+                grant = c.grants.firstOrNull { it.key == whole }
+            }
             .onFailure {
                 failed = true
                 result = it.message ?: "Your vault did not answer."
@@ -258,7 +270,14 @@ internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
             )
             !loaded -> Hint("Loading your vault…")
             held != null -> {
-                Text("Your credentials: Approved", style = Design.Style.bodySmall, color = Design.Palette.ok.now)
+                // ONLY WHAT IT WAS GIVEN: a grant scoped by `only` was shown as
+                // "Approved" over the whole vault (eighth audit).
+                Text(
+                    if (held.only.isEmpty()) "Your credentials: Approved"
+                    else "Your credentials: only ${held.only.joinToString(", ") { PhoneVault.label(it) }}",
+                    style = Design.Style.bodySmall,
+                    color = Design.Palette.ok.now,
+                )
                 TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), held) } }) { Text("Remove") }
             }
             else -> {
