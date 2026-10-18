@@ -111,3 +111,28 @@ test('what the listing is missing is said before anything is written', () => {
   // It warns; it does not fail the job.
   assert.match(src, /::warning::this listing is not finished/);
 });
+
+test('a version already in preparation under another name is renamed, never duplicated', () => {
+  // Apple allows one version in preparation per platform, and App Store
+  // Connect makes a "1.0" with the app record. Three releases of a new app
+  // looked only for a version with the build's own name, found none, asked
+  // for a second one, and got the generic 409 for it. The editable version
+  // that exists — whatever it is called — is this release's version.
+  const lookup = SRC.indexOf('filter[platform]=IOS&limit=20');
+  const rename = SRC.indexOf("attributes: { versionString } }");
+  const create = SRC.indexOf("await api('/v1/appStoreVersions', {");
+  assert.ok(lookup > 0, 'the editable-version lookup is gone');
+  assert.ok(rename > lookup, 'the rename is gone');
+  assert.ok(rename < create, 'the rename must be tried before a new version is created');
+  assert.match(SRC, /one version in preparation per platform/);
+});
+
+test('the listing pre-check includes the data it reads', () => {
+  // A listed appInfo carries its relationships as links only. Without
+  // `include`, `relationships.primaryCategory.data` is absent whether or not a
+  // category is set, and the check warned "no primary category" on three
+  // releases whose listing was complete.
+  const fn = SRC.slice(SRC.indexOf('async function listingGaps('), SRC.indexOf('async function main()'));
+  assert.match(fn, /appInfos\?include=primaryCategory,ageRatingDeclaration/);
+  assert.match(fn, /ageRatingDeclarations/);
+});
