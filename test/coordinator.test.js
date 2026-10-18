@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../src/fleet/protocol/intents.js';
 
 import { Coordinator } from './helpers/node-coordinator.js';
 import { HostRegistry, HEALTH_STALE_MS } from '../src/fleet/coordinator/registry.js';
@@ -20,6 +20,7 @@ import { HubClient } from '../src/fleet/host/hub-client.js';
 import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
 import { generateKeyPair, sign, signingInput } from '../src/fleet/crypto.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
+import { admit } from './helpers/enrolled-hosts.js';
 
 // --- the registry: `unknown` is a state, not a default ----------------------
 
@@ -989,6 +990,45 @@ test('a coordinator restart does not re-announce a fault it already announced', 
   await restored.onHostMessage('box', { kind: 'health', health: health({ claudeAccounts: 0 }) });
 
   assert.equal(sent.length, 1, 'the deploy re-announced a fault the fleet had already been told about');
+});
+
+test('a box changing what its health says is announced once an hour per fault, whatever it changes', async () => {
+  // The fault is what the quiet hour is keyed on, and in the protocol branch
+  // it fell back on the sentence, which carries the number the box sent: a
+  // member's box sending a new one per frame was 200 pushes to the admin's
+  // phone for 200 frames, above the fleet or below its floor alike (sixth
+  // Workers audit). The hub reason, the same hole closed in the third, is the
+  // control. Each also has to stay quiet across a deploy, which finds the
+  // announcement in the ring by its opening words, so the fault must be them.
+  const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+  /** @type {Array<[string, (i: number) => any]>} */
+  const cases = [
+    ['ahead of the fleet', (i) => health({ protocol: PROTOCOL_VERSION + 1 + i })],
+    ['below its floor', (i) => health({ protocol: PROTOCOL_MIN - 1 - i })],
+    ['its session manager', (i) => health({ hub: { reachable: false, reason: `reason ${i}` } })],
+  ];
+  for (const [what, frame] of cases) {
+    let clock = 1_700_000_000_000;
+    /** @type {any[]} */
+    const sent = [];
+    const push = { send: async (/** @type {any} */ _d, /** @type {any} */ m) => { sent.push(m); } };
+    const c = new CoordinatorCore({ now: () => clock, logger: quiet, push });
+    c.devices.set('phone', { token: 't', platform: 'ios' });
+    await admit(c, 'sam-box', { enrolledBy: 'sam@example.test' });
+    for (let i = 0; i < 200; i++) {
+      clock += 1_000;
+      await c.onHostMessage('sam-box', { kind: 'health', health: frame(i) });
+    }
+    assert.equal(sent.length, 1, `${what}: ${sent.length} pushes for one fault in an hour`);
+    assert.equal(c.events.filter((e) => e.event === 'host.degraded').length, 1, `${what}: one record`);
+
+    const restored = new CoordinatorCore({ now: () => clock, logger: quiet, push });
+    restored.devices.set('phone', { token: 't', platform: 'ios' });
+    restored.events.push(...c.events);
+    await admit(restored, 'sam-box', { enrolledBy: 'sam@example.test' });
+    await restored.onHostMessage('sam-box', { kind: 'health', health: frame(200) });
+    assert.equal(sent.length, 1, `${what}: the deploy announced it again`);
+  }
 });
 
 test('a start just after the coordinator restarts waits for the machines to report, rather than refusing', async () => {

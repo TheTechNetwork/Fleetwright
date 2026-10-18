@@ -904,7 +904,8 @@ export class CoordinatorCore {
   }
 
   /**
-   * May a box's session event buzz a phone now? The ring has it either way.
+   * May a box's session event, or a change in its health (#onHostState),
+   * buzz a phone now? The ring has it either way.
    *
    * EVERY OTHER THING A BOX MAKES THE FLEET SAY HAS A BOUND, and this had
    * none: a fault is announced once an hour (#onHostState), a reserved name's
@@ -1046,7 +1047,17 @@ export class CoordinatorCore {
     // events did, which is part of how this whole class of fact stayed
     // invisible — the coordinator's own observations went to a log and a list
     // nobody opens.
-    if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
+    //
+    // AND COUNTED WITH THE BOX'S OTHER PUSHES. The quiet hour above is only as
+    // good as `fault` is free of the box's words, and twice now it was not: the
+    // hub reason, then the protocol integers, each a new fault per frame and a
+    // push per fault to every admin device, outside the allowance the same
+    // box's session events were held to (sixth Workers audit). So a health
+    // change spends the box's person's, or operator box's, HOST_PUSHES_EACH
+    // like any session event, and a fault added later that lets the box's
+    // words in is bounded by that rather than by nothing. Keyed by what was
+    // said, so a different fault inside HOST_PUSH_QUIET_MS is still news.
+    if (this.push && NOTIFIABLE.has(event.event) && this.#mayPush(hostId, { event: kind, name: said })) await this.#notify(event);
   }
 
   /** When each host's last announcement of each fault was made (#onHostState). */
