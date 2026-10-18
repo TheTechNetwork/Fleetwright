@@ -196,6 +196,10 @@ test('the switch starts exactly the granted unit, then reports the suite read ba
   const back = switchAptSuite(cfg, 'stable', { exec });
   assert.equal(back.ok, true);
   assert.match(back.message, /downgrade/, 'says why the way back needs the pin');
+  // And what happens then, which is not an install: the package unit runs
+  // apt-get -y without --allow-downgrades, and apt refuses the downgrade.
+  assert.doesNotMatch(back.message, /next Apply update installs/);
+  assert.match(back.message, /stays on that build until the next release is published/);
   assert.equal(readChannel(cfg), 'stable');
   assert.equal(calls.length, 2);
 });

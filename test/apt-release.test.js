@@ -36,6 +36,27 @@ test('a newer candidate is waiting, and says Apply update installs the package a
   assert.doesNotMatch(r.message, /\/upgrade/);
 });
 
+test('an older candidate, which the way back to stable pins, is not waiting and offers nothing to apply', () => {
+  // apt 2.8's own output on a box moved back from rolling: the pin makes the
+  // last release the candidate, below the build of main installed. The package
+  // unit's `apt-get -y install --only-upgrade` answers that with "Packages were
+  // downgraded and -y was used without --allow-downgrades" and installs
+  // nothing, so "waiting" and "Apply update installs" were both untrue.
+  const policy =
+    'fleetwright:\n  Installed: 0.4.13~main.5\n  Candidate: 0.4.12\n  Version table:\n' +
+    ' *** 0.4.13~main.5 100\n        100 /var/lib/dpkg/status\n' +
+    '     0.4.12 1001\n        500 https://apt.fleetwright.example stable/main all Packages\n';
+  const r = checkAptRelease({ exec: ok(policy) });
+  assert.equal(r.available, null, 'nothing Apply update would install');
+  assert.equal(r.ok, true);
+  assert.match(r.message, /0\.4\.13~main\.5 is a build of main, newer than 0\.4\.12/);
+  assert.match(r.message, /stays on it until a newer release is published/);
+  assert.doesNotMatch(r.message, /waiting|--apply/);
+  // And the same two versions the other way up are an ordinary upgrade.
+  const up = 'fleetwright:\n  Installed: 0.4.12\n  Candidate: 0.4.13\n  Version table:\n     0.4.13 500\n        500 https://apt.fleetwright.example stable/main all Packages\n *** 0.4.12 100\n        100 /var/lib/dpkg/status\n';
+  assert.equal(checkAptRelease({ exec: ok(up) }).available, '0.4.13');
+});
+
 test('installed is the candidate: up to date, and says as of when', () => {
   const r = checkAptRelease({ exec: ok(POLICY('0.2.4', '0.2.4')) });
   assert.equal(r.available, null);

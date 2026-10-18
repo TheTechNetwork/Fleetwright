@@ -54,6 +54,27 @@ export function parseAptPolicy(stdout) {
 }
 
 /**
+ * Whether apt's candidate is OLDER than what is installed: a downgrade, which
+ * a pin above 1000 makes the candidate — the pin the move from rolling back to
+ * stable writes (install/fleetwright-apt-channel).
+ *
+ * Read off the version table, which apt prints highest version first, so no
+ * version comparison of this file's own can disagree with apt's. False when
+ * either is missing from the table: then this cannot tell, and the caller says
+ * what it said before.
+ *
+ * @param {string} stdout  `apt-cache policy <pkg>`
+ * @param {string} installed @param {string} candidate
+ */
+function candidateIsOlder(stdout, installed, candidate) {
+  const table = String(stdout || '').split(/^\s*Version table:\s*$/m)[1] ?? '';
+  const versions = [...table.matchAll(/^ {1,8}(?:\*\*\* )?(\S+) -?\d+\s*$/gm)].map((m) => m[1]);
+  const i = versions.indexOf(installed);
+  const c = versions.indexOf(candidate);
+  return i >= 0 && c > i;
+}
+
+/**
  * @param {string[]} argv
  * @returns {{ status: number|null, stdout: string, stderr: string }}
  */
@@ -100,6 +121,24 @@ export function checkAptRelease({ exec = run } = {}) {
       message:
         `This box is set to take Fleetwright from apt, but the ${APT_PACKAGE} package is not installed.\n` +
         'Install it (apt install fleetwright), or remove FLEETWRIGHT_RELEASE_SOURCE from /etc/fleetwright.env.',
+    };
+  }
+  // OLDER IS NOT WAITING. Back on stable from rolling, the box has a build of
+  // main, a prerelease of the next release and so newer than the last one, and
+  // the pin makes that last release apt's candidate. This said it was waiting
+  // and that Apply update installs it; the package unit runs `apt-get -y
+  // install --only-upgrade`, and apt answers a downgrade under -y with
+  // "Packages were downgraded and -y was used without --allow-downgrades" and
+  // installs nothing. So it is said as what it is, with nothing to apply.
+  if (candidate && candidate !== installed && candidateIsOlder(r.stdout, installed, candidate)) {
+    return {
+      available: null,
+      configured: true,
+      ok: true,
+      reason: 'apt',
+      message:
+        `${APT_PACKAGE} ${installed} is a build of main, newer than ${candidate}, the newest release in apt's stable suite. ` +
+        'Apply update does not install an older version, so this box stays on it until a newer release is published, and takes each one from then on.',
     };
   }
   if (candidate && candidate !== installed) {
