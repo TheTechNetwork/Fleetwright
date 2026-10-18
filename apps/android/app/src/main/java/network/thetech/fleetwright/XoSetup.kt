@@ -92,6 +92,36 @@ internal object XoSetup {
         return listOfNotNull(what, part).joinToString(", ").ifEmpty { null }
     }
 
+    /**
+     * What a part's bytes are doing, in a few words, from the fixed key the
+     * host sends (XOBUILD_DOING) and what is being built: the edge router's
+     * image is OPNsense, which is fixed, and a machine image's is whichever
+     * the person chose, which is not sent. Null for a key never met.
+     */
+    fun doing(key: String?, build: String?): String? {
+        val edge = build == "edge"
+        return when (key) {
+            "download" -> if (edge) "Downloading OPNsense" else "Downloading the image"
+            "read" -> "Reading the blocks the configuration goes in"
+            "keep" -> if (edge) "Writing OPNsense to the pool, to keep" else "Writing the image to the pool, to keep"
+            "write" -> if (edge) "Writing the edge router’s disk" else "Writing the disk"
+            else -> null
+        }
+    }
+
+    /**
+     * "Reading the blocks the configuration goes in: 192 of 2238 MB" while
+     * a part's bytes move: the machine's sentence says the same with the
+     * release and the storage named, which the notification is never sent.
+     * Null while none move; a key never met still says "192 of 2238 MB".
+     */
+    fun bytesLine(doing: String?, build: String?, done: Int?, total: Int?): String? {
+        if (done == null || total == null || total < 1 || done < 0 || done > total) return null
+        val count = "$done of $total MB"
+        val what = doing(doing, build) ?: return count
+        return "$what: $count"
+    }
+
     /** A Xen Orchestra address: the same shape XO_ADDRESS_RE accepts, so a refusal is said here rather than by the fleet. */
     val ADDRESS_RE = Regex(
         "^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]{2,45}\\])(?::[0-9]{1,5})?$",

@@ -217,6 +217,21 @@ class XoSetupTest {
     }
 
     @Test
+    fun whatTheBytesAreDoingIsWordedFromTheKeyAndTheCountIsSaidEitherWay() {
+        // The machine's sentence names the release and the storage and is
+        // never sent to the notification; the key and the megabytes are.
+        assertEquals("Reading the blocks the configuration goes in: 192 of 2238 MB", XoSetup.bytesLine("read", "edge", 192, 2238))
+        assertEquals("Downloading OPNsense: 1 of 468 MB", XoSetup.bytesLine("download", "edge", 1, 468))
+        assertEquals("Downloading the image: 1 of 468 MB", XoSetup.bytesLine("download", "image", 1, 468))
+        assertEquals("Writing the image to the pool, to keep: 700 of 2048 MB", XoSetup.bytesLine("keep", "image", 700, 2048))
+        // A key this app has never met: the numbers are known, the words are not made up.
+        assertEquals("192 of 2238 MB", XoSetup.bytesLine("something-newer", "edge", 192, 2238))
+        assertEquals(null, XoSetup.bytesLine("read", "edge", null, null))
+        assertEquals(null, XoSetup.bytesLine("read", "edge", 3, 2))
+        assertEquals(null, XoSetup.bytesLine("read", "edge", 0, 0))
+    }
+
+    @Test
     fun aCertificateIsReadTolerantly() {
         assertEquals(null, XoSetup.certificate(null))
         val full = XoSetup.certificate(

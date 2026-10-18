@@ -911,7 +911,15 @@ class Fleet(
      * [build] is what it is a build of (`edge`, `image` or `holder`), null
      * from a machine before it said.
      */
-    data class BuildPart(val stage: Int, val stages: Int, val fill: Int, val build: String? = null)
+    /**
+     * [doing] is what the part's bytes are doing (XOBUILD_DOING: download,
+     * read, keep, write) and [done] of [total] the megabytes, null together
+     * while none move and from a machine before it said.
+     */
+    data class BuildPart(
+        val stage: Int, val stages: Int, val fill: Int, val build: String? = null,
+        val doing: String? = null, val done: Int? = null, val total: Int? = null,
+    )
 
     data class Setup(
         val job: String,
@@ -2720,7 +2728,13 @@ class Fleet(
                                 val stages = p.optInt("stages", -1)
                                 val fill = p.optInt("fill", -1)
                                 val build = p.optString("build").takeIf { it.isNotBlank() && !p.isNull("build") }
-                                if (stage in 1..stages && fill in 0..1000) BuildPart(stage, stages, fill, build) else null
+                                val doing = p.optString("doing").takeIf { it.isNotBlank() && !p.isNull("doing") }
+                                val done = p.optInt("done", -1)
+                                val total = p.optInt("total", -1)
+                                val moving = doing != null && total >= 1 && done in 0..total
+                                if (stage in 1..stages && fill in 0..1000) {
+                                    BuildPart(stage, stages, fill, build, doing.takeIf { moving }, done.takeIf { moving }, total.takeIf { moving })
+                                } else null
                             },
                         )
                     },
