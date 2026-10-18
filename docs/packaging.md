@@ -443,10 +443,19 @@ So on such a box:
   package for its run and lets it go afterwards (a hold the operator set
   themselves is kept). The OS count leaves the package out too, so one release
   is not reported twice. Two buttons, two disjoint sets of packages.
-- **`/channel`** is the suite its apt line names, and pinned: `stable` for a
-  box installed from the package, `rolling` for a machine made from an image
-  built from main. A box installed by hand that wants main builds uses the
-  one-liner.
+- **`/channel`** is the suite its apt line names: `stable` for a box
+  installed from the package, `rolling` for a machine made from an image
+  built from main. **Changing it is a unit**, because the sources line is
+  root's and the hub is not: `fleetwright-apt-channel@stable.service` or
+  `@rolling.service`, granted as two exact lines beside the upgrade units and
+  installed with them, runs `install/fleetwright-apt-channel`, which rewrites
+  the one suite word, pins the package to the rolling suite above priority
+  1000 (a build of main is `0.0.0~main.<run>` and sorts below every release,
+  so taking it is a downgrade apt would otherwise refuse) or removes the pin
+  on the way back, and runs `apt-get update`. The hub then reads the line
+  again and reports the suite the box is on, not the one it asked for. The
+  next **Apply update** installs from the new suite. Without the upgrade
+  grant the channel is pinned and the answer says which command grants it.
 - **The one-liner refuses**, and names the apt commands for each thing it
   would have done.
 - **Removing the package** and re-running the installer clears the source line,

@@ -23,6 +23,7 @@ import { log } from '../log.js';
 import { unitName } from '../fleet/legacy-paths.js';
 import { APT_PACKAGE } from './apt-release.js';
 import { grantCommand } from './grants.js';
+import { APT_CHANNEL_UNIT } from './channel.js';
 
 const CHECK_TIMEOUT_MS = 20_000;
 
@@ -398,7 +399,7 @@ function upgradesOff(cfg) {
         'This service runs unprivileged on purpose, so applying packages needs a rule that says ' +
         'so out loud, and only somebody with a shell on the box can give it. There:\n\n' +
         `  ${grantCommand('upgrades', 'on')}\n\n` +
-        'which installs the three units, writes the rule, records FLEETWRIGHT_SYSTEM_UPGRADE=1 in /etc/fleetwright.env ' +
+        'which installs the units, writes the rule, records FLEETWRIGHT_SYSTEM_UPGRADE=1 in /etc/fleetwright.env ' +
         'and restarts the service (sessions keep running). On a box installed from apt, sudo dpkg-reconfigure fleetwright ' +
         'asks the same question. By hand, it is:\n\n' +
         // THE SAME RULE THE INSTALLER WRITES, and it has to be — somebody who
@@ -411,15 +412,17 @@ function upgradesOff(cfg) {
         // visudo rejects the line without them.
         // THE UNITS FIRST: a grant to start a unit that is not installed
         // permits nothing. Both live in install/ and take no arguments.
-        '  sudo install -m 0644 install/fleetwright-upgrade.service install/fleetwright-apt-update.service install/fleetwright-package-upgrade.service /etc/systemd/system/\n' +
+        '  sudo install -m 0644 install/fleetwright-upgrade.service install/fleetwright-apt-update.service install/fleetwright-package-upgrade.service install/fleetwright-apt-channel@.service /etc/systemd/system/\n' +
+        '  sudo install -m 0755 install/fleetwright-apt-channel /usr/local/sbin/\n' +
         '  sudo systemctl daemon-reload\n' +
         '  sudo tee /etc/sudoers.d/fleetwright-upgrade >/dev/null <<\'EOF\'\n' +
-        `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}, /usr/bin/systemctl start --no-block ${PACKAGE_UPGRADE_UNIT}\n` +
+        `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}, /usr/bin/systemctl start --no-block ${PACKAGE_UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_CHANNEL_UNIT}stable.service, /usr/bin/systemctl start ${APT_CHANNEL_UNIT}rolling.service\n` +
         '  EOF\n' +
         '  sudo chmod 0440 /etc/sudoers.d/fleetwright-upgrade\n\n' +
         'then set FLEETWRIGHT_SYSTEM_UPGRADE=1 in /etc/fleetwright.env and restart.\n' +
-        `Scoped to starting those three units — one runs \`apt-get -y upgrade\` with the fleetwright package held and conffile prompts answered, ` +
-        'one `apt-get update`, one `apt-get install --only-upgrade fleetwright` — it cannot install, remove or run anything else.'
+        `Scoped to starting those units — one runs \`apt-get -y upgrade\` with the fleetwright package held and conffile prompts answered, ` +
+        'one `apt-get update`, one `apt-get install --only-upgrade fleetwright`, and two move an apt box between the stable and rolling ' +
+        'suites — it cannot install, remove or run anything else.'
   );
 }
 

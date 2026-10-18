@@ -57,7 +57,7 @@ test('all three units are ones systemd will load, and none takes an argument', (
   assert.equal(r.status, 0, `systemd-analyze verify: ${r.stderr}${r.stdout}`);
 });
 
-test('the grant the installer writes is one visudo accepts, and names only the three units', (t) => {
+test('the grant the installer writes is one visudo accepts, and names only the units and the two suite instances', (t) => {
   const installer = readFileSync(here('install/install.sh'), 'utf8');
   const fn = /write_upgrade_sudoers\(\) \{[\s\S]*?\n\}/.exec(installer)?.[0] ?? '';
   assert.ok(fn, 'write_upgrade_sudoers is gone');
@@ -68,6 +68,10 @@ test('the grant the installer writes is one visudo accepts, and names only the t
   // permitted at all.
   assert.match(fn, /systemctl start --no-block fleetwright-package-upgrade\.service/);
   assert.match(installer, /install_unit fleetwright-package-upgrade/, 'the grant names a unit the installer does not install');
+  // THE SUITE UNIT, as two exact instances: test/apt-channel.test.js keeps
+  // the rule that no wildcard form is granted.
+  assert.match(fn, /systemctl start fleetwright-apt-channel@stable\.service, /);
+  assert.match(fn, /systemctl start fleetwright-apt-channel@rolling\.service/);
   assert.doesNotMatch(fn, /printf '[^']*apt-get/, 'an apt-get line is back in the grant');
   assert.doesNotMatch(fn, /env_keep/, 'DEBIAN_FRONTEND rides in the unit now, not through sudo');
 
@@ -78,7 +82,7 @@ test('the grant the installer writes is one visudo accepts, and names only the t
   const file = path.join(dir, 'fleetwright-upgrade');
   writeFileSync(
     file,
-    `agent ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}, /usr/bin/systemctl start --no-block ${PACKAGE_UPGRADE_UNIT}\n`,
+    `agent ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}, /usr/bin/systemctl start --no-block ${PACKAGE_UPGRADE_UNIT}, /usr/bin/systemctl start fleetwright-apt-channel@stable.service, /usr/bin/systemctl start fleetwright-apt-channel@rolling.service\n`,
   );
   const r = spawnSync('visudo', ['-cf', file], { encoding: 'utf8' });
   assert.equal(r.status, 0, `visudo: ${r.stderr}${r.stdout}`);
