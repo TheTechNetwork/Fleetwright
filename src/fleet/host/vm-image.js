@@ -56,7 +56,7 @@ import { readFileSync } from 'node:fs';
 import { isIPv4 } from 'node:net';
 import { gzipSync } from 'node:zlib';
 
-import { fetchPinned, uploadDisk, srName } from './edge-router.js';
+import { builtInTemplate, fetchPinned, uploadDisk, srName } from './edge-router.js';
 import { qcow2Raw, qcow2Size } from './qcow2.js';
 import { IMAGE_REPORT_TOKEN_RE } from '../protocol/intents.js';
 
@@ -739,26 +739,29 @@ const logEnd = (log) => String(log || '').trim().split('\n').slice(-12).join('\n
  */
 async function baseOf(admin, templates, pool, tag, sr) {
   for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(tag))) {
-    if ((await diskOf(admin, t.id))?.$SR === sr) return t;
+    const disks = await disksOf(admin, t.id);
+    if (disks.length === 1 && disks[0].$SR === sr) return t;
   }
   return null;
 }
 
 /**
- * A VM's or template's disk: the first that is not a CD drive or a cloud-init
- * drive.
+ * A VM's or template's disks: every one that is not a CD drive or a
+ * cloud-init drive. All of them, as the edge router's are (edge-router.js,
+ * disksOf): the first of two is a guess at which one boots.
  *
  * @param {{ call: (method: string, params?: any) => Promise<any> }} admin @param {string} vm
- * @returns {Promise<any|null>}
+ * @returns {Promise<any[]>}
  */
-async function diskOf(admin, vm) {
+async function disksOf(admin, vm) {
   const vbds = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VBD', VM: vm } })) || {}));
+  const disks = [];
   for (const vbd of vbds) {
     if (!vbd?.VDI || vbd.is_cd_drive) continue;
     const vdi = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', id: vbd.VDI } })) || {})[0]);
-    if (vdi && vdi.name_label !== CONFIG_DRIVE_NAME) return vdi;
+    if (vdi && vdi.name_label !== CONFIG_DRIVE_NAME) disks.push(vdi);
   }
-  return null;
+  return disks;
 }
 
 /**
@@ -883,8 +886,8 @@ export async function ensureImage({
 
   const sr = imageStorage({ pool, srs, fleetSrs, sr: chosenSr });
   const on = srName(sr);
-  const base = templates.find((t) => t?.$pool === pool && t?.name_label === VM_IMAGE.template);
-  if (!base) throw new Error(`this pool has no "${VM_IMAGE.template}" template to make the machine image from. Nothing was built`);
+  // XCP-NG'S OWN, by its mark and not its name (edge-router.js, builtInTemplate).
+  const base = builtInTemplate(templates, pool, VM_IMAGE.template, 'the machine image');
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: IMAGE_STAGES, fill });
   const os = spec.os;
@@ -997,8 +1000,15 @@ export async function ensureImage({
       tags: [VM_IMAGE.buildTag],
       bootAfterCreate: false,
     });
-    const disk = await diskOf(admin, /** @type {string} */ (vm));
-    if (!disk) throw new Error(`the machine image’s build VM was made from the kept ${os} without a disk`);
+    // ONE DISK, OR NOTHING IS GROWN AND NOTHING BOOTS: the install goes on
+    // the disk the VM starts from, and with two there is no telling which.
+    const disks = await disksOf(admin, /** @type {string} */ (vm));
+    if (disks.length !== 1) {
+      throw new Error(disks.length
+        ? `the machine image’s build VM came from the kept ${os} with ${disks.length} disks where it has one, so none was grown and it was not started`
+        : `the machine image’s build VM was made from the kept ${os} without a disk`);
+    }
+    const [disk] = disks;
     // ROOM FOR A SESSION. cloud-init grows the partition to fill it on the
     // first boot, the build's and every clone's alike. Through whichever
     // call the server offers (RESIZE_METHODS in xo-setup.js): both take the

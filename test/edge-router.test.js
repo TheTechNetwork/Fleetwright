@@ -201,7 +201,8 @@ const SRS = [
   { id: 'sr-big', $pool: 'p1', size: 500 * GiB, physical_usage: 100 * GiB },
   { id: 'sr-other-pool', $pool: 'p2', size: 900 * GiB, physical_usage: 0 },
 ];
-const TEMPLATE = { id: 'tpl-other', $pool: 'p1', name_label: 'Other install media' };
+/** XCP-ng's own "Other install media": marked as a default template, with no disks of its own. */
+const TEMPLATE = { id: 'tpl-other', $pool: 'p1', name_label: 'Other install media', isDefaultTemplate: true, $VBDs: [] };
 
 /** Everything ensureEdge needs, with the download, unpack and upload stood in for. */
 function edgeArgs(/** @type {any} */ admin, /** @type {any} */ extra = {}) {
@@ -813,7 +814,7 @@ test('nothing is downloaded or made without room for the disk or a template to m
   await assert.rejects(ensureEdge(edgeArgs(full, { sr: 'sr-other-pool' }).args), /not in the way out’s pool/);
   await assert.rejects(ensureEdge(edgeArgs(full, { sr: 'sr-small' }).args), /sr-small has no 3 GiB free/);
   const bare = xo({ VM: [], 'VM-template': [] });
-  await assert.rejects(ensureEdge(edgeArgs(bare).args), /no "Other install media" template/);
+  await assert.rejects(ensureEdge(edgeArgs(bare).args), /no built-in "Other install media" template/);
   for (const admin of [full, bare]) {
     assert.ok(!admin.calls.some(([m]) => m === 'disk.import' || m === 'vm.create'));
   }
@@ -945,6 +946,27 @@ test('a router without the key the job brings is rebuilt once, keeping its WAN M
   const first = await macOf();
   assert.match(first, /^02(:[0-9a-f]{2}){5}$/, 'locally administered and unicast');
   assert.equal(await macOf(), first);
+});
+
+// THE TEMPLATE IT IS MADE FROM is the pool's own, by XCP-ng's mark, and
+// nothing that only shares its name: a VM inherits its template's disks.
+test('the edge router is made from XCP-ng’s own template, never one that only shares its name, and none or two of them is a stop', async () => {
+  const named = { id: 'tpl-named', $pool: 'p1', name_label: 'Other install media', isDefaultTemplate: false, $VBDs: [] };
+  const withDisk = { id: 'tpl-with-disk', $pool: 'p1', name_label: 'Other install media', isDefaultTemplate: true, $VBDs: ['vbd-planted'] };
+  const made = xo({ VM: [], 'VM-template': [named, withDisk, TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-1' });
+  await ensureEdge(edgeArgs(made).args);
+  assert.deepEqual(called(made, 'vm.create').map((p) => p.template), ['tpl-other'], 'made from a template that only has the name, or brings a disk');
+
+  for (const [templates, said] of /** @type {Array<[any[], RegExp]>} */ ([
+    [[named, withDisk], /no built-in "Other install media" template, XCP-ng’s own with no disks, to make the edge router from\. Nothing was built/],
+    [[TEMPLATE, { ...TEMPLATE, id: 'tpl-second' }], /2 built-in "Other install media" templates where XCP-ng ships one/],
+  ])) {
+    const admin = xo({ VM: [], 'VM-template': templates, VIF: [] });
+    let downloaded = false;
+    await assert.rejects(ensureEdge(edgeArgs(admin, { getImage: async () => ((downloaded = true), '/nowhere/image.bz2') }).args), said);
+    assert.equal(downloaded, false, 'downloaded before it knew there was nothing to make the router from');
+    assert.deepEqual(called(admin, 'vm.create'), []);
+  }
 });
 
 // THE KEPT DISK (edge-router.js, buildEdge): the image as published kept on
@@ -1116,6 +1138,20 @@ test('with the disk kept on the pool, the router is a copy of it with only the b
   assert.ok(said.includes('Copying the disk kept on sr-big and writing the configuration: 10 MB.'), said.join('\n'));
   assert.deepEqual([...new Set(parts.map((p) => p.stage))], [1, 2, 3]);
   for (let i = 1; i < parts.length; i++) assert.ok(parts[i].fill >= parts[i - 1].fill, `the bar went back at ${i}`);
+});
+
+test('a copy of the kept disk that comes with two disks has nothing written into either, and the whole disk is sent instead', async () => {
+  const k = keptXo({ kept: true });
+  // The router is the first VM this build makes; a second disk comes with it.
+  k.objects.VDI.push({ id: 'vdi-second', $SR: 'sr-big', name_label: 'second', $VBDs: ['vbd-second'] });
+  k.objects.VBD.push({ id: 'vbd-second', VM: 'vm-2', VDI: 'vdi-second', is_cd_drive: false });
+  const { args, said } = edgeArgs(k.admin, k.extra);
+  assert.match(await ensureEdge(args), /The edge router is up/);
+  assert.deepEqual(called(k.admin, 'disk.importContent'), [], 'the configuration was written into one of two disks');
+  assert.deepEqual(k.writes, []);
+  assert.ok(called(k.admin, 'vm.delete').some((p) => p.id === 'vm-2' && p.deleteDisks), 'the copy with two disks was left');
+  assert.deepEqual(k.uploads.map((u) => u.name), [EDGE.vm], 'the whole disk was not sent in its place');
+  assert.ok(said.some((t) => /came with 2 disks where it has one/.test(t)), said.join('\n'));
 });
 
 test('the first build keeps the image as published, never booted and out of the fleet’s reach, and the next build is a copy of it', async () => {

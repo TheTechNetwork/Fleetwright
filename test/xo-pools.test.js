@@ -821,11 +821,12 @@ test('the image goes on storage the fleet may use with room for a whole disk', (
 /**
  * An admin stand-in for a build: the VM it makes goes from Running to
  * whatever `then` says on the second look.
- * @param {{ then: 'Halted'|'rebooted'|'Running', existing?: any[], runs?: number }} o
+ * @param {{ then: 'Halted'|'rebooted'|'Running', existing?: any[], runs?: number, kept?: any[], named?: any[] }} o
  */
-function buildPool({ then, existing = [], runs = 1, kept = [] }) {
+function buildPool({ then, existing = [], runs = 1, kept = [], named = [] }) {
   let looks = 0;
-  const base = { type: 'VM-template', id: 'other-media', name_label: VM_IMAGE.template, $pool: 'pool-1', tags: [] };
+  // XCP-ng's own, marked so and with no disks; `named` are listed before it.
+  const base = { type: 'VM-template', id: 'other-media', name_label: VM_IMAGE.template, $pool: 'pool-1', tags: [], isDefaultTemplate: true, $VBDs: [] };
   const sr = { type: 'SR', id: 'sr-1', name_label: 'Local storage', $pool: 'pool-1', size: 500 * 1024 ** 3, physical_usage: 0 };
   /** @type {Array<{ method: string, params: any }>} */
   const calls = [];
@@ -833,7 +834,7 @@ function buildPool({ then, existing = [], runs = 1, kept = [] }) {
   // which is how a cloud-init drive is told from a disk.
   /** @type {Array<{ vm: string, vdi: string, name: string, sr: string }>} */
   const disks = kept.map((k) => ({ vm: k.id, vdi: `${k.id}-disk`, name: 'disk', sr: k.sr ?? 'sr-1' }));
-  const templates = [base, ...existing, ...kept.map((k) => ({ type: 'VM-template', id: k.id, $pool: 'pool-1', tags: k.tags }))];
+  const templates = [...named, base, ...existing, ...kept.map((k) => ({ type: 'VM-template', id: k.id, $pool: 'pool-1', tags: k.tags }))];
   const admin = {
     async call(/** @type {string} */ method, /** @type {any} */ params = {}) {
       calls.push({ method, params });
@@ -1027,6 +1028,18 @@ test('a kept disk is used only on its own storage and for its own build, and an 
   assert.ok(p.calls.some((c) => c.method === 'disk.import'), 'a copy on other storage would not be a fast clone here, and an older build is not this one');
   assert.equal(/** @type {any} */ (p.calls.filter((c) => c.method === 'vm.create')[1]).params.template, 'base-vm');
   assert.deepEqual(p.calls.filter((c) => c.method === 'vm.delete').map((c) => c.params), [{ id: 'kept-older', deleteDisks: true }], 'the older build’s, and not the one kept on the other storage');
+});
+
+test('the image starts from XCP-ng’s own template and not one that only shares its name, and its build VM with two disks grows neither', async () => {
+  const named = { type: 'VM-template', id: 'tpl-named', name_label: VM_IMAGE.template, $pool: 'pool-1', tags: [], isDefaultTemplate: false, $VBDs: [] };
+  const p = buildPool({ then: 'Halted', named: [named] });
+  await ensureImage(buildArgs(p));
+  assert.equal(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.create')).params.template, 'other-media', 'made from a template that only has the name');
+
+  const two = buildPool({ then: 'Halted', kept: [{ id: 'kept-1', tags: [VM_IMAGE.baseTag, `${VM_IMAGE.baseTag}:debian-13:${DEBIAN_IMAGE.build}`] }] });
+  two.disks.push({ vm: 'build-vm', vdi: 'build-vm-second', name: 'disk', sr: 'sr-1' });
+  await assert.rejects(ensureImage(buildArgs(two)), /build VM came from the kept Debian 13 with 2 disks where it has one, so none was grown and it was not started/);
+  assert.ok(!two.calls.some((c) => c.method === 'disk.resize' || c.method === 'vm.start'), 'a disk was grown, or the VM started');
 });
 
 test('a build that reboots failed, and its VM is kept stopped, named for what happened', async () => {
