@@ -15,6 +15,7 @@ import path from 'node:path';
 
 import { runUpdate, updateStatus, canSelfRestart, looksLikeOwnershipProblem, updateAvailable } from '../src/core/update.js';
 import { dispatch } from '../src/adapters/commands.js';
+import { runningVersion } from '../src/fleet/host/running-version.js';
 
 /** @param {string} cwd @param {string[]} args */
 const git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -90,6 +91,79 @@ test('somewhere that is not a checkout says so, rather than failing at git', asy
 
   assert.equal(s.ok, false);
   assert.match(String(s.message), /not a git checkout/);
+});
+
+// --- whose git config runs ---------------------------------------------------
+//
+// The sidecar read its version by running `git status` in the hub's install
+// directory on every health frame, as the account that holds the host key. A
+// checkout's config can name a program for git status to run, the service user
+// owns the checkout, and the installer had given the sidecar `safe.directory`
+// for it: the service user's program, run as the sidecar.
+
+const HAS_GIT = spawnSync('git', ['--version']).status === 0;
+
+test('a checkout another account owns is not read with git, and the sidecar reports its own package version', { skip: !HAS_GIT && 'git is not installed' }, async (t) => {
+  // Another owner cannot be made without root, so this account stands in for
+  // somebody else by passing a uid that is not its own.
+  const { cfg, root } = deployment(t);
+  const other = (process.getuid?.() ?? 0) + 1;
+
+  const s = updateStatus(cfg, { uid: other });
+  assert.equal(s.ok, false, 'git ran, and read the branch, in a tree this account does not own');
+  assert.equal(s.notOwned, true);
+  assert.match(String(s.message), /sudo chown -R \S+ /, 'the remedy is the ownership, said as a command');
+  assert.doesNotMatch(String(s.message), /safe\.directory/, 'never the switch that lets the tree run programs as this account');
+
+  // And the version is still reported — from the tree this process loaded,
+  // not from the checkout, and not as a branch git was never asked for.
+  const own = path.join(root, 'running');
+  mkdirSync(own);
+  writeFileSync(path.join(own, 'package.json'), JSON.stringify({ version: '0.4.99' }));
+  assert.deepEqual(runningVersion(cfg, { installRoot: own, uid: other }), { head: '0.4.99', branch: null });
+});
+
+test('a repository that names a program for git status to run does not get it run', { skip: !HAS_GIT && 'git is not installed' }, async (t) => {
+  // core.fsmonitor is a command git runs on every status. In a tree this
+  // account owns it is this account's own config — but the read must not run
+  // it either, because nothing about reading a version needs it.
+  const { cfg, clone, root } = deployment(t);
+  const marker = path.join(root, 'ran');
+  git(clone, ['config', 'core.fsmonitor', `touch '${marker}'; true`]);
+
+  const s = updateStatus(cfg);
+  assert.equal(s.ok, true, s.message);
+  assert.equal(existsSync(marker), false, 'git status ran the program the repository named');
+});
+
+test('global and system git config cannot change what the status reads', { skip: !HAS_GIT && 'git is not installed' }, async (t) => {
+  // safe.directory lives in exactly these two files and is what switches
+  // git's own ownership guard off, so neither is read. Its effect cannot be
+  // seen without a second account; these two keys stand in, each hiding a
+  // stray file from the status if its file is read.
+  const { cfg, clone, root } = deployment(t);
+  const ignore = path.join(root, 'ignore');
+  writeFileSync(ignore, 'from-global\n');
+  const globalFile = path.join(root, 'global.gitconfig');
+  writeFileSync(globalFile, `[core]\n\texcludesFile = ${ignore}\n`);
+  const systemFile = path.join(root, 'system.gitconfig');
+  writeFileSync(systemFile, '[status]\n\tshowUntrackedFiles = no\n');
+  writeFileSync(path.join(clone, 'from-global'), 'x\n');
+  writeFileSync(path.join(clone, 'from-system'), 'x\n');
+
+  const saved = { g: process.env.GIT_CONFIG_GLOBAL, s: process.env.GIT_CONFIG_SYSTEM };
+  t.after(() => {
+    for (const [k, v] of [['GIT_CONFIG_GLOBAL', saved.g], ['GIT_CONFIG_SYSTEM', saved.s]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+  process.env.GIT_CONFIG_GLOBAL = globalFile;
+  process.env.GIT_CONFIG_SYSTEM = systemFile;
+
+  const s = updateStatus(cfg);
+  assert.equal(s.ok, true, s.message);
+  assert.deepEqual([...(s.dirty ?? [])].sort(), ['?? from-global', '?? from-system']);
 });
 
 // --- pulling ----------------------------------------------------------------
