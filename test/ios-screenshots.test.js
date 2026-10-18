@@ -101,11 +101,16 @@ test('a picture the wrong size for its slot fails the run, and never reaches the
   assert.match(SH, /exit 1/);
 });
 
-test('the three devices run at once, with their logs kept apart', () => {
-  // A boot is three to four minutes on a hosted runner; three in a row made
-  // this the long pole of the release.
-  assert.match(SH, /shoot "\$TYPE" "\$\{entry#\*:\}" >"\$OUT\/\.log-\$TYPE" 2>&1 &/);
-  assert.match(SH, /wait "\$\{pids\[\$i\]\}"/);
+test('the devices run one at a time, each with its own log, under a job timeout', () => {
+  // Three concurrent boots never came up on the hosted runner: 0.4.14's job
+  // sat for over half an hour with the submission waiting behind it. Serial
+  // is the shape known to finish, and the workflow's timeout-minutes is the
+  // wall a hang cannot climb past.
+  assert.match(SH, /shoot "\$TYPE" "\$\{entry#\*:\}" >"\$OUT\/\.log-\$TYPE" 2>&1 \|\| failed=1/);
+  assert.doesNotMatch(SH, /2>&1 &$/m, 'a device is backgrounded again');
+  const yml = readFileSync(new URL('../.github/workflows/ios.yml', import.meta.url), 'utf8');
+  const shots = yml.slice(yml.indexOf('  screenshots:'), yml.indexOf('  release-app-store:'));
+  assert.match(shots, /timeout-minutes: 30/);
 });
 
 test('a device the machine does not have is skipped, not fatal', () => {
