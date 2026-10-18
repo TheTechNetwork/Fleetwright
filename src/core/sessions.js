@@ -538,6 +538,12 @@ export class SessionManager {
     let configDir = null;
     /** @type {import('./runner-login.js').RunnerAuth|null} */
     let runnerAuth = null;
+    // Whose session this is, off the record when it has one: a colleague who
+    // resumes it does not make it theirs. One value for the download cache and
+    // the egress network, so the two always name the same person.
+    const owner = this.registry.get(name)?.createdBy ?? actor;
+    /** @type {import('./egress.js').EgressRoute|null} */
+    let egress = null;
     if (this.cfg.sandbox) {
       // Trust does not live on the host any more: the image bakes
       // hasTrustDialogAccepted for /work, so ~/.claude.json is never mutated
@@ -557,14 +563,15 @@ export class SessionManager {
       // their own Claude account.
       const known = this.registry.get(name);
       // THE WAY OUT BEFORE THE SESSION, when the box is on an allowlist: a
-      // session put on the internal network before its proxy is up has no
-      // route anywhere and sits at a sign-in that cannot complete. No-op when
-      // egress is open.
-      const egress = await ensureEgress(this.cfg);
-      if (!egress.ok) {
-        this.registry.upsert(name, { status: 'error', detail: egress.message ?? 'egress setup failed', cwd, createdBy: actor });
-        return { ok: false, message: `Could not prepare the egress proxy for "${name}": ${egress.message}` };
+      // session put on its owner's internal network before the proxy is on it
+      // has no route anywhere and sits at a sign-in that cannot complete.
+      // No-op when egress is open.
+      const way = await ensureEgress(this.cfg, owner);
+      if (!way.ok) {
+        this.registry.upsert(name, { status: 'error', detail: way.message ?? 'egress setup failed', cwd, createdBy: actor });
+        return { ok: false, message: `Could not prepare the egress proxy for "${name}": ${way.message}` };
       }
+      egress = way;
       const volumes = await ensureSandboxVolumes(this.cfg, name, actor, {
         account: known?.account ?? null,
         createdBy: known?.createdBy ?? null,
@@ -616,7 +623,9 @@ export class SessionManager {
         runnerAuth,
         remoteControl: noLink ? false : null,
         // Whose download cache this session shares (claude.js cacheVolumeFor).
-        owner: this.registry.get(name)?.createdBy ?? actor,
+        owner,
+        // And which network it joins: its owner's, nobody else's (G9).
+        egress,
       });
       // A new life of the container: whatever the CLI last said belongs to the
       // old one, and the pane is the only witness until it speaks again.
@@ -1344,6 +1353,14 @@ export class SessionManager {
       // half-launched session and mark it ended.
       this.inFlight.add(rec.name);
       try {
+        // Its owner's way out first, as a launch does: after an upgrade from
+        // one shared network, that person's network may not exist yet.
+        const way = this.cfg.sandbox ? await ensureEgress(this.cfg, rec.createdBy ?? null) : null;
+        if (way && !way.ok) {
+          this.registry.upsert(rec.name, { status: 'error', resumeOnBoot: false, detail: `restore failed: ${way.message}` });
+          skipped.push({ name: rec.name, why: way.message ?? 'egress setup failed' });
+          continue;
+        }
         const command = buildCommand(this.cfg, {
           name: rec.name,
           resumeUuid: rec.uuid,
@@ -1353,6 +1370,7 @@ export class SessionManager {
           // session brought back after a reboot with no hook and no broker.
           hookSocket: await this.#ensureHookSocket(rec.name),
           owner: rec.createdBy ?? null,
+          egress: way,
           remoteControl: onRunner(this.cfg) || this.noRemoteControl.has(rec.name) ? false : null,
         });
         this.#newLife(rec.name);

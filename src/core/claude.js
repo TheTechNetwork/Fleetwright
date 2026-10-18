@@ -11,8 +11,7 @@ import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
 import { CONTAINER_SOCKET_DIR, CONTAINER_SOCKET_PATH, LEGACY_CONTAINER_SOCKET_PATH, SOCKET_FILE } from './hook-socket.js';
 import { egressArgs } from './egress.js';
-import { createHash } from 'node:crypto';
-import { emailFromActor, normaliseEmail } from './accounts.js';
+import { ownerTag } from './accounts.js';
 
 /** @typedef {import('./runner-login.js').RunnerAuth} RunnerAuth */
 
@@ -58,15 +57,19 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * would outrank in the same way. An API key needs nothing here: the session
  * inherits it.
  *
+ * egress is the route ensureEgress returned for this session's owner: which
+ * internal network it joins and where its proxy is on it. Required when the
+ * box is on an allowlist, ignored when egress is open (./egress.js).
+ *
  * @param {import('../config.js').Config} cfg
- * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null, runnerAuth?: RunnerAuth|null, owner?: string|null }} opts
+ * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null, runnerAuth?: RunnerAuth|null, owner?: string|null, egress?: import('./egress.js').EgressRoute|null }} opts
  *   `owner` is whose session this is (an actor or an email), for the download cache it shares
  */
-export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null, runnerAuth = null, owner = null }) {
+export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null, runnerAuth = null, owner = null, egress = null }) {
   const rc = remoteControl === null ? cfg.remoteControl : remoteControl;
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
 
-  const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket, owner) : [cfg.claudeBin];
+  const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket, owner, egress) : [cfg.claudeBin];
   if (cfg.sandbox) argv.push('claude');
   if (rc) argv.push('--remote-control', name);
   if (skip) argv.push('--dangerously-skip-permissions');
@@ -124,8 +127,9 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
  * @param {string} name
  * @param {boolean} hookSocket
  * @param {string|null} [owner]  whose session this is, for the download cache
+ * @param {import('./egress.js').EgressRoute|null} [egress]  the owner's route out, under an allowlist
  */
-function sandboxArgv(cfg, name, hookSocket, owner = null) {
+function sandboxArgv(cfg, name, hookSocket, owner = null, egress = null) {
   const argv = [
     cfg.podmanBin, 'run', '--rm', '-it',
     '--name', `agent-${name}`,
@@ -177,10 +181,10 @@ function sandboxArgv(cfg, name, hookSocket, owner = null) {
   }
 
   // Where it may reach: nothing, when the box is on an allowlist, except the
-  // proxy on the internal network — which is told to it here, because a
-  // session finds its only way out by being handed the address. Empty when
+  // proxy on its owner's internal network — which is told to it here, because
+  // a session finds its only way out by being handed the address. Empty when
   // egress is open, which is the line every session ran before.
-  argv.push(...egressArgs(cfg));
+  argv.push(...egressArgs(cfg, egress));
 
   // One mechanism for resource limits instead of a separate cgroup layer.
   if (cfg.sandboxMemory) argv.push(`--memory=${cfg.sandboxMemory}`);
@@ -193,19 +197,16 @@ function sandboxArgv(cfg, name, hookSocket, owner = null) {
 }
 
 /**
- * The podman volume holding one person's download cache: `cache-` and the
- * first sixteen hex digits of a hash of their email, because an address is not
- * a volume name and the volume list need not spell out who uses the box.
- * Sessions with no person behind them (the box's own surfaces) share
- * `cache-box`, which is the operator's.
+ * The podman volume holding one person's download cache: `cache-` and their
+ * ownerTag, the same key their egress network is named by. Sessions with no
+ * person behind them (the box's own surfaces) share `cache-box`, which is the
+ * operator's.
  *
  * @param {string|null} owner  an actor (`fleet:<email>`) or an email
  * @returns {string}
  */
 export function cacheVolumeFor(owner) {
-  const email = emailFromActor(owner) ?? normaliseEmail(String(owner ?? ''));
-  if (!email) return 'cache-box';
-  return `cache-${createHash('sha256').update(email).digest('hex').slice(0, 16)}`;
+  return `cache-${ownerTag(owner)}`;
 }
 
 // --- 1. Remote Control can silently fail to attach --------------------------

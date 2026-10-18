@@ -15,6 +15,45 @@
 // default network, so it is the only path out — and the allowlist lives in
 // the proxy, because the network cannot express one.
 //
+// ONE INTERNAL NETWORK PER PERSON, not one per box (docs/security.md G9).
+// "Exactly the other containers on it" was the problem: every allowlisted
+// session on a box joined one `agent-egress`, so anybody's session could open
+// a connection to any port anybody else's was listening on — a dev server, a
+// debugger, an MCP server bound to 0.0.0.0 — which the open default never
+// allowed, because there each container has a network namespace of its own.
+// Now a session joins `agent-egress-<ownerTag>`, keyed exactly as the
+// person's download cache is (accounts.js ownerTag), and the one container on
+// more than one of those networks is the proxy. Sessions of the same person
+// share theirs, which is no more than their own /work already allows.
+//
+// THE PROXY DOES NOT JOIN THEM UP. A session's only route is its own subnet,
+// and it holds no CAP_NET_ADMIN to add one through the proxy; the other side
+// has no route back either. The proxy is started with forwarding off in its
+// own namespace, said explicitly because a new namespace can inherit the
+// host's setting and a podman host has it on. (A proxy started before this
+// change runs without it until it is next replaced; the route and the
+// capability above hold either way.) And its filter is hostnames, so a
+// CONNECT to another network's address is refused like any other name that
+// is not on the list.
+//
+// THE SUBNETS. FLEETWRIGHT_SANDBOX_EGRESS_SUBNET used to be the one network's
+// subnet. It is now the FIRST person's: each network gets a subnet that size,
+// counted upward from it, and the first that podman agrees is free — podman
+// refuses one that overlaps any network it knows or any route on the host, so
+// a refusal is the collision check and the next candidate is tried. The
+// choice is recorded nowhere but podman: a person's network, once it exists,
+// is read back with `podman network inspect`, and their proxy is always the
+// second address of whatever subnet it has. Every candidate is kept inside
+// the private ranges, which is what tinyproxy's Allow lines name.
+//
+// A BOX THAT ALREADY HAS `agent-egress` keeps it and stops using it: no new
+// session joins it, and nothing here removes it, because sessions started
+// before this change may still be on it. Its subnet is the default's first
+// candidate, so podman refuses that one and the first person gets the next.
+// The running proxy keeps its leg on the old network until it is next
+// replaced, so those sessions keep their way out until they restart onto
+// their own. `podman network rm agent-egress` once nothing is on it.
+//
 // The proxy is tinyproxy: CONNECT only, `FilterDefaultDeny`, a filter file of
 // exact hostnames, port 443 only. A CONNECT proxy does not terminate TLS, so
 // no CA bundle enters the container; the session needs HTTPS_PROXY and
@@ -39,23 +78,33 @@
 // no podman and the container that would prove it does not run in CI. The
 // test is a session on a box with the setting on: `curl https://example.com`
 // refused by the proxy, `claude` signing in and answering. security.md
-// SEC-INJECT-2 stays marked until that has been seen.
+// SEC-INJECT-2 stays marked until that has been seen. For G9 add two people's
+// sessions on one box, one listening on 0.0.0.0, and the other unable to
+// reach it while both still reach the proxy.
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
+import { ownerTag } from './accounts.js';
 import { podman, podmanAsync } from './podman.js';
 
-/** The internal network sessions join. Created once, never removed by this code. */
-export const EGRESS_NETWORK = 'agent-egress';
-/** The proxy container, on both the internal network and the default one. */
+/** Every person's internal network is this and their ownerTag. Each is created
+ * once and never removed by this code. */
+const NETWORK_PREFIX = 'agent-egress-';
+/** The proxy container, on every person's internal network and the default one. */
 export const PROXY_CONTAINER = 'agent-egress-proxy';
-/** Where the proxy listens, inside the internal network. */
+/** Where the proxy listens, inside the internal networks. */
 export const PROXY_PORT = 3128;
-/** The subnet the internal network gets, so the proxy's address is fixed and
- * no session depends on name resolution to find its only way out. */
+/** The first person's subnet, and the size of everybody's: the proxy's address
+ * on each network is fixed by it, so no session depends on name resolution to
+ * find its only way out. */
 export const DEFAULT_SUBNET = '10.89.201.0/24';
+/** How many subnets are tried, counting up, before a box says it has none
+ * free: enough for every person a box serves and the networks it already has. */
+const SUBNET_TRIES = 64;
+/** The ranges every person's subnet is kept inside, and that tinyproxy allows. */
+const PRIVATE_RANGES = [['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16]];
 /** The label the proxy container carries, naming the config it was started
  * with — so a changed allowlist is a restart and an unchanged one is not. */
 export const CONFIG_LABEL = 'agent-egress-config';
@@ -81,14 +130,60 @@ export const DEFAULT_HOSTS = Object.freeze([
 const HOST_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 
 /**
- * The proxy's address on the internal network: the second host of the subnet,
+ * @typedef {{ network?: string, proxy?: string }} EgressRoute
+ *   the internal network a session joins, and its proxy's `address:port`
+ *   there: both set by ensureEgress under an allowlist, neither when open
+ */
+
+/** @param {string} ip */
+const ipToInt = (ip) => ip.split('.').reduce((n, o) => n * 256 + Number(o), 0);
+/** @param {number} n */
+const intToIp = (n) => [24, 16, 8, 0].map((shift) => Math.floor(n / 2 ** shift) % 256).join('.');
+
+/**
+ * A subnet as its first address and its size, aligned to that size.
+ * @param {string} subnet
+ */
+function parseSubnet(subnet) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(String(subnet).trim());
+  const prefix = Number(m?.[5]);
+  if (!m || m.slice(1, 5).some((o) => Number(o) > 255) || prefix < 8 || prefix > 30) {
+    throw new Error(`not a usable egress subnet: ${subnet}`);
+  }
+  const size = 2 ** (32 - prefix);
+  return { start: Math.floor(ipToInt(`${m[1]}.${m[2]}.${m[3]}.${m[4]}`) / size) * size, size, prefix };
+}
+
+/**
+ * The proxy's address on an internal network: the second host of the subnet,
  * because netavark keeps the first for the gateway.
  * @param {string} subnet
  */
 export function proxyAddress(subnet) {
-  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(subnet);
-  if (!m || Number(m[5]) > 30) throw new Error(`not a usable egress subnet: ${subnet}`);
-  return `${m[1]}.${m[2]}.${m[3]}.${Number(m[4]) + 2}`;
+  return intToIp(parseSubnet(subnet).start + 2);
+}
+
+/**
+ * The internal network one person's sessions join.
+ * @param {string|null} owner  an actor (`fleet:<email>`) or an email
+ */
+function egressNetworkFor(owner) {
+  return `${NETWORK_PREFIX}${ownerTag(owner)}`;
+}
+
+/**
+ * The i-th candidate subnet counted up from the configured one, or null once
+ * the count leaves the private ranges tinyproxy is told to allow.
+ * @param {string} first @param {number} i
+ */
+function candidateSubnet(first, i) {
+  const { start, size, prefix } = parseSubnet(first);
+  const at = start + i * size;
+  const inside = PRIVATE_RANGES.some(([base, bits]) => {
+    const lo = ipToInt(String(base));
+    return at >= lo && at + size <= lo + 2 ** (32 - Number(bits));
+  });
+  return inside ? `${intToIp(at)}/${prefix}` : null;
 }
 
 /**
@@ -139,10 +234,11 @@ export function proxyConfig(hosts, { port = PROXY_PORT } = {}) {
     'MaxClients 64',
     'DisableViaHeader Yes',
     'LogLevel Info',
-    // The internal network is the only way to reach this listener, and it
-    // has no route in from anywhere else — but a proxy that answers anybody
-    // is still the wrong default, so the private ranges podman hands out are
-    // named and nothing else is.
+    // The internal networks are the only way to reach this listener, and
+    // they have no route in from anywhere else — but a proxy that answers
+    // anybody is still the wrong default, so the private ranges are named and
+    // nothing else is. candidateSubnet keeps every person's network inside
+    // them, which is what keeps these three lines right whatever was chosen.
     'Allow 10.0.0.0/8',
     'Allow 172.16.0.0/12',
     'Allow 192.168.0.0/16',
@@ -171,20 +267,27 @@ export function allowListText(hosts) {
 }
 
 /**
- * The environment a session gets, so every HTTPS client in it goes through
- * the proxy. `NO_PROXY` keeps loopback direct, which is where nothing listens
- * in a session anyway; the CLI never sends loopback through a proxy on its own
- * account (its network page says so), and other tools in the session should
- * not either.
+ * The network a session joins and the environment it gets, so every HTTPS
+ * client in it goes through its owner's proxy. `NO_PROXY` keeps loopback
+ * direct, which is where nothing listens in a session anyway; the CLI never
+ * sends loopback through a proxy on its own account (its network page says
+ * so), and other tools in the session should not either.
  *
- * @param {{ sandboxEgress?: string, sandboxEgressSubnet?: string }} cfg
+ * The route is what ensureEgress returned for the session's owner, because
+ * only podman knows which subnet that person's network got. Without one an
+ * allowlisted launch THROWS: there is no network a session could be put on
+ * that would not be either nobody's way out or somebody else's.
+ *
+ * @param {{ sandboxEgress?: string }} cfg
+ * @param {EgressRoute|null} [route]
  * @returns {string[]}  `podman run` arguments, empty when egress is open
  */
-export function egressArgs(cfg) {
+export function egressArgs(cfg, route = null) {
   if (cfg.sandboxEgress !== 'allowlist') return [];
-  const proxy = `http://${proxyAddress(cfg.sandboxEgressSubnet ?? DEFAULT_SUBNET)}:${PROXY_PORT}`;
+  if (!route?.network || !route.proxy) throw new Error('an allowlisted session needs the route ensureEgress gave its owner');
+  const proxy = `http://${route.proxy}`;
   return [
-    '--network', EGRESS_NETWORK,
+    '--network', route.network,
     '-e', `HTTPS_PROXY=${proxy}`,
     '-e', `HTTP_PROXY=${proxy}`,
     '-e', `https_proxy=${proxy}`,
@@ -195,33 +298,36 @@ export function egressArgs(cfg) {
 }
 
 /**
- * Make the network and the proxy exist, with the current allowlist, before a
- * session is put on them.
+ * Make the owner's network and the proxy exist, with the current allowlist,
+ * before a session is put on them, and say where that session's way out is.
  *
- * Idempotent and cheap when nothing changed: an existing network is left as
- * it is, and a running proxy whose config label matches the config on disk
- * is left running. A changed allowlist replaces the proxy container — which
- * drops the live CONNECT tunnels of every running session for a second, and
- * that is the honest cost of changing what a fleet may reach.
+ * Idempotent and cheap when nothing changed: two podman calls, the same as
+ * when there was one network. An existing network is read back as it is; a
+ * running proxy whose config label matches the config on disk is left
+ * running, and joined to this person's network with `podman network connect`
+ * if it is not on it yet, which touches no other person's tunnels. A changed
+ * allowlist replaces the proxy container — which drops the live CONNECT
+ * tunnels of every running session for a second, and that is the honest cost
+ * of changing what a fleet may reach — and the new one is put back on every
+ * person's network at the address their sessions were told.
  *
  * NEVER TOUCHES A SESSION VOLUME, so it carries no --userns: the proxy is the
  * box's, not a session's, and it reads a config file the service user wrote.
  *
  * @param {import('../config.js').Config} cfg
- * @returns {Promise<{ ok: boolean, message?: string, proxy?: string, hosts?: string[] }>}
+ * @param {string|null} [owner]  whose session this is: an actor or an email
+ * @returns {Promise<EgressRoute & { ok: boolean, message?: string, hosts?: string[] }>}
  */
-export async function ensureEgress(cfg) {
+export async function ensureEgress(cfg, owner = null) {
   if (cfg.sandboxEgress !== 'allowlist') return { ok: true };
-  const subnet = cfg.sandboxEgressSubnet || DEFAULT_SUBNET;
   const { hosts, refused } = allowlistFor(cfg);
   for (const r of refused) log.warn(`egress: ignoring "${r}" in FLEETWRIGHT_SANDBOX_EGRESS_ALLOW — not a hostname`);
 
-  // The network, once.
-  if (podman(cfg, ['network', 'inspect', EGRESS_NETWORK]).status !== 0) {
-    const made = podman(cfg, ['network', 'create', '--internal', '--subnet', subnet, EGRESS_NETWORK]);
-    if (made.status !== 0) return { ok: false, message: `could not create the ${EGRESS_NETWORK} network: ${made.stderr.trim().slice(0, 200)}` };
-    log.info(`egress: created the internal network ${EGRESS_NETWORK} (${subnet})`);
-  }
+  // This person's network, once.
+  const own = ensureOwnerNetwork(cfg, egressNetworkFor(owner));
+  if (!own.ok) return own;
+  const leg = { network: own.network, ip: proxyAddress(own.subnet) };
+  const route = { network: leg.network, proxy: `${leg.ip}:${PROXY_PORT}` };
 
   // The config on disk, and its hash — the label the container carries.
   const dir = path.join(cfg.stateDir, 'egress');
@@ -240,25 +346,35 @@ export async function ensureEgress(cfg) {
     return { ok: false, message: `could not write the egress config under ${dir}: ${/** @type {Error} */ (e).message}` };
   }
 
-  // The proxy, if it is not already the one this config describes.
-  const running = podman(cfg, ['container', 'inspect', '--format', `{{.State.Running}} {{index .Config.Labels "${CONFIG_LABEL}"}}`, PROXY_CONTAINER]);
-  if (running.status === 0 && running.stdout.trim() === `true ${digest}`) {
-    return { ok: true, proxy: `${proxyAddress(subnet)}:${PROXY_PORT}`, hosts };
+  // The proxy, if it is already the one this config describes: on this
+  // person's network too, or joined to it now.
+  const seen = podman(cfg, ['container', 'inspect', '--format', `{{.State.Running}}|{{index .Config.Labels "${CONFIG_LABEL}"}}|{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}`, PROXY_CONTAINER]);
+  const [running = '', label = '', networks = ''] = seen.stdout.trim().split('|');
+  if (seen.status === 0 && running === 'true' && label === digest) {
+    if (networks.split(/\s+/).includes(leg.network)) return { ok: true, ...route, hosts };
+    const joined = podman(cfg, ['network', 'connect', '--ip', leg.ip, leg.network, PROXY_CONTAINER]);
+    // Somebody else's launch for the same person can have joined it first.
+    if (joined.status !== 0 && !/already connected/i.test(joined.stderr)) {
+      return { ok: false, message: `could not put the egress proxy on ${leg.network}: ${joined.stderr.trim().slice(0, 300)}` };
+    }
+    log.info(`egress: proxy ${PROXY_CONTAINER} joined ${leg.network} at ${leg.ip}`);
+    return { ok: true, ...route, hosts };
   }
   const image = await ensureProxyImage(cfg);
   if (!image.ok) return image;
-  if (running.status === 0) {
-    log.info(`egress: the allowlist changed (${running.stdout.trim().split(' ')[1] || 'none'} → ${digest}) — replacing the proxy`);
+  if (seen.status === 0) {
+    log.info(`egress: the allowlist changed (${label || 'none'} → ${digest}) — replacing the proxy`);
     podman(cfg, ['rm', '-f', PROXY_CONTAINER]);
   }
   const started = podman(cfg, [
     'run', '-d', '--name', PROXY_CONTAINER,
     '--label', `${CONFIG_LABEL}=${digest}`,
-    // Both networks: the internal one the sessions are on, with the fixed
-    // address they are told about, and the default one, which is the only
-    // way out. Named first so the address applies to it.
-    '--network', `${EGRESS_NETWORK}:ip=${proxyAddress(subnet)}`,
+    // Every person's internal network, each at the address their sessions
+    // were told, and the default one, which is the only way out.
+    ...everyLeg(cfg, leg).flatMap((l) => ['--network', `${l.network}:ip=${l.ip}`]),
     '--network', 'podman',
+    // See "THE PROXY DOES NOT JOIN THEM UP" above.
+    '--sysctl', 'net.ipv4.ip_forward=0',
     '--restart', 'unless-stopped',
     '-v', `${conf}:/etc/tinyproxy/tinyproxy.conf:ro`,
     '-v', `${allow}:/etc/tinyproxy/allow.list:ro`,
@@ -267,8 +383,90 @@ export async function ensureEgress(cfg) {
   if (started.status !== 0) {
     return { ok: false, message: `could not start the egress proxy: ${started.stderr.trim().slice(0, 300)}` };
   }
-  log.info(`egress: proxy ${PROXY_CONTAINER} up at ${proxyAddress(subnet)}:${PROXY_PORT}, ${hosts.length} hosts allowed`);
-  return { ok: true, proxy: `${proxyAddress(subnet)}:${PROXY_PORT}`, hosts };
+  log.info(`egress: proxy ${PROXY_CONTAINER} up, ${leg.network} at ${leg.ip}, ${hosts.length} hosts allowed`);
+  return { ok: true, ...route, hosts };
+}
+
+/**
+ * The subnet a network has, from podman, or null when there is no such network.
+ * @param {import('../config.js').Config} cfg @param {string} network
+ */
+function subnetOf(cfg, network) {
+  const r = podman(cfg, ['network', 'inspect', '--format', '{{range .Subnets}}{{.Subnet}} {{end}}', network]);
+  if (r.status !== 0) return null;
+  return /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/.exec(r.stdout)?.[0] ?? '';
+}
+
+/**
+ * One person's internal network: read back when it exists, created on the
+ * first subnet podman agrees is free when it does not.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} network
+ * @returns {{ ok: true, network: string, subnet: string } | { ok: false, message: string }}
+ */
+function ensureOwnerNetwork(cfg, network) {
+  const have = subnetOf(cfg, network);
+  if (have !== null) return usableNetwork(network, have);
+  const first = cfg.sandboxEgressSubnet || DEFAULT_SUBNET;
+  try { parseSubnet(first); } catch (e) { return { ok: false, message: /** @type {Error} */ (e).message }; }
+  for (let i = 0; i < SUBNET_TRIES; i++) {
+    const subnet = candidateSubnet(first, i);
+    if (!subnet) break;
+    const made = podman(cfg, ['network', 'create', '--internal', '--subnet', subnet, network]);
+    if (made.status === 0) {
+      log.info(`egress: created the internal network ${network} (${subnet})`);
+      return usableNetwork(network, subnet);
+    }
+    // Two launches for one person at once: the other one made it.
+    const raced = subnetOf(cfg, network);
+    if (raced !== null) return usableNetwork(network, raced);
+    // Podman's words for an overlap with a network it knows or a host route.
+    if (!/subnet .*already used|overlap/i.test(made.stderr)) {
+      return { ok: false, message: `could not create the ${network} network: ${made.stderr.trim().slice(0, 200)}` };
+    }
+  }
+  return { ok: false, message: `no free subnet for ${network}: the private ones counted up from ${first} are all taken — set FLEETWRIGHT_SANDBOX_EGRESS_SUBNET somewhere free` };
+}
+
+/**
+ * A network this code can put the proxy on: an IPv4 subnet with a second
+ * address. Anything else under the name was not made here.
+ *
+ * @param {string} network @param {string} subnet
+ * @returns {{ ok: true, network: string, subnet: string } | { ok: false, message: string }}
+ */
+function usableNetwork(network, subnet) {
+  try {
+    proxyAddress(subnet);
+    return { ok: true, network, subnet };
+  } catch {
+    return { ok: false, message: `the ${network} network has no usable IPv4 subnet (${subnet || 'none'}) — remove it and it is made again` };
+  }
+}
+
+/**
+ * Every person's network the proxy belongs on, with its address there: this
+ * one, and whatever others exist, so a replaced proxy is back where every
+ * running session was told it is. A network whose subnet cannot be read is
+ * left off with a warning rather than failing this person's start.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ network: string, ip: string }} leg
+ */
+function everyLeg(cfg, leg) {
+  const listed = podman(cfg, ['network', 'ls', '--format', '{{.Name}}']);
+  const names = listed.status === 0 ? listed.stdout.split('\n').map((n) => n.trim()) : [];
+  const legs = [leg];
+  for (const network of new Set(names.filter((n) => n.startsWith(NETWORK_PREFIX) && n !== leg.network))) {
+    const subnet = subnetOf(cfg, network);
+    try {
+      legs.push({ network, ip: proxyAddress(String(subnet)) });
+    } catch {
+      log.warn(`egress: ${network} has no usable subnet (${subnet || 'none'}) — the proxy is not on it, so its sessions have no way out`);
+    }
+  }
+  return legs;
 }
 
 /**

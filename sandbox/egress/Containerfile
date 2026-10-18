@@ -1,4 +1,5 @@
-# The egress proxy: the one way out of the internal network sessions sit on.
+# The egress proxy: the one way out of the internal networks sessions sit on,
+# one per person, and the only container on more than one of them.
 #
 # tinyproxy on Alpine, and nothing else. It answers CONNECT to port 443 for
 # the hostnames in /etc/tinyproxy/allow.list and refuses everything else —
