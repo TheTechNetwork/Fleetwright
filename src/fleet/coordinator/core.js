@@ -18,6 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities, actsFor, mayActFor, believedCreator, administers } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
+import { oneLine } from '../../core/text.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -255,21 +256,6 @@ function xoFor(host, email) {
  */
 function holds(host, email) {
   return xoFor(host, email).some((/** @type {any} */ e) => e?.holder === true);
-}
-
-/**
- * Text a box wrote, as one line: control characters, line and paragraph
- * separators and the bidirectional overrides become spaces, so nothing it
- * says can start a line of its own or reorder the line it is on.
- *
- * @param {unknown} v @param {number} max
- */
-function oneLine(v, max) {
-  return String(v)
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g, ' ')
-    .replace(/ {2,}/g, ' ')
-    .trim()
-    .slice(0, max);
 }
 
 /**
@@ -3326,12 +3312,26 @@ export class CoordinatorCore {
       // listing reached a member as the fleet's words (sixth audit). A box
       // that answers `list` without them has told this member nothing of
       // theirs, and that is what they read.
+      //
+      // AND FOR AN ADMIN TOO, from every box that sent its records. An
+      // admin's `list` and `status` are asked of every box, members' among
+      // them (scheduler.js), and the box's prose went into the reply as it
+      // wrote it: a member's box answered with lines laid out as other
+      // hosts' lines and an instruction to stop every session, which an
+      // agent holding the admin's credential read as the fleet's listing
+      // (eighth audit). The records say everything the prose did that
+      // anybody acts on — what runs, what can be resumed, whose, and the
+      // link to drive it — so the admin loses no answer, only the box's
+      // choice of words. A box that sent none has said nothing the
+      // coordinator can vouch for, and is quoted below as its own.
+      /** @param {any} r */
+      const ours = (r) =>
+        (spec.verb === 'list' && r.ok !== false && Array.isArray(r.sessions))
+        || (filtering && (Array.isArray(r.sessions) || (spec.verb === 'list' && r.ok !== false)));
       const rendered = new Map(
         results.map((r) => [
           r.hostId,
-          filtering && (Array.isArray(r.sessions) || (spec.verb === 'list' && r.ok !== false))
-            ? describeOwnSessions(sessions.filter((s) => s.hostId === r.hostId))
-            : (r.text ?? ''),
+          ours(r) ? describeSessions(sessions.filter((s) => s.hostId === r.hostId), filtering) : (r.text ?? ''),
         ]),
       );
 
@@ -3408,7 +3408,15 @@ export class CoordinatorCore {
         // cannot be acted on.
         sessions,
         hosts: results.map(({ hostId, ok, error }) => ({ hostId, ok, text: rendered.get(hostId) ?? '', error })),
-        text: results.map((r) => `${r.hostId}: ${rendered.get(r.hostId) ?? ''}`).join('\n'),
+        // EVERYTHING ELSE A BOX SAID IS QUOTED AS ITS OWN, on one line under
+        // its name: an unnamed `status`, its profiles, a refusal. Merged as
+        // `host: text`, a box's newlines started lines of the merged reply,
+        // and one laid out as `ops-box: …` was another host's answer to
+        // whoever read it (eighth audit). `hosts` keeps each box's words in
+        // a field that names it, where a line cannot pass for another's.
+        text: results
+          .map((r) => (ours(r) ? `${r.hostId}: ${rendered.get(r.hostId) ?? ''}` : boxSaid(r.hostId, r.text)))
+          .join('\n'),
       };
     }
 
@@ -6614,20 +6622,31 @@ function ownedBy(owner, requester) {
  * "nothing of yours" and never "no sessions": the box may be holding a dozen,
  * and a screen may not report a state it does not know (C-5).
  *
- * @param {any[]} sessions  already filtered to the requester
+ * AN ADMIN'S IS THE SAME LISTING OVER EVERY RECORD, with whose each one is,
+ * as the fleet believes the box that said it (hosts.js believedCreator). Its
+ * empty listing is the box's own report of none, which is what it says.
+ *
+ * @param {any[]} sessions  already filtered to the requester when `own`
+ * @param {boolean} own  the caller is a member, and these are theirs
  */
-function describeOwnSessions(sessions) {
-  if (!sessions.length) return 'nothing of yours';
+function describeSessions(sessions, own) {
+  if (!sessions.length) return own ? 'nothing of yours' : 'no sessions reported';
   const running = sessions.filter((s) => String(s?.status || '') === 'running');
   const rest = sessions.filter((s) => String(s?.status || '') !== 'running');
-  const lines = [`${running.length} of your sessions running, ${rest.length} resumable`, ''];
+  const lines = [own ? `${running.length} of your sessions running, ${rest.length} resumable` : `${running.length} running, ${rest.length} resumable`, ''];
+  /** @param {any} s */
+  const whose = (s) => (own || !s?.createdBy ? '' : ` · ${oneLine(String(s.createdBy).replace(/^fleet:/, ''), 128)}`);
   // The Remote Control URL rides along on a running session, the way the
   // host's listing carries it: it is the caller's own session, and it is the
-  // link they would otherwise ask for next.
-  for (const s of running) lines.push(`▶ ${sessionLabel(s)}${s?.rcUrl ? `\n   ${s.rcUrl}` : ''}`);
+  // link they would otherwise ask for next. Only an https link, which is all
+  // a Remote Control URL is: on a line of its own, anything else a box put
+  // there was a line of its choosing in the listing.
+  /** @param {any} s */
+  const link = (s) => (typeof s?.rcUrl === 'string' && /^https:\/\/\S{1,500}$/.test(s.rcUrl) ? `\n   ${s.rcUrl}` : '');
+  for (const s of running) lines.push(`▶ ${sessionLabel(s)}${whose(s)}${link(s)}`);
   if (rest.length) {
     lines.push('', 'Resumable:');
-    for (const s of rest) lines.push(`◼ ${sessionLabel(s)}`);
+    for (const s of rest) lines.push(`◼ ${sessionLabel(s)}${whose(s)}`);
   }
   return lines.join('\n');
 }
@@ -6636,12 +6655,30 @@ function describeOwnSessions(sessions) {
  * A session on one line. A title is a label, not a transcript — somebody
  * pasted a whole task in as one, and the listing rendered its first paragraph.
  *
+ * AND ONE LINE WHATEVER THE BOX SENT. This split on `\n` alone, so a title
+ * or a name carrying `\r`, U+2028 or a bidirectional override still broke
+ * the line or reordered it, in a listing an admin's agent now reads from
+ * every box (eighth audit).
+ *
  * @param {any} s
  */
 function sessionLabel(s) {
-  const title = s?.title ? String(s.title).split('\n')[0].trim() : '';
+  const title = s?.title ? oneLine(String(s.title).split(/[\r\n\u2028\u2029]/)[0], 200) : '';
   const short = title.length > 48 ? `${title.slice(0, 47)}…` : title;
-  return short ? `${s.name} · ${short}` : String(s?.name ?? '');
+  const name = oneLine(s?.name ?? '', 40);
+  return short ? `${name} · ${short}` : name;
+}
+
+/**
+ * What a box said in a fan-out reply, quoted and attributed on one line:
+ * `deb13 said: “…”`. Its words still reach the reader, who asked for them,
+ * and cannot be read as anybody else's (dispatch, the merged `text`).
+ *
+ * @param {string} hostId @param {unknown} text
+ */
+function boxSaid(hostId, text) {
+  const said = text == null ? '' : oneLine(text, 2000);
+  return said ? `${hostId} said: “${said}”` : `${hostId} said nothing`;
 }
 
 /**

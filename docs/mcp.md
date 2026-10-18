@@ -46,9 +46,13 @@ Control URL into anything running. An invited guest calling the first verb they
 would ever call read their host's other work.
 
 The coordinator now writes that listing itself, from the records the caller may
-see — `describeOwnSessions` in `coordinator/core.js`, and `test/ownership.test.js`
+see — `describeSessions` in `coordinator/core.js`, and `test/ownership.test.js`
 holds both renderings of the same fact to the same rule. An admin and the
-break-glass token still get the host's own words.
+break-glass token get the same listing over every record, with whose each one
+is: they used to get the host's own words, and a member's box wrote lines into
+them laid out as another host's, with an instruction an admin's agent took for
+the fleet's (eighth audit). Whatever else a box says in a fan-out reply is
+quoted under its name on one line.
 
 ## What is not exposed, and why that is a policy rather than a lock
 

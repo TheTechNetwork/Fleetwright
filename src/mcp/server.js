@@ -22,6 +22,7 @@
 import { toolsFor, DEFAULT_DENY } from './tools.js';
 import { dispatchRunner } from '../core/runners.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
+import { oneLine, LABEL_RE } from '../core/text.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -181,12 +182,22 @@ function describeHealth(h) {
   // I closed that issue (#311) on the strength of the same commit that fixed
   // the login banner, and the banner was all it fixed. Caught by running the
   // tool afterwards rather than by re-reading the diff.
-  if (h.hostId) lines.push(String(h.hostId));
+  //
+  // THE BOX WROTE THIS FRAME, so what it names is held to one line and its
+  // tags to what a tag is (text.js LABEL_RE), whatever the coordinator in
+  // front of it did. Joined as sent, a box's labels were lines of its own in
+  // an admin's agent's fleet_health (eighth audit). The coordinator drops
+  // such a label too (registry.js attributed); this is the renderer not
+  // relying on it.
+  if (h.hostId) lines.push(oneLine(h.hostId, 64));
   if (typeof h.running === 'number' && typeof h.maxSessions === 'number') {
     lines.push(`${h.running}/${h.maxSessions} sessions running, ${h.free ?? '?'} free`);
   }
   if (Array.isArray(h.loadavg) && h.loadavg.length) lines.push(`load ${h.loadavg.map(Number).join(' ')}`);
-  if (Array.isArray(h.labels)) lines.push(`tags: ${h.labels.length ? h.labels.join(', ') : 'none'}`);
+  if (Array.isArray(h.labels)) {
+    const tags = h.labels.filter((/** @type {unknown} */ l) => typeof l === 'string' && LABEL_RE.test(l));
+    lines.push(`tags: ${tags.length ? tags.join(', ') : 'none'}`);
+  }
   // WHETHER A SESSION CAN ACTUALLY RUN — and `loggedIn` is not that fact.
   //
   // This said "NOT LOGGED IN — a session here cannot do anything" whenever

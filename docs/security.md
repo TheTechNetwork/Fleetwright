@@ -1167,6 +1167,21 @@ SHOULD make safe mode reachable without editing host config.
 *Falsify:* `start` carries `mode`; the apps render it. Check that a per-session
 `--safe` is offered, since the box default is dangerous.
 
+**What a box says reaches an agent as the box's, never as the fleet's.** The
+other direction of the same problem: an agent holding an admin's credential
+reads text a member's box wrote, and a box is a machine somebody else has root
+on. `list`, a nameless `status` and `profiles` asked by an admin go to every
+box, members' included (`scheduler.js`). A box's listing is rewritten from its
+records by the coordinator for every caller, with whose each session is as the
+fleet believes it, and anything else a fan-out reply says is quoted on one line
+under the box's name, `deb13 said: “…”` (`describeSessions`, `boxSaid`,
+`core.js`). A box's labels are held to the hub's label rule where its frame
+comes in (`attributed`, `registry.js`), so `fleet_health` prints tags and
+nothing else. None of this stops a box saying something false about itself;
+it stops one saying it in somebody else's voice.
+*Falsify:* `test/ownership.test.js` ("a member’s box writes no line of an
+admin’s list"), `test/mcp.test.js` ("a box’s labels reach fleet_health").
+
 ---
 
 ## 8. Isolation and the sandbox
