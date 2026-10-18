@@ -130,6 +130,21 @@ const MAX_CLAUDE_PER_WINDOW = 5;
 
 /** GitHub sign-ins and renewals one person's devices may finish in MINT_WINDOW_MS. */
 const MAX_GITHUB_PER_WINDOW = 20;
+/**
+ * How long a GitHub code handed to a box is remembered as a box's
+ * (#rememberBoxSignIn). GitHub's codes last ten minutes from when it issued
+ * them, which is before this hands one on, so the code is dead before it is
+ * forgotten.
+ */
+const BOX_SIGN_IN_TTL_MS = 10 * 60_000;
+/**
+ * How many it remembers at once, every one of which goes beside each device's
+ * sign-in to the minting Worker, which takes as many (minter/github.js,
+ * MAX_BOX_CODES). Past it a box's sign-in is refused rather than one
+ * forgotten early, because forgetting one is the hole this list closes.
+ */
+const MAX_BOX_SIGN_INS = 64;
+const BOX_SIGN_IN_RE = /^[0-9a-f]{64}$/;
 // A person's vault changes: a phone listing, keeping and approving, a few at
 // a time. Thirty in ten minutes is a busy afternoon and not a script.
 const MAX_VAULT_PER_WINDOW = 30;
@@ -326,7 +341,7 @@ export class CoordinatorCore {
    *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any>,
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
    *     linkedRepo?: (ask: { role: string, repo: string }) => Promise<any>,
-   *     github?: (ask: { sealed: unknown }) => Promise<any>,
+   *     github?: (ask: { sealed: unknown, boxCodes?: string[] }) => Promise<any>,
    *     vault?: (route: 'device'|'box', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
    * }} [opts]
@@ -3659,6 +3674,14 @@ export class CoordinatorCore {
    * The code alone is no use to this process: GitHub refuses it without the
    * verifier that never left the phone.
    *
+   * NOR A BOX'S. A box that finishes a person's Connect holds its own
+   * verifier and is handed the code (#exchangeOnHost), and the sign-in the
+   * minter records here is what lets a request open that person's vault and
+   * approve a key. So every code this coordinator handed a box in the last
+   * ten minutes goes beside the ciphertext, as a hash, and the minter refuses
+   * one it finds inside: a sign-in started for a box is never a device's,
+   * whoever's credential sends it (#rememberBoxSignIn, G11).
+   *
    * @param {{ email?: string|null }|null} requester @param {any} body
    * @returns {Promise<Record<string, unknown>>}
    */
@@ -3685,13 +3708,80 @@ export class CoordinatorCore {
     }
     recent.push(now);
     this.claudeAsks.set(key, recent);
-    const r = await this.minter.github({ sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct } }).then(
+    const r = await this.minter.github({ sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, boxCodes: this.#boxSignInsNow() }).then(
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
     return r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
+  }
+
+  /**
+   * The codes handed to boxes that may still be live, as hashes: SHA-256, hex,
+   * which is how the minter compares one (minter/github.js). Kept in storage
+   * (fleet-do.js, `boxSignIns`), because this object is evicted between
+   * messages as a matter of course, and a box that waited for that would
+   * otherwise find the list empty.
+   * @type {Map<string, number>}
+   */
+  #boxSignIns = new Map();
+
+  /** The live hashes, the expired ones dropped. */
+  #boxSignInsNow() {
+    const now = this.now();
+    for (const [hash, at] of this.#boxSignIns) if (now - at >= BOX_SIGN_IN_TTL_MS) this.#boxSignIns.delete(hash);
+    return [...this.#boxSignIns.keys()];
+  }
+
+  /**
+   * Remember a GitHub code as a box's BEFORE the box is handed it, so the
+   * minting Worker refuses to record it as a device's sign-in
+   * (githubDeviceToken). False when MAX_BOX_SIGN_INS are already remembered,
+   * and then the box is not handed the code.
+   *
+   * WHY THE CODE AND NOT WHO SENDS IT. A box's root or sidecar account seals
+   * the code with the verifier it minted, and sends it with whatever fleet
+   * credential it can find; the coordinator cannot read the seal and the
+   * minter cannot tell one verifier from another. What only this process
+   * knows is which codes it relayed to a box, so that is what it says.
+   *
+   * Written to storage before the code leaves: a Durable Object holds an
+   * outgoing message until the writes before it are done, so the box is never
+   * holding a code the list in storage does not have.
+   *
+   * @param {string} code
+   */
+  async #rememberBoxSignIn(code) {
+    const hash = await hashSecret(code);
+    if (this.#boxSignInsNow().length >= MAX_BOX_SIGN_INS) return false;
+    this.#boxSignIns.set(hash, this.now());
+    this.onStateChanged?.();
+    return true;
+  }
+
+  /**
+   * For storage: each remembered hash and when, the live ones only.
+   * @returns {Array<[string, number]>}
+   */
+  serialiseBoxSignIns() {
+    this.#boxSignInsNow();
+    return [...this.#boxSignIns];
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it, and only
+   * what is still inside its window.
+   * @param {unknown} saved
+   */
+  restoreBoxSignIns(saved) {
+    const now = this.now();
+    for (const row of Array.isArray(saved) ? saved.slice(0, MAX_BOX_SIGN_INS) : []) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || !BOX_SIGN_IN_RE.test(row[0])) continue;
+      const at = row[1];
+      if (typeof at !== 'number' || !Number.isFinite(at) || at > now || now - at >= BOX_SIGN_IN_TTL_MS) continue;
+      this.#boxSignIns.set(row[0], at);
+    }
   }
 
   /**
@@ -3964,7 +4054,13 @@ export class CoordinatorCore {
     const { flow, refused } = this.#redeemFor(this.pendingGithub, state, requester);
     if (!flow) return refused;
 
-    if (flow.pkce) return this.#exchangeOnHost({ provider: 'github', flow, code, clientId, origin });
+    if (flow.pkce) {
+      // A BOX'S FROM HERE ON, before it is handed over (#rememberBoxSignIn).
+      if (!(await this.#rememberBoxSignIn(code))) {
+        return { ok: false, text: 'Too many GitHub sign-ins have been finished on boxes in the last ten minutes. Wait a few minutes and start again from the app.' };
+      }
+      return this.#exchangeOnHost({ provider: 'github', flow, code, clientId, origin });
+    }
 
     const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };

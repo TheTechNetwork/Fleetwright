@@ -368,6 +368,9 @@ test('the minter refuses a phone sign-in it cannot finish, each for its own reas
   assert.equal(await code(await sealedWith({ v: 2, grant: 'refresh', refreshToken: FIRST_REFRESH })), 'bad_params');
   assert.equal(await code(await sealedWith({ grant: 'refresh', refreshToken: 'short' })), 'bad_params');
   assert.equal(await code(await sealedWith({ grant: 'password' })), 'bad_params');
+  // A coordinator's list of codes it handed boxes that is not a list of
+  // hashes is refused, not read as no list (G11).
+  assert.equal(await code({ ...(await sealedWith({ grant: 'refresh', refreshToken: FIRST_REFRESH })), boxCodes: ['goodcode123'] }), 'bad_params');
   // A redirect anywhere but a fleet's own callback is refused before GitHub is asked.
   assert.equal(await code(await sealedWith({ grant: 'code', code: 'goodcode123', verifier: 'v'.repeat(64), redirectUri: 'https://evil.example/elsewhere' })), 'bad_params');
   assert.equal(await code(await sealedWith({ grant: 'refresh', refreshToken: FIRST_REFRESH })), 'github_unreachable');

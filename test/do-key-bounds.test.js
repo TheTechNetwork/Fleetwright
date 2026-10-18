@@ -83,6 +83,9 @@ const BOUNDED = {
   // The hour's pushes each person has had and the pool losses said to them:
   // a window, and MAX_PUSH_LIMIT_ROWS of each.
   pushLimits: 'src/fleet/coordinator/core.js',
+  // GitHub codes handed to boxes: a ten-minute window, and a refusal past
+  // MAX_BOX_SIGN_INS.
+  boxSignIns: 'src/fleet/coordinator/core.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */
