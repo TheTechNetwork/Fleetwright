@@ -59,9 +59,9 @@ export function cancelReboot() {
  *
  * @param {import('../config.js').Config} cfg
  * @param {string[]} args what came after /reboot
- * @param {{ actor?: string|null, sessions?: string[], now?: () => number, exec?: (argv: string[]) => { status: number, stderr: string } }} [opts]
+ * @param {{ actor?: string|null, sessions?: string[], fleetName?: string|null, now?: () => number, exec?: (argv: string[]) => { status: number, stderr: string } }} [opts]
  */
-export function reboot(cfg, args, { actor = null, sessions = [], now = () => Date.now(), exec = defaultExec } = {}) {
+export function reboot(cfg, args, { actor = null, sessions = [], fleetName = null, now = () => Date.now(), exec = defaultExec } = {}) {
   if (!cfg.systemReboot) {
     return {
       ok: false,
@@ -77,6 +77,19 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
   }
 
   const hostname = os.hostname();
+  // TWO NAMES FOR ONE MACHINE, and either one proves the person read which
+  // machine this is. The kernel's hostname is what a shell on the box shows.
+  // The fleet name is what the apps show — FLEETWRIGHT_HOST_ID, or the name
+  // the coordinator assigned at enrolment — and it is the only name a phone
+  // has, so it is the one the phone confirms with. A box called RPI-7550-ARM
+  // that joined its fleet as rpi-7550 refused every reboot from the app with
+  // "This box is RPI-7550-ARM, not rpi-7550", which is the guard misfiring on
+  // the machine it was meant to protect: the person named this box, by the
+  // name they were shown. Both names are accepted, exactly, and a refusal
+  // names both so the next attempt is not a guess.
+  const names = [hostname, ...(fleetName && fleetName !== hostname ? [fleetName] : [])];
+  const isThisBox = (/** @type {string} */ name) => names.includes(name);
+  const whoIAm = names.length > 1 ? `${hostname} (${fleetName} in the fleet)` : hostname;
   const current = live(now);
 
   // Step 1: no arguments. Say what will be lost, and ask for as much as the
@@ -147,10 +160,10 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
   // the PIN off, and a box that had sessions when it was asked keeps needing
   // one even if they end while somebody is deciding.
   if (current.pin === null) {
-    if (args[0] !== hostname) {
+    if (!isThisBox(args[0])) {
       return {
         ok: false,
-        text: `This box is ${hostname}, not ${args[0]}. Nothing was done. /reboot to start again.`,
+        text: `This box is ${whoIAm}, not ${args[0]}. Nothing was done. /reboot to start again.`,
       };
     }
   } else {
@@ -174,10 +187,10 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
     // The PIN and the hostname together — the one message the apps actually
     // send. The wrong-box guard is the same as step 3's on its own: the second
     // argument has to be this machine's name, or nothing happens.
-    if (args[1] !== hostname) {
+    if (!isThisBox(args[1])) {
       return {
         ok: false,
-        text: `This box is ${hostname}, not ${args[1]}. Nothing was done. /reboot to start again.`,
+        text: `This box is ${whoIAm}, not ${args[1]}. Nothing was done. /reboot to start again.`,
       };
     }
   }
