@@ -147,19 +147,22 @@ test('the installer has one place a grant is turned on or off, and three callers
   // THE ANSWER IS OVERWRITTEN, not filled in. The Pi's first `grant reboot
   // on` wrote the rule and left FLEETWRIGHT_SYSTEM_REBOOT=0 in the file,
   // because set_env keeps whatever is there; the hub restarted into the
-  // same refusal. A grant is a decision being changed, so it goes through
-  // put_env, the writer that replaces.
+  // same refusal. A grant is a decision being changed, so it is recorded
+  // through note_grant, whose env-file writer is put_env, the one that
+  // replaces (and root's own record beside it, install-root-sources.test.js).
   const applyGrant = /^apply_grant\(\) \{[\s\S]*?\n\}/m.exec(SH)?.[0] ?? '';
-  for (const key of ['FLEETWRIGHT_SYSTEM_UPGRADE', 'FLEETWRIGHT_SYSTEM_REBOOT']) {
-    assert.match(applyGrant, new RegExp(`put_env "\\$ENV_FILE" ${key} 1`), `${key} on is not overwritten`);
-    assert.match(applyGrant, new RegExp(`put_env "\\$ENV_FILE" ${key} 0`), `${key} off is not overwritten`);
-    assert.doesNotMatch(applyGrant, new RegExp(`set_env "\\$ENV_FILE" ${key}`), `${key} still goes through the fill-if-empty writer`);
+  const noteGrant = /^note_grant\(\) \{[\s\S]*?\n\}/m.exec(SH)?.[0] ?? '';
+  for (const grant of ['upgrades', 'reboot']) {
+    assert.match(applyGrant, new RegExp(`note_grant ${grant} 1`), `${grant} on is not recorded`);
+    assert.match(applyGrant, new RegExp(`note_grant ${grant} 0`), `${grant} off is not recorded`);
   }
+  assert.match(noteGrant, /put_env "\$ENV_FILE" "\$key" "\$2"/, 'an answer is not overwritten in the env file');
+  assert.doesNotMatch(applyGrant + noteGrant, /set_env "\$ENV_FILE" (FLEETWRIGHT_SYSTEM_|"\$key")/, 'an answer still goes through the fill-if-empty writer');
   // The wizard, the repair and --grant.
   assert.match(SH, /if confirm "Allow system updates from chat\?" Y; then\n\s+apply_grant upgrades yes/);
   assert.match(SH, /if confirm "Allow reboot from chat\?" N; then\n\s+apply_grant reboot yes/);
-  assert.match(SH, /FLEETWRIGHT_SYSTEM_UPGRADE\)" = 1 \]; then\n\s+apply_grant upgrades yes/);
-  assert.match(SH, /FLEETWRIGHT_SYSTEM_REBOOT\)" = 1 \]; then\n\s+apply_grant reboot yes/);
+  assert.match(SH, /ROOT_SYSTEM_UPGRADE" = 1 \]; then\n\s+apply_grant upgrades yes/);
+  assert.match(SH, /ROOT_SYSTEM_REBOOT" = 1 \]; then\n\s+apply_grant reboot yes/);
   assert.match(SH, /--grant\)/);
   assert.match(SH, /GRANT_ONLY=1/);
   // THE GRANT MODE RUNS BEFORE SECTION 1, which is where the installer finds

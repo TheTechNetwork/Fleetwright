@@ -68,6 +68,13 @@ test('the service user can change a path through any directory on the way to it'
     // directory of somebody else's under sticky /tmp, whatever is inside it.
     mkdirSync(p('sealed/inner'), { recursive: true }); chmodSync(p('sealed'), 0o700);
     writeFileSync(p('sealed/inner/file'), ''); chmodSync(p('sealed/inner/file'), 0o666);
+    // A tree holding a link to a link: the hop sits in a directory anybody
+    // can write, so anybody can point it — and so the tree — elsewhere.
+    symlinkSync('/usr/bin/env', p('open/hop'));
+    mkdirSync(p('hops')); symlinkSync(p('open/hop'), p('hops/link'));
+    mkdirSync(p('hopsrel')); symlinkSync('../open/hop', p('hopsrel/link'));
+    mkdirSync(p('inside/d'), { recursive: true }); writeFileSync(p('inside/d/x'), ''); symlinkSync('d/x', p('inside/in'));
+    writeFileSync(p('open/target/file'), '');
 
     const cases = [
       ['/usr/bin/env', false, 'a root-owned file in root-owned directories'],
@@ -82,6 +89,10 @@ test('the service user can change a path through any directory on the way to it'
       [p('sealed/inner/file'), false, 'a 0666 file nobody else can reach'],
       [p('ro/missing'), false, 'nothing there, in a directory they cannot write'],
       [p('open/missing'), true, 'nothing there, in a directory they can write'],
+      [p('safe/via/file'), true, 'a file reached through a symlink on the way that lands in a directory anybody can write'],
+      [p('hops'), true, 'a tree holding a link whose next hop is a link in a directory anybody can write'],
+      [p('hopsrel'), true, 'the same, written relative'],
+      [p('inside'), false, 'a tree whose only link stays inside it'],
     ];
     const script = `${functions(ALTER)}
 RUN_USER=nobody
@@ -107,6 +118,58 @@ test('a file the service user owns is theirs wherever it sits', { skip: !(root &
     spawnSync('chown', ['nobody', path.join(t, 'tree', 'f')]);
     const r = sh(`${functions(ALTER)}\nRUN_USER=nobody\nrun_user_can_alter "$P" && echo yes || echo no`, { P: path.join(t, 'tree') });
     assert.equal(r.stdout.trim(), 'yes', r.stderr);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('a group they are in, a sticky directory, a link on the way and a directory of theirs above', { skip: !(root && canAsk) && 'needs root to give files and groups away' }, () => {
+  // The shapes the kernel's own rules decide, each made for real: the group
+  // bits apply to a member of the group and the other bits to nobody else's;
+  // a sticky directory protects only what its owner does not own; a link is
+  // asked where it sits as well as where it lands; and a directory of theirs
+  // anywhere above is a rename away from a tree of their own.
+  const t = mkdtempSync(path.join(tmpdir(), 'rua-shapes-'));
+  try {
+    chmodSync(t, 0o755);
+    const p = (/** @type {string} */ rel) => path.join(t, rel);
+    const gid = spawnSync('id', ['-g', 'nobody'], { encoding: 'utf8' }).stdout.trim();
+    const give = (/** @type {string[]} */ args) => assert.equal(spawnSync(args[0], args.slice(1)).status, 0, args.join(' '));
+    mkdirSync(p('ours')); writeFileSync(p('ours/file'), '');
+    give(['chgrp', gid, p('ours')]); chmodSync(p('ours'), 0o775);
+    mkdirSync(p('wheel')); writeFileSync(p('wheel/file'), '');
+    give(['chgrp', '0', p('wheel')]); chmodSync(p('wheel'), 0o775);
+    mkdirSync(p('ourslocked')); writeFileSync(p('ourslocked/file'), '');
+    give(['chgrp', gid, p('ourslocked')]); chmodSync(p('ourslocked'), 0o707);
+    mkdirSync(p('tmp')); chmodSync(p('tmp'), 0o1777);
+    writeFileSync(p('tmp/theirs'), ''); give(['chown', 'nobody', p('tmp/theirs')]);
+    writeFileSync(p('tmp/roots'), '');
+    mkdirSync(p('tmp/sealed')); writeFileSync(p('tmp/sealed/file'), '');
+    mkdirSync(p('safe')); symlinkSync(p('ours'), p('safe/hop'));
+    mkdirSync(p('theirs/sub'), { recursive: true }); writeFileSync(p('theirs/sub/file'), '');
+    give(['chown', 'nobody', p('theirs')]);
+
+    const cases = [
+      [p('ours/file'), true, 'a file in a directory group-writable by a group they are in'],
+      [p('ours'), true, 'that directory'],
+      [p('wheel/file'), false, 'a file in a directory group-writable by a group they are not in'],
+      [p('ourslocked/file'), false, 'their group’s bits, which deny, over the other bits, which allow'],
+      [p('tmp/theirs'), true, 'their file in a sticky directory anybody can write'],
+      [p('tmp/roots'), false, 'root’s file in that sticky directory'],
+      [p('tmp/sealed/file'), false, 'a file in root’s directory in that sticky directory'],
+      [p('tmp'), true, 'the sticky directory itself, where anybody can make a name'],
+      [p('safe/hop/file'), true, 'a file through a link on the way into their group’s directory'],
+      [p('theirs/sub/file'), true, 'root’s file two directories below one of theirs'],
+    ];
+    const r = sh(`${functions(ALTER)}
+RUN_USER=nobody
+while IFS= read -r q; do
+  if run_user_can_alter "$q"; then echo "yes $q"; else echo "no  $q"; fi
+done <<< "$CASES"`, { CASES: cases.map(([q]) => q).join('\n') });
+    const answers = new Map(r.stdout.trim().split('\n').map((l) => [l.slice(4), l.startsWith('yes')]));
+    for (const [q, want, why] of cases) {
+      assert.equal(answers.get(/** @type {string} */ (q)), want, `${why}: ${q}\n${r.stdout}${r.stderr}`);
+    }
   } finally {
     rmSync(t, { recursive: true, force: true });
   }

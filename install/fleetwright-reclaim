@@ -24,29 +24,24 @@
 #   remove only entries of that one shape.
 #
 # NO ARGUMENTS, for the reason the other rules spell their command lines out:
-# sudoers matches argv, and every argument is a widening. The base is read from
-# the root-owned env file, exactly as fleetwright-migrate reads its manifest URL.
+# sudoers matches argv, and every argument is a widening.
+#
+# AND NOTHING FROM THE ENV FILE. The base was read out of /etc/fleetwright.env
+# as FLEETWRIGHT_INSTALL_DIR, "the root-owned env file" — which it is not:
+# install.sh chowns it to the service user so the CLI can read it (see
+# fleetwright-migrate's header, which said the same thing and was wrong the
+# same way). So the directory whose releases/.stale-* root removes was one
+# the service user named. The installer never writes that setting, so every
+# box read the default anyway; it is now the default, or FLEETWRIGHT_BASE,
+# which sudo's env_reset strips — the same base fleetwright-migrate uses.
 set -eu
 
-ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/fleetwright.env}"
-[ -f "$ENV_FILE" ] || [ ! -f /etc/agent-hub.env ] || ENV_FILE=/etc/agent-hub.env
 log() { printf '%s\n' "$*"; }
 
 # BEING ABLE TO WRITE IS THE REQUIREMENT, NOT BEING ROOT — the same rule
 # fleetwright-migrate and bootstrap.sh state, so the whole path is testable
 # against a temporary tree instead of only ever on a real box.
-BASE="${FLEETWRIGHT_BASE:-}"
-if [ -z "$BASE" ]; then
-  # Read it the way systemd does — take the value, never source the file, which
-  # would execute whatever is in it in a root shell.
-  BASE="$(sed -n 's/^FLEETWRIGHT_INSTALL_DIR=//p' "$ENV_FILE" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
-  # FLEETWRIGHT_INSTALL_DIR points at `<base>/current`; the releases live one level
-  # up. Absent, the default layout is /opt/fleetwright.
-  case "$BASE" in
-    */current) BASE="${BASE%/current}" ;;
-    '') BASE=/opt/fleetwright ;;
-  esac
-fi
+BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 
 RELEASES="$BASE/releases"
 [ -d "$RELEASES" ] || { log "no $RELEASES — nothing to reclaim"; exit 0; }

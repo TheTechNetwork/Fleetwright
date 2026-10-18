@@ -143,17 +143,54 @@ FLEET_BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 SERVICES_STARTED=0
 OLD_UNIT_BACKUP_DIR=""
 ENV_FILE=/etc/fleetwright.env
-# The release address root acts on, which is not $ENV_FILE: that file is the
-# service user's, chowned to them so the CLI can read it. See "WHERE ROOT
-# TAKES ITS RELEASES FROM" below, and install/fleetwright-migrate, which reads
-# only this.
-RELEASE_MANIFEST_FILE=/usr/local/etc/fleetwright/release-manifest
+# What root acts on, which is not $ENV_FILE: that file is the service user's,
+# chowned to them so the CLI can read it. The release address root fetches
+# from, and the two answers that decide which sudoers rules root writes. See
+# "WHERE ROOT TAKES ITS RELEASES FROM" and "WHAT ROOT HAS GRANTED" below, and
+# install/fleetwright-migrate, which reads only the first.
+#
+# ONE VALUE TO A FILE, not an env file of root's. The address was already
+# one line in one file that the migrate helper reads with `head`, and a
+# second format would be a second parser running as root. A file per answer
+# also gives "never recorded" a shape of its own — no file — which is the one
+# state a run may seed from (record_root_setting, below); a missing key in a
+# shared file would be easier to arrange and harder to tell from a blank one.
+ROOT_ETC=/usr/local/etc/fleetwright
+RELEASE_MANIFEST_FILE="$ROOT_ETC/release-manifest"
+SYSTEM_UPGRADE_FILE="$ROOT_ETC/system-upgrade"
+SYSTEM_REBOOT_FILE="$ROOT_ETC/system-reboot"
 SIDECAR_ENV=/etc/fleetwright-sidecar.env
 COORD_ENV=/etc/fleetwright-coordinator.env
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
+
+# ROOT'S RECORD OF ONE SETTING: one line, 0644, root's, in a directory root
+# makes. The value may be empty, and an empty file is still a record — "seeded
+# once, and there was nothing to take" — because a run seeds only a file that
+# does not exist, and a seed that left nothing behind was a seed taken again
+# on every run from whatever the service user had written since. Called
+# inside `if`, so a failure is a warning rather than the end of the run.
+# Defined up here because --grant, which exits long before the sections that
+# read these, records its answer through it.
+record_root_setting() { # record_root_setting FILE VALUE
+  local tmp
+  tmp="$(mktemp)" || return 1
+  printf '%s\n' "$2" > "$tmp"
+  if install -d -m 0755 -o root -g root "${1%/*}" \
+     && install -m 0644 -o root -g root "$tmp" "$1"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+# And read back: the first line, or nothing.
+root_setting() { # root_setting FILE
+  [ -f "$1" ] || return 0
+  head -n 1 "$1" | tr -d '[:space:]'
+}
 
 # Who owns a path. GNU stat spells it -c %U and BSD stat -f %Su; a Mac has the
 # second, and the first version of the two chown guards below asked GNU's
@@ -946,6 +983,26 @@ get_env() { # get_env FILE KEY
   sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1 || true
 }
 
+# WHICH fleetwright-migrate ROOT RUNS ITSELF, for the heal below and the
+# conversion offer at the end. The installer's own tree's, $SELF_DIR — never
+# the payload's, which is the service user's `current` — rather than the copy
+# in /usr/local/sbin, because that copy was once a snapshot from whichever
+# install ran last: a fix to the helper did not take effect until the run
+# after the one that installed it, which happened on a real box.
+#
+# UNLESS THE TREE IS ONE $RUN_USER CAN CHANGE, which a checkout is. This run
+# has copied the helper into /usr/local/sbin from the same tree by then, so
+# the two are the same file except that one is out of their reach, and the
+# conversion offer runs it only after waiting on a person's answer for as
+# long as they take. That copy is the one root runs (root_may_run).
+migrate_helper() { # → the path of the helper root should run
+  if [ -x "$SELF_DIR/install/fleetwright-migrate" ] && root_may_run "$SELF_DIR/install/fleetwright-migrate"; then
+    printf '%s\n' "$SELF_DIR/install/fleetwright-migrate"
+  else
+    printf '%s\n' /usr/local/sbin/fleetwright-migrate
+  fi
+}
+
 # A CONVERTED BOX IS BROUGHT FORWARD, NOT JUST RE-POINTED.
 #
 # Re-running the one-liner on a packaged box used to rewrite its units, restart
@@ -977,14 +1034,11 @@ refresh_release_if_converted() {
   [ "$CHECK_ONLY" != 1 ] || return 0
   [ "$PACKAGED" = 0 ] || return 0             # we ARE the release being laid out
   [ -z "${FLEETWRIGHT_MIGRATING:-}" ] || return 0   # the helper re-ran us; do not loop
-  [ -n "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ] || return 0
+  # Root's address, which is the only one the helper will use; the env
+  # file's is the service user's (WHERE ROOT TAKES ITS RELEASES FROM).
+  [ -n "${ROOT_MANIFEST:-}" ] || return 0
 
-  # THE TREE'S HELPER, NOT THE INSTALLED SNAPSHOT. /usr/local/sbin's copy was
-  # taken by whichever install ran last, so a fix to the helper would otherwise
-  # not take effect until the run AFTER the one that installed it — which has
-  # already happened once on a real box.
-  HELPER=/usr/local/sbin/fleetwright-migrate
-  [ -x "$SELF_DIR/install/fleetwright-migrate" ] && HELPER="$SELF_DIR/install/fleetwright-migrate"
+  HELPER="$(migrate_helper)"
   [ -x "$HELPER" ] || return 0
 
   say "Packaged release"
@@ -1208,9 +1262,24 @@ _rua_walk() { # _rua_walk PATH DEPTH [notree]
   # A symlink in the tree is asked where it lands — the path to it and the
   # thing itself, not a second walk of everything under it, and not at all
   # when it lands inside the tree just scanned.
-  while IFS= read -r -d '' target; do
-    target="$(readlink -f -- "$target" 2>/dev/null)" || return 0
-    case "$target/" in "${cur%/}/"*) continue ;; esac
+  #
+  # ONE HOP AT A TIME, as the walk down does. This resolved the link all the
+  # way with `readlink -f` and asked only where it ended, so a link to
+  # /srv/open/hop, itself a link to /usr/bin/env, was asked about
+  # /usr/bin/env and answered "safe" — while /srv/open was a directory
+  # anybody could write, and the hop in it anybody's to point at a file of
+  # their own. The walk follows every link on the way and asks the
+  # directory each one sits in. "Inside the tree" is decided on the link as
+  # written, and only when it climbs nowhere: `sub/../x` can leave through a
+  # `sub` that is itself a link.
+  local link
+  while IFS= read -r -d '' link; do
+    target="$(readlink -- "$link")" || return 0
+    case "$target" in /*) ;; *) target="$(dirname -- "$link")/$target" ;; esac
+    case "/$target/" in
+      */../*) ;;
+      *) case "$target/" in "${cur%/}/"*) continue ;; esac ;;
+    esac
     _rua_walk "$target" $((depth + 1)) notree && return 0
   done < <(find "$cur" -type l -print0 2>/dev/null)
   return 1
@@ -1599,11 +1668,31 @@ write_reboot_sudoers() {
   return 1
 }
 
+# AN ANSWER, RECORDED WHERE ROOT READS IT AND WHERE THE HUB DOES: root's file
+# (see "WHAT ROOT HAS GRANTED"), then the env file, which src/config.js reads
+# to decide what /upgrade and /reboot offer. A root file that could not be
+# written is removed rather than left saying the old answer, so the next run
+# seeds it from the rule on disk — which this run has just made agree.
+note_grant() { # note_grant upgrades|reboot 1|0
+  local file key
+  case "$1" in
+    upgrades) file="$SYSTEM_UPGRADE_FILE" key=FLEETWRIGHT_SYSTEM_UPGRADE; ROOT_SYSTEM_UPGRADE="$2" ;;
+    reboot)   file="$SYSTEM_REBOOT_FILE" key=FLEETWRIGHT_SYSTEM_REBOOT; ROOT_SYSTEM_REBOOT="$2" ;;
+    *) die "note_grant: not a grant: $1" ;;
+  esac
+  if [ "$PLATFORM" != macos ] && ! record_root_setting "$file" "$2"; then
+    rm -f "$file"
+    warn "could not write $file — the next run as root takes the answer from the rule on disk"
+  fi
+  put_env "$ENV_FILE" "$key" "$2"
+}
+
 # THE ONE PLACE A GRANT IS TURNED ON OR OFF. The wizard calls it when somebody
 # answers, --repair calls it for the answers already recorded, and --grant
 # calls it for an answer changed later. Three callers, one implementation:
-# the rule, the units it names, and the recorded answer move together, or a
-# box ends up permitted something the env file says it is not.
+# the rule, the units it names, and the recorded answer — root's and the
+# hub's, note_grant above — move together, or a box ends up permitted
+# something the env file says it is not.
 #
 # Off REMOVES the rule. A recorded "0" beside a rule still on disk is the
 # shape of drift this file keeps finding, and a grant somebody withdrew from
@@ -1616,8 +1705,8 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
   # as off, with the reason, and no rule is written.
   if [ "$PLATFORM" = macos ]; then
     case "$1" in
-      upgrades) put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0 ;;
-      reboot)   put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0 ;;
+      upgrades) note_grant upgrades 0 ;;
+      reboot)   note_grant reboot 0 ;;
       *) die "apply_grant: not a grant: $1=$2" ;;
     esac
     [ "$2" = yes ] && warn "$1 from chat is not available on a Mac — recorded as off (apt and systemctl are Linux)"
@@ -1627,7 +1716,7 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
     upgrades:yes)
       install_upgrade_units
       if write_upgrade_sudoers; then
-        put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
+        note_grant upgrades 1
         set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
         ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade, fleetwright-apt-update, fleetwright-package-upgrade and fleetwright-apt-channel@{stable,rolling}"
       else
@@ -1636,11 +1725,11 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
       fi ;;
     upgrades:no)
       rm -f /etc/sudoers.d/fleetwright-upgrade
-      put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0
+      note_grant upgrades 0
       ok "system upgrades from chat are off — /etc/sudoers.d/fleetwright-upgrade removed" ;;
     reboot:yes)
       if write_reboot_sudoers; then
-        put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 1
+        note_grant reboot 1
         set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
         ok "/etc/sudoers.d/fleetwright-reboot — $RUN_USER may run systemctl reboot"
       else
@@ -1649,7 +1738,7 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
       fi ;;
     reboot:no)
       rm -f /etc/sudoers.d/fleetwright-reboot
-      put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0
+      note_grant reboot 0
       ok "reboot from chat is off — /etc/sudoers.d/fleetwright-reboot removed" ;;
     *) die "apply_grant: not a grant: $1=$2" ;;
   esac
@@ -2440,23 +2529,23 @@ fi
 #     because until this run the helper read that same value as root, at the
 #     same service user's request. From the second run on it is kept.
 #
+#     ONCE MEANS A FILE IS LEFT EVEN WHEN THERE WAS NOTHING TO TAKE. This
+#     wrote only a non-empty address, so a box that had none — every apt box,
+#     where releases come from apt and nobody tells root an address — had no
+#     file after its first run, and every run after that was "the first" all
+#     over again: the service user put an address in their env file, the next
+#     `apt upgrade` ran this as root and seeded root's file from it, and
+#     `sudo -n fleetwright-migrate` ran their release's install.sh as root.
+#     An empty file is the record that the seed was taken. The migrate helper
+#     refuses it as it refuses a missing one; telling is still the way in.
+#
+#     AND NOTHING IS SEEDED ON A BOX ROOT IS TOLD IS APT'S. The deb's postinst
+#     says so in this installer's own environment; such a box takes releases
+#     from apt alone, and a manifest address of root's would only be the
+#     second updater "A BOX THAT APT OWNS" above refuses to make.
+#
 # NOT ON A MAC, where there is no helper to read it (see "THE MIGRATION
 # HELPER" below) and /usr/local/etc is often the Homebrew user's directory.
-#
-# Called inside `if`, so a failure is a warning rather than the end of the run.
-record_release_manifest() { # record_release_manifest URL
-  local tmp
-  tmp="$(mktemp)" || return 1
-  printf '%s\n' "$1" > "$tmp"
-  if install -d -m 0755 -o root -g root "${RELEASE_MANIFEST_FILE%/*}" \
-     && install -m 0644 -o root -g root "$tmp" "$RELEASE_MANIFEST_FILE"; then
-    rm -f "$tmp"
-    return 0
-  fi
-  rm -f "$tmp"
-  return 1
-}
-
 ENV_MANIFEST="$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)"
 ROOT_MANIFEST=""
 if [ "$PLATFORM" != macos ]; then
@@ -2464,21 +2553,24 @@ if [ "$PLATFORM" != macos ]; then
   if [ -n "${FLEETWRIGHT_RELEASE_MANIFEST:-}" ]; then
     ROOT_MANIFEST="$FLEETWRIGHT_RELEASE_MANIFEST"
     MANIFEST_FROM=told
-  elif [ -s "$RELEASE_MANIFEST_FILE" ]; then
-    ROOT_MANIFEST="$(head -n 1 "$RELEASE_MANIFEST_FILE" | tr -d '[:space:]')"
+  elif [ -e "$RELEASE_MANIFEST_FILE" ]; then
+    ROOT_MANIFEST="$(root_setting "$RELEASE_MANIFEST_FILE")"
     MANIFEST_FROM=kept
-  elif [ -n "$ENV_MANIFEST" ]; then
-    ROOT_MANIFEST="$ENV_MANIFEST"
+  else
     MANIFEST_FROM=seeded
-  elif [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" != "apt" ] \
-       && ROOT_MANIFEST=$(release_manifest_url "$(git -C "$DIR" remote get-url origin 2>/dev/null || true)"); then
-    MANIFEST_FROM=seeded
+    if [ "${FLEETWRIGHT_RELEASE_SOURCE:-}" = "apt" ]; then
+      ROOT_MANIFEST=""
+    elif [ -n "$ENV_MANIFEST" ]; then
+      ROOT_MANIFEST="$ENV_MANIFEST"
+    elif [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" != "apt" ]; then
+      ROOT_MANIFEST=$(release_manifest_url "$(git -C "$DIR" remote get-url origin 2>/dev/null || true)") || ROOT_MANIFEST=""
+    fi
   fi
-  if [ -n "$ROOT_MANIFEST" ] && [ "$MANIFEST_FROM" != kept ]; then
-    if record_release_manifest "$ROOT_MANIFEST"; then
-      ok "root takes releases from $ROOT_MANIFEST ($RELEASE_MANIFEST_FILE)"
+  if [ "$MANIFEST_FROM" != kept ]; then
+    if record_root_setting "$RELEASE_MANIFEST_FILE" "$ROOT_MANIFEST"; then
+      [ -z "$ROOT_MANIFEST" ] || ok "root takes releases from $ROOT_MANIFEST ($RELEASE_MANIFEST_FILE)"
     else
-      warn "could not write $RELEASE_MANIFEST_FILE — root will not move this box onto a release until it can"
+      [ -z "$ROOT_MANIFEST" ] || warn "could not write $RELEASE_MANIFEST_FILE — root will not move this box onto a release until it can"
       ROOT_MANIFEST=""
     fi
   fi
@@ -2523,6 +2615,13 @@ if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" != "apt" ]; then
       warn "could not tell which repository this came from, so FLEETWRIGHT_RELEASE_MANIFEST is unset"
       warn "  re-run this installer as root with FLEETWRIGHT_RELEASE_MANIFEST=<url of a release manifest>, or this box cannot take updates"
     fi
+  fi
+  # ROOT KEPT "NONE" and the env file names one: said, because nothing else
+  # will. Root's record was seeded once with nothing to take, and is not
+  # seeded again from a file the service user writes (above).
+  if [ "$PLATFORM" != macos ] && [ -z "$ROOT_MANIFEST" ] && [ -n "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ]; then
+    warn "root has no release address of its own ($RELEASE_MANIFEST_FILE) and does not take $ENV_FILE's,"
+    warn "  so it will not move this box onto a release. To give it one: re-run this installer as root with FLEETWRIGHT_RELEASE_MANIFEST=<url>"
   fi
 fi
 
@@ -2589,6 +2688,78 @@ if [ -n "$CLAUDE_BIN" ]; then
   set_env "$ENV_FILE" FLEETWRIGHT_CLAUDE_BIN "$CLAUDE_BIN"
   ok "recorded claude at $CLAUDE_BIN in $ENV_FILE"
 fi
+
+# WHAT ROOT HAS GRANTED, which is no longer the env file either.
+#
+# Two sudoers rules hang on two answers — system upgrades and reboot from
+# chat — and --repair re-applies each one answered yes. It took the answer
+# from $ENV_FILE, which is the service user's for the reason the release
+# address above is not in it. So FLEETWRIGHT_SYSTEM_REBOOT=1 in their own
+# file, then `sudo -n fleetwright-migrate`, and the heal's --repair wrote
+# /etc/sudoers.d/fleetwright-reboot for them; FLEETWRIGHT_SYSTEM_UPGRADE=1
+# was the rule that starts apt as root. The deb's postinst runs --repair on
+# every apt upgrade, so they did not even need the sudo rule to get there.
+#
+# So root's answers live in $SYSTEM_UPGRADE_FILE and $SYSTEM_REBOOT_FILE,
+# beside the address and by its rule:
+#
+#   TOLD. An answer in this installer's own environment or on its command
+#     line — debconf's, a flag, `sudo fleetwright grant` — goes through
+#     apply_grant, which records it (note_grant). Root's environment.
+#
+#   KEPT. A file already there is what --repair and the wizard read, and
+#     nothing here refreshes it. An empty one is an answer nobody has given:
+#     the wizard asks it, and --repair grants nothing on it.
+#
+#   SEEDED, ONCE, from root's evidence rather than the env file's. The rule
+#     is in /etc/sudoers.d or it is not, and only root writes there, so that
+#     is the answer. The env file says only whether the question was ever
+#     answered at all, which can make the record a no, or leave it for a
+#     person to be asked — never a yes. Not even trust on first use, then:
+#     the most the service user's file can add is a refusal.
+#
+# AND THE ENV FILE IS PUT BACK TO ROOT'S ANSWER, out loud, as the address is:
+# the hub reads it (src/config.js) to decide whether to offer /upgrade's
+# apply and /reboot, and a hub believing a grant root never made offers a
+# button that cannot work.
+#
+# A MAC KEEPS ITS ANSWERS IN THE ENV FILE. No rule is ever written there
+# (apply_grant records every answer as off), so there is nothing for root to
+# guard, and /usr/local/etc is often the Homebrew user's.
+ROOT_SYSTEM_UPGRADE=""
+ROOT_SYSTEM_REBOOT=""
+for GRANT in upgrades reboot; do
+  case "$GRANT" in
+    upgrades) GRANT_FILE="$SYSTEM_UPGRADE_FILE" GRANT_KEY=FLEETWRIGHT_SYSTEM_UPGRADE GRANT_RULE=/etc/sudoers.d/fleetwright-upgrade ;;
+    reboot)   GRANT_FILE="$SYSTEM_REBOOT_FILE" GRANT_KEY=FLEETWRIGHT_SYSTEM_REBOOT GRANT_RULE=/etc/sudoers.d/fleetwright-reboot ;;
+  esac
+  GRANT_ENV="$(get_env "$ENV_FILE" "$GRANT_KEY")"
+  if [ "$PLATFORM" = macos ]; then
+    GRANT_ROOT="$GRANT_ENV"
+  elif [ -e "$GRANT_FILE" ]; then
+    GRANT_ROOT="$(root_setting "$GRANT_FILE")"
+  else
+    if [ -f "$GRANT_RULE" ]; then GRANT_ROOT=1
+    elif [ -n "$GRANT_ENV" ]; then GRANT_ROOT=0
+    else GRANT_ROOT=""; fi
+    if record_root_setting "$GRANT_FILE" "$GRANT_ROOT"; then
+      [ -z "$GRANT_ROOT" ] || ok "root's answer for $GRANT from chat is $GRANT_ROOT, from the rule on disk ($GRANT_FILE)"
+    else
+      warn "could not write $GRANT_FILE — the next run as root takes the answer from the rule on disk again"
+    fi
+  fi
+  case "$GRANT_ROOT" in 1|0) ;; *) GRANT_ROOT="" ;; esac
+  if [ "$PLATFORM" != macos ] && [ "$GRANT_ENV" != "$GRANT_ROOT" ]; then
+    warn "$ENV_FILE said $GRANT_KEY=$GRANT_ENV, and root's answer is ${GRANT_ROOT:-none} — it says that now"
+    warn "  to change it: sudo fleetwright grant $GRANT on|off"
+    put_env "$ENV_FILE" "$GRANT_KEY" "$GRANT_ROOT"
+  fi
+  case "$GRANT" in
+    upgrades) ROOT_SYSTEM_UPGRADE="$GRANT_ROOT" ;;
+    reboot)   ROOT_SYSTEM_REBOOT="$GRANT_ROOT" ;;
+  esac
+done
+unset GRANT GRANT_FILE GRANT_KEY GRANT_RULE GRANT_ENV GRANT_ROOT
 
 # --- 3b. sidecar configuration ----------------------------------------------
 # Pre-filled from the session manager's own config, because the hub URL and
@@ -3070,6 +3241,21 @@ if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ]; th
       warn "  a root-owned release prune quarantines will need: sudo /usr/local/sbin/fleetwright-reclaim"
     fi
   fi
+fi
+
+# THE FIRST-BOOT JOIN, root's copy. cloud-init runs install/fleetwright-vm-join
+# as root, once, on a machine cloned from a Fleetwright image
+# (src/fleet/host/vm-image.js, JOIN_RUNCMD), and it ran the one in `current` —
+# the tree this installer gives the service user a section up, on the image
+# as everywhere. Nothing runs as that user on an image or a clone before
+# cloud-init's last stage except the machine's owner, who has sudo there; so
+# that copy was still what apt laid out. But that is a fact about the order
+# of a boot, and the rule here is about who owns the file. Packaged Linux,
+# from this installer's tree only, never the payload.
+if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ] \
+   && [ -f "$SELF_DIR/install/fleetwright-vm-join" ]; then
+  install -m 0755 -o root -g root "$SELF_DIR/install/fleetwright-vm-join" /usr/local/sbin/fleetwright-vm-join
+  ok "installed /usr/local/sbin/fleetwright-vm-join (what a machine cloned from an image of this box joins with)"
 fi
 
 # Reading the service journal needs group membership: systemd-journald shows a
@@ -3943,7 +4129,7 @@ if [ "$WIZARD" = yes ]; then
     # Answered already — by debconf, a flag, or `fleetwright grant` — so the
     # answer is applied and the question is not asked.
     apply_grant upgrades "$GRANT_UPGRADES" || true
-  elif [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" ] \
+  elif [ -z "$ROOT_SYSTEM_UPGRADE" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     printf '\n  /upgrade can show what the operating system has waiting, and apply it.\n'
     printf '  That needs one sudoers rule permitting exactly three things, each a\n'
@@ -3958,7 +4144,7 @@ if [ "$WIZARD" = yes ]; then
     if confirm "Allow system updates from chat?" Y; then
       apply_grant upgrades yes || true
     else
-      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0
+      note_grant upgrades 0
       ok "skipping — /upgrade will report what is waiting but not apply it"
     fi
     printf '\n'
@@ -3971,7 +4157,7 @@ if [ "$WIZARD" = yes ]; then
   # the second while thinking about the first.
   if [ -n "$GRANT_REBOOT" ] && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     apply_grant reboot "$GRANT_REBOOT" || true
-  elif [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT)" ] \
+  elif [ -z "$ROOT_SYSTEM_REBOOT" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     printf '  /reboot can restart this machine from chat, behind three confirmations:\n'
     printf '  the command, a one-time token, and the hostname typed out.\n'
@@ -3979,7 +4165,7 @@ if [ "$WIZARD" = yes ]; then
     if confirm "Allow reboot from chat?" N; then
       apply_grant reboot yes || true
     else
-      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0
+      note_grant reboot 0
       ok "skipping — sudo fleetwright grant reboot on turns it on later, and /reboot says so"
     fi
     printf '\n'
@@ -4236,10 +4422,12 @@ fi
 # The two sudoers rules are the exception, because they live behind questions in
 # the wizard and the wizard does not run when nobody is there to answer.
 #
-# THE ANSWERS ARE ALREADY IN THE ENV FILE. A box that said yes to system
-# upgrades has FLEETWRIGHT_SYSTEM_UPGRADE=1 recorded, so re-applying the rule is
-# acting on a decision somebody already made rather than making one for them.
-# A box that said no keeps its no: this reads the setting, it never writes one.
+# THE ANSWERS ARE ALREADY RECORDED — in root's files, not the env file, which
+# the service user can write and this runs unattended at their request (see
+# "WHAT ROOT HAS GRANTED"). A box that said yes to system upgrades has a 1 in
+# $SYSTEM_UPGRADE_FILE, so re-applying the rule is acting on a decision
+# somebody already made rather than making one for them. A box that said no
+# keeps its no: this reads the answer, it never writes one.
 #
 # The case this exists for is a rule that has CHANGED shape. The upgrade rule
 # grew two permitted command forms so an unattended apt can answer conffile
@@ -4249,12 +4437,12 @@ fi
 if [ "$REPAIR" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   say "Repairing what this box has already agreed to"
   if command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
-    if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" = 1 ]; then
+    if [ "$ROOT_SYSTEM_UPGRADE" = 1 ]; then
       apply_grant upgrades yes || true
     else
       ok "system upgrades are off here — leaving that alone (sudo fleetwright grant upgrades on)"
     fi
-    if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT)" = 1 ]; then
+    if [ "$ROOT_SYSTEM_REBOOT" = 1 ]; then
       apply_grant reboot yes || true
     else
       ok "reboot from chat is off here — leaving that alone (sudo fleetwright grant reboot on)"
@@ -4642,7 +4830,7 @@ fi
 # interleaving.
 if [ "$PACKAGED" = 0 ] && [ "$FROM_SOURCE" = 0 ] && [ "$CHECK_ONLY" != 1 ] && [ "$CONVERTED" = 0 ] \
    && [ -z "${FLEETWRIGHT_MIGRATING:-}" ] && [ -x /usr/local/sbin/fleetwright-migrate ] \
-   && [ -n "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ]; then
+   && [ -n "${ROOT_MANIFEST:-}" ]; then
   say "Packaged releases"
   printf '  This box is a git checkout. On packaged releases an update is a\n'
   printf '  download with a checksum instead of a pull, installed beside what is\n'
@@ -4692,20 +4880,13 @@ if [ "$PACKAGED" = 0 ] && [ "$FROM_SOURCE" = 0 ] && [ "$CHECK_ONLY" != 1 ] && [ 
       # arriving back here — it will be running from the release, where
       # PACKAGED is 1 and this block is skipped anyway, and belt and braces on
       # a loop that would be a fork bomb rather than a bug.
-      # THE ONE IN THE TREE, NOT THE COPY IN /usr/local/sbin.
-      #
-      # That copy is a snapshot taken by whichever install ran last, and this
-      # script is running as root out of a checkout that was updated seconds
-      # ago. Running the snapshot means a fix to the helper does not take
-      # effect until the run AFTER the one that installed it — which is exactly
-      # what happened: a box re-ran the one-liner with the fix present in its
-      # tree, and migrated with the previous helper.
-      #
-      # /usr/local/sbin is for the APP's path, where there is no checkout and a
-      # narrow sudoers rule is the point. Here there is a tree, it is newer, and
-      # nothing needs sudo because this is already root.
-      HELPER=/usr/local/sbin/fleetwright-migrate
-      [ -x "$DIR/install/fleetwright-migrate" ] && HELPER="$DIR/install/fleetwright-migrate"
+      # THE INSTALLER'S OWN, NOT THE PAYLOAD'S (migrate_helper). This ran
+      # $DIR/install/fleetwright-migrate, and only the payload guard at the
+      # top kept $DIR equal to $SELF_DIR here; a payload is the service
+      # user's `current`, and this is root. On a checkout the service user
+      # can change, they also had the whole of the question above to change
+      # the tree's copy, so root runs the one it took before asking.
+      HELPER="$(migrate_helper)"
       FLEETWRIGHT_MIGRATING=1 "$HELPER" \
         || warn "the migration did not finish — this box is still the checkout it was, and still works"
       ;;

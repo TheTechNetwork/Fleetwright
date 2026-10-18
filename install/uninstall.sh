@@ -219,13 +219,17 @@ if [ -f /usr/local/sbin/fleetwright-migrate ]; then
   rm -f /usr/local/sbin/fleetwright-migrate
   ok "/usr/local/sbin/fleetwright-migrate"
 fi
-# And the address it reads, root's copy of where releases come from: left
-# behind, a reinstall that is not told an address keeps this one, from a box
-# that no longer exists, rather than learning the new box's.
-if [ -f /usr/local/etc/fleetwright/release-manifest ]; then
-  rm -f /usr/local/etc/fleetwright/release-manifest
-  ok "/usr/local/etc/fleetwright/release-manifest"
-fi
+# And root's record of this box: the address the helper reads, and the two
+# answers that decide which sudoers rules root writes. Left behind, a
+# reinstall that is not told otherwise keeps them, from a box that no longer
+# exists — its address, and its yes to rules the reinstall then writes on its
+# first --repair — rather than learning the new box's.
+for f in release-manifest system-upgrade system-reboot; do
+  if [ -f "/usr/local/etc/fleetwright/$f" ]; then
+    rm -f "/usr/local/etc/fleetwright/$f"
+    ok "/usr/local/etc/fleetwright/$f"
+  fi
+done
 rmdir /usr/local/etc/fleetwright 2>/dev/null || true
 if [ -f /usr/local/sbin/fleetwright-confirm ]; then
   rm -f /usr/local/sbin/fleetwright-confirm
@@ -234,6 +238,10 @@ fi
 if [ -f /usr/local/sbin/fleetwright-reclaim ]; then
   rm -f /usr/local/sbin/fleetwright-reclaim
   ok "/usr/local/sbin/fleetwright-reclaim"
+fi
+if [ -f /usr/local/sbin/fleetwright-vm-join ]; then
+  rm -f /usr/local/sbin/fleetwright-vm-join
+  ok "/usr/local/sbin/fleetwright-vm-join"
 fi
 # The sidecar's store, for the same reason: root-owned and outside the tree on
 # purpose, so purging the tree never reached it.

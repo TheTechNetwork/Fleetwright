@@ -305,26 +305,6 @@ test('a release whose own installer is broken can still be migrated to', () => {
   }
 });
 
-test('the installer runs the helper from its own tree, not the installed copy', () => {
-  // A STALENESS CLASS, and it cost a real migration. /usr/local/sbin/fleetwright-migrate
-  // is a snapshot taken by whichever install ran last. install.sh runs as root
-  // out of a checkout it has just updated — so running the snapshot means a fix
-  // to the helper takes effect on the run AFTER the one that installed it.
-  //
-  // That is exactly what happened: a box re-ran the one-liner with the fix in
-  // its tree and migrated using the previous helper, printing the fallback
-  // message the fix exists to avoid.
-  //
-  // /usr/local/sbin remains the APP's path, where there is no checkout and the
-  // narrow sudoers rule is the whole point.
-  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
-  const block = sh.slice(sh.indexOf('# --- 9. and then it stops being a checkout'));
-  assert.match(block, /HELPER="\$DIR\/install\/fleetwright-migrate"/, 'the installer still runs the installed snapshot');
-  assert.match(block, /\[ -x "\$DIR\/install\/fleetwright-migrate" \]/);
-  // The snapshot stays as the fallback, for a tree that somehow has no helper.
-  assert.match(block, /HELPER=\/usr\/local\/sbin\/fleetwright-migrate/);
-});
-
 test('the helper never runs an installer the service user can write', () => {
   // The three-reasons fallback this test used to pin is gone with the checkout
   // preference it explained. What is worth pinning now is the property that
