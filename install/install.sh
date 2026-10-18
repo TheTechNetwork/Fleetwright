@@ -1987,7 +1987,10 @@ if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
         # One implementation, called rather than copied: the uninstaller is the
         # thing that knows how to take a box apart, and a second copy of that
         # knowledge here is the copy that goes stale.
-        "$DIR/install/uninstall.sh" --yes || die "cleanup failed — nothing further was changed"
+        #
+        # THIS INSTALLER'S COPY, which root may run: on a packaged route $DIR
+        # is `current` by now, and `current` is the service user's to rewrite.
+        "$SELF_DIR/install/uninstall.sh" --yes || die "cleanup failed — nothing further was changed"
         ok "cleaned — installing fresh"
       fi
       ;;
@@ -2208,6 +2211,18 @@ fi
 # helper that is running this installer keeps reading the file it started
 # from rather than the one that replaces it.
 #
+# FROM THIS INSTALLER'S TREE, NOT THE PAYLOAD — the rule the watchdog, the
+# reclaimer and the apt-channel script below already follow. On every packaged
+# route $DIR is `current` by now, which the service user can rewrite, and this
+# line was copying the service user's file into the one path sudoers lets the
+# service user run as root. fleetwright-migrate's heal runs this installer out
+# of a verified copy with `current` as the payload, so the whole of it was:
+# edit current/install/fleetwright-migrate, `sudo -n fleetwright-migrate`
+# (allowed, no arguments), and the next `sudo -n fleetwright-migrate` ran the
+# edit as root. $SELF_DIR is the deb's extract, bootstrap.sh's or the
+# helper's own verified copy on those routes, and the checkout on a checkout,
+# where it is the same tree as $DIR.
+#
 # NOT ON A MAC. The helper rewrites systemd units under /etc/systemd/system and
 # runs the packaged release's installer, and a Mac has neither the units nor
 # the packaged layout — /update there pulls the checkout and the operator
@@ -2217,8 +2232,8 @@ fi
 # the helper is not for this box is the honest answer, not a portable group.
 if [ "$PLATFORM" = macos ]; then
   say "the release-migration helper is systemd-only — a Mac updates by re-running this installer with --upgrade"
-elif [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
-  install -m 0755 -o root -g root "$DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
+elif [ "$CHECK_ONLY" != 1 ] && [ -f "$SELF_DIR/install/fleetwright-migrate" ]; then
+  install -m 0755 -o root -g root "$SELF_DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
   ok "installed /usr/local/sbin/fleetwright-migrate"
   if write_migrate_sudoers; then
     ok "the app can move this box onto packaged releases without a shell"
@@ -2246,8 +2261,11 @@ say "Configuring the fleet sidecar"
 if [ -f "$SIDECAR_ENV" ]; then
   ok "$SIDECAR_ENV already exists — left untouched"
 else
+  # The template from this installer's own tree: what lands here is the
+  # sidecar's environment, and a NODE_OPTIONS in it is code the sidecar runs.
+  # $DIR is `current` on a packaged route, which is the service user's.
   SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" SIDECAR_TOKEN_FILE="$SIDECAR_TOKEN_FILE" \
-  TEMPLATE="$DIR/install/fleetwright-sidecar.env.example" "$NODE_BIN" <<'NODE'
+  TEMPLATE="$SELF_DIR/install/fleetwright-sidecar.env.example" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
 
 // The sidecar's own token, minted above. Preferred over the operator's
@@ -3068,8 +3086,9 @@ fi
 #
 # What else stays out of reach: the units are root-owned in /etc, the sidecar's
 # env file is its account's and 0600, and the sudoers rule names
-# /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, so that
-# a service user who can rewrite the tree still cannot rewrite what runs as root.
+# /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, and
+# written from the installer's own tree rather than from this one, so a service
+# user who can rewrite the tree still cannot rewrite what runs as root.
 if [ -d "$FLEET_BASE" ] && [ "$(owner_of "$FLEET_BASE")" != "$RUN_USER" ]; then
   if chown -R "$RUN_USER" "$FLEET_BASE" 2>/dev/null; then
     ok "$FLEET_BASE now belongs to $RUN_USER, so updates can be applied without root"
@@ -3631,7 +3650,10 @@ if [ "$WIZARD" = yes ]; then
     printf '\n'
     if confirm "Log this box into a Claude account now?" Y; then
       sleep 2 # let the hub finish binding its port
-      if LOGIN_OUT="$("$DIR/bin/fleetwright" login 2>&1)"; then
+      # AS THE SERVICE USER, which owns the login it is starting and the
+      # config it reads: run as root, this was root executing a file in
+      # `current`, which that user can rewrite.
+      if LOGIN_OUT="$(as_user "'$UNIT_NODE_BIN' '$DIR/bin/fleetwright' login" 2>&1)"; then
         printf '%s\n' "$LOGIN_OUT"
         # Only ask for a code if there is a page to get one from. `login` on an
         # already-authenticated box answers "Already logged in", and asking for
@@ -3648,7 +3670,7 @@ if [ "$WIZARD" = yes ]; then
         if ! printf '%s' "$LOGIN_OUT" | grep -q 'Already logged in'; then
           ask AUTH_CODE "Paste the code from that page (blank to do it later)"
           if [ -n "$AUTH_CODE" ]; then
-            "$DIR/bin/fleetwright" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
+            as_user "'$UNIT_NODE_BIN' '$DIR/bin/fleetwright' code $(printf '%q' "$AUTH_CODE")" 2>&1 | sed 's/^/  /' || true
           fi
         else
           ok "nothing to do — this box is already logged in"
@@ -3851,7 +3873,14 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   # failure described above — silently, on exactly the boxes an upgrade puts
   # most at risk. The release states the protocol it speaks in its package.json,
   # which is the same number the manifest carries.
-  UPGRADE_MINE="$("$NODE_BIN" -e "import('$DIR/src/fleet/protocol/intents.js').then(m => console.log(m.PROTOCOL_VERSION))" 2>/dev/null || true)"
+  #
+  # AS THE SERVICE USER, NOT AS ROOT. That import executes a file in $DIR, and
+  # on a packaged box $DIR is `current`: a release ships no src/, so the
+  # service user could add one, ask for the heal (`sudo -n fleetwright-migrate`
+  # runs this with --repair), and have root import it. Reading a number does
+  # not need root, and the service user running its own file gains nothing.
+  UPGRADE_MINE="$(as_user "'$NODE_BIN' -e \"import('$DIR/src/fleet/protocol/intents.js').then(m => console.log(m.PROTOCOL_VERSION))\"" 2>/dev/null | tail -1 || true)"
+  case "$UPGRADE_MINE" in *[!0-9]*) UPGRADE_MINE="" ;; esac
   # GUARDED, BECAUSE A FALLBACK MUST NOT BE ABLE TO END THE SCRIPT. As
   # `[ -n "$X" ] || VAR=$(sed ... | head -1)` this was a landmine: sed exits 2
   # on a file it cannot read, pipefail promotes that through the pipeline, and
