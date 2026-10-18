@@ -295,7 +295,7 @@ test('iOS: the Live Activity decodes exactly what the coordinator pushes, and te
   // so a phone that predates it still decodes every push.
   assert.match(
     IOS,
-    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var fill: Int\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var build: String\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var stage: Int\? = nil\s*var stages: Int\? = nil\s*\}/,
+    /struct ContentState: Codable, Hashable \{\s*(?:\/\/\/[^\n]*\n\s*)?var step: Int\s*(?:\/\/\/[^\n]*\n\s*)*var of: Int\s*(?:\/\/\/[^\n]*\n\s*)*var phase: String\s*(?:\/\/\/[^\n]*\n\s*)*var state: String\s*(?:\/\/\/[^\n]*\n\s*)*var since: Date\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var fill: Int\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var build: String\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var stage: Int\? = nil\s*var stages: Int\? = nil\s*(?:\/\/\/[^\n]*\n\s*)*var doing: String\? = nil\s*var done: Int\? = nil\s*var total: Int\? = nil\s*\}/,
   );
   // `since` is the phone's own, never pushed: optional, so a pushed state
   // without it still decodes.
@@ -338,9 +338,18 @@ test('iOS: the bar is the edge router’s build while it says how far, and the d
     assert.ok(IOS.includes(`case "${key}": return "${words}"`), `no words for a ${key} build`);
   }
   assert.ok(IOS.includes('case let (what?, part?): return "\\(what), \\(part)"'));
-  assert.ok(SCREEN.includes('XOSetupWords.detail(build: part.build, stage: part.stage, stages: part.stages)'));
+  // One line for the screen and the Lock Screen: "Step 5 of 5 · building the
+  // edge router, part 2 of 3", with the percentage on the screen, which has
+  // no corner for it. Asked for, with the two side by side.
+  assert.ok(SCREEN.includes('Text(XOSetupWords.stepLine(state, percent: true))'));
+  assert.match(WIDGET, /if !stale, XOSetupWords\.isLive\(state\.state\), state\.of > 0 \{\s*Text\(XOSetupWords\.stepLine\(state, percent: false\)\)/);
+  // And what the bytes are doing, worded from the key the coordinator
+  // pushes, never from the machine's sentence, which names the storage.
+  assert.match(WIDGET, /if !stale, let bytes = XOSetupWords\.bytes\(state\) \{\s*Text\(bytes\)/);
+  assert.ok(IOS.includes('case "read": return "Reading the blocks the configuration goes in"'));
+  assert.ok(IOS.includes('case "write": return edge ? "Writing the edge router’s disk" : "Writing the disk"'));
+  assert.ok(!WIDGET.includes('state.text') && !IOS.includes('text: progress.text'), 'the machine’s sentence reached the activity');
   assert.ok(!SCREEN.includes('building the edge router'), 'the screen names one build for every build again');
-  assert.match(WIDGET, /if !stale, let detail = XOSetupWords\.detail\(state\) \{\s*Text\(detail\)/);
   assert.ok(SCREEN.includes('if choice.edgeDiskChoice, choice.building(in: inv).edge || choice.building(in: inv).image {'));
   assert.ok(SCREEN.includes('edgeDisk: begun.can.contains("edge-disk")'));
   assert.ok(SCREEN.includes('Its disk is on \\($0).'));

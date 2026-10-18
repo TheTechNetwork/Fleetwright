@@ -50,6 +50,14 @@ struct XOSetupAttributes: ActivityAttributes {
         /// together when the build is not in parts or the host did not say.
         var stage: Int? = nil
         var stages: Int? = nil
+        /// What that part's bytes are doing, from a fixed list (XOBUILD_DOING:
+        /// `download`, `read`, `keep`, `write`), and the megabytes moved and
+        /// in all; nil together while none move. The host's own sentence names
+        /// the release and the storage and is never pushed, so this is what
+        /// the Lock Screen says instead, worded here from the key.
+        var doing: String? = nil
+        var done: Int? = nil
+        var total: Int? = nil
     }
 
     /// The job `begin` answered with. Local; never pushed.
@@ -145,6 +153,44 @@ enum XOSetupWords {
     static func detail(_ s: XOSetupAttributes.ContentState) -> String? {
         guard s.state == "running" else { return nil }
         return detail(build: s.build, stage: s.stage, stages: s.stages)
+    }
+
+    /// "Step 5 of 5 · building the edge router, part 2 of 3", and with
+    /// `percent` the bar's number after it, for the line under the headline.
+    /// One line for the screen in the app and the Lock Screen, so the two
+    /// say the same thing about the same moment; the Lock Screen leaves the
+    /// percentage off because it is already in its corner (ordinal).
+    static func stepLine(_ s: XOSetupAttributes.ContentState, percent: Bool) -> String {
+        let step = "Step \(min(s.step + 1, max(s.of, 1))) of \(max(s.of, 1))"
+        let fill = percent ? s.fill.map { "\($0 / 10)%" } : nil
+        return [step, detail(s), s.state == "running" ? fill : nil].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// What a part's bytes are doing, in a few words, by key and by what is
+    /// being built: the edge router's image is OPNsense, which is fixed, and
+    /// a machine image's is whichever the person chose, which is not pushed.
+    /// Nil for a key this build has never met: the megabytes are still said.
+    static func doing(_ key: String?, build: String?) -> String? {
+        let edge = build == "edge"
+        switch key {
+        case "download": return edge ? "Downloading OPNsense" : "Downloading the image"
+        case "read": return "Reading the blocks the configuration goes in"
+        case "keep": return edge ? "Writing OPNsense to the pool, to keep" : "Writing the image to the pool, to keep"
+        case "write": return edge ? "Writing the edge router’s disk" : "Writing the disk"
+        default: return nil
+        }
+    }
+
+    /// "Reading the blocks the configuration goes in: 192 of 2238 MB" while
+    /// a part's bytes move, which is what the screen's sentence from the
+    /// machine says with the release and the storage named. Nil while none
+    /// move; a key never met still says "192 of 2238 MB" (C-5: the phone
+    /// knows the numbers, so it says the numbers).
+    static func bytes(_ s: XOSetupAttributes.ContentState) -> String? {
+        guard s.state == "running", let done = s.done, let total = s.total, total > 0 else { return nil }
+        let count = "\(done) of \(total) MB"
+        guard let what = doing(s.doing, build: s.build) else { return count }
+        return "\(what): \(count)"
     }
 
     /// The one line for the state, once the state is not "running".

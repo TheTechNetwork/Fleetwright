@@ -169,6 +169,7 @@ enum XOSetupActivities {
         let part = state == "running" ? progress.part : nil
         return XOSetupAttributes.ContentState(step: step, of: of, phase: phase, state: state, since: Date(),
                                               fill: part?.fill, build: part?.build,
-                                              stage: part?.stage, stages: part?.stages)
+                                              stage: part?.stage, stages: part?.stages,
+                                              doing: part?.doing, done: part?.done, total: part?.total)
     }
 }

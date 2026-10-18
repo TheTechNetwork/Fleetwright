@@ -1282,6 +1282,12 @@ struct Fleet {
             let fill: Int
             /// `edge`, `image` or `holder`; absent from a host before it said.
             var build: String?
+            /// What the part's bytes are doing (XOBUILD_DOING) and the
+            /// megabytes moved and in all; absent while none move, and from
+            /// a host before it said.
+            var doing: String?
+            var done: Int?
+            var total: Int?
         }
     }
 
