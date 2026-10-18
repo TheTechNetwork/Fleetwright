@@ -253,6 +253,13 @@ export function helperState({ installRoot, bin = MIGRATE_BIN, read = (p) => read
  * and checks a release and runs ITS installer. `--repair` asks nothing and
  * puts back only what this box already agreed to.
  *
+ * Including on a converted box, which keeps its old checkout and so used to
+ * send the one-liner down the checkout route: root's git in the service
+ * user's repository, then their install.sh. bootstrap.sh now uses a checkout
+ * as root only when root owns it outright, and a box whose units run the
+ * release fetches the release. Only packaged boxes are shown this; a checkout
+ * box's /update names its own way (commands.js, checkoutNote).
+ *
  * @param {{ releaseSource?: string }} [cfg]
  */
 export function helperRefreshCommand(cfg) {

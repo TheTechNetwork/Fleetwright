@@ -398,3 +398,100 @@ test('a box the fleetwright package owns is refused, and told how apt does each 
   assert.match(r.stderr, /fleetwright join/);
   assert.equal(existsSync(rel.base), false, 'something was laid out before the refusal');
 });
+
+// --- root, and a checkout root does not own ------------------------------------
+//
+// A converted box keeps /opt/fleetwright-src, the service user's, on purpose;
+// a box that runs its checkout has given it to them. The repair the hub prints
+// for a stale helper is this file run as root, and it took the checkout route
+// because .git was there: root's `git checkout` ran their post-checkout hook
+// and then their install.sh, with git trusting a repository owned by whoever
+// ran sudo. As root, now, a checkout is used only when root owns it outright.
+
+const isRoot = process.getuid?.() === 0;
+const nobodyUid = (() => {
+  const r = spawnSync('id', ['-u', 'nobody'], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : null;
+})();
+
+/**
+ * Stubs for running this as root without being root: `id -u` answers 0, and
+ * dpkg knows no packages. Under real root nothing needs pretending, and the
+ * checkout is handed to nobody instead, with SUDO_UID saying so — which is
+ * what makes git trust it.
+ * @param {import('node:test').TestContext} t
+ */
+function asRoot(t) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'as-root-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'dpkg-query'), '#!/bin/sh\nexit 1\n');
+  writeFileSync(path.join(dir, 'id'), `#!/bin/sh\n[ "$*" = -u ] && { echo 0; exit 0; }\nexec ${spawnSync('sh', ['-c', 'command -v id'], { encoding: 'utf8' }).stdout.trim()} "$@"\n`);
+  chmodSync(path.join(dir, 'dpkg-query'), 0o755);
+  chmodSync(path.join(dir, 'id'), 0o755);
+  return { DPKG_STUBS: dir, ...(isRoot && nobodyUid ? { SUDO_UID: nobodyUid } : {}) };
+}
+
+/**
+ * A checkout of the test's origin that another account owns, with a
+ * post-checkout hook that leaves a mark if git runs it.
+ * @param {import('node:test').TestContext} t
+ */
+function foreignCheckout(t) {
+  const where = origin(t);
+  assert.equal(pipeIntoSh(where).status, 0);
+  const mark = path.join(where.root, 'hook-ran');
+  writeFileSync(path.join(where.target, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch ${JSON.stringify(mark)}\n`);
+  chmodSync(path.join(where.target, '.git', 'hooks', 'post-checkout'), 0o755);
+  // Something new upstream, so a checkout has something to do.
+  writeFileSync(path.join(where.repo, 'NEW'), 'later\n');
+  git(where.repo, ['add', '-A']);
+  git(where.repo, ['commit', '-qm', 'second']);
+  if (isRoot) spawnSync('chown', ['-R', 'nobody', where.target]);
+  return { where, mark };
+}
+
+test('as root, a converted box’s checkout is left alone and the release is fetched instead', { skip: isRoot && !nobodyUid && 'needs a nobody account' }, (t) => {
+  const { where, mark } = foreignCheckout(t);
+  const rel = release(t);
+  const units = path.join(rel.root, 'units');
+  mkdirSync(units);
+  writeFileSync(path.join(units, 'fleetwright.service'), `[Service]\nExecStart=/usr/bin/node ${rel.base}/current/lib/fleetwright.mjs serve\n`);
+  const r = pipeIntoSh(where, ['--repair'], {
+    FLEETWRIGHT_MANIFEST: rel.manifest, FLEETWRIGHT_BASE: rel.base, FLEETWRIGHT_UNIT_DIR: units, TMPDIR: rel.root, ...asRoot(t),
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /INSTALLER RAN \[--repair\] from file:/, `the release's installer did not run:\n${r.stdout}${r.stderr}`);
+  assert.doesNotMatch(r.stdout, /INSTALLER RAN \[--repair\]\n/, 'root ran the checkout’s installer');
+  assert.equal(existsSync(mark), false, 'root’s git ran a hook in a repository it does not own');
+  assert.equal(existsSync(path.join(where.target, 'NEW')), false, 'root checked out into the service user’s tree');
+});
+
+test('as root, a box that runs a checkout it does not own is refused, and told what its operator can do', { skip: isRoot && !nobodyUid && 'needs a nobody account' }, (t) => {
+  const { where, mark } = foreignCheckout(t);
+  const units = path.join(where.root, 'units');
+  mkdirSync(units);
+  const r = pipeIntoSh(where, ['--repair'], { FLEETWRIGHT_UNIT_DIR: units, ...asRoot(t) });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /INSTALLER RAN/, 'root ran the checkout’s installer');
+  assert.equal(existsSync(mark), false, 'root’s git ran a hook in a repository it does not own');
+  assert.match(r.stderr, /is a checkout \S+ can change, and root does not run code out of a tree another/);
+  // The known exclusion, said as a choice the operator makes with their eyes open.
+  assert.match(r.stderr, /run its installer as root yourself, knowing it is \S+'s:\s+sudo -u \S+ git -C \S+ pull --ff-only && sudo bash \S+\/install\/install\.sh --repair/);
+});
+
+test('root’s git in a checkout root owns runs none of its hooks', { skip: !isRoot && 'needs root' }, (t) => {
+  // Root's own tree, still used. But nothing a fetch and a checkout need is
+  // in a hook or in core.fsmonitor, so root's git reads and runs neither.
+  const where = origin(t);
+  assert.equal(pipeIntoSh(where).status, 0);
+  const mark = path.join(where.root, 'hook-ran');
+  writeFileSync(path.join(where.target, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch ${JSON.stringify(mark)}\n`);
+  chmodSync(path.join(where.target, '.git', 'hooks', 'post-checkout'), 0o755);
+  writeFileSync(path.join(where.repo, 'NEW'), 'later\n');
+  git(where.repo, ['add', '-A']);
+  git(where.repo, ['commit', '-qm', 'second']);
+  const r = pipeIntoSh(where);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(path.join(where.target, 'NEW')), true, 'the checkout was not updated');
+  assert.equal(existsSync(mark), false, 'root’s git ran the repository’s post-checkout hook');
+});

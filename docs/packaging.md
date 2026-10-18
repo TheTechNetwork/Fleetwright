@@ -654,6 +654,20 @@ never converts and names the command. And a repository that is not on GitHub,
 where there is no release address to derive and a guess would be a 404 blamed
 on the installer; it says so and clones.
 
+**As root, a checkout is used only when root owns it outright** — every
+directory from `/` down to it, and everything in it, writable by nobody else
+and with no link out of it — and root's git then reads no global or system
+config and runs no hook or `core.fsmonitor`. The installer gives a checkout to
+the service user so `/update` can pull, so after its first install it is
+theirs, and root running its `install.sh` (or git running its hooks) would be
+root running their code. A **converted** box, whose units run
+`/opt/fleetwright/current`, keeps its old checkout and now fetches and checks
+the release instead, which is what makes `curl … | sudo sh -s -- --repair`
+safe advice there. A box that **runs** its checkout is refused with the two
+ways on: `sudo /usr/local/sbin/fleetwright-migrate` onto releases, or reading
+the checkout and running its installer as root knowingly — the one place it
+stays the service user's (`security.md`, G10).
+
 **Development boxes still want the checkout.** `--from-source` keeps that, and
 the fallback in step 3 means the two can coexist indefinitely rather than
 needing a flag day of their own.

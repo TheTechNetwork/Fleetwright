@@ -26,7 +26,8 @@
 # checkout: `--from-source`, which is for a box somebody EDITS; a box that
 # already has one at $DIR, which is kept the shape it was; and a repository
 # that is not on GitHub, where there is no release address to derive and a
-# guess would be a 404 blamed on the installer.
+# guess would be a 404 blamed on the installer. As root, any of those only
+# with a checkout root owns outright ("root runs only a tree root owns").
 #
 # POSIX sh, deliberately. `curl | sh` runs under whatever /bin/sh is — dash on
 # Debian — and the real installer is bash: it uses `set -o pipefail`, `local`
@@ -89,11 +90,98 @@ fi
 # Decided before anything is touched, because the two routes check different
 # things and refuse in different words.
 SOURCE=0
-for arg in "$@"; do [ "$arg" = "--from-source" ] && SOURCE=1; done
+ASKED_SOURCE=0
+for arg in "$@"; do [ "$arg" = "--from-source" ] && SOURCE=1 && ASKED_SOURCE=1; done
 # A box that has a checkout keeps it. Laying a release beside a checkout that
 # is still what the units point at would be two installs arguing about one
 # box; the installer's own conversion offer is the way from one to the other.
 [ -d "$DIR/.git" ] && SOURCE=1
+
+# --- root runs only a tree root owns --------------------------------------------
+#
+# THE CHECKOUT IS NOT ROOT'S. The installer gives it to the service user so
+# /update can pull, and a box converted to packaged releases keeps it on
+# purpose (/opt/fleetwright-src, the way back). So the route above sent root
+# into somebody else's repository: `git checkout`, which runs that
+# repository's .git/hooks/post-checkout, `git status`, which runs its
+# core.fsmonitor, and then their install/install.sh — with git trusting a
+# repository owned by the account that ran sudo. And on a converted box this
+# is not a person's choice: the repair the hub prints for a stale helper is
+# `curl …/install | sudo sh -s -- --repair`.
+#
+# So as root a checkout is used only when root owns it outright: root's every
+# directory from / down to it (a sticky one on the way tolerated, as /tmp is,
+# because nobody else can rename root's entry in it), and root's everything in
+# it, writable by nobody else, with no link that leads out of it — the rule
+# install.sh's run_user_can_alter applies, asked of every account at once,
+# since this file does not know which one runs the service. Resolved first,
+# and used by that resolved name, so no link on the way is followed twice.
+#
+# Otherwise: a converted box, whose units run $BASE/current, fetches and checks
+# the release exactly as a fresh box does, and leaves the checkout alone. A box
+# that RUNS its checkout is the one place it stays the service user's
+# (docs/security.md, G10), and this says what its operator can do instead of
+# doing it for them. A person installing into their own home, not as root, is
+# using their own tree.
+uid_mode() { stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Mp%Lp' "$1" 2>/dev/null; }
+root_only() { # root_only PATH [sticky-ok] → 0 when PATH is root's and only root can write it
+  um="$(uid_mode "$1")" || return 1
+  [ "${um% *}" = 0 ] || return 1
+  m=$((0${um#* }))
+  [ $((m & 18)) = 0 ] && return 0
+  [ -n "${2:-}" ] && [ $((m & 512)) != 0 ]
+}
+root_owns() { # root_owns DIR → 0 when no account but root can change DIR, the way to it, or anything in it
+  case "$1" in /*) ;; *) return 1 ;; esac
+  [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  root_only / sticky || return 1
+  ro_cur="" ro_rest="${1#/}"
+  while [ -n "$ro_rest" ]; do
+    ro_comp="${ro_rest%%/*}"
+    case "$ro_rest" in */*) ro_rest="${ro_rest#*/}" ;; *) ro_rest="" ;; esac
+    [ -n "$ro_comp" ] || continue
+    ro_cur="$ro_cur/$ro_comp"
+    [ ! -L "$ro_cur" ] || return 1
+    if [ -n "$ro_rest" ]; then root_only "$ro_cur" sticky || return 1; else root_only "$ro_cur" || return 1; fi
+  done
+  [ -z "$(find "$1" \( ! -user 0 -o \( ! -type l \( -perm -0002 -o -perm -0020 \) \) \) -print 2>/dev/null | head -n 1)" ] || return 1
+  # A link is root's here, but where it leads need not be: relative, and
+  # never up, keeps it inside what was just asked.
+  find "$1" -type l 2>/dev/null | while IFS= read -r ro_link; do
+    case "$(readlink "$ro_link")" in /*|..|../*|*/..|*/../*) exit 1 ;; esac
+  done
+}
+# What a box runs is what its units start — the question fleetwright-migrate
+# asks, by the same seam (sudo resets the environment, so it widens nothing).
+UNIT_DIR="${FLEETWRIGHT_UNIT_DIR:-/etc/systemd/system}"
+runs_release() {
+  for u in "$UNIT_DIR/fleetwright.service" "$UNIT_DIR/agent-hub.service"; do
+    [ -f "$u" ] && grep '^ExecStart=' "$u" | grep -q "$BASE/current" && return 0
+  done
+  return 1
+}
+if [ "$SOURCE" = 1 ] && [ -d "$DIR/.git" ] && [ "$(id -u)" = 0 ]; then
+  DIR="$(cd "$DIR" && pwd -P)"
+  if ! root_owns "$DIR"; then
+    OWNER="$(ls -ld "$DIR" | awk '{print $3}')"
+    if [ "$ASKED_SOURCE" = 0 ] && runs_release; then
+      say "$DIR is $OWNER's to change, so root does not run it"
+      ok "this box runs the release under $BASE — fetching that, checked, as a fresh box does; the checkout is left as it is"
+      SOURCE=0
+    else
+      HOW=""
+      [ -x /usr/local/sbin/fleetwright-migrate ] && HOW="
+       Move this box onto releases, which root installs from a checked tarball:
+           sudo /usr/local/sbin/fleetwright-migrate"
+      die "$DIR is a checkout $OWNER can change, and root does not run code out of a tree another
+       account can change: its installer, and git's hooks in it, would run as root whatever
+       they had put there. This box runs that checkout, so it stays $OWNER's, root included
+       (docs/security.md, G10).$HOW
+       Or read what is in $DIR, and run its installer as root yourself, knowing it is $OWNER's:
+           sudo -u $OWNER git -C $DIR pull --ff-only && sudo bash $DIR/install/install.sh --repair"
+    fi
+  fi
+fi
 
 if [ "$SOURCE" = 0 ] && [ -z "$MANIFEST" ]; then
   case "$REPO" in
@@ -233,6 +321,14 @@ if ! command -v git >/dev/null 2>&1; then
   command -v git >/dev/null 2>&1 || die "git still is not on PATH after installing it."
 fi
 
+# AND ROOT'S git READS NOTHING IT WAS NOT HANDED. Even in a tree root owns,
+# git as root runs what configuration names — a hook, a core.fsmonitor — and
+# reads ~/.gitconfig and /etc/gitconfig on the way. None of that is needed to
+# fetch and check out a commit, so as root none of it is read or run.
+if [ "$(id -u)" = 0 ]; then
+  git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+fi
+
 # Three states, three different right answers. The third is the one worth being
 # careful about: a directory that is not ours must not be clobbered by a command
 # somebody pasted.
@@ -337,6 +433,14 @@ else
 fi
 
 [ -x "$DIR/install/install.sh" ] || die "$DIR does not look like Fleetwright — no install/install.sh in it."
+# ASKED AGAIN, of what is about to run: a fresh clone is root's, but only as
+# much as the directory it was cloned into is.
+if [ "$(id -u)" = 0 ]; then
+  DIR="$(cd "$DIR" && pwd -P)"
+  root_owns "$DIR" || die "$DIR is not root's alone — a directory on the way to it, or something in it, another
+       account can change — so root will not run the installer in it. Clone somewhere only root
+       can write, or let the one-liner fetch a release instead of a checkout."
+fi
 
 # Hand over, with stdin BACK ON THE TERMINAL.
 #
