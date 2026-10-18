@@ -25,7 +25,14 @@ internal class PhoneVault(private val settings: Settings) {
 
     data class Item(val name: String, val at: Long)
 
-    data class Grant(val key: String, val fingerprint: String, val label: String, val email: String)
+    /**
+     * One box this person approved. [key] is the whole SHA-256 of the box's
+     * key, as the minter names the grant ([keyHash]); [fingerprint] is its
+     * first sixteen characters. [only] is the vault's `only`: the items a box
+     * approved for some of the vault may hold, as [approveHolder] writes it
+     * for a pool's own machine. Empty is the whole vault.
+     */
+    data class Grant(val key: String, val fingerprint: String, val label: String, val email: String, val only: List<String> = emptyList())
 
     data class Contents(val items: List<Item>, val grants: List<Grant>)
 
@@ -58,7 +65,11 @@ internal class PhoneVault(private val settings: Settings) {
             },
             grants = (0 until (grants?.length() ?: 0)).mapNotNull { i ->
                 grants?.optJSONObject(i)?.let {
-                    Grant(it.optString("key"), it.optString("fingerprint"), it.optString("label"), it.optString("email"))
+                    val only = it.optJSONArray("only")
+                    Grant(
+                        it.optString("key"), it.optString("fingerprint"), it.optString("label"), it.optString("email"),
+                        (0 until (only?.length() ?: 0)).map { i -> only!!.optString(i) },
+                    )
                 }
             },
         )
@@ -141,11 +152,33 @@ internal class PhoneVault(private val settings: Settings) {
          * exactly as src/fleet/crypto.js `fingerprint` makes it and
          * `fleetwright-sidecar identity` prints it.
          */
-        fun fingerprint(jwk: JSONObject): String {
+        fun fingerprint(jwk: JSONObject): String = keyHash(jwk).take(16)
+
+        /** The whole of that SHA-256, in hex: what the minter names a grant by (boxKeyHash in src/fleet/minter/vault.js), and [Grant.key]. */
+        fun keyHash(jwk: JSONObject): String {
             val canonical = "{\"crv\":${JSONObject.quote(jwk.optString("crv"))},\"kty\":${JSONObject.quote(jwk.optString("kty"))}," +
                 "\"x\":${JSONObject.quote(jwk.optString("x"))},\"y\":${JSONObject.quote(jwk.optString("y"))}}"
             val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
-            return digest.take(8).joinToString("") { "%02x".format(it) }
+            return digest.joinToString("") { "%02x".format(it) }
+        }
+
+        /**
+         * Whether these grants approve [jwk] as [hostId]'s for an admin's
+         * secret, which is the person's word that it is that machine's key
+         * and skips the comparison.
+         *
+         * A GRANT SCOPED BY `only` IS NOT THAT WORD. It is the one this phone
+         * writes when it lets a pool's own machine in to hold its pool's
+         * record and nothing else ([approveHolder]), and nobody compared a key
+         * for it the way the comparison asks. Counted, any grant at all with a
+         * matching sixteen-character prefix handed the Xen Orchestra admin's
+         * sign-in to a machine holding one pool's record, without anyone being
+         * asked. So only a whole-vault grant counts, under the name that
+         * answered, by the whole hash of the key; anything else asks.
+         */
+        fun approves(grants: List<Grant>, hostId: String, jwk: JSONObject): Boolean {
+            val hash = keyHash(jwk)
+            return grants.any { it.only.isEmpty() && it.label == hostId && it.key == hash }
         }
 
         /** How a vault item is named to a person. */
