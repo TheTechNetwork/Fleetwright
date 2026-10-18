@@ -1914,13 +1914,21 @@ ongoing notification. An iPhone told the job is done while the pools it sees
 are none says "Done, and Xen Orchestra still shows no pools" rather than
 "Pools back".
 
-**An older machine is sent nothing.** The phone seals a reconnect only to a
-machine whose `begin` lists `reconnect` in `can`, checked when `begin`
-answers and again where the seal is made. An older machine ignores a purpose
-it does not know and would run the sign-in as a whole setup, making a
-limited user, a resource set and a token nobody asked for. When the machine
-a push named is too old, the iPhone asks your other machines instead;
-Android says so and asks for another machine that reaches the pool.
+**An older machine is sent nothing it could open.** The phone seals a
+reconnect only to a machine whose `begin` lists `reconnect-signin` in `can`,
+checked when `begin` answers and again where the seal is made, and seals it
+under a binding of its own (`xosetupReconnectSigninAad`) rather than the
+setup's. An older machine ignores a purpose it does not know and would run
+the sign-in as a whole setup, making a limited user, a resource set and a
+token nobody asked for; `can` is not signed, so a coordinator could add the
+word to an older machine's list, and the binding is what makes that useless:
+the older machine cannot open the seal at all. A machine that lists
+`reconnect` but not `reconnect-signin` is refused with a sentence saying to
+update it. When the machine a push named is too old, the iPhone asks your
+other machines instead; Android says so and asks for another machine that
+reaches the pool. A machine that does open it runs it only as a reconnect,
+and refuses a purpose it does not know before anything reaches Xen
+Orchestra.
 
 **Every server Xen Orchestra lists.** `server.getAll` is every pool master
 Xen Orchestra is registered with, not only the pool the fleet uses, so the
