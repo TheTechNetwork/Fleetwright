@@ -179,7 +179,8 @@ test('a first start creates the internal network and runs the proxy on both netw
   const conf = readFileSync(path.join(s.cfg().stateDir, 'egress', 'tinyproxy.conf'), 'utf8');
   const allow = readFileSync(path.join(s.cfg().stateDir, 'egress', 'allow.list'), 'utf8');
   assert.match(conf, /FilterDefaultDeny Yes/);
-  for (const h of REQUIRED_HOSTS) assert.ok(listed(allow.split('\n'), `^${h.replace(/\./g, '\\.')}$`), h);
+  const literal = (/** @type {string} */ h) => h.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+  for (const h of REQUIRED_HOSTS) assert.ok(listed(allow.split('\n'), `^${literal(h)}$`), h);
 });
 
 test('a proxy already running with this config is left alone; a changed allowlist replaces it', async (t) => {
