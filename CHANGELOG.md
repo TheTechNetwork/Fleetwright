@@ -11,6 +11,64 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.11 — 2026-10-18
+
+**A machine installed from apt can move between the stable and rolling
+suites from the app, rebooting a machine whose fleet name is not its
+hostname works, a pool whose servers stop showing offers one tap to
+reconnect them, and a run of fixes from the security audit tightens what
+one person's box and sign-in can reach.**
+
+- **Switch a machine installed from apt between stable and rolling.** On
+  the machine's page the channel picker now works on an apt machine that
+  has the upgrade grant; without it the channel is shown pinned and the
+  reply names `sudo fleetwright grant upgrades on`. Moving to rolling takes
+  the current build of main on the next Apply update, and moving back to
+  stable takes the next release. The machine reads its source back and
+  reports the suite it is on, not the one it was asked for.
+- **Rebooting a machine whose fleet name differs from its hostname.** A
+  machine called RPI-7550-ARM that joined as rpi-7550 refused every reboot
+  from the app with "This box is RPI-7550-ARM, not rpi-7550". Either name
+  confirms it now, and a refusal names both.
+- **Reconnect a pool's servers with one tap.** When Xen Orchestra answers
+  but shows no pool for five minutes, the fleet pushes **Reconnect**. The
+  tap opens the app, Face ID (the fingerprint or screen lock on Android)
+  opens the kept admin sign-in, and one machine reconnects the servers and
+  reports what it did. The same is offered on the pool's page. Only a
+  machine updated to this release can run it; an older one is refused with
+  a sentence saying so.
+- **The edge router is rebuilt from its kept disk.** A rebuild writes only
+  the configuration, about 10 MB, where every build used to send the whole
+  3 GiB disk through Xen Orchestra. Needs a Xen Orchestra the fleet
+  installed or updated; one installed another way falls back to the full
+  build.
+- **About one router build in 256 made a certificate its own web server
+  refused.** Fixed.
+- **A member can administer only their own machines.** Changing the
+  channel, image or labels of a machine, updating, upgrading or rebooting
+  it, and reading its logs are refused for a machine that does not act for
+  that member alone, and the apps leave those controls out where they would
+  be refused. Listing machines reaches only the machines that act for the
+  member.
+- **Removing a person ends what they set up.** Their hypervisor setups
+  stop minting pins, and their machines, including ones offline at the
+  time, are asked to hand back the members' sessions and sign-ins when they
+  return.
+- **A GitHub or Cloudflare sign-in finishes only for the person who started
+  it.** A forwarded Connect link no longer links someone else's account
+  under the sender's name. Update the app and the fleet together: an app
+  from before this against an updated fleet finishes the old way.
+- **A runner is handed its owner's repository tokens and Claude login**,
+  not whoever's job it is running.
+- **A new session cannot take over a stopped one's name**, workspace and
+  account included. The reply points to `/resume <name>`.
+- **A machine's session events buzz a phone at most once per 30 seconds**
+  per session and kind, so one chatty machine cannot spend the fleet's push
+  budget.
+- **Building a machine image shows the session image's pull in bytes**,
+  "131 of 262 MB, 6 min so far", instead of a percentage.
+- **A few hidden things**, for the curious, at the CLI and in the apps.
+
 ## 0.4.10 — 2026-10-15
 
 **You choose on a pool's policy what the machines made there may do from the
