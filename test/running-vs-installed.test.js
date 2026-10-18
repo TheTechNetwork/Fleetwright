@@ -15,6 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { installedVersion, currentVersion } from '../src/core/release-apply.js';
@@ -57,4 +58,36 @@ test('a checkout has no second answer', () => {
   // Not a release layout: no `current`, nothing to compare, and null rather
   // than 'unknown' so a caller cannot mistake it for a version to draw.
   assert.equal(currentVersion('/home/somebody/fleetwright'), null);
+});
+
+test('what `current` holds is read only as a package.json: not through a link, not at any size, not a version of any shape', (t) => {
+  // The sidecar reads `current` on every health frame, and the service user
+  // owns the base it is under. A package.json linked to a file only the
+  // sidecar's account can read was parsed and its version sent with health; a
+  // FIFO blocked the sidecar's one thread for good.
+  const base = layout(t);
+  const release = path.join(base, 'releases', 'main-102');
+  const secret = path.join(base, 'only-the-sidecar-reads-this.json');
+  writeFileSync(secret, JSON.stringify({ version: 'what-the-sidecar-keeps' }));
+  rmSync(path.join(release, 'package.json'));
+  symlinkSync(secret, path.join(release, 'package.json'));
+  assert.equal(currentVersion(path.join(base, 'current')), null, 'read through a link');
+
+  rmSync(path.join(release, 'package.json'));
+  writeFileSync(path.join(release, 'package.json'), JSON.stringify({ version: 'main-102', pad: 'x'.repeat(300 * 1024) }));
+  assert.equal(installedVersion(release), 'unknown', 'read whatever its size');
+  writeFileSync(path.join(release, 'package.json'), JSON.stringify({ version: { not: 'a version' } }));
+  assert.equal(installedVersion(release), 'unknown', 'passed on a version of any shape');
+});
+
+test('a FIFO where package.json should be is not waited on', { skip: spawnSync('mkfifo', ['--version']).status !== 0 && 'no mkfifo here' }, (t) => {
+  // In a child, because a read that blocks blocks the test runner with it.
+  const base = layout(t);
+  const release = path.join(base, 'releases', 'main-102');
+  rmSync(path.join(release, 'package.json'));
+  assert.equal(spawnSync('mkfifo', [path.join(release, 'package.json')]).status, 0);
+  const mod = new URL('../src/core/release-apply.js', import.meta.url).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(mod)}); console.log(m.installedVersion(${JSON.stringify(release)}))`], { encoding: 'utf8', timeout: 10_000 });
+  assert.equal(r.signal, null, 'it waited on the FIFO until it was killed');
+  assert.equal(r.stdout.trim(), 'unknown', r.stderr);
 });
