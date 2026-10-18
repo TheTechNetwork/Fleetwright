@@ -242,3 +242,122 @@ test('a removed admin’s box is asked for back what it held for everyone else, 
   assert.equal(stop.error?.code, 'unknown_session');
   assert.deepEqual(asked, [], 'a member’s stop reached a box that no longer acts for them');
 });
+
+// THE SAME HAND-BACK FOR A BOX THAT WAS NOT THERE TO BE ASKED. The test above
+// asked a box connected at the removal, and only that one was asked: a box
+// offline then was recorded as beyond asking and never asked when it
+// returned, and one the registry did not hold, which after a Durable Object
+// restart is every box that was offline, was not even named (sixth Workers
+// audit). Each case ends the same way, with the box asked on its first report
+// after it returns, from that report as the box made it.
+const LOGGER = { info() {}, warn() {}, error() {}, debug() {} };
+const BOSS_BOX_REPORT = {
+  hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: 2, free: 3, labels: [],
+  sessions: [
+    { name: 'nina-job', status: 'running', createdBy: 'fleet:nina@example.test' },
+    { name: 'boss-job', status: 'running', createdBy: 'fleet:boss@example.test' },
+  ],
+};
+const HANDED_BACK = [
+  'boss-box stop nina-job for nina@example.test',
+  'boss-box unlink claude for nina@example.test',
+  'boss-box unlink cloudflare for nina@example.test',
+  'boss-box unlink github for nina@example.test',
+];
+
+/** The intents a core sends, as one line each. @param {any} core */
+function listen(core) {
+  /** @type {string[]} */
+  const asked = [];
+  core.send = async (/** @type {any} */ host, /** @type {any} */ spec) => {
+    asked.push(`${host.hostId} ${spec.verb} ${spec.params.name ?? spec.params.provider} for ${spec.actor}`);
+    return { ok: true, text: 'done' };
+  };
+  return asked;
+}
+
+/** A Durable Object waking from storage: credentials and enrolments restored, and no box in the registry until it dials. @param {any} core */
+async function restart(core) {
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const next = new CoordinatorCore({ logger: LOGGER });
+  next.clients.restore(JSON.parse(JSON.stringify(core.clients.serialise())));
+  next.hostIds.restore(JSON.parse(JSON.stringify(core.hostIds.serialise())));
+  return next;
+}
+
+/** @param {any} core */
+const demotedSaid = (core) =>
+  core.recentEvents({ email: 'nina@example.test', admin: false }).filter((/** @type {any} */ e) => e.event === 'host.demoted');
+
+test('a removed admin’s box that was offline at the removal is asked for back what it held on its first report after it returns', async () => {
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: LOGGER });
+  const boss = /** @type {any} */ (await core.issueClient({ email: 'boss@example.test' }, 'phone'));
+  await core.issueClient({ email: 'nina@example.test' }, 'phone');
+  await admit(core, 'boss-box', { enrolledBy: 'boss@example.test' });
+  await admit(core, 'nina-box', { enrolledBy: 'nina@example.test' });
+  core.registry.recordHealth('boss-box', BOSS_BOX_REPORT);
+  core.hostDisconnected('boss-box', 'offline');
+  const asked = listen(core);
+
+  core.revokeClient(boss.client.id);
+  assert.deepEqual(asked, [], 'an offline box cannot be asked anything');
+  assert.deepEqual(demotedSaid(core).map((/** @type {any} */ e) => e.hostId), ['boss-box']);
+  assert.match(demotedSaid(core)[0].text, /first time it reports in/);
+
+  core.hostConnected('boss-box', () => {});
+  assert.deepEqual(asked, [], 'asked before the report that says whose each session is');
+  await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  assert.deepEqual(asked.sort(), HANDED_BACK, 'a box offline at the removal was never asked for a member’s session and sign-ins');
+
+  // Once: the next report is the box's own business.
+  asked.length = 0;
+  await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  assert.deepEqual(asked, []);
+});
+
+test('a removed admin’s box the registry did not hold is named, and owes the hand-back across a restart', async () => {
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const before = new CoordinatorCore({ logger: LOGGER });
+  const boss = /** @type {any} */ (await before.issueClient({ email: 'boss@example.test' }, 'phone'));
+  await before.issueClient({ email: 'nina@example.test' }, 'phone');
+  await admit(before, 'boss-box', { enrolledBy: 'boss@example.test' });
+  before.hostDisconnected('boss-box', 'offline');
+
+  // Evicted while the box was away, and the admin removed after.
+  const core = await restart(before);
+  const asked = listen(core);
+  core.revokeClient(boss.client.id);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(demotedSaid(core).map((/** @type {any} */ e) => e.hostId), ['boss-box'], 'a box absent from the registry was demoted without a word');
+
+  // Rebuilt, re-keyed with a pin minted for its name, and evicted again before
+  // it came back: what it owes is kept with its enrolment through all three.
+  const { generateKeyPair } = await import('../src/fleet/crypto.js');
+  const rekeyed = await core.hostIds.enrol({ hostId: 'boss-box', publicJwk: (await generateKeyPair()).publicJwk, enrolledBy: 'boss@example.test', boundToThisHost: true });
+  assert.equal(rekeyed.ok, true);
+  const after = await restart(core);
+  const late = listen(after);
+  after.hostConnected('boss-box', () => {});
+  await after.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  assert.deepEqual(late.sort(), HANDED_BACK, 'the hand-back a box owed did not survive a restart');
+});
+
+test('a box whose admin signs back in owes nothing it was not there for', async () => {
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const core = new CoordinatorCore({ logger: LOGGER });
+  const boss = /** @type {any} */ (await core.issueClient({ email: 'boss@example.test' }, 'phone'));
+  await core.issueClient({ email: 'nina@example.test' }, 'phone');
+  await admit(core, 'boss-box', { enrolledBy: 'boss@example.test' });
+  core.hostDisconnected('boss-box', 'offline');
+  core.revokeClient(boss.client.id);
+  await core.issueClient({ email: 'boss@example.test' }, 'new phone');
+
+  const asked = listen(core);
+  core.hostConnected('boss-box', () => {});
+  await core.onHostMessage('boss-box', { kind: 'health', health: BOSS_BOX_REPORT });
+  assert.deepEqual(asked, [], 'the fleet’s own box was asked to forget the sign-ins it is there to hold');
+});
