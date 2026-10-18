@@ -22,7 +22,7 @@ import path from 'node:path';
 
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits } from '../src/fleet/host/xo-setup.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
-import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupWatchAad } from '../src/fleet/seal.js';
+import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
 import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
@@ -58,12 +58,12 @@ async function finished(/** @type {XoSetups} */ setups, /** @type {string} */ jo
  * What the phone does with `begin`'s answer: check the signature, make a key
  * for the token to come back to, and seal both the sign-in and that key.
  */
-async function phone(/** @type {any} */ begun, /** @type {string} */ address, /** @type {string} */ pin, payload = /** @type {any} */ (null)) {
+async function phone(/** @type {any} */ begun, /** @type {string} */ address, /** @type {string} */ pin, payload = /** @type {any} */ (null), aad = xosetupAad) {
   const { job, key, keySig, hostKey } = begun.xosetup;
   const signed = await verify(hostKey, keySig, signingInput('xosetup-key', { address, job, key, pin }));
   const reply = await newSealKey();
   const inside = payload ?? { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey };
-  const box = await seal({ to: key, aad: xosetupAad(job, address), payload: inside });
+  const box = await seal({ to: key, aad: aad(job, address), payload: inside });
   return { signed, sealed: `${box.epk}.${box.iv}.${box.ct}`, reply };
 }
 
@@ -337,7 +337,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'reconnect', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
+    ['policy', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -1011,14 +1011,19 @@ function clock() {
   };
 }
 
-/** What the phone seals for a reconnect: the admin sign-in, the purpose, and a key for the answer. */
-async function reconnecting(/** @type {any} */ xo, /** @type {XoSetups} */ setups, /** @type {string} */ actor) {
+/**
+ * What the phone seals for a reconnect: the admin sign-in, the purpose, and a
+ * key for the answer, under the reconnect's own binding, or under the
+ * setup's as a phone not yet updated does.
+ */
+async function reconnecting(/** @type {any} */ xo, /** @type {XoSetups} */ setups, /** @type {string} */ actor, aad = xosetupReconnectSigninAad) {
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.equal(begun.ok, true, begun.text);
   const reply = await newSealKey();
-  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, purpose: 'reconnect', xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey });
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, purpose: 'reconnect', xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey }, aad);
   const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
   assert.equal(ran.ok, true, ran.text);
+  assert.equal(ran.text, `Reconnecting the servers of ${xo.address}.`);
   return { begun, reply, job: begun.xosetup.job };
 }
 
@@ -1177,8 +1182,11 @@ test('a reconnect cancelled while it waits stops there, and one that would outru
     await letGo(xo);
   }
   {
-    // Each of these takes a minute: half of it waiting to let go, half
-    // asking again to be enabled. Ten minutes fit nine and a bit.
+    // Each of these takes a minute of the job's clock: half of it waiting
+    // to let go, half asking again to be enabled. A cycle is begun only with
+    // room for the longest it could take, every call waiting the minute the
+    // connection waits for one, which is about six: so four are begun, at
+    // nought, one, two and three minutes, and not a fifth at four.
     const many = 'ijklmnopqrst'.split('');
     const xo = await standIn(t, { servers: many.map((id) => xenServer(id, { status: 'connecting', linger: 1000, busy: 1000 })) });
     const c = clock();
@@ -1190,7 +1198,7 @@ test('a reconnect cancelled while it waits stops there, and one that would outru
     assert.ok(c.elapsed <= 10 * 60_000, `held for ${c.elapsed / 1000} seconds`);
     const actions = (await account(end, reply, xo.address)).servers.map((/** @type {any} */ s) => s.action);
     const begun = actions.filter((a) => a === 'failed').length;
-    assert.ok(begun >= 8 && begun < many.length, actions.join());
+    assert.equal(begun, 4, actions.join());
     assert.deepEqual(actions.slice(begun), Array(many.length - begun).fill('left'), 'the rest were never touched');
     assert.equal(new Set(asked(xo, 'server.disable')).size, begun, 'no server was turned off that there was no time to turn on again');
     await letGo(xo);
@@ -1283,5 +1291,109 @@ test('a reconnect is refused before anything changes where Xen Orchestra cannot,
     assert.equal(events.length > 0, reported);
     assert.ok(!xo.calls.some((/** @type {any} */ x) => x.method === 'server.enable' || x.method === 'server.disable'));
     await letGo(xo);
+  }
+});
+
+test('the ten minutes running out in the middle of a cycle wait for it to end, so the server is turned on again before the session closes', { skip }, async (t) => {
+  // Stuck connecting, and three looks letting go once disabled: the time
+  // runs out at the first pause after the disable, which is the middle.
+  const servers = [xenServer('c', { status: 'connecting', linger: 3 })];
+  const xo = await standIn(t, { servers });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const turn = () => new Promise((r) => setImmediate(r));
+  let ticked = false;
+  const { setups } = await machine({
+    sleep: async () => {
+      if (!ticked) {
+        ticked = true;
+        t.mock.timers.tick(10 * 60_000);
+      }
+      await turn();
+    },
+  });
+  const actor = 'eli@example.com';
+  const { reply, job } = await reconnecting(xo, setups, actor);
+  /** @type {any} */
+  let end;
+  for (const t0 = performance.now(); (end = setups.status({ job, actor }).xosetup).state === 'running' && performance.now() - t0 < 5_000;) await turn();
+  assert.ok(ticked, 'the ten minutes ran out during the cycle');
+  assert.equal(end.state, 'failed');
+  assert.match(end.text, /^It stopped at the ten minutes this machine holds an admin session for/);
+  assert.deepEqual([asked(xo, 'server.disable'), asked(xo, 'server.enable')], [['c'], ['c']]);
+  assert.deepEqual([servers[0].enabled, servers[0].status], [true, 'connected'], 'turned on again, not left off for a later reconnect to take for a person’s choice');
+  assert.deepEqual((await account(end, reply, xo.address)).servers.map((/** @type {any} */ s) => s.action), ['cycled']);
+  for (const t0 = performance.now(); xo.live() > 0 && performance.now() - t0 < 5_000;) await turn();
+  assert.equal(xo.live(), 0, 'the admin session was closed once the cycle ended');
+});
+
+test('a cycle that fails after its disable asks for the enable once, and one whose connection is gone is said to be turned off by this job', { skip }, async (t) => {
+  const actor = 'eli@example.com';
+  {
+    // The look after the disable is refused, and the session is still there.
+    const servers = [xenServer('c', { status: 'connecting', stumble: true })];
+    const xo = await standIn(t, { servers });
+    const c = clock();
+    const { setups } = await machine({ now: c.now, sleep: c.sleep });
+    const { reply, job } = await reconnecting(xo, setups, actor);
+    const end = await finished(setups, job, actor);
+    assert.deepEqual(asked(xo, 'server.enable'), ['c']);
+    assert.equal(servers[0].enabled, true, 'turned on again');
+    const [said] = (await account(end, reply, xo.address)).servers;
+    assert.equal(said.action, 'failed');
+    assert.equal(said.error, 'the event loop was busy');
+    await letGo(xo);
+  }
+  {
+    // The connection ends as soon as the disable has answered.
+    const servers = [xenServer('c', { status: 'connecting', cut: true })];
+    const xo = await standIn(t, { servers });
+    const c = clock();
+    const { setups } = await machine({ now: c.now, sleep: c.sleep });
+    const { reply, job } = await reconnecting(xo, setups, actor);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'failed');
+    assert.equal(servers[0].enabled, false, 'off, and nothing here can reach Xen Orchestra to say otherwise');
+    const [said] = (await account(end, reply, xo.address)).servers;
+    assert.equal(said.action, 'failed', 'never left, connected already');
+    assert.match(said.error, /\. This job turned it off to reconnect it and could not turn it on again, so it may be turned off in Xen Orchestra now; turn it on there$/);
+    await letGo(xo);
+  }
+});
+
+test('a reconnect’s sign-in opens under its own binding only as a reconnect, a phone not yet updated still reconnects, and a purpose this machine does not know starts nothing', { skip }, async (t) => {
+  const actor = 'eli@example.com';
+  // A PHONE NOT YET UPDATED seals under the setup's binding, and this
+  // machine, which knows a reconnect, runs it as one and as nothing more.
+  {
+    const servers = [xenServer('b', { status: 'disconnected' })];
+    const xo = await standIn(t, { servers });
+    const c = clock();
+    const { setups } = await machine({ now: c.now, sleep: c.sleep });
+    const { job } = await reconnecting(xo, setups, actor, xosetupAad);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'done', end.text);
+    assert.deepEqual(asked(xo, 'server.enable'), ['b']);
+    assert.ok(!xo.calls.some((/** @type {any} */ x) => /^(user|token|resourceSet|plugin)\./.test(x.method)), 'no part of a setup');
+    await letGo(xo);
+  }
+  for (const [aad, purpose] of /** @type {Array<[typeof xosetupAad, string|undefined]>} */ ([
+    [xosetupReconnectSigninAad, undefined],
+    [xosetupReconnectSigninAad, 'policy'],
+    [xosetupReconnectSigninAad, 'rebuild'],
+    [xosetupAad, 'rebuild'],
+  ])) {
+    const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected' })] });
+    const { setups } = await machine();
+    const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+    const reply = await newSealKey();
+    const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, ...(purpose ? { purpose } : {}), xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey }, aad);
+    const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
+    const which = `${aad === xosetupAad ? 'setup' : 'reconnect-signin'} / ${purpose}`;
+    assert.equal(ran.ok, false, which);
+    assert.match(ran.text, /^The sign-in was sealed for a kind of job this machine does not run, so nothing was started\./, which);
+    assert.equal(ran.xosetup?.state, 'failed', `${which}: the job is over and its key spent`);
+    assert.equal((await setups.run({ job: begun.xosetup.job, sealed, actor })).text, 'That setup has already been given its sign-in.', which);
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    assert.equal(xo.connections(), 0, `${which}: Xen Orchestra was never reached`);
   }
 });

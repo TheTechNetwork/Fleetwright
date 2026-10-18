@@ -113,7 +113,7 @@ import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
-import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupWatchAad } from '../seal.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { machineGrantsOf } from '../../core/grants.js';
@@ -161,6 +161,21 @@ const RECONNECT_METHODS = Object.freeze(['server.getAll', 'server.enable', 'serv
  * stops at ten.
  */
 const RECONNECT = Object.freeze({ settleMs: 30_000, retryMs: 2_000, retryForMs: 30_000, pollMs: 5_000, waitMs: 3 * 60_000, capMs: 10 * 60_000 });
+/** How long a call to Xen Orchestra is waited for where the connection does not say (XoRpc's own default, xo-ws.js). */
+const CALL_TIMEOUT_MS = 60_000;
+/**
+ * THE LONGEST ONE CYCLE CAN TAKE (#cycle), with every call waiting as long
+ * as the connection waits for one: the disable; half a minute of letting go,
+ * a pause, and the look that ends it; half a minute of asking to be enabled,
+ * a pause, and the enable and look that end it; and the one enable a failed
+ * cycle asks for. About six minutes at XoRpc's minute a call, which is what
+ * the reconnect step leaves room for before it begins one.
+ *
+ * @param {number} callMs
+ */
+function cycleMs(callMs) {
+  return RECONNECT.settleMs + RECONNECT.retryForMs + 2 * RECONNECT.retryMs + 5 * callMs;
+}
 /** How often an install that is quiet still says it is going: under the Lock Screen's twenty minutes of silence. */
 const DEPLOY_HEARTBEAT_MS = 5 * 60_000;
 /** The tag on the network the edge router's WAN goes on: the way out of every lab. */
@@ -584,8 +599,14 @@ export class XoSetups {
         // sign-in (`purpose: 'reconnect'`, #reconnectSteps). An older one
         // would take that sign-in for a whole setup, so a phone seals one
         // only where this is said.
+        // `reconnect-signin`: it opens that sign-in under a reconnect's own
+        // binding (seal.js, xosetupReconnectSigninAad), and a phone seals
+        // one under nothing else. `can` is not signed, so a relay could add
+        // `reconnect` to an older machine's list; under its own binding the
+        // sign-in does not open there, where under the setup's it was run as
+        // a whole setup.
         can: [
-          'policy', 'reconnect', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
+          'policy', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
           ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder', 'holder-ask'] : []),
         ],
@@ -670,20 +691,50 @@ export class XoSetups {
     /** @type {any} */
     let inside;
     const deploy = rec.purpose === 'deploy';
+    const box = { epk: parts[0], iv: parts[1], ct: parts[2] };
+    // UNDER THE SETUP'S NAME, OR A RECONNECT'S OWN: a phone that knows this
+    // machine lists `reconnect-signin` seals a reconnect under the second,
+    // which a machine too old to know a reconnect cannot open (seal.js).
+    let underReconnect = false;
     try {
       inside = await openSealed({
         privateKey: rec.key.privateKey,
         publicKey: rec.key.publicKey,
         aad: deploy ? xodeployAad(job, rec.address) : xosetupAad(job, rec.address),
-        sealed: { epk: parts[0], iv: parts[1], ct: parts[2] },
+        sealed: box,
       });
     } catch {
-      return { ok: false, text: deploy ? 'The passwords did not open with this job’s key. Start again from the app.' : 'The sign-in did not open with this setup’s key. Start again from the app.' };
+      if (deploy) return { ok: false, text: 'The passwords did not open with this job’s key. Start again from the app.' };
+      try {
+        inside = await openSealed({
+          privateKey: rec.key.privateKey,
+          publicKey: rec.key.publicKey,
+          aad: xosetupReconnectSigninAad(job, rec.address),
+          sealed: box,
+        });
+        underReconnect = true;
+      } catch {
+        return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
+      }
     }
     // ONE USE: the key goes as soon as it has opened the one thing it exists
     // for, which for a policy job is two things (below).
     const jobKey = rec.key;
     rec.key = null;
+    // A RECONNECT ONLY UNDER ITS OWN BINDING, and no purpose this machine
+    // does not know taken for a whole setup. Under the reconnect's name the
+    // phone asked for a reconnect and nothing else, so anything else in it is
+    // refused. Under the setup's name a setup carries no purpose at all, a
+    // policy change says `policy`, and a reconnect from a phone not yet
+    // updated says `reconnect` and is run as one, which is safe here because
+    // this machine knows it. Checked here, before #execute, which chooses
+    // its steps from `rec.purpose` and runs a whole setup for anything else.
+    if (!deploy && (underReconnect ? inside?.purpose !== 'reconnect' : ![undefined, 'policy', 'reconnect'].includes(inside?.purpose))) {
+      rec.state = 'failed';
+      rec.text = 'The sign-in was sealed for a kind of job this machine does not run, so nothing was started. Update the app and this machine, then try again.';
+      this.#ended(rec);
+      return { ok: false, text: rec.text, xosetup: status(rec) };
+    }
     // WHERE THE TOKEN GOES BACK TO, checked before anything is made: an app
     // too old to send one would otherwise have a user and a token made for
     // it in Xen Orchestra that nobody could ever be handed.
@@ -975,11 +1026,16 @@ export class XoSetups {
     const keys = policy ? XOPOLICY_STEPS : deploy ? XODEPLOY_STEPS : reconnect ? XORECONNECT_STEPS : XOSETUP_STEPS;
     // TEN MINUTES SIGNED IN AS AN ADMIN, and no more, for a reconnect: read
     // by its steps on `now` between looks, and held by a timer too, which
-    // closes the session under whatever call is waiting when the time is up.
+    // closes the session under whatever call is waiting when the time is up,
+    // EXCEPT A CYCLE'S: the middle of one is a server this job turned off, so
+    // the session closes when the cycle ends (#cycle). A cycle is bounded by
+    // its own windows and call timeouts, and the reconnect step begins one
+    // only with room for all of them before the ten minutes are up.
     if (reconnect) {
       ctx.deadline = this.now() + RECONNECT.capMs;
       ctx.cap = setTimeout(() => {
         ctx.expired = true;
+        if (ctx.cycling) return;
         try {
           ctx.admin?.close();
         } catch {
@@ -1602,20 +1658,29 @@ export class XoSetups {
           }
           // ROOM FOR THE WHOLE OF ONE before beginning it: a cycle turns the
           // server off first, and must not be cut off before it is on again.
+          // Its windows and its pauses, and every call it can make waiting
+          // as long as the connection waits for one: a Xen Orchestra slow to
+          // answer spends the ten minutes in calls, not in pauses, and a
+          // cycle begun with room only for its pauses ran past them.
           if (ctx.rec.cancelled) throw new Error('cancelled');
-          if (this.now() + RECONNECT.settleMs + RECONNECT.retryForMs >= ctx.deadline) {
+          const cycle = s.status !== 'disconnected';
+          const room = cycle ? cycleMs(ctx.admin?.callTimeoutMs ?? CALL_TIMEOUT_MS) : RECONNECT.settleMs + RECONNECT.retryForMs;
+          if (ctx.expired || this.now() + room >= ctx.deadline) {
             ctx.expired = true;
             throw new Error('ten minutes were up');
           }
           ctx.rec.text = `Reconnecting server ${i + 1} of ${servers.length}.`;
-          const cycle = s.status !== 'disconnected';
           try {
             if (cycle) await this.#cycle(ctx, s.id);
             else await this.#enable(ctx, s.id, { stoppable: true });
             outcomes.set(s.id, { action: cycle ? 'cycled' : 'enabled', error: null });
           } catch (e) {
-            if (/** @type {any} */ (e)?.stop || ctx.expired) throw e;
+            // A CYCLE THAT BEGAN IS ACCOUNTED FOR, however it ended: its
+            // server was turned off, and one left without an outcome is
+            // sealed to the phone as left, connected already.
+            if (!cycle && (/** @type {any} */ (e)?.stop || ctx.expired)) throw e;
             outcomes.set(s.id, { action: 'failed', error: await this.#failure(ctx, s.id, /** @type {Error} */ (e)) });
+            if (ctx.expired) throw e;
           }
         }
       },
@@ -1723,34 +1788,70 @@ export class XoSetups {
    * A server stuck connecting, or connected with an error: disabled, given
    * half a minute to reach `disconnected`, then enabled again. Never stopped
    * in the middle, by a cancel or by the clock, because the middle is a
-   * server turned off.
+   * server turned off: the ten minutes' timer leaves the session open while
+   * a cycle runs and closes it when the cycle ends (#execute).
+   *
+   * A CYCLE THAT FAILS BEFORE IT ASKED FOR THE ENABLE asks for it once, on
+   * the session it still has: a server this job turned off must not be left
+   * off by it for want of one call. One whose enable was refused has had its
+   * half a minute of asking already. Whatever is still off, or may be, is
+   * said on the error (`disabledByJob`), because the read-back that would
+   * say it (#failure) needs the connection the failure may have taken.
    *
    * @param {any} ctx @param {string} id
    */
   async #cycle(ctx, id) {
-    await ctx.admin.call('server.disable', { id });
-    const until = this.now() + RECONNECT.settleMs;
-    for (;;) {
-      const now = (await this.#xenServers(ctx)).find((x) => x.id === id);
-      // Still not let go at the end of it: enabled all the same, because a
-      // server this job turned off must not be left off by it.
-      if (!now || now.status === 'disconnected' || this.now() >= until) break;
-      await this.#pause(ctx, RECONNECT.retryMs);
+    ctx.cycling = true;
+    // Xen Orchestra sets `enabled: false` before it answers a disable, so
+    // one sent and not answered may have turned the server off all the same.
+    let enabling = false;
+    try {
+      await ctx.admin.call('server.disable', { id });
+      const until = this.now() + RECONNECT.settleMs;
+      for (;;) {
+        const now = (await this.#xenServers(ctx)).find((x) => x.id === id);
+        // Still not let go at the end of it: enabled all the same, because a
+        // server this job turned off must not be left off by it.
+        if (!now || now.status === 'disconnected' || this.now() >= until) break;
+        await this.#pause(ctx, RECONNECT.retryMs);
+      }
+      enabling = true;
+      await this.#enable(ctx, id);
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      const on = !enabling && (await ctx.admin.call('server.enable', { id }).then(() => true, (/** @type {Error} */ x) => /did not answer server\.enable in time/.test(x.message)));
+      if (!on) Object.assign(err, { disabledByJob: true });
+      throw err;
+    } finally {
+      ctx.cycling = false;
+      if (ctx.expired) {
+        try {
+          ctx.admin?.close();
+        } catch {
+          /* closing */
+        }
+      }
     }
-    await this.#enable(ctx, id);
   }
 
   /**
    * Why one server could not be reconnected, for the phone: the two answers
    * Xen Orchestra will not retry put in words, anything else as it said it,
    * and whether the server is left turned off, read back rather than assumed.
+   * Where the read-back cannot reach Xen Orchestra, a server this job turned
+   * off and could not turn on again (`disabledByJob`, #cycle) is still said
+   * to be off, or maybe off, and never left unsaid: a later reconnect leaves
+   * a server that is off alone, as a person's choice.
    *
    * @param {any} ctx @param {string} id @param {Error} e
    */
   async #failure(ctx, id, e) {
     const now = await this.#xenServers(ctx).then((all) => all.find((x) => x.id === id)).catch(() => null);
     const why = permanentWords(e) ?? permanentWords(now?.raw) ?? scrub(e.message, ctx.secrets ?? {});
-    return `${why}${now && !now.enabled ? '. It is turned off in Xen Orchestra now; turn it on there' : ''}`.slice(0, 300);
+    const off = now
+      ? !now.enabled ? '. It is turned off in Xen Orchestra now; turn it on there' : ''
+      : /** @type {any} */ (e)?.disabledByJob ? '. This job turned it off to reconnect it and could not turn it on again, so it may be turned off in Xen Orchestra now; turn it on there' : '';
+    return `${why.slice(0, 300 - off.length)}${off}`;
   }
 
   /**

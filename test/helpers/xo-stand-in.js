@@ -58,7 +58,7 @@ export function xenStoreAsXo(data) {
 
 /**
  * @typedef {{ id: string, label: string, host: string, status: string, enabled: boolean, error?: any, poolId: string, poolName?: string,
- *   busy?: number, linger?: number, slow?: number, refuse?: 'auth'|'pool'|'down', lingering?: number, slowing?: number }} XoServer
+ *   busy?: number, linger?: number, slow?: number, refuse?: 'auth'|'pool'|'down', lingering?: number, slowing?: number, cut?: boolean, stumble?: boolean, stumbling?: boolean }} XoServer
  */
 
 /** A certificate and key for this run only, and the pin a phone would accept. */
@@ -85,7 +85,10 @@ export function certificate() {
  * `busy` (enables refused as `connecting` before one is taken), `linger`
  * (looks it stays `disconnecting` after a disable), `slow` (looks it stays
  * `connecting` after an enable; Infinity for never) and `refuse` (`auth`,
- * `pool` or `down`: what every enable fails with).
+ * `pool` or `down`: what every enable fails with). Two play the connection
+ * failing in the middle of a reconnect's cycle: `cut` ends it just after a
+ * disable of that server answers, and `stumble` refuses the first look
+ * after one and keeps the connection.
  *
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string>, servers?: XoServer[] }} [opts]
  */
@@ -176,6 +179,11 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
         const server = servers?.find((s) => s.id === p.id);
         switch (msg.method) {
           case 'server.getAll':
+            if (servers?.some((s) => s.stumbling)) {
+              for (const s of servers) s.stumbling = false;
+              refuse('the event loop was busy', 1);
+              break;
+            }
             // A look moves a server along whatever it is in the middle of.
             for (const s of servers ?? []) {
               if (s.status === 'disconnecting' && --s.lingering <= 0) s.status = 'disconnected';
@@ -227,7 +235,9 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
             server.enabled = false;
             if (server.linger) Object.assign(server, { status: 'disconnecting', lingering: server.linger });
             else if (server.status !== 'disconnected') server.status = 'disconnected';
+            if (server.stumble) server.stumbling = true;
             answer(true);
+            if (server.cut) socket.end();
             break;
           case 'session.signIn': {
             const u = users.find((x) => x.email === p.email);

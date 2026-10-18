@@ -371,18 +371,33 @@ machine of the fleet, through the coordinator.
   kept sign-in with Face ID, Touch ID or a strong fingerprint or face check
   (or the person types it) and seals it to one job's key on one machine,
   saying `purpose: reconnect` inside the seal, where a coordinator cannot
-  change it; and only to a machine whose `begin` lists `reconnect`, because
-  an older one would run it as a whole setup. The machine holds the
-  signed-in session, not the password, for at most ten minutes. It calls
-  `server.enable` and `server.disable` and nothing else that changes
-  anything: only on servers that are not connected, or are connected with an
-  error Xen Orchestra recorded; never on a server a person turned off, which
-  stays off; and it keeps nothing afterwards. That is every server Xen
-  Orchestra lists, including pools outside the fleet's resource set, which
-  is what a person reconnecting by hand would touch. Which servers there are,
-  their addresses and what became of each is sealed to the phone under
-  `fleetwright-xosetup-reconnect/v1:<job>:<address>`; the coordinator relays
-  counts and the address. Only an admin can run it.
+  change it, under a binding of its own,
+  `fleetwright-xosetup-reconnect-signin/v1:<job>:<address>`, and only to a
+  machine whose `begin` lists `reconnect-signin`. A machine older than that
+  binding cannot open it, where under the setup's binding an older one
+  opened it and ran a whole setup. `can` is not signed, so a compromised
+  coordinator can add the word to an older machine's `begin`; all that gets
+  it is a seal that machine cannot open. The machine opens anything under
+  that binding only as a reconnect, and refuses, before it reaches Xen
+  Orchestra, any purpose it does not know rather than run a setup for it.
+  The machine holds the signed-in session, not the password, for at most ten
+  minutes. It calls `server.enable` and `server.disable` and nothing else
+  that changes anything: only on servers that are not connected, or are
+  connected with an error Xen Orchestra recorded; never on a server a person
+  turned off, which stays off; and it keeps nothing afterwards. A server it
+  disables to cycle is asked to turn on again before the session closes: the
+  ten minutes do not cut a cycle in the middle, and one is begun only with
+  room for the longest it can take, every call waiting the minute the
+  connection allows. A server left off all the same, because Xen Orchestra
+  refused or the connection to it ended (which a relay can cause), is said
+  on the phone to be off, or to have been turned off by this job and maybe
+  left so, never to have been left as it was. A later reconnect cannot tell
+  that server from one a person turned off, and leaves it off. That is every
+  server Xen Orchestra lists, including pools outside the fleet's resource
+  set, which is what a person reconnecting by hand would touch. Which
+  servers there are, their addresses and what became of each is sealed to
+  the phone under `fleetwright-xosetup-reconnect/v1:<job>:<address>`; the
+  coordinator relays counts and the address. Only an admin can run it.
 - **A lost pool's push is bounded by whose pool it is.** It goes to the
   owner's and the admins' phones only, once per pool per hour plus one
   recovery, and to at most eight addresses per person in an hour, since the
