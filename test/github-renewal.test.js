@@ -119,6 +119,27 @@ test('a renewal stores BOTH halves, because GitHub rotates the refresh token', a
     'the rotated refresh token was dropped — this connection would break at the NEXT renewal');
 });
 
+test('an unlinked token stays unlinked: the next renewal does not bring it back', async (t) => {
+  // Ninth audit: `unlink` emptied the env file and left the renewal material,
+  // so within hours the timer traded the refresh token and wrote a fresh
+  // token back into the row. What a removal's unlink of a member came to.
+  const s = store(t);
+  s.store.save('guest@example.com', 'github', ACCESS, 'octocat', null);
+  s.store.saveRenewal('guest@example.com', 'github', { clientId: CLIENT_ID, refresh: REFRESH, expiresIn: 1 });
+  assert.equal(s.store.remove('guest@example.com', 'github').ok, true);
+
+  let asked = 0;
+  const real = globalThis.fetch;
+  t.after(() => { globalThis.fetch = real; });
+  globalThis.fetch = async () => {
+    asked++;
+    return new Response(JSON.stringify({ access_token: 'ghu_back000000000000000000000000', refresh_token: 'ghr_back000000000000000000000000', expires_in: 28_800 }));
+  };
+  await renewProviderTokens(s.cfg, { secrets: { githubClientSecret: CLIENT } });
+  assert.equal(asked, 0, 'the renewal spent the refresh token of a link that was removed');
+  assert.equal(s.store.tokenFor('guest@example.com', 'github'), null);
+});
+
 test('a token with hours left is not spent on a renewal', async (t) => {
   // GitHub rotates on every exchange, so a renewal is not free even though it
   // costs no quota: each one throws away a working refresh token for a new

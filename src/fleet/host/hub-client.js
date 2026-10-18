@@ -237,6 +237,21 @@ export class HubClient {
     return { ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
   }
 
+  /**
+   * Have fleetwright forget somebody removed from the fleet: their sessions
+   * here binned and their sign-ins deleted (src/core/forget-person.js). A hub
+   * from before the route is not done, and says so, so the coordinator keeps
+   * it owed.
+   *
+   * @param {string} email
+   * @returns {Promise<{ ok: boolean, text: string, forgot?: any }>}
+   */
+  async forgetPerson(email) {
+    const r = await this.#json('POST', '/api/forget-person', { email }, this.commandTimeoutMs, { allowStatus: [400, 404] });
+    if (r.__status === 404) return { ok: false, text: 'fleetwright here is older than forgetting a person; update it' };
+    return { ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '', ...(r.forgot ? { forgot: r.forgot } : {}) };
+  }
+
   /** Liveness only. @returns {Promise<boolean>} */
   async alive() {
     try {

@@ -41,6 +41,7 @@ import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
 import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
 import { applyVault } from '../core/vault-store.js';
+import { forgetPerson } from '../core/forget-person.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
 
@@ -397,6 +398,17 @@ export class HttpAdapter {
     if (p === '/api/vault' && method === 'POST') {
       const r = applyVault(this.cfg, await readJson(req));
       if (r.ok) log.info(`http: vault: ${r.text}`);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    // SOMEBODY REMOVED FROM THE FLEET, whose sessions and sign-ins here are
+    // ended in one act (src/core/forget-person.js). From the sidecar, which
+    // takes the address from an intent the coordinator sent on its socket and
+    // has no other way to name one; done here because the sessions and every
+    // store involved are this process's. A route of its own rather than a
+    // command, so no surface that types commands can reach it.
+    if (p === '/api/forget-person' && method === 'POST') {
+      const r = forgetPerson(this.cfg, this.sessions, (await readJson(req)).email);
       return json(res, r.ok ? 200 : 400, r);
     }
 

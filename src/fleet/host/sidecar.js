@@ -151,6 +151,7 @@ const CAPABILITY_VERBS = new Set([
   'exchange',
   'unlink',
   'renew',
+  'forgetperson',
   'update',
   'upgrade',
   'start',
@@ -750,6 +751,16 @@ export class Sidecar {
       // A MINT NEVER BECOMES A COMMAND LINE EITHER, for the same reason: the
       // key it signs with is in this process and nowhere else on the box.
       if (intent.verb === 'mint') return reply(await this.#mint(intent));
+
+      // SOMEBODY REMOVED FROM THE FLEET, named by the actor and nothing else,
+      // as `unlink` is. The hub does the forgetting, because every store
+      // involved is its own (src/core/forget-person.js); the reply says what
+      // it did, which is the only thing that settles it at the coordinator.
+      if (intent.verb === 'forgetperson') {
+        const who = emailFromActor(intent.actor ? `fleet:${intent.actor}` : null);
+        if (!who) return reply({ ok: false, text: 'forgetperson names its person as the actor, and this one names nobody.' });
+        return reply(await this.hub.forgetPerson(who));
+      }
 
       // ADDING A HYPERVISOR IS THIS PROCESS'S TOO. The setup key is signed
       // with the key this process holds, the sealed sign-in is opened with a

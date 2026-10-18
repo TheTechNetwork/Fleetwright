@@ -34,6 +34,7 @@ import { phaseFor, advancePhases } from './activity.js';
 import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
 import { SpentReader } from './spent.js';
+import { emailFromActor, normaliseEmail } from './accounts.js';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -1059,6 +1060,37 @@ export class SessionManager {
     }
 
     return this.purge({ name });
+  }
+
+  /**
+   * EVERY SESSION ONE PERSON STARTED HERE, forgotten, for when they have been
+   * removed from the fleet (forget-person.js): stopped, out of the list and in
+   * the bin, so an admin can still bring back work removed by mistake for the
+   * bin's window, and nothing brings it back by itself.
+   *
+   * Marked stopped and to stay down BEFORE it is binned, because the bin keeps
+   * the record as it was. A running session binned as `running` with
+   * resumeOnBoot set came back out of the bin still saying so, and the next
+   * reconcile and boot relaunched it with `--resume` as the person removed.
+   *
+   * Theirs is what its record says: started by `fleet:<their address>`, read
+   * the one way every per-person store on this box reads it (emailFromActor).
+   *
+   * @param {string} email
+   * @returns {string[]} the names binned
+   */
+  forgetOwner(email) {
+    const who = normaliseEmail(email);
+    if (!who) return [];
+    const theirs = this.registry.list().filter((r) => emailFromActor(r.createdBy) === who).map((r) => r.name);
+    /** @type {string[]} */
+    const gone = [];
+    for (const name of theirs) {
+      this.registry.upsert(name, { status: 'stopped', resumeOnBoot: false, detail: 'its owner was removed from the fleet', stoppedAt: Date.now() });
+      if (this.forget({ name }).ok) gone.push(name);
+    }
+    if (gone.length) log.info(`forgot ${gone.length} session(s) of somebody removed from the fleet: ${gone.join(', ')}`);
+    return gone;
   }
 
   /**

@@ -873,6 +873,25 @@ export class Connections {
       else unlinkSync(metaFile);
     } catch { /* nothing recorded — the env file was the whole story */ }
 
+    // AND WHAT RENEWS IT, or the next renewal undoes this. The refresh token
+    // stayed in `<row>.renewal.json`, renewableRows still found the row, and
+    // within hours keepalive traded it for a new access token and saved it
+    // straight back into the file this had just emptied: an unlink that
+    // lasted until the token was due (ninth audit). A removal's unlink of a
+    // member on the fleet's boxes was exactly this.
+    const renewalFile = this.renewalPathFor(row);
+    if (renewalFile && existsSync(renewalFile)) {
+      try {
+        const all = JSON.parse(this.#readGuarded(renewalFile));
+        if (all && typeof all === 'object' && provider in all) {
+          had = true;
+          delete all[provider];
+          if (Object.keys(all).length) writeFileSync(renewalFile, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+          else unlinkSync(renewalFile);
+        }
+      } catch { /* unreadable material renews nothing */ }
+    }
+
     return had
       ? {
           ok: true,
@@ -881,5 +900,24 @@ export class Connections {
             `It is still live on your ${p.label} account — revoke it there if you want it dead.`,
         }
       : { ok: false, message: `No ${p.label} token was stored.` };
+  }
+
+  /**
+   * Everything kept for one person: their tokens, what a phone is shown of
+   * them, and the renewal material, all three files at once. For somebody
+   * removed from the fleet (forget-person.js), so a person's row and never the
+   * box's own.
+   *
+   * @param {string} email
+   * @returns {string[]} the providers that had a token or renewal material here
+   */
+  forget(email) {
+    const row = normaliseEmail(email);
+    if (!row) return [];
+    const had = Object.keys(PROVIDERS).filter((p) => this.tokenFor(row, p) !== null || this.readRenewal(row, p) !== null);
+    for (const file of [this.envPathFor(row), this.metaPathFor(row), this.renewalPathFor(row)]) {
+      if (file && existsSync(file)) unlinkSync(file);
+    }
+    return had;
   }
 }
