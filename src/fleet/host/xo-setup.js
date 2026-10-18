@@ -120,14 +120,15 @@ import { machineGrantsOf } from '../../core/grants.js';
 import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName, wanAddressOf } from './edge-router.js';
 import { VM_IMAGE, IMAGES, IMAGE_CHANNELS, ensureImage, removeImage, imageKeyOf, imageChannelOf } from './vm-image.js';
 import { HOLDER, ensureHolder } from './xo-holder.js';
+import { FLEET_SET } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
-/** The resource set that bounds it, by name. */
-export const FLEET_SET = 'fleetwright';
+/** The resource set that bounds it, by name: xo-made.js's, which reads it too. */
+export { FLEET_SET };
 /** The installer's update plugin, as Xen Orchestra names a plugin: its package minus `xo-server-`. */
 export const UPDATES_PLUGIN = 'installer-updates';
 

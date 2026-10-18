@@ -820,8 +820,10 @@ test('the image goes on storage the fleet may use with room for a whole disk', (
 
 /**
  * An admin stand-in for a build: the VM it makes goes from Running to
- * whatever `then` says on the second look.
- * @param {{ then: 'Halted'|'rebooted'|'Running', existing?: any[], runs?: number, kept?: any[], named?: any[] }} o
+ * whatever `then` says on the second look. Its resource sets are the fleet's,
+ * `set-1`, and the list of what the policy job made (xo-made.js), which holds
+ * every `kept` disk unless it says `recorded: false`.
+ * @param {{ then: 'Halted'|'rebooted'|'Running', existing?: any[], runs?: number, kept?: Array<{ id: string, tags: string[], sr?: string, recorded?: boolean, resourceSet?: string }>, named?: any[] }} o
  */
 function buildPool({ then, existing = [], runs = 1, kept = [], named = [] }) {
   let looks = 0;
@@ -834,7 +836,12 @@ function buildPool({ then, existing = [], runs = 1, kept = [], named = [] }) {
   // which is how a cloud-init drive is told from a disk.
   /** @type {Array<{ vm: string, vdi: string, name: string, sr: string }>} */
   const disks = kept.map((k) => ({ vm: k.id, vdi: `${k.id}-disk`, name: 'disk', sr: k.sr ?? 'sr-1' }));
-  const templates = [...named, base, ...existing, ...kept.map((k) => ({ type: 'VM-template', id: k.id, $pool: 'pool-1', tags: k.tags }))];
+  const templates = [...named, base, ...existing, ...kept.map((k) => ({ type: 'VM-template', id: k.id, $pool: 'pool-1', tags: k.tags, ...(k.resourceSet ? { resourceSet: k.resourceSet } : {}) }))];
+  /** @type {Array<{ id: string, name: string, objects: string[] }>} */
+  const sets = [
+    { id: 'set-1', name: 'fleetwright', objects: [] },
+    ...(kept.length ? [{ id: 'set-made', name: 'fleetwright-made', objects: kept.filter((k) => k.recorded !== false).map((k) => k.id) }] : []),
+  ];
   const admin = {
     async call(/** @type {string} */ method, /** @type {any} */ params = {}) {
       calls.push({ method, params });
@@ -849,6 +856,9 @@ function buildPool({ then, existing = [], runs = 1, kept = [], named = [] }) {
         return Object.fromEntries([...templates, ...drives].filter((o) => o.type === f.type && (!f.id || o.id === f.id) && (!f.VM || o.VM === f.VM)).map((o) => [o.id, o]));
       }
       if (method === 'disk.import') return { $sendTo: '/upload/1' };
+      if (method === 'resourceSet.getAll') return sets.map((x) => ({ ...x, objects: [...x.objects] }));
+      if (method === 'resourceSet.create') sets.push({ id: `set-${sets.length + 1}`, name: params.name, objects: [...params.objects] });
+      if (method === 'resourceSet.addObject') sets.find((x) => x.id === params.id)?.objects.push(params.object);
       // AS XEN ORCHESTRA DOES: a cloud-init drive goes on the storage of the
       // VM's first disk, so one asked for with none is refused, in its words;
       // and a VM made from a template gets a copy of each of its disks, on
@@ -872,7 +882,7 @@ function buildPool({ then, existing = [], runs = 1, kept = [], named = [] }) {
     VBD: () => disks.map((d) => ({ type: 'VBD', id: `vbd-${d.vdi}`, VM: d.vm, VDI: d.vdi, is_cd_drive: false })),
     VDI: () => disks.map((d) => ({ type: 'VDI', id: d.vdi, name_label: d.name, $SR: d.sr })),
   };
-  return { admin, calls, sr, disks, objects };
+  return { admin, calls, sr, disks, objects, sets };
 }
 
 // THE DOWNLOAD the build is handed: a real compressed qcow2 (qemu-img's, see
@@ -916,8 +926,8 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   const said = [];
   const text = await ensureImage({ ...buildArgs(p), say: (t) => said.push(t) });
   assert.match(text, /machine image is ready on rack/);
-  const order = p.calls.map((c) => c.method).filter((m) => m !== 'xo.getAllObjects');
-  assert.deepEqual(order, ['disk.import', 'vm.create', 'vm.attachDisk', 'vm.convertToTemplate', 'vm.create', 'disk.resize', 'vm.createCloudInitConfigDrive', 'vm.start', 'vdi.delete', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
+  const order = p.calls.map((c) => c.method).filter((m) => m !== 'xo.getAllObjects' && m !== 'resourceSet.getAll');
+  assert.deepEqual(order, ['disk.import', 'vm.create', 'vm.attachDisk', 'vm.convertToTemplate', 'resourceSet.create', 'vm.create', 'disk.resize', 'vm.createCloudInitConfigDrive', 'vm.start', 'vdi.delete', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
   // THE DISK AS PUBLISHED IS KEPT, never booted and offered to nothing, and
   // the build is a copy of it.
   const [keptCreate, create] = p.calls.filter((c) => c.method === 'vm.create').map((c) => c.params);
@@ -941,6 +951,7 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.equal(createHash('sha256').update(p.uploaded.body).digest('hex'), DOWNLOADED_RAW.sha256);
   assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }, { id: 'build-vm', tag: 'fleetwright-channel:stable' }]);
   assert.deepEqual(p.calls.filter((c) => c.method === 'resourceSet.addObject').map((c) => c.params), [{ id: 'set-1', object: 'build-vm' }], 'the kept disk is not the fleet’s to clone');
+  assert.deepEqual(p.sets.find((x) => x.name === 'fleetwright-made')?.objects, ['base-vm'], 'the kept disk is not on the list of what the job made, so no build would use it');
   assert.ok(said.some((s) => /Installing Fleetwright on the machine image/.test(s)));
 
   const there = buildPool({ then: 'Halted', existing: [{ type: 'VM-template', id: 'img', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag] }] });
@@ -1040,6 +1051,27 @@ test('the image starts from XCP-ng’s own template and not one that only shares
   two.disks.push({ vm: 'build-vm', vdi: 'build-vm-second', name: 'disk', sr: 'sr-1' });
   await assert.rejects(ensureImage(buildArgs(two)), /build VM came from the kept Debian 13 with 2 disks where it has one, so none was grown and it was not started/);
   assert.ok(!two.calls.some((c) => c.method === 'disk.resize' || c.method === 'vm.start'), 'a disk was grown, or the VM started');
+});
+
+test('a kept disk is used only when the job’s own list says it made it, and anything else is passed over for the checked download and left alone', async () => {
+  for (const [what, kept, spoil] of /** @type {Array<[string, any, (p: ReturnType<typeof buildPool>) => void]>} */ ([
+    ['carrying the tag and on no list', { recorded: false }, () => {}],
+    ['made in a resource set, as the fleet’s user makes its VMs', { resourceSet: 'set-1' }, () => {}],
+    ['in the fleet’s own set, where its token reaches it', {}, (p) => void p.sets[0].objects.push('kept-1')],
+  ])) {
+    const p = buildPool({
+      then: 'Halted',
+      kept: [
+        { id: 'kept-1', tags: [VM_IMAGE.baseTag, KEPT_TAG], ...kept },
+        { id: 'kept-older', tags: [VM_IMAGE.baseTag, `${VM_IMAGE.baseTag}:debian-13:20250901-0000`], recorded: false },
+      ],
+    });
+    spoil(p);
+    await ensureImage(buildArgs(p));
+    assert.ok(p.calls.some((c) => c.method === 'disk.import'), `${what}: the download was skipped`);
+    assert.deepEqual(p.calls.filter((c) => c.method === 'vm.create').map((c) => c.params.template), ['other-media', 'base-vm'], `${what}: built from it`);
+    assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), `${what}: removed something the job did not make`);
+  }
 });
 
 test('a build that reboots failed, and its VM is kept stopped, named for what happened', async () => {

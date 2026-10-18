@@ -58,6 +58,7 @@ import { gzipSync } from 'node:zlib';
 
 import { builtInTemplate, fetchPinned, uploadDisk, srName } from './edge-router.js';
 import { qcow2Raw, qcow2Size } from './qcow2.js';
+import { forgetMade, outsideSets, recordMade, setsOf } from './xo-made.js';
 import { IMAGE_REPORT_TOKEN_RE } from '../protocol/intents.js';
 
 /**
@@ -732,18 +733,34 @@ const logEnd = (log) => String(log || '').trim().split('\n').slice(-12).join('\n
  * offers it, and kept out of the resource set, so the fleet's token cannot
  * clone it.
  *
+ * FOUND BY ITS ID, as the edge router's is and for the same reason
+ * (edge-router.js, THE KEPT DISK): a base skips the download and its digest,
+ * so a template carrying the tag is not enough. Only one whose id is on the
+ * list of what the policy job made (xo-made.js), that is not in the fleet's
+ * resource set and was made in no set, is used; otherwise the image is
+ * downloaded and checked as if nothing were kept. Only listed bases are
+ * removed when a newer build is kept.
+ *
  * @param {{ call: (method: string, params?: any) => Promise<any> }} admin
  * @param {any[]} templates  every VM-template, as xo.getAllObjects gave them
  * @param {string} pool @param {string} tag  `${VM_IMAGE.baseTag}:<key>:<build>` @param {string} sr
+ * @param {{ fleet: Set<string>, made: Set<string> }} sets  as xo-made.js reads them
  * @returns {Promise<any|null>}
  */
-async function baseOf(admin, templates, pool, tag, sr) {
-  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(tag))) {
+async function baseOf(admin, templates, pool, tag, sr, sets) {
+  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(tag) && baseByUs(x, sets))) {
     const disks = await disksOf(admin, t.id);
     if (disks.length === 1 && disks[0].$SR === sr) return t;
   }
   return null;
 }
+
+/**
+ * A base the policy job made (baseOf, FOUND BY ITS ID).
+ *
+ * @param {any} t @param {{ fleet: Set<string>, made: Set<string> }} sets
+ */
+const baseByUs = (t, sets) => sets.made.has(String(t?.id)) && !sets.fleet.has(String(t?.id)) && outsideSets(t);
 
 /**
  * A VM's or template's disks: every one that is not a CD drive or a
@@ -893,7 +910,8 @@ export async function ensureImage({
   const os = spec.os;
   const baseTag = `${VM_IMAGE.baseTag}:${spec.key}:${spec.build}`;
   /** @type {any} */
-  let from = await baseOf(admin, templates, pool, baseTag, sr.id);
+  const sets = await setsOf(admin);
+  let from = await baseOf(admin, templates, pool, baseTag, sr.id, sets);
 
   /** @type {string|null} */
   let vdi = null;
@@ -969,10 +987,12 @@ export async function ensureImage({
       await admin.call('vm.attachDisk', { vm: making, vdi, bootable: true, position: '0' });
       vdi = null; // the base's now, and deleted with it
       await admin.call('vm.convertToTemplate', { id: making });
+      // ON THE LIST before it is used, or removed with the rest (baseOf).
+      await recordMade(admin, /** @type {string} */ (making));
       from = { id: making };
       making = null; // kept from here, whatever happens to this build
-      for (const old of basesFor(templates, pool, spec.key).filter((t) => !t.tags.includes(baseTag))) {
-        await admin.call('vm.delete', { id: old.id, deleteDisks: true }).catch(() => {});
+      for (const old of basesFor(templates, pool, spec.key).filter((t) => !t.tags.includes(baseTag) && baseByUs(t, sets))) {
+        await admin.call('vm.delete', { id: old.id, deleteDisks: true }).then(() => forgetMade(admin, old.id), () => {});
       }
     }
 

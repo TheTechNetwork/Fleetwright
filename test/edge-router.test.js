@@ -195,6 +195,9 @@ function xo(/** @type {Record<string, any[]>} */ objects, /** @type {Record<stri
   };
 }
 
+/** What only reads, left out where the order of what is done is the point. */
+const READS = ['xo.getAllObjects', 'resourceSet.getAll'];
+
 const GiB = 1024 ** 3;
 const SRS = [
   { id: 'sr-small', $pool: 'p1', size: 4 * GiB, physical_usage: 2 * GiB },
@@ -472,7 +475,7 @@ test('an edge is built with an interface on each lab, in order, and tagged with 
   for (const ask of [labs, null]) {
     const same = xo({ VM: [old], VIF: onLabs });
     const said = await ensureEdge(edgeArgs(same, { labs: ask, fleet }).args);
-    assert.deepEqual(same.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects'), []);
+    assert.deepEqual(same.calls.map(([m]) => m).filter((m) => !READS.includes(m)), []);
     assert.match(said, /already there[\s\S]*with one open lab and one closed lab/);
   }
   // Other labs: rebuilt, still dropping, as nobody asked to change that.
@@ -540,7 +543,7 @@ test('the edge router is made in the order that boots: disk in, WAN first, check
   );
   const { args, said } = edgeArgs(admin);
   const done = await ensureEdge(args);
-  const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects');
+  const methods = admin.calls.map(([m]) => m).filter((m) => !READS.includes(m));
   // Asked first whether it can write into a disk that is there: this stand-in
   // makes none, so the whole disk is sent.
   assert.deepEqual(methods, ['disk.create', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vif.set', 'vm.start']);
@@ -632,7 +635,7 @@ test('an edge router already there is not built again: its WAN follows the way o
   });
   const { args } = edgeArgs(admin);
   const done = await ensureEdge(args);
-  const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects');
+  const methods = admin.calls.map(([m]) => m).filter((m) => !READS.includes(m));
   assert.deepEqual(methods, ['vif.set', 'vm.start']);
   assert.deepEqual(admin.calls.find(([m]) => m === 'vif.set')?.[1], { id: 'vif-w', network: 'net-wan' });
   assert.match(done, /already there, on eth0\.10 at 10\.10\.10\.237,[\s\S]*WAN moved to eth0\.10[\s\S]*was started/, 'its WAN address, not its LAN one');
@@ -666,7 +669,7 @@ test('an edge built the other way is rebuilt: the old one stopped, the new one b
   const { args } = edgeArgs(admin, { block: true, rebuilding: () => told++ });
   const done = await ensureEdge(args);
   assert.equal(told, 1, 'the job is not told it is rebuilding');
-  const methods = admin.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects' && m !== 'vif.set');
+  const methods = admin.calls.map(([m]) => m).filter((m) => !READS.includes(m) && m !== 'vif.set');
   assert.deepEqual(methods, ['vm.stop', 'disk.create', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.delete']);
   const params = Object.fromEntries(admin.calls);
   assert.deepEqual(params['vm.stop'], { id: 'vm-old', force: true });
@@ -689,7 +692,7 @@ test('a rebuild that fails leaves the old edge running as it was, and an edge as
   for (const block of [null, true]) {
     const there = xo({ VM: [old], VIF: [] });
     const said = await ensureEdge(edgeArgs(there, { block }).args);
-    assert.deepEqual(there.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects'), [], String(block));
+    assert.deepEqual(there.calls.map(([m]) => m).filter((m) => !READS.includes(m)), [], String(block));
     assert.match(said, /already there[\s\S]*dropping what its threat rules match/);
   }
 });
@@ -704,7 +707,7 @@ function pairXo(/** @type {any[]} */ vms) {
   let n = 0;
   return xo({ VM: vms, 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => `vm-new-${++n}` });
 }
-const methodsOf = (/** @type {any} */ admin) => admin.calls.map((/** @type {any} */ c) => c[0]).filter((/** @type {string} */ m) => !['xo.getAllObjects', 'vif.set'].includes(m));
+const methodsOf = (/** @type {any} */ admin) => admin.calls.map((/** @type {any} */ c) => c[0]).filter((/** @type {string} */ m) => !READS.includes(m) && m !== 'vif.set');
 const created = (/** @type {any} */ admin) => admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.create').map((/** @type {any} */ c) => c[1]);
 const passwords = (/** @type {any} */ admin) => admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.set' && c[1].xenStoreData).map((/** @type {any} */ c) => c[1].xenStoreData[EDGE_HA.passwordKey]);
 
@@ -932,7 +935,7 @@ test('a router without the key the job brings is rebuilt once, keeping its WAN M
   const watched = { ...old, tags: [...old.tags, EDGE_WATCH.tag], xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: JSON.stringify(w) }) };
   const same = xo({ VM: [watched], VIF: [wanVif] });
   await ensureEdge(edgeArgs(same, { watch: w }).args);
-  assert.deepEqual(same.calls.map(([m]) => m).filter((m) => m !== 'xo.getAllObjects'), []);
+  assert.deepEqual(same.calls.map(([m]) => m).filter((m) => !READS.includes(m)), []);
   const other = xo({ VM: [{ ...watched, xenStoreData: {} }], 'VM-template': [TEMPLATE], VIF: [wanVif] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' });
   await ensureEdge(edgeArgs(other, { watch: w }).args);
   assert.ok(other.calls.some(([m]) => m === 'vm.create'), 'a router whose key is gone keeps a key the phone was never given');
@@ -1020,12 +1023,15 @@ const BASE_NAME = `OPNsense ${OPNSENSE_IMAGE.release} (as published)`;
  * A stand-in Xen Orchestra that keeps what it is asked to make, as the real
  * one does: VMs and templates with their disks, a VM made from a template
  * getting a copy of each of its disks on the same storage, so a disk kept by
- * one build is there for the next. `kept` starts it with the kept disk on
- * sr-big; `answers` overrides any call.
+ * one build is there for the next; and its resource sets, the fleet's and
+ * the list of what the policy job made (xo-made.js). `kept` starts it with
+ * the kept disk on sr-big, on that list; `answers` overrides any call.
  */
 function keptXo({ kept = false, answers = /** @type {Record<string, (p: any) => any>} */ ({}), writeInto = async (/** @type {any} */ _w) => {} } = {}) {
   /** @type {Record<string, any[]>} */
   const objects = { VM: [], 'VM-template': [TEMPLATE], VBD: [], VDI: [], VIF: [] };
+  /** @type {Array<{ id: string, name: string, objects: string[] }>} */
+  const sets = [{ id: 'rs-fleet', name: 'fleetwright', objects: [] }, ...(kept ? [{ id: 'rs-made', name: 'fleetwright-made', objects: ['tpl-kept'] }] : [])];
   let n = 0;
   const next = (/** @type {string} */ p) => `${p}-${++n}`;
   const attach = (/** @type {string} */ vm, /** @type {string} */ vdi) => objects.VBD.push({ id: next('vbd'), VM: vm, VDI: vdi, is_cd_drive: false });
@@ -1077,6 +1083,13 @@ function keptXo({ kept = false, answers = /** @type {Record<string, (p: any) => 
     'vm.start': (p) => {
       for (const v of objects.VM) if (v.id === p.id) v.power_state = 'Running';
     },
+    'resourceSet.getAll': () => sets.map((x) => ({ ...x, objects: [...x.objects] })),
+    'resourceSet.create': (p) => void sets.push({ id: next('rs'), name: p.name, objects: [...p.objects] }),
+    'resourceSet.addObject': (p) => void sets.find((x) => x.id === p.id)?.objects.push(p.object),
+    'resourceSet.removeObject': (p) => {
+      const set = sets.find((x) => x.id === p.id);
+      if (set) set.objects = set.objects.filter((o) => o !== p.object);
+    },
     ...answers,
   });
   /** @type {Array<{ sendTo: string, body: Buffer }>} */
@@ -1086,6 +1099,7 @@ function keptXo({ kept = false, answers = /** @type {Record<string, (p: any) => 
   return {
     admin,
     objects,
+    sets,
     writes,
     uploads,
     extra: {
@@ -1158,6 +1172,7 @@ test('the first build keeps the image as published, never booted and out of the 
   const k = keptXo();
   // An older release's, which the new one replaces.
   k.objects['VM-template'].push({ id: 'tpl-older', $pool: 'p1', tags: [EDGE.baseTag, `${EDGE.baseTag}:${EDGE.baseKey}:26.1`] });
+  k.sets.push({ id: 'rs-made', name: 'fleetwright-made', objects: ['tpl-older'] });
   const first = edgeArgs(k.admin, k.extra);
   await ensureEdge(first.args);
   // Asked first, on a disk made for the question and removed after.
@@ -1175,7 +1190,8 @@ test('the first build keeps the image as published, never booted and out of the 
   assert.deepEqual(kept.VIFs, []);
   assert.deepEqual(called(k.admin, 'vm.convertToTemplate'), [{ id: 'vm-3' }]);
   assert.ok(!called(k.admin, 'vm.start').some((p) => p.id === 'vm-3'), 'the kept disk was booted');
-  assert.deepEqual(called(k.admin, 'resourceSet.addObject'), [], 'the fleet’s token could clone the kept disk');
+  assert.deepEqual(k.sets.find((x) => x.name === 'fleetwright')?.objects, [], 'the fleet’s token could clone the kept disk');
+  assert.deepEqual(k.sets.find((x) => x.name === 'fleetwright-made')?.objects, ['vm-3'], 'the kept disk is not on the list of what the job made');
   assert.ok(called(k.admin, 'vm.delete').some((p) => p.id === 'tpl-older' && p.deleteDisks), 'the older release’s kept disk was left');
   // And the router itself, a copy of it with its blocks written.
   assert.equal(router.template, 'vm-3');
@@ -1185,11 +1201,33 @@ test('the first build keeps the image as published, never booted and out of the 
   const before = k.admin.calls.length;
   const again = edgeArgs(k.admin, { ...k.extra, block: true });
   const done = await ensureEdge(again.args);
-  const later = k.admin.calls.slice(before).map((c) => c[0]).filter((m) => !['xo.getAllObjects', 'vif.set'].includes(m));
+  const later = k.admin.calls.slice(before).map((c) => c[0]).filter((m) => !['xo.getAllObjects', 'resourceSet.getAll', 'vif.set'].includes(m));
   assert.deepEqual(later, ['vm.stop', 'vm.create', 'disk.importContent', 'vdi.set', 'vm.start', 'vm.delete']);
   assert.equal(called(k.admin, 'vm.create').at(-1).template, 'vm-3');
   assert.deepEqual(k.uploads.length, 1, 'the second build sent the disk again');
   assert.match(done, /dropped[\s\S]*replaced the one that was there/);
+});
+
+// FOUND BY ITS ID (edge-router.js, THE KEPT DISK): a kept disk skips the
+// download's digest, so a template that only carries its tag is not one.
+test('a kept disk is used only when the job’s own list says it made it, and anything else is passed over for the checked download and left alone', async () => {
+  for (const [what, spoil] of /** @type {Array<[string, (k: ReturnType<typeof keptXo>) => void]>} */ ([
+    ['carrying the tag and on no list', (k) => void k.sets.splice(1)],
+    ['in the fleet’s own set, where its token reaches it', (k) => void k.sets[0].objects.push('tpl-kept')],
+    ['made in a resource set, as the fleet’s user makes its VMs', (k) => void (k.objects['VM-template'].find((t) => t.id === 'tpl-kept').resourceSet = 'rs-fleet')],
+  ])) {
+    const k = keptXo({ kept: true });
+    spoil(k);
+    // An older release's that is not on the list either: not the build's to remove.
+    k.objects['VM-template'].push({ id: 'tpl-older', $pool: 'p1', tags: [EDGE.baseTag, `${EDGE.baseTag}:${EDGE.baseKey}:26.1`] });
+    await ensureEdge(edgeArgs(k.admin, k.extra).args);
+    const [keptNow, router] = called(k.admin, 'vm.create');
+    assert.notEqual(router?.template, 'tpl-kept', `${what}: the router was made from it`);
+    assert.deepEqual(k.uploads.map((u) => u.name), [BASE_NAME], `${what}: the published image was not downloaded and kept in its place`);
+    assert.deepEqual(keptNow.tags, [EDGE.baseTag, BASE_TAG], what);
+    assert.equal(router.template, k.sets.find((x) => x.name === 'fleetwright-made')?.objects.at(-1), `${what}: the router is not made from the disk the job kept and listed`);
+    assert.ok(!called(k.admin, 'vm.delete').some((p) => p.id === 'tpl-kept' || p.id === 'tpl-older'), `${what}: removed something the job did not make`);
+  }
 });
 
 test('where Xen Orchestra cannot write into a disk that is there, the whole disk is sent as before, nothing extra is kept, and the person is told why', async () => {

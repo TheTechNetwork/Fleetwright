@@ -57,6 +57,7 @@ import { REQUIRED_HOSTS } from '../../core/egress.js';
 import { connectPinnedTls, splitAddress } from './xo-ws.js';
 import { EDGE_WATCH, keptOn, watchConfig, watchOf } from './edge-credentials.js';
 import { VHD_BLOCK, sparseVhd } from './vhd.js';
+import { forgetMade, outsideSets, recordMade, setsOf } from './xo-made.js';
 
 /**
  * The image, pinned. A new OPNsense release is a new entry here, with the
@@ -1403,6 +1404,18 @@ function labsSaid(key) {
  * template's disk is on. Not tagged `fleetwright-image` and never put in the
  * resource set, so no box offers it and the fleet's token cannot clone it.
  *
+ * FOUND BY ITS ID, NOT BY ITS TAG. A kept disk is taken for the published
+ * image without the download's digest being checked again, so a template
+ * that only carries the tag is not one: any that somebody else made and
+ * tagged would have become the router's disk. The id of each one this makes
+ * is written into the list of what the policy job made (xo-made.js, which
+ * says why there and not in a tag), and a kept disk is used only when its id
+ * is on that list, it is not in the fleet's resource set, and it was made in
+ * no resource set. Anything else is passed over and the published image
+ * downloaded and checked as though nothing were kept. A kept disk from before
+ * the list is passed over the same way, once, and left where it is: this
+ * removes only what the list says it made.
+ *
  * A REBUILD COPIES IT AND WRITES ONLY THE CONFIGURATION. The router's VM is
  * made from that template, which copies its disk (a copy-on-write clone on
  * the storage XCP-ng keeps as VHD files: seconds, the way a session's machine
@@ -1497,13 +1510,22 @@ export function builtInTemplate(templates, pool, name, what) {
 }
 
 /**
- * The kept disk for this release on storage `sr`, or null: a template with
- * exactly one disk, on that storage.
+ * Whether a template is a kept disk the policy job made: on its list, not in
+ * the fleet's set, and made in no set (THE KEPT DISK, FOUND BY ITS ID).
+ *
+ * @param {any} t @param {{ fleet: Set<string>, made: Set<string> }} sets
+ */
+const keptByUs = (t, sets) => sets.made.has(String(t?.id)) && !sets.fleet.has(String(t?.id)) && outsideSets(t);
+
+/**
+ * The kept disk for this release on storage `sr`, or null: one the policy job
+ * made, with exactly one disk, on that storage.
  *
  * @param {any} admin @param {any[]} templates @param {string} pool @param {string} sr
+ * @param {{ fleet: Set<string>, made: Set<string> }} sets
  */
-async function keptBaseOn(admin, templates, pool, sr) {
-  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(baseTagFor()))) {
+async function keptBaseOn(admin, templates, pool, sr, sets) {
+  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(baseTagFor()) && keptByUs(x, sets))) {
     const disks = await disksOf(admin, t.id);
     if (disks.length === 1 && disks[0].$SR === sr) return t;
   }
@@ -1635,7 +1657,8 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const regions = imagePatches(config);
   const send = (/** @type {string} */ sendTo, /** @type {Buffer} */ body) => writeInto({ address, pin, plain, sendTo, body, signal });
   /** @type {any} */
-  let base = await keptBaseOn(admin, templates, pool, sr.id);
+  const sets = await setsOf(admin);
+  let base = await keptBaseOn(admin, templates, pool, sr.id, sets);
   /** Why a copy of the kept disk cannot be written into here, once that is known. */
   let refused = base ? null : await writesInto({ admin, sr: sr.id, send, signal });
   const baseName = `OPNsense ${release} (as published)`;
@@ -1720,11 +1743,15 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
         await admin.call('vm.attachDisk', { vm: making, vdi: keptVdi, bootable: true, position: '0' });
         keptVdi = null; // the template's now, and deleted with it
         await admin.call('vm.convertToTemplate', { id: making });
+        // ON THE LIST before anything uses it, or it is removed with the
+        // rest of what this build made: a kept disk nobody can find by its id
+        // would be passed over by every build after this one.
+        await recordMade(admin, /** @type {string} */ (making));
         base = { id: making };
         making = null; // kept from here, whatever happens to this build
         keeping = false;
-        for (const old of templates.filter((t) => t?.$pool === pool && (t?.tags || []).some((/** @type {string} */ x) => x.startsWith(`${EDGE.baseTag}:${EDGE.baseKey}:`)) && !t.tags.includes(baseTagFor()))) {
-          await admin.call('vm.delete', { id: old.id, deleteDisks: true }).catch(() => {});
+        for (const old of templates.filter((t) => t?.$pool === pool && keptByUs(t, sets) && (t?.tags || []).some((/** @type {string} */ x) => x.startsWith(`${EDGE.baseTag}:${EDGE.baseKey}:`)) && !t.tags.includes(baseTagFor()))) {
+          await admin.call('vm.delete', { id: old.id, deleteDisks: true }).then(() => forgetMade(admin, old.id), () => {});
         }
       }
 
