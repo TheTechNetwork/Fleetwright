@@ -20,6 +20,20 @@ import { spawnSync } from 'node:child_process';
 export const APT_PACKAGE = 'fleetwright';
 
 /**
+ * HOW ROOT PUTS AN APT BOX'S GENERATED FILES BACK, sudoers rules included:
+ * the package installed again. Its postinst checks the release against the
+ * sha256 in its manifest, unpacks it into a temp directory only root can
+ * reach, and runs the installer's --repair from there (install/deb/postinst).
+ *
+ * NOT install.sh UNDER THE INSTALL ROOT, which is what the refusals used to
+ * print. The installer gives that whole tree to the service user so an update
+ * needs no root (install.sh, "AND THE SAME THING FOR A PACKAGED BOX"), so a
+ * root shell running a script there runs whatever the service user last wrote
+ * into it: root with extra steps, handed to whoever reaches the service.
+ */
+export const APT_REPAIR = `sudo apt-get install --reinstall ${APT_PACKAGE}`;
+
+/**
  * Installed and candidate versions out of `apt-cache policy <pkg>`.
  *
  * `(none)` is apt's word for "not installed" or "no candidate", and it becomes

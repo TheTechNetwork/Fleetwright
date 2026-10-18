@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { runUpdate, updateStatus, canSelfRestart, looksLikeOwnershipProblem, updateAvailable } from '../src/core/update.js';
+import { dispatch } from '../src/adapters/commands.js';
 
 /** @param {string} cwd @param {string[]} args */
 const git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -206,6 +207,21 @@ test("git's \"insufficient permission\" counts as the ownership problem", async 
   ]) {
     assert.equal(looksLikeOwnershipProblem(output), false, output);
   }
+});
+
+// --- what root is told to run ---------------------------------------------
+
+test('a checkout that pulled is told how to refresh what the installer generates, and never to run the checkout’s installer as root', async (t) => {
+  // It said `sudo <checkout>/install/install.sh --repair`: a script the
+  // service user can rewrite, run as root, from the comment that says root
+  // must not run one.
+  const { cfg, clone, pushUpstream } = deployment(t);
+  pushUpstream('an installer change');
+  const r = await dispatch(/** @type {any} */ ({ cfg }), '/update');
+  assert.equal(r.ok, true, r.text);
+  assert.match(r.text, /This box is a checkout, so what the installer generates/);
+  assert.ok(!r.text.includes(`sudo ${clone}`), r.text);
+  assert.match(r.text, /run the installer with --repair from a copy only root can write/);
 });
 
 // --- restarting -------------------------------------------------------------

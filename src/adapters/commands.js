@@ -2175,11 +2175,17 @@ export const COMMANDS = {
       // SAID ONCE, WHEN IT MATTERS. On a packaged box an update refreshes what
       // the installer generates; on a checkout it cannot, soundly — root would
       // be running a script the service user can rewrite — so a pull that
-      // brought installer changes leaves them for a person with a shell.
+      // brought installer changes leaves them for a person with a shell. And
+      // the sentence must not then tell that person to do the unsound thing:
+      // it printed `sudo <checkout>/install/install.sh --repair`, the very
+      // script this comment says root must not run (upgrades.js, repairCommand).
       const checkoutNote =
         r.ok && r.changed
           ? '\n\nThis box is a checkout, so what the installer generates — units, hook, sudoers — is not refreshed by an update. ' +
-            `sudo ${status.dir}/install/install.sh --repair does that; a box on packaged releases has it done on every update.`
+            `Not from ${status.dir}, whose every file the service user can rewrite: run the installer with --repair from a copy only root can write, ` +
+            (ctx.cfg.releaseManifest
+              ? 'or move this box onto packaged releases with sudo /usr/local/sbin/fleetwright-migrate, where every update does it from a checked copy.'
+              : 'such as a fresh clone of this commit.')
           : '';
 
       return { ok: r.ok, text: `${status.dir} (${status.branch})\n\n${r.message}${checkoutNote}`, buttons };
