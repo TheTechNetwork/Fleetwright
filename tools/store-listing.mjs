@@ -78,6 +78,14 @@ export function storeListing(path = LISTING_PATH) {
   const name = required(md, /App name/i, 'App name');
   const short = required(md, /Short description/i, 'Short description');
   const full = required(md, /Full description/i, 'Full description');
+  // THE FIELDS APP STORE CONNECT STILL WANTED TYPED after the description
+  // arrived: the first submission was refused for every one of them, with the
+  // answers in nobody's head. Required, like the rest — an empty keyword
+  // field is a store page nobody finds.
+  const keywords = required(md, /^## Keywords/i, 'Keywords');
+  const supportUrl = required(md, /^## Support URL/i, 'Support URL');
+  const privacyPolicyUrl = required(md, /^## Privacy policy URL/i, 'Privacy policy URL');
+  const copyright = required(md, /^## Copyright/i, 'Copyright');
 
   // THE LIMITS ARE APPLE'S AND GOOGLE'S, checked here rather than discovered on
   // upload. A field one character over is refused by the API with a message
@@ -86,6 +94,7 @@ export function storeListing(path = LISTING_PATH) {
     ['App name', name, 30],
     ['Short description', short, 80],
     ['Full description', full, 4000],
+    ['Keywords', keywords, 100],
   ].filter(([, v, max]) => String(v).length > Number(max));
   if (tooLong.length) {
     throw new Error(
@@ -93,5 +102,9 @@ export function storeListing(path = LISTING_PATH) {
     );
   }
 
-  return { name, short, full };
+  for (const [k, v] of [['Support URL', supportUrl], ['Privacy policy URL', privacyPolicyUrl]]) {
+    if (!/^https:\/\/\S+$/.test(v)) throw new Error(`${k} is not one https URL: ${JSON.stringify(v)}`);
+  }
+
+  return { name, short, full, keywords, supportUrl, privacyPolicyUrl, copyright };
 }

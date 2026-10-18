@@ -773,9 +773,9 @@ the version page:
 
 | | |
 |---|---|
-| Description, promotional text | **applied from [`store-listing.md`](../apps/store-listing.md)** on every full release. Keywords and support URL are still typed once |
-| Screenshots | **generated and uploaded** — `./scripts/ios-screenshots.sh` writes `apps/ios/store/screenshots/<display type>/`, you review and commit them, and a full release attaches them before submitting. Nothing to do by hand unless you want different shots |
-| Privacy policy URL | `https://fleet.thetech.network/privacy`, same as Play |
+| Description, promotional text, keywords, support URL, copyright, privacy policy URL | **applied from [`store-listing.md`](../apps/store-listing.md)** on every full release |
+| Screenshots | **taken on a macOS runner and uploaded** on every full release: the `store screenshots` job runs `./scripts/ios-screenshots.sh` for the three display types App Store Connect asks for (`APP_IPHONE_67`, `APP_IPHONE_61`, `APP_IPAD_PRO_3GEN_129`), keeps them as the run artifact `ios-screenshots`, and the submission attaches them before submitting, for a display type that has none. Committed ones under `apps/ios/store/screenshots/` win, for when you want different shots |
+| App Review contact | **from four secrets**, set once: `ASC_REVIEW_FIRST_NAME`, `ASC_REVIEW_LAST_NAME`, `ASC_REVIEW_PHONE`, `ASC_REVIEW_EMAIL`. Without them the job warns and Apple holds the version until the contact is typed |
 | App Privacy | same answers as Play's data safety form, and from the same single source: [`store-listing.md`](../apps/store-listing.md)'s "Data safety" section (email address collected, linked, app functionality) |
 | Age rating | the questionnaire; utility, no user-generated content → 4+ |
 | Category | Developer Tools |

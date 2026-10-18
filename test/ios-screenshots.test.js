@@ -46,9 +46,14 @@ test('the screenshot tab and the unconfigured-app rule cannot both fire', () => 
 
 test('the directories are named for Apple display types, which the uploader reads', () => {
   // The directory name IS the display type — appScreenshotSets is keyed on it
-  // — so a size is added in one list and nowhere else.
-  assert.match(SH, /APP_IPHONE_69:/);
-  assert.match(SH, /APP_IPHONE_65:/);
+  // — so a size is added in one list and nowhere else. And the names are the
+  // API's ScreenshotDisplayType values: the first list here said
+  // APP_IPHONE_69, which does not exist (6.9" phones are APP_IPHONE_67), and
+  // Apple would have refused it on the first upload.
+  assert.match(SH, /"APP_IPHONE_67:/);
+  assert.match(SH, /"APP_IPHONE_61:/);
+  assert.match(SH, /"APP_IPAD_PRO_3GEN_129:/);
+  assert.doesNotMatch(SH, /"APP_IPHONE_69:/, 'APP_IPHONE_69 is not a display type Apple has');
   const uploader = readFileSync(new URL('../tools/appstore-screenshots.mjs', import.meta.url), 'utf8');
   assert.match(uploader, /screenshotDisplayType: type/, 'the uploader stopped keying on the directory name');
   assert.match(SH, /apps\/ios\/store\/screenshots/);
@@ -67,6 +72,16 @@ test('it uses a simulator of its own and deletes it', () => {
   // somebody else's device list, and on whatever state that device was left in.
   assert.match(SH, /simctl create "fleetwright-shots-/);
   assert.match(SH, /simctl delete "\$UDID"/);
+});
+
+test('the simulator is chosen by pattern, newest first, not by name', () => {
+  // "iPhone 17 Pro Max" is a job that breaks when the runner image moves to
+  // the next phone. A pattern over simctl's device types picks whatever the
+  // current Pro Max, Pro and 13-inch iPad are.
+  assert.match(SH, /simctl list devicetypes --json/);
+  assert.match(SH, /\^iPhone \[0-9\]\+ Pro Max\$/);
+  assert.match(SH, /\^iPad Pro 13-inch/);
+  assert.match(SH, /ds\[-1\]/, 'the newest matching device type is no longer the one used');
 });
 
 test('a device the machine does not have is skipped, not fatal', () => {

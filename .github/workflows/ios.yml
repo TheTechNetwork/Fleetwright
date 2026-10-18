@@ -726,11 +726,53 @@ jobs:
   # Re-runs are safe: an editable version is reused, a submitted one is left
   # alone, and a version already on the store says so and asks for a
   # MARKETING_VERSION bump by name.
+  # THE STORE SCREENSHOTS, taken on a macOS runner. Apple refuses a version
+  # without them, and `scripts/ios-screenshots.sh` needs Xcode and a
+  # simulator, which is exactly what a laptop has and a release job did not —
+  # so the first submission of the app was refused for want of a picture while
+  # the script that takes them sat unrun. A full release only, where the
+  # submission is; nothing about a TestFlight build wants a store page.
+  #
+  # Independent of `build`, on purpose: the script builds for the simulator
+  # itself, and running it in parallel with the archive is what keeps the
+  # release from taking another ten minutes. The pictures are a run artifact,
+  # so what the store will show can be looked at before App Review does.
+  screenshots:
+    name: store screenshots
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install xcodegen
+      - name: Generate the Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+      - name: Take the screenshots
+        env:
+          SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots
+        run: ./scripts/ios-screenshots.sh
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ios-screenshots
+          path: ${{ runner.temp }}/screenshots
+          if-no-files-found: error
+
   release-app-store:
     name: submit to the App Store
-    needs: testflight
+    needs: [testflight, screenshots]
+    # always(), so a screenshot job that failed does not also cancel the
+    # submission: the uploader skips a display type the version already has,
+    # and a version that has none is refused by Apple in words the job now
+    # relays — a red cross with the reason, rather than a job that never ran.
     if: >-
-      github.event_name == 'release' && !github.event.release.prerelease
+      always()
+      && github.event_name == 'release' && !github.event.release.prerelease
       && needs.testflight.outputs.uploaded == 'true'
     runs-on: ubuntu-26.04
     environment: production
@@ -739,6 +781,13 @@ jobs:
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: '24.22.0'
+      - uses: actions/download-artifact@v8.0.2
+        # The artifact is absent when the screenshots job failed; that case is
+        # Apple's refusal to report, not this step's.
+        continue-on-error: true
+        with:
+          name: ios-screenshots
+          path: ${{ runner.temp }}/screenshots
       - name: Create the App Store version and submit it for review
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -747,6 +796,14 @@ jobs:
           BUNDLE_ID: network.thetech.fleetwright
           BUILD_NUMBER: ${{ github.run_number }}
           FALLBACK_NOTES: ${{ github.event.release.body || github.event.release.name }}
+          # Who App Review may call about the submission. Four secrets, set
+          # once; without them the job says so and Apple holds the version
+          # until they are typed in App Store Connect. See docs/ci.md.
+          ASC_REVIEW_FIRST_NAME: ${{ secrets.ASC_REVIEW_FIRST_NAME }}
+          ASC_REVIEW_LAST_NAME: ${{ secrets.ASC_REVIEW_LAST_NAME }}
+          ASC_REVIEW_PHONE: ${{ secrets.ASC_REVIEW_PHONE }}
+          ASC_REVIEW_EMAIL: ${{ secrets.ASC_REVIEW_EMAIL }}
+          RUNNER_SCREENSHOTS: ${{ runner.temp }}/screenshots
         # The public "What's New in This Version" comes from CHANGELOG.md, the
         # same section TestFlight and Play show, so one version has one set of
         # notes everywhere. It used to be the release body, which is whatever
@@ -759,4 +816,9 @@ jobs:
             WHATS_NEW="$FALLBACK_NOTES"
           fi
           export WHATS_NEW
+          # Committed screenshots win over the runner's, for when somebody
+          # wants different shots than the demo fleet's three tabs.
+          if [ ! -d apps/ios/store/screenshots ] && [ -d "$RUNNER_SCREENSHOTS" ]; then
+            export SCREENSHOTS_DIR="$RUNNER_SCREENSHOTS"
+          fi
           node tools/appstore-release.mjs
