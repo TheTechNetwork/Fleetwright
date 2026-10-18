@@ -21,7 +21,7 @@ import { existsSync, statSync } from 'node:fs';
 
 import { log } from '../log.js';
 import { unitName } from '../fleet/legacy-paths.js';
-import { APT_PACKAGE } from './apt-release.js';
+import { APT_PACKAGE, APT_REPAIR } from './apt-release.js';
 import { grantCommand } from './grants.js';
 import { APT_CHANNEL_UNIT } from './channel.js';
 
@@ -439,7 +439,8 @@ function upgradesOff(cfg) {
  *
  * The same grant gates it. A box whose sudoers predates this unit is refused
  * by sudo, which is a clean signal: the remedy is the installer's --repair,
- * and `apt install fleetwright` on the box works meanwhile.
+ * and the package's own install runs it, from a checked copy root owns, as it
+ * installs the update (apt-release.js, APT_REPAIR, says why not install.sh).
  *
  * @param {import('../config.js').Config} cfg
  * @param {{ actor?: string|null, version?: string|null, exec?: typeof run }} [opts]
@@ -454,7 +455,7 @@ export function runPackageUpgrade(cfg, { actor = null, version = null, exec = ru
       ok: false,
       text:
         `This box's sudoers rule predates the package unit, so it cannot install ${what} from here yet.\n` +
-        `On the box: sudo ${cfg.installDir}/install/install.sh --repair puts the rule in place — or sudo apt install ${APT_PACKAGE} does the update itself.`,
+        `On the box: sudo apt-get install ${APT_PACKAGE} installs it and puts the rule in place, from a checked copy of the release only root can write.`,
     };
   }
   if (r.status !== 0) {
@@ -466,6 +467,24 @@ export function runPackageUpgrade(cfg, { actor = null, version = null, exec = ru
       `Installing ${what} from apt. The services restart themselves when it lands — sessions keep running — ` +
       'and this box reports the new version within a minute.',
   };
+}
+
+/**
+ * HOW ROOT PUTS BACK WHAT THE INSTALLER GENERATES on this box, said so that
+ * root is never pointed at a file the service user could have rewritten: not
+ * install.sh in the checkout or under the install root, both of which the
+ * installer gives to the service user (apt-release.js, APT_REPAIR). On an apt
+ * box, the package installed again; on packaged releases, the root-owned
+ * helper outside the tree, which repairs from the release it verifies
+ * (install/fleetwright-migrate, THE HEAL); on a checkout there is nothing
+ * root-owned to run, and the sentence says what to run it from.
+ *
+ * @param {{ releaseSource?: string, releaseManifest?: string }} cfg
+ */
+export function repairCommand(cfg) {
+  if (cfg?.releaseSource === 'apt') return APT_REPAIR;
+  if (cfg?.releaseManifest) return 'sudo /usr/local/sbin/fleetwright-migrate';
+  return 'the installer with --repair, run from a copy only root can write and not from the checkout, which the service user can';
 }
 
 /**
@@ -530,10 +549,7 @@ export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpda
   const startedAt = Date.now();
   let r = exec(['sudo', '-n', SYSTEMCTL, 'start', unitName(UPGRADE_UNIT)], 15 * 60_000);
   if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
-    log.warn(
-      "upgrade: this box's sudoers rule predates the upgrade unit. " +
-        'Fix it without a full reinstall: sudo /opt/fleetwright-src/install/install.sh --repair',
-    );
+    log.warn(`upgrade: this box's sudoers rule predates the upgrade unit. Fix it without a full reinstall: ${repairCommand(cfg)}`);
     r = exec(['sudo', '-n', ...APT_SAFE], 15 * 60_000);
     if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
       r = exec(['sudo', '-n', ...APT_PLAIN], 15 * 60_000);

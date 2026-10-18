@@ -119,9 +119,13 @@ export function allowlistFor(cfg) {
  *
  * CONNECT to 443 and nothing else: no plain HTTP through the proxy, because a
  * request the proxy could read is a request it could be made to rewrite, and
- * the CLI speaks TLS to everything on its list. `FilterType fixed` matches the
- * whole hostname exactly, so `evil-api.anthropic.com.attacker.net` does not
- * match `api.anthropic.com` the way a substring filter would.
+ * the CLI speaks TLS to everything on its list.
+ *
+ * EXACT HOSTNAMES, AS ANCHORED EXTENDED REGEXES (allowListText). This said
+ * `FilterType fixed` and claimed exact matching, but tinyproxy knows only
+ * `bre`, `ere` and `fnmatch`: 1.11's parser calls anything else a syntax error
+ * and the proxy does not start, so an allowlisted box had no way out at all
+ * (seventh audit), and had it started, its regexes match anywhere in the host.
  *
  * @param {string[]} hosts
  * @param {{ port?: number }} [opts]
@@ -143,13 +147,27 @@ export function proxyConfig(hosts, { port = PROXY_PORT } = {}) {
     'Allow 172.16.0.0/12',
     'Allow 192.168.0.0/16',
     'ConnectPort 443',
-    'FilterType fixed',
+    'FilterType ere',
     'FilterCaseSensitive No',
     'FilterURLs No',
     'FilterDefaultDeny Yes',
     'Filter /etc/tinyproxy/allow.list',
     '',
   ].join('\n');
+}
+
+/**
+ * The filter file: one line per host, anchored at both ends and with its dots
+ * escaped, so `api.anthropic.com` matches that host and not
+ * `api.anthropic.com.attacker.net` or `apiXanthropic.com`. HOST_RE has already
+ * kept everything but letters, digits, dots and hyphens out; every other
+ * regex character is escaped all the same, so the line is a literal whatever
+ * a later change lets through.
+ *
+ * @param {string[]} hosts
+ */
+export function allowListText(hosts) {
+  return hosts.map((h) => `^${h.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$\n`).join('');
 }
 
 /**
@@ -210,7 +228,7 @@ export async function ensureEgress(cfg) {
   const conf = path.join(dir, 'tinyproxy.conf');
   const allow = path.join(dir, 'allow.list');
   const confText = proxyConfig(hosts);
-  const allowText = `${hosts.join('\n')}\n`;
+  const allowText = allowListText(hosts);
   const digest = createHash('sha256').update(confText).update('\n--\n').update(allowText).digest('hex').slice(0, 16);
   try {
     // Readable by the proxy's own user inside the container, which is not the

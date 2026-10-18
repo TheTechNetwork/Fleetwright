@@ -19,6 +19,7 @@ import path from 'node:path';
 import {
   allowlistFor,
   proxyConfig,
+  allowListText,
   egressArgs,
   proxyAddress,
   ensureEgress,
@@ -56,10 +57,27 @@ test('extras are validated as hostnames, lowercased, deduplicated and sorted', (
 
 test('the proxy config is CONNECT-only to 443, default-deny, exact-match', () => {
   const conf = proxyConfig(['api.anthropic.com']);
-  for (const line of ['ConnectPort 443', 'FilterDefaultDeny Yes', 'FilterType fixed', 'FilterURLs No', 'Filter /etc/tinyproxy/allow.list', 'Port 3128']) {
+  for (const line of ['ConnectPort 443', 'FilterDefaultDeny Yes', 'FilterType ere', 'FilterURLs No', 'Filter /etc/tinyproxy/allow.list', 'Port 3128']) {
     assert.ok(conf.split('\n').includes(line), line);
   }
   assert.doesNotMatch(conf, /^ConnectPort 80$/m, 'no plain HTTP through a proxy that could then read it');
+  // tinyproxy's own grammar for the directive (conf.c, 1.11): any other word is
+  // a syntax error and the proxy does not start. `fixed` was one (seventh audit).
+  const type = conf.split('\n').find((l) => l.startsWith('FilterType'));
+  assert.match(type ?? '', /^FilterType (bre|ere|fnmatch)$/);
+});
+
+test('each allowed host matches itself and nothing that merely contains it', () => {
+  const lines = allowListText(['api.anthropic.com', 'pypi.org']).trimEnd().split('\n');
+  // An extended regex as tinyproxy compiles it: unanchored by itself, so the
+  // anchors have to be in the line. JS reads this subset of ERE the same way.
+  const allows = (/** @type {string} */ host) => lines.some((l) => new RegExp(l, 'i').test(host));
+  assert.equal(allows('api.anthropic.com'), true);
+  assert.equal(allows('API.Anthropic.com'), true, 'FilterCaseSensitive No');
+  assert.equal(allows('pypi.org'), true);
+  for (const host of ['api.anthropic.com.attacker.net', 'evil-api.anthropic.com', 'apiXanthropic.com', 'pypiXorg', 'xpypi.org']) {
+    assert.equal(allows(host), false, host);
+  }
 });
 
 test('a session on the allowlist is put on the internal network and told the proxy, and nothing else', () => {
@@ -161,7 +179,8 @@ test('a first start creates the internal network and runs the proxy on both netw
   const conf = readFileSync(path.join(s.cfg().stateDir, 'egress', 'tinyproxy.conf'), 'utf8');
   const allow = readFileSync(path.join(s.cfg().stateDir, 'egress', 'allow.list'), 'utf8');
   assert.match(conf, /FilterDefaultDeny Yes/);
-  for (const h of REQUIRED_HOSTS) assert.ok(listed(allow.split('\n'), h), h);
+  const literal = (/** @type {string} */ h) => h.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+  for (const h of REQUIRED_HOSTS) assert.ok(listed(allow.split('\n'), `^${literal(h)}$`), h);
 });
 
 test('a proxy already running with this config is left alone; a changed allowlist replaces it', async (t) => {
@@ -181,7 +200,7 @@ test('a proxy already running with this config is left alone; a changed allowlis
   const after = s.calls().slice(before);
   assert.ok(after.some((c) => c === `rm -f ${PROXY_CONTAINER}`), 'the old proxy goes');
   assert.ok(after.some((c) => c.startsWith('run -d')), 'and the new one comes up');
-  assert.match(readFileSync(path.join(s.cfg().stateDir, 'egress', 'allow.list'), 'utf8'), /^pypi\.org$/m);
+  assert.match(readFileSync(path.join(s.cfg().stateDir, 'egress', 'allow.list'), 'utf8'), /^\^pypi\\\.org\$$/m);
 });
 
 test('a missing local image is built before the proxy is started, and a hostname that is not one is ignored with a warning', async (t) => {

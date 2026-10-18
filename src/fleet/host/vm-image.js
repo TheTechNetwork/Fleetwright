@@ -21,8 +21,10 @@
 // own /install without a pin, wipes everything that would make two clones
 // the same machine (the machine id, SSH host keys, any host key), cleans
 // cloud-init so each clone runs its own, and powers off. Then the VM becomes
-// the template, tagged so the fleet's boxes find it, and is put in the
-// resource set so the limited user can clone it.
+// the template, tagged so the fleet's boxes find it, written into the list
+// of what the policy job made (xo-made.js), which is what makes it the
+// fleet's image rather than its tag, and put in the resource set so the
+// limited user can clone it.
 //
 // HOW THE BUILD SAYS IT FAILED. The install script powers off when
 // everything worked and reboots when anything did not: cloud-init does not
@@ -56,8 +58,9 @@ import { readFileSync } from 'node:fs';
 import { isIPv4 } from 'node:net';
 import { gzipSync } from 'node:zlib';
 
-import { fetchPinned, uploadDisk, srName } from './edge-router.js';
+import { builtInTemplate, fetchPinned, uploadDisk, srName } from './edge-router.js';
 import { qcow2Raw, qcow2Size } from './qcow2.js';
+import { forgetMade, outsideSets, recordMade, setsOf } from './xo-made.js';
 import { IMAGE_REPORT_TOKEN_RE } from '../protocol/intents.js';
 
 /**
@@ -177,6 +180,29 @@ export function imageKeyOf(t) {
   const tagged = tags.find((/** @type {string} */ x) => x.startsWith('fleetwright-image:'));
   if (tagged) return tagged.slice('fleetwright-image:'.length);
   return tags.includes('fleetwright-image') ? DEBIAN_IMAGE.key : null;
+}
+
+/**
+ * WHETHER A TEMPLATE IS THE FLEET'S MACHINE IMAGE, which its tag alone does
+ * not say: `fleetwright-image` is a string anybody who can make a template can
+ * give it, and every template so tagged on any pool used to be written into
+ * the fleet's resource set, where every approved box's token clones it, and
+ * left alone as the image by the next build. Now it is the fleet's only when
+ * an admin put it there: on the list of what the policy job made, or already
+ * in the fleet's resource set, both of which only an admin of Xen Orchestra
+ * can write (xo-made.js); and made in no resource set, so not by the fleet's
+ * own user, whatever list it is on. Nothing puts a template in the fleet's set
+ * now that is not on the list, so an image in it was put there by a job. The
+ * one that remains open: a version from before the list put every tagged
+ * template in the set, and one planted then, by somebody at the pool's admin
+ * or above, cannot be told from an image a job built then.
+ *
+ * @param {any} t  a VM-template as xo.getAllObjects gave it
+ * @param {{ fleet: Set<string>, made: Set<string> }} sets  as xo-made.js reads them
+ */
+export function isFleetImage(t, sets) {
+  const id = String(t?.id);
+  return (sets.made.has(id) || sets.fleet.has(id)) && outsideSets(t);
 }
 
 /** Names and sizes in Xen Orchestra. */
@@ -732,33 +758,52 @@ const logEnd = (log) => String(log || '').trim().split('\n').slice(-12).join('\n
  * offers it, and kept out of the resource set, so the fleet's token cannot
  * clone it.
  *
+ * FOUND BY ITS ID, as the edge router's is and for the same reason
+ * (edge-router.js, THE KEPT DISK): a base skips the download and its digest,
+ * so a template carrying the tag is not enough. Only one whose id is on the
+ * list of what the policy job made (xo-made.js), that is not in the fleet's
+ * resource set and was made in no set, is used; otherwise the image is
+ * downloaded and checked as if nothing were kept. Only listed bases are
+ * removed when a newer build is kept.
+ *
  * @param {{ call: (method: string, params?: any) => Promise<any> }} admin
  * @param {any[]} templates  every VM-template, as xo.getAllObjects gave them
  * @param {string} pool @param {string} tag  `${VM_IMAGE.baseTag}:<key>:<build>` @param {string} sr
+ * @param {{ fleet: Set<string>, made: Set<string> }} sets  as xo-made.js reads them
  * @returns {Promise<any|null>}
  */
-async function baseOf(admin, templates, pool, tag, sr) {
-  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(tag))) {
-    if ((await diskOf(admin, t.id))?.$SR === sr) return t;
+async function baseOf(admin, templates, pool, tag, sr, sets) {
+  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(tag) && baseByUs(x, sets))) {
+    const disks = await disksOf(admin, t.id);
+    if (disks.length === 1 && disks[0].$SR === sr) return t;
   }
   return null;
 }
 
 /**
- * A VM's or template's disk: the first that is not a CD drive or a cloud-init
- * drive.
+ * A base the policy job made (baseOf, FOUND BY ITS ID).
+ *
+ * @param {any} t @param {{ fleet: Set<string>, made: Set<string> }} sets
+ */
+const baseByUs = (t, sets) => sets.made.has(String(t?.id)) && !sets.fleet.has(String(t?.id)) && outsideSets(t);
+
+/**
+ * A VM's or template's disks: every one that is not a CD drive or a
+ * cloud-init drive. All of them, as the edge router's are (edge-router.js,
+ * disksOf): the first of two is a guess at which one boots.
  *
  * @param {{ call: (method: string, params?: any) => Promise<any> }} admin @param {string} vm
- * @returns {Promise<any|null>}
+ * @returns {Promise<any[]>}
  */
-async function diskOf(admin, vm) {
+async function disksOf(admin, vm) {
   const vbds = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VBD', VM: vm } })) || {}));
+  const disks = [];
   for (const vbd of vbds) {
     if (!vbd?.VDI || vbd.is_cd_drive) continue;
     const vdi = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', id: vbd.VDI } })) || {})[0]);
-    if (vdi && vdi.name_label !== CONFIG_DRIVE_NAME) return vdi;
+    if (vdi && vdi.name_label !== CONFIG_DRIVE_NAME) disks.push(vdi);
   }
-  return null;
+  return disks;
 }
 
 /**
@@ -853,14 +898,17 @@ export async function ensureImage({
   if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was built`);
   if (asked !== null && !IMAGE_CHANNELS.includes(asked)) throw new Error(`${asked} is not a suite an image is built from. Nothing was built`);
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
-  const there = templates.find((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key);
+  // THE FLEET'S IMAGE, by the lists and not by its tag (isFleetImage): one
+  // that only carries the tag is neither left as the image nor retired.
+  const sets = await setsOf(admin);
+  const there = templates.find((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key && isFleetImage(t, sets));
   // REBUILT WHEN ASKED: the new one is built beside it and the one there is
   // retired only once the new one is a template, so a build that fails or is
   // cancelled leaves the pool with the image it had (retireImage below).
   if (there && !replace) {
-    // IN THE SET, whatever else: an image made before the set existed, or
-    // taken out of it in Xen Orchestra, is one the fleet can see and not use.
-    await admin.call('resourceSet.addObject', { id: setId, object: there.id }).catch(() => {});
+    // IN THE SET, whatever else: an image the job made and listed, taken out
+    // of the set in Xen Orchestra, is one the fleet can see and not use.
+    if (!sets.fleet.has(String(there.id))) await admin.call('resourceSet.addObject', { id: setId, object: there.id }).catch(() => {});
     // KEPT AS IT WAS BUILT, and said so when that is not what was asked: the
     // suite is chosen per build, and changing the choice changes nothing until
     // the image is rebuilt.
@@ -883,14 +931,14 @@ export async function ensureImage({
 
   const sr = imageStorage({ pool, srs, fleetSrs, sr: chosenSr });
   const on = srName(sr);
-  const base = templates.find((t) => t?.$pool === pool && t?.name_label === VM_IMAGE.template);
-  if (!base) throw new Error(`this pool has no "${VM_IMAGE.template}" template to make the machine image from. Nothing was built`);
+  // XCP-NG'S OWN, by its mark and not its name (edge-router.js, builtInTemplate).
+  const base = builtInTemplate(templates, pool, VM_IMAGE.template, 'the machine image');
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: IMAGE_STAGES, fill });
   const os = spec.os;
   const baseTag = `${VM_IMAGE.baseTag}:${spec.key}:${spec.build}`;
   /** @type {any} */
-  let from = await baseOf(admin, templates, pool, baseTag, sr.id);
+  let from = await baseOf(admin, templates, pool, baseTag, sr.id, sets);
 
   /** @type {string|null} */
   let vdi = null;
@@ -966,10 +1014,12 @@ export async function ensureImage({
       await admin.call('vm.attachDisk', { vm: making, vdi, bootable: true, position: '0' });
       vdi = null; // the base's now, and deleted with it
       await admin.call('vm.convertToTemplate', { id: making });
+      // ON THE LIST before it is used, or removed with the rest (baseOf).
+      await recordMade(admin, /** @type {string} */ (making));
       from = { id: making };
       making = null; // kept from here, whatever happens to this build
-      for (const old of basesFor(templates, pool, spec.key).filter((t) => !t.tags.includes(baseTag))) {
-        await admin.call('vm.delete', { id: old.id, deleteDisks: true }).catch(() => {});
+      for (const old of basesFor(templates, pool, spec.key).filter((t) => !t.tags.includes(baseTag) && baseByUs(t, sets))) {
+        await admin.call('vm.delete', { id: old.id, deleteDisks: true }).then(() => forgetMade(admin, old.id), () => {});
       }
     }
 
@@ -997,8 +1047,15 @@ export async function ensureImage({
       tags: [VM_IMAGE.buildTag],
       bootAfterCreate: false,
     });
-    const disk = await diskOf(admin, /** @type {string} */ (vm));
-    if (!disk) throw new Error(`the machine image’s build VM was made from the kept ${os} without a disk`);
+    // ONE DISK, OR NOTHING IS GROWN AND NOTHING BOOTS: the install goes on
+    // the disk the VM starts from, and with two there is no telling which.
+    const disks = await disksOf(admin, /** @type {string} */ (vm));
+    if (disks.length !== 1) {
+      throw new Error(disks.length
+        ? `the machine image’s build VM came from the kept ${os} with ${disks.length} disks where it has one, so none was grown and it was not started`
+        : `the machine image’s build VM was made from the kept ${os} without a disk`);
+    }
+    const [disk] = disks;
     // ROOM FOR A SESSION. cloud-init grows the partition to fill it on the
     // first boot, the build's and every clone's alike. Through whichever
     // call the server offers (RESIZE_METHODS in xo-setup.js): both take the
@@ -1089,6 +1146,9 @@ export async function ensureImage({
     await admin.call('tag.add', { id: vm, tag: imageTag(spec.key) });
     await admin.call('tag.add', { id: vm, tag: channelTag(channel) });
     await admin.call('vm.convertToTemplate', { id: vm });
+    // ON THE LIST, then in the set: what makes it the fleet's image is that
+    // this job made it (isFleetImage), not the tags just given it.
+    await recordMade(admin, /** @type {string} */ (vm));
     await admin.call('resourceSet.addObject', { id: setId, object: vm });
   } catch (e) {
     // Nothing half-made is left, except a failed install's VM, kept on purpose,
@@ -1143,6 +1203,7 @@ async function retireImage(admin, template) {
   const clones = await clonesOf(admin, String(template.id));
   if (!clones) {
     await admin.call('vm.delete', { id: template.id, deleteDisks: true });
+    await forgetMade(admin, String(template.id));
     return { removed: true };
   }
   const name = `${String(template.name_label || VM_IMAGE.name).slice(0, 60)} (replaced)`;
@@ -1165,17 +1226,22 @@ export async function removeImage({ admin, pool, poolName = 'this pool', image: 
   const spec = IMAGES[key];
   if (!spec) throw new Error(`there is no machine image called ${key}. Nothing was removed`);
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
-  const there = templates.filter((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key);
+  // ONLY WHAT THE JOB MADE: an admin's session deletes nothing, disks and
+  // all, because somebody else gave it a tag (isFleetImage, baseOf).
+  const sets = await setsOf(admin);
+  const there = templates.filter((t) => t?.$pool === pool && t?.tags?.includes?.(VM_IMAGE.tag) && imageKeyOf(t) === key && isFleetImage(t, sets));
   // ITS KEPT DISKS GO WITH IT (baseOf): asked to remove the image is asked
   // for the room back, and a machine made from it keeps the disk it reads.
-  for (const b of basesFor(templates, pool, key)) await admin.call('vm.delete', { id: b.id, deleteDisks: true }).catch(() => {});
+  for (const b of basesFor(templates, pool, key).filter((t) => baseByUs(t, sets))) {
+    await admin.call('vm.delete', { id: b.id, deleteDisks: true }).then(() => forgetMade(admin, b.id), () => {});
+  }
   if (!there.length) return `The ${spec.os} machine image was already gone from ${poolName}.`;
   /** @type {number[]} */
   const kept = [];
   for (const t of there) {
     const clones = await clonesOf(admin, String(t.id));
     if (clones) kept.push(clones);
-    else await admin.call('vm.delete', { id: t.id, deleteDisks: true });
+    else await admin.call('vm.delete', { id: t.id, deleteDisks: true }).then(() => forgetMade(admin, String(t.id)));
   }
   if (!kept.length) return `The ${spec.os} machine image was removed from ${poolName}. New session no longer offers it.`;
   const n = kept.reduce((a, b) => a + b, 0);

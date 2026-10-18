@@ -113,21 +113,22 @@ import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
-import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupPolicySigninAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { machineGrantsOf } from '../../core/grants.js';
 import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName, wanAddressOf } from './edge-router.js';
-import { VM_IMAGE, IMAGES, IMAGE_CHANNELS, ensureImage, removeImage, imageKeyOf, imageChannelOf } from './vm-image.js';
-import { HOLDER, ensureHolder } from './xo-holder.js';
+import { VM_IMAGE, IMAGES, IMAGE_CHANNELS, ensureImage, removeImage, imageKeyOf, imageChannelOf, isFleetImage } from './vm-image.js';
+import { ensureHolder, isHolder } from './xo-holder.js';
+import { FLEET_SET, setsOf } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
-/** The resource set that bounds it, by name. */
-export const FLEET_SET = 'fleetwright';
+/** The resource set that bounds it, by name: xo-made.js's, which reads it too. */
+export { FLEET_SET };
 /** The installer's update plugin, as Xen Orchestra names a plugin: its package minus `xo-server-`. */
 export const UPDATES_PLUGIN = 'installer-updates';
 
@@ -605,8 +606,12 @@ export class XoSetups {
         // `reconnect` to an older machine's list; under its own binding the
         // sign-in does not open there, where under the setup's it was run as
         // a whole setup.
+        // `policy-signin`: the same for a policy change's sign-in
+        // (xosetupPolicySigninAad), which under the setup's name a machine
+        // from before policy changes ran as a whole setup, resetting the
+        // pool's resource set (seventh audit).
         can: [
-          'policy', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
+          'policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
           ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder', 'holder-ask'] : []),
         ],
@@ -692,44 +697,42 @@ export class XoSetups {
     let inside;
     const deploy = rec.purpose === 'deploy';
     const box = { epk: parts[0], iv: parts[1], ct: parts[2] };
-    // UNDER THE SETUP'S NAME, OR A RECONNECT'S OWN: a phone that knows this
-    // machine lists `reconnect-signin` seals a reconnect under the second,
-    // which a machine too old to know a reconnect cannot open (seal.js).
-    let underReconnect = false;
+    // UNDER THE SETUP'S NAME, OR A RECONNECT'S OR A POLICY CHANGE'S OWN: a
+    // phone that knows this machine lists `reconnect-signin` and
+    // `policy-signin` seals each under its own name, which a machine too old
+    // to know the job cannot open (seal.js).
+    /** @type {'setup'|'reconnect'|'policy'} */
+    let under = 'setup';
+    /** @param {string} aad */
+    const tryOpen = (aad) => openSealed({ privateKey: rec.key.privateKey, publicKey: rec.key.publicKey, aad, sealed: box });
     try {
-      inside = await openSealed({
-        privateKey: rec.key.privateKey,
-        publicKey: rec.key.publicKey,
-        aad: deploy ? xodeployAad(job, rec.address) : xosetupAad(job, rec.address),
-        sealed: box,
-      });
+      inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : xosetupAad(job, rec.address));
     } catch {
       if (deploy) return { ok: false, text: 'The passwords did not open with this job’s key. Start again from the app.' };
-      try {
-        inside = await openSealed({
-          privateKey: rec.key.privateKey,
-          publicKey: rec.key.publicKey,
-          aad: xosetupReconnectSigninAad(job, rec.address),
-          sealed: box,
-        });
-        underReconnect = true;
-      } catch {
-        return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
+      for (const [name, aad] of /** @type {const} */ ([['reconnect', xosetupReconnectSigninAad(job, rec.address)], ['policy', xosetupPolicySigninAad(job, rec.address)]])) {
+        try {
+          inside = await tryOpen(aad);
+          under = name;
+          break;
+        } catch { /* the next name, or none */ }
       }
+      if (under === 'setup') return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
     }
     // ONE USE: the key goes as soon as it has opened the one thing it exists
     // for, which for a policy job is two things (below).
     const jobKey = rec.key;
     rec.key = null;
-    // A RECONNECT ONLY UNDER ITS OWN BINDING, and no purpose this machine
-    // does not know taken for a whole setup. Under the reconnect's name the
-    // phone asked for a reconnect and nothing else, so anything else in it is
-    // refused. Under the setup's name a setup carries no purpose at all, a
-    // policy change says `policy`, and a reconnect from a phone not yet
-    // updated says `reconnect` and is run as one, which is safe here because
-    // this machine knows it. Checked here, before #execute, which chooses
-    // its steps from `rec.purpose` and runs a whole setup for anything else.
-    if (!deploy && (underReconnect ? inside?.purpose !== 'reconnect' : ![undefined, 'policy', 'reconnect'].includes(inside?.purpose))) {
+    // EACH JOB ONLY UNDER ITS OWN BINDING, and no purpose this machine does
+    // not know taken for a whole setup. Under the reconnect's or the policy
+    // change's name the phone asked for that and nothing else, so anything
+    // else in it is refused. Under the setup's name a setup carries no
+    // purpose at all, and a policy change or a reconnect from a phone not yet
+    // updated says `policy` or `reconnect` and is run as one, which is safe
+    // here because this machine knows both. Checked here, before #execute,
+    // which chooses its steps from `rec.purpose` and runs a whole setup for
+    // anything else.
+    const allowed = under === 'setup' ? [undefined, 'policy', 'reconnect'] : [under];
+    if (!deploy && !allowed.includes(inside?.purpose)) {
       rec.state = 'failed';
       rec.text = 'The sign-in was sealed for a kind of job this machine does not run, so nothing was started. Update the app and this machine, then try again.';
       this.#ended(rec);
@@ -1201,12 +1204,17 @@ export class XoSetups {
           ? Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VDI', name_label: EDGE.vm } })) || {})
           : [];
         // AND EACH POOL'S MACHINE IMAGE, so the phone offers to build one only
-        // where there is none.
+        // where there is none: the fleet's, by the lists only an admin writes,
+        // and not every template on every pool that carries the tag, which
+        // the apply step below used to write into the set for every box's
+        // token to clone (vm-image.js, isFleetImage).
+        const own = await setsOf(ctx.admin);
         const templates = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {});
-        ctx.images = templates.filter((/** @type {any} */ t) => Array.isArray(t?.tags) && t.tags.includes(VM_IMAGE.tag));
+        ctx.images = templates.filter((/** @type {any} */ t) => Array.isArray(t?.tags) && t.tags.includes(VM_IMAGE.tag) && isFleetImage(t, own));
         // AND EACH POOL'S OWN MACHINE, so the phone offers to make one only
-        // where there is none (xo-holder.js).
-        ctx.holders = vms.filter((/** @type {any} */ v) => Array.isArray(v?.tags) && v.tags.includes(HOLDER.tag));
+        // where there is none, by both its tags and where it was made
+        // (xo-holder.js, isHolder): the edge router sends its logs to it.
+        ctx.holders = vms.filter((/** @type {any} */ v) => isHolder(v, ctx.rec.address));
         const inventory = inventoryOf(ctx, set);
         ctx.rec.choices = choicesOf(inventory);
         const box = await seal({ to: ctx.rec.reply, aad: xosetupInventoryAad(ctx.rec.job, ctx.rec.address), payload: inventory });
@@ -1242,6 +1250,9 @@ export class XoSetups {
         // AND EVERY IMAGE OF THE FLEET'S, whether or not it is in the set
         // now, so a pool this already happened to is put right by its next
         // change of policy: a phone keeping an image sends nothing about it.
+        // The fleet's is what the choose step found on the lists, so one taken
+        // out is put back only when the job made it, and a template that only
+        // carries the tag is never put in.
         const chosenKinds = new Set([...(ctx.srs || []), ...(ctx.networks || [])].map((/** @type {any} */ o) => String(o?.id)));
         const rest = (ctx.setObjects || []).filter((/** @type {string} */ id) => !chosenKinds.has(id));
         const images = (ctx.images || []).map((/** @type {any} */ t) => String(t.id));

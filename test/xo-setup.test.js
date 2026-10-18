@@ -22,7 +22,7 @@ import path from 'node:path';
 
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits } from '../src/fleet/host/xo-setup.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
-import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
+import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupPolicySigninAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
 import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
@@ -337,11 +337,12 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
+    ['policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
-  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' });
+  // Sealed as an updated phone seals a policy change: under its own binding.
+  const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey, purpose: 'policy' }, xosetupPolicySigninAad);
   const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
   assert.equal(ran.ok, true, ran.text);
   /** @type {any} */
@@ -360,27 +361,36 @@ async function choose(/** @type {any} */ begun, /** @type {string} */ address, /
   return `${box.epk}.${box.iv}.${box.ct}`;
 }
 
-test('changing the policy keeps the machine images and the fleet\'s own machines in the set, and puts back an image taken out', { skip }, async (t) => {
+test('changing the policy keeps the machine images and the fleet\'s own machines in the set, and puts back an image the job made, never one that only carries the tag', { skip }, async (t) => {
   // Every change of policy wrote storage and networks alone into the set,
   // which `resourceSet.set` replaces: the Debian image went with a change
   // that only asked for an Ubuntu one, and the next machine asked for from
   // it was refused with "not enough permissions".
   // And an Ubuntu image already taken out by such a change, which the next
   // change puts back: the phone sends nothing about an image it keeps.
+  // But only one the job made and listed (vm-image.js, isFleetImage): every
+  // template on any pool carrying the tag used to go into the set, for every
+  // approved box's token to clone.
   const xo = await standIn(t, {
-    sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'tpl-debian', 'vm-holder'] }],
-    templates: { 'tpl-ubuntu': { id: 'tpl-ubuntu', type: 'VM-template', $pool: 'p1', name_label: 'Fleetwright Ubuntu 24.04', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04'] } },
+    sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'tpl-debian', 'vm-holder'] }, { id: 'rs-made', name: 'fleetwright-made', objects: ['tpl-ubuntu'] }],
+    templates: {
+      'tpl-ubuntu': { id: 'tpl-ubuntu', type: 'VM-template', $pool: 'p1', name_label: 'Fleetwright Ubuntu 24.04', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04'] },
+      'tpl-planted': { id: 'tpl-planted', type: 'VM-template', $pool: 'p1', name_label: 'Fleetwright Debian 13', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] },
+    },
   });
   const { setups } = await machine();
   const actor = 'eli@example.com';
-  const { begun } = await choosing(xo, setups, actor);
+  const { begun, reply, state } = await choosing(xo, setups, actor);
+  const [epk, iv, ct] = state.inventory.split('.');
+  const inventory = /** @type {any} */ (await open({ ...reply, aad: xosetupInventoryAad(begun.xosetup.job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(inventory.images.map((/** @type {any} */ i) => i.key), ['ubuntu-24.04'], 'the phone is shown a template that only carries the tag as the pool’s image');
   const good = { v: 1, srs: ['sr1'], networks: ['net-dmz'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
   const took = await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, good), actor });
   assert.equal(took.ok, true, took.text);
   const end = await finished(setups, begun.xosetup.job, actor);
   assert.equal(end.state, 'done', end.text);
   // What the phone chose replaces the storage and networks; the rest stays.
-  assert.deepEqual(xo.sets[0].objects, ['sr1', 'net-dmz', 'tpl-debian', 'vm-holder', 'tpl-ubuntu']);
+  assert.deepEqual(xo.sets[0].objects, ['sr1', 'net-dmz', 'tpl-debian', 'vm-holder', 'tpl-ubuntu'], 'a template that only carries the tag went into the set');
 });
 
 test('a setup run again leaves what the fleet may use as a person left it', { skip }, async (t) => {
@@ -526,7 +536,7 @@ test('the machine image is built after the policy, on the way out’s pool, behi
 test('the pool’s own machine is made last, from its image, with a pin asked for this job, and the person told to approve it', { skip }, async (t) => {
   // ASKED FOR: "dedicated hypervisor VM on the pool". src/fleet/host/xo-holder.js.
   const xo = await standIn(t, {
-    sets: [chosenBefore()],
+    sets: [{ ...chosenBefore(), objects: [...chosenBefore().objects, 'tpl'] }],
     more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start'],
     vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
@@ -594,7 +604,7 @@ test('a Xen Orchestra without disk.resize builds the image through vdi.set, and 
 test('an image that is there is rebuilt or removed when the person asks, removed ones first', { skip }, async (t) => {
   // ASKED FOR: "There is no rebuild button or delete button".
   const xo = await standIn(t, {
-    sets: [chosenBefore()],
+    sets: [{ ...chosenBefore(), objects: [...chosenBefore().objects, 'deb', 'u24'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'vm.delete'],
     vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: {
@@ -942,7 +952,7 @@ test('through a phone, a policy makes the pool its own machine, and gigabyte bui
   // uploads of their own the relay does not carry, so they are refused and
   // the job keeps waiting for a choice without them.
   const xo = await standIn(t, {
-    sets: [chosenBefore()],
+    sets: [{ ...chosenBefore(), objects: [...chosenBefore().objects, 'tpl'] }],
     more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start', 'disk.import', 'vm.attachDisk', 'vif.set'],
     vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
     templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
@@ -1381,6 +1391,10 @@ test('a reconnect’s sign-in opens under its own binding only as a reconnect, a
     [xosetupReconnectSigninAad, 'policy'],
     [xosetupReconnectSigninAad, 'rebuild'],
     [xosetupAad, 'rebuild'],
+    // And a policy change's own binding opens only a policy change.
+    [xosetupPolicySigninAad, undefined],
+    [xosetupPolicySigninAad, 'reconnect'],
+    [xosetupPolicySigninAad, 'rebuild'],
   ])) {
     const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected' })] });
     const { setups } = await machine();
@@ -1388,7 +1402,7 @@ test('a reconnect’s sign-in opens under its own binding only as a reconnect, a
     const reply = await newSealKey();
     const { sealed } = await phone(begun, xo.address, xo.pin, { v: 1, ...(purpose ? { purpose } : {}), xo: { email: 'admin@admin.net', password: PASSWORD }, reply: reply.publicKey }, aad);
     const ran = await setups.run({ job: begun.xosetup.job, sealed, actor });
-    const which = `${aad === xosetupAad ? 'setup' : 'reconnect-signin'} / ${purpose}`;
+    const which = `${aad === xosetupAad ? 'setup' : aad === xosetupPolicySigninAad ? 'policy-signin' : 'reconnect-signin'} / ${purpose}`;
     assert.equal(ran.ok, false, which);
     assert.match(ran.text, /^The sign-in was sealed for a kind of job this machine does not run, so nothing was started\./, which);
     assert.equal(ran.xosetup?.state, 'failed', `${which}: the job is over and its key spent`);

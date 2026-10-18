@@ -1937,16 +1937,29 @@ export const COMMANDS = {
     short: 'Recent service or session logs',
     help: 'The last lines of a service log, or of a session — /logs <name> shows what that session printed. '
       + 'Defaults to the session manager, 40 lines.',
-    run: (ctx, args) => {
+    run: (ctx, args, _flags, values) => {
       // Either order, because nobody remembers which comes first.
       const words = args.filter(Boolean);
       const lines = words.map(Number).find((n) => Number.isFinite(n) && n > 0) ?? null;
+
+      // `--session=<name>` IS A SESSION AND NOTHING ELSE. The sidecar sends a
+      // fleet `logs <name>` this way, because the coordinator has already
+      // checked that the name is the asker's own session, and read as a bare
+      // word a session called `hub` or `sidecar` was the service journal:
+      // everybody's work on the box, which a member may not read (seventh
+      // audit). A name with no such session here is said to be one.
+      const named = values?.get('session');
+      if (named !== undefined) {
+        if (!ctx.sessions.get?.(named)) return { ok: false, text: `There is no session called "${named}" on this machine.` };
+        const r = readSessionLogs(ctx.cfg, named, lines ?? 60);
+        return { ok: r.ok, text: r.text };
+      }
       const source = words.find((w) => resolveSource(w)) ?? null;
 
       // A SESSION NAME beats a service name, and is checked against the
-      // registry rather than guessed at: "is this a service word" already has
-      // an answer, so anything else that names a real session is a session.
-      const sessionWord = words.find((w) => !resolveSource(w) && !Number.isFinite(Number(w)) && ctx.sessions.get?.(w));
+      // registry rather than guessed at: anything that names a real session
+      // is a session, a service word included.
+      const sessionWord = words.find((w) => !Number.isFinite(Number(w)) && ctx.sessions.get?.(w));
       if (sessionWord) {
         const r = readSessionLogs(ctx.cfg, sessionWord, lines ?? 60);
         return { ok: r.ok, text: r.text };
@@ -2162,11 +2175,17 @@ export const COMMANDS = {
       // SAID ONCE, WHEN IT MATTERS. On a packaged box an update refreshes what
       // the installer generates; on a checkout it cannot, soundly — root would
       // be running a script the service user can rewrite — so a pull that
-      // brought installer changes leaves them for a person with a shell.
+      // brought installer changes leaves them for a person with a shell. And
+      // the sentence must not then tell that person to do the unsound thing:
+      // it printed `sudo <checkout>/install/install.sh --repair`, the very
+      // script this comment says root must not run (upgrades.js, repairCommand).
       const checkoutNote =
         r.ok && r.changed
           ? '\n\nThis box is a checkout, so what the installer generates — units, hook, sudoers — is not refreshed by an update. ' +
-            `sudo ${status.dir}/install/install.sh --repair does that; a box on packaged releases has it done on every update.`
+            `Not from ${status.dir}, whose every file the service user can rewrite: run the installer with --repair from a copy only root can write, ` +
+            (ctx.cfg.releaseManifest
+              ? 'or move this box onto packaged releases with sudo /usr/local/sbin/fleetwright-migrate, where every update does it from a checked copy.'
+              : 'such as a fresh clone of this commit.')
           : '';
 
       return { ok: r.ok, text: `${status.dir} (${status.branch})\n\n${r.message}${checkoutNote}`, buttons };

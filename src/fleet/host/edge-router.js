@@ -57,6 +57,7 @@ import { REQUIRED_HOSTS } from '../../core/egress.js';
 import { connectPinnedTls, splitAddress } from './xo-ws.js';
 import { EDGE_WATCH, keptOn, watchConfig, watchOf } from './edge-credentials.js';
 import { VHD_BLOCK, sparseVhd } from './vhd.js';
+import { forgetMade, outsideSets, recordMade, setsOf } from './xo-made.js';
 
 /**
  * The image, pinned. A new OPNsense release is a new entry here, with the
@@ -1403,6 +1404,18 @@ function labsSaid(key) {
  * template's disk is on. Not tagged `fleetwright-image` and never put in the
  * resource set, so no box offers it and the fleet's token cannot clone it.
  *
+ * FOUND BY ITS ID, NOT BY ITS TAG. A kept disk is taken for the published
+ * image without the download's digest being checked again, so a template
+ * that only carries the tag is not one: any that somebody else made and
+ * tagged would have become the router's disk. The id of each one this makes
+ * is written into the list of what the policy job made (xo-made.js, which
+ * says why there and not in a tag), and a kept disk is used only when its id
+ * is on that list, it is not in the fleet's resource set, and it was made in
+ * no resource set. Anything else is passed over and the published image
+ * downloaded and checked as though nothing were kept. A kept disk from before
+ * the list is passed over the same way, once, and left where it is: this
+ * removes only what the list says it made.
+ *
  * A REBUILD COPIES IT AND WRITES ONLY THE CONFIGURATION. The router's VM is
  * made from that template, which copies its disk (a copy-on-write clone on
  * the storage XCP-ng keeps as VHD files: seconds, the way a session's machine
@@ -1452,29 +1465,69 @@ function labsSaid(key) {
 const baseTagFor = (release = OPNSENSE_IMAGE.release) => `${EDGE.baseTag}:${EDGE.baseKey}:${release}`;
 
 /**
- * A VM's or template's disk: the first that is not a CD drive. The same
- * calls the machine image reads its kept disk with (vm-image.js, diskOf).
+ * A VM's or template's disks: every one that is not a CD drive. The same
+ * calls the machine image reads its kept disk with (vm-image.js, disksOf).
+ * All of them and not the first, because the first is a guess: a copy that
+ * came with two would have had its configuration written into whichever the
+ * pool listed first, and booted from the other.
  *
- * @param {any} admin @param {string} vm @returns {Promise<any|null>}
+ * @param {any} admin @param {string} vm @returns {Promise<any[]>}
  */
-async function diskOf(admin, vm) {
+async function disksOf(admin, vm) {
   const vbds = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VBD', VM: vm } })) || {}));
+  const disks = [];
   for (const vbd of vbds) {
     if (!vbd?.VDI || vbd.is_cd_drive) continue;
     const vdi = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VDI', id: vbd.VDI } })) || {})[0]);
-    if (vdi) return vdi;
+    if (vdi) disks.push(vdi);
   }
-  return null;
+  return disks;
 }
 
 /**
- * The kept disk for this release on storage `sr`, or null.
+ * THE POOL'S OWN TEMPLATE, by XCP-ng's say and not by its name. A VM made
+ * from a template inherits its disks and settings, so the edge router and the
+ * machine image are made from the built-in one with no disks of its own, and
+ * nothing else will do: `name_label` is a string anybody who can make a
+ * template can give theirs, and the first template called "Other install
+ * media" used to be the one taken, whoever made it. `isDefaultTemplate` is
+ * Xen Orchestra's reading of XAPI's own mark on the templates it ships
+ * (is_default_template, or other_config's default_template), which nothing
+ * below a pool's admin sets; `$VBDs` empty is a template that brings no disk.
+ * None, or more than one, is a stop that says so: which one to trust is not
+ * something to guess at.
+ *
+ * Shared with the machine image (vm-image.js, ensureImage).
+ *
+ * @param {any[]} templates  every VM-template, as xo.getAllObjects gave them
+ * @param {string} pool @param {string} name @param {string} what  what is made from it, for the sentence
+ */
+export function builtInTemplate(templates, pool, name, what) {
+  const found = templates.filter((t) => t?.$pool === pool && t?.name_label === name && t.isDefaultTemplate === true && Array.isArray(t.$VBDs) && t.$VBDs.length === 0);
+  if (found.length === 1) return found[0];
+  if (!found.length) throw new Error(`this pool has no built-in "${name}" template, XCP-ng’s own with no disks, to make ${what} from. Nothing was built`);
+  throw new Error(`this pool has ${found.length} built-in "${name}" templates where XCP-ng ships one, so which to make ${what} from cannot be told. Nothing was built`);
+}
+
+/**
+ * Whether a template is a kept disk the policy job made: on its list, not in
+ * the fleet's set, and made in no set (THE KEPT DISK, FOUND BY ITS ID).
+ *
+ * @param {any} t @param {{ fleet: Set<string>, made: Set<string> }} sets
+ */
+const keptByUs = (t, sets) => sets.made.has(String(t?.id)) && !sets.fleet.has(String(t?.id)) && outsideSets(t);
+
+/**
+ * The kept disk for this release on storage `sr`, or null: one the policy job
+ * made, with exactly one disk, on that storage.
  *
  * @param {any} admin @param {any[]} templates @param {string} pool @param {string} sr
+ * @param {{ fleet: Set<string>, made: Set<string> }} sets
  */
-async function keptBaseOn(admin, templates, pool, sr) {
-  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(baseTagFor()))) {
-    if ((await diskOf(admin, t.id))?.$SR === sr) return t;
+async function keptBaseOn(admin, templates, pool, sr, sets) {
+  for (const t of templates.filter((x) => x?.$pool === pool && x?.tags?.includes?.(baseTagFor()) && keptByUs(x, sets))) {
+    const disks = await disksOf(admin, t.id);
+    if (disks.length === 1 && disks[0].$SR === sr) return t;
   }
   return null;
 }
@@ -1585,8 +1638,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const { release, rawSize, compressedSize } = OPNSENSE_IMAGE;
 
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
-  const template = templates.find((t) => t?.$pool === pool && t?.name_label === EDGE.template);
-  if (!template) throw new Error(`this pool has no "${EDGE.template}" template to make the edge router from. Nothing was built`);
+  const template = builtInTemplate(templates, pool, EDGE.template, 'the edge router');
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: BUILD_STAGES, fill });
   say(`Downloading OPNsense ${release}.`, stage(1, 0));
@@ -1605,7 +1657,8 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const regions = imagePatches(config);
   const send = (/** @type {string} */ sendTo, /** @type {Buffer} */ body) => writeInto({ address, pin, plain, sendTo, body, signal });
   /** @type {any} */
-  let base = await keptBaseOn(admin, templates, pool, sr.id);
+  const sets = await setsOf(admin);
+  let base = await keptBaseOn(admin, templates, pool, sr.id, sets);
   /** Why a copy of the kept disk cannot be written into here, once that is known. */
   let refused = base ? null : await writesInto({ admin, sr: sr.id, send, signal });
   const baseName = `OPNsense ${release} (as published)`;
@@ -1690,11 +1743,15 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
         await admin.call('vm.attachDisk', { vm: making, vdi: keptVdi, bootable: true, position: '0' });
         keptVdi = null; // the template's now, and deleted with it
         await admin.call('vm.convertToTemplate', { id: making });
+        // ON THE LIST before anything uses it, or it is removed with the
+        // rest of what this build made: a kept disk nobody can find by its id
+        // would be passed over by every build after this one.
+        await recordMade(admin, /** @type {string} */ (making));
         base = { id: making };
         making = null; // kept from here, whatever happens to this build
         keeping = false;
-        for (const old of templates.filter((t) => t?.$pool === pool && (t?.tags || []).some((/** @type {string} */ x) => x.startsWith(`${EDGE.baseTag}:${EDGE.baseKey}:`)) && !t.tags.includes(baseTagFor()))) {
-          await admin.call('vm.delete', { id: old.id, deleteDisks: true }).catch(() => {});
+        for (const old of templates.filter((t) => t?.$pool === pool && keptByUs(t, sets) && (t?.tags || []).some((/** @type {string} */ x) => x.startsWith(`${EDGE.baseTag}:${EDGE.baseKey}:`)) && !t.tags.includes(baseTagFor()))) {
+          await admin.call('vm.delete', { id: old.id, deleteDisks: true }).then(() => forgetMade(admin, old.id), () => {});
         }
       }
 
@@ -1703,8 +1760,11 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
       // gets a copy of the image's.
       vm = await admin.call('vm.create', { template: base.id, ...vmParams });
       try {
-        const disk = await diskOf(admin, /** @type {string} */ (vm));
-        if (!disk) throw new Error('the copy of the kept disk came without a disk');
+        // ONE DISK OR NONE IS WRITTEN: the blocks go into the disk it boots
+        // from, and with two there is no telling which that is.
+        const disks = await disksOf(admin, /** @type {string} */ (vm));
+        if (disks.length !== 1) throw new Error(disks.length ? `the copy of the kept disk came with ${disks.length} disks where it has one` : 'the copy of the kept disk came without a disk');
+        const [disk] = disks;
         const sendTo = (await admin.call('disk.importContent', { id: disk.id, format: 'vhd' }))?.$sendTo;
         if (typeof sendTo !== 'string') throw new Error('it gave nowhere to send the blocks');
         await send(sendTo, vhd);

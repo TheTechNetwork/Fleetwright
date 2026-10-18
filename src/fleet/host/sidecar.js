@@ -2233,7 +2233,13 @@ export function toCommandLine({ verb, params, actor }) {
       // `name` wins when both arrive: naming a session is the more specific
       // request. Every token is protocol-constrained — a name, an enum, or a
       // bounded integer.
-      return ['/logs', p.name || p.service, p.lines].filter((x) => x !== undefined && x !== null).join(' ');
+      //
+      // A name goes as `--session=<name>`, which the hub reads as a session
+      // and nothing else: as a bare word, a session named after a log source
+      // (`hub`, `sidecar`) or a number read the service journal, which the
+      // coordinator lets a member reach only on a box that acts for them alone
+      // (seventh audit).
+      return ['/logs', p.name ? `--session=${p.name}` : p.service, p.lines].filter((x) => x !== undefined && x !== null).join(' ');
     case 'update':
       return p.restart === 'yes' ? '/update --restart' : '/update';
     case 'upgrade':

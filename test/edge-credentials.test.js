@@ -74,3 +74,15 @@ test('the key is found again where a router keeps it, and anything else is no ke
     assert.equal(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: bad }) }), null, String(bad).slice(0, 40));
   }
 });
+
+test('a certificate made from 2030 on still expires in the future', async () => {
+  // UTCTime's two-digit year reads 50 as 1950, so a twenty-year certificate
+  // made in 2031 said it had expired before it was made. From 2050 a
+  // certificate's time is GeneralizedTime (RFC 5280).
+  const { X509Certificate } = await import('node:crypto');
+  for (const made of ['2029-06-01T00:00:00Z', '2031-01-01T00:00:00Z', '2049-12-31T00:00:00Z']) {
+    const cert = new X509Certificate(selfSigned({ cn: 'fleetwright-edge', now: Date.parse(made) }).crt);
+    const years = (new Date(cert.validTo).getTime() - Date.parse(made)) / (365 * 86_400_000);
+    assert.ok(years > 19.9 && years < 20.1, `${made}: valid until ${cert.validTo}`);
+  }
+});

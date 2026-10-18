@@ -187,15 +187,17 @@ test('the package upgrade starts its unit without waiting, and says the box will
   assert.match(r.text, /restart themselves/);
 });
 
-test('a box whose grant predates the package unit is told the two ways out, and nothing else is tried', () => {
+test('a box whose grant predates the package unit is told to install the package, which puts the rule back, and nothing else is tried', () => {
   const { exec, calls } = fakeExec([
     { match: /systemctl start --no-block/, status: 1, stderr: "Sorry, user agent is not allowed to execute '/usr/bin/systemctl start --no-block fleetwright-package-upgrade.service' as root" },
   ]);
   const r = runPackageUpgrade({ ...cfg, installDir: '/opt/fleetwright/current' }, { exec, version: '0.4.0' });
   assert.equal(r.ok, false);
   assert.equal(calls.length, 1, 'no apt-get fallback: there never was a grant for this one');
-  assert.match(r.text, /install\.sh --repair/);
-  assert.match(r.text, /apt install fleetwright/);
+  // Not the installer under the install root, which the service user owns:
+  // the package's postinst runs --repair from a checked copy root owns.
+  assert.match(r.text, /On the box: sudo apt-get install fleetwright installs it and puts the rule in place/);
+  assert.ok(!r.text.includes('/opt/fleetwright/current'), r.text);
 });
 
 test('a package unit that fails to start reports what systemd said', () => {

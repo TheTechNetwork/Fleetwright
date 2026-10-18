@@ -22,6 +22,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { grantCommand } from './grants.js';
+import { APT_REPAIR } from './apt-release.js';
 
 /**
  * The only two answers. `stable` is what a box gets by saying nothing.
@@ -199,12 +200,14 @@ export function switchAptSuite(cfg, value, { exec = run } = {}) {
   if (r.status !== 0) {
     // sudo's refusal rather than the unit's failure: the grant predates the
     // unit, which --repair puts right — the same shape as the package unit.
+    // Through the package, never the installer under the install root, which
+    // the service user owns (apt-release.js, APT_REPAIR).
     if (/not allowed|password is required|no tty/i.test(r.stderr)) {
       return {
         ok: false,
         message:
           `This box's sudoers rule predates the channel unit, so it cannot change suite from here yet.\n` +
-          `On the box: sudo ${cfg.installDir}/install/install.sh --repair puts the rule in place.`,
+          `On the box: ${APT_REPAIR} puts the rule in place, from a checked copy of the release only root can write.`,
       };
     }
     const why = (r.stderr || r.stdout).trim().split('\n').slice(-6).join('\n');

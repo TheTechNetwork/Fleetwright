@@ -7,6 +7,10 @@ import { validateIntent, PROTOCOL_VERSION, isMutating } from '../src/fleet/proto
 import { HostRegistry } from '../src/fleet/coordinator/registry.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
+import { dispatch } from '../src/adapters/commands.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const logs = (params = {}) => ({
   v: PROTOCOL_VERSION, kind: 'intent', id: 'abcd1234', verb: 'logs', params, issuedAt: Date.now(),
@@ -79,7 +83,7 @@ test('a session name is accepted, and beats a service when both arrive', () => {
   assert.equal(validateIntent(logs({ name: 'bigjob' })).ok, true);
   assert.equal(
     toCommandLine({ verb: 'logs', params: { name: 'bigjob', service: 'hub', lines: 60 } }),
-    '/logs bigjob 60',
+    '/logs --session=bigjob 60',
     'naming a session is the more specific request',
   );
 });
@@ -88,4 +92,36 @@ test('a session name is still a name -- nothing else fits through', () => {
   for (const bad of ['../etc/passwd', 'a b', 'name;rm -rf /', '']) {
     assert.equal(validateIntent(logs({ name: bad })).ok, false, JSON.stringify(bad));
   }
+});
+
+test('a session named after a log source is that session, never the service journal', async (t) => {
+  // Seventh audit: the coordinator sends a member's `logs <name>` only to the
+  // box holding their own session of that name, and the hub read the same
+  // word as a log source first. A member who named a session `hub` on the
+  // operator's box read its journal, everybody's work on it, which the
+  // coordinator refuses a member everywhere else. A fleet name now arrives as
+  // `--session=`, and a word naming a real session beats a service word.
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'logs-session-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bin = (/** @type {string} */ name, /** @type {string} */ prints) => {
+    writeFileSync(path.join(dir, name), `#!/bin/sh\necho ${prints}\n`, { mode: 0o755 });
+    return path.join(dir, name);
+  };
+  bin('tmux', 'PANE-OF-THE-SESSION');
+  const before = process.env.PATH;
+  process.env.PATH = `${dir}:${before}`;
+  t.after(() => { process.env.PATH = before; });
+  const ctx = /** @type {any} */ ({
+    cfg: { sandbox: false, stateDir: dir, journalctlBin: bin('journalctl', 'EVERYBODYS-JOURNAL') },
+    sessions: { get: (/** @type {string} */ n) => (n === 'hub' ? { name: 'hub', status: 'running' } : null) },
+  });
+
+  for (const line of [toCommandLine({ verb: 'logs', params: { name: 'hub' } }), '/logs hub']) {
+    const r = await dispatch(ctx, line);
+    assert.doesNotMatch(r.text, /EVERYBODYS-JOURNAL/, `${line} read the service journal`);
+    assert.match(r.text, /PANE-OF-THE-SESSION/, line);
+  }
+  const none = await dispatch(ctx, '/logs --session=sidecar');
+  assert.equal(none.ok, false);
+  assert.doesNotMatch(none.text, /EVERYBODYS-JOURNAL/, 'a name with no session here fell back to the journal');
 });

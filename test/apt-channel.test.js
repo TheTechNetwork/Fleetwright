@@ -231,11 +231,15 @@ test('without the upgrade grant the box is pinned, and the answer names the comm
   assert.equal(pinnedByEnv({ ...cfg, systemUpgrade: true }), false);
 });
 
-test('a grant that predates the unit is told about --repair; a unit that fails is quoted', (t) => {
+test('a grant that predates the unit is told to reinstall the package, never to run the service user’s installer; a unit that fails is quoted', (t) => {
   const { cfg, file } = aptBox(t, STABLE);
   const old = switchAptSuite(cfg, 'rolling', { exec: fakeSudo(file, { refuse: true }).exec });
   assert.equal(old.ok, false);
-  assert.match(old.message, /install\.sh --repair/);
+  // THROUGH THE PACKAGE, whose postinst repairs from a checked copy root
+  // owns; never the installer under the install root, which the service
+  // user owns, run as root.
+  assert.match(old.message, /On the box: sudo apt-get install --reinstall fleetwright puts the rule in place/);
+  assert.ok(!old.message.includes(cfg.installDir), old.message);
   const broke = switchAptSuite(cfg, 'rolling', { exec: fakeSudo(file, { fail: 'Job for fleetwright-apt-channel@rolling.service failed.' }).exec });
   assert.equal(broke.ok, false);
   assert.match(broke.message, /failed/);
