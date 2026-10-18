@@ -7,7 +7,8 @@
 # debs:  <debs-dir>/v0.3.0/fleetwright_0.3.0_amd64.deb
 #
 # <rolling-dir>, when given, holds the debs of the `rolling` release, the
-# newest builds of main: fleetwright_0.0.0.main.<run>_<arch>.deb.
+# newest builds of main: fleetwright_<next>.main.<run>_<arch>.deb (the `~` in
+# the version is a `.` in the file name, which is how GitHub keeps it).
 #
 # <out-dir> gets ONLY what is served — dists/ and the public key — and never a
 # package. The packages stay GitHub release assets, and the apt Worker
@@ -20,9 +21,10 @@
 # rollout is complete, and is what every box is installed from. `rolling`
 # carries the newest builds of main, for a pool whose machine image its owner
 # chose to build from main (docs/hypervisors.md, "Built from main"). They are
-# kept apart by the suite and never by the version: a build of main is
-# `0.0.0~main.<run>`, which sorts below every release, so a box that had both
-# lines would take stable and never see main.
+# kept apart by the suite: a box names one of the two on its sources line, and
+# /channel moves the word. A build of main is a prerelease of the next release,
+# `<next>~main.<run>`, above the release it follows and below the one it names
+# (tools/build-host-deb.mjs, debVersion).
 #
 # SIGNED OR NOT PUBLISHED. `[trusted=yes]` switches apt's signature check off
 # and makes whoever serves the URL root on every box that trusts it; a

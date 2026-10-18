@@ -397,10 +397,18 @@ change merged reaches the pool's machines without a release being cut first.
   (`tools/build-apt-repo.sh`). Stable is still drawn only from published,
   non-prerelease releases whose rollout is complete; a run with no rolling
   debs writes stable alone.
-- **Kept apart by suite, never by version.** A build of main is
-  `0.0.0~main.<run>`, which sorts below every release, so a box with both lines
-  would take stable and never see main. Each `<run>` is higher than the last,
-  so a box on rolling takes every build in turn.
+- **Kept apart by suite, and versioned as prereleases of the next release.**
+  A build of main is `<next>~main.<run>`, with `<next>` the version in
+  `package.json` at that commit plus one patch, the same `~` an rc gets:
+  `0.4.12~main.330` sits above 0.4.11 and below 0.4.12, where the code is, so
+  `apt list --upgradable` on a rolling box reads as a version and moving stable
+  to rolling is an upgrade. Each `<run>` is higher than the last, so a box on
+  rolling takes every build in turn. A release that raises the minor instead
+  still outranks them; the name guessed the number, not the order. It was
+  `0.0.0~main.<run>`, below every release, while a box could carry both suite
+  lines; since `/channel` moves the one word, nothing needed that, and what it
+  cost was "0.0.0~main.325 is waiting (this box has 0.4.11)" about the commit
+  0.4.11 was cut from.
 - **Each suite dated by its own Release.** The Worker's Last-Modified for a
   file under `dists/<suite>/` comes from that suite's signed Release, so a
   rolling index republished on a merge is never answered "not modified" with
@@ -449,10 +457,11 @@ So on such a box:
   root's and the hub is not: `fleetwright-apt-channel@stable.service` or
   `@rolling.service`, granted as two exact lines beside the upgrade units and
   installed with them, runs `install/fleetwright-apt-channel`, which rewrites
-  the one suite word, pins the package to the rolling suite above priority
-  1000 (a build of main is `0.0.0~main.<run>` and sorts below every release,
-  so taking it is a downgrade apt would otherwise refuse) or removes the pin
-  on the way back, and runs `apt-get update`. The hub then reads the line
+  the one suite word, pins the package to the stable suite above priority
+  1000 on the way back (a build of main is a prerelease of the next release
+  and outranks the last one, so returning to a release is a downgrade apt
+  would otherwise refuse) or removes the pin on the way to rolling, and runs
+  `apt-get update`. The hub then reads the line
   again and reports the suite the box is on, not the one it asked for. The
   next **Apply update** installs from the new suite. Without the upgrade
   grant the channel is pinned and the answer says which command grants it.

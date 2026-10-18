@@ -58,19 +58,50 @@ export function pinnedNodeVersion(text = readFileSync(path.join(DEB_SRC, 'node.e
  *
  * A BUILD OF MAIN IS `main-<run>`, and the deb job builds on every push to
  * main — that is what makes the pipeline one that has run before the day it
- * matters. `0.0.0~main.<run>` starts with a digit and sorts below every real
- * release, so a rolling deb somebody installs by hand is upgraded by the first
- * stable one. It is never in the stable suite, which apt-repo.yml draws only
- * from published, non-prerelease releases; it is in the rolling suite, which
- * only a machine image built from main reads. Each `<run>` is higher than the
- * last, so a box on that suite takes every build in turn.
+ * matters. To dpkg it is a PRERELEASE OF THE NEXT RELEASE, `<next>~main.<run>`,
+ * where <next> is the version in package.json at that commit with its patch
+ * raised by one: the bump commit IS the release, and until 1.0 every release
+ * raises the patch (docs/ci.md, "Which number"). `0.4.12~main.330` sorts above
+ * 0.4.11 and below 0.4.12, which is where the code sits, and reads as what it
+ * is — the same `~` the rc form above uses, semver's `0.4.12-main.330`. So
+ * moving a box from stable to rolling is an ordinary upgrade, and `apt list
+ * --upgradable` reads as a version rather than a riddle. Each `<run>` is higher
+ * than the last, so a box on the rolling suite takes every build in turn.
+ *
+ * IT WAS `0.0.0~main.<run>`, below every release, from the day the rolling
+ * suite existed until 0.4.12. That kept a box with both suite lines on stable,
+ * and no box has had both lines since /channel moved the one word instead. What
+ * it left was a rolling box being told "0.0.0~main.325 is waiting (this box
+ * has 0.4.11)" about the very commit 0.4.11 was cut from, and a downgrade pin
+ * in a root-run script to make rolling installable at all. The pin moved to the
+ * stable side with this (install/fleetwright-apt-channel), because going back
+ * to a release is now the downgrade.
+ *
+ * Two edges, both ordered right. The build between a version bump merging and
+ * its tag being published is named a prerelease of the release AFTER the one
+ * being cut; it is that release's code, so it sorts just above it, which is
+ * where a rolling box should be. And a release that raises the minor instead,
+ * 0.5.0 after builds called 0.4.12~main, still outranks them: the name guessed
+ * the number, not the order.
+ *
+ * @param {string} version the manifest's version: a tag, or `main-<run>`
+ * @param {string} [base] package.json's version, for a build of main
  */
-export function debVersion(version) {
+export function debVersion(version, base = packageVersion()) {
   const rolling = /^main-(\d+)$/.exec(String(version));
-  if (rolling) return `0.0.0~main.${rolling[1]}`;
+  if (rolling) {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(base);
+    if (!m) throw new Error(`a build of main needs the release it follows as x.y.z, not "${base}"`);
+    return `${m[1]}.${m[2]}.${Number(m[3]) + 1}~main.${rolling[1]}`;
+  }
   const v = String(version).replace(/^v/, '').replace(/-/g, '~').replace(/[^0-9A-Za-z.+~]/g, '.');
   if (!/^[0-9]/.test(v)) throw new Error(`"${version}" cannot be a Debian version — it has to start with a digit`);
   return v;
+}
+
+/** The version in this checkout's package.json, which test/version.test.js keeps equal to the apps'. */
+export function packageVersion(file = path.join(ROOT, 'package.json')) {
+  return JSON.parse(readFileSync(file, 'utf8')).version;
 }
 
 /** The sha256 SHASUMS256.txt lists for one file, or null. */

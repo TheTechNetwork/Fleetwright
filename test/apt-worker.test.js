@@ -194,12 +194,13 @@ test('each suite is dated by its own Release, so a rolling index is never "not m
 });
 
 test('a rolling package is fetched from the rolling release, under the name GitHub gave it', async () => {
-  // host-release.yml uploads 0.0.0~main.<run> as 0.0.0.main.<run>, because
-  // GitHub renames an asset with a `~`; the Packages file names what is there.
+  // host-release.yml uploads <next>~main.<run> as <next>.main.<run>, because
+  // GitHub renames an asset with a `~`; the Packages file names what is there,
+  // so this is the name apt asks for.
   const w = world();
-  const r = await w.get('/pool/rolling/fleetwright_0.0.0.main.12_amd64.deb');
+  const r = await w.get('/pool/rolling/fleetwright_0.4.12.main.12_amd64.deb');
   assert.equal(r.status, 200);
-  assert.deepEqual(w.fetched, ['https://github.com/TheTechNetwork/Fleetwright/releases/download/rolling/fleetwright_0.0.0.main.12_amd64.deb']);
+  assert.deepEqual(w.fetched, ['https://github.com/TheTechNetwork/Fleetwright/releases/download/rolling/fleetwright_0.4.12.main.12_amd64.deb']);
 });
 
 test('no date in the Release, or no Release: the metadata is served as it is', async () => {
