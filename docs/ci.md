@@ -758,6 +758,11 @@ Re-runs are safe, and are the recovery for everything slow or rejected:
 - build still processing after 45 minutes → **warning, green**, re-run later;
 - version exists and is editable (including **rejected** — fix, publish a new
   release or re-run) → reused, newest build attached;
+- a version is in preparation **under another name** — the `1.0` App Store
+  Connect makes with the app record, or a rejected earlier release after a
+  `MARKETING_VERSION` bump — → renamed to this build's version and reused.
+  Apple allows one version in preparation per platform, so a second one is
+  refused with a generic 409; this is the case it hides;
 - version already waiting for or in review → says so, green, done;
 - version already **on the store** → the one real refusal: bump
   `MARKETING_VERSION` in `apps/ios/project.yml` and publish a new release.

@@ -132,15 +132,27 @@ async function listingGaps(appId, versionString) {
     // The primary locale's own text. Absent here is the commonest first-time
     // failure, and the one that reads worst afterwards: Apple complains about
     // `description` on a version this script just created.
-    const infos = await api(`/v1/apps/${appId}/appInfos?limit=1`);
-    const info = infos.data?.[0];
-    if (info) {
-      const cat = info.relationships?.primaryCategory?.data;
-      if (!cat) gaps.push('no primary category');
-      // ageRatingDeclaration is a relationship; its absence is the age rating
-      // never having been answered.
-      const rating = info.relationships?.ageRatingDeclaration?.data;
-      if (!rating) gaps.push('the age rating questionnaire has not been answered');
+    //
+    // WITH `include`, OR THE ANSWER IS ALWAYS "MISSING". A listed resource
+    // carries its relationships as links only; the `data` under each appears
+    // when the related resource is included in the same request. Without it,
+    // both checks below read an absent `data` as an absent category and an
+    // unanswered questionnaire, and said so on three releases whose listing
+    // was complete — a warning that is wrong every time is one nobody reads.
+    //
+    // Two app infos can exist (the one on the store and the one being
+    // prepared); a category on either is a category.
+    const infos = await api(`/v1/apps/${appId}/appInfos?include=primaryCategory,ageRatingDeclaration&limit=2`);
+    const included = infos.included || [];
+    if (infos.data?.length) {
+      const hasCategory = infos.data.some((/** @type {any} */ i) => i.relationships?.primaryCategory?.data);
+      if (!hasCategory) gaps.push('no primary category');
+      // The declaration exists from the day the app record does, answered or
+      // not; unanswered is every one of its attributes still null.
+      const answered = included
+        .filter((/** @type {any} */ i) => i.type === 'ageRatingDeclarations')
+        .some((/** @type {any} */ d) => Object.values(d.attributes || {}).some((v) => v !== null && v !== undefined));
+      if (!answered) gaps.push('the age rating questionnaire has not been answered');
     }
 
     // The version's localisations carry description, keywords and support URL.
@@ -249,13 +261,45 @@ async function main() {
     // time. Already public means the version string is spent, and the only
     // fix is a bump in project.yml — said here by name, because the API's own
     // error for it is a generic 409.
-    if (vstate === 'READY_FOR_SALE' || vstate === 'REPLACED_WITH_NEW_VERSION') {
+    if (vstate === 'READY_FOR_SALE' || vstate === 'READY_FOR_DISTRIBUTION' || vstate === 'REPLACED_WITH_NEW_VERSION') {
       throw new Error(
         `version ${versionString} is already on the App Store (${vstate}) — bump MARKETING_VERSION in apps/ios/project.yml and publish a new release`,
       );
     }
     console.log(`version ${versionString} is ${vstate} — already submitted, nothing to do`);
     return;
+  }
+  if (!version) {
+    // ONE VERSION IN PREPARATION PER PLATFORM — Apple's rule, and the whole
+    // reason a new app's first release failed three times with a generic 409
+    // on the POST below. App Store Connect makes a "1.0" the moment the app
+    // record is created, in PREPARE_FOR_SUBMISSION, and nothing here had ever
+    // shipped it; the lookup above asks only for a version with THIS build's
+    // name, so it found nothing and asked for a second one, which is the one
+    // thing Apple refuses. The same shape recurs after a rejection when the
+    // next release carries a new MARKETING_VERSION: the rejected version is
+    // still the only editable one.
+    //
+    // So an editable version under any name is this release's version, renamed.
+    // versionString is an updatable attribute, and the rename is what makes
+    // the rest of this file — attach the build, write the listing, submit —
+    // land on the version Apple will actually accept.
+    const editable = await api(`/v1/apps/${app.id}/appStoreVersions?filter[platform]=IOS&limit=20`);
+    const other = (editable.data || []).find((/** @type {any} */ v) =>
+      EDITABLE.has(v.attributes?.appVersionState || v.attributes?.appStoreState),
+    );
+    if (other) {
+      const was = other.attributes?.versionString;
+      const state = other.attributes?.appVersionState || other.attributes?.appStoreState;
+      const renamed = await api(`/v1/appStoreVersions/${other.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ data: { type: 'appStoreVersions', id: other.id, attributes: { versionString } } }),
+      });
+      version = renamed?.data || { ...other, attributes: { ...other.attributes, versionString } };
+      console.log(
+        `renamed App Store version ${was} (${state}) to ${versionString} — Apple allows one version in preparation per platform, and that one was it`,
+      );
+    }
   }
   if (!version) {
     // AFTER_APPROVAL, not MANUAL: approved means released, with no third state
