@@ -394,6 +394,51 @@ test('a request that cannot be safely replayed gets 503 and a Retry-After', asyn
   assert.match(body.text, /Nothing was lost/);
 });
 
+test('a GET that acts is not replayed, and a GET that reads still is', async () => {
+  // "GET changes nothing" was the rule, and the shorthand broke it: fleet-do.js
+  // runs `start`, `stop` and `resume` on `GET /api/<verb>/<name>` for callers
+  // that can only send a GET, with no idempotency id. Replayed after a reset
+  // that may have landed after the object acted, `start` is two sessions — the
+  // case the POST path already refuses, arriving by the other door.
+  const reset = () => {
+    let attempts = 0;
+    const fleet = {
+      idFromName: () => 'id',
+      get: () => ({
+        fetch: async () => {
+          attempts++;
+          if (attempts === 1) throw new Error('Durable Object reset because its code was updated.');
+          return new Response('{"ok":true}', { status: 200 });
+        },
+      }),
+    };
+    return { fleet, attempts: () => attempts };
+  };
+  /** @param {string} path @param {any} fleet */
+  const call = (path, fleet) =>
+    worker.fetch(
+      new Request(`https://fleet.example${path}`, { headers: { authorization: 'Bearer a-token-at-least-16ch' } }),
+      /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
+    );
+
+  for (const path of ['/api/start/deb132', '/api/stop/fix-ci', '/api/resume/fix-ci?choice=1', '/api/start']) {
+    const { fleet, attempts } = reset();
+    const res = await call(path, fleet);
+    assert.equal(attempts(), 1, `${path} was replayed after a reset`);
+    assert.equal(res.status, 503, path);
+    assert.equal(/** @type {any} */ ((await res.json()).error).code, 'restarting', path);
+  }
+
+  // The negative control: a read through the same shorthand keeps its replay,
+  // so the refusal above is the verb and not every GET under /api.
+  for (const path of ['/api/status/fix-ci', '/api/hosts']) {
+    const { fleet, attempts } = reset();
+    const res = await call(path, fleet);
+    assert.equal(attempts(), 2, `${path} should still be replayed once`);
+    assert.equal(res.status, 200, path);
+  }
+});
+
 test('a replay that is reset again answers, rather than becoming a 500', async () => {
   // THE SECOND REPORT ON THIS ROUTE, and it named callFleet: the replay above
   // was awaited OUTSIDE the try that caught the first reset, so a request

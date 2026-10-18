@@ -51,7 +51,13 @@ export const Fleet = Sentry.instrumentDurableObjectWithSentry(sentryOptions, Fle
  * A request is replayed only when replaying it is indistinguishable from
  * sending it once:
  *
- *   - GET and HEAD, which change nothing by definition.
+ *   - GET and HEAD, which change nothing by definition — EXCEPT the
+ *     shorthand verbs that do. `GET /api/start/<name>` (and stop, resume) is
+ *     fleet-do.js's Shortcut-friendly form of the intent, carries no
+ *     idempotency id, and runs on a GET because "Get Contents of URL" is what
+ *     a spoken phrase can send. Replaying it is replaying `start` with no id:
+ *     the same two sessions as the POST, arriving by the other door. Those
+ *     get the POST's answer, 503 and come back.
  *   - POST /api/host/challenge, which mints a nonce. Getting a second one costs
  *     nothing; the first is simply never spent, and hosts.js already expires
  *     unspent nonces. This is the route the error actually arrived on.
@@ -70,8 +76,7 @@ export const Fleet = Sentry.instrumentDurableObjectWithSentry(sentryOptions, Fle
 async function callFleet(env, request) {
   const url = new URL(request.url);
   const replayable =
-    request.method === 'GET' ||
-    request.method === 'HEAD' ||
+    ((request.method === 'GET' || request.method === 'HEAD') && !MUTATING_SHORTHAND.test(url.pathname)) ||
     (request.method === 'POST' && url.pathname === '/api/host/challenge');
 
   // Cloned BEFORE the first attempt, because a body is read once. Only when it
@@ -115,6 +120,14 @@ async function callFleet(env, request) {
     );
   }
 }
+
+/**
+ * The GET shorthand verbs that act. Matched on the verb alone, wider than the
+ * object's own route (any suffix, not only a valid name): a path this refuses
+ * to replay that the object would 404 costs one 503, and a narrower match here
+ * than there is a `start` replayed the day the object's pattern loosens.
+ */
+const MUTATING_SHORTHAND = /^\/api\/(start|stop|resume)(\/|$)/;
 
 /**
  * Is this the platform interrupting us, rather than a fault?
