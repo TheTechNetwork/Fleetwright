@@ -60,6 +60,10 @@ interesting failures live.
    the system and the one the docs describe wrongly — see §5 and §9.
 3. **host → session.** One-directional seeding (credentials in) plus a
    per-session unforgeable socket (uuid out). The session cannot cross back.
+   **Only for a sandboxed session.** A box that runs sessions directly
+   (`FLEETWRIGHT_SANDBOX` off, which is every Mac and any Linux box installed
+   without podman) has no boundary here at all: the session is a tmux pane
+   running as the service user, and holds everything that account holds (G8).
 4. **anything-on-host-loopback → fleetwright.** Token-gated (§6.4, §9-G6): a
    token is generated into `${stateDir}/api-token` when none is configured, and
    the check fails closed. The boundary is "any local process that can read
@@ -832,7 +836,14 @@ refused, including when token generation itself failed.
 
 ### 4.4 Malicious or hijacked session
 
-**Bound:** whatever the credentials it holds can do, for as long as they live
+**On a box that runs sessions directly, the bound is §4.2's, not this one.** The
+session runs as the service user, so it reads `${stateDir}/api-token` and drives
+the hub as any actor it names, reads every person's direct config, linked Claude
+credential and `<row>.env`, and types into any other session's pane (G8). What it
+does not reach is the host key, which the sidecar's own account holds. The rest
+of this section is the sandboxed case.
+
+**Bound (sandboxed):** whatever the credentials it holds can do, for as long as they live
 (GitHub access token: 8h, fetched per request over the broker socket; the
 member's Claude credential: its remaining life), plus anything reachable over
 **open egress** (§8). Escape from the container
@@ -866,7 +877,8 @@ mitigation for the rest and is **ASPIRATIONAL**.
 
 **Bound:** a normal member's authority, plus co-tenancy on any shared host: guest
 sessions run as the **same OS user** as everyone else's, isolated by container
-filesystem, not by uid (`accounts.md`). A container escape crosses that.
+filesystem, not by uid (`accounts.md`). A container escape crosses that, and on
+a box that runs sessions directly there is no container to escape (G8).
 **SEC-SESSION-3** — The system MUST NOT be presented as isolating mutually
 distrusting people on one host. People who need isolation from each other need
 different hosts.
@@ -1123,6 +1135,11 @@ box has been seen refusing `curl https://example.com` from a session while
 posture of a session on untrusted input is still "trusted to the extent of
 everything it can reach." Not a credential-terminating proxy: the tunnel is
 bytes in, bytes out, and the CLI needs `HTTPS_PROXY` and no CA bundle.
+Until the seventh audit it could not have been measured at all: the config said
+`FilterType fixed`, which tinyproxy 1.11 rejects as a syntax error, so the
+proxy never started and an allowlisted box had no way out. It is ERE now, one
+anchored line per host. And every session on such a box shares the one
+internal network, so each can reach the ports the others listen on (G9).
 *Falsify:* `egressArgs` in `egress.js` empty under `allowlist`; `sandboxArgv`
 in `claude.js` not spreading it; `test/egress.test.js`.
 
@@ -1230,8 +1247,31 @@ breaks.* `enrollment.js` shuts redemption for everyone after 10 wrong guesses/mi
 Acceptable for a handful of operators; **state it** rather than discover it. Not a
 correction, an addition to non-goals (§10).
 
+**G8 — "The session cannot cross back" is false on a box that runs sessions
+directly.** *Violates §2 boundary 3, §4.4, and the §3 rows that say a member's
+credential reaches "that member's sessions".* With the sandbox off a session is a
+tmux pane under the service user, which owns the loopback token, every person's
+`${stateDir}/direct/<name>` and `accounts/<email>.json`, every `<row>.env`, and
+the tmux server. A member who may start a session on the operator's direct box
+therefore has the hub's authority there, as any actor, and every other person's
+credentials on it. SEC-SESSION-3 already says people who need isolation need
+different hosts; this is the stronger statement that a direct box isolates
+nobody, not even from a member who never escapes anything. Until the seventh
+audit it was worse, because the service user could also become root through the
+migrate helper (`hardening.md`). **Decide:** refuse members' starts on a host
+with the sandbox off, or let the operator choose that per box; until then, this
+row is the statement.
+
+**G9 — Sessions on the egress allowlist share one network.** *Narrows
+SEC-INJECT-2.* `agent-egress` is one `--internal` network per box, so a session
+on it reaches any port another person's session has open (a dev server, a
+debugger, an MCP server bound to 0.0.0.0), a path the open default's per-container
+namespaces do not give it. **Correct:** one internal network per owner, or say so
+wherever the allowlist is offered.
+
 Gaps G1–G4 are the ones that change what a person should believe before pointing
-this at real machines. G5–G7 are real and smaller.
+this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
+a box without podman.
 
 ### Status
 
@@ -1244,6 +1284,8 @@ this at real machines. G5–G7 are real and smaller.
 | **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
+| **G8** | **stated, not fixed.** The scheduler still offers a direct box to members. The decision is the owner's; the migrate helper's root path it compounded is closed (`install-root-sources.test.js`). |
+| **G9** | **stated, not fixed.** One network per owner is the change; until then this row is the statement. |
 
 ---
 
