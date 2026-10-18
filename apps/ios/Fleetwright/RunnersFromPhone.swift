@@ -152,9 +152,16 @@ struct YourVault: View {
         return out
     }
 
-    /// Approved boxes that are in this fleet, by name.
+    /// Approved boxes that are in this fleet, by name, and what a box approved
+    /// for part of the vault holds. A pool's own machine is let in for its one
+    /// record (`only`), and this list said "Held by" it as if it held
+    /// everything (eighth audit).
     private var holders: [String] {
-        (contents?.grants ?? []).compactMap { inFleet[$0.fingerprint] }.sorted()
+        (contents?.grants ?? []).compactMap { grant in
+            inFleet[grant.fingerprint].map { name in
+                grant.only.isEmpty ? name : "\(name) (\(grant.only.map(PhoneVault.label).joined(separator: ", ")) only)"
+            }
+        }.sorted()
     }
 
     private var heldBy: String {
@@ -330,8 +337,14 @@ struct VaultApproval: View {
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                     } else if let grant {
+                        // ONLY WHAT IT WAS GIVEN. A grant scoped by `only` is a
+                        // pool's own machine let in for its one record, and the
+                        // page said "Approved" over it as if it held the whole
+                        // vault (eighth audit).
                         LabeledContent("Your credentials") {
-                            Text("Approved").fleetType(.label).foregroundStyle(Design.Palette.ok)
+                            Text(grant.only.isEmpty ? "Approved" : "Only " + grant.only.map(PhoneVault.label).joined(separator: ", "))
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.ok)
                         }
                         Button("Remove", role: .destructive) {
                             act { try await vault.remove(Fleet(settings: settings), grant: grant) }
@@ -370,7 +383,10 @@ struct VaultApproval: View {
     private func reload() async {
         do {
             let contents = try await vault.list(Fleet(settings: settings))
-            grant = contents.grants.first { $0.fingerprint == fingerprint }
+            // The whole key hash, as the minter names the grant, not its
+            // sixteen-character start.
+            let whole = host.publicJwk.map(PhoneVault.keyHash)
+            grant = contents.grants.first { $0.key == whole }
         } catch {
             failed = true
             result = error.localizedDescription
