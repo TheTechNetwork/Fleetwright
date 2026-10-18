@@ -34,17 +34,24 @@ class XoReconnectTest {
         JSONObject().put("v", 1).put("servers", JSONArray(servers.toList())).put("pools", pools)
 
     @Test
-    fun theSignInIsThePolicySignInsShapeWithThisPurposeInsideTheSeal() {
+    fun theSignInIsThePolicySignInsShapeWithThisPurposeUnderItsOwnBinding() {
+        // The same string as xosetupReconnectSigninAad in src/fleet/seal.js.
+        assertEquals("fleetwright-xosetup-reconnect-signin/v1:J:A", Seal.xosetupReconnectSigninAad("J", "A"))
         val jobKey = Seal.newKey()
         val reply = Seal.newKey()
-        fun open(sealed: String): JSONObject {
+        fun open(sealed: String, aad: String): JSONObject {
             val parts = sealed.split(".")
-            return Seal.open(jobKey, XoSetup.aad(job, address), JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2]))
+            return Seal.open(jobKey, aad, JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2]))
         }
-        val inside = open(XoReconnect.sealSignIn(jobKey.publicKey, job, address, "admin@xo.lan", "pw", reply.publicKey))
-        // The machine reads `purpose` and `reply` from inside, under setup's
-        // binding, exactly as it does a policy sign-in: the same keys, nothing more.
-        val policy = open(XoPolicy.sealSignIn(jobKey.publicKey, job, address, "admin@xo.lan", "pw", reply.publicKey))
+        val sealed = XoReconnect.sealSignIn(jobKey.publicKey, job, address, "admin@xo.lan", "pw", reply.publicKey)
+        val inside = open(sealed, Seal.xosetupReconnectSigninAad(job, address))
+        // NOT UNDER SETUP'S BINDING: a machine from before reconnect opens a
+        // sign-in under it, ignores the purpose and runs a whole setup with
+        // the admin's sign-in. Under this one it opens nothing.
+        assertFalse(runCatching { open(sealed, XoSetup.aad(job, address)) }.isSuccess)
+        // The machine reads `purpose` and `reply` from inside exactly as it
+        // does a policy sign-in's: the same keys, nothing more.
+        val policy = open(XoPolicy.sealSignIn(jobKey.publicKey, job, address, "admin@xo.lan", "pw", reply.publicKey), XoSetup.aad(job, address))
         assertEquals(policy.keys().asSequence().toSet(), inside.keys().asSequence().toSet())
         assertEquals("reconnect", inside.getString("purpose"))
         assertEquals(1, inside.getInt("v"))
