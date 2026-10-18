@@ -105,6 +105,22 @@ async function api(path, init = {}) {
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Apple's reason, on one line. api() formats a refusal as the request on the
+ * first line and Apple's `title: detail` on the ones after; the first line
+ * alone ("PATCH … → 409") is the part that says nothing, and it is what every
+ * warning here used to print.
+ *
+ * @param {unknown} e
+ */
+function reason(e) {
+  const lines = String(e instanceof Error ? e.message : e)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return (lines.length > 1 ? lines.slice(1).join('; ') : lines[0]) || 'no reason given';
+}
+
+/**
  * What is missing from the listing, before anything is created.
  *
  * WHY THIS RUNS FIRST. Everything below it writes: it creates an App Store
@@ -181,7 +197,7 @@ async function listingGaps(appId, versionString) {
     }
   } catch (e) {
     // NOT A FAILURE. See above: this is a better message, not a new gate.
-    console.log(`::debug::could not pre-check the listing (${String(e.message).split('\n')[0]})`);
+    console.log(`::debug::could not pre-check the listing (${reason(e)})`);
     return [];
   }
   return gaps;
@@ -359,7 +375,7 @@ async function main() {
   } catch (e) {
     // A LISTING THAT CANNOT BE READ IS NOT A REASON TO DROP A RELEASE. The copy
     // already on the store is what stays, and it says so.
-    console.log(`::warning::store listing not applied: ${String(e.message).split('\n')[0]}`);
+    console.log(`::warning::store listing not applied: ${reason(e)}`);
   }
 
   if (Object.keys(attributes).length) {
@@ -367,19 +383,38 @@ async function main() {
       const locs = await api(`/v1/appStoreVersions/${version.id}/appStoreVersionLocalizations?limit=200`);
       const en = locs.data.find((/** @type {any} */ l) => l.attributes.locale === 'en-US');
       if (en) {
-        await api(`/v1/appStoreVersionLocalizations/${en.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({
-            data: { type: 'appStoreVersionLocalizations', id: en.id, attributes },
-          }),
-        });
-        console.log(`listing: ${Object.keys(attributes).join(', ')}`);
-        if (WHATS_NEW) console.log(`what's new: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
+        const patch = (/** @type {Record<string, string>} */ attrs) =>
+          api(`/v1/appStoreVersionLocalizations/${en.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              data: { type: 'appStoreVersionLocalizations', id: en.id, attributes: attrs },
+            }),
+          });
+        // THE FIRST VERSION REFUSES whatsNew, and because the fields travel
+        // in one PATCH the refusal took the description down with it: the
+        // app's first submission then failed for "Description - This field
+        // is required" with the description sitting in store-listing.md. So
+        // a refused PATCH that carried notes is tried once more without
+        // them; the notes decorate, the description is required. A refusal
+        // without notes in it, or of the retry, lands in the catch below.
+        let written = attributes;
+        const refused = await patch(attributes).then(() => null, (/** @type {Error} */ e) => e);
+        if (refused && attributes.whatsNew) {
+          const { whatsNew, ...rest } = attributes;
+          console.log(`::warning::release notes refused (${reason(refused)}) — writing the listing without them`);
+          written = rest;
+          await patch(rest);
+        } else if (refused) {
+          written = {};
+          console.log(`::warning::listing not set: ${reason(refused)}`);
+        }
+        if (Object.keys(written).length) console.log(`listing: ${Object.keys(written).join(', ')}`);
+        if (written.whatsNew) console.log(`what's new: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
       } else {
         console.log('no en-US localization on the version — finish the listing in App Store Connect');
       }
     } catch (e) {
-      console.log(`::warning::listing not set: ${String(e.message).split('\n')[0]}`);
+      console.log(`::warning::listing not set: ${reason(e)}`);
     }
   }
 
@@ -409,7 +444,7 @@ async function main() {
     // THE SAME RULE AS THE LISTING. Whatever is already on the store stays, and
     // a submission with the previous version's screenshots is a submission; a
     // release that stopped here is not.
-    console.log(`::warning::screenshots not uploaded: ${String(e.message).split('\n')[0]}`);
+    console.log(`::warning::screenshots not uploaded: ${reason(e)}`);
   }
 
   // Submission, via the reviewSubmissions flow (appStoreVersionSubmissions is
@@ -453,8 +488,14 @@ async function main() {
       }),
     });
   } catch (e) {
-    if (/already|duplicate|conflict|409/i.test(String(e.message))) {
-      console.log(`version already in the submission: ${e.message.split('\n')[1]?.trim() || ''}`);
+    // ONLY "ALREADY IN" IS DONE. This used to accept any 409, and Apple
+    // answers an INCOMPLETE version with a 409 too: "is not in valid state:
+    // This resource cannot be reviewed". The job then printed "version
+    // already in the submission", skipped the submit, and went green with
+    // nothing submitted — a green that cost a release to discover. A version
+    // Apple will not take is this job failing, in Apple's words.
+    if (/already (?:exists|in|added|part of)|duplicate/i.test(String(e.message))) {
+      console.log(`version already in the submission: ${reason(e)}`);
     } else {
       // The error most worth translating: an incomplete listing refuses here
       // (or on the PATCH below) with attribute-by-attribute complaints.
@@ -473,8 +514,12 @@ async function main() {
     });
     console.log(`version ${versionString} (build ${BUILD_NUMBER}) submitted for App Review`);
   } catch (e) {
-    if (/already|state|conflict|409/i.test(String(e.message))) {
-      console.log(`not resubmitted: ${e.message.split('\n')[0]}`);
+    // The same rule: a submission that is already on its way is done, and
+    // anything else is a refusal that must be seen. The old test matched on
+    // "state" and "409", which is also what Apple says when it will NOT
+    // submit; see the item POST above.
+    if (/already (?:been )?submitted|already in review/i.test(String(e.message))) {
+      console.log(`not resubmitted: ${reason(e)}`);
     } else {
       console.error('If this names missing metadata, finish the listing in App Store Connect — the once-ever checklist is in docs/ci.md.');
       throw e;

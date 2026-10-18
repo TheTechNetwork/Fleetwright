@@ -136,3 +136,36 @@ test('the listing pre-check includes the data it reads', () => {
   assert.match(fn, /appInfos\?include=primaryCategory,ageRatingDeclaration/);
   assert.match(fn, /ageRatingDeclarations/);
 });
+
+test('a refused version is a red job, not "already in the submission"', () => {
+  // Apple answers an INCOMPLETE version with a 409 too: "is not in valid
+  // state: This resource cannot be reviewed". The old test accepted any 409
+  // as "already in", skipped the submit, and the first release of a new app
+  // went green with nothing submitted. Only "already" is done.
+  const items = SRC.slice(SRC.indexOf("await api('/v1/reviewSubmissionItems'"), SRC.indexOf('await api(`/v1/reviewSubmissions/${submission.id}`'));
+  assert.doesNotMatch(items, /conflict\|409/, 'any 409 is accepted as "already in the submission" again');
+  assert.doesNotMatch(items, /\/already\|/, 'a bare "already" matches Apple\'s refusals as well');
+  assert.match(items, /throw e/);
+  const final = SRC.slice(SRC.indexOf('await api(`/v1/reviewSubmissions/${submission.id}`'), SRC.indexOf('main().catch'));
+  assert.doesNotMatch(final, /state\|conflict\|409/, 'any refusal of the submit is accepted as done again');
+});
+
+test('refused release notes do not take the description with them', () => {
+  // A first version refuses whatsNew, and the fields travel in one PATCH, so
+  // the description sank with the notes and Apple then wanted it typed. The
+  // PATCH that carried notes is tried once more without them.
+  const block = SRC.slice(SRC.indexOf('const attributes = {}'), SRC.indexOf('// Submission, via'));
+  assert.match(block, /const \{ whatsNew, \.\.\.rest \} = attributes/);
+  assert.match(block, /await patch\(rest\)/);
+  assert.match(block, /release notes refused/);
+});
+
+test("warnings carry Apple's reason, not only the request that was refused", () => {
+  // api() puts the request on the first line and Apple's words after it;
+  // "PATCH … → 409" alone is what three releases printed, and it says
+  // nothing. reason() is what every warning and skip prints now.
+  assert.match(SRC, /function reason\(/);
+  const fn = SRC.slice(SRC.indexOf('function reason('), SRC.indexOf('async function listingGaps('));
+  assert.match(fn, /lines\.slice\(1\)/);
+  assert.doesNotMatch(SRC, /String\(e\.message\)\.split\('\\n'\)\[0\]\}`\)/, 'a warning still prints only the request line');
+});
