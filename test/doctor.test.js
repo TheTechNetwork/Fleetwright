@@ -14,7 +14,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, chmodSync, existsSync, statSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
@@ -369,4 +369,75 @@ test('doctor run by root reaches claude only through sudo -u the service user', 
   assert.match(log, /^-n -H -u svc -- \S+\/claude --version$/m, `${log}\n${child.stdout}${child.stderr}`);
   assert.match(log, /^-n -H -u svc -- \S+\/claude auth status --json$/m);
   assert.match(child.stdout, /9\.9\.9 \(Claude Code\)/, 'the answer still arrives');
+});
+
+// --- root, on a box whose config is the service user's ----------------------
+
+/**
+ * A config file of the service user's, as the installer leaves one: theirs,
+ * 0600. `nobody` stands in for them; the unit names `svc`, which is root's
+ * record of who runs the service and so the account root asks as.
+ */
+function theirConfig(b, lines) {
+  const file = path.join(b.work, 'fleetwright.env');
+  writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o600 });
+  spawnSync('chown', ['nobody', file]);
+  writeFileSync(path.join(b.unitDir, 'fleetwright.service'), '[Service]\nUser=svc\nExecStart=/usr/bin/node x serve\n');
+  return file;
+}
+const rootOnly = { skip: (process.getuid?.() !== 0 || spawnSync('id', ['-u', 'nobody']).status !== 0) && 'needs root and a nobody account: it is root\'s doctor' };
+
+test('root’s doctor runs no program, and asks as no user, named in the service user’s config', rootOnly, async (t) => {
+  const b = await box({ unit: 'failed' });
+  t.after(() => b.close());
+  const marker = path.join(b.work, 'ran-theirs');
+  const theirs = path.join(b.work, 'theirs');
+  mkdirSync(theirs);
+  writeFileSync(path.join(theirs, 'systemctl'), `#!/bin/sh\nid -u >> ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+  // Root's own systemctl, the fixture's, saying what environment it was given.
+  writeFileSync(path.join(b.fakeBin, 'systemctl'), `#!/bin/sh\necho "$* leak=$LEAKME" >> ${JSON.stringify(b.systemctlLog)}\n[ "$1" = is-active ] && echo failed\nexit 0\n`, { mode: 0o755 });
+  const said = path.join(b.work, 'sudo.log');
+  writeFileSync(path.join(b.fakeBin, 'sudo'), `#!/bin/sh\necho "$*" >> "$SUDO_LOG"\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`, { mode: 0o755 });
+  const file = theirConfig(b, [
+    `FLEETWRIGHT_SYSTEMCTL_BIN=${path.join(theirs, 'systemctl')}`,
+    'FLEETWRIGHT_USER=root',
+    `FLEETWRIGHT_CLAUDE_BIN=${path.join(b.fakeBin, 'claude')}`,
+    'LEAKME=from-their-file',
+  ]);
+  const env = { ...envFor(b), FLEETWRIGHT_ENV_FILE: file, SUDO_LOG: said };
+  for (const k of ['FLEETWRIGHT_SYSTEMCTL_BIN', 'FLEETWRIGHT_USER', 'FLEETWRIGHT_CLAUDE_BIN']) delete env[k];
+  const child = spawnSync(process.execPath, ['bin/fleetwright', 'doctor', '--repair'], { cwd: ROOT, encoding: 'utf8', env, timeout: 30_000 });
+  const out = `${child.stdout}${child.stderr}`;
+  assert.equal(existsSync(marker), false, `root ran the systemctl their config named:\n${out}`);
+  const ran = existsSync(b.systemctlLog) ? readFileSync(b.systemctlLog, 'utf8') : '';
+  assert.match(ran, /^is-active fleetwright leak=$/m, `root’s systemctl, with root’s environment:\n${ran}\n${out}`);
+  assert.match(ran, /^start fleetwright leak=$/m, 'and the repair still runs');
+  // Their `FLEETWRIGHT_USER=root` is not who claude is asked as: the unit's User= is.
+  const log = existsSync(said) ? readFileSync(said, 'utf8') : '';
+  assert.match(log, /^-n -H -u svc -- \S+\/claude --version$/m, `${log}\n${out}`);
+});
+
+test('root’s other commands run as the installation’s owner, so root follows none of their links', rootOnly, async (t) => {
+  // The hub's commands read the API token out of the state directory, which is
+  // the service user's: an `api-token` linked to a file of root's, and root
+  // tightened that file to 0600 and sent its first line as a bearer token.
+  const b = await box();
+  t.after(() => b.close());
+  const roots = path.join(b.work, 'roots-file');
+  writeFileSync(roots, 'root-secret\n', { mode: 0o644 });
+  chmodSync(roots, 0o644);
+  symlinkSync(roots, path.join(b.state, 'api-token'));
+  const said = path.join(b.work, 'sudo.log');
+  // A sudo that only says how it was asked: being root still, the command it
+  // would run refuses, which is the other half under test.
+  writeFileSync(path.join(b.fakeBin, 'sudo'), `#!/bin/sh\necho "$*" >> "$SUDO_LOG"\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`, { mode: 0o755 });
+  const file = theirConfig(b, [`FLEETWRIGHT_STATE_DIR=${b.state}`]);
+  const env = { ...envFor(b), FLEETWRIGHT_ENV_FILE: file, SUDO_LOG: said };
+  delete env.FLEETWRIGHT_STATE_DIR;
+  const child = spawnSync(process.execPath, ['bin/fleetwright', 'list'], { cwd: ROOT, encoding: 'utf8', env, timeout: 30_000 });
+  const out = `${child.stdout}${child.stderr}`;
+  assert.equal((statSync(roots).mode & 0o777).toString(8), '644', `root chmodded a file of its own through their link:\n${out}`);
+  assert.match(readFileSync(said, 'utf8'), /^-n -H -u svc -- \S+ \S+\/bin\/fleetwright list$/m, out);
+  assert.match(out, /still root after asking sudo for svc/);
+  assert.notEqual(child.status, 0);
 });
