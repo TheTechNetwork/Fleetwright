@@ -386,7 +386,7 @@ export const XORECONNECT_STEPS = Object.freeze([
 // what they always had. A host from before it is not handed one (`since:
 // 14`) and would serve its own secrets to any session granted the name, so
 // the coordinator refuses a `secret` start for somebody who does not
-// administer such a box rather than send it. docs/security.md, G8.
+// administer such a box rather than send it. docs/security.md, G12.
 /** @type {number} */
 export const PROTOCOL_VERSION = 14;
 
