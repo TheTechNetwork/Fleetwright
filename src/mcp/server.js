@@ -23,6 +23,7 @@ import { toolsFor, DEFAULT_DENY } from './tools.js';
 import { dispatchRunner } from '../core/runners.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { oneLine, LABEL_RE } from '../core/text.js';
+import { hostReported } from '../fleet/coordinator/core.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -1113,13 +1114,23 @@ export class McpServer {
           // It read as the fleet's, so a member's box could write an
           // instruction an admin's agent took for the fleet's own record
           // (seventh audit). The coordinator's own records stay as written.
-          const boxSaid = String(e.event || '').startsWith('session.') && !e.actor;
-          const said = String(e.text || '').replace(/[\r\n\u2028\u2029]+/g, ' ');
-          const who = e.actor || (boxSaid && e.hostId ? `as ${e.hostId} reported it` : 'the fleet');
+          //
+          // AND EVERY EVENT THE BOX IS THE AUTHOR OF, by the coordinator's own
+          // test of which those are (hostReported): `host.degraded` carries
+          // the box's hub reason inside the coordinator's sentence, and the
+          // pool events the names it gave its pools. They read as the
+          // fleet's, `· the fleet` and all (eighth audit). A pool event names
+          // a person, whose pool it is, and is still the box's report.
+          const boxSaid = hostReported(e);
+          const said = oneLine(e.text || '', 1000);
+          const who = boxSaid
+            ? `as ${e.hostId ? oneLine(e.hostId, 64) : 'a box'} reported it${e.actor ? `, for ${e.actor}` : ''}`
+            : e.actor || 'the fleet';
           const where = e.hostId ? ` on ${e.hostId}` : '';
+          const name = e.name ? oneLine(e.name, 80) : '';
           const what = boxSaid
-            ? `${e.event} — ${e.name}${said ? `: “${said}”` : ''}`
-            : said || (e.name ? `${e.event} — ${e.name}` : e.event);
+            ? `${e.event}${name ? ` — ${name}` : ''}${said ? `: “${said}”` : ''}`
+            : said || (name ? `${e.event} — ${name}` : e.event);
           return `${new Date(e.at).toISOString()}  ${what}${where} · ${who}`;
         })
         .join('\n'),

@@ -22,7 +22,7 @@
 import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
 import { HOLDER_ID_RE } from '../protocol/holder-join.js';
 import { believedCreator } from './hosts.js';
-import { LABEL_RE } from '../../core/text.js';
+import { LABEL_RE, oneLine } from '../../core/text.js';
 
 /**
  * A POOL'S OWN MACHINE RUNS NO SESSIONS. It is made to stay up and hold the
@@ -356,7 +356,12 @@ export class HostRegistry {
       // line here: it is shown on every phone and was taken whole, any length
       // and any characters, into the record #onHostState writes (third
       // Workers audit). An error message fits in 200 with room to spare.
-      const said = String(health.hub.reason ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+      //
+      // ONE LINE BY THE SAME RULE AS EVERY OTHER WORD A BOX SENDS (text.js
+      // oneLine). This took out the C0 controls and kept U+2028, U+2029 and
+      // the bidirectional overrides, which break or reorder a line as surely
+      // as a newline, in a push and in fleet_events (eighth audit).
+      const said = oneLine(health.hub.reason ?? '', 200);
       host.reason = `session manager unreachable: ${said || 'no reason given'}`;
       fault = 'session manager unreachable';
     } else if (host.ephemeral && health.claudeAccounts === 0 && health.runnerAuth == null) {
