@@ -592,6 +592,16 @@ class Fleet(
          * too old to say, and then a healthy machine is offered as before.
          */
         val takesSessions: Boolean? = null,
+        /**
+         * Whether this person may change this machine's releases, image and
+         * labels, update or upgrade it, and reboot it: every machine for the
+         * admin, a member's only on one that acts for them alone (hosts.js
+         * administers, the rule placement refuses the rest with). False hides
+         * those controls, because the coordinator would refuse them after the
+         * tap. Null from a coordinator too old to say, and then they are
+         * drawn as before: cannot tell is not no.
+         */
+        val administers: Boolean? = null,
         /** A pool's own machine: it holds the pool and runs no sessions. */
         val holder: Boolean = false,
     ) {
@@ -2838,6 +2848,7 @@ class Fleet(
                     // `has` first, for the same reason as appPending: a
                     // coordinator too old to say is not one that said no.
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
+                    administers = o.takeIf { it.has("administers") && !it.isNull("administers") }?.optBoolean("administers"),
                     holder = o.optBoolean("holder", false),
                 )
             }
