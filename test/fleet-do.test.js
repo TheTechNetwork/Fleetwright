@@ -778,6 +778,29 @@ test('a box changing its health reason every frame is announced once, and holds 
   assert.ok(seeded(state.raw.get('events') ?? []), 'and out of storage');
 });
 
+test('a health frame heavier than any honest one is neither kept nor served again', async () => {
+  // recordHealth kept a frame whole, keys nobody reads included, and
+  // /api/hosts handed it back to every member who could see the box: one box
+  // a member enrolled made this object hold and re-send whatever it chose,
+  // every fifteen seconds, up to the platform's message limit (seventh audit).
+  const { fleet: f } = fleet();
+  f.core.hostConnected('mallory-box', () => {});
+  const socket = /** @type {any} */ ({ deserializeAttachment: () => ({ hostId: 'mallory-box' }) });
+  const health = (/** @type {any} */ extra) => ({ protocol: 7, labels: [], maxSessions: 4, running: 0, free: 4, sessions: [], loggedIn: true, claudeAccounts: 1, hub: { reachable: true }, ...extra });
+  const served = async () => JSON.stringify(await (await call(f, '/api/hosts')).json());
+
+  await f.webSocketMessage(socket, JSON.stringify({ kind: 'health', health: health({ note: 'an honest frame' }) }));
+  assert.match(await served(), /an honest frame/, 'an ordinary frame is not kept');
+
+  // Over the health bound, then over the bound on parsing anything at all.
+  for (const size of [600 * 1024, 3 * 1024 * 1024]) {
+    await f.webSocketMessage(socket, JSON.stringify({ kind: 'health', health: health({ note: 'padded', pad: 'x'.repeat(size) }) }));
+    assert.equal(f.core.registry.get('mallory-box')?.health?.note, 'an honest frame', `a ${size}-byte frame replaced the last honest one`);
+    const body = await served();
+    assert.ok(body.length < 64 * 1024, `/api/hosts re-served ${body.length} bytes of one box's frame`);
+  }
+});
+
 test('one member’s machines fill their own share of the fleet, not everybody’s', async () => {
   // HostIdentities refused any new machine once 200 were live, and nothing
   // bounded how many one person added: a member minting and spending pins one

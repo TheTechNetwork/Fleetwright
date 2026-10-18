@@ -37,6 +37,30 @@ const ALARM_MS = 30_000;
 /** The most one stored event may weigh: a host's largest is about 1,100 (#saveEvents). */
 const EVENT_MAX_CHARS = 4_000;
 
+/**
+ * The most a host frame may weigh before it is parsed at all, and the most a
+ * health frame may weigh before it is kept (webSocketMessage).
+ *
+ * A HEALTH FRAME IS KEPT AND SERVED AGAIN. recordHealth stores it whole,
+ * keys nobody reads included, and GET /api/hosts hands it back to every
+ * member who can see the box, so one box a member enrolled (and they may
+ * enrol 25) could make this object hold and re-send whatever it liked, up to
+ * the platform's own message limit, every fifteen seconds (seventh audit).
+ *
+ * Measured, not guessed: an ordinary frame is a few kilobytes, and the
+ * heaviest honest one that could be built from sidecar.js health() — 40
+ * running sessions each asking a 600-character question with six options, a
+ * full bin of 100, two Xen Orchestras with 40 machines apiece and an hour of
+ * their traffic — is 265 KB. 512 KiB is twice that.
+ *
+ * Every other frame is an answer, read once and dropped, and the largest the
+ * host sends on purpose is a sealed pool page under the megabyte the fleet
+ * carries in one message (xo-pools.js MAX_PAGE_BYTES). 2 MiB is twice that,
+ * so the bound is only on what this object will parse, never on an answer.
+ */
+const HOST_FRAME_MAX = 2 * 1024 * 1024;
+const HEALTH_FRAME_MAX = 512 * 1024;
+
 
 /**
  * A comma or whitespace separated list from an environment variable.
@@ -1500,11 +1524,25 @@ export class Fleet {
     // the cost is four log lines a minute per fleet.
     console.log(`fleet: frame from ${hostId || 'UNTAGGED-SOCKET'}: ${String(message).slice(0, 80)}`);
     if (!hostId) return;
+    // WEIGHED BEFORE IT IS PARSED (HOST_FRAME_MAX says why each number). A
+    // string by its length, which for the ASCII JSON a sidecar writes is its
+    // bytes and is never more than them. Dropped with a line, not closed: a
+    // box whose honest report outgrew the bound goes stale and says why here,
+    // rather than reconnecting into the same refusal every fifteen seconds.
+    const weight = typeof message === 'string' ? message.length : message.byteLength;
+    if (weight > HOST_FRAME_MAX) {
+      console.warn(`fleet: ${hostId} sent a ${weight}-byte frame, over the ${HOST_FRAME_MAX} this coordinator reads; dropped`);
+      return;
+    }
     let parsed;
     try {
       parsed = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
     } catch {
       console.warn(`fleet: ${hostId} sent a non-JSON frame`);
+      return;
+    }
+    if (parsed?.kind === 'health' && weight > HEALTH_FRAME_MAX) {
+      console.warn(`fleet: ${hostId} sent a ${weight}-byte health frame, over the ${HEALTH_FRAME_MAX} this coordinator keeps; dropped`);
       return;
     }
     await this.core.onHostMessage(hostId, parsed);
