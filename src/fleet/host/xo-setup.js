@@ -118,9 +118,9 @@ import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { machineGrantsOf } from '../../core/grants.js';
 import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, MAX_GROUPS, edgeLabsOf, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fleetHosts, labsEachOf, srName, wanAddressOf } from './edge-router.js';
-import { VM_IMAGE, IMAGES, IMAGE_CHANNELS, ensureImage, removeImage, imageKeyOf, imageChannelOf } from './vm-image.js';
-import { HOLDER, ensureHolder } from './xo-holder.js';
-import { FLEET_SET } from './xo-made.js';
+import { VM_IMAGE, IMAGES, IMAGE_CHANNELS, ensureImage, removeImage, imageKeyOf, imageChannelOf, isFleetImage } from './vm-image.js';
+import { ensureHolder, isHolder } from './xo-holder.js';
+import { FLEET_SET, setsOf } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
@@ -1204,12 +1204,17 @@ export class XoSetups {
           ? Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VDI', name_label: EDGE.vm } })) || {})
           : [];
         // AND EACH POOL'S MACHINE IMAGE, so the phone offers to build one only
-        // where there is none.
+        // where there is none: the fleet's, by the lists only an admin writes,
+        // and not every template on every pool that carries the tag, which
+        // the apply step below used to write into the set for every box's
+        // token to clone (vm-image.js, isFleetImage).
+        const own = await setsOf(ctx.admin);
         const templates = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {});
-        ctx.images = templates.filter((/** @type {any} */ t) => Array.isArray(t?.tags) && t.tags.includes(VM_IMAGE.tag));
+        ctx.images = templates.filter((/** @type {any} */ t) => Array.isArray(t?.tags) && t.tags.includes(VM_IMAGE.tag) && isFleetImage(t, own));
         // AND EACH POOL'S OWN MACHINE, so the phone offers to make one only
-        // where there is none (xo-holder.js).
-        ctx.holders = vms.filter((/** @type {any} */ v) => Array.isArray(v?.tags) && v.tags.includes(HOLDER.tag));
+        // where there is none, by both its tags and where it was made
+        // (xo-holder.js, isHolder): the edge router sends its logs to it.
+        ctx.holders = vms.filter((/** @type {any} */ v) => isHolder(v, ctx.rec.address));
         const inventory = inventoryOf(ctx, set);
         ctx.rec.choices = choicesOf(inventory);
         const box = await seal({ to: ctx.rec.reply, aad: xosetupInventoryAad(ctx.rec.job, ctx.rec.address), payload: inventory });
@@ -1245,6 +1250,9 @@ export class XoSetups {
         // AND EVERY IMAGE OF THE FLEET'S, whether or not it is in the set
         // now, so a pool this already happened to is put right by its next
         // change of policy: a phone keeping an image sends nothing about it.
+        // The fleet's is what the choose step found on the lists, so one taken
+        // out is put back only when the job made it, and a template that only
+        // carries the tag is never put in.
         const chosenKinds = new Set([...(ctx.srs || []), ...(ctx.networks || [])].map((/** @type {any} */ o) => String(o?.id)));
         const rest = (ctx.setObjects || []).filter((/** @type {string} */ id) => !chosenKinds.has(id));
         const images = (ctx.images || []).map((/** @type {any} */ t) => String(t.id));

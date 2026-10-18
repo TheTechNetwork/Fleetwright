@@ -821,8 +821,9 @@ test('the image goes on storage the fleet may use with room for a whole disk', (
 /**
  * An admin stand-in for a build: the VM it makes goes from Running to
  * whatever `then` says on the second look. Its resource sets are the fleet's,
- * `set-1`, and the list of what the policy job made (xo-made.js), which holds
- * every `kept` disk unless it says `recorded: false`.
+ * `set-1`, holding every image among `existing`, and the list of what the
+ * policy job made (xo-made.js), which holds every `kept` disk unless it says
+ * `recorded: false`.
  * @param {{ then: 'Halted'|'rebooted'|'Running', existing?: any[], runs?: number, kept?: Array<{ id: string, tags: string[], sr?: string, recorded?: boolean, resourceSet?: string }>, named?: any[] }} o
  */
 function buildPool({ then, existing = [], runs = 1, kept = [], named = [] }) {
@@ -839,7 +840,7 @@ function buildPool({ then, existing = [], runs = 1, kept = [], named = [] }) {
   const templates = [...named, base, ...existing, ...kept.map((k) => ({ type: 'VM-template', id: k.id, $pool: 'pool-1', tags: k.tags, ...(k.resourceSet ? { resourceSet: k.resourceSet } : {}) }))];
   /** @type {Array<{ id: string, name: string, objects: string[] }>} */
   const sets = [
-    { id: 'set-1', name: 'fleetwright', objects: [] },
+    { id: 'set-1', name: 'fleetwright', objects: existing.filter((t) => t.type === 'VM-template' && t.tags?.includes(VM_IMAGE.tag)).map((t) => t.id) },
     ...(kept.length ? [{ id: 'set-made', name: 'fleetwright-made', objects: kept.filter((k) => k.recorded !== false).map((k) => k.id) }] : []),
   ];
   const admin = {
@@ -927,7 +928,7 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   const text = await ensureImage({ ...buildArgs(p), say: (t) => said.push(t) });
   assert.match(text, /machine image is ready on rack/);
   const order = p.calls.map((c) => c.method).filter((m) => m !== 'xo.getAllObjects' && m !== 'resourceSet.getAll');
-  assert.deepEqual(order, ['disk.import', 'vm.create', 'vm.attachDisk', 'vm.convertToTemplate', 'resourceSet.create', 'vm.create', 'disk.resize', 'vm.createCloudInitConfigDrive', 'vm.start', 'vdi.delete', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject']);
+  assert.deepEqual(order, ['disk.import', 'vm.create', 'vm.attachDisk', 'vm.convertToTemplate', 'resourceSet.create', 'vm.create', 'disk.resize', 'vm.createCloudInitConfigDrive', 'vm.start', 'vdi.delete', 'vm.set', 'tag.remove', 'tag.add', 'tag.add', 'tag.add', 'vm.convertToTemplate', 'resourceSet.addObject', 'resourceSet.addObject']);
   // THE DISK AS PUBLISHED IS KEPT, never booted and offered to nothing, and
   // the build is a copy of it.
   const [keptCreate, create] = p.calls.filter((c) => c.method === 'vm.create').map((c) => c.params);
@@ -950,8 +951,8 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.equal(p.uploaded.body.length, DOWNLOADED_RAW.size);
   assert.equal(createHash('sha256').update(p.uploaded.body).digest('hex'), DOWNLOADED_RAW.sha256);
   assert.deepEqual(p.calls.filter((c) => c.method === 'tag.add').map((c) => c.params), [{ id: 'build-vm', tag: VM_IMAGE.tag }, { id: 'build-vm', tag: 'fleetwright-image:debian-13' }, { id: 'build-vm', tag: 'fleetwright-channel:stable' }]);
-  assert.deepEqual(p.calls.filter((c) => c.method === 'resourceSet.addObject').map((c) => c.params), [{ id: 'set-1', object: 'build-vm' }], 'the kept disk is not the fleet’s to clone');
-  assert.deepEqual(p.sets.find((x) => x.name === 'fleetwright-made')?.objects, ['base-vm'], 'the kept disk is not on the list of what the job made, so no build would use it');
+  assert.deepEqual(p.sets.find((x) => x.name === 'fleetwright')?.objects, ['build-vm'], 'the kept disk is the fleet’s to clone, or the image is not');
+  assert.deepEqual(p.sets.find((x) => x.name === 'fleetwright-made')?.objects, ['base-vm', 'build-vm'], 'what the job made is not on its list, so no build would trust it');
   assert.ok(said.some((s) => /Installing Fleetwright on the machine image/.test(s)));
 
   const there = buildPool({ then: 'Halted', existing: [{ type: 'VM-template', id: 'img', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag] }] });
@@ -1154,6 +1155,27 @@ test('a build VM that never reports in is named as the likely problem, and one t
 
 const OLD = { type: 'VM-template', id: 'img-old', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag, 'fleetwright-image:debian-13'] };
 const CLONE = { type: 'VM', id: 'vm-a', $pool: 'pool-1', tags: [`${VM_IMAGE.fromPrefix}img-old`] };
+
+test('a template that only carries the image’s tags is not the image: it is not left as one, put in the set, retired or removed, and one is built', async () => {
+  const planted = { ...OLD, id: 'img-planted' };
+  // On no list of the fleet's; or in its set, but made in it, as the fleet's own user makes VMs.
+  for (const [what, template, inSet] of /** @type {Array<[string, any, boolean]>} */ ([
+    ['on no list', planted, false],
+    ['made in the fleet’s set', { ...planted, resourceSet: 'set-1' }, true],
+  ])) {
+    const p = buildPool({ then: 'Halted', existing: [template] });
+    if (!inSet) p.sets[0].objects = [];
+    for (const replace of [false, true]) {
+      const text = await ensureImage({ ...buildArgs(p), replace });
+      assert.match(text, /machine image is ready on rack/, `${what}, replace ${replace}: ${text}`);
+    }
+    assert.ok(!p.calls.some((c) => c.params?.id === 'img-planted' || c.params?.object === 'img-planted'), `${what}: ${JSON.stringify(p.calls.filter((c) => c.params?.id === 'img-planted' || c.params?.object === 'img-planted'))}`);
+  }
+  const gone = buildPool({ then: 'Halted', existing: [planted] });
+  gone.sets[0].objects = [];
+  assert.match(await removeImage({ admin: gone.admin, pool: 'pool-1', poolName: 'rack', image: 'debian-13' }), /already gone/);
+  assert.ok(!gone.calls.some((c) => c.method === 'vm.delete'), 'an admin’s session deleted a template because somebody else tagged it');
+});
 
 test('a guest agent the box cannot get does not stop the build, and the phone is told what it goes without', async () => {
   const p = buildPool({ then: 'Halted' });

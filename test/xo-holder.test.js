@@ -30,8 +30,15 @@ const SECRET = 'ab'.repeat(32);
 const debian = { type: 'VM-template', id: 'tpl-debian', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: [VM_IMAGE.tag, 'fleetwright-image:debian-13'] };
 const ubuntu = { type: 'VM-template', id: 'tpl-ubuntu', name_label: 'Fleetwright Ubuntu', $pool: 'p1', tags: [VM_IMAGE.tag, 'fleetwright-image:ubuntu-24.04'] };
 
-/** The admin's Xen Orchestra: objects by type, every call recorded. @param {any[]} objects */
-function admin(objects) {
+/** The two tags a pool's own machine is made with, for the Xen Orchestra `spec` names. */
+const HOLDER_TAGS = [HOLDER.tag, `${HOLDER.forPrefix}xo.lan`];
+
+/**
+ * The admin's Xen Orchestra: objects by type, every call recorded, and its
+ * resource sets, the fleet's holding both images unless told otherwise.
+ * @param {any[]} objects @param {any[]} [sets]
+ */
+function admin(objects, sets = [{ id: 'rs-fleet', name: 'fleetwright', objects: ['tpl-debian', 'tpl-ubuntu'] }]) {
   /** @type {Array<[string, any]>} */
   const calls = [];
   return {
@@ -39,6 +46,7 @@ function admin(objects) {
     async call(/** @type {string} */ method, /** @type {any} */ params = {}) {
       calls.push([method, params]);
       if (method === 'xo.getAllObjects') return Object.fromEntries(objects.filter((o) => o.type === params.filter?.type).map((o) => [o.id, o]));
+      if (method === 'resourceSet.getAll') return sets;
       return true;
     },
   };
@@ -77,13 +85,13 @@ test('a pool without one gets a machine from its Debian image, on the way out, o
 });
 
 test('one already there is left alone, or started when it is off, and no pin is asked for', async () => {
-  const running = { type: 'VM', id: 'vm-h', name_label: NAME, $pool: 'p1', power_state: 'Running', tags: [HOLDER.tag] };
+  const running = { type: 'VM', id: 'vm-h', name_label: NAME, $pool: 'p1', power_state: 'Running', tags: HOLDER_TAGS };
   for (const [vm, call] of /** @type {Array<[any, string|null]>} */ ([[running, null], [{ ...running, power_state: 'Halted' }, 'vm.start']])) {
     const xo = admin([debian, vm]);
     const { asked, askPin } = pinner();
     await ensureHolder(spec(xo, askPin));
     assert.equal(asked.count, 0);
-    assert.deepEqual(xo.calls.filter(([m]) => m !== 'xo.getAllObjects').map(([m]) => m), call ? [call] : []);
+    assert.deepEqual(xo.calls.filter(([m]) => m !== 'xo.getAllObjects' && m !== 'resourceSet.getAll').map(([m]) => m), call ? [call] : []);
   }
 });
 
@@ -97,6 +105,28 @@ test('no image to make it from, or no pin from the fleet, is a stop that says so
     await assert.rejects(ensureHolder(spec(xo, pinner(answer).askPin)), /gave no pin/);
     assert.ok(!xo.calls.some(([m]) => m === 'vm.create'), JSON.stringify(answer));
   }
+});
+
+test('a VM somebody else tagged is neither started nor deleted, and a template that only carries the image tag is not cloned', async () => {
+  const foreign = [
+    { type: 'VM', id: 'vm-tag-only', name_label: 'holder-111111', $pool: 'p1', power_state: 'Halted', tags: [HOLDER.tag] },
+    { type: 'VM', id: 'vm-other-xo', name_label: 'holder-222222', $pool: 'p1', power_state: 'Halted', tags: [HOLDER.tag, `${HOLDER.forPrefix}xo.elsewhere`] },
+    // Both tags, but made in the fleet's set, as its own user makes every VM.
+    { type: 'VM', id: 'vm-in-set', name_label: 'holder-333333', $pool: 'p1', power_state: 'Halted', tags: HOLDER_TAGS, resourceSet: 'rs-fleet' },
+  ];
+  for (const again of [false, true]) {
+    const xo = admin([debian, ...foreign]);
+    await ensureHolder({ ...spec(xo, pinner().askPin), again });
+    assert.ok(!xo.calls.some(([m, p]) => ['vm.start', 'vm.stop', 'vm.delete'].includes(m) && String(p.id).startsWith('vm-')), `again: ${again}: ${JSON.stringify(xo.calls.filter(([m]) => m.startsWith('vm.')))}`);
+    assert.equal(xo.calls.filter(([m]) => m === 'vm.create').length, 1, 'none of them is the pool’s own machine, so one is made');
+  }
+  // An image on no list of the fleet's, or made in its set: nothing to clone.
+  const planted = { ...debian, id: 'tpl-planted' };
+  const madeInSet = { ...ubuntu, resourceSet: 'rs-fleet' };
+  const xo = admin([planted, madeInSet], [{ id: 'rs-fleet', name: 'fleetwright', objects: ['tpl-ubuntu'] }]);
+  const { asked, askPin } = pinner();
+  await assert.rejects(ensureHolder(spec(xo, askPin)), /no machine image/);
+  assert.equal(asked.count, 0);
 });
 
 test('its cloud-init is its name and one join file with the pin, the name and the pool, and no ticket, owner or login', () => {
@@ -205,17 +235,17 @@ test('a new one is born allowed what its owner chose, and one already there is l
   assert.deepEqual(join.grants, { upgrades: true, reboot: true });
   const plain = JSON.parse(/** @type {string} */ (/content: \|\n {6}(\{.*\})/.exec(holderCloudConfig({ hostId: NAME, pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan', grants: { reboot: 'yes' } }))?.[1]));
   assert.equal('grants' in plain, false, 'anything but a yes or no reaches no machine');
-  const there = admin([debian, { type: 'VM', id: 'vm-1', name_label: NAME, $pool: 'p1', power_state: 'Running', tags: [HOLDER.tag] }]);
+  const there = admin([debian, { type: 'VM', id: 'vm-1', name_label: NAME, $pool: 'p1', power_state: 'Running', tags: HOLDER_TAGS }]);
   await ensureHolder({ ...spec(there, pinner().askPin), grants: { reboot: true } });
   assert.ok(!there.calls.some(([m]) => m === 'vm.create' || m === 'vm.delete'), 'a running machine’s grants are changed on it');
 });
 
 test('made again, the one there goes first, disk and all, and the new one boots with the phone’s secret', async () => {
-  const stuck = { type: 'VM', id: 'vm-stuck', name_label: 'holder-c09fcd', $pool: 'p1', power_state: 'Running', tags: [HOLDER.tag] };
+  const stuck = { type: 'VM', id: 'vm-stuck', name_label: 'holder-c09fcd', $pool: 'p1', power_state: 'Running', tags: HOLDER_TAGS };
   const xo = admin([debian, stuck]);
   const { asked, askPin } = pinner();
   const said = await ensureHolder({ ...spec(xo, askPin), secret: SECRET, again: true });
-  assert.deepEqual(xo.calls.filter(([m]) => m !== 'xo.getAllObjects').map(([m, p]) => `${m} ${p.id ?? p.name_label}`), ['vm.stop vm-stuck', 'vm.delete vm-stuck', `vm.create ${NAME}`]);
+  assert.deepEqual(xo.calls.filter(([m]) => m !== 'xo.getAllObjects' && m !== 'resourceSet.getAll').map(([m, p]) => `${m} ${p.id ?? p.name_label}`), ['vm.stop vm-stuck', 'vm.delete vm-stuck', `vm.create ${NAME}`]);
   assert.equal(asked.count, 1);
   const [, made] = /** @type {[string, any]} */ (xo.calls.find(([m]) => m === 'vm.create'));
   assert.ok(made.cloudConfig.includes(`"secret":"${SECRET}"`));
