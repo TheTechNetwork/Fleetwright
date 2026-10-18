@@ -105,6 +105,10 @@ const NONCE_SECRET_BYTES = 32;
  * @property {number|null} lastSeenAt
  * @property {number|null} revokedAt
  * @property {boolean} [ephemeral]  expected to vanish; see docs/ephemeral-hosts.md
+ * @property {'ticket'|'runner-token'} [admittedBy]  for a RUNNER, which claim said
+ *   whose it is: a ticket the fleet minted for one dispatch, or a reusable runner
+ *   token whoever presses Run workflow spends
+ * @property {string} [actorId]  for a RUNNER, the GitHub account id that started its job
  */
 
 /**
@@ -231,9 +235,10 @@ export class HostIdentities {
    * rebuilt machine should do; the alternative is a fleet slowly filling with
    * dead entries nobody dares delete.
    *
-   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, owner?: string|null, readmit?: boolean, boundToThisHost?: boolean, ephemeral?: boolean }} spec
+   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, owner?: string|null, readmit?: boolean, boundToThisHost?: boolean, ephemeral?: boolean,
+   *   admittedBy?: 'ticket'|'runner-token'|null, actorId?: string|null }} spec
    */
-  async enrol({ hostId, publicJwk, enrolledBy = null, owner = null, readmit = false, boundToThisHost = false, ephemeral = false }) {
+  async enrol({ hostId, publicJwk, enrolledBy = null, owner = null, readmit = false, boundToThisHost = false, ephemeral = false, admittedBy = null, actorId = null }) {
     const id = String(hostId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
       return { ok: false, error: 'a host id is letters, digits, dot, dash and underscore' };
@@ -349,6 +354,14 @@ export class HostIdentities {
       // it unless asked for by name, and disconnection retires it instead of
       // leaving a corpse in the list. See docs/ephemeral-hosts.md.
       ephemeral: Boolean(ephemeral),
+      // HOW A RUNNER WAS ADMITTED, AND WHO STARTED ITS JOB, which are two facts
+      // and not one. A reusable runner token says whose runner it is and
+      // nothing about who pressed Run workflow; the minting Worker mints for
+      // whoever did. So a repository token is asked of it only for a runner
+      // the fleet dispatched for its owner, whose job token still names the
+      // account recorded here (CoordinatorCore#onRunnerMint).
+      ...(ephemeral && (admittedBy === 'ticket' || admittedBy === 'runner-token') ? { admittedBy } : {}),
+      ...(ephemeral && actorId ? { actorId: String(actorId) } : {}),
     };
     this.hosts.set(id, host);
     return {

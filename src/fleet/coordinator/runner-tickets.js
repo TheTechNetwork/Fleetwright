@@ -38,6 +38,9 @@
 // held for minutes instead of for ever. Nor does the starter's Claude login go
 // with a runner attributed to somebody else: the minter gives one only to the
 // runner of the fleet account that deposited it (src/fleet/minter/claude.js).
+// Their repository reach does, because the minting Worker mints a ticket's
+// runner for whoever started its job (CoordinatorCore#onRunnerMint): the
+// spender's own, lent by their own act, to a runner only its owner can use.
 //
 // Not stored in full, for the same reason a device credential is not: the hash
 // is enough to recognise the one value that matters, and a store that can hand
