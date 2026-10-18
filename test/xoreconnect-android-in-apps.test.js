@@ -134,6 +134,17 @@ test('Android: Reconnect on a lost pool’s notification opens the app, for an a
   // on the reconnect for that address, starting on the machine that noticed.
   const main = file('MainActivity.kt');
   assert.equal(main.match(/notifiedPool\.value = poolNamedBy\(intent\)/g)?.length, 2);
+  // ONLY A TAP ON ONE THIS APP DREW. MainActivity is exported, so another
+  // app can start it with the same extras: without a word PoolNotice put in
+  // its own notification, and spent by the tap, no pool is named.
+  assert.match(fn(main, 'private fun poolNamedBy('), /^private fun poolNamedBy\(intent: Intent\?\): PoolTap\? \{\s*if \(!PoolNotice\.redeem\(this, intent\?\.getStringExtra\(PoolNotice\.EXTRA_NONCE\)\)\) return null\s*return PoolNotice\.tap\(/);
+  assert.match(notice, /val nonce = issue\(context\)/);
+  assert.match(fn(notice, 'private fun openIntent('), /intent\.putExtra\(EXTRA_NONCE, nonce\)/);
+  // Both of a notification's intents, the body's and Reconnect's, carry it.
+  assert.equal(notice.match(/openIntent\(context, kind, address, hostId, id, nonce, action = /g)?.length, 2);
+  assert.match(fn(notice, 'fun redeem('), /if \(nonce\.isNullOrBlank\(\)\) return false[\s\S]*?if \(nonce !in all\) return false[\s\S]*?all - nonce/);
+  assert.match(notice, /ByteArray\(16\)\.also \{ random\.nextBytes\(it\) \}/);
+  assert.match(notice, /private val random = SecureRandom\(\)/);
   assert.match(file('MachinesScreen.kt'), /if \(tap\.reconnect\) \{\s*reconnectVia = tap\.hostId\s*reconnectFor = tap\.address/);
   assert.match(file('MachinesScreen.kt'), /HypervisorSheet\(settings, reconnectFor = pool, via = reconnectVia,/);
 });

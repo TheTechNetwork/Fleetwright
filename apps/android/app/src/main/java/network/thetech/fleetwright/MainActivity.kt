@@ -218,15 +218,22 @@ class MainActivity : ComponentActivity() {
      * notification (PoolNotice): its page, or the reconnect for it from the
      * Reconnect button, on the machine that noticed. It carries no `event`,
      * so it is never taken for a session above.
+     *
+     * ONLY FROM A NOTIFICATION THIS APP DREW: this activity is exported, so
+     * another app can start it with the same extras, and without the word
+     * PoolNotice put in its own notification that intent names no pool.
      */
     private val notifiedPool = mutableStateOf<PoolTap?>(null)
 
-    private fun poolNamedBy(intent: Intent?): PoolTap? = PoolNotice.tap(
-        intent?.getStringExtra(PoolNotice.EXTRA_KIND),
-        intent?.getStringExtra(PoolNotice.EXTRA_ADDRESS),
-        intent?.getStringExtra(PoolNotice.EXTRA_HOST),
-        intent?.getStringExtra(PoolNotice.EXTRA_ACTION),
-    )
+    private fun poolNamedBy(intent: Intent?): PoolTap? {
+        if (!PoolNotice.redeem(this, intent?.getStringExtra(PoolNotice.EXTRA_NONCE))) return null
+        return PoolNotice.tap(
+            intent?.getStringExtra(PoolNotice.EXTRA_KIND),
+            intent?.getStringExtra(PoolNotice.EXTRA_ADDRESS),
+            intent?.getStringExtra(PoolNotice.EXTRA_HOST),
+            intent?.getStringExtra(PoolNotice.EXTRA_ACTION),
+        )
+    }
 
     /**
      * Android 13+ shows nothing until this is granted. Asked once there is a
