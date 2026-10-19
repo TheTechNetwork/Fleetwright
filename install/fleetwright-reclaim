@@ -44,19 +44,44 @@ log() { printf '%s\n' "$*"; }
 BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 
 RELEASES="$BASE/releases"
+
+# THE TWO DIRECTORIES ARE REAL ONES, OR NOTHING IS TOUCHED. `releases` sits in
+# the base, and the base is the service user's: they can rename `releases`
+# aside and put a link in its place, and a glob through that link was root
+# removing `.stale-*` in whatever directory it named. Neither may be a link,
+# asked without following one.
+if [ -L "$BASE" ] || [ -L "$RELEASES" ]; then
+  log "refusing: $BASE or $RELEASES is a symbolic link, not the release tree — nothing reclaimed"
+  exit 1
+fi
 [ -d "$RELEASES" ] || { log "no $RELEASES — nothing to reclaim"; exit 0; }
 
+# AND THEN ROOT STANDS IN IT. A check followed by a path is a check the owner
+# can race: `releases` swapped for a link between the test above and the glob
+# below. Once this shell's working directory is the directory, renaming the
+# name moves nothing under it — and the physical path is compared with the
+# base's, so a swap that landed before the `cd` is refused here instead.
+BASE_P="$(cd -P -- "$BASE" && pwd -P)" || { log "cannot enter $BASE — nothing reclaimed"; exit 1; }
+cd -P -- "$RELEASES" || { log "cannot enter $RELEASES — nothing reclaimed"; exit 1; }
+if [ "$(pwd -P)" != "$BASE_P/releases" ]; then
+  log "refusing: $RELEASES resolved to $(pwd -P), not inside $BASE_P — nothing reclaimed"
+  exit 1
+fi
+
 # A glob, which lists DIRECT CHILDREN only — it never recurses — so this cannot
-# reach past releases/ into a nested path. `[ -e ]` is the guard for the
-# no-match case: an unmatched glob expands to the literal `.stale-*`, which is
-# not a real path, so it is skipped rather than handed to rm. `rm -rf` on a
-# `.stale-` that is itself a symlink removes the link, not its target.
+# reach past releases/ into a nested path. Only a directory or a link is
+# quarantine; anything else with the name is left. A link is removed as itself
+# and never followed (checked first, because `-d` follows one), and `rm -rf`
+# does not follow the links inside a directory it removes. An unmatched glob
+# expands to the literal `.stale-*`, which is neither, so it is skipped.
 found=0
-for entry in "$RELEASES"/.stale-*; do
-  [ -e "$entry" ] || [ -L "$entry" ] || continue    # the no-match case
+for entry in ./.stale-*; do
+  if [ -L "$entry" ]; then rm -f -- "$entry"
+  elif [ -d "$entry" ]; then rm -rf -- "$entry"
+  else continue
+  fi
   found=1
-  rm -rf -- "$entry"
-  log "reclaimed $(basename "$entry")"
+  log "reclaimed ${entry#./}"
 done
 [ "$found" = 1 ] || log "no quarantined releases to reclaim"
 exit 0

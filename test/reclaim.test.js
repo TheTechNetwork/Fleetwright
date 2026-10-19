@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -66,6 +66,45 @@ test('a name that only looks like quarantine, one level down, is not reached', (
   execFileSync('sh', [HELPER], { env: { ...process.env, FLEETWRIGHT_BASE: base }, stdio: 'pipe' });
   assert.equal(existsSync(path.join(base, 'releases', 'v1', '.stale-decoy')), true, 'reached past a direct child');
   rmSync(base, { recursive: true, force: true });
+});
+
+test('a releases that is a link is not followed: what it points at keeps its quarantine', () => {
+  // `releases` sits in the base, which is the service user's, so they can
+  // rename it aside and leave a link in its place. Root's glob went through
+  // the link and removed `.stale-*` in whatever directory it named.
+  const base = makeBox();
+  const elsewhere = mkdtempSync(path.join(tmpdir(), 'reclaim-elsewhere-'));
+  mkdirSync(path.join(elsewhere, '.stale-x'));
+  writeFileSync(path.join(elsewhere, '.stale-x', 'f'), 'x');
+  rmSync(path.join(base, 'releases'), { recursive: true, force: true });
+  symlinkSync(elsewhere, path.join(base, 'releases'));
+  const r = spawnSync('sh', [HELPER], { env: { ...process.env, FLEETWRIGHT_BASE: base }, encoding: 'utf8' });
+  assert.equal(existsSync(path.join(elsewhere, '.stale-x', 'f')), true, `root reclaimed through a link:\n${r.stdout}${r.stderr}`);
+  assert.notEqual(r.status, 0, 'a refusal that exits 0 reads as a reclaim');
+  assert.match(r.stdout, /refusing/);
+
+  // And a base that is itself a link, to a tree that looks exactly right.
+  const linked = path.join(elsewhere, 'base-link');
+  const real = makeBox();
+  mkdirSync(path.join(real, 'releases', '.stale-y'));
+  symlinkSync(real, linked);
+  const b = spawnSync('sh', [HELPER], { env: { ...process.env, FLEETWRIGHT_BASE: linked }, encoding: 'utf8' });
+  assert.equal(existsSync(path.join(real, 'releases', '.stale-y')), true, `root reclaimed through a linked base:\n${b.stdout}`);
+  assert.notEqual(b.status, 0);
+  for (const d of [base, elsewhere, real]) rmSync(d, { recursive: true, force: true });
+});
+
+test('only a directory or a link is quarantine, and a link goes as itself', () => {
+  const base = makeBox();
+  const target = mkdtempSync(path.join(tmpdir(), 'reclaim-target-'));
+  writeFileSync(path.join(target, 'keep'), 'x');
+  symlinkSync(target, path.join(base, 'releases', '.stale-link'));
+  writeFileSync(path.join(base, 'releases', '.stale-file'), 'not a release');
+  execFileSync('sh', [HELPER], { env: { ...process.env, FLEETWRIGHT_BASE: base }, stdio: 'pipe' });
+  assert.equal(existsSync(path.join(base, 'releases', '.stale-link')), false, 'the link stayed');
+  assert.equal(existsSync(path.join(target, 'keep')), true, 'removed what the link pointed at');
+  assert.equal(existsSync(path.join(base, 'releases', '.stale-file')), true, 'a plain file was treated as a release');
+  for (const d of [base, target]) rmSync(d, { recursive: true, force: true });
 });
 
 test('the helper takes no base from the env file, which is the service user’s', () => {
