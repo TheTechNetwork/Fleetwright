@@ -41,7 +41,8 @@ What happens, from the phone to a session on a VM:
    them: a pool's token is its own kind, not a named secret.
 3. **The box looks at the pool.** Signed in with the limited token, it finds
    the Fleetwright machine images there (templates tagged
-   `fleetwright-image`) and reports them in its health, never the token. The
+   `fleetwright-image` that are in the fleet's resource set) and reports them
+   in its health, never the token. The
    coordinator offers each person the images on their own pools as
    `vmImages`, and both phones list them under New session › Where as "New
    machine from Fleetwright Debian 13 on rack".
@@ -515,7 +516,83 @@ the storage and networks it may use, and limits on vCPUs, memory and disk.
 A compromised box is then a quota's worth of VMs from the images in that
 set, and nothing on the pool that predates it. This is the bound to write
 down for the operator, because it is the one that holds when everything on
-our side has failed.
+our side has failed. It is a little wider than that, measured below: the
+token can also copy its own machines to templates outside the quota, and it
+can read everything on the Xen Orchestra.
+
+### What Xen Orchestra lets whom do
+
+Measured, not read off its documentation: xo-server **5.211.0**
+(`docker.io/ronivay/xen-orchestra:latest`, image `a7c2f28e636b`), its
+JSON-RPC called as the admin, as a user made the way `xo-setup.js` makes the
+fleet's (`user.create` with permission `none`, the subject of a resource set,
+signed in with the token it minted), and as a plain user with permission
+`none` and an `admin` ACL on one VM an admin made in no set. No XCP-ng was
+attached; a stand-in XAPI gave Xen Orchestra a pool, templates, VMs and a
+snapshot to check permissions on, and logged which calls Xen Orchestra let
+through to it. So the table is Xen Orchestra's own checks, exactly; what XAPI
+then does with a copy (which fields it carries over) is not measured here.
+
+| Method | Fleet's user | Plain user | Governed by (xo-server `src/`) |
+|---|---|---|---|
+| `resourceSet.create`, `.set`, `.delete`, `.addObject`, `.removeObject`, `.addSubject`, `.removeSubject`, `.addLimit` | refused: `not enough permissions`, `{"permission":"admin"}` | refused, the same | `api/resource-set.mjs`: `create.permission = 'admin'` and the same on each |
+| `resourceSet.getAll` | its own set only | `[]` | `xo-mixins/resource-sets.mjs`, `getAllResourceSets`: filtered to sets the user is a subject of unless `permission === 'admin'` |
+| `resourceSet.get` by id | **any set**, `fleetwright-made` included | **any set** | `api/resource-set.mjs`: `get` has no `permission` and no `resolve`, so only a sign-in |
+| `xo.getAllObjects` | **every object**: the pool, hosts, storage, every network, template, VM and snapshot, with all their fields | **every object** | `api/xo.mjs`: no `permission`; `xo.mjs`, `getObjects`, filters by nothing but the caller's filter |
+| `tag.add` | on the VM it made (it holds an `admin` ACL there, as `vm.create` in a set gives) and that VM's snapshot; refused on every template, network, storage, host and other VM: `{"permission":"administrate","object":{"id":…}}` | on the VM it was given, and that VM's snapshots and clones; refused elsewhere, the same | `api/tag.mjs`: `add.resolve = { object: ['id', null, 'administrate'] }`; `xo-acl-resolver`: a VM-template is `or(checkSelf, checkMember('$pool'))` |
+| `customField.add` on a template | refused, `administrate` | refused | `api/custom-field.mjs`: `resolve object: ['id', null, 'administrate']`, and it writes only under `XenCenter.CustomFields.` |
+| `vm.set { name_label }` | on its own VM; refused on templates | on the VM it was given; refused on templates | `api/vm.mjs`: `set.resolve VM: ['id', ['VM', 'VM-snapshot', 'VM-template'], 'administrate']` |
+| `vm.set { resourceSet: null }` | refused: `not enough permissions` | refused | `api/vm.mjs`, `set`: `if (this.apiContext.permission !== 'admin') throw unauthorized()` |
+| `vm.convertToTemplate` | refused: `administrate` on the **pool** | refused, the same | `api/vm.mjs`: `await this.checkPermissions([[vm.$pool, 'administrate']])` |
+| `vm.snapshot` | allowed while the set has room; refused `not enough resources in resource set` when it has not | allowed (the VM had no disks; with disks it also needs `operate` on their storage) | `api/vm.mjs`: `resolve vm: ['id', 'VM', 'operate']`; a subject of the VM's set skips the storage check ("Workaround: allow Resource Set members to snapshot"); limits allocated |
+| `vm.copyToTemplate` on a snapshot it has | **allowed**, and still allowed with the set's limits exhausted | **allowed**: a template named and tagged as the plain user chose, in no set | `api/vm.mjs`: `copyToTemplate.resolve = { vm: ['id', ['VM-snapshot'], 'administrate'] }`, no pool check, no storage check, no limit allocated, no ACL given on the copy |
+| `vm.delete` on that template | refused, `administrate` | refused | the copy has no ACL for its maker |
+| `vm.clone` of a template (an image, the built-in one) | refused, `administrate` on the template | refused | `api/vm.mjs`: `clone.resolve vm: [… 'administrate']` |
+| `vm.clone` of a VM it holds | allowed within limits | **allowed**: a VM in no set (no disks; with disks, `operate` on their storage) | `api/vm.mjs`, `clone`: `checkPermissionOnSrs`, then an `admin` ACL on the clone |
+| `vm.copy` | refused: `operate` on the storage | refused | `api/vm.mjs`: `copy.resolve sr: ['sr', 'SR', 'operate']` |
+| `vm.create` with no resource set | refused: `administrate` on the pool | refused | `api/vm.mjs`, `create`: `if (resourceSet === undefined) await this.checkPermissions([[template.$pool, 'administrate']])` |
+| `vm.create` in the set from a template not in it | refused: `not enough permissions` | refused (not a subject) | `xo-mixins/resource-sets.mjs`, `checkResourceSetConstraints`: every template, storage and network must be in the set |
+| `vm.import` | refused: `administrate` on the storage | refused | `api/vm.mjs`: `import_.resolve sr: ['sr', 'SR', 'administrate']` |
+| `network.create` | refused: `administrate` on the pool | refused | `api/network.mjs`: `create.resolve = { pool: ['pool', 'pool', 'administrate'] }` |
+| `acl.add` | refused: `{"permission":"admin"}` | refused | `api/acl.mjs`: `add.permission = 'admin'` |
+| `user.set { permission: 'admin' }` on itself | refused: `this property can only be changed by an administrator` | refused | `api/user.mjs`, `set`: `[...noEditFields, 'permission'].some(…)` for a caller who is not an admin |
+
+What the code rests on, held to it:
+
+- **Only an admin writes a resource set**, so the lists in `xo-made.js` are
+  the admin's. Holds. Either list can be read by anybody signed in who has its
+  id, which costs nothing: they hold ids, and every id is in
+  `xo.getAllObjects` anyway.
+- **A tag is anybody's who holds `administrate` on the object**, and that is
+  the fleet's own user on every machine it makes, and anybody an admin gives
+  one VM. Nobody below an admin can tag a template, network, storage or host
+  directly. But a template with any name and any tags can be made by
+  anybody holding a VM: snapshot it, tag the snapshot, `vm.copyToTemplate`.
+  So nothing takes a tag alone: the policy job's kept disks, bases and
+  images are found by the lists (`keptBaseOn`, `baseOf`, `isFleetImage`),
+  the pool's own machine by the list (`isHolder`), and XCP-ng's built-in
+  template by `isDefaultTemplate`, which reads `is_default_template` or
+  `other_config.default_template`, neither of which any method below an
+  admin writes. A planted "Other install media" and a planted
+  `fleetwright-base` were both measured to be made, and neither is taken.
+- **Made in no set means made by an admin** was too strong. A plain user given
+  one VM in no set cloned it, and copied a snapshot of it to a template, both
+  in no set. The fleet's own user cannot: its machines are in the set and it
+  cannot take one out. Every reader of `outsideSets` already pairs it with a
+  list, so this changed nothing but the comment.
+- **The limited user sees what the fleet may use** was false: it sees every
+  object on the Xen Orchestra. A box reported every template tagged
+  `fleetwright-image`, every network, and every VM tagged as a session's
+  machine and named like one; a plain user's VM so renamed and tagged
+  appeared as a person's machine and was swept (Xen Orchestra refused the
+  delete). The box now reports, sweeps and works only what is in the fleet's
+  set, as the token reads it with `resourceSet.getAll`
+  (`src/fleet/host/xo-pools.js`, `fleetSetOf`), which only an admin can
+  change and only a subject of the set can make a VM in.
+- **The quota bounds the token** holds for VMs and not for templates: the
+  fleet's user can snapshot a machine it made and copy the snapshot to a
+  template, a full copy on the same storage that no limit counts, and cannot
+  then delete the copy. An admin removes those in Xen Orchestra.
 
 ## What `provision` may express
 
@@ -533,9 +610,10 @@ a box from before labs validates the enum and refuses it by name, the way
 `xosetup`'s `policy` phase was added, and only a box that reported a lab is
 asked. The lab rides in `network`, which the box checks is a lab it saw on
 that pool and saw empty. **The id must be an image the box itself saw
-on your pool**, tagged `fleetwright-image`: the box checks its own report,
-not the coordinator's word, and so must a network: one the box saw on that
-pool, which the resource set already bounds to the networks the fleet may use.
+on your pool**, tagged `fleetwright-image` and in the fleet's resource set:
+the box checks its own report, not the coordinator's word, and so must a
+network: one the box saw in the set on that pool, the networks the fleet may
+use. Xen Orchestra checks both again when the VM is made.
 No disk, address or cloud-init crosses the protocol. A compromised coordinator
 can ask for one of your images for a few hours, attributed to you, on a
 network the policy allows; it cannot ask for a VM on a network the policy

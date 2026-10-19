@@ -439,9 +439,12 @@ machine of the fleet, through the coordinator.
   The disk goes to Xen Orchestra over the job's pinned connection. The image
   as published is kept on the pool as a template so a rebuild can copy it
   and write only the configuration's blocks into the copy, checked the same
-  way first; that template is visible to Xen Orchestra's admins only, is not
-  tagged for the fleet and is outside its resource set, so the fleet's token
-  can neither see nor clone it, and no box offers it for sessions. The router
+  way first; that template is not tagged for the fleet and is outside its
+  resource set, so the fleet's token cannot clone it (`vm.clone` asks
+  `administrate` on the template, measured refused) and no box offers it for
+  sessions. The token can see it: Xen Orchestra 5.211.0 shows a user who is
+  not an admin every object (`docs/hypervisors.md`, "What Xen Orchestra lets
+  whom do"), so its being kept is no secret, only its use. The router
   has no account anyone can sign in to (root's password is `*`) and no
   anti-lockout rule, so a lab, the only thing on its LAN side, cannot change
   the rules that keep it off the person's LAN. It is not tagged `fleetwright`,
@@ -521,6 +524,13 @@ machine of the fleet, through the coordinator.
   clone the images in the set onto the storage and networks in the set,
   within its limits. That is the bound the token always had, now reachable
   from every box the person approved instead of from their phone alone.
+  Measured on Xen Orchestra 5.211.0, the bound is wider in two ways
+  (`docs/hypervisors.md`, "What Xen Orchestra lets whom do"): the token reads
+  every object on the Xen Orchestra, not only the set's, and it can snapshot
+  a machine it made and `vm.copyToTemplate` the snapshot, which Xen
+  Orchestra counts against no limit (allowed with the set's limits
+  exhausted) and leaves the token unable to delete. Filling the pool's
+  storage with such copies is within its reach; an admin removes them.
 - **A machine from the pool is admitted by a ticket alone.** There is no
   GitHub token beside it, so a VM ticket admits a machine: single use, at
   most forty-five minutes, bound to the person who asked, and spendable only
