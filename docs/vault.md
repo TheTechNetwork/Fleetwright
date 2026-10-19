@@ -44,22 +44,31 @@ with `not_a_device`. That is what keeps out the GitHub token the vault itself
 hands every box you approve, which GitHub would also call yours, so a box you
 removed, or a session on it, cannot approve a key of its own and hold your
 vault again. A phone signed in before this was asked for signs out of GitHub
-there and signs in again, once. A Claude deposit is held to the same rule,
+there and signs in again, once, and every phone did so once more when G11 was
+closed (below): a sign-in recorded before then could not be told from one a box
+had forged, so a record now carries a version (`SIGNIN_VERSION`), one without
+it is no device's and renews into none, and the `not_a_device` sentence says to
+sign out of GitHub under Runners from this phone and sign in again. Vault items
+and approvals were not touched. A Claude deposit is held to the same rule,
 except for the tokens a person's own command line has (`gho_`, `ghp_`,
 `github_pat_`), which `fleetwright-claude-login` sends.
 
-**Except a box of the operator's.** A device sign-in is recorded by the token's
-hash, not by who finished it, and an operator box finishes the sign-ins it
-started for people (the PKCE verifier is on the box; `#offerChallenges`,
-`#exchange`). So the root or sidecar account of one of the operator's boxes can
-complete a sign-in that the minter then records as a device of the person who
-signed in, and approve a key of its own against that person's vault, removed
-from their list or not, because connects are still placed on operator boxes
-(`mayActFor`). The eighth audit reproduced it (`githubDeviceToken`,
-`vaultDevice`). Whether the operator's boxes sit inside a member's vault
-boundary is the owner's decision, and docs/security.md's G11 is where it is
-recorded; until it is made, the sentence above holds for a member's own boxes
-and not for the operator's. The request also names the fleet account it is for, and the coordinator
+**Not a box's sign-in.** A device sign-in is recorded by the token's hash, not
+by who finished it, and an operator box finishes the sign-ins it started for
+people (the PKCE verifier is on the box; `#offerChallenges`, `#exchange`). So
+the root or sidecar account of one of the operator's boxes could complete a
+sign-in that the minter then recorded as a device of the person who signed in,
+and approve a key of its own against that person's vault (the eighth audit,
+`githubDeviceToken`, `vaultDevice`). Operator boxes are outside a member's vault
+boundary, which is docs/security.md's G11 decided. Nothing in a code or a
+verifier says which flow made it, and the coordinator is the one place that
+knows which codes it relayed to a box: it keeps the SHA-256 of each for ten
+minutes, at most 64, in Durable Object storage (`boxSignIns`), and lists them
+beside every device's sign-in. The minter refuses a listed code before GitHub
+is asked (`box_sign_in`), so the box can still finish there the sign-in it was
+started for, and only a sign-in the person's own phone started becomes their
+device. The list can only take away, as the members list does, and a
+coordinator from before it sends none and is served as before. The request also names the fleet account it is for, and the coordinator
 says which signed-in account sent it; the minter refuses unless the two agree.
 The answer comes back sealed to a key the phone made for that one request.
 Each change carries its time and is refused if it is older than ten minutes or
@@ -124,7 +133,10 @@ while the account that made it is not on that list: no item, no Claude login,
 and no renewal, so their refresh token is not rotated again. The person drops
 out of the box's answer, and the box deletes what it held for them on that
 ask, as it does for a box removed from a phone. That is every box they
-approved, their own included, within ten minutes.
+approved, their own included, within ten minutes. The fleet's own boxes do not
+wait for that ask: a removal also sends each of them `forgetperson`, and the box
+deletes what the vault gave it for them at once, with their sessions and
+sign-ins there ([security.md](./security.md) G13).
 
 Until the eighth audit the minter never heard of a removal. The hand-back
 asked the fleet's boxes to `unlink` the person's sign-ins, which clears a
@@ -165,7 +177,7 @@ the more specific decision:
 | the broker (`git`, `gh`, `wrangler`, `fleet-cred`) | nothing for that provider is linked here |
 | the person's connections listing (`/connect`, what a phone's Credentials shows) | nothing for that provider is linked here; the row says `vault: true`, so a box holding only the vault's copy counts as having it and is not named as "not on" |
 | a session's Claude login | no Claude account is linked here: a direct session gets `CLAUDE_CODE_OAUTH_TOKEN` with `ANTHROPIC_API_KEY` unset, a sandboxed one is seeded `.claude-token` for its entrypoint to export |
-| `fleet-secret NAME` | the box has no secret of that name |
+| `fleet-secret NAME` | the box has no secret of that name, or its own may not answer this session: one the fleet started for somebody who does not administer the box is answered from their vault alone ([security.md](./security.md) G12) |
 
 A hypervisor's record is the exception to all of this: the sidecar takes it
 out of the answer before fleetwright sees it, holds it in memory, and uses it
@@ -193,8 +205,9 @@ faster.
 phone's own verifier, which the coordinator never sees. A GitHub link the
 coordinator starts for a box is its own page, so a compromised coordinator
 could begin one with a verifier of its own, and if you finished it, have the
-minter record it as a device's sign-in. Closing that needs the phone to sign
-vault requests with a key of its own, which it does not yet.
+minter record it as a device's sign-in. The list of codes it handed boxes is
+its word too, so the same coordinator could leave one off. Closing that needs
+the phone to sign vault requests with a key of its own, which it does not yet.
 
 **A box you did not check.** Approving without comparing the fingerprint trusts
 the coordinator's list for which key that box has, which is the one thing this

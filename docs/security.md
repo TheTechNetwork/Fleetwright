@@ -64,6 +64,8 @@ interesting failures live.
    (`FLEETWRIGHT_SANDBOX` off, which is every Mac and any Linux box installed
    without podman) has no boundary here at all: the session is a tmux pane
    running as the service user, and holds everything that account holds (G8).
+   So a member's session goes on such a box only when the box acts for that
+   member alone (`runsSessionsFor`, `hosts.js`).
 4. **anything-on-host-loopback → fleetwright.** Token-gated (§6.4, §9-G6): a
    token is generated into `${stateDir}/api-token` when none is configured, and
    the check fails closed. The boundary is "any local process that can read
@@ -86,9 +88,9 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Host private key** (P-256) | `/var/lib/fleetwright-sidecar/host-key.json`, `0600` in `0700`, mode re-checked every load | the sidecar's own account (`fleetwright-sidecar`) only — not the session user, so neither the hub nor a session escape landing as it can read this, **on a packaged Linux box**, where the sidecar runs a root-owned copy of a verified release from `/usr/local/lib/fleetwright-sidecar` that the session user cannot change. On a git checkout, or a box whose node lives in the session user's home, the session user can change what the sidecar runs and so reach this key through it; the installer says so in those words (`hardening.md`) | re-enrol the host | `revoke` at coordinator, per-host | mode check refuses to start if loosened |
 | **Host public key** | coordinator DO | anyone who reads the DO (public half; harmless) | with re-enrol | with revoke | host list |
 | **Box Claude credential** | **gone as a standing store** — adopted once into `${stateDir}/accounts/<email>.json` and handed to the member it belonged to; a session with no linked account is refused, not given a shared one (`one-account-per-person.md`) | — | — | — | — |
-| **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink` | `/api/state` per-account |
-| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which a removal also asks of a box it takes out of the operator's tier, for every other person whose credential was live at the removal and nobody who joined since, then or, for a box away at the time, on its first report after it returns: each request names its person, so a box that put the debt off was otherwise told the emails of everybody who joined meanwhile (`#handBack`), and of the fleet's own boxes for the person removed (`#handBackPerson`). A copy held from the person's vault is not a link and `unlink` does not reach it; it stops because the minter serves no grant of somebody no longer in the fleet, and the box deletes it on that ask (`#onHostVault`, [vault.md](./vault.md)); provider revoke (real) | `verify` verb |
-| **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`; provider revoke | renewal-failure log |
+| **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink`; a removal from the fleet deletes it on each of the fleet's own boxes, asked with `forgetperson` at once or on the box's first report after it returns, and owed until the box itself says it is done (`#forgetOnBoxes`, `core.js`; `forget-person.js`; G13). Not on the person's own boxes, which act for them alone | `/api/state` per-account |
+| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which deletes the renewal material with the token (until G13 it left it, and the next renewal wrote a fresh token back), and which a removal also asks of a box it takes out of the operator's tier, for every other person whose credential was live at the removal and nobody who joined since, then or, for a box away at the time, on its first report after it returns: each request names its person, so a box that put the debt off was otherwise told the emails of everybody who joined meanwhile (`#handBack`). The fleet's own boxes are asked instead to forget the person removed, with `forgetperson`: `<row>.env`, its metadata and `<row>.renewal.json` deleted in one act, asked at once or on the box's first report after it returns, and owed until the box itself says it is done (`#forgetOnBoxes`, `Connections.forget`, G13); not the person's own boxes. A copy held from the person's vault is not a link and `unlink` does not reach it; it stops because the minter serves no grant of somebody no longer in the fleet, and the box deletes it on that ask (`#onHostVault`, [vault.md](./vault.md)), or at once when it is asked to forget them; provider revoke (real) | `verify` verb |
+| **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`, which until G13 left this file behind; `forgetperson`, for somebody removed; provider revoke | renewal-failure log |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry; `DELETE /api/enroll/{id}` by its minter or an admin; dropped when its minter is removed (`#forgetPerson`) | `outstanding()` (masked) |
 | **Telegram bot token** (archived) | host env (`FLEETWRIGHT_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `fleetwright doctor` names it |
 | **GitHub App private key** | **nowhere in this system** (ASPIRATIONAL: waits for the broker) | — | regenerate at first use | delete in GitHub | — |
@@ -855,8 +857,13 @@ refused, including when token generation itself failed.
 session runs as the service user, so it reads `${stateDir}/api-token` and drives
 the hub as any actor it names, reads every person's direct config, linked Claude
 credential and `<row>.env`, and types into any other session's pane (G8). What it
-does not reach is the host key, which the sidecar's own account holds. The rest
-of this section is the sandboxed case.
+does not reach is the host key, which the sidecar's own account holds. A member
+cannot start or resume a session on such a box unless it acts for them alone:
+placement runs a member's session only on a box that reports `sandboxed: true`
+or that they administer (`runsSessionsFor`, `hosts.js`), so on an operator's
+direct box this bound is held by the admins' sessions and nobody else's, bar a
+member's session already running there before the change (G8). The rest of
+this section is the sandboxed case.
 
 **Bound (sandboxed):** whatever the credentials it holds can do, for as long as they live
 (GitHub access token: 8h, fetched per request over the broker socket; the
@@ -893,7 +900,8 @@ mitigation for the rest and is **ASPIRATIONAL**.
 **Bound:** a normal member's authority, plus co-tenancy on any shared host: guest
 sessions run as the **same OS user** as everyone else's, isolated by container
 filesystem, not by uid (`accounts.md`). A container escape crosses that, and on
-a box that runs sessions directly there is no container to escape (G8).
+a box that runs sessions directly there is no container to escape, which is why
+a guest's session is not placed on one unless it acts for them alone (G8).
 **SEC-SESSION-3** — The system MUST NOT be presented as isolating mutually
 distrusting people on one host. People who need isolation from each other need
 different hosts.
@@ -1314,9 +1322,33 @@ credentials on it. SEC-SESSION-3 already says people who need isolation need
 different hosts; this is the stronger statement that a direct box isolates
 nobody, not even from a member who never escapes anything. Until the seventh
 audit it was worse, because the service user could also become root through the
-migrate helper (`hardening.md`). **Decide:** refuse members' starts on a host
-with the sandbox off, or let the operator choose that per box; until then, this
-row is the statement.
+migrate helper (`hardening.md`). **Decided: refused, with no per-box opt-in.**
+A member's `start` and `resume` go only to a box whose health says
+`sandboxed: true`, or to one they administer, which for a member is a box that
+acts for them alone (`runsSessionsFor`, `hosts.js`). The hub says `true` only
+with the sandbox on and no `FLEETWRIGHT_SANDBOX_ARGS` let through that end
+containment, `--privileged` among them (`#hostFacts`, `http.js`;
+`unsafeSandboxArgs`); the `sandbox` field beside it could not answer the
+question, because a sidecar from before #681 sent a variant whether or not the
+box used it. A box too old to send `sandboxed` has not said, which is cannot
+tell (C-5), and is treated as unsandboxed. A tag pick leaves such boxes out for
+a member rather than landing on one, and is refused with code `unsandboxed` and
+every box named only when nothing else will do (`scheduler.js`); a resume is
+held to the same rule, and the owner's `stop`, `forget` and the rest still
+reach the session, since they run nothing of theirs there. The snapshot's
+`takesSessions` asks the same question, so a phone offers a member only the
+machines a start of theirs would reach, and it now asks `mayActFor` too: it
+used to say yes to a member for a box another member enrolled. Both phones
+draw Resume by the same rule and say why in its place where they do not.
+`test/unsandboxed-hosts.test.js`, `test/unsandboxed-resume-ios-in-apps.test.js`,
+`test/unsandboxed-resume-android-in-apps.test.js`. **Not fixed, and stated:** a
+member's session already running on a direct box keeps running, and the box's
+boot restore brings it back, because the rule is placement's and the hub
+restores its own; an operator should stop those. `sandboxed` does not account
+for G4's fallback to `--userns=host` on a box whose service runs as root, so
+such a box says `true` where G4's mapping does not hold. And until each box is
+updated none reports `sandboxed`, so for that window a member starts and
+resumes only on boxes they administer.
 
 **G9 — Sessions on the egress allowlist share one network.** *Narrows
 SEC-INJECT-2.* `agent-egress` is one `--internal` network per box, so a session
@@ -1370,7 +1402,39 @@ named. Root now takes the address only from
 `/usr/local/etc/fleetwright/release-manifest`, root's, written by the installer
 from what it was told or seeded once from what the box already had, and never
 refreshed from the env file afterwards; the channel is read as one of two words
-(`fleetwright-migrate`, `migration-end-to-end.test.js`). **Not fixed, and stated:**
+(`fleetwright-migrate`, `migration-end-to-end.test.js`). Root's two other
+answers were in the same file: `--repair` re-applied each sudoers rule whose
+answer was yes in the env file, so `FLEETWRIGHT_SYSTEM_REBOOT=1` there and
+`sudo -n fleetwright-migrate` wrote the service user a reboot rule, and the
+upgrade answer the rule that starts apt as root. Root's answers now live in
+`/usr/local/etc/fleetwright/system-upgrade` and `system-reboot`, beside the
+release address and by its rule: told, kept, or seeded once from the rules in
+`/etc/sudoers.d`, which only root writes, so the env file can make a record a
+no and never a yes, and is put back to root's answer out loud (`install.sh`,
+"WHAT ROOT HAS GRANTED"). The address's seed was not once either: a seed with
+nothing to take left no file, so an apt box seeded root's address from the env
+file on every later upgrade; an empty record now marks the seed taken, and a
+box root's own environment says is apt's seeds nothing from the env file.
+`sudo fleetwright grant` no longer hands the installer the env file as root's
+environment (`grants.js`, `bin/fleetwright`), and `fleetwright-reclaim` no
+longer takes the base it removes `.stale-*` under from that file. The
+conversion offer and the heal run the installer's own helper, or root's copy
+in `/usr/local/sbin` when the tree is the service user's; a pool machine's
+first-boot join runs root's copy there, not `current`'s (`JOIN_RUNCMD`,
+`vm-image.js`); and a link in a tree is checked one hop at a time. Root's CLI
+had the same habit: `sudo fleetwright doctor` ran `FLEETWRIGHT_SYSTEMCTL_BIN`
+out of the env file as root, asked claude as whatever user that file named,
+root included, and handed every child the file's variables, `LD_PRELOAD` among
+them; and the hub's commands read the API token through the service user's
+state directory as root. As root, on a box whose env file is another
+account's, the CLI now runs doctor and grant on root's own environment and
+takes from that file only what they show, asks as and chowns to the
+installation's owner as root knows it (root's environment, the unit's `User=`,
+the file's owner, never a name inside it), runs every other command as that
+owner, and refuses `serve` (`bin/fleetwright`). `install-root-sources.test.js`,
+`sidecar-store.test.js`, `reclaim.test.js`, `grants.test.js`,
+`xo-pools.test.js`, `xo-holder.test.js`, `doctor.test.js` (the doctor tests
+need root and skip otherwise). **Not fixed, and stated:**
 a checkout or a Mac has no root-owned tree, so `sudo fleetwright` there runs
 the service user's code and the installer says so, and the one-liner as root
 refuses a checkout the service user owns and names the two ways on — move to
@@ -1387,12 +1451,106 @@ can register itself as the person's device and approve a key against their
 vault (eighth audit, reproduced). It does not reach a member's own boxes. Fix
 options, each a change to the device model: device-key-signed vault operations,
 refusing code grants without the phone's own marker bound in the seal, or binding
-vault and deposit to the GitHub id already linked to the requester. **Decide**
-whether operator boxes are inside a member's vault boundary.
+vault and deposit to the GitHub id already linked to the requester. **Decided:
+operator boxes are outside a member's vault boundary**, and only a sign-in the
+person's own phone started can become their device. Nothing in a code or a
+verifier says which flow made it, and the coordinator is the one place that
+knows which codes it relayed to a box, so it remembers the SHA-256 of each
+GitHub code it hands one, for ten minutes and at most 64, written to the
+Durable Object key `boxSignIns` before the code leaves (`#rememberBoxSignIn`,
+`core.js`), and lists them beside every device's sign-in. The minter refuses a
+listed code before GitHub is asked (`box_sign_in`, `minter/github.js`), so the
+box can still finish the sign-in it was started for, and it never becomes a
+device's. A sign-in recorded before the fix could not be told from a phone's,
+so every one was ended: a record now carries `SIGNIN_VERSION`, one without it
+is no device's and renews into none, and each member's phone signs in to
+GitHub once more after the deploy, told how by the `not_a_device` sentence.
+Vault items and approvals were not touched: an approval a forged sign-in made
+stays until its person removes it, and shows in their vault list with the
+fleet account that made it. `test/vault.test.js`, the two G11 tests. **Not
+fixed, and stated:** the list is the coordinator's word and can only take
+away, so a compromised coordinator can still begin a flow of its own or leave a
+code off it ([vault.md](./vault.md), "A sign-in the coordinator started"), and
+a coordinator from before the list sends none and is served as before.
+
+**G12 — A box's own named secrets answered members' sessions first.**
+*Narrows [credential-broker.md](./credential-broker.md)'s "a named secret is
+scoped to what `start --secret <name>` granted".* The hook socket answered
+`fleet-secret NAME` from the box's `FLEETWRIGHT_SECRETS_DIR` first, for every
+session, and only then from the session owner's vault (`namedSecretFor`,
+`src/index.js`). `start --secret` is a grant any member can make on a box that
+acts for them, so a member who named `DEPLOY_KEY` on an operator's box was
+served the operator's, and their own vault secret of that name was hidden
+behind it. **Fixed in protocol 14:** `start` and `resume` carry
+`boxSecrets: yes|no`, set by the coordinator once the box is chosen and removed
+from anything a caller sent: `yes` when the session's owner administers the box
+(`#boxSecrets`, `core.js`; the break-glass token, which names nobody,
+administers every box), decided again on a resume for the session's owner
+rather than whoever pressed it. The hub keeps it on the record
+(`--box-secrets`), and `sessionSecret` (`secret-store.js`) reads the box's
+store only for a record that says yes, or for a session somebody on the box
+itself started; every other session is answered from its owner's vault alone.
+A start or resume from a coordinator older than 14 says nothing, which the hub
+takes as no for anybody the fleet started (`boxSecretsFor`). A member's
+`secret` start on a box they do not administer that speaks below 14 is refused
+`host_outdated` rather than sent, and a member's `secrets` listing covers only
+the boxes they administer, so a picker offers nothing it could not have.
+`test/box-secrets.test.js`, `test/box-secrets-hub.test.js`,
+`test/ownership.test.js`. **Not fixed, and stated:** a fleet session started
+before its host was updated carries no flag, so the box's secrets stop
+answering it, an admin's included, until it is resumed through a coordinator
+that speaks 14; and a resume on a host below 14 cannot carry the flag, so that
+host serves it as it always did.
+
+**G13 — Removing a member left the fleet's own boxes acting for them.**
+*Violates the §3 revocation column for **Member linked Claude credential** and
+**Member provider token**.* A removal asked each connected box in the
+operator's tier to `stop` the person's sessions its last report listed and to
+`unlink` their three sign-ins (`#handBackPerson`), and four things went on in
+their name (ninth audit). A box offline at the removal was never asked, then or
+when it returned. A session the last report did not list kept running with its
+Remote Control link, and `stop` keeps a record resumable, so one that ended
+with its box came back as them on the next boot (`resumeOnBoot`). `unlink`
+(`Connections.remove`) emptied `<row>.env` and left `<row>.renewal.json`, so
+`renewProviderTokens` traded their refresh token with the fleet's client secret
+and wrote a fresh GitHub token back into the row, which undid the hand-back on
+a box a removed admin's removal took out of the tier too. And the sends were
+never checked, so a box that refused or never answered read as asked.
+**Fixed:** a removal is now a debt each live enrolment in the operator's tier
+owes until the box itself says it is paid (`#forgetOnBoxes`, `core.js`). The
+person goes on a list of removals, at most `MAX_REMOVALS_KEPT` (200), under the
+Durable Object key `removals`; each enrolment keeps the earliest one it has not
+confirmed (`forgetFrom`, saved with the enrolment); and the box is sent
+`forgetperson`, whose actor is the person and which has no params, at once
+when it is connected and otherwise on its first report whose hub is answering.
+Only its `ok` settles it. A box that answers `unknown_verb` runs an older
+release: it is asked the old `stop` and `unlink` meanwhile and asked again when
+it reconnects. One that does not answer is asked again from a report five
+minutes on, with one event saying so. `dispatch` refuses the verb from any
+caller (`coordinator_only`) and no MCP tool offers it, and it adds no reach:
+it is `forget` of each of the person's sessions and `unlink` of each of their
+sign-ins, in one act. On the box the sidecar takes the address from the actor
+alone and hands it to the hub on a loopback route of its own,
+`/api/forget-person`, which no command surface reaches; `forget-person.js`
+stops and bins every session whose record says the person started it, marked
+not to resume on boot before it is binned, deletes `accounts/<email>.json`,
+deletes the env file, its metadata and the renewal material
+(`Connections.forget`), and deletes what the vault gave the box for them.
+Separately, `unlink` now drops the provider's renewal material too, and
+`Accounts.list` no longer counts `<email>.renewal.json` as a second linked
+Claude account. `test/config-frame.test.js`, `test/forget-person.test.js`,
+`test/github-renewal.test.js`. **Not fixed, and stated:** a member's own boxes
+are not asked: they act for that person alone and are their hardware, the
+minter stops serving them anything from the vault, and an admin can delete the
+box. A pool's sign-in the sidecar holds in memory from the vault goes on the
+next vault pass, within ten minutes, not at once. A `/login for <email>` in
+flight at the removal is not cancelled.
 
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
-a box without podman.
+a box without podman: a member's sessions no longer go there, and an admin's
+still run as the account that holds everybody's credentials on it. G9–G13
+surfaced later; what each leaves behind is in its status row.
 
 ### Status
 
@@ -1405,10 +1563,12 @@ a box without podman.
 | **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
-| **G8** | **stated, not fixed.** The scheduler still offers a direct box to members. The decision is the owner's; the migrate helper's root path it compounded is closed (`install-root-sources.test.js`). |
+| **G8** | **decided and fixed: refused, with no per-box opt-in.** A member's start or resume goes only to a box that reports `sandboxed: true` (the sandbox on, and no `FLEETWRIGHT_SANDBOX_ARGS` that end containment) or that they administer (`runsSessionsFor`); a box that has not said is treated as unsandboxed, a tag pick leaves such boxes out, and nothing else doing is refused `unsandboxed` with every box named. The snapshot's `takesSessions` and both phones' Resume follow the same rule and say why where they do not. Members' sessions already running on a direct box keep running and come back on boot until an operator stops them; `sandboxed` does not account for G4's `--userns=host` fallback; and until hosts update, members start and resume only on boxes they administer. The migrate helper's root path it compounded is closed (`install-root-sources.test.js`). `test/unsandboxed-hosts.test.js`, `test/unsandboxed-resume-ios-in-apps.test.js`, `test/unsandboxed-resume-android-in-apps.test.js`. |
 | **G9** | **fixed, not yet measured.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Like SEC-INJECT-2 as a whole, unmeasured until two people's sessions on one real box are seen unable to reach each other. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
-| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box; and the migrate helper takes the manifest address from a file root owns, not the service user's env file. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box with no system node are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`, `migration-end-to-end.test.js`. |
-| **G11** | **stated, not fixed.** An owner decision; until then docs/vault.md says the device rule holds for a member's own boxes only. |
+| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box; and the migrate helper takes the manifest address from a file root owns, not the service user's env file; and the sudoers answers `--repair` acts on, and every seed of root's records, come from root's own files; and root's CLI runs nothing from the service user's env file as root, chowns to no name in it, and hands its variables to no child. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box whose only node 24+ is in the service user's home (run as root, with a warning; the heal refuses) are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`, `migration-end-to-end.test.js`, `sidecar-store.test.js`, `reclaim.test.js`, `grants.test.js`, `xo-pools.test.js`, `xo-holder.test.js`. |
+| **G11** | **decided and fixed.** Operator boxes are outside a member's vault boundary. The coordinator remembers the SHA-256 of every GitHub code it hands a box (ten minutes, in Durable Object storage key `boxSignIns`, at most 64) and lists them beside each device's sign-in; the minter refuses a listed code before GitHub is asked (`box_sign_in`), so a sign-in started for a box never becomes a device's. A sign-in recorded before the fix could not be told from a phone's, so every one was ended: records now carry a version (`SIGNIN_VERSION`), one without it is no device's and renews into none, and each member's phone signs in to GitHub once more after the deploy. Vault items and approvals were not touched; an approval a forged sign-in made stays until its person removes it, and shows in their vault list with the fleet account that made it. A compromised coordinator can still begin its own flow or leave a code off the list, and an old coordinator sends no list and is served as before. `test/vault.test.js` (two G11 tests). |
+| **G12** | **fixed.** Protocol 14's `boxSecrets`, set by the coordinator on `start` and `resume` from whether the session's owner administers the box, decides whether the box's own named secrets may answer it; otherwise only the owner's vault does (`sessionSecret`). A member's `secret` start on a box they do not administer that speaks below 14 is refused `host_outdated`, and a member's `secrets` listing covers only boxes they administer. Fleet sessions started before the host update carry no flag, so the box's secrets stop answering them, admins' included, until resumed through a v14 coordinator; a resume on a host below 14 cannot be scoped. `test/box-secrets.test.js`, `test/box-secrets-hub.test.js`, `test/ownership.test.js`. |
+| **G13** | **fixed, except a member's own boxes.** A removal is a debt each live operator-tier enrolment owes until the box says it is paid: the coordinator-only `forgetperson`, asked at once or on the box's first answering report after it returns, retried after five minutes, with the old `stop` and `unlink` for a box too old to know it; the removals kept under Durable Object key `removals`, at most 200. The box bins the person's sessions with nothing to bring them back on boot, and deletes their Claude account, their sign-ins with the renewal material, and their vault copies. `unlink` now drops renewal material too. Their own boxes are not asked; a pool's sign-in held in sidecar memory goes on the next vault pass, within ten minutes; a `/login for <email>` in flight at the removal is not cancelled. `test/config-frame.test.js`, `test/forget-person.test.js`, `test/github-renewal.test.js`. |
 
 ---
 

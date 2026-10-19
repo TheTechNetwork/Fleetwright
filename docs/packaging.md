@@ -285,7 +285,9 @@ which runs as root, reads it only from `/usr/local/etc/fleetwright/release-manif
 because the env file belongs to the service user and an address they choose
 would be a release root runs. The installer writes root's copy from a value it
 is given, keeps it otherwise, and puts the env file back to match it, so editing
-the env file by hand changes nothing for long. To move a box to another release
+the env file by hand changes nothing for long. A box that had nothing to seed
+it from, every apt box among them, keeps an empty record, which the migrate
+helper refuses, rather than seeding it from the env file on a later run. To move a box to another release
 host, tell the installer as root. The one-liner takes it as `FLEETWRIGHT_MANIFEST`,
 verifies the release there, and hands that address down; a repair through the
 one-liner without it records the address it verified against, which is ours.
@@ -563,9 +565,18 @@ sudo fleetwright grant                  # what this box allows now
 ```
 
 It writes or removes the sudoers rule, installs the units the upgrade rule
-names, records the answer in `/etc/fleetwright.env` and restarts the service;
-sessions keep running. On a deb box `sudo dpkg-reconfigure fleetwright` asks
-the two questions again and does the same. A machine the fleet makes on your
+names, records the answer in root's own file,
+`/usr/local/etc/fleetwright/system-upgrade` or `system-reboot`, and in
+`/etc/fleetwright.env`, which the hub reads to decide what it offers, and
+restarts the service; sessions keep running. On a deb box `sudo
+dpkg-reconfigure fleetwright` asks the two questions again and does the same.
+**Those are the only ways to change an answer.** The rules are written from
+root's files, beside the release address and for its reason: the env file is
+the service user's, so editing it changes nothing, and the installer's next
+run puts it back to root's answer and says so. A box from before root kept
+these files takes its answers once from the rules already in
+`/etc/sudoers.d`, which only root writes, and the env file can add only a
+refusal ([security.md](./security.md) G10). A machine the fleet makes on your
 pool is born with the answers chosen on the pool's policy, which its first
 boot applies with this same command (`docs/hypervisors.md`, "Machines made
 here"). The refusal a phone or a chat gets
