@@ -292,13 +292,22 @@ async function writeVersionFacts(appId, versionId) {
     );
     return;
   }
+  // AND WHAT TO TELL THEM, on every submission, not only the first. 0.4.15
+  // was stopped before a person saw it: Apple's automated pass saw Sign in
+  // with Apple on the first screen, no demo account and no notes, and said
+  // "submitted without a demo account". There is no account to give; the
+  // sign-in is to a fleet of your own, and the demo button is the way in. So
+  // the notes say that, and `demoAccountRequired` is written on the PATCH as
+  // well as the POST: the first version set it once and never again, so a
+  // box somebody ticked in the web UI would have stayed ticked for ever.
+  const attributes = { ...contact, demoAccountRequired: false, notes: REVIEW_NOTES };
   try {
     const existing = await api(`/v1/appStoreVersions/${versionId}/appStoreReviewDetail`).catch(() => null);
     const current = existing?.data;
     if (current) {
       await api(`/v1/appStoreReviewDetails/${current.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ data: { type: 'appStoreReviewDetails', id: current.id, attributes: contact } }),
+        body: JSON.stringify({ data: { type: 'appStoreReviewDetails', id: current.id, attributes } }),
       });
     } else {
       await api('/v1/appStoreReviewDetails', {
@@ -306,17 +315,35 @@ async function writeVersionFacts(appId, versionId) {
         body: JSON.stringify({
           data: {
             type: 'appStoreReviewDetails',
-            attributes: { ...contact, demoAccountRequired: false },
+            attributes,
             relationships: { appStoreVersion: { data: { type: 'appStoreVersions', id: versionId } } },
           },
         }),
       });
     }
-    console.log(`review contact: ${contact.contactFirstName} ${contact.contactLastName}`);
+    console.log(`review contact: ${contact.contactFirstName} ${contact.contactLastName}; notes say there is no login and how to look around`);
   } catch (e) {
     console.log(`::warning::review contact not set: ${reason(e)}`);
   }
 }
+
+/**
+ * What App Review reads before opening the app. Written as the answer to the
+ * one question Apple's automated pass asks of an app with a sign-in button:
+ * where is the account. There is none to give, and this says why in the
+ * first sentence, because the pass reads the first sentence. The rest is
+ * the way in (test/demo-button.test.js pins the button's words to the app)
+ * and what the sign-in is for, so a reviewer who tries it anyway is not
+ * surprised by a refusal. Under Apple's 4000-character limit by a long way.
+ */
+export const REVIEW_NOTES = [
+  'This app has no username-and-password login and no account to sign up for, so there is no demo account to provide.',
+  'To look around: on the first screen, tap "Look around the demo fleet". No sign-in and nothing to type. '
+    + 'It connects to a demonstration fleet with two machines and a few sessions, and every screen of the app works against it.',
+  '"Sign in with Apple" on that screen is for people who run a fleet of their own: it signs this device in to the fleet at the address '
+    + 'typed above it, which has to allow the person’s email address first. It is not a login to this app or to any account of ours, '
+    + 'and it is not needed to review the app.',
+].join('\n\n');
 
 async function main() {
   const apps = await api(`/v1/apps?filter[bundleId]=${encodeURIComponent(BUNDLE_ID)}&limit=1`);
