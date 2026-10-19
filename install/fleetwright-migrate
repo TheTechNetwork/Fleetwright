@@ -108,7 +108,10 @@ MODE="$(stat -c %a "$MANIFEST_FILE")"
 [ $((0$MODE & 022)) -eq 0 ] \
   || die "$MANIFEST_FILE can be changed by accounts other than $(id -un) (mode $MODE), so it is not used. $REINSTALL"
 MANIFEST_URL="$(head -n 1 "$MANIFEST_FILE" | tr -d '[:space:]')"
-[ -n "$MANIFEST_URL" ] || die "$MANIFEST_FILE is empty, so there is nothing to migrate to. $REINSTALL"
+# EMPTY IS A RECORD TOO: the installer seeded it once and had nothing to take
+# (an apt box, or a checkout whose remote it could not read), and it does not
+# seed it again from the service user's file. Only telling it fills it.
+[ -n "$MANIFEST_URL" ] || die "$MANIFEST_FILE is empty: root was never given a release address. Re-run the installer as root with FLEETWRIGHT_RELEASE_MANIFEST=<url> (the one-liner passes the one it verified) and it records it."
 
 INSTALL_DIR="$(env_get_named FLEETWRIGHT_INSTALL_DIR)"
 [ -n "$INSTALL_DIR" ] || INSTALL_DIR=/opt/fleetwright-src

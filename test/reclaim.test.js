@@ -68,6 +68,22 @@ test('a name that only looks like quarantine, one level down, is not reached', (
   rmSync(base, { recursive: true, force: true });
 });
 
+test('the helper takes no base from the env file, which is the service user’s', () => {
+  // FLEETWRIGHT_INSTALL_DIR in /etc/fleetwright.env chose the directory whose
+  // releases/.stale-* root removed, and that file is chowned to the service
+  // user. Under sudo there is no FLEETWRIGHT_BASE (env_reset), which is the
+  // case run here: their file names a base, and nothing in it is touched.
+  const theirs = makeBox();
+  mkdirSync(path.join(theirs, 'releases', '.stale-named'), { recursive: true });
+  const envFile = path.join(theirs, 'fleetwright.env');
+  writeFileSync(envFile, `FLEETWRIGHT_INSTALL_DIR=${path.join(theirs, 'current')}\n`);
+  const env = { ...process.env, FLEETWRIGHT_ENV_FILE: envFile };
+  delete env.FLEETWRIGHT_BASE;
+  execFileSync('sh', [HELPER], { env, stdio: 'pipe' });
+  assert.equal(existsSync(path.join(theirs, 'releases', '.stale-named')), true, 'root removed quarantine in a base the env file named');
+  rmSync(theirs, { recursive: true, force: true });
+});
+
 test('staleReleases lists exactly the quarantine', () => {
   const base = makeBox();
   mkdirSync(path.join(base, 'releases', '.stale-old-0'), { recursive: true });

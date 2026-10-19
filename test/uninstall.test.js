@@ -44,9 +44,12 @@ test('root’s half goes too: the migrate rule and the helper it names', () => {
   // gone, on a box that is no longer in any fleet.
   assert.match(SH, /\/etc\/sudoers\.d\/fleetwright-migrate/);
   assert.match(SH, /rm -f \/usr\/local\/sbin\/fleetwright-migrate/);
-  // And root's copy of the address it fetches from, or a reinstall that is
-  // not told one would keep a box's that no longer exists.
-  assert.match(SH, /rm -f \/usr\/local\/etc\/fleetwright\/release-manifest/);
+  // And root's record of the box — the address it fetches from and the two
+  // sudoers answers — or a reinstall that is not told otherwise would keep a
+  // box's that no longer exists, and write the rules it said yes to.
+  assert.match(SH, /for f in release-manifest system-upgrade system-reboot; do\n\s+if \[ -f "\/usr\/local\/etc\/fleetwright\/\$f" \]; then\n\s+rm -f "\/usr\/local\/etc\/fleetwright\/\$f"/);
+  // And the join script a clone runs as root, root's copy.
+  assert.match(SH, /rm -f \/usr\/local\/sbin\/fleetwright-vm-join/);
   // All three rules the installer can write, in one loop, so a fourth cannot
   // be added to the installer without this list being the next thing read.
   for (const rule of ['fleetwright-upgrade', 'fleetwright-reboot', 'fleetwright-migrate']) {

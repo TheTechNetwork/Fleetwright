@@ -282,8 +282,10 @@ test('a repair reads the recorded answers and never writes one', () => {
   // because a repair happened to run would be making it for them.
   const section = SH.slice(SH.indexOf('# --- 8b.'), SH.indexOf('# --- 9.'));
 
-  assert.match(section, /get_env "\$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE\)" = 1/);
-  assert.match(section, /get_env "\$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT\)" = 1/);
+  // Root's recorded answers, not the env file's, which the service user can
+  // write (install-root-sources.test.js runs the two together).
+  assert.match(section, /"\$ROOT_SYSTEM_UPGRADE" = 1/);
+  assert.match(section, /"\$ROOT_SYSTEM_REBOOT" = 1/);
   assert.equal(/set_env/.test(section), false, 'the repair writes a setting — it must only read them');
 
   // And says so when it leaves one alone, or a repair that silently did less

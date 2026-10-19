@@ -139,11 +139,11 @@ test('root’s release address is told or kept, never taken from the service use
     const rootFile = path.join(t, 'usr', 'local', 'etc', 'fleetwright', 'release-manifest');
     const REAL = 'https://github.com/o/r/releases/latest/download/manifest.json';
     const EVIL = 'https://attacker.example/manifest.json';
-    const run = (/** @type {Record<string,string>} */ v = {}) => bash(`${fns(['get_env', 'set_env', 'put_env', 'release_manifest_url', 'record_release_manifest'])}
+    const run = (/** @type {Record<string,string>} */ v = {}) => bash(`${fns(['get_env', 'set_env', 'put_env', 'release_manifest_url', 'record_root_setting', 'root_setting'])}
 install() { local a=(); while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) a+=("$1"); shift ;; esac; done; command install "\${a[@]}"; }
 set -euo pipefail
 PLATFORM=linux CHECK_ONLY=0 ENV_FILE="$X_ENV" RELEASE_MANIFEST_FILE="$X_ROOT" DIR="$X_T" NODE_BIN="$X_NODE"
-${block}`, { X_ENV: envFile, X_ROOT: rootFile, X_T: t, X_NODE: process.execPath, FLEETWRIGHT_RELEASE_MANIFEST: '', ...v });
+${block}`, { X_ENV: envFile, X_ROOT: rootFile, X_T: t, X_NODE: process.execPath, FLEETWRIGHT_RELEASE_MANIFEST: '', FLEETWRIGHT_RELEASE_SOURCE: '', ...v });
     const root = () => (existsSync(rootFile) ? readFileSync(rootFile, 'utf8').trim() : null);
     const env = () => (readFileSync(envFile, 'utf8').match(/^FLEETWRIGHT_RELEASE_MANIFEST=(.*)$/m) ?? [])[1];
 
@@ -165,6 +165,172 @@ ${block}`, { X_ENV: envFile, X_ROOT: rootFile, X_T: t, X_NODE: process.execPath,
     r = run({ FLEETWRIGHT_RELEASE_MANIFEST: NEW });
     assert.equal(root(), NEW, r.stdout + r.stderr);
     assert.equal(env(), NEW, r.stdout + r.stderr);
+
+    // SEEDED ONCE, even when there was nothing to take. A box with no address
+    // anywhere — every apt box, which root is told is apt's — kept no file,
+    // so each later run was "the first" again and seeded root's address from
+    // whatever the service user had written since: the next `apt upgrade`
+    // made theirs root's, and `sudo -n fleetwright-migrate` ran it.
+    for (const v of [{ FLEETWRIGHT_RELEASE_SOURCE: 'apt' }, {}]) {
+      rmSync(rootFile);
+      writeFileSync(envFile, '');
+      r = run(v);
+      assert.equal(root(), '', `no record that the seed was taken:\n${r.stdout}${r.stderr}`);
+      writeFileSync(envFile, `FLEETWRIGHT_RELEASE_MANIFEST=${EVIL}\n`);
+      r = run(v);
+      assert.equal(root(), '', `root seeded its address from the service user’s file on a later run (${JSON.stringify(v)}):\n${r.stdout}${r.stderr}`);
+    }
+    // And told is still the way in.
+    r = run({ FLEETWRIGHT_RELEASE_MANIFEST: REAL });
+    assert.equal(root(), REAL, r.stdout + r.stderr);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('root’s sudoers answers are told, kept or seeded from the rule on disk — never a yes from the service user’s env file', () => {
+  // --repair re-applies every rule answered yes, and it took the answer from
+  // the env file, which is the service user's: FLEETWRIGHT_SYSTEM_REBOOT=1
+  // there, `sudo -n fleetwright-migrate`, and the heal's --repair wrote them
+  // the reboot rule (or, for upgrades, the one that starts apt as root). The
+  // deb's postinst runs --repair on every apt upgrade, so they did not even
+  // need the sudo rule to get there. Run here: whatever this installer does
+  // between recording claude and configuring the sidecar, then --repair.
+  const from = 'ok "recorded claude at $CLAUDE_BIN in $ENV_FILE"\nfi\n';
+  const blocks = (between(from, '# --- 3b. sidecar configuration').slice(from.length)
+    + between('# --- 8b. --repair', '# --- 9. --upgrade')).replaceAll('/etc/sudoers.d', '$X_SUDOERS');
+  const t = tmp('grants');
+  try {
+    const sudoers = path.join(t, 'sudoers.d');
+    mkdirSync(sudoers);
+    const envFile = path.join(t, 'fleetwright.env');
+    const etc = path.join(t, 'etc', 'fleetwright');
+    const run = (/** @type {string} */ first = '') => bash(`${fns(['get_env', 'set_env', 'put_env', 'record_root_setting', 'root_setting', 'note_grant', 'apply_grant'])}
+install() { local a=(); while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) a+=("$1"); shift ;; esac; done; command install "\${a[@]}"; }
+visudo() { :; }
+install_upgrade_units() { :; }
+write_upgrade_sudoers() { echo "RULE upgrades"; : > "$X_SUDOERS/fleetwright-upgrade"; }
+write_reboot_sudoers() { echo "RULE reboot"; : > "$X_SUDOERS/fleetwright-reboot"; }
+set -euo pipefail
+PLATFORM=linux CHECK_ONLY=0 REPAIR=1 RUN_USER=nobody ENV_FILE="$X_ENV" NODE_BIN="$X_NODE"
+SYSTEM_UPGRADE_FILE="$X_ETC/system-upgrade" SYSTEM_REBOOT_FILE="$X_ETC/system-reboot"
+${first}
+${blocks}`, { X_ENV: envFile, X_ETC: etc, X_SUDOERS: sudoers, X_NODE: process.execPath });
+    const root = (/** @type {string} */ n) => { const f = path.join(etc, `system-${n}`); return existsSync(f) ? readFileSync(f, 'utf8').trim() : null; };
+    const env = (/** @type {string} */ k) => (readFileSync(envFile, 'utf8').match(new RegExp(`^FLEETWRIGHT_SYSTEM_${k}=(.*)$`, 'm')) ?? [])[1];
+    const theirs = 'FLEETWRIGHT_SYSTEM_UPGRADE=1\nFLEETWRIGHT_SYSTEM_REBOOT=1\n';
+
+    // The first run as root after this change, on a box that granted neither,
+    // whose service user has flipped both: no rule, a no recorded for each,
+    // and their file put back to it out loud.
+    writeFileSync(envFile, theirs);
+    let r = run();
+    assert.doesNotMatch(r.stdout, /RULE/, `--repair wrote a rule the service user asked for in their own file:\n${r.stdout}${r.stderr}`);
+    assert.deepEqual([root('upgrade'), root('reboot')], ['0', '0'], r.stdout + r.stderr);
+    assert.deepEqual([env('UPGRADE'), env('REBOOT')], ['0', '0'], r.stdout + r.stderr);
+    assert.match(r.stdout, /said FLEETWRIGHT_SYSTEM_REBOOT=1, and root's answer is 0/);
+    assert.equal((statSync(path.join(etc, 'system-reboot')).mode & 0o777).toString(8), '644');
+
+    // Kept: flipping it again changes nothing root does.
+    writeFileSync(envFile, theirs);
+    r = run();
+    assert.doesNotMatch(r.stdout, /RULE/, r.stdout + r.stderr);
+    assert.deepEqual([root('upgrade'), root('reboot')], ['0', '0']);
+
+    // Told, by root's own command (`sudo fleetwright grant reboot on`): recorded,
+    // and then --repair keeps it, whatever their file says afterwards.
+    r = run('apply_grant reboot yes');
+    assert.deepEqual([root('upgrade'), root('reboot')], ['0', '1'], r.stdout + r.stderr);
+    writeFileSync(envFile, 'FLEETWRIGHT_SYSTEM_REBOOT=0\n');
+    r = run();
+    assert.equal(r.stdout.match(/RULE reboot/g)?.length, 1, `the kept yes was not re-applied:\n${r.stdout}${r.stderr}`);
+    assert.equal(env('REBOOT'), '1');
+
+    // A box from before root's record: seeded from the rules on disk, which
+    // only root writes. The reboot rule is there and is repaired; the env
+    // file's yes for upgrades, with no rule behind it, is a no.
+    rmSync(etc, { recursive: true });
+    writeFileSync(envFile, theirs);
+    r = run();
+    assert.deepEqual([root('upgrade'), root('reboot')], ['0', '1'], r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /RULE upgrades/, r.stdout + r.stderr);
+    assert.match(r.stdout, /RULE reboot/);
+
+    // Never answered anywhere: recorded as nobody's answer yet, so the wizard
+    // still asks, and nothing is granted.
+    rmSync(etc, { recursive: true });
+    rmSync(path.join(sudoers, 'fleetwright-reboot'));
+    writeFileSync(envFile, '');
+    r = run();
+    assert.deepEqual([root('upgrade'), root('reboot')], ['', ''], r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /RULE/);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('the conversion offer runs the installer’s own migrate helper, never the payload’s nor a stale snapshot', () => {
+  // `$DIR/install/fleetwright-migrate`, as root. Only the payload guard at
+  // the top kept $DIR equal to $SELF_DIR on this path; a payload is the
+  // service user's `current`. And the tree's, not /usr/local/sbin's, when
+  // the tree is root's: that copy was a snapshot from whichever install ran
+  // last, and a box re-ran the one-liner with a fix to the helper in its
+  // tree and migrated with the previous one.
+  const offer = between('  case "$MIGRATE" in\n', '\nfi\n').replaceAll('/usr/local/sbin/', '$X_T/sbin/install/');
+  const t = tmp('offer');
+  try {
+    for (const d of ['self', 'payload', 'sbin']) {
+      mkdirSync(path.join(t, d, 'install'), { recursive: true });
+      writeFileSync(path.join(t, d, 'install', 'fleetwright-migrate'), `#!/bin/sh\necho "ran ${d}"\n`, { mode: 0o755 });
+    }
+    const r = bash(`${fns([...ALTER_FNS, 'root_may_run'])}
+eval "$(fn migrate_helper | sed "s#/usr/local/sbin/#$X_T/sbin/install/#")"
+PLATFORM=linux RUN_USER=nobody MIGRATE=yes SELF_DIR="$X_T/self" DIR="$X_T/payload"
+${offer}`, { X_T: t });
+    assert.match(r.stdout, /^ran self$/m, r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /ran (payload|sbin)/);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('on a checkout the service user can change, root runs the migrate helper it copied before asking', { skip: !canBeNobody && 'needs root, sudo and a nobody account' }, () => {
+  // The offer waits on a person's answer; the tree is theirs for as long as
+  // that takes. The copy in /usr/local/sbin was taken from it earlier in the
+  // same run and is out of their reach, so that is the one root runs.
+  const t = tmp('offer-own');
+  try {
+    mkdirSync(path.join(t, 'self', 'install'), { recursive: true });
+    mkdirSync(path.join(t, 'sbin'));
+    writeFileSync(path.join(t, 'self', 'install', 'fleetwright-migrate'), '#!/bin/sh\necho "ran theirs"\n', { mode: 0o755 });
+    writeFileSync(path.join(t, 'sbin', 'fleetwright-migrate'), '#!/bin/sh\necho "ran root’s"\n', { mode: 0o755 });
+    spawnSync('chown', ['-R', 'nobody', path.join(t, 'self')]);
+    const offer = between('  case "$MIGRATE" in\n', '\nfi\n').replaceAll('/usr/local/sbin/', '$X_T/sbin/');
+    const r = bash(`${fns([...ALTER_FNS, 'root_may_run'])}
+eval "$(fn migrate_helper | sed "s#/usr/local/sbin/#$X_T/sbin/#")"
+PLATFORM=linux RUN_USER=nobody MIGRATE=yes SELF_DIR="$X_T/self" DIR="$X_T/self"
+${offer}`, { X_T: t });
+    assert.match(r.stdout, /^ran root’s$/m, r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /ran theirs/);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('a machine cloned from an image of this box gets a root-owned join script, from the installer’s own tree', () => {
+  const block = between('# THE FIRST-BOOT JOIN, root', '# Reading the service journal');
+  const t = tmp('vmjoin');
+  try {
+    for (const d of ['self', 'payload']) {
+      mkdirSync(path.join(t, d, 'install'), { recursive: true });
+      writeFileSync(path.join(t, d, 'install', 'fleetwright-vm-join'), d);
+    }
+    const r = bash(`${fns([])}
+install() { echo "install $*"; }
+PACKAGED=1 PLATFORM=linux CHECK_ONLY=0 SELF_DIR="$X_T/self" DIR="$X_T/payload"
+${block}`, { X_T: t });
+    assert.match(r.stdout, new RegExp(`^install -m 0755 -o root -g root ${t}/self/install/fleetwright-vm-join /usr/local/sbin/fleetwright-vm-join$`, 'm'), r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /payload/);
   } finally {
     rmSync(t, { recursive: true, force: true });
   }
