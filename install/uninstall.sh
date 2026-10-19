@@ -321,4 +321,8 @@ printf '  This box is out of the fleet. If it was enrolled, the coordinator stil
 printf '  lists it — remove it there too:\n\n'
 printf '      curl -sX DELETE -H "Authorization: Bearer $TOKEN" \\\n'
 printf '           https://YOUR-COORDINATOR/api/hosts/%s\n\n' "$(hostname 2>/dev/null || echo HOSTID)"
-[ "$PURGE" != 1 ] && printf '  The code at %s was kept. Re-run install.sh to set this box up again.\n\n' "$PURGE_DIR"
+# AN IF, NOT `[ ] &&`: as the last line, a false test is the script's exit
+# status, and every --purge that removed everything exited 1.
+if [ "$PURGE" != 1 ]; then
+  printf '  The code at %s was kept. Re-run install.sh to set this box up again.\n\n' "$PURGE_DIR"
+fi

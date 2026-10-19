@@ -330,11 +330,9 @@ test('the migration rule names a path the service user cannot write', () => {
   // above while looking identical.
   assert.match(SH, /install -m 0755 -o root -g root "\$SELF_DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
 
-  // NO ARGUMENTS. sudoers matches argv, so every argument somebody could pass
-  // is a widening of the grant — the same reason the apt rule spells its whole
-  // command line out rather than permitting `apt-get`.
-  const rule = SH.slice(SH.indexOf('write_migrate_sudoers() {'), SH.indexOf('write_reboot_sudoers() {'));
-  assert.doesNotMatch(rule, /fleetwright-migrate [^\\n]/, 'the rule permits arguments');
+  // NO ARGUMENTS is install-on-a-box.test.js's, which renders the rule. This
+  // asserted that nothing followed the path, and to sudo nothing following the
+  // path is what permits ANY arguments.
 
   // On every box that carries the helper, checkout or release. This used to say
   // "only on a checkout: a packaged box has nothing to migrate to" — true until
@@ -371,11 +369,9 @@ test('the reclaim rule names a path the service user cannot write, scoped to .st
   // Same security argument as the migration grant: the service user can write
   // the whole install tree, so a rule naming anything under $DIR would let it
   // rewrite the script it runs as root. The helper is root-owned, in
-  // /usr/local/sbin, and takes no arguments.
+  // /usr/local/sbin, and takes no arguments (install-on-a-box.test.js).
   assert.match(SH, /^write_reclaim_sudoers\(\) \{/m);
   assert.match(SH, /NOPASSWD: \/usr\/local\/sbin\/fleetwright-reclaim/);
-  const rule = SH.slice(SH.indexOf('write_reclaim_sudoers() {'), SH.indexOf('# --- 1. prerequisites'));
-  assert.doesNotMatch(rule, /fleetwright-reclaim [^\\n]/, 'the rule permits arguments');
 
   // Installed as root, by root, on a packaged box — the mode and owner are the
   // property, a copy that inherited the checkout's ownership would defeat it.

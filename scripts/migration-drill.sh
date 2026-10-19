@@ -106,13 +106,25 @@ cleanup() {
     systemctl disable --now "$u" >/dev/null 2>&1
     rm -f "/etc/systemd/system/$u.service"
   done
+  # THE WATCHDOG AND ROOT'S OTHER HALF, which this list did not have. A run
+  # on a systemd box ended "removed everything this drill created" and left
+  # the commit-confirm timer and its unit, three root helpers, a sudoers rule
+  # granting fleetwright-reclaim to an account cleanup had just deleted, the
+  # sidecar's root-owned store, root's two recorded answers and three CLI
+  # links into a checkout that no longer existed.
+  systemctl disable --now fleetwright-confirm.timer >/dev/null 2>&1
+  rm -f /etc/systemd/system/fleetwright-confirm.timer /etc/systemd/system/fleetwright-confirm.service
   systemctl daemon-reload >/dev/null 2>&1
   rm -rf /etc/fleetwright.env /etc/fleetwright-sidecar.env /etc/fleetwright-coordinator.env \
          /var/lib/fleetwright /var/lib/fleetwright-sidecar /var/lib/fleetwright-coordinator \
-         /usr/local/bin/fleetwright /usr/local/bin/fleetwright-sidecar \
+         /usr/local/bin/fleetwright /usr/local/bin/fleetwright-sidecar /usr/local/bin/fw \
+         /usr/local/bin/agent-hub /usr/local/bin/agent-fleet-sidecar \
          /usr/local/bin/fleetwright-coordinator /usr/local/sbin/fleetwright-migrate \
+         /usr/local/sbin/fleetwright-confirm /usr/local/sbin/fleetwright-reclaim \
+         /usr/local/sbin/fleetwright-vm-join /usr/local/lib/fleetwright-sidecar \
          /etc/sudoers.d/fleetwright-upgrade /etc/sudoers.d/fleetwright-reboot \
-         /etc/sudoers.d/fleetwright-migrate "$ROOT_MANIFEST_FILE"
+         /etc/sudoers.d/fleetwright-migrate /etc/sudoers.d/fleetwright-reclaim "$ROOT_MANIFEST_FILE" \
+         "${ROOT_MANIFEST_FILE%/*}/system-upgrade" "${ROOT_MANIFEST_FILE%/*}/system-reboot"
   rmdir "${ROOT_MANIFEST_FILE%/*}" 2>/dev/null
   # The logs outlive the drill: a failure you cannot read afterwards is a
   # failure you get to reproduce.
@@ -127,6 +139,15 @@ cleanup() {
     userdel fleetwright-sidecar >/dev/null 2>&1 || true
   fi
   echo "  logs in ${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
+  # LOOKED FOR, NOT ASSERTED. The drill refuses a box with an install on it,
+  # so anything of the installer's names still here is the drill's.
+  LEFT="$(ls -d /etc/systemd/system/fleetwright* /etc/sudoers.d/fleetwright* /usr/local/sbin/fleetwright* \
+                /usr/local/lib/fleetwright* /usr/local/etc/fleetwright /usr/local/bin/fleetwright* 2>/dev/null)"
+  if [ -n "$LEFT" ]; then
+    echo "  LEFT BEHIND, by this drill:"
+    printf '%s\n' "$LEFT" | sed 's/^/       /'
+    exit 1
+  fi
   echo "  removed everything this drill created"
 }
 trap cleanup EXIT
