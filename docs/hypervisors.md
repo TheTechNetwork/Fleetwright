@@ -539,6 +539,12 @@ then does with a copy (which fields it carries over) is not measured here.
 | `resourceSet.getAll` | its own set only | `[]` | `xo-mixins/resource-sets.mjs`, `getAllResourceSets`: filtered to sets the user is a subject of unless `permission === 'admin'` |
 | `resourceSet.get` by id | **any set**, `fleetwright-made` included | **any set** | `api/resource-set.mjs`: `get` has no `permission` and no `resolve`, so only a sign-in |
 | `xo.getAllObjects` | **every object**: the pool, hosts, storage, every network, template, VM and snapshot, with all their fields | **every object** | `api/xo.mjs`: no `permission`; `xo.mjs`, `getObjects`, filters by nothing but the caller's filter |
+| `xo.getAllObjects`, a VM's `xenStoreData` | **verbatim**: values an admin set with `vm.set` on a VM made in no set came back as set | **verbatim** | the same; `vm.set`'s `xenStoreData` is filed under `vm-data/` (`api/vm.mjs`, `autoPrefix`), and a key given as `null` is deleted (measured) |
+| `user.getAll` (every user, with its `preferences`) | refused: `not enough permissions`, `{"permission":"admin"}` | refused, the same | `api/user.mjs`: `getAll.permission = 'admin'` |
+| `session.getUser` | its own user only | its own user only | `api/session.mjs`: the signed-in user's id |
+| `user.set { preferences }` on another user | refused: `a user can only change its own properties` | refused, the same | `api/user.mjs`, `set`: `id !== this.apiContext.user.id` for a caller who is not an admin |
+| REST `/rest/v0/users`, `/rest/v0/users/<id>` | `[]`; 403 `not enough privileges` | `[]`; 403 | the REST API's own privilege check; an admin gets every user with its `preferences` |
+| `disk.exportContent` of a cloud-init drive on a machine in its set | **allowed** with the `admin` ACL `vm.create` in the set gives: `$getFrom` returned; refused without it, `{"permission":"view"}` | refused, `view` | `api/disk.mjs`: `exportContent.resolve = { vdi: ['id', ['VDI', 'VDI-snapshot'], 'view'] }`, and a VDI's ACL follows its VM's. The stand-in XAPI served no export, so only Xen Orchestra's check is measured |
 | `tag.add` | on the VM it made (it holds an `admin` ACL there, as `vm.create` in a set gives) and that VM's snapshot; refused on every template, network, storage, host and other VM: `{"permission":"administrate","object":{"id":…}}` | on the VM it was given, and that VM's snapshots and clones; refused elsewhere, the same | `api/tag.mjs`: `add.resolve = { object: ['id', null, 'administrate'] }`; `xo-acl-resolver`: a VM-template is `or(checkSelf, checkMember('$pool'))` |
 | `customField.add` on a template | refused, `administrate` | refused | `api/custom-field.mjs`: `resolve object: ['id', null, 'administrate']`, and it writes only under `XenCenter.CustomFields.` |
 | `vm.set { name_label }` | on its own VM; refused on templates | on the VM it was given; refused on templates | `api/vm.mjs`: `set.resolve VM: ['id', ['VM', 'VM-snapshot', 'VM-template'], 'administrate']` |
@@ -593,6 +599,22 @@ What the code rests on, held to it:
   fleet's user can snapshot a machine it made and copy the snapshot to a
   template, a full copy on the same storage that no limit counts, and cannot
   then delete the copy. An admin removes those in Xen Orchestra.
+- **Only an admin reads what is on the edge routers** was false, and it was
+  where the pair's CARP password and the routers' key were kept: in each
+  router's `xenStoreData`, which both the fleet's user and the plain user read
+  back verbatim (dummy values). They are kept now in the preferences of a user
+  made for them, `fleetwright-edge-keys`, which only an admin reads
+  (`user.getAll`, above), and the routers carry a hash of the password and
+  the certificate's pin. The next policy job clears the old fields and builds
+  the routers again with new ones (`docs/security.md`, G14). The repo's own
+  `keepFor`, `keptFor` and `clearExposed` were run against this Xen
+  Orchestra: afterwards neither principal's `xo.getAllObjects` held any of
+  seven secret values, only the two marks.
+- **A machine's cloud-init drive** holds its ticket and the Claude login until
+  Xen Orchestra destroys it after boot, and every box holding the fleet's
+  token passes Xen Orchestra's check to export it, since the fleet's user is
+  given `admin` on every machine any box makes in the set. Recorded in
+  `docs/security.md`, G14, and not changed by it.
 
 ## What `provision` may express
 
@@ -847,11 +869,17 @@ purpose.
   and the machine that ran the job is always the first: its address is one the
   job knows, where a holder's is what its guest agent reports (`syslogTo`).
 
-**Where the key is kept.** On each router in Xen Orchestra, beside the pair's
-CARP password: Xen Orchestra's admins can read it, and the fleet's token
-cannot see the routers at all. A rebuild finds it there and keeps it. A router
-without the job's key (one from before this, or one whose key was lost) is
-**rebuilt once** to get it, one at a time for a pair. Each router now also
+**Where the key is kept.** In Xen Orchestra, beside the pair's CARP password,
+in the preferences of a user made for them, `fleetwright-edge-keys`, which
+only Xen Orchestra's admins read ("What Xen Orchestra lets whom do"). Each
+router carries only its certificate's pin, so the job can tell that the key
+it kept is the one the router has. A rebuild finds it there and keeps it. A
+router without the job's key (one from before this, or one whose key was
+lost) is **rebuilt once** to get it, one at a time for a pair. It was kept on
+the routers, in their `xenStoreData`, on the word that the fleet's token
+could not see them; every signed-in user reads that field, so the next
+policy job clears it and builds the routers again with a new key and a new
+password (`docs/security.md`, G14). Each router now also
 **keeps its WAN MAC across rebuilds** (the old router's own, or one made from
 the pool and which router it is), so the DHCP server on the way out hands the
 new router the address the old one had.
@@ -1015,10 +1043,12 @@ for the first and `.3` for the second.
 - **Their advertisements carry an HMAC** of a password made for the pair,
   so a machine on the uplink cannot claim the gateway. OPNsense passes CARP's
   own packets before any rule here ("CARP defaults"), so the private-ranges
-  rule does not stop them. The password is kept on the two VMs in Xen
-  Orchestra (their `xenStoreData`), where the admin sign-in can read it and
-  the fleet's token cannot, since neither is in the resource set; a rebuilt
-  router is given the same one, so the old and the new agree.
+  rule does not stop them. The password is kept in Xen Orchestra where only
+  its admins read it, the preferences of the user `fleetwright-edge-keys`
+  ("What Xen Orchestra lets whom do"), and each router carries only a hash of
+  it, so the job knows which password the routers have; a rebuilt router is
+  given the same one, so the old and the new agree. It was in the two VMs'
+  `xenStoreData`, which every signed-in user reads (`docs/security.md`, G14).
 
 **Changing anything rebuilds them one at a time.** The second is replaced
 while the first carries the machines, then the first while the second does,
@@ -1041,7 +1071,8 @@ their uplinks joined by a socket: the first came up master holding
 and no bad authentication. With the first powered off, the second became
 master and held 10.254.0.1. **Not yet run** on a real pool: CARP over Xen's
 netfront driver, which needs the uplink to carry multicast between the two
-VMs, and `xenStoreData` set through Xen Orchestra's `vm.set`.
+VMs. `vm.set`'s `xenStoreData`, which carries the two marks, has run against
+Xen Orchestra 5.211.0 with a stand-in XAPI, not a real pool.
 
 ### What the edge filters
 

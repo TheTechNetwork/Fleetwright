@@ -631,10 +631,14 @@ machine of the fleet, through the coordinator.
   firewall's rules stay as built, and it cannot read or clear the logs. The
   API answers only HTTPS to the WAN address from private addresses, with a
   certificate the job made and the box pins, so the key is sent to nothing
-  else. The key lives on the routers in Xen Orchestra (admins only), in the
-  person's vault beside the pool's token, and in the memory of the boxes they
-  approved for the pool. A compromised coordinator sees none of it: the key
-  reaches the phone sealed, and the vault keeps it sealed.
+  else. The key lives in Xen Orchestra where only its admins read it (the
+  preferences of a user made for it, `fleetwright-edge-keys`, beside the
+  pair's CARP password; the routers carry only the certificate's pin and a
+  hash of the password), in the person's vault beside the pool's token, and
+  in the memory of the boxes they approved for the pool. Until G14 it was in
+  the routers' `xenStoreData`, which every user signed in to that Xen
+  Orchestra reads. A compromised coordinator sees none of it: the key reaches
+  the phone sealed, and the vault keeps it sealed.
 - **A pool's page from away** (`xolook`, `xoact`, `docs/manage.md`, "From
   away"). A box that holds a person's pool token reads the page for their
   phone and seals it to a key the phone made for that one look, so the
@@ -1564,10 +1568,72 @@ box. A pool's sign-in the sidecar holds in memory from the vault goes on the
 next vault pass, within ten minutes, not at once. A `/login for <email>` in
 flight at the removal is not cancelled.
 
+**G14 — The edge routers' secrets were in a field every Xen Orchestra user reads.**
+*Violates "the fleet's token cannot see the routers at all"
+(`edge-credentials.js`, `edge-router.js`, `docs/hypervisors.md`) and the
+edge key bullet in §4.1.* The policy job kept the pair's CARP password and the
+routers' key (the `fleetwright-watch` API key and secret, the salt, and the
+private key of the certificate the boxes pin) in each router's `xenStoreData`,
+so the next job could find them, on the word that only Xen Orchestra's admins
+read it. Measured on xo-server 5.211.0 (`docs/hypervisors.md`, "What Xen
+Orchestra lets whom do"): `xo.getAllObjects` has no permission check, and it
+returned an admin-made VM's `xenStoreData` verbatim to the fleet's limited user
+(signed in with the token every approved box holds) and to a plain user with
+permission `none` and nothing granted, dummy values standing in for the
+secrets. So every box approved for the pool, and anybody else with any
+account on that Xen Orchestra, could read them. What each was there to hold
+back, by this document and `docs/hypervisors.md` (reasoned, not exercised
+here): the key is what the router's API asks (the edge key bullet above says
+what it can do); the certificate's private key is what a box's pin holds the
+router to; the CARP password's HMAC is what stops "a machine on the uplink"
+claiming the gateway. **Fixed:** both are kept in the
+preferences of a Xen Orchestra user made for the purpose,
+`fleetwright-edge-keys` (permission `none`, a random password nobody keeps),
+one entry per pool (`EDGE_KEPT`, `keepFor`, `keptFor`). Measured on 5.211.0
+with the same three principals: an admin reads it back with `user.getAll`; the
+fleet's token and the plain user are refused `user.getAll` ("not enough
+permissions", `{"permission":"admin"}`), get only their own user from
+`session.getUser`, are refused `user.set` on it ("a user can only change its
+own properties"), get `[]` from the REST API's `/rest/v0/users` and 403 from
+`/rest/v0/users/<id>`, and none of `xo.getAllObjects`, `group.getAll`,
+`acl.getCurrentPermissions`, `resourceSet.getAll`, `cloudConfig.getAll` or
+`user.getAuthenticationTokens` carried the value. A router now carries only a
+SHA-256 of the password under a label of its own and the pin of its
+certificate (`fleetwright-carp-mark`, `fleetwright-watch-pin`), enough for the
+job to tell that what it kept is what the router has. The repo's own
+functions were run against that Xen Orchestra: the fleet's token and the plain
+user read the two marks and none of seven secret values. **Rotated on
+upgrade:** the next policy job takes `fleetwright-carp` and `fleetwright-watch`
+off every router that has them (`vm.set` with null, measured to delete them),
+whatever else it does; and on the way out's pool it rebuilds the routers even
+when the phone did not ask for the edge, since nothing kept matches them: a
+single router with a new key, a pair the way a pair that lost its password is
+made again (the second made first, a new password, the machines without a way
+out while it starts). The phone is handed the new key at the end of the job.
+`test/edge-router.test.js` ("after a build, nothing Xen Orchestra shows
+everybody signed in…", "routers that carry the pair's password and the key in
+the clear…"), `test/xo-setup.test.js` ("a router that carries its key in the
+clear…"), `test/edge-credentials.test.js`; each of the three regressions
+failed on the code before the fix. **Not fixed, and stated:** the old values
+stay valid on a router until the job that rebuilds it runs; a pool whose way
+out is no longer the edge's pool has the fields cleared and is rebuilt only by
+the next job that builds its edge; the values were readable before the
+upgrade, and anybody who read them then kept them until that rebuild. **Found
+beside it, not changed here:** a session machine's cloud-init drive holds its
+ticket and the Claude login until Xen Orchestra destroys it after boot
+(`destroyCloudConfigVdiAfterBoot`), and the fleet's user holds the `admin` ACL
+`vm.create` gives in its set on every machine any box made, so any box
+holding the token passes Xen Orchestra's check for `disk.exportContent` on
+another box's machine's drive in that window (measured: `$getFrom` returned to
+the fleet's user with the ACL, `not enough permissions` without it and to the
+plain user; the stand-in XAPI could not serve the export, so the bytes were not
+read). The router's own disk, made by the admin outside the set, is refused to
+both.
+
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
 a box without podman: a member's sessions no longer go there, and an admin's
-still run as the account that holds everybody's credentials on it. G9–G13
+still run as the account that holds everybody's credentials on it. G9–G14
 surfaced later; what each leaves behind is in its status row.
 
 ### Status
@@ -1587,6 +1653,7 @@ surfaced later; what each leaves behind is in its status row.
 | **G11** | **decided and fixed.** Operator boxes are outside a member's vault boundary. The coordinator remembers the SHA-256 of every GitHub code it hands a box (ten minutes, in Durable Object storage key `boxSignIns`, at most 64) and lists them beside each device's sign-in; the minter refuses a listed code before GitHub is asked (`box_sign_in`), so a sign-in started for a box never becomes a device's. A sign-in recorded before the fix could not be told from a phone's, so every one was ended: records now carry a version (`SIGNIN_VERSION`), one without it is no device's and renews into none, and each member's phone signs in to GitHub once more after the deploy. Vault items and approvals were not touched; an approval a forged sign-in made stays until its person removes it, and shows in their vault list with the fleet account that made it. A compromised coordinator can still begin its own flow or leave a code off the list, and an old coordinator sends no list and is served as before. `test/vault.test.js` (two G11 tests). |
 | **G12** | **fixed.** Protocol 14's `boxSecrets`, set by the coordinator on `start` and `resume` from whether the session's owner administers the box, decides whether the box's own named secrets may answer it; otherwise only the owner's vault does (`sessionSecret`). A member's `secret` start on a box they do not administer that speaks below 14 is refused `host_outdated`, and a member's `secrets` listing covers only boxes they administer. Fleet sessions started before the host update carry no flag, so the box's secrets stop answering them, admins' included, until resumed through a v14 coordinator; a resume on a host below 14 cannot be scoped. `test/box-secrets.test.js`, `test/box-secrets-hub.test.js`, `test/ownership.test.js`. |
 | **G13** | **fixed, except a member's own boxes.** A removal is a debt each live operator-tier enrolment owes until the box says it is paid: the coordinator-only `forgetperson`, asked at once or on the box's first answering report after it returns, retried after five minutes, with the old `stop` and `unlink` for a box too old to know it; the removals kept under Durable Object key `removals`, at most 200. The box bins the person's sessions with nothing to bring them back on boot, and deletes their Claude account, their sign-ins with the renewal material, and their vault copies. `unlink` now drops renewal material too. Their own boxes are not asked; a pool's sign-in held in sidecar memory goes on the next vault pass, within ten minutes; a `/login for <email>` in flight at the removal is not cancelled. `test/config-frame.test.js`, `test/forget-person.test.js`, `test/github-renewal.test.js`. |
+| **G14** | **fixed, rotated on upgrade.** The edge pair's CARP password and the routers' key, kept in their `xenStoreData` where `xo.getAllObjects` shows them to every signed-in user (measured on 5.211.0), are kept in the preferences of the `fleetwright-edge-keys` user, which only an admin reads back (measured); the routers carry a hash of the password and the certificate's pin. The next policy job clears the old fields from every router and rebuilds the edge on the way out's pool with a new password and key, asked or not. The old values stay valid until that rebuild. A session machine's cloud-init drive is readable through Xen Orchestra by any box holding the fleet's token until boot destroys it (measured at Xen Orchestra's check), not changed here. `test/edge-router.test.js`, `test/xo-setup.test.js`, `test/edge-credentials.test.js`. |
 
 ---
 
