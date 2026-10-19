@@ -1678,12 +1678,29 @@ The machine's own disk is under the same check for its whole life:
 `xo-acl-resolver` grants a VDI to whoever has the permission on a VM it is
 attached to, and a `VDI-snapshot` follows its source, so every box holding the
 token passes Xen Orchestra's check to export the disk the hub keeps the login
-on (`runner-login.token`), as it did before this change (read from 5.211.0's
-resolver; whether XAPI serves an export of a running machine's disk was not
-measured). Both come from one Xen Orchestra user for every box, with `admin`
-on every machine any of them made; closing them needs a user per box, or the
-ACL taken off after the clone, which the limited user cannot do
-(`acl.remove` is an admin's). A box that restarts between making a machine and
+on (`runner-login.token`), as it did before this change (measured at Xen
+Orchestra's check: `$getFrom` for the disk of a machine made with the token;
+whether XAPI serves an export of a running machine's disk was not measured).
+Both come from one Xen Orchestra user for every box holding the token, with
+`admin` on every machine any of them made. Who those boxes are bounds it: the
+token is an item in the pool owner's vault, handed only to boxes that person
+approved (§4.1), so every box that passes the check is one they approved,
+and each already holds a token that makes, stops and deletes any machine in
+the set. What is left is one compromised box among a person's own
+reaching the machines the others made, not one person reaching another's. A
+user per box would narrow it to the machines a box made. Measured on 5.211.0
+with two users in the fleet's set and the stand-in XAPI: `vm.create` gave the
+`admin` ACL to its caller alone, and the other user was refused
+`disk.exportContent` on the machine's disk (`{"permission":"view"}`) and
+`vm.export`, `vm.snapshot`, `vm.clone`, `vm.copy`, `vm.start`, `vm.set`,
+`tag.add` and `vm.delete` on the machine, all of which the maker was given
+(`share: true` gives every subject of the set the ACL; the fleet does not pass
+it). Not built: each box would need its own user and token, minted by an admin
+job and kept in its own vault item, and a machine could then be stopped,
+extended, swept on expiry or handed its login only by the box that made it, so
+a box gone would strand its machines until an admin job removed them. The
+ACL taken off after the clone is not open to the limited user (`acl.remove` is
+an admin's). A box that restarts between making a machine and
 its asking hands it nothing (what it made is kept in memory), and a machine
 image built before this change does not ask, so its machines run with no
 login until it is rebuilt. The pool's own machine is made by the admin outside
@@ -1714,7 +1731,7 @@ surfaced later; what each leaves behind is in its status row.
 | **G11** | **decided and fixed.** Operator boxes are outside a member's vault boundary. The coordinator remembers the SHA-256 of every GitHub code it hands a box (ten minutes, in Durable Object storage key `boxSignIns`, at most 64) and lists them beside each device's sign-in; the minter refuses a listed code before GitHub is asked (`box_sign_in`), so a sign-in started for a box never becomes a device's. A sign-in recorded before the fix could not be told from a phone's, so every one was ended: records now carry a version (`SIGNIN_VERSION`), one without it is no device's and renews into none, and each member's phone signs in to GitHub once more after the deploy. Vault items and approvals were not touched; an approval a forged sign-in made stays until its person removes it, and shows in their vault list with the fleet account that made it. A compromised coordinator can still begin its own flow or leave a code off the list, and an old coordinator sends no list and is served as before. `test/vault.test.js` (two G11 tests). |
 | **G12** | **fixed.** Protocol 14's `boxSecrets`, set by the coordinator on `start` and `resume` from whether the session's owner administers the box, decides whether the box's own named secrets may answer it; otherwise only the owner's vault does (`sessionSecret`). A member's `secret` start on a box they do not administer that speaks below 14 is refused `host_outdated`, and a member's `secrets` listing covers only boxes they administer. Fleet sessions started before the host update carry no flag, so the box's secrets stop answering them, admins' included, until resumed through a v14 coordinator; a resume on a host below 14 cannot be scoped. `test/box-secrets.test.js`, `test/box-secrets-hub.test.js`, `test/ownership.test.js`. |
 | **G13** | **fixed, except a member's own boxes.** A removal is a debt each live operator-tier enrolment owes until the box says it is paid: the coordinator-only `forgetperson`, asked at once or on the box's first answering report after it returns, retried after five minutes, with the old `stop` and `unlink` for a box too old to know it; the removals kept under Durable Object key `removals`, at most 200. The box bins the person's sessions with nothing to bring them back on boot, and deletes their Claude account, their sign-ins with the renewal material, and their vault copies. `unlink` now drops renewal material too. Their own boxes are not asked; a pool's sign-in held in sidecar memory goes on the next vault pass, within ten minutes; a `/login for <email>` in flight at the removal is not cancelled. `test/config-frame.test.js`, `test/forget-person.test.js`, `test/github-renewal.test.js`. |
-| **G14** | **fixed, rotated on upgrade.** The edge pair's CARP password and the routers' key, kept in their `xenStoreData` where `xo.getAllObjects` shows them to every signed-in user (measured on 5.211.0), are kept in the preferences of the `fleetwright-edge-keys` user, which only an admin reads back (measured); the routers carry a hash of the password and the certificate's pin. The next policy job clears the old fields from every router and rebuilds the edge on the way out's pool with a new password and key, asked or not. The old values stay valid until that rebuild. A session machine's cloud-init drive is readable through Xen Orchestra by any box holding the fleet's token until boot destroys it (measured at Xen Orchestra's check), so it no longer carries the Claude login: the machine asks once enrolled and the box that made it hands it over sealed (`vmlogin`); its ticket lives fifteen minutes, and spent twice it is refused, recorded as `vm.ticket-reused` and the host it let in revoked. Not closed: the ticket itself stays on the drive and cannot be bound to the machine, and the machine's own disk, where the login lands, passes the same check for its life (read from 5.211.0's resolver, the export not measured). `test/edge-router.test.js`, `test/xo-setup.test.js`, `test/edge-credentials.test.js`, `test/xo-pools.test.js`, `test/pool-vms-coordinator.test.js`, `test/vm-claude-login.test.js`. |
+| **G14** | **fixed, rotated on upgrade.** The edge pair's CARP password and the routers' key, kept in their `xenStoreData` where `xo.getAllObjects` shows them to every signed-in user (measured on 5.211.0), are kept in the preferences of the `fleetwright-edge-keys` user, which only an admin reads back (measured); the routers carry a hash of the password and the certificate's pin. The next policy job clears the old fields from every router and rebuilds the edge on the way out's pool with a new password and key, asked or not. The old values stay valid until that rebuild. A session machine's cloud-init drive is readable through Xen Orchestra by any box holding the fleet's token until boot destroys it (measured at Xen Orchestra's check), so it no longer carries the Claude login: the machine asks once enrolled and the box that made it hands it over sealed (`vmlogin`); its ticket lives fifteen minutes, and spent twice it is refused, recorded as `vm.ticket-reused` and the host it let in revoked. Not closed: the ticket itself stays on the drive and cannot be bound to the machine, and the machine's own disk, where the login lands, passes the same check for its life (measured at Xen Orchestra's check, the export not measured). Both reach only boxes the pool's owner approved for it; a user per box would narrow them to the box that made the machine (measured) and is not built, since a box gone would strand its machines. `test/edge-router.test.js`, `test/xo-setup.test.js`, `test/edge-credentials.test.js`, `test/xo-pools.test.js`, `test/pool-vms-coordinator.test.js`, `test/vm-claude-login.test.js`. |
 
 ---
 

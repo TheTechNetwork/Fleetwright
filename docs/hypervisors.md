@@ -626,9 +626,23 @@ What the code rests on, held to it:
   the same check**, for its whole life: `xo-acl-resolver` grants a VDI to
   anybody with the permission on a VM it is attached to, and `VDI-snapshot`
   follows the disk it is a snapshot of, so every such box passes Xen
-  Orchestra's check to export the disk the hub keeps the login on. Read from
-  5.211.0's resolver, not exercised: the stand-in XAPI serves no export, so
-  whether XAPI serves one of a running machine's disk is not measured.
+  Orchestra's check to export the disk the hub keeps the login on (measured:
+  `$getFrom` for the disk of a machine made with the token; the stand-in XAPI
+  serves no export, so whether XAPI serves one of a running machine's disk is
+  not). Every such box is one the pool's owner approved, and already holds
+  a token that can delete the machine.
+- **A user per box would keep each box to its own machines.** Measured with
+  two users made as the fleet's is, both subjects of the one set: `vm.create`
+  gave the `admin` ACL to its caller alone; the other was refused
+  `disk.exportContent` on the machine's disk (`{"permission":"view"}`),
+  `vm.export`, `vm.clone` and `vm.copy` (`administrate`), `vm.snapshot` and
+  `vm.start` (`operate`), and `vm.set`, `tag.add` and `vm.delete`
+  (`administrate`); the maker was given each. `vm.create` with `share: true`
+  gives every subject the ACL, which is today's behaviour by another route.
+  Not built: a machine would answer only to the box that made it, so stopping,
+  extending, sweeping on expiry and handing over the login would all wait on
+  that one box, and each box would need a user and a token an admin job
+  minted for it (`docs/security.md`, G14).
 
 ## What `provision` may express
 
