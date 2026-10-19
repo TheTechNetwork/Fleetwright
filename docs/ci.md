@@ -8,6 +8,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | workflow | on | secrets |
 |---|---|---|
 | `ci.yml` | every push and PR — **no paths filter**, see `ci-scope.md` | none |
+| `ci.yml` — `root` | every push and PR — the root-gated tests, under `sudo`, on Node 24 and 26; see [below](#the-tests-only-root-can-run) | none |
 | `ci.yml` — `gate` (`CI passed`) | every push, PR and merge-queue run | none |
 | `ios.yml` — `build` | PRs touching `apps/ios` | **none** |
 | `android.yml` — `debug` | PRs touching `apps/android` | none |
@@ -38,7 +39,7 @@ Two named checks, and they are the only two worth requiring:
 
 | check | what it means |
 |---|---|
-| **`CI passed`** | `ci.yml`'s `test` matrix and `checks` job both passed, or were legitimately skipped |
+| **`CI passed`** | `ci.yml`'s `test` matrix, `checks` job and `root` matrix all passed, or were legitimately skipped |
 | **`Worker passed`** | `worker.yml`'s `check` and `container` jobs passed, or the change was not in the Worker's bundle |
 
 **They exist so that a required check can have a stable name.** Requiring
@@ -82,6 +83,22 @@ change outside `apps/ios` it reports *nothing* rather than *skipped* — a
 required check would wait on it forever. Making them requireable means the same
 `changes`-job treatment `worker.yml` got; until then they report on the pull
 request and a human reads them.
+
+## The tests only root can run
+
+Twenty-four tests skip unless they run as root — root's doctor, root's git and
+its hooks, the installer acting as the service user, the sidecar's store and
+account — and every other Linux job runs as `runner`, so until `root` existed
+they reported skipped on every run and nobody saw them. `root` runs the six
+files that hold them (`bootstrap`, `doctor`, `grants`, `install-root-sources`,
+`sidecar-store`, `sidecar-user`) under the runner's passwordless sudo, in about
+ten seconds, as `sudo env "PATH=$PATH" node --test …`: plain `sudo` resets PATH
+to its `secure_path`, which does not have setup-node's `node`. It **fails on
+any skip** and names the test, because a root job that skipped what needs root
+would be green having tested nothing. Its first run on Node 26 found root's
+doctor passing the service user's env file to root's own children, which is
+why it runs on both Nodes. A new root-only test in a seventh file must be added
+to that list, or it stays unrun.
 
 ## The Worker's deploy filter
 
