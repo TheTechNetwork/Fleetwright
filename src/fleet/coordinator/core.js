@@ -844,6 +844,7 @@ export class CoordinatorCore {
     // ONBOARDING PROGRESS IS ITS OWN AUDIENCE: the job's owner, on the surfaces
     // that show progress, never the ring every phone reads.
     if (msg.event === 'xosetup.progress') return this.#onSetupProgress(hostId, msg);
+    if (msg.event === 'xosetup.holder-removed') return this.#onHolderRemoved(hostId, msg);
     // A HOST REPORTS ON ITS SESSIONS, AND THAT IS ALL IT REPORTS. Every event a
     // sidecar sends is `session.*` and names the session (watcher.js); the
     // rest of the ring, enrolments, revocations, refusals, is the
@@ -2000,6 +2001,50 @@ export class CoordinatorCore {
     } catch (e) {
       this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
     }
+  }
+
+  /**
+   * The policy job removed a pool's own machine to make it again, and says
+   * which, by the name this coordinator gave it (xo-holder.js, ensureHolder).
+   *
+   * A holder that had joined was an enrolled host under that name, and
+   * deleting the VM left the host under Machines for good: "unknown", then
+   * "not reporting", beside the new one, with nothing to say why. Asked
+   * for: "Recreating holder didn't delete old one". Retired here, as a
+   * temporary host that went away is (ephemeralHostRetired), so the row goes.
+   *
+   * HELD TO THE JOB AND TO THE OWNER. The event comes from the box running
+   * the job, on the enrolment that began it, while its owner is in the
+   * fleet (#setupOn and the holder pin's checks), and the name is one of a
+   * pool's own machine let in for that owner (`holder:<email>`) or enrolled
+   * by them, so a box can retire nothing else: not another person's holder,
+   * not a box, not itself. A name this coordinator never enrolled, or one
+   * already revoked, is nothing to do.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  #onHolderRemoved(hostId, msg) {
+    const job = String(msg.job || '');
+    const rec = XOSETUP_JOB_RE.test(job) ? this.setups.get(job) : undefined;
+    const name = String(msg.hostId || '');
+    if (!rec || !this.#setupOn(job, rec, hostId) || !rec.owner || !this.#hasLiveCredential(String(rec.owner).toLowerCase())) {
+      this.log.warn(`coordinator: ${hostId} reported a holder removed for a setup it is not running`);
+      return;
+    }
+    if (!HOLDER_ID_RE.test(name) || name === hostId) return;
+    const enrolled = this.hostIds?.get(name);
+    if (!enrolled || enrolled.revokedAt || enrolled.ephemeral) return;
+    const by = String(enrolled.enrolledBy || '');
+    const theirs = (by.startsWith('holder:') ? by.slice('holder:'.length) : by).toLowerCase();
+    if (theirs !== String(rec.owner).toLowerCase()) {
+      this.log.warn(`coordinator: ${hostId} reported ${name} removed, which is not ${rec.owner}'s pool machine`);
+      return;
+    }
+    if (!this.revokeHost(name)) return;
+    this.missingSince.delete(name);
+    this.record({ event: 'host.retired', hostId: name, text: `the pool’s own machine was removed by ${hostId} to make it again` });
+    this.log.info(`coordinator: retired ${name}, removed by ${hostId} to make the pool’s own machine again`);
+    this.onStateChanged?.();
   }
 
   /**
