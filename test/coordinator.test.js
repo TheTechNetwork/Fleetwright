@@ -555,7 +555,9 @@ test('the HTTP API routes an intent and answers flat JSON', async (t) => {
 
   assert.equal(body.ok, true);
   assert.equal(body.text, 'started');
-  assert.deepEqual(stub.commands, ['/new api']);
+  // No requester is the operator's token, which administers every box, so the
+  // box's own secrets may answer the session (protocol v14).
+  assert.deepEqual(stub.commands, ['/new api --box-secrets=yes']);
 });
 
 test('the Shortcut-friendly shorthand works with one round trip', async (t) => {
@@ -569,7 +571,7 @@ test('the Shortcut-friendly shorthand works with one round trip', async (t) => {
   const body = await res.json();
 
   assert.equal(body.ok, true);
-  assert.deepEqual(stub.commands, ['/resume bigjob summary']);
+  assert.deepEqual(stub.commands, ['/resume bigjob summary --box-secrets=yes']);
 });
 
 test('/healthz is the one unauthenticated surface and leaks nothing', async (t) => {

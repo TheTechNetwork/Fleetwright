@@ -119,6 +119,17 @@ test('a pin from the environment is reported as one, and no sandbox means no san
   assert.equal((await plain.state()).sandbox, null);
 });
 
+test('/api/state says whether a session here is contained, and says no when it is not', async (t) => {
+  // The coordinator lets a member's session onto a box they do not administer
+  // only on `sandboxed: true` (docs/security.md G8), so it is said only when it
+  // is so. A sandbox the operator let `--privileged` through is not one.
+  assert.equal((await (await hub(t)).state()).sandboxed, true);
+  assert.equal((await (await hub(t, { sandbox: false })).state()).sandboxed, false);
+  const opened = await hub(t, { sandboxExtraArgs: ['--privileged'], sandboxAllowUnsafeArgs: true });
+  assert.equal((await opened.state()).sandboxed, false);
+  assert.equal((await (await hub(t, { sandboxExtraArgs: ['--device=/dev/kvm'] })).state()).sandboxed, true, 'an extra arg that adjusts the sandbox is still one');
+});
+
 test('a reader that fails leaves a null, not a default', async (t) => {
   // C-5, in the two shapes it takes here. A rules path that exists and is not
   // a file is REFUSED by readHouseRules and reported as 0 — the house rules

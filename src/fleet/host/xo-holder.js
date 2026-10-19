@@ -22,7 +22,7 @@
 // a box that is up when the laptop is asleep, and asked first once approved
 // (`holder` in its health, core.js #vmHolders).
 
-import { VM_IMAGE, imageKeyOf, isFleetImage } from './vm-image.js';
+import { JOIN_RUNCMD, VM_IMAGE, imageKeyOf, isFleetImage } from './vm-image.js';
 import { outsideSets, recordMade, setsOf } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { machineGrantsOf } from '../../core/grants.js';
@@ -110,7 +110,7 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret
     '    content: |',
     `      ${join}`,
     'runcmd:',
-    '  - [/opt/fleetwright/current/install/fleetwright-vm-join, /run/fleetwright/join.json]',
+    JOIN_RUNCMD,
     '',
   ].join('\n');
 }

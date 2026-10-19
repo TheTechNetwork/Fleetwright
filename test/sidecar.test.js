@@ -792,6 +792,8 @@ test('a fleetwright that does not publish the facts leaves them null, never defa
   assert.equal(r.health.channel, null);
   assert.equal(r.health.channelPinned, null);
   assert.equal(r.health.sandbox, null);
+  // Not false: the coordinator reads null as cannot tell (hosts.js runsSessionsFor).
+  assert.equal(r.health.sandboxed, null);
   assert.deepEqual(r.health.setLabels, []);
   assert.deepEqual(r.health.labels, ['debian13', 'gpu'], 'the labels this process was given still go out');
 });
@@ -802,6 +804,7 @@ test('the facts fleetwright publishes ride the frame in the shape the apps read'
     channel: 'rolling',
     channelPinned: false,
     sandbox: { variant: 'browser', image: 'ghcr.io/x/fleetwright-session:web', pinned: false },
+    sandboxed: true,
     houseRules: 42,
   };
   const { sidecar } = await setup(t, { facts });
@@ -809,6 +812,7 @@ test('the facts fleetwright publishes ride the frame in the shape the apps read'
   assert.equal(r.health.channel, 'rolling');
   assert.equal(r.health.channelPinned, false);
   assert.deepEqual(r.health.sandbox, facts.sandbox);
+  assert.equal(r.health.sandboxed, true);
   assert.equal(r.health.houseRules, 42);
   // Three sources, one list: given, derived, set. And the removable ones
   // named apart, so a screen offers Remove on exactly those.
@@ -821,12 +825,13 @@ test('a fact of the wrong shape is dropped rather than forwarded', async (t) => 
   // frame will say. A string where a number belongs is not "cannot tell" in
   // a different font; it is refused.
   const { sidecar } = await setup(t, {
-    facts: { labels: { auto: 'amd64', set: [] }, channel: 'nightly', channelPinned: 'yes', sandbox: { variant: 1 }, houseRules: '42' },
+    facts: { labels: { auto: 'amd64', set: [] }, channel: 'nightly', channelPinned: 'yes', sandbox: { variant: 1 }, sandboxed: 'yes', houseRules: '42' },
   });
   const r = await sidecar.handle(intent({ verb: 'health' }));
   assert.equal(r.health.channel, null);
   assert.equal(r.health.channelPinned, null);
   assert.equal(r.health.sandbox, null);
+  assert.equal(r.health.sandboxed, null);
   assert.equal(r.health.houseRules, null);
   assert.deepEqual(r.health.labels, ['debian13', 'gpu']);
 });

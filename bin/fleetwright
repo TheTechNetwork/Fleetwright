@@ -18,7 +18,7 @@ import { loadConfig } from '../src/config.js';
 import { loadEnvFile } from '../src/core/env-file.js';
 import { Registry } from '../src/core/registry.js';
 import { titleFromTranscript } from '../src/core/titles.js';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { readApiToken, apiTokenFile } from '../src/core/api-token.js';
 import { updateStatus } from '../src/core/update.js';
 import { releaseLayout } from '../src/core/release-apply.js';
@@ -48,8 +48,64 @@ if (sub === 'join') {
 // The old path on a box the installer has not migrated yet. The override is
 // read after adopting legacy names, so the old variable still works too.
 adoptLegacyEnv(process.env);
-loadEnvFile(process.env.FLEETWRIGHT_ENV_FILE || preferExisting('/etc/fleetwright.env', '/etc/agent-hub.env'));
-const cfg = loadConfig();
+// THE ENVIRONMENT THIS WAS GIVEN, before the env file is folded into it. That
+// file is the service user's (install.sh chowns it to them), and `sudo
+// fleetwright grant` hands the installer its environment as root's own word:
+// FLEETWRIGHT_GRANT_UPGRADES=yes in their file made `grant reboot on` grant
+// upgrades too. What runs as root gets this, never the file.
+const givenEnv = { ...process.env };
+const envFile = process.env.FLEETWRIGHT_ENV_FILE || preferExisting('/etc/fleetwright.env', '/etc/agent-hub.env');
+loadEnvFile(envFile);
+let cfg = loadConfig();
+
+// ROOT, ON A BOX WHOSE CONFIG IS SOMEBODY ELSE'S. `sudo fleetwright doctor`
+// and `--repair` are advice this product prints, and doctor ran
+// FLEETWRIGHT_SYSTEMCTL_BIN out of that file as root, asked claude "as the
+// service user" named by its FLEETWRIGHT_USER — `root` meant root, directly —
+// and chowned a tree to that user. Everything the file set was also in the
+// environment of every child root spawned, so an LD_PRELOAD in it reached
+// root's `tmux -V`. And the hub's commands read the API token through the
+// state directory, which is theirs: a link at the name, and root chmodded and
+// read whatever it pointed at and sent it as a bearer token.
+//
+// So when root runs this and the file belongs to another account:
+//   - doctor and grant run on root's own environment — the one it was started
+//     with — and take from the file only what they show or ask about, never a
+//     program, a path root acts on, or a user (FROM_THEIR_FILE);
+//   - the account root asks claude as and chowns to is the installation's
+//     owner as root knows it: the one root's wrapper names, else the unit's
+//     User=, which is root's file, else the owner of the env file itself —
+//     never a name written inside it;
+//   - everything else is the hub's business and runs AS that owner, re-executed
+//     through sudo, so root follows none of their links; and `serve` as root is
+//     refused, because the service is theirs to run.
+// A file root owns, or none, changes nothing: then it is root's own word.
+
+/**
+ * What root's doctor and grant take from a config file that is another
+ * account's: what they print, the hub they ask whether it is up, the claude
+ * they ask questions of AS that account, the release address they look up and
+ * the answers they report. Not a program root runs, a path root writes or
+ * chowns, or a user; those come from root's environment or the defaults.
+ */
+const FROM_THEIR_FILE = ['bind', 'port', 'webEnabled', 'stateDir', 'workdir', 'claudeBin', 'releaseManifest', 'releaseSource', 'releaseChannel', 'systemUpgrade', 'systemReboot'];
+
+const owner = foreignOwner(envFile);
+if (owner !== null) {
+  if (sub === 'serve') {
+    console.error(`fleetwright: not serving as root. ${envFile} is ${owner}'s, and so is the service: systemctl start fleetwright`);
+    process.exit(1);
+  }
+  if (!['doctor', 'grant', 'help', '--help', '-h'].includes(sub)) asOwner(owner);
+  const theirs = cfg;
+  // Also puts root's environment back as process.env, for every child below.
+  const roots = loadConfig({ ...givenEnv });
+  cfg = Object.freeze({
+    ...roots,
+    ...Object.fromEntries(FROM_THEIR_FILE.map((k) => [k, /** @type {any} */ (theirs)[k]])),
+    runUser: owner,
+  });
+}
 const base = `http://${cfg.bind === '0.0.0.0' || cfg.bind === '::' ? '127.0.0.1' : cfg.bind}:${cfg.port}`;
 
 switch (sub) {
@@ -68,7 +124,7 @@ switch (sub) {
     const { runGrant } = await import('../src/core/grants.js');
     const { INSTALL_ROOT } = await import('../src/core/resources.js');
     const { spawnSync: spawn } = await import('node:child_process');
-    process.exit(runGrant(argv.slice(1), { cfg, root: INSTALL_ROOT, node: process.execPath, uid: process.getuid?.(), spawn }));
+    process.exit(runGrant(argv.slice(1), { cfg, root: INSTALL_ROOT, node: process.execPath, uid: process.getuid?.(), spawn, env: givenEnv }));
   }
   case 'help':
   case '--help':
@@ -445,6 +501,59 @@ function unitState() {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+/**
+ * The account that owns this installation, when root is running this and the
+ * env file is that account's; null otherwise, which means the file is root's
+ * word (or there is none).
+ *
+ * @param {string} file
+ * @returns {string|null}
+ */
+function foreignOwner(file) {
+  if (process.getuid?.() !== 0) return null;
+  let uid;
+  try {
+    uid = statSync(file).uid;
+  } catch {
+    return null;
+  }
+  if (uid === 0) return null;
+  // Root's own word first: root's `fleetwright` wrapper names the service
+  // user in the environment it starts this with (install.sh).
+  const told = givenEnv.FLEETWRIGHT_USER;
+  if (told && told !== 'root' && told !== '0') return told;
+  // Then the unit, which is root's file, so its User= is root's record too.
+  const unitDir = givenEnv.FLEETWRIGHT_UNIT_DIR || '/etc/systemd/system';
+  try {
+    const user = /^User=\s*(\S+)\s*$/m.exec(readFileSync(`${unitDir}/${unitName('fleetwright', { dir: unitDir })}.service`, 'utf8'))?.[1];
+    if (user && user !== 'root' && user !== '0') return user;
+  } catch { /* no unit: a box run by hand */ }
+  const r = spawnSync('id', ['-nu', String(uid)], { encoding: 'utf8', env: givenEnv });
+  return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : `#${uid}`;
+}
+
+/**
+ * Run this same command as the installation's owner, and exit with its status.
+ * Once: a second root arriving here means sudo did not change who this is.
+ *
+ * @param {string} who
+ */
+function asOwner(who) {
+  if (givenEnv.FLEETWRIGHT_AS_OWNER) {
+    console.error(`fleetwright: still root after asking sudo for ${who} — not running ${sub} as root on ${who}'s config`);
+    process.exit(1);
+  }
+  const r = spawnSync('sudo', ['-n', '-H', '-u', who, '--', process.execPath, process.argv[1], ...argv], {
+    stdio: 'inherit',
+    env: { ...givenEnv, FLEETWRIGHT_AS_OWNER: '1' },
+  });
+  if (r.error) {
+    console.error(`fleetwright: as root this runs as ${who}, whose config it is, and sudo could not be started: ${r.error.message}`);
+    process.exit(1);
+  }
+  process.exit(r.status ?? 1);
+}
 
 function tmuxSessionName() {
   const args = ['display-message', '-p', '#{session_name}'];

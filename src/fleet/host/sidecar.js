@@ -82,6 +82,7 @@ const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {
  * @property {'stable'|'rolling'|null} channel
  * @property {boolean|null} channelPinned
  * @property {{ variant: string, image: string, pinned: boolean }|null} sandbox
+ * @property {boolean|null} sandboxed
  * @property {number|null} houseRules
  */
 
@@ -109,6 +110,7 @@ export function factsFrom(state) {
       sandbox && typeof sandbox.variant === 'string' && typeof sandbox.image === 'string' && typeof sandbox.pinned === 'boolean'
         ? { variant: sandbox.variant, image: sandbox.image, pinned: sandbox.pinned }
         : null,
+    sandboxed: typeof state?.sandboxed === 'boolean' ? state.sandboxed : null,
     houseRules: typeof state?.houseRules === 'number' ? state.houseRules : null,
   };
 }
@@ -149,6 +151,7 @@ const CAPABILITY_VERBS = new Set([
   'exchange',
   'unlink',
   'renew',
+  'forgetperson',
   'update',
   'upgrade',
   'start',
@@ -748,6 +751,16 @@ export class Sidecar {
       // A MINT NEVER BECOMES A COMMAND LINE EITHER, for the same reason: the
       // key it signs with is in this process and nowhere else on the box.
       if (intent.verb === 'mint') return reply(await this.#mint(intent));
+
+      // SOMEBODY REMOVED FROM THE FLEET, named by the actor and nothing else,
+      // as `unlink` is. The hub does the forgetting, because every store
+      // involved is its own (src/core/forget-person.js); the reply says what
+      // it did, which is the only thing that settles it at the coordinator.
+      if (intent.verb === 'forgetperson') {
+        const who = emailFromActor(intent.actor ? `fleet:${intent.actor}` : null);
+        if (!who) return reply({ ok: false, text: 'forgetperson names its person as the actor, and this one names nobody.' });
+        return reply(await this.hub.forgetPerson(who));
+      }
 
       // ADDING A HYPERVISOR IS THIS PROCESS'S TOO. The setup key is signed
       // with the key this process holds, the sealed sign-in is opened with a
@@ -1871,6 +1884,12 @@ export class Sidecar {
         // "minimal" — a fleet where every old box claims to have no browser is
         // a fleet where `tag: browser` looks broken.
         sandbox: this.facts?.sandbox ?? null,
+        // WHETHER ITS SESSIONS ARE CONTAINED, the question `sandbox` does not
+        // answer (http.js #hostFacts). The coordinator places a member's
+        // session on a box they do not administer only when this is `true`
+        // (hosts.js runsSessionsFor, docs/security.md G8). Null from a hub
+        // too old to say, which is cannot tell and is treated as not.
+        sandboxed: this.facts?.sandboxed ?? null,
       };
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);
@@ -2192,6 +2211,11 @@ export function toCommandLine({ verb, params, actor }) {
         p.profile ? `--profile=${p.profile}` : null,
         p.secret ? `--secret=${p.secret}` : null,
         p.archive ? `--archive=${p.archive}` : null,
+        // `boxSecrets` (v14), an enum of two literals: whether this box's own
+        // named secrets may answer the session, which the coordinator decides
+        // from who administers the box. Absent from an older coordinator, and
+        // the hub then serves a fleet actor's session from its vault alone.
+        p.boxSecrets ? `--box-secrets=${p.boxSecrets === 'yes' ? 'yes' : 'no'}` : null,
       ]
         .filter(Boolean)
         .join(' ');
@@ -2232,7 +2256,15 @@ export function toCommandLine({ verb, params, actor }) {
     case 'deletefile':
       return `/deletefile ${p.name} ${p.path}`;
     case 'resume':
-      return p.choice ? `/resume ${p.name} ${p.choice}` : `/resume ${p.name}`;
+      // `boxSecrets` as on `start`, decided again for the session's owner.
+      return [
+        '/resume',
+        p.name,
+        p.choice ?? null,
+        p.boxSecrets ? `--box-secrets=${p.boxSecrets === 'yes' ? 'yes' : 'no'}` : null,
+      ]
+        .filter(Boolean)
+        .join(' ');
     case 'stop':
       return `/stop ${p.name}`;
     case 'forget':

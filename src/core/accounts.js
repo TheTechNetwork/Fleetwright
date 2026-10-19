@@ -294,6 +294,10 @@ export class Accounts {
             f.endsWith('.json') &&
             !f.endsWith('.account.json') &&
             !f.endsWith('.connections.json') &&
+            // And the renewal material beside a GitHub or Cloudflare link,
+            // which listed somebody with a renewable link as a second linked
+            // Claude account named `<email>.renewal`.
+            !f.endsWith('.renewal.json') &&
             !f.startsWith('.'),
         )
         .map((f) => f.slice(0, -'.json'.length))

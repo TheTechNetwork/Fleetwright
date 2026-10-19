@@ -28,11 +28,13 @@ import { onRunner } from './runner-login.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
 import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
+import { boxSecretsFor } from './secret-store.js';
 import { readSessionLogs } from './logs.js';
 import { phaseFor, advancePhases } from './activity.js';
 import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
 import { SpentReader } from './spent.js';
+import { emailFromActor, normaliseEmail } from './accounts.js';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -285,7 +287,7 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null, archive?: string|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null, archive?: string|null, boxSecrets?: boolean|null }} opts
    *   `task` is the session's first message in words (protocol v7); either it or `profile`
    *   skipPermissions overrides FLEETWRIGHT_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
@@ -298,9 +300,12 @@ export class SessionManager {
    *   secret NAMES a secret this host holds, granting the session permission to
    *   fetch its value at runtime over the hook socket. The name travels; the
    *   value never does. See src/core/secret-store.js.
+   *   boxSecrets says whether THIS BOX's own named secrets may answer that
+   *   request, or only the owner's vault: the coordinator's word, from who
+   *   administers the box (protocol v14). See boxSecretsFor below.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null, archive = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null, archive = null, boxSecrets = null } = {}) {
     this.reconcile();
 
     if (name && !isValidName(name)) return { ok: false, message: nameError(name) };
@@ -445,6 +450,7 @@ export class SessionManager {
       // fixed for the life of the session — a resume keeps it, because it is
       // on the record. See src/core/archive.js.
       archive,
+      boxSecrets: boxSecretsFor(actor, boxSecrets),
     });
   }
 
@@ -453,13 +459,14 @@ export class SessionManager {
    * is still in the registry as running — that is the point of keeping records
    * past the end of their tmux session.
    *
-   * @param {{ name: string, actor?: string|null, choice?: 'summary'|'full'|null }} opts
+   * @param {{ name: string, actor?: string|null, choice?: 'summary'|'full'|null, boxSecrets?: boolean|null }} opts
    *   choice picks how to answer the "resume from summary or in full?" dialog.
    *   Omit it to use FLEETWRIGHT_RESUME_CHOICE, which defaults to showing you the
-   *   dialog and waiting.
+   *   dialog and waiting. boxSecrets as on start, decided again by the
+   *   coordinator for the session's owner.
    * @returns {Promise<Result>}
    */
-  async resume({ name, actor = null, choice = null }) {
+  async resume({ name, actor = null, choice = null, boxSecrets = null }) {
     this.reconcile();
 
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
@@ -499,6 +506,10 @@ export class SessionManager {
       choice,
       // Carry the session's own mode forward, not the current global default.
       skipPermissions: rec.skipPermissions ?? null,
+      // Decided again by the coordinator for the session's owner, so somebody
+      // who has stopped administering this box since is not served its
+      // secrets by resuming. Somebody on the box leaves the record's alone.
+      boxSecrets: boxSecretsFor(actor, boxSecrets),
     });
   }
 
@@ -525,10 +536,10 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean, archive?: string|null }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean, archive?: string|null, boxSecrets?: boolean|null }} opts
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false, archive = null }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false, archive = null, boxSecrets = null }) {
     // Whose Claude account got seeded, when THIS start created the volumes.
     // Stays null on resume and on non-sandboxed sessions: null on the record
     // means "whatever was already there".
@@ -671,6 +682,9 @@ export class SessionManager {
         // The archive, by name, on a fresh start only; a resume keeps the one
         // already on the record.
         ...(archive ? { archive } : {}),
+        // Whether this box's own named secrets may answer the session, when
+        // this launch was told (secret-store.js boxSecretsServed reads it).
+        ...(typeof boxSecrets === 'boolean' ? { boxSecrets } : {}),
         // Whose Claude account this session runs on. Only set when this start
         // created the volumes — a resume keeps the account it began with, and
         // null on the record means "whatever was there already".
@@ -1046,6 +1060,37 @@ export class SessionManager {
     }
 
     return this.purge({ name });
+  }
+
+  /**
+   * EVERY SESSION ONE PERSON STARTED HERE, forgotten, for when they have been
+   * removed from the fleet (forget-person.js): stopped, out of the list and in
+   * the bin, so an admin can still bring back work removed by mistake for the
+   * bin's window, and nothing brings it back by itself.
+   *
+   * Marked stopped and to stay down BEFORE it is binned, because the bin keeps
+   * the record as it was. A running session binned as `running` with
+   * resumeOnBoot set came back out of the bin still saying so, and the next
+   * reconcile and boot relaunched it with `--resume` as the person removed.
+   *
+   * Theirs is what its record says: started by `fleet:<their address>`, read
+   * the one way every per-person store on this box reads it (emailFromActor).
+   *
+   * @param {string} email
+   * @returns {string[]} the names binned
+   */
+  forgetOwner(email) {
+    const who = normaliseEmail(email);
+    if (!who) return [];
+    const theirs = this.registry.list().filter((r) => emailFromActor(r.createdBy) === who).map((r) => r.name);
+    /** @type {string[]} */
+    const gone = [];
+    for (const name of theirs) {
+      this.registry.upsert(name, { status: 'stopped', resumeOnBoot: false, detail: 'its owner was removed from the fleet', stoppedAt: Date.now() });
+      if (this.forget({ name }).ok) gone.push(name);
+    }
+    if (gone.length) log.info(`forgot ${gone.length} session(s) of somebody removed from the fleet: ${gone.join(', ')}`);
+    return gone;
   }
 
   /**

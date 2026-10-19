@@ -21,9 +21,9 @@ import { versionDrift } from './core/release-apply.js';
 import { reclaimStale } from './core/reclaim.js';
 import { Connections, PROVIDERS } from './core/connectors.js';
 import { rowForActor, emailFromActor } from './core/accounts.js';
-import { vaultEnvFor, vaultExpiryFor, vaultSecret } from './core/vault-store.js';
+import { vaultEnvFor, vaultExpiryFor } from './core/vault-store.js';
 import { loadEnvFile } from './core/env-file.js';
-import { answerSecretRequest, readNamedSecret } from './core/secret-store.js';
+import { sessionSecret } from './core/secret-store.js';
 import { HttpAdapter } from './adapters/http.js';
 import { archiveRunning, ARCHIVE_EVERY_MS } from './core/archive.js';
 import { onRunner } from './core/runner-login.js';
@@ -158,15 +158,11 @@ export async function main() {
           // `start --secret` put there — and the VALUE is read from the store
           // now, so a rotation on the box reaches a running session. The scoping
           // is answerSecretRequest's: a session gets the name it was granted and
-          // no other, and can never probe which secrets exist by asking.
-          namedSecretFor: (name, requested) =>
-            answerSecretRequest({
-              requested,
-              granted: registry.get(name)?.secret ?? null,
-              // The box's own secret of that name first, then the session
-              // owner's from their vault.
-              read: (n) => readNamedSecret(cfg.secretsDir, n) ?? vaultSecret(cfg, emailFromActor(registry.get(name)?.createdBy ?? null), n),
-            }),
+          // no other, and can never probe which secrets exist by asking. WHICH
+          // store is sessionSecret's: this box's own only for a session whose
+          // record says the box's secrets are its starter's to have, then the
+          // owner's vault.
+          namedSecretFor: (name, requested) => sessionSecret(cfg, registry.get(name), requested),
           logger: log,
         })
       : null;

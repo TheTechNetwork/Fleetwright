@@ -105,6 +105,26 @@ export function applyVault(cfg, bundle) {
 }
 
 /**
+ * Forget what the vault gave this box for one person, now rather than on the
+ * next ask: for somebody removed from the fleet (forget-person.js), whom the
+ * minter gives nothing from then on anyway.
+ *
+ * @param {{ stateDir: string }} cfg @param {string|null} email
+ * @returns {boolean} whether anything was there
+ */
+export function forgetVault(cfg, email) {
+  const who = normaliseEmail(email);
+  if (!who) return false;
+  let had = false;
+  for (const file of [path.join(vaultDir(cfg), `${who}.json`), path.join(vaultDir(cfg), `${who}.claude`)]) {
+    if (!existsSync(file)) continue;
+    unlinkSync(file);
+    had = true;
+  }
+  return had;
+}
+
+/**
  * What this box holds for one person, or null.
  *
  * @param {{ stateDir: string }} cfg @param {string|null} email

@@ -821,6 +821,8 @@ export const COMMANDS = {
       if (archive !== null && !REPO_RE.test(archive)) {
         return { ok: false, text: 'An archive is a repository, written owner/repo.' };
       }
+      const boxSecrets = boxSecretsFlag(values);
+      if (boxSecrets === undefined) return { ok: false, text: BOX_SECRETS_WORDS };
       // title and brief arrive as FIELDS on the context, never parsed out of
       // the command line. A title is prose with spaces in it, and putting prose
       // into a line that is then split is the same mistake `answer` taking an
@@ -844,6 +846,7 @@ export const COMMANDS = {
         // there. See src/core/secret-store.js.
         secret: values?.get('secret') ?? ctx.secret ?? null,
         archive,
+        boxSecrets,
       });
       let text = r.message;
       if (r.ok && archive) text += `\nIt is pushed to ${archive}, on a branch of its own, before it stops and every ten minutes while it runs.`;
@@ -1124,7 +1127,7 @@ export const COMMANDS = {
     usage: '/resume <name> [summary|full]',
     short: 'Resume a stopped session',
     help: 'Bring a stopped session back with its conversation intact.',
-    run: async (ctx, args) => {
+    run: async (ctx, args, _flags, values) => {
       if (!args[0]) {
         // No name given: offer the ones that can actually be resumed rather
         // than making someone go and read /list first.
@@ -1140,7 +1143,9 @@ export const COMMANDS = {
       if (args[1] && !choice) {
         return { ok: false, text: `"${args[1]}" is not a resume mode. Use "summary" or "full".` };
       }
-      const r = await ctx.sessions.resume({ name: args[0], actor: ctx.actor, choice });
+      const boxSecrets = boxSecretsFlag(values);
+      if (boxSecrets === undefined) return { ok: false, text: BOX_SECRETS_WORDS };
+      const r = await ctx.sessions.resume({ name: args[0], actor: ctx.actor, choice, boxSecrets });
       // When the session parks at the dialog, turn the two options into taps.
       const waiting = ctx.sessions.awaitingChoice.has(args[0]);
       return {
@@ -2587,6 +2592,25 @@ export function helpText(ctx) {
 export function canonicalCommand(name) {
   return LOOKUP[name] ?? null;
 }
+
+/**
+ * What `--box-secrets=yes|no` says, which the fleet adds to `/new` and
+ * `/resume` (protocol v14's `boxSecrets`): whether this box's own named
+ * secrets may answer the session, decided by the coordinator from who
+ * administers the box. Null when it is not there, which sessions.js reads as
+ * no for somebody the fleet started and leaves alone for somebody on the box;
+ * undefined for any other word, which is refused rather than guessed at.
+ *
+ * @param {Map<string, string>|undefined} values
+ * @returns {boolean|null|undefined}
+ */
+function boxSecretsFlag(values) {
+  const said = values?.get('box-secrets');
+  if (said === undefined) return null;
+  return said === 'yes' ? true : said === 'no' ? false : undefined;
+}
+
+const BOX_SECRETS_WORDS = '--box-secrets is yes or no.';
 
 /**
  * Run one command line.

@@ -15,12 +15,24 @@
 //
 // Two halves, kept apart so the decision is testable without a filesystem: a
 // pure `answerSecretRequest` that says yes or no given what the session was
-// granted, and a `readNamedSecret` that touches disk. The socket wires them
-// together in src/index.js.
+// granted, and a `readNamedSecret` that touches disk. `sessionSecret` wires
+// them together for the hook socket in src/index.js.
+//
+// WHOSE STORE ANSWERS. Two hold named secrets: this box's, which its operator
+// placed, and each person's vault, which their phone gave this box
+// (vault-store.js). The box's used to answer first for every session, and
+// `start { secret }` is a grant any member can make on an operator's box, so a
+// member who named DEPLOY_KEY was served the operator's, with their own vault's
+// DEPLOY_KEY hidden behind it. Now the box's answers only a session whose
+// record says it may (`boxSecrets`, which the coordinator decides from who
+// administers the box, protocol v14) or one started by somebody on the box
+// itself; everybody else's is answered from their own vault alone.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { isValidName } from './names.js';
+import { emailFromActor } from './accounts.js';
+import { vaultSecret } from './vault-store.js';
 
 /**
  * The names of the secrets this box holds, sorted, for the `secrets` verb and
@@ -125,4 +137,63 @@ export function answerSecretRequest({ requested, granted, read }) {
     return { ok: false, error: 'no_secret' };
   }
   return { ok: true, name: requested, value };
+}
+
+/** @param {unknown} actor */
+const fromTheFleet = (actor) => String(actor ?? '').startsWith('fleet:');
+
+/**
+ * What a start or resume writes on the record about this box's own secrets.
+ *
+ * The coordinator's word when it gave one. When it did not, which is a
+ * coordinator from before v14: `false` for somebody the fleet started, because
+ * it cannot be told whether they administer this box and the box's secrets
+ * are its operator's (fail closed, and their own vault still answers); and
+ * null, leaving the record as it is, for somebody on the box, whose sessions
+ * the box's secrets have always answered (boxSecretsServed).
+ *
+ * @param {string|null|undefined} actor  who pressed start or resume
+ * @param {boolean|null|undefined} said  `--box-secrets`, from the coordinator
+ * @returns {boolean|null}
+ */
+export function boxSecretsFor(actor, said) {
+  if (typeof said === 'boolean') return said;
+  return fromTheFleet(actor) ? false : null;
+}
+
+/**
+ * May this box's own named secrets answer this session?
+ *
+ * A session started by somebody on the box (the console, the CLI: an actor
+ * with no fleet identity) yes, as it always was: that is the box's operator.
+ * A session the fleet started only when its record says so, which only the
+ * coordinator's `yes` writes; a record from before, or one an older
+ * coordinator started, says nothing and is answered from its owner's vault.
+ * An unparseable fleet creator is the fleet's like any other, so no.
+ *
+ * @param {{ createdBy?: string|null, boxSecrets?: boolean|null }|null|undefined} rec
+ */
+export function boxSecretsServed(rec) {
+  if (!rec) return false;
+  return fromTheFleet(rec.createdBy) ? rec.boxSecrets === true : true;
+}
+
+/**
+ * The answer to a session's `fleet-secret <name>`, as the hook socket gives
+ * it: the grant on its record decides (answerSecretRequest), then this box's
+ * store if it may answer this session (boxSecretsServed), then the session
+ * owner's vault. Read now, so a rotation reaches a running session.
+ *
+ * @param {{ secretsDir: string, stateDir: string }} cfg
+ * @param {{ createdBy?: string|null, secret?: string|null, boxSecrets?: boolean|null }|null|undefined} rec  the session's record
+ * @param {string} requested
+ */
+export function sessionSecret(cfg, rec, requested) {
+  return answerSecretRequest({
+    requested,
+    granted: rec?.secret ?? null,
+    read: (n) =>
+      (boxSecretsServed(rec) ? readNamedSecret(cfg.secretsDir, n) : null) ??
+      vaultSecret(cfg, emailFromActor(rec?.createdBy ?? null), n),
+  });
 }

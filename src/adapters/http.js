@@ -36,10 +36,12 @@ import { readLabels } from '../core/labels.js';
 import { readChannel, pinnedByEnv as channelPinnedByEnv } from '../core/channel.js';
 import { readVariant, sessionImage, pinnedByEnv as sandboxPinnedByEnv } from '../core/sandbox-variant.js';
 import { readHouseRules } from '../core/rules.js';
+import { unsafeSandboxArgs } from '../core/sandbox-args.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
 import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
 import { applyVault } from '../core/vault-store.js';
+import { forgetPerson } from '../core/forget-person.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
 
@@ -399,6 +401,17 @@ export class HttpAdapter {
       return json(res, r.ok ? 200 : 400, r);
     }
 
+    // SOMEBODY REMOVED FROM THE FLEET, whose sessions and sign-ins here are
+    // ended in one act (src/core/forget-person.js). From the sidecar, which
+    // takes the address from an intent the coordinator sent on its socket and
+    // has no other way to name one; done here because the sessions and every
+    // store involved are this process's. A route of its own rather than a
+    // command, so no surface that types commands can reach it.
+    if (p === '/api/forget-person' && method === 'POST') {
+      const r = forgetPerson(this.cfg, this.sessions, (await readJson(req)).email);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
     // One command endpoint rather than a REST verb per action: the web UI and
     // the chat adapters then genuinely share a code path, so a command can
     // never work in one surface and be missing from the other.
@@ -623,7 +636,7 @@ export class HttpAdapter {
    * apps already render null as "not reported". Caught per field rather than
    * around the whole object so one bad file does not blank the others.
    *
-   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, houseRules: number|null }}
+   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, houseRules: number|null }}
    */
   #hostFacts() {
     const cfg = this.cfg;
@@ -644,6 +657,18 @@ export class HttpAdapter {
       sandbox: cfg.sandbox
         ? tell(() => ({ variant: readVariant(cfg), image: sessionImage(cfg), pinned: sandboxPinnedByEnv(cfg) }))
         : null,
+      // WHETHER A SESSION HERE IS CONTAINED, which `sandbox` above does not
+      // say: it is null for a box that could not read its variant too, and a
+      // sidecar from before #681 sent one whether or not the box used it. The
+      // coordinator lets a member's session onto a box they do not administer
+      // only on `true`, because without the sandbox a session is a pane under
+      // this account, which holds every person's credentials here and the
+      // loopback token (docs/security.md G8). So `true` is said only when it
+      // is so: the sandbox on, and no FLEETWRIGHT_SANDBOX_ARGS the operator
+      // let through that end containment (sandbox-args.js), because a box
+      // whose sandbox is `--privileged` is not one. Read from configuration
+      // that cannot fail, so it is a boolean and never null.
+      sandboxed: Boolean(cfg.sandbox) && !unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length,
       // How many characters of house rules every session here is given, 0 when
       // the file exists and is refused (too big, not a file), null when there
       // is none — the shape the sidecar always sent, moved here unchanged.

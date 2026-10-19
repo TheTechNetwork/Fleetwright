@@ -301,6 +301,26 @@ export const VM_IMAGE = Object.freeze({
 const RUN_USER = 'fleetwright';
 
 /**
+ * How a machine cloned from the image runs its join script, as root, once,
+ * on its first boot (install/fleetwright-vm-join): the cloud-init line both
+ * kinds of machine carry (xo-pools.js, xo-holder.js).
+ *
+ * ROOT'S COPY, in /usr/local/sbin, which the installer puts there from the
+ * package's own extract. It ran the one in `current`, and the installer
+ * gives `current` to the run user on the image as on every box. On a clone
+ * nothing has run as that account by cloud-init's last stage except the
+ * machine's owner, who has sudo there, so the copy in `current` was still
+ * what apt laid out; but that rests on the order of a boot, and root running
+ * a file another account owns is the thing docs/security.md's G10 closes
+ * everywhere else.
+ *
+ * AN IMAGE BUILT BEFORE THAT COPY EXISTED has only `current`'s, and keeps
+ * using it — under exactly the ordering argument above — rather than a clone
+ * that cannot join.
+ */
+export const JOIN_RUNCMD = `  - [sh, -c, 'j=/usr/local/sbin/fleetwright-vm-join; [ -x "$j" ] || j=/opt/fleetwright/current/install/fleetwright-vm-join; exec "$j" "$0"', /run/fleetwright/join.json]`;
+
+/**
  * The cloud-init the build VM boots with. One script, so that "everything
  * worked" and "something did not" are the two ways it can end: powered off,
  * or rebooted (see the top of this file).
