@@ -57,17 +57,23 @@ What happens, from the phone to a session on a VM:
    the resource set, tagged `fleetwright-session`, with the time it must be
    gone by, when it was made, the image, the network and whose it is, and
    booted with a cloud-init drive holding one file: the coordinator, the
-   ticket, whose machine it is, your Claude login from your vault, and a
-   backstop for its end. Your SSH public keys go on the same drive, when you
-   keep some. Xen Orchestra is asked to destroy the drive once the machine
-   has booted.
+   ticket, whose machine it is, and a backstop for its end. Your SSH public
+   keys go on the same drive, when you keep some. **Not your Claude login**:
+   every box holding the pool's token may export the drive through Xen
+   Orchestra (below, and `docs/security.md`, G14). Xen Orchestra is asked to
+   destroy the drive once the machine has booted, which 5.211.0 does five
+   minutes after the machine is running with its drivers detected
+   (`vdiDelayBeforeRemovingCloudConfigDrive`).
 6. **The machine joins by itself.** `install/fleetwright-vm-join` wipes the
    drive first, moves the file beside the sidecar's key and starts the
    services, which the image left off. The sidecar enrols itself once at
    `/api/enroll/vm` with the ticket, under the name the coordinator derives
-   from it (`vm-<ticket id>`), hands your Claude login to its hub as a
-   runner's is handed, and deletes the file. It is then a temporary host in
-   every way: yours, placed only by name, retired with its key on disconnect.
+   from it (`vm-<ticket id>`). Then it asks for your Claude login over the
+   connection its key opened, and the box that made it hands it over, sealed
+   to the machine (`vmlogin`, `docs/intents.md`): only for a machine that box
+   made for you, by the VM's id, still running, and once. The hub keeps it as
+   a runner's, and the file is deleted. It is then a temporary host in every
+   way: yours, placed only by name, retired with its key on disconnect.
 7. **The session starts on it**, from the first health frame that says it
    can take one; a frame from before its login has arrived holds the start
    for the next.
@@ -610,11 +616,19 @@ What the code rests on, held to it:
   `keepFor`, `keptFor` and `clearExposed` were run against this Xen
   Orchestra: afterwards neither principal's `xo.getAllObjects` held any of
   seven secret values, only the two marks.
-- **A machine's cloud-init drive** holds its ticket and the Claude login until
-  Xen Orchestra destroys it after boot, and every box holding the fleet's
-  token passes Xen Orchestra's check to export it, since the fleet's user is
-  given `admin` on every machine any box makes in the set. Recorded in
-  `docs/security.md`, G14, and not changed by it.
+- **A machine's cloud-init drive** is readable by every box holding the
+  fleet's token until Xen Orchestra destroys it after boot: each passes Xen
+  Orchestra's check to export it, since the fleet's user is given `admin` on
+  every machine any box makes in the set. So it no longer carries the Claude
+  login, which the machine asks for once it has enrolled, and the ticket it
+  does carry lives fifteen minutes and is refused, said and undone if it is
+  spent twice (`docs/security.md`, G14). **The machine's own disk is under
+  the same check**, for its whole life: `xo-acl-resolver` grants a VDI to
+  anybody with the permission on a VM it is attached to, and `VDI-snapshot`
+  follows the disk it is a snapshot of, so every such box passes Xen
+  Orchestra's check to export the disk the hub keeps the login on. Read from
+  5.211.0's resolver, not exercised: the stand-in XAPI serves no export, so
+  whether XAPI serves one of a running machine's disk is not measured.
 
 ## What `provision` may express
 
@@ -651,11 +665,19 @@ See "Machines from your pool", steps 4 to 7. What a leaked ticket costs is
 more than a runner's, because there is no GitHub token beside it: somebody
 holding it before the machine spends it could enrol a machine of their own as
 your temporary host and be started the session you asked for with it. It is
-single use, forty-five minutes at most, travels only on the machine's
-cloud-init drive, which the machine wipes as its first act and Xen
-Orchestra destroys after boot, and the machine spends it within a minute or
-two of being made. A runner's ticket cannot be spent at `/api/enroll/vm`,
-and a VM's cannot be spent at `/api/enroll/actions`.
+single use, fifteen minutes at most (as long as the fleet waits for a machine
+kept ready to join), travels only on the machine's cloud-init drive, which
+the machine wipes as its first act and Xen Orchestra destroys after boot, and
+the machine spends it after that wipe, as it boots. **Spent twice is said**:
+the spending is remembered until the ticket would have expired, and the whole
+ticket presented again is refused (`ticket_reused`), recorded as
+`vm.ticket-reused` for you and the fleet's admins, and the host it let in is
+taken out of the fleet with what it was running, because nothing can tell the
+machine from a copy of its drive. The same machine presenting it again with
+the same key, after an answer lost on the way back, is answered as before.
+Your Claude login is never on the drive: it is asked for after enrolment.
+A runner's ticket cannot be spent at `/api/enroll/vm`, and a VM's cannot be
+spent at `/api/enroll/actions`.
 
 ## Ending
 

@@ -91,6 +91,8 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink`; a removal from the fleet deletes it on each of the fleet's own boxes, asked with `forgetperson` at once or on the box's first report after it returns, and owed until the box itself says it is done (`#forgetOnBoxes`, `core.js`; `forget-person.js`; G13). Not on the person's own boxes, which act for them alone | `/api/state` per-account |
 | **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which deletes the renewal material with the token (until G13 it left it, and the next renewal wrote a fresh token back), and which a removal also asks of a box it takes out of the operator's tier, for every other person whose credential was live at the removal and nobody who joined since, then or, for a box away at the time, on its first report after it returns: each request names its person, so a box that put the debt off was otherwise told the emails of everybody who joined meanwhile (`#handBack`). The fleet's own boxes are asked instead to forget the person removed, with `forgetperson`: `<row>.env`, its metadata and `<row>.renewal.json` deleted in one act, asked at once or on the box's first report after it returns, and owed until the box itself says it is done (`#forgetOnBoxes`, `Connections.forget`, G13); not the person's own boxes. A copy held from the person's vault is not a link and `unlink` does not reach it; it stops because the minter serves no grant of somebody no longer in the fleet, and the box deletes it on that ask (`#onHostVault`, [vault.md](./vault.md)), or at once when it is asked to forget them; provider revoke (real) | `verify` verb |
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`, which until G13 left this file behind; `forgetperson`, for somebody removed; provider revoke | renewal-failure log |
+| **Machine ticket** (`fwt_…` minted for a machine on somebody's pool) | coordinator DO (`runnerTickets`), **hash only**; in flight on the machine's cloud-init drive | the Worker, as a hash; every box holding the pool's token may export the drive until Xen Orchestra destroys it after boot (G14) | single use, 15 minutes (`VM_TICKET_TTL_MS`) | spent at `/api/enroll/vm`; expiry | the spending is remembered until expiry: a second presentation is refused `ticket_reused`, recorded as `vm.ticket-reused` for the owner and the admins, and the host it enrolled revoked (`#vmTicketSpentTwice`, `core.js`) |
+| **Claude login on a session machine** | the box that made it: sidecar memory, from the owner's vault; the machine: `${stateDir}/runner-login.token`, `0600`, once handed over. **Not on its cloud-init drive** (G14) | that box; the machine's hub and its owner's sessions; and, at Xen Orchestra's check, every box holding the pool's token, which may export the machine's disk (G14, not measured whether XAPI serves it) | the person's (`claude setup-token`) | gone with the machine; the box hands it to a machine once (`XoPools#handLogin`) | `vm.claude` / `vm.claude-refused` events; `vm.ticket-reused` says when a revoked copy had been handed it |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry; `DELETE /api/enroll/{id}` by its minter or an admin; dropped when its minter is removed (`#forgetPerson`) | `outstanding()` (masked) |
 | **Telegram bot token** (archived) | host env (`FLEETWRIGHT_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `fleetwright doctor` names it |
 | **GitHub App private key** | **nowhere in this system** (ASPIRATIONAL: waits for the broker) | — | regenerate at first use | delete in GitHub | — |
@@ -533,17 +535,23 @@ machine of the fleet, through the coordinator.
   storage with such copies is within its reach; an admin removes them.
 - **A machine from the pool is admitted by a ticket alone.** There is no
   GitHub token beside it, so a VM ticket admits a machine: single use, at
-  most forty-five minutes, bound to the person who asked, and spendable only
+  most fifteen minutes, bound to the person who asked, and spendable only
   at `/api/enroll/vm` (a runner's ticket is refused there, and a VM's at
   `/api/enroll/actions`). The name is derived from the ticket, never chosen.
-  It travels only on the machine's cloud-init drive, with the person's Claude
-  login from their vault; the machine wipes the drive as its first act and
-  Xen Orchestra is asked to destroy it after boot. Somebody who read the
-  drive before then (a pool admin, or anything that can read that storage)
-  could enrol a machine of their own as that person's temporary host and be
-  started the session asked for with it, and has their Claude login: the
-  same reach as reading the machine's own disk, which the hypervisor always
-  had. The box checks the image it clones is one it saw tagged
+  It travels only on the machine's cloud-init drive; the machine wipes the
+  drive as its first act, spends the ticket after, and Xen Orchestra is
+  asked to destroy the drive after boot. Somebody who read the drive before
+  then (a pool admin, anything that can read that storage, or any box holding
+  the pool's token, G14) and spent the ticket first could enrol a machine of
+  their own as that person's temporary host, be started the session asked
+  for with it, and be handed their Claude login if it asked before the
+  machine presented the ticket; when the machine does, it is refused, the
+  fleet records `vm.ticket-reused` for the owner and the admins, and the
+  host that spent it is revoked. **The Claude login is not on the drive**:
+  the machine asks for it once enrolled, and the box that made it seals it
+  to that machine (`vmlogin`). Reading the machine's own disk, where the hub
+  keeps it, is the reach the hypervisor always had, and every box holding
+  the token passes Xen Orchestra's check for it too (G14). The box checks the image it clones is one it saw tagged
   `fleetwright-image` on that person's pool, and a network one it saw on
   that pool, so the coordinator can name which of the person's images and
   which of the networks the policy allows, and nothing else.
@@ -1619,16 +1627,69 @@ stay valid on a router until the job that rebuilds it runs; a pool whose way
 out is no longer the edge's pool has the fields cleared and is rebuilt only by
 the next job that builds its edge; the values were readable before the
 upgrade, and anybody who read them then kept them until that rebuild. **Found
-beside it, not changed here:** a session machine's cloud-init drive holds its
+beside it, and changed since:** a session machine's cloud-init drive held its
 ticket and the Claude login until Xen Orchestra destroys it after boot
-(`destroyCloudConfigVdiAfterBoot`), and the fleet's user holds the `admin` ACL
+(`destroyCloudConfigVdiAfterBoot`, which 5.211.0 does five minutes after the
+machine is running with its drivers detected: `vdiDelayBeforeRemovingCloudConfigDrive`
+in its `@xen-orchestra/xapi`), and the fleet's user holds the `admin` ACL
 `vm.create` gives in its set on every machine any box made, so any box
 holding the token passes Xen Orchestra's check for `disk.exportContent` on
 another box's machine's drive in that window (measured: `$getFrom` returned to
 the fleet's user with the ACL, `not enough permissions` without it and to the
 plain user; the stand-in XAPI could not serve the export, so the bytes were not
 read). The router's own disk, made by the admin outside the set, is refused to
-both.
+both. Measured on the repo's own code before the change: the cloud-config a
+box handed `vm.create` carried `{"ticket":"fwt_…","owner":…,"claude":"sk-ant-…"}`;
+the ticket lived 45 minutes; and a second presentation, under another key,
+was answered `unclaimed` exactly as an unknown ticket is, recorded nothing,
+and left in the host the first presentation enrolled. **Changed:** the drive
+carries no Claude login. The machine asks for it once enrolled, with the
+`claude-login` frame a runner sends and no job token; the coordinator asks the
+boxes holding the owner's pools with `vmlogin`, a verb only it sends
+(`#vmClaude`), and the box that made the machine seals the login it holds
+from the vault to the machine's one-request key, only for a VM it noted making
+(by the id `vm.create` answered), still under that name, running, for that
+person, and once (`XoPools#handLogin`); the coordinator relays ciphertext.
+Not the minter: it hands a login out on GitHub's word about a job, and a
+hand-out on the coordinator's word alone would widen what a compromised one
+reaches. A machine's ticket lives fifteen minutes (`VM_TICKET_TTL_MS`, as long
+as `vmStandby` waits for a kept machine to join); its spending is remembered
+until then (`RunnerTickets#spentFor`), and the whole ticket presented again is
+refused `ticket_reused`, recorded as `vm.ticket-reused` for the owner and the
+admins (saying whether that host had been handed the login), and the host it
+enrolled is revoked with its held session, because a copy and the machine
+hold the same value and nothing tells them apart; the same key again is the
+machine retrying after a lost answer and is answered as before. A wrong secret
+under a machine's id, which every Xen Orchestra user sees as its name, is an
+unknown ticket and revokes nothing. `test/xo-pools.test.js` ("…never its
+owner’s login on the drive"), `test/pool-vms-coordinator.test.js` ("a
+machine’s ticket lives minutes, and spent twice…"), `test/vm-claude-login.test.js`
+(the drive, the enrolment from it, the login handed over through the
+coordinator, once); each failed on the code before (the join file carried
+`claude`; the second presentation was `unclaimed`; the drive carried the
+login). **Not closed, and stated:** the ticket is still on the drive, and
+nothing binds it to the machine: what the drive holds and the VM's id are both
+shown to whoever can export it, so a box that reads it while the machine boots
+and spends it first is let in, may be handed the login if it asks before the
+machine presents the ticket, and is revoked when the machine does; one that
+also stops the machine (it holds `admin` on it) is never caught that way,
+though the box that made the machine hands nothing to one that is not running.
+The machine's own disk is under the same check for its whole life:
+`xo-acl-resolver` grants a VDI to whoever has the permission on a VM it is
+attached to, and a `VDI-snapshot` follows its source, so every box holding the
+token passes Xen Orchestra's check to export the disk the hub keeps the login
+on (`runner-login.token`), as it did before this change (read from 5.211.0's
+resolver; whether XAPI serves an export of a running machine's disk was not
+measured). Both come from one Xen Orchestra user for every box, with `admin`
+on every machine any of them made; closing them needs a user per box, or the
+ACL taken off after the clone, which the limited user cannot do
+(`acl.remove` is an admin's). A box that restarts between making a machine and
+its asking hands it nothing (what it made is kept in memory), and a machine
+image built before this change does not ask, so its machines run with no
+login until it is rebuilt. The pool's own machine is made by the admin outside
+the set, so the fleet's user holds no ACL on it and Xen Orchestra refuses it
+the export (the check measured above without the ACL); its pin is bound to a
+name the coordinator chose, and was not changed.
 
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
@@ -1653,7 +1714,7 @@ surfaced later; what each leaves behind is in its status row.
 | **G11** | **decided and fixed.** Operator boxes are outside a member's vault boundary. The coordinator remembers the SHA-256 of every GitHub code it hands a box (ten minutes, in Durable Object storage key `boxSignIns`, at most 64) and lists them beside each device's sign-in; the minter refuses a listed code before GitHub is asked (`box_sign_in`), so a sign-in started for a box never becomes a device's. A sign-in recorded before the fix could not be told from a phone's, so every one was ended: records now carry a version (`SIGNIN_VERSION`), one without it is no device's and renews into none, and each member's phone signs in to GitHub once more after the deploy. Vault items and approvals were not touched; an approval a forged sign-in made stays until its person removes it, and shows in their vault list with the fleet account that made it. A compromised coordinator can still begin its own flow or leave a code off the list, and an old coordinator sends no list and is served as before. `test/vault.test.js` (two G11 tests). |
 | **G12** | **fixed.** Protocol 14's `boxSecrets`, set by the coordinator on `start` and `resume` from whether the session's owner administers the box, decides whether the box's own named secrets may answer it; otherwise only the owner's vault does (`sessionSecret`). A member's `secret` start on a box they do not administer that speaks below 14 is refused `host_outdated`, and a member's `secrets` listing covers only boxes they administer. Fleet sessions started before the host update carry no flag, so the box's secrets stop answering them, admins' included, until resumed through a v14 coordinator; a resume on a host below 14 cannot be scoped. `test/box-secrets.test.js`, `test/box-secrets-hub.test.js`, `test/ownership.test.js`. |
 | **G13** | **fixed, except a member's own boxes.** A removal is a debt each live operator-tier enrolment owes until the box says it is paid: the coordinator-only `forgetperson`, asked at once or on the box's first answering report after it returns, retried after five minutes, with the old `stop` and `unlink` for a box too old to know it; the removals kept under Durable Object key `removals`, at most 200. The box bins the person's sessions with nothing to bring them back on boot, and deletes their Claude account, their sign-ins with the renewal material, and their vault copies. `unlink` now drops renewal material too. Their own boxes are not asked; a pool's sign-in held in sidecar memory goes on the next vault pass, within ten minutes; a `/login for <email>` in flight at the removal is not cancelled. `test/config-frame.test.js`, `test/forget-person.test.js`, `test/github-renewal.test.js`. |
-| **G14** | **fixed, rotated on upgrade.** The edge pair's CARP password and the routers' key, kept in their `xenStoreData` where `xo.getAllObjects` shows them to every signed-in user (measured on 5.211.0), are kept in the preferences of the `fleetwright-edge-keys` user, which only an admin reads back (measured); the routers carry a hash of the password and the certificate's pin. The next policy job clears the old fields from every router and rebuilds the edge on the way out's pool with a new password and key, asked or not. The old values stay valid until that rebuild. A session machine's cloud-init drive is readable through Xen Orchestra by any box holding the fleet's token until boot destroys it (measured at Xen Orchestra's check), not changed here. `test/edge-router.test.js`, `test/xo-setup.test.js`, `test/edge-credentials.test.js`. |
+| **G14** | **fixed, rotated on upgrade.** The edge pair's CARP password and the routers' key, kept in their `xenStoreData` where `xo.getAllObjects` shows them to every signed-in user (measured on 5.211.0), are kept in the preferences of the `fleetwright-edge-keys` user, which only an admin reads back (measured); the routers carry a hash of the password and the certificate's pin. The next policy job clears the old fields from every router and rebuilds the edge on the way out's pool with a new password and key, asked or not. The old values stay valid until that rebuild. A session machine's cloud-init drive is readable through Xen Orchestra by any box holding the fleet's token until boot destroys it (measured at Xen Orchestra's check), so it no longer carries the Claude login: the machine asks once enrolled and the box that made it hands it over sealed (`vmlogin`); its ticket lives fifteen minutes, and spent twice it is refused, recorded as `vm.ticket-reused` and the host it let in revoked. Not closed: the ticket itself stays on the drive and cannot be bound to the machine, and the machine's own disk, where the login lands, passes the same check for its life (read from 5.211.0's resolver, the export not measured). `test/edge-router.test.js`, `test/xo-setup.test.js`, `test/edge-credentials.test.js`, `test/xo-pools.test.js`, `test/pool-vms-coordinator.test.js`, `test/vm-claude-login.test.js`. |
 
 ---
 
