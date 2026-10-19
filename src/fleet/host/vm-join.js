@@ -4,8 +4,15 @@
 // The box that made the machine booted it with one file (xo-pools.js,
 // machineCloudConfig), which the join script moves beside this process's key
 // and names in FLEETWRIGHT_VM_JOIN (install/fleetwright-vm-join). It holds
-// the coordinator, a single-use ticket, whose machine this is, that person's
-// Claude login, and how long the machine lives.
+// the coordinator, a single-use ticket, whose machine this is, and how long
+// the machine lives.
+//
+// NOT THE CLAUDE LOGIN ANY MORE. Every box holding the pool's token may
+// export a machine's cloud-init drive through Xen Orchestra until it is
+// destroyed after boot (docs/security.md, G14), so the sidecar asks for the
+// login once this machine has enrolled, and the box that made it hands it
+// over sealed to this machine (sidecar.js, #handVmLogin). A file from a box
+// older than that still carries it as `claude`, and it is used as given.
 //
 // THE SIDECAR ENROLS ITSELF, ONCE. A permanent box is enrolled by a person
 // with a pin, and `enrol` is deliberately a command rather than something
@@ -167,8 +174,9 @@ export async function waitToBeLetIn({ file, origin, hostId, publicJwk, privateJw
 }
 
 /**
- * Whose machine this is and the Claude login it runs on, for the hub, or
- * null when the file has been handed over already.
+ * Whose machine this is, for the hub, and the Claude login when the file
+ * came from a box that still put one on the drive (null otherwise: it is
+ * asked for), or null when the file has been handed over already.
  *
  * @param {string} file
  * @returns {{ email: string, token: string|null }|null}

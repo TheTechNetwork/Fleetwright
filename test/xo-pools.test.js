@@ -250,7 +250,7 @@ test('a pool the token saw and no longer sees is reported missing, and for how l
   assert.equal('missing' in /** @type {any} */ (empty.report()[0]), false);
 });
 
-test('a machine is made from the person’s own image, on the uplink, with its ticket, its login and its end', async () => {
+test('a machine is made from the person’s own image, on the uplink, with its ticket and its end, and never its owner’s login on the drive', async () => {
   const now = Date.parse('2026-10-06T12:00:00Z');
   const stand = xo({ objects: [pool, image, uplink] });
   const pools = holder(stand, () => now);
@@ -284,7 +284,13 @@ test('a machine is made from the person’s own image, on the uplink, with its t
   // The power-off the machine schedules for itself is a backstop past the
   // longest it can be given; its end is the box's to keep, by the tag, so an
   // extension needs nothing from inside the machine.
-  assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: CLAUDE, minutes: 380 });
+  //
+  // NOT THE CLAUDE LOGIN, which this box holds for Eli (G14): every box
+  // holding the pool's token may export this drive through Xen Orchestra
+  // until boot destroys it. The machine asks for it once enrolled.
+  assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 380 });
+  assert.equal(pools.claude.get(ELI), CLAUDE, 'the box holds the login it keeps off the drive');
+  assert.ok(!made.cloudConfig.includes(CLAUDE), 'the drive carries the Claude login');
   assert.match(made.cloudConfig, /fleetwright-vm-join.*, \/run\/fleetwright\/join\.json\]$/m);
   // ON THE UPLINK, FENCED: the network file, the script and its unit, and
   // the unit started before the join script starts anything that listens.
@@ -308,7 +314,7 @@ test('a machine joins with root’s copy of the join script, and one cloned from
   // the join script out of it on the machine's first boot. Run here as
   // cloud-init runs it — the argv on the runcmd line — with the two places
   // it looks pointed at this test's directories.
-  const config = machineCloudConfig({ name: 'm', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60 });
+  const config = machineCloudConfig({ name: 'm', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 60 });
   const line = config.split('\n').find((l) => l.includes('fleetwright-vm-join')) ?? '';
   const argv = /^ {2}- \[sh, -c, '([^']*)', (\/run\/fleetwright\/join\.json)\]$/.exec(line);
   assert.ok(argv, `cloud-init does not run root’s copy: ${line}`);
@@ -621,17 +627,16 @@ test('a machine is given its owner’s SSH keys and sudo when they keep some, an
   const pools = holder(xo());
   pools.adopt([{ email: ELI, items: [{ name: 'secret:SSH_AUTHORIZED_KEYS', value: `${key}\nnot a key\nrm -rf /\n` }] }]);
   assert.deepEqual(pools.ssh.get(ELI), [key], 'public keys only, a line each');
-  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60, sshKeys: [key] });
+  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 60, sshKeys: [key] });
   assert.match(config, /users:\n {2}- name: fleetwright\n/);
   assert.ok(config.includes(`      - ${JSON.stringify(key)}`));
-  assert.ok(!machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60 }).includes('users:'));
+  assert.ok(!machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 60 }).includes('users:'));
 });
 
 test('the cloud-init a machine boots with is one join file and the join script, and carries what it was given', () => {
-  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test/x', ticket: TICKET, owner: ELI, claude: null, minutes: 60 });
+  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test/x', ticket: TICKET, owner: ELI, minutes: 60 });
   assert.match(config, /^#cloud-config\nhostname: vm-abc\n/);
   assert.match(config, /"coordinator":"https:\/\/fleet.test"/, 'the bare origin');
-  assert.match(config, /"claude":null/);
 });
 
 test('a machine enrols itself with its ticket once, records its name, and hands its login over once', async (t) => {
@@ -639,6 +644,8 @@ test('a machine enrols itself with its ticket once, records its name, and hands 
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, 'vm-join.json');
   const hostKeyFile = join(dir, 'host-key.json');
+  // A FILE FROM A BOX OLDER THAN G14's FIX, which still put the login on the
+  // drive: a machine from an image built since uses it as given.
   writeFileSync(file, JSON.stringify({ v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: 'Eli@Example.com', claude: CLAUDE, minutes: 60 }), { mode: 0o600 });
   const key = await generateKeyPair();
   /** @type {any[]} */
