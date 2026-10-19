@@ -30,7 +30,11 @@
 // WHAT THE LIMITED USER MAY DO is what its resource set allows: clone images
 // that are in the set onto storage and networks that are in the set, inside
 // its limits. Xen Orchestra enforces that, which is the bound that holds when
-// everything on our side has failed.
+// everything on our side has failed. Not quite all of it, measured on 5.211.0
+// (docs/hypervisors.md, "What Xen Orchestra lets whom do"): it may also
+// snapshot the machines it made and copy a snapshot to a template, which
+// vm.copyToTemplate counts against no limit and leaves it unable to delete;
+// and it sees every object on the pool, not only the set's (fleetSetOf).
 
 import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
@@ -167,6 +171,39 @@ function labKind(n) {
   if (n.tags.includes(LAB.closedTag)) return 'closed';
   return null;
 }
+
+/**
+ * WHAT THE FLEET'S RESOURCE SET HOLDS, as the limited user reads it: the sets
+ * it is a subject of, which is all resourceSet.getAll answers a user who is
+ * not an admin, and what is in them.
+ *
+ * THE SET AND NOT WHAT THE TOKEN SEES, AND NOT THE TAGS. Xen Orchestra shows
+ * a user who is not an admin every object there is, its own or not
+ * (xo.getAllObjects checks only that somebody is signed in), and a tag is
+ * something anybody given administrate on one VM can add to it, to a clone of
+ * it, and to a snapshot of it that it then copies to a template: all measured
+ * on 5.211.0 (docs/hypervisors.md, "What Xen Orchestra lets whom do"). So a
+ * VM somebody else named `vm-…` and tagged as one of ours was reported as a
+ * person's machine, counted against their labs, and swept; a template tagged
+ * as an image was offered on the phones; and every network on the pool was
+ * offered, of which only those in the set can carry a machine. What is in the
+ * set only an admin of Xen Orchestra can change, and a VM is made in it only
+ * by a subject of the set (vm.create checks both).
+ *
+ * @param {any} rpc  signed in with the fleet's token
+ * @returns {Promise<{ ids: Set<string>, objects: Set<string> }>}
+ */
+async function fleetSetOf(rpc) {
+  const answer = await rpc.call('resourceSet.getAll');
+  const sets = /** @type {any[]} */ (Array.isArray(answer) ? answer : []);
+  return {
+    ids: new Set(sets.map((s) => String(s?.id))),
+    objects: new Set(sets.flatMap((s) => (Array.isArray(s?.objects) ? s.objects.map(String) : []))),
+  };
+}
+
+/** A VM made in the fleet's set. @param {any} v @param {{ ids: Set<string> }} set */
+const inFleetSet = (v, set) => typeof v?.resourceSet === 'string' && set.ids.has(v.resourceSet);
 
 /**
  * How many of the fleet's own machines have an interface on each network, by
@@ -472,12 +509,15 @@ export class XoPools {
         const pools = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'pool' } })) || {}));
         const names = new Map(pools.map((p) => [p.id, String(p.name_label || p.id).slice(0, 80)]));
         const templates = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
+        // ONLY WHAT IS IN THE FLEET'S SET, of everything the token sees
+        // (fleetSetOf): images, networks and machines alike.
+        const set = await fleetSetOf(rpc);
         const images = templates
-          .filter((t) => t?.tags?.includes?.(VM_IMAGE.tag) && typeof t.id === 'string')
+          .filter((t) => t?.tags?.includes?.(VM_IMAGE.tag) && typeof t.id === 'string' && set.objects.has(t.id))
           .map((t) => ({ id: String(t.id), name: String(t.name_label || VM_IMAGE.name).slice(0, 80), pool: t.$pool ?? null, poolName: names.get(t.$pool) ?? null }));
-        await this.#sweep(rpc);
+        await this.#sweep(rpc, set);
         // THE NETWORKS A MACHINE CAN GO ON besides the uplink: the pool's that
-        // the fleet may use (what the limited user sees), for a machine that
+        // the fleet may use (what is in its set), for a machine that
         // should be reachable from the person's own network; and the group
         // networks, marked, which a machine joins as well as its own.
         const nets = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'network' } })) || {}));
@@ -488,7 +528,7 @@ export class XoPools {
         const occupied = labKinds.size ? await machinesOnNetworks(rpc, vms) : new Map();
         /** @type {Network[]} */
         const networks = nets
-          .filter((n) => typeof n?.id === 'string' && n.name_label !== EDGE.uplink)
+          .filter((n) => typeof n?.id === 'string' && n.name_label !== EDGE.uplink && set.objects.has(n.id))
           .map((n) => {
             const lab = labKind(n);
             const perPerson = lab ? labsEachOf([n], null) : null;
@@ -507,7 +547,7 @@ export class XoPools {
         // phone's page of it. Read after the sweep, so a removed one is gone.
         const imageNames = new Map(templates.map((t) => [t.id, String(t.name_label || '').slice(0, 80)]));
         const machines = vms
-          .filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag) && /^vm-[0-9a-f]{12}$/.test(String(v.name_label)))
+          .filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag) && /^vm-[0-9a-f]{12}$/.test(String(v.name_label)) && inFleetSet(v, set))
           .map((v) => {
             const until = Number(tagValue(v, VM_IMAGE.untilPrefix));
             const made = Number(tagValue(v, MADE_PREFIX));
@@ -597,16 +637,17 @@ export class XoPools {
   /**
    * Machines that are done, removed with their disks: stopped (a machine
    * powers itself off at its end), or still running well past the end it was
-   * given. Only machines this fleet made, by their tag; nothing else on the
-   * pool is touched.
+   * given. Only machines this fleet made, by their tag and made in its set
+   * (fleetSetOf: the tag alone is anybody's); nothing else on the pool is
+   * touched.
    *
-   * @param {any} rpc
+   * @param {any} rpc @param {{ ids: Set<string> }} set
    */
-  async #sweep(rpc) {
+  async #sweep(rpc, set) {
     const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
     for (const vm of vms) {
       const tags = Array.isArray(vm?.tags) ? vm.tags : [];
-      if (!tags.includes(VM_IMAGE.sessionTag) || tags.includes(BUSY_TAG)) continue;
+      if (!tags.includes(VM_IMAGE.sessionTag) || tags.includes(BUSY_TAG) || !inFleetSet(vm, set)) continue;
       const until = Number(tags.find((/** @type {string} */ t) => t.startsWith(VM_IMAGE.untilPrefix))?.slice(VM_IMAGE.untilPrefix.length)) * 1000;
       const overdue = Number.isFinite(until) && this.now() > until + GRACE_MS;
       if (vm.power_state !== 'Halted' && !overdue) continue;
@@ -799,7 +840,9 @@ export class XoPools {
           continue;
         }
         const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
-        const vm = vms.find((v) => v?.name_label === name && Array.isArray(v.tags) && v.tags.includes(VM_IMAGE.sessionTag));
+        // Made in the fleet's set, or it is somebody else's VM by that name.
+        const set = await fleetSetOf(rpc);
+        const vm = vms.find((v) => v?.name_label === name && Array.isArray(v.tags) && v.tags.includes(VM_IMAGE.sessionTag) && inFleetSet(v, set));
         if (!vm) continue;
         // MADE FOR SOMEBODY ELSE on the same Xen Orchestra is not there, as
         // far as this person is concerned.

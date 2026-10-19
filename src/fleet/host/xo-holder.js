@@ -6,7 +6,8 @@
 // MADE BY THE POLICY JOB, with the admin sign-in, and outside the fleet's
 // resource set: it is not one of the fleet's machines and does not count
 // against their limits, and the limited user the fleet works with can neither
-// see it nor remove it. It goes on the way out, the network the edge router's
+// change it nor remove it. It can see it: Xen Orchestra shows a user who is
+// not an admin every object (xo-pools.js, fleetSetOf). It goes on the way out, the network the edge router's
 // WAN is on, because it has to reach Xen Orchestra and the coordinator, and
 // the uplink behind the router reaches neither by design.
 //
