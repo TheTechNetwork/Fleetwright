@@ -441,3 +441,28 @@ test('root’s other commands run as the installation’s owner, so root follows
   assert.match(out, /still root after asking sudo for svc/);
   assert.notEqual(child.status, 0);
 });
+
+test('root’s doctor asks the owner whether they can write the hub’s release tree, and its repair gives it to them', rootOnly, async (t) => {
+  // Measured on a systemd box: the service user's doctor said "FAIL updates
+  // can be applied without root" and named `sudo fleetwright doctor --repair`;
+  // root's doctor described root's own copy of the release, said ok because
+  // root can write anything, and repaired nothing. The tree stayed root's.
+  const b = await box();
+  t.after(() => b.close());
+  chmodSync(b.work, 0o755); // so `nobody` can reach the tree it is asked about
+  const file = theirConfig(b, []);
+  // As root's wrapper starts it: the owner and the hub's tree in root's
+  // environment, and the code it runs is some other copy (here, the checkout).
+  const env = { ...envFor(b), FLEETWRIGHT_ENV_FILE: file, FLEETWRIGHT_USER: 'nobody', FLEETWRIGHT_PAYLOAD: b.current };
+  delete env.FLEETWRIGHT_INSTALL_DIR;
+  const run = (args) => spawnSync(process.execPath, ['bin/fleetwright', 'doctor', ...args], { cwd: ROOT, encoding: 'utf8', env, timeout: 30_000 });
+
+  const asked = run([]);
+  const out = `${asked.stdout}${asked.stderr}`;
+  assert.match(out, new RegExp(`FAIL\\s+updates can be applied without root\\s+— ${b.base} is not writable by nobody`), out);
+
+  const repaired = run(['--repair']);
+  const nobody = Number(spawnSync('id', ['-u', 'nobody'], { encoding: 'utf8' }).stdout.trim());
+  assert.equal(statSync(path.join(b.base, 'releases')).uid, nobody, `${repaired.stdout}${repaired.stderr}`);
+  assert.match(repaired.stdout, new RegExp(`ok\\s+make ${b.base} writable by nobody`));
+});

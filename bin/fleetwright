@@ -315,8 +315,19 @@ async function doctor({ repair = false } = {}) {
   // EVERY CHECK BELOW IS A STATE A REAL BOX REACHED, and none of them was
   // visible from here. doctor asked whether this box could run a SESSION; the
   // afternoons lost were all to whether it could run ITSELF.
-  const status = updateStatus(cfg);
-  const layout = releaseLayout(cfg.installDir);
+  // THE HUB'S TREE, WHICHEVER COPY IS RUNNING THIS. As root on a packaged box
+  // this is root's copy of the release (install.sh, "ROOT'S COMMAND IS ROOT'S
+  // CODE"), so cfg.installDir names /usr/local/lib/fleetwright-sidecar — a
+  // tree the service user never updates. Every line below then described
+  // root's store: intact, runnable, and "updates can be applied without root",
+  // because root can write anything. The service user's doctor said FAIL and
+  // named `sudo fleetwright doctor --repair` as the fix; root's said ok and
+  // repaired nothing, on a box whose release tree was still root's. Root's
+  // wrapper names the hub's tree in FLEETWRIGHT_PAYLOAD, which is root's own
+  // word, and that is the tree in question.
+  const installDir = (owner !== null && givenEnv.FLEETWRIGHT_PAYLOAD) || cfg.installDir;
+  const status = updateStatus({ ...cfg, installDir });
+  const layout = releaseLayout(installDir);
   // THE LAYOUT DECIDES WHETHER THIS IS A RELEASE BOX, NOT THE PAYLOAD.
   //
   // `updateStatus` answers `packaged: true` only when lib/fleetwright.mjs is
@@ -326,7 +337,7 @@ async function doctor({ repair = false } = {}) {
   // would have printed seven cheerful lines about tmux and said nothing at all
   // about the reason the service was in a restart loop.
   if (status.packaged || layout.ok) {
-    ok('the release layout is intact', layout.ok, layout.ok ? cfg.installDir : layout.message);
+    ok('the release layout is intact', layout.ok, layout.ok ? installDir : layout.message);
 
     // AND THE PAYLOAD IS ACTUALLY THERE, which the layout check does not ask.
     // releaseLayout validates the SHAPE of the path — that this is
@@ -338,7 +349,7 @@ async function doctor({ repair = false } = {}) {
     // right. Only opening the file the unit is supposed to run says otherwise,
     // and nothing did — so a box sat in a restart loop with a layout check
     // reporting `ok`.
-    const entry = `${cfg.installDir}/lib/fleetwright.mjs`;
+    const entry = `${installDir}/lib/fleetwright.mjs`;
     ok(
       'the release has something to run',
       existsSync(entry),
@@ -350,14 +361,17 @@ async function doctor({ repair = false } = {}) {
     // root, and the service user could not write it — so the box could not
     // apply its own updates and had no way to find that out until it failed.
     if (layout.ok) {
-      const writable = canWrite(layout.base) && canWrite(`${layout.base}/releases`);
+      // ASKED OF WHOEVER APPLIES UPDATES, which is not root. Root answers yes
+      // to every write, so asked as root this line could only ever say ok.
+      const who = owner ?? whoami();
+      const writable = canWriteAs(owner, layout.base) && canWriteAs(owner, `${layout.base}/releases`);
       ok(
         'updates can be applied without root',
         writable,
-        writable ? '' : `${layout.base} is not writable by ${whoami()} — re-run the installer`,
+        writable ? '' : `${layout.base} is not writable by ${who} — re-run the installer`,
       );
       if (!writable) repairs.push({
-        what: `make ${layout.base} writable by ${whoami()}`,
+        what: `make ${layout.base} writable by ${who}`,
         // NOT ATTEMPTED WITHOUT ROOT, and named rather than tried-and-failed: a
         // chown that fails prints a permission error about fixing a permission
         // error, which reads as the tool being broken.
@@ -449,6 +463,18 @@ function canWrite(dir) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Can `who` write `dir`? Asked as them, through sudo, when root is asking for
+ * the installation's owner; otherwise asked of this process.
+ *
+ * @param {string|null} who
+ * @param {string} dir
+ */
+function canWriteAs(who, dir) {
+  if (who === null) return canWrite(dir);
+  return spawnSync(...asServiceUser('test', ['-w', dir], { uid: process.getuid?.(), runUser: who })).status === 0;
 }
 
 function whoami() {
