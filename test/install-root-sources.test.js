@@ -580,18 +580,51 @@ test('with no copy of root’s, root is refused in words; a checkout says what r
   }
 });
 
+/** A packaged base with no store: current → releases/v1, whose uninstaller leaves a marker. */
+function purgeFixture(t) {
+  mkdirSync(path.join(t, 'base', 'releases', 'v1', 'install'), { recursive: true });
+  symlinkSync('releases/v1', path.join(t, 'base', 'current'));
+  const marker = path.join(t, 'ran');
+  writeFileSync(path.join(t, 'base', 'releases', 'v1', 'install', 'uninstall.sh'), `#!/bin/sh\ntouch "${marker}"\n`);
+  chmodSync(path.join(t, 'base', 'releases', 'v1', 'install', 'uninstall.sh'), 0o755);
+  return marker;
+}
+const purge = (/** @type {string} */ t) =>
+  spawnSync('sh', [new URL('../install/deb/postrm', import.meta.url).pathname, 'purge'], {
+    encoding: 'utf8',
+    env: { ...process.env, FLEETWRIGHT_BASE: path.join(t, 'base'), FLEETWRIGHT_SIDECAR_BASE: path.join(t, 'no-store') },
+  });
+
 test('apt purge never runs the service user’s uninstaller as root', () => {
   const t = tmp('postrm');
   try {
-    mkdirSync(path.join(t, 'base', 'current', 'install'), { recursive: true });
-    const marker = path.join(t, 'ran');
-    writeFileSync(path.join(t, 'base', 'current', 'install', 'uninstall.sh'), `#!/bin/sh\ntouch "${marker}"\n`);
-    chmodSync(path.join(t, 'base', 'current', 'install', 'uninstall.sh'), 0o755);
-    const r = spawnSync('sh', [new URL('../install/deb/postrm', import.meta.url).pathname, 'purge'], {
-      encoding: 'utf8',
-      env: { ...process.env, FLEETWRIGHT_BASE: path.join(t, 'base'), FLEETWRIGHT_SIDECAR_BASE: path.join(t, 'no-store') },
-    });
+    const marker = purgeFixture(t);
+    // THE SERVICE USER'S TREE. Under root the fixture would be root's own,
+    // which is the other case below; handed to nobody it is somebody else's.
+    if (isRoot && NOBODY !== null) spawnSync('chown', ['-R', NOBODY, path.join(t, 'base')]);
+    const r = purge(t);
     assert.equal(existsSync(marker), false, 'postrm ran current/install/uninstall.sh');
+    assert.match(r.stderr, /was not run as root/);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test('apt purge runs current’s uninstaller when the whole tree is root’s own', { skip: !isRoot && 'needs root to own the fixture' }, () => {
+  // A box whose service user is root has no store (the installer makes one
+  // only for another account) and a `current` that is root's: running it
+  // trusts nobody new, and refusing it left every release under /opt behind.
+  // Owned by uid 0 AND writable by nobody else, file by file: one group-write
+  // bit on the way is somebody else's hand on the script.
+  const t = tmp('postrm-root');
+  try {
+    const marker = purgeFixture(t);
+    purge(t);
+    assert.equal(existsSync(marker), true, 'postrm refused root\'s own tree');
+    rmSync(marker);
+    chmodSync(path.join(t, 'base', 'releases', 'v1'), 0o775);
+    const r = purge(t);
+    assert.equal(existsSync(marker), false, 'postrm ran a tree with a group-write bit on the way');
     assert.match(r.stderr, /was not run as root/);
   } finally {
     rmSync(t, { recursive: true, force: true });
