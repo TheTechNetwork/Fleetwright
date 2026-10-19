@@ -868,7 +868,7 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   address: string, pin: string|null, plain: boolean,
  *   imageDir: string,
  *   coordinatorUrl: string,
- *   say: (text: string, part?: { stage: number, stages: number, fill: number }) => void,
+ *   say: (text: string, part?: import('./edge-router.js').BuildPart) => void,
  *   signal?: AbortSignal,
  *   image?: string,
  *   resize?: 'disk.resize'|'vdi.set',
@@ -964,7 +964,7 @@ export async function ensureImage({
         signal,
         onProgress: (d, t) => {
           downloaded = d;
-          say(`Downloading ${os} for the machine image: ${mb(d)} of ${mb(t)} MB.`, stage(1, imageFill(d, 0, spec)));
+          say(`Downloading ${os} for the machine image: ${mb(d)} of ${mb(t)} MB.`, { ...stage(1, imageFill(d, 0, spec)), doing: 'download', done: mb(d), total: mb(t) });
         },
       });
       signal?.throwIfAborted();
@@ -994,7 +994,8 @@ export async function ensureImage({
         size: holds,
         filename: `${spec.key}.raw`,
         signal,
-        onProgress: (d, t) => say(`Writing ${os}’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, imageFill(spec.compressedSize, d, spec))),
+        // `keep`: this disk is the image as published, kept for the next build.
+        onProgress: (d, t) => say(`Writing ${os}’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, { ...stage(2, imageFill(spec.compressedSize, d, spec)), doing: 'keep', done: mb(d), total: mb(t) }),
       });
       signal?.throwIfAborted();
 

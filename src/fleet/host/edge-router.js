@@ -1055,7 +1055,12 @@ export const srName = (sr) => String(sr?.name_label || sr?.id || 'the storage').
  * bytes each stage moves (the download, then the disk), because those are
  * nearly all of the time; making and starting the VM is the last fiftieth.
  *
- * @typedef {{ stage: number, stages: number, fill: number }} BuildPart
+ * WHAT THE BYTES ARE DOING, beside the part, while they move: a key from
+ * XOBUILD_DOING and the megabytes done and in all. The sentence beside it
+ * says the same with the release and the storage named, and only the key
+ * and the numbers reach a Lock Screen (xo-setup.js, #report).
+ *
+ * @typedef {{ stage: number, stages: number, fill: number, doing?: string, done?: number, total?: number }} BuildPart
  */
 export const BUILD_STAGES = 3;
 const MAKING = 980;
@@ -1655,6 +1660,8 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const template = builtInTemplate(templates, pool, EDGE.template, 'the edge router');
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: BUILD_STAGES, fill });
+  /** The part with its bytes: what they are doing, and how many of how many, in MB. */
+  const moving = (/** @type {BuildPart} */ part, /** @type {string} */ doing, /** @type {number} */ d, /** @type {number} */ t) => ({ ...part, doing, done: mb(d), total: mb(t) });
   say(`Downloading OPNsense ${release}.`, stage(1, 0));
   let downloaded = 0;
   const file = await getImage({
@@ -1662,7 +1669,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
     signal,
     onProgress: (d, t) => {
       downloaded = d;
-      say(`Downloading OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, stage(1, buildFill(d, 0)));
+      say(`Downloading OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, moving(stage(1, buildFill(d, 0)), 'download', d, t));
     },
   });
   signal?.throwIfAborted();
@@ -1718,7 +1725,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
         regions,
         unpackImpl,
         signal,
-        onProgress: (d, t) => say(`Reading the blocks the configuration goes in from OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, bar(d)),
+        onProgress: (d, t) => say(`Reading the blocks the configuration goes in from OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, moving(bar(d), 'read', d, t)),
       });
       const vhd = sparseVhd({ size: rawSize, blocks });
 
@@ -1740,7 +1747,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
           body: unpackImpl(file, { signal }).pipe(new ConfigPatch({ regions: [], total: rawSize })),
           size: rawSize,
           signal,
-          onProgress: (d, t) => say(`Writing OPNsense ${release} as published to ${on}: ${mb(d)} of ${mb(t)} MB.`, bar(read + d)),
+          onProgress: (d, t) => say(`Writing OPNsense ${release} as published to ${on}: ${mb(d)} of ${mb(t)} MB.`, moving(bar(read + d), 'keep', d, t)),
         });
         signal?.throwIfAborted();
         making = await admin.call('vm.create', {
@@ -1813,7 +1820,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
         body,
         size: rawSize,
         signal,
-        onProgress: (d, t) => say(`Writing the edge router’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, stage(2, buildFill(compressedSize, d))),
+        onProgress: (d, t) => say(`Writing the edge router’s disk to ${on}: ${mb(d)} of ${mb(t)} MB.`, moving(stage(2, buildFill(compressedSize, d)), 'write', d, t)),
       });
       signal?.throwIfAborted();
     }

@@ -1002,6 +1002,9 @@ export class XoSetups {
         // THE PART OF A BUILD, and only of a build: an install's download is one
         // bar, and "part 1 of 1" on the Lock Screen would be words about nothing.
         ...(rec.part && rec.state === 'running' && buildKey(rec) ? { build: buildKey(rec), stage: rec.part.stage, stages: rec.part.stages } : {}),
+        // WHAT THE BYTES ARE DOING, as a key and two megabyte counts, so the
+        // Lock Screen can say it without the sentence (XOBUILD_DOING).
+        ...(rec.part && rec.state === 'running' && rec.part.doing ? { doing: rec.part.doing, done: rec.part.done, total: rec.part.total } : {}),
       });
     } catch (e) {
       this.log.warn(`xosetup: could not report progress: ${/** @type {Error} */ (e).message}`);
@@ -1293,7 +1296,7 @@ export class XoSetups {
           if (!part) return;
           const before = rec.part;
           rec.part = part;
-          if (!before || before.stage !== part.stage || Math.floor(before.fill / 50) !== Math.floor(part.fill / 50)) this.#report(rec);
+          if (!before || before.stage !== part.stage || before.doing !== part.doing || Math.floor(before.fill / 50) !== Math.floor(part.fill / 50)) this.#report(rec);
         };
         const way = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress);
         if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');

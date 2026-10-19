@@ -494,6 +494,7 @@ test('the machine image is built after the policy, on the way out’s pool, behi
       }
       box.setups?.imageReport({ job: 'ffffffffffff', step: 'done' });
       heard.push(o.vmReport()?.detail ?? null);
+      o.say('Writing Debian 13’s disk to Home: 700 of 2048 MB.', { stage: 2, stages: 4, fill: 300, doing: 'keep', done: 700, total: 2048 });
       o.say('Installing Fleetwright on the machine image.', { stage: 3, stages: 4, fill: 600 });
       return 'The machine image is ready on Home.';
     },
@@ -527,6 +528,12 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   // Its bar reaches the Lock Screen, saying what is being built and which
   // part: the phones once called every build's part the edge router's.
   assert.ok(events.some((/** @type {any} */ e) => e.fill === 600 && e.purpose === 'policy' && e.build === 'image' && e.stage === 3 && e.stages === 4), JSON.stringify(events.at(-1)));
+  // And what the bytes are doing while they move, as a key and megabytes
+  // (XOBUILD_DOING): the event carries them, and a part that moves none
+  // carries none, so the Lock Screen says megabytes only while there are some.
+  const moving = events.find((/** @type {any} */ e) => e.doing);
+  assert.deepEqual([moving?.doing, moving?.done, moving?.total, moving?.stage], ['keep', 700, 2048, 2]);
+  assert.ok(events.filter((/** @type {any} */ e) => e.fill === 600).every((/** @type {any} */ e) => !('doing' in e) && !('done' in e)));
   assert.equal(asked[0].image, 'debian-13', 'a phone from before the choice asked for Debian');
   assert.equal(asked[0].channel, null, 'and said nothing about the suite, which builds it as before');
   assert.equal(asked[0].resize, 'disk.resize', 'the long-standing name, where the server offers it');
