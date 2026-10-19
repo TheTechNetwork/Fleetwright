@@ -269,7 +269,6 @@ fi
 # exists is left alone and said, never merged.
 LEGACY_RUNNING=""   # new unit names whose old unit was active
 LEGACY_UNITS=""     # old unit names to stop before their replacement starts
-LEGACY_CONFIRM=0    # the commit-confirm watchdog was removed under its old name
 legacy_unit_for() { # legacy_unit_for NEW → OLD, or nothing
   case "$1" in
     fleetwright) echo agent-hub ;;
@@ -336,12 +335,11 @@ migrate_legacy_names() {
     fi
   done
   # The watchdog is a timer and a oneshot; stopped outright, because the new
-  # one is armed by the start step and two would race over one trial record.
+  # one is armed where it is installed and two would race over one trial record.
   for f in service timer; do
     if [ -f "/etc/systemd/system/agent-fleet-confirm.$f" ]; then
       systemctl disable --now "agent-fleet-confirm.$f" >/dev/null 2>&1 || true
       rm -f "/etc/systemd/system/agent-fleet-confirm.$f"
-      LEGACY_CONFIRM=1
       ok "unit agent-fleet-confirm.$f removed — fleetwright-confirm replaces it"
     fi
   done
@@ -1462,7 +1460,15 @@ pkg_why() {
   if [ "${FLEETWRIGHT_NO_INSTALL_DEPS:-0}" = "1" ]; then printf 'FLEETWRIGHT_NO_INSTALL_DEPS=1 is set'
   elif [ "$PLATFORM" = macos ]; then printf 'Homebrew is not installed — see https://brew.sh'
   elif [ "$(id -u)" != "0" ]; then printf 'not running as root — re-run with sudo'
-  else printf 'no supported package manager found (apt, dnf, pacman, zypper, apk)'
+  else
+    # THE MANAGER THAT IS HERE, IF ONE IS. This said "no supported package
+    # manager found" on a Debian box whose apt-get had simply failed — no
+    # network — which sends somebody looking for a problem they do not have.
+    local m
+    for m in apt-get dnf pacman zypper apk; do
+      if command -v "$m" >/dev/null; then printf '%s could not install it — no network, or no such package in its sources' "$m"; return 0; fi
+    done
+    printf 'no supported package manager found (apt, dnf, pacman, zypper, apk)'
   fi
 }
 
@@ -1642,10 +1648,14 @@ write_upgrade_sudoers() {
 #
 # No arguments, for the reason the apt rule spells its whole command line out:
 # sudoers matches argv, and every argument somebody could pass is a widening.
+# The `""` is what says so to sudo. A command written with no arguments at all
+# matches it with ANY arguments — `sudo -l` on a box answered yes to
+# `fleetwright-migrate --anything` — so the rule allowed what this comment
+# said it did not, and only the helper ignoring its argv stood in between.
 write_migrate_sudoers() {
   local tmp
   tmp="$(mktemp)"
-  printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-migrate\n' "$RUN_USER" > "$tmp"
+  printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-migrate ""\n' "$RUN_USER" > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
     install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-migrate
     rm -f "$tmp"
@@ -1756,7 +1766,7 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
 write_reclaim_sudoers() {
   local tmp
   tmp="$(mktemp)"
-  printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-reclaim\n' "$RUN_USER" > "$tmp"
+  printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-reclaim ""\n' "$RUN_USER" > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
     install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-reclaim
     rm -f "$tmp"
@@ -3296,6 +3306,25 @@ else
   HAVE_SYSTEMD=0
 fi
 
+# THE WATCHDOG IS ARMED WHERE IT IS INSTALLED, on every route. Only the wizard
+# used to arm it, and every other route runs none: --no-wizard, the deb's
+# postinst with no coordinator, and the --repair and --upgrade that every
+# update's heal runs. A box installed any of those ways was told "commit-confirm
+# watchdog installed (reverts an update that cannot prove itself)" and took its
+# updates with fleetwright-confirm.timer disabled — measured on a systemd box
+# through an install, two heals and an update to a new release. Arming it
+# starts a clock and nothing else: the script is a no-op with nothing on trial,
+# so a box whose services are not started yet loses nothing by having it.
+if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ] && [ "$HAVE_SYSTEMD" = 1 ] \
+   && [ -f /etc/systemd/system/fleetwright-confirm.timer ]; then
+  systemctl reset-failed fleetwright-confirm.timer >/dev/null 2>&1 || true
+  if systemctl enable --now fleetwright-confirm.timer >/dev/null 2>&1; then
+    ok "commit-confirm watchdog armed — a bad update reverts itself"
+  else
+    warn "could not arm fleetwright-confirm.timer — updates will not auto-revert"
+  fi
+fi
+
 # --- 5. the SessionStart hook ----------------------------------------------
 # This is what makes resume reliable: Claude hands the hook its own session id
 # and transcript path, so the conversation uuid fleetwright records is
@@ -4245,16 +4274,6 @@ if [ "$WIZARD" = yes ]; then
       # the only evidence worth acting on.
       if start_service fleetwright; then SERVICES_STARTED=1; fi
 
-      # Arm the commit-confirm watchdog. A timer, not a service: `enable --now`
-      # starts its clock, and it is a no-op on a box with nothing on trial.
-      if [ "$PACKAGED" = 1 ] && [ -f /etc/systemd/system/fleetwright-confirm.timer ]; then
-        systemctl reset-failed fleetwright-confirm.timer >/dev/null 2>&1 || true
-        if systemctl enable --now fleetwright-confirm.timer >/dev/null 2>&1; then
-          ok "commit-confirm watchdog armed — a bad update reverts itself"
-        else
-          warn "could not arm fleetwright-confirm.timer — updates will not auto-revert"
-        fi
-      fi
 
       # Enrol BEFORE starting the sidecar. Not for correctness — the sidecar
       # retries and would pick it up — but because a box that comes up refused
@@ -4651,19 +4670,6 @@ if [ -n "$LEGACY_RUNNING" ] && [ "$CHECK_ONLY" != 1 ]; then
       journalctl -u "$unit" -n 12 --no-pager 2>/dev/null | sed 's/^/       /' || true
     fi
   done
-fi
-# THE WATCHDOG, RE-ARMED. The migration removed agent-fleet-confirm.timer; the
-# new timer is written above but only the wizard arms it, and an update runs
-# no wizard. Left here, every pre-rename box would stop reverting bad updates
-# the day it took this one.
-if [ "$LEGACY_CONFIRM" = 1 ] && [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ] \
-   && [ -f /etc/systemd/system/fleetwright-confirm.timer ]; then
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  if systemctl enable --now fleetwright-confirm.timer >/dev/null 2>&1; then
-    ok "commit-confirm watchdog re-armed under its new name"
-  else
-    warn "could not arm fleetwright-confirm.timer — updates will not auto-revert"
-  fi
 fi
 
 say "Installed."

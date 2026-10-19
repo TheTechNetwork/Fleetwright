@@ -5,18 +5,22 @@
 # machine image (src/fleet/host/vm-image.js). JOIN_FILE is the one file the
 # box that made the machine put on its cloud-init drive
 # (src/fleet/host/xo-pools.js, machineCloudConfig): the coordinator, a
-# single-use ticket, whose machine this is, their Claude login, and how many
-# minutes it lives.
+# single-use ticket, whose machine this is, and how many minutes it lives.
+# Not their Claude login: the sidecar asks for that once the machine has
+# enrolled, and the box that made it hands it over (docs/security.md, G14).
+# A file from a box older than that still carries it, and it is used.
 #
 # WHAT IT DOES, in this order, and why the order:
 #
-#   1. Wipes the cloud-init drive. It holds the ticket and the Claude login,
-#      and Xen Orchestra is asked to destroy it once the machine has booted;
-#      this does not wait to find out whether it did.
+#   1. Wipes the cloud-init drive. It holds the ticket, which every box
+#      holding the pool's token may read through Xen Orchestra until the
+#      drive is destroyed, by default five minutes after boot (5.211.0); this does not
+#      wait, and the sidecar spends the ticket only after this step.
 #   2. Moves the file beside the sidecar's key, readable by the sidecar only,
 #      and names it in the sidecar's environment. The sidecar enrols itself
-#      with the ticket on its first start and hands the login to the hub
-#      (src/fleet/host/vm-join.js), then deletes the file.
+#      with the ticket on its first start, asks for its owner's Claude login
+#      and hands it to the hub (src/fleet/host/vm-join.js, sidecar.js), then
+#      deletes the file.
 #   3. Applies what the machine may do from chat, when its owner chose on the
 #      pool's policy (`grants` in the file, src/core/grants.js): the same
 #      `fleetwright grant` a person runs on a box, once per answer, before

@@ -281,6 +281,61 @@ jobs:
       # do less than the checked-in script does. Two implementations of one
       # check is how the weaker one becomes the one that passes.
 
+  # THE TESTS ONLY ROOT CAN RUN, as root.
+  #
+  # Twenty-four tests skip unless they run as root: root's doctor reaching
+  # claude only through `sudo -u`, root's git running no hooks in a checkout,
+  # and every install-root-sources case where the installer acts as the
+  # service user so that root follows none of their links. They are the
+  # regressions for the hardening rounds, and no job here ran them: `runner`
+  # is not root, so the matrix above printed each one as skipped, and green.
+  #
+  # A RUNNER HAS PASSWORDLESS SUDO, so this is one `sudo` and ten seconds.
+  # PATH goes through `env` because sudo's secure_path would drop setup-node's
+  # node; the files are named rather than found, because a file that only
+  # skips as root (release-apply's quarantine) would make the count below lie.
+  # The whole of each file runs, which costs nothing and says the rest of it
+  # holds as root too.
+  #
+  # NOTHING MAY SKIP. A step that ran as root and skipped what needs root has
+  # the same green tick as one that tested it, which is the thing this job is
+  # here to stop. So a skip fails it and names the test and its reason.
+  #
+  # BOTH NODES, like the suite, because what root's children inherit turned
+  # out to depend on the runtime. Run this way for the first time, on 26,
+  # root's doctor handed the service user's env file to root's systemctl:
+  # Node 26 stopped honouring `process.env = {...}` for children, which is how
+  # bin/fleetwright put root's own environment back (src/config.js). On 24 it
+  # passed, and the deb ships 24, until the day Renovate moves it.
+  root:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['24', '26']
+    name: root-only tests (node ${{ matrix.node }})
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - name: The tests that need root, under sudo, with nothing skipped
+        run: |
+          set -eu
+          sudo env "PATH=$PATH" node --test \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=tap --test-reporter-destination=/tmp/root-tests.tap \
+            test/bootstrap.test.js test/doctor.test.js test/grants.test.js \
+            test/install-root-sources.test.js test/sidecar-store.test.js test/sidecar-user.test.js
+          if ! grep -qx '# skipped 0' /tmp/root-tests.tap; then
+            echo "::error::a root-only test skipped under sudo, so it was not tested:"
+            grep -E '# SKIP' /tmp/root-tests.tap
+            exit 1
+          fi
+
   # (The Renovate config validator has its own workflow, renovate-config.yml —
   # it runs on its own Node because Renovate declares engines ^24.11.0 and its
   # native re2 module does not load on 26.)
@@ -304,7 +359,7 @@ jobs:
   # two, and the cancelled one's red mark said nothing about the code.
   gate:
     name: CI passed
-    needs: [test, checks]
+    needs: [test, checks, root]
     if: always()
     runs-on: ubuntu-26.04
     # To read this workflow's other runs on the same commit, and nothing else.
