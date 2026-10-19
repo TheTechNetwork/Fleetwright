@@ -57,6 +57,15 @@ const TICKET_TTL_MS = 45 * 60_000;
 
 /** Bounded, because an unclaimed dispatch costs memory until it expires. */
 const MAX_TICKETS = 200;
+/**
+ * Spent tickets remembered, for the ones redeemed with `remember` (a
+ * machine's, core.js enrolVm). A second presentation of one of these is not
+ * a typo or a slow job: the value was read by two parties, so it is told
+ * apart from "unknown" and said (`spentFor`). Kept until the ticket would
+ * have expired, which is as long as anybody could have spent it, and the
+ * oldest goes first past the cap, as an unclaimed ticket's memory does.
+ */
+const MAX_SPENT = 100;
 /** And per person, so one person's dispatches are only ever paid for by their own. */
 const MAX_TICKETS_PER_OWNER = 20;
 /** What a person is told when the fleet-wide backstop refuses their ticket. */
@@ -117,6 +126,10 @@ export function constantTimeEqual(a, b) {
  * @property {number} expiresAt
  */
 
+/**
+ * @typedef {{ id: string, secretHash: string, owner: string, platform: string, spentAt: number, expiresAt: number }} Spent
+ */
+
 export class RunnerTickets {
   /** @param {{ now?: () => number, ttlMs?: number }} [opts] */
   constructor({ now = () => Date.now(), ttlMs = TICKET_TTL_MS } = {}) {
@@ -124,16 +137,20 @@ export class RunnerTickets {
     this.ttlMs = ttlMs;
     /** @type {Map<string, Ticket>} */
     this.tickets = new Map();
+    /** Spent with `remember`, by id, until each would have expired. @type {Map<string, Spent>} */
+    this.spent = new Map();
   }
 
   /**
    * Mint one for a dispatch that is about to happen.
    *
-   * @param {{ owner: string, platform: string, repository?: string|null, start?: Ticket['start'] }} spec
+   * @param {{ owner: string, platform: string, repository?: string|null, start?: Ticket['start'], ttlMs?: number }} spec
+   *   `ttlMs` shorter than the default for a ticket whose spender is known to
+   *   be quick: a machine on somebody's pool, which spends it as it boots
    * @returns {Promise<{ id: string, token: string, expiresAt: number } | null>}
    *   null when the fleet holds as many tickets as it can, none of them this person's
    */
-  async mint({ owner, platform, repository = null, start = null }) {
+  async mint({ owner, platform, repository = null, start = null, ttlMs }) {
     this.#sweep();
     // A PERSON'S OWN OLDEST TICKET MAKES ROOM FOR THEIR NEXT, AND NOBODY
     // ELSE'S EVER DOES. This used to drop the fleet's oldest ticket whoever
@@ -148,7 +165,7 @@ export class RunnerTickets {
     else if (this.tickets.size >= MAX_TICKETS) return null;
     const id = randomHex(ID_BYTES);
     const secret = randomHex(SECRET_BYTES);
-    const expiresAt = this.now() + this.ttlMs;
+    const expiresAt = this.now() + Math.min(this.ttlMs, Number(ttlMs) > 0 ? Number(ttlMs) : this.ttlMs);
     this.tickets.set(id, {
       id,
       secretHash: await hashSecret(secret),
@@ -175,16 +192,51 @@ export class RunnerTickets {
    * turns that into one sentence, because a job reading it cannot act on the
    * difference and an attacker should not be told which it was.
    *
+   * REMEMBER, for a ticket that travels where somebody else might read it
+   * before its spender does (a machine's cloud-init drive): the spending is
+   * kept, hash and all, until the ticket would have expired, so a second
+   * presentation can be recognised for what it is (`spentFor`).
+   *
    * @param {unknown} token
+   * @param {{ remember?: boolean }} [opts]
    * @returns {Promise<Ticket|null>}
    */
-  async redeem(token) {
+  async redeem(token, { remember = false } = {}) {
     const found = await this.peek(token);
     if (!found) return null;
     // Deleted before the caller does anything with it. A redemption that fails
     // downstream must not leave the ticket spendable, because the safe failure
     // is "ask for another runner" and the unsafe one is "try it again".
     this.tickets.delete(found.id);
+    if (remember) {
+      while (this.spent.size >= MAX_SPENT) {
+        const oldest = this.spent.keys().next().value;
+        if (oldest === undefined) break;
+        this.spent.delete(oldest);
+      }
+      const { id, secretHash, owner, platform, expiresAt } = found;
+      this.spent.set(id, { id, secretHash, owner, platform, spentAt: this.now(), expiresAt });
+    }
+    return found;
+  }
+
+  /**
+   * A ticket redeemed with `remember` and presented again: the whole value,
+   * secret and all, so whoever holds it read it where it travelled. Null for
+   * anything else, including the id alone with a wrong secret, because the
+   * id is a machine's name and not a secret (`vm-<id>`).
+   *
+   * @param {unknown} token
+   * @returns {Promise<Spent|null>}
+   */
+  async spentFor(token) {
+    this.#sweep();
+    const raw = typeof token === 'string' ? token : '';
+    const parts = raw.split('_');
+    if (parts.length !== 3 || parts[0] !== TICKET_PREFIX) return null;
+    const found = this.spent.get(parts[1]);
+    if (!found) return null;
+    if (!constantTimeEqual(found.secretHash, await hashSecret(parts[2]))) return null;
     return found;
   }
 
@@ -222,18 +274,26 @@ export class RunnerTickets {
    */
   serialise() {
     this.#sweep();
-    return [...this.tickets.values()];
+    // THE SPENT ONES IN THE SAME LIST, marked, so the storage key and its
+    // shape stay what they were: a spending forgotten by an eviction would
+    // make the drive's second reader an unknown ticket again.
+    return [...this.tickets.values(), ...[...this.spent.values()].map((t) => ({ ...t, spent: true }))];
   }
 
-  /** @param {Ticket[]} entries */
+  /** @param {Array<Ticket|(Spent & { spent: true })>} entries */
   restore(entries) {
     for (const t of entries || []) {
-      if (t?.id && t.secretHash && t.expiresAt > this.now()) this.tickets.set(t.id, t);
+      if (!(t?.id && t.secretHash && t.expiresAt > this.now())) continue;
+      if ('spent' in t && t.spent === true) {
+        const { id, secretHash, owner, platform, spentAt, expiresAt } = /** @type {Spent} */ (t);
+        this.spent.set(id, { id, secretHash, owner, platform, spentAt, expiresAt });
+      } else this.tickets.set(t.id, /** @type {Ticket} */ (t));
     }
   }
 
   #sweep() {
     const now = this.now();
     for (const [id, t] of this.tickets) if (t.expiresAt <= now) this.tickets.delete(id);
+    for (const [id, t] of this.spent) if (t.expiresAt <= now) this.spent.delete(id);
   }
 }

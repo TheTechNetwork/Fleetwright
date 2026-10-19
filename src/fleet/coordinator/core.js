@@ -34,7 +34,7 @@ import { RunnerTickets, randomHex, hashSecret, constantTimeEqual, TICKETS_FULL }
 import { RunnerRepos } from './runner-repos.js';
 import { LinkedRepos } from './linked-repos.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
-import { VmStandby, MAX_READY } from './vm-standby.js';
+import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
 import { HolderJoins } from './holder-joins.js';
@@ -108,6 +108,14 @@ const POOL_PAGE_PROTOCOL = 13;
 /** The protocol a box speaks to keep its own named secrets from sessions of people who do not administer it (`boxSecrets`, v14). */
 const BOX_SECRETS_PROTOCOL = 14;
 /**
+ * How long a machine's ticket lives: as long as the fleet waits for a machine
+ * kept ready to enrol before it takes it to have failed (vm-standby.js), and
+ * not the forty-five minutes a runner's has for a GitHub queue. A machine
+ * spends its ticket as it boots; the rest of the window was only time for a
+ * copy read off its drive to be spent instead.
+ */
+const VM_TICKET_TTL_MS = PENDING_MS;
+/**
  * How long a probe through a phone may take. Longer than the fan-out's ten
  * seconds: every round trip of the TLS handshake crosses the coordinator twice
  * and the phone's own network, which may be a mobile one.
@@ -129,6 +137,8 @@ const MINT_WINDOW_MS = 10 * 60_000;
  * two. Past that it is asking for something other than a login.
  */
 const MAX_CLAUDE_PER_WINDOW = 5;
+/** Machines remembered as handed a Claude login, oldest first out (vmLoginsGiven). */
+const MAX_VM_LOGINS_REMEMBERED = 200;
 
 /** GitHub sign-ins and renewals one person's devices may finish in MINT_WINDOW_MS. */
 const MAX_GITHUB_PER_WINDOW = 20;
@@ -490,6 +500,13 @@ export class CoordinatorCore {
     this.mintAsks = new Map();
     /** The same, for Claude logins. @type {Map<string, number[]>} */
     this.claudeAsks = new Map();
+    /**
+     * Machines from a pool that were handed their owner's Claude login
+     * (#vmClaude), so a ticket spent twice can say whether a copy may have
+     * had it. In memory: it is said once, within the minutes a ticket lives.
+     * @type {Set<string>}
+     */
+    this.vmLoginsGiven = new Set();
     /**
      * In-flight GitHub authorizations, keyed by the `state` GitHub will hand
      * back. In memory rather than in storage on purpose: it lives ten minutes,
@@ -3401,6 +3418,16 @@ export class CoordinatorCore {
         text: 'forgetperson is sent by the coordinator when somebody is removed from the fleet. It cannot be called.',
       };
     }
+    // NOR A MACHINE'S CLAUDE LOGIN: asked for by the machine over its own
+    // socket (#vmClaude), and sent straight to the box that made it. From a
+    // caller it would be a login sealed to a key of the caller's choosing.
+    if (spec.verb === 'vmlogin') {
+      return {
+        ok: false,
+        error: { code: 'coordinator_only' },
+        text: 'vmlogin is sent by the coordinator for a machine that asked for its owner\u2019s Claude login. It cannot be called.',
+      };
+    }
 
     // Recorded BEFORE placement, and only for verbs that change something.
     //
@@ -5484,6 +5511,13 @@ export class CoordinatorCore {
     }
     const job = String(msg.job || '');
     const key = String(msg.key || '');
+    // A MACHINE FROM A POOL has no job token to ask the minter with. Its
+    // login comes from the box that made it (#vmClaude), and never from the
+    // minter on this coordinator's word alone.
+    if (String(this.hostIds.get(hostId)?.enrolledBy || '').startsWith('vm:') && !job) {
+      await this.#vmClaude(hostId, host, key, answer);
+      return;
+    }
     if (!JWT_RE.test(job) || job.length > 8192 || !SEAL_KEY_RE.test(key)) {
       answer({ ok: false, error: { code: 'bad_params' }, text: 'That request for a Claude login is not in the shape one takes.' });
       return;
@@ -5510,6 +5544,103 @@ export class CoordinatorCore {
       reply.ok
         ? { ok: true, sealed: reply.sealed, login: reply.login, owner: host.owner, text: reply.text }
         : { ok: false, owner: host.owner, error: reply.error || { code: 'refused' }, text: reply.text || 'No Claude login for this runner.' },
+    );
+  }
+
+  /**
+   * A machine from somebody's pool asks for their Claude login, once it has
+   * enrolled, over the socket its own key opened (`claude-login`, no job).
+   * It used to boot with the login on its cloud-init drive, which every box
+   * holding the pool's token may export (docs/security.md, G14).
+   *
+   * THE BOX THAT MADE IT HANDS IT OVER, asked with `vmlogin`: the boxes
+   * holding the owner's pools are asked in the order #vmctl asks them, and
+   * every one but the maker says it did not make that machine (`notHere`).
+   * The maker holds the login from the owner's vault, checks the machine is
+   * one it made for them and still running, and seals the login to the key
+   * that came with this frame, so what passes through here is ciphertext.
+   *
+   * NOT THE MINTER, though it keeps the same login for runners. The minter
+   * hands one out on GitHub's word about a job, never on this coordinator's,
+   * and a machine on a pool has no GitHub job: a hand-out keyed on this
+   * coordinator's word would let a compromised one ask for anybody's login.
+   * The box answers only for machines it made, which a compromised
+   * coordinator reaches already, by starting a session on one.
+   *
+   * @param {string} hostId @param {any} host @param {string} key
+   * @param {(answer: Record<string, unknown>) => void} answer
+   */
+  async #vmClaude(hostId, host, key, answer) {
+    const owner = String(host.owner).toLowerCase();
+    if (!SEAL_KEY_RE.test(key)) {
+      answer({ ok: false, owner, error: { code: 'bad_params' }, text: 'That request for a Claude login is not in the shape one takes.' });
+      return;
+    }
+    const now = this.now();
+    const recent = (this.claudeAsks.get(hostId) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_CLAUDE_PER_WINDOW) {
+      answer({ ok: false, owner, error: { code: 'too_many' }, text: `${hostId} has asked for a Claude login ${recent.length} times in ten minutes.` });
+      return;
+    }
+    recent.push(now);
+    this.claudeAsks.set(hostId, recent);
+    const spec = { verb: 'vmlogin', params: { name: hostId, key }, actor: owner, requester: { email: owner, admin: false } };
+    /** @type {Array<{ host: any, seen: boolean }>} */
+    const holders = [];
+    for (const box of this.registry.reachable()) {
+      if (box.ephemeral || !Array.isArray(box.health?.xo)) continue;
+      const mine = xoFor(box, owner);
+      if (!mine.length) continue;
+      const seen = mine.some((/** @type {any} */ e) => Array.isArray(e?.machines) && e.machines.some((/** @type {any} */ m) => m?.name === hostId));
+      holders.push({ host: box, seen });
+    }
+    holders.sort((a, b) => Number(b.seen) - Number(a.seen) || Number(holds(b.host, owner)) - Number(holds(a.host, owner)) || a.host.hostId.localeCompare(b.host.hostId));
+    /** @type {string[]} */
+    const skipped = [];
+    /** @type {any} */
+    let reply = null;
+    for (const { host: box } of holders) {
+      let r;
+      try {
+        r = await this.send(box, spec);
+      } catch (e) {
+        skipped.push(`${box.hostId} (${/** @type {Error} */ (e).message})`);
+        continue;
+      }
+      // A BOX FROM BEFORE `vmlogin` made nothing it could hand a login to
+      // either: it put the login on the drive. The next box is asked.
+      if (r?.ok === false && r.error?.code === 'unknown_verb') {
+        skipped.push(`${box.hostId} (needs updating)`);
+        continue;
+      }
+      if (r?.ok === false && (r.unreachable === true || r.notHere === true)) {
+        skipped.push(`${box.hostId} (${r.text || 'did not make it'})`);
+        continue;
+      }
+      reply = { ...r, box: box.hostId };
+      break;
+    }
+    const sealed = reply?.ok === true && reply.sealed && typeof reply.sealed === 'object' ? reply.sealed : null;
+    if (sealed) {
+      if (this.vmLoginsGiven.size >= MAX_VM_LOGINS_REMEMBERED) {
+        const oldest = this.vmLoginsGiven.values().next().value;
+        if (oldest !== undefined) this.vmLoginsGiven.delete(oldest);
+      }
+      this.vmLoginsGiven.add(hostId);
+    }
+    const why = reply ? String(reply.text || 'no reason given') : holders.length ? `no box holding the pool made it: ${skipped.join(', ')}` : 'no connected box holds a pool of theirs';
+    this.record({
+      hostId,
+      event: sealed ? 'vm.claude' : 'vm.claude-refused',
+      actor: owner,
+      text: sealed
+        ? `${owner}\u2019s machine ${hostId} was handed their Claude login by ${reply.box}, which made it`
+        : `${owner}\u2019s machine ${hostId} has no Claude login: ${why}`,
+    });
+    answer(
+      sealed
+        ? { ok: true, sealed, owner, text: `handed by ${reply.box}, which made this machine` }
+        : { ok: false, owner, error: reply?.error || { code: 'refused' }, text: why },
     );
   }
 
@@ -6570,7 +6701,7 @@ export class CoordinatorCore {
       start = /** @type {any} */ (checked.params);
     }
     const image = holders[0].entries[0].images[0];
-    const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start });
+    const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start, ttlMs: VM_TICKET_TTL_MS });
     if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
     const vmHost = `vm-${ticket.id}`;
     // A MACHINE KEPT READY IS BEING MADE FROM HERE, not from the box's answer.
@@ -6826,10 +6957,23 @@ export class CoordinatorCore {
    * machine. Somebody holding it before the VM spends it could enrol a
    * machine of their own as that person's temporary host, which is placed
    * only for them and named by them, and be started the session they asked
-   * for with it. It travels only in the VM's cloud-init drive, which the box
-   * asks Xen Orchestra to destroy once the VM has booted, and it is single
-   * use: the VM spends it within a minute or two of being made. Said in
-   * docs/security.md.
+   * for with it, and asks for their Claude login as the machine would. It
+   * travels only in the VM's cloud-init drive, which Xen Orchestra lets every
+   * box holding the pool's token export until boot destroys it (G14), so it
+   * lives fifteen minutes rather than a runner's forty-five, and the VM wipes
+   * the drive and spends it as it boots.
+   *
+   * SPENT TWICE IS SAID, AND UNDONE. Nothing here can tell the machine from
+   * somebody who read its drive: both hold the same value, and the drive and
+   * the VM's id are both shown to whoever can export it. What can be told is
+   * that two parties held it, because the VM always presents it once. So the
+   * spending is remembered until the ticket would have expired
+   * (RunnerTickets#spentFor), and a second presentation of the whole value
+   * is refused, recorded for the owner and the fleet's admins to see, and the
+   * host enrolled with it is taken out of the fleet with whatever it was
+   * running, because it is as likely to be the copy as the machine. A
+   * machine lost that way is asked for again; a copy left in is somebody
+   * else running that person's work.
    *
    * @param {any} body  `{ ticket, publicJwk }`
    * @returns {Promise<{ status: number, body: Record<string, any> }>}
@@ -6845,8 +6989,12 @@ export class CoordinatorCore {
       },
     });
     const peeked = RunnerTickets.looksLikeTicket(presented) ? await this.runnerTickets.peek(presented) : null;
-    if (!peeked || !isVmTicket(peeked)) return refuse();
-    const ticket = await this.runnerTickets.redeem(presented);
+    if (!peeked) {
+      const spent = RunnerTickets.looksLikeTicket(presented) ? await this.runnerTickets.spentFor(presented) : null;
+      return spent && isVmTicket(spent) ? this.#vmTicketSpentTwice(spent, body?.publicJwk) : refuse();
+    }
+    if (!isVmTicket(peeked)) return refuse();
+    const ticket = await this.runnerTickets.redeem(presented, { remember: true });
     if (!ticket) return refuse();
     const hostId = `vm-${ticket.id}`;
     const result = await this.hostIds.enrol({
@@ -6877,6 +7025,54 @@ export class CoordinatorCore {
         : `a machine from ${ticket.owner}’s hypervisor enrolled itself`,
     });
     return { status: 200, body: { ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true } };
+  }
+
+  /**
+   * A machine's ticket presented after it was spent: refused, said where its
+   * owner and the fleet's admins read the events, and the host it enrolled
+   * taken out of the fleet (enrolVm says why that one).
+   *
+   * THE SAME KEY AGAIN IS THE SAME MACHINE: a VM whose answer was lost on the
+   * way back keeps its ticket and presents it on its next start
+   * (vm-join.js), and is answered as it was the first time. Its key is
+   * public, so somebody else presenting it gains a name they cannot sign as.
+   *
+   * @param {{ id: string, owner: string, spentAt: number }} spent
+   * @param {any} publicJwk  what this presentation came with
+   * @returns {{ status: number, body: Record<string, any> }}
+   */
+  #vmTicketSpentTwice(spent, publicJwk) {
+    const hostId = `vm-${spent.id}`;
+    const enrolled = this.hostIds.get(hostId);
+    if (enrolled && !enrolled.revokedAt && enrolled.publicJwk?.x === publicJwk?.x && enrolled.publicJwk?.y === publicJwk?.y) {
+      return { status: 200, body: { ok: true, hostId, fingerprint: enrolled.fingerprint, ephemeral: true } };
+    }
+    const given = this.vmLoginsGiven.has(hostId);
+    const removed = this.revokeHost(hostId);
+    if (removed) {
+      this.runnerStarts.delete(hostId);
+      this.vmStandby.forget(hostId);
+      this.onStateChanged?.();
+    }
+    this.record({
+      event: 'vm.ticket-reused',
+      hostId,
+      actor: spent.owner,
+      text:
+        `the ticket ${spent.owner}\u2019s machine ${hostId} was made with was presented again after it had been spent, so somebody ` +
+        `other than the machine read it from its cloud-init drive. ${removed ? `${hostId} was taken out of the fleet, since it may be the copy` : `${hostId} was not in the fleet any more`}` +
+        `${given ? `, and it had been handed ${spent.owner}\u2019s Claude login: make a new one (claude setup-token) and keep it in the vault in place of the old` : ''}. ` +
+        'Ask for the machine again, and tell the pool\u2019s admin.',
+    });
+    this.log.warn(`coordinator: the ticket for ${hostId} was presented twice; ${removed ? 'revoked it' : 'it was not enrolled'}`);
+    return {
+      status: 403,
+      body: {
+        ok: false,
+        error: { code: 'ticket_reused' },
+        text: 'That ticket was spent already, by something else holding a copy of it, so this machine is not let in and the one that was has been taken out. Ask for the machine again.',
+      },
+    };
   }
 }
 

@@ -1704,7 +1704,8 @@
                       "xosetup",
                       "vmctl",
                       "xolook",
-                      "xoact"
+                      "xoact",
+                      "vmlogin"
                     ]
                   },
                   "params": {

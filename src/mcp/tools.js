@@ -37,9 +37,11 @@ import { VERBS } from '../fleet/protocol/intents.js';
  */
 /**
  * Verbs only the coordinator sends. See the filter in toolsFor. `forgetperson`
- * is sent when somebody is removed from the fleet (core.js #forgetOnBoxes).
+ * is sent when somebody is removed from the fleet (core.js #forgetOnBoxes),
+ * and `vmlogin` when a machine from a pool asks for its owner's Claude login
+ * (core.js #vmClaude).
  */
-export const COORDINATOR_ONLY = Object.freeze(['mint', 'forgetperson']);
+export const COORDINATOR_ONLY = Object.freeze(['mint', 'forgetperson', 'vmlogin']);
 
 /** @type {string[]} */
 export const DEFAULT_DENY = ([

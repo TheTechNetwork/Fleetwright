@@ -2388,7 +2388,8 @@ const OPENAPI = JSON.stringify({
                       "xosetup",
                       "vmctl",
                       "xolook",
-                      "xoact"
+                      "xoact",
+                      "vmlogin"
                     ]
                   },
                   "params": {
