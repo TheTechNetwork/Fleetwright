@@ -140,6 +140,7 @@ and "dead host" is the one it retries.
 | `linkrepo` | `role` (`archive`\|`runners`\|`templates`, v11), `repo` (`owner/repo`, v11) | | `/linkrepo <role> <owner/repo>` |
 | `setuptoken` | `code?` (secret), `reply?` (a P-256 public key) | ✅ | `/setuptoken` starts `claude setup-token` in a pane and returns the sign-in page; `/setuptoken <code> <reply>` finishes it and returns the token sealed to `reply` |
 | `mint` | `repo` (`owner/repo`), `job` (a GitHub Actions job token), `key` (a P-256 public key) | | sidecar-local — `/githubaccess <owner/repo>` asks the hub what the person can do there; the token is minted and sealed in the sidecar |
+| `vmlogin` | `name` (`vm-<12 hex>`), `key` (a P-256 public key) | | sidecar-local — the Claude login the box holds from the machine's owner's vault, sealed to `key`, for a machine this box made for them (by the VM's id), still running, and only once. Coordinator only |
 | `xoprobe` | `address` (host or IP, optional port), `relay?` (v12: a relay through the asking phone) | | sidecar-local — one TLS handshake and one GET of `/signin`; answers reachable, Xen Orchestra or not, and the certificate's SHA-256. Beside it, `ssh-keyscan` at the address on port 22: where no Xen Orchestra answered, `ssh` says the host keys' fingerprints and whether the machine can install Xen Orchestra there. Fanned out to every permanent machine; with `relay`, sent to the relay's machine alone and run through the phone: one attempt, HTTPS only, and no `ssh-keyscan`. A fan-out that reached nothing names a machine that can work through a phone (`relay.hostId`). Admin only |
 | `xosetup` | `phase` (`begin`\|`run`\|`status`\|`cancel`\|`policy`), `job?`, `address?`, `pin?` (certificate SHA-256), `sealed?` (secret), `trust?` (`accepted`: the person accepted a certificate that does not check out), `plain?` (`accepted`, with no `pin`: the person accepted setting it up over plain HTTP), `relay?` (v12, for `begin`: every connection of the job goes through the asking phone, as TLS the machine opens; never with `plain`); phase `deploy` takes `address` and `pin` (the hex SHA-256 of the pool master's SSH host key), and refuses `relay` | ✅ | sidecar-local — onboards a Xen Orchestra pool: a signed key for the job, the admin sign-in sealed to it, steps reported as `xosetup.progress`. A job whose sealed sign-in says `purpose: policy` changes what the fleet may use instead: the pool's inventory sealed to the phone in `status`, the person's choice sealed back in `policy`, no progress events. A job begun with `deploy`, for a pool with no Xen Orchestra, installs it first with the installer's `xo-remote-deploy.sh` (the root password and the new admin password sealed in `run`), then onboards it, reporting as `purpose: deploy`. Pinned to one machine; admin only. See `hypervisors.md` |
 | `xolook` | `address` (v13), `reply` (a P-256 public key, v13) | | sidecar-local — a pool's page for a phone away from it: the methods the person's token may call and the pool's hosts, VMs, storage and disks, cut to what the page draws and sealed to `reply` under `fleetwright-xolook/v1:<address>`. Sent only to a permanent machine that reported holding the asker's token for that address, the one that last reached it first. Owner only. See `manage.md`, "From away" |
@@ -184,7 +185,7 @@ session gets its owner's vault alone. Absent, from an older coordinator, is
 `secret` start for somebody who does not administer such a box is refused
 `host_outdated` rather than sent. See [security.md](./security.md) G12.
 
-`mint` is one of two verbs nobody calls. A runner sends a `mint` **frame** up its
+`mint` is one of three verbs nobody calls. A runner sends a `mint` **frame** up its
 own socket when one of its sessions' git asks for a repository; the coordinator
 relays the ask to the minting Worker, a separate script that holds the fleet's
 GitHub App key, over a service binding — that is not this verb at all. Only
@@ -198,7 +199,7 @@ only `/githubaccess <repo>`, and seals the token it mints to `key`. So the reply
 the coordinator relays is ciphertext. See
 [runner-central.md](./runner-central.md#private-code-on-a-runner).
 
-`forgetperson` is the other. The coordinator sends it to each of the fleet's own
+`forgetperson` is another. The coordinator sends it to each of the fleet's own
 boxes when somebody is removed, with the person as the actor and no params, and
 keeps sending it until the box says it is done; `dispatch` refuses it from any
 caller with `coordinator_only`, and the MCP server does not offer it
@@ -211,6 +212,19 @@ for them. It adds no reach: `forget` of each session and `unlink` of each
 sign-in could already be asked by name. An older box answers `unknown_verb`,
 which the coordinator treats as not done: it asks that box the old `stop` and
 `unlink` meanwhile, and `forgetperson` again when it reconnects. See [security.md](./security.md) G13.
+
+`vmlogin` is the third. A machine made on somebody's pool used to boot with
+their Claude login on its cloud-init drive, which every box holding the pool's
+token may export through Xen Orchestra ([security.md](./security.md) G14). Now
+the machine asks once it has enrolled, with the `claude-login` **frame** a
+runner sends and no job token, and the coordinator sends this verb, as the
+machine's owner, to the boxes holding their pools until the one that made it
+answers; the others say `notHere`, and a box from before the verb answers
+`unknown_verb` and is passed over. The box hands the login only to a machine it
+noted making, by the VM's id Xen Orchestra gave it, still under that name and
+running, and only once, sealed to `key`, so the reply the coordinator relays is
+ciphertext. `dispatch` refuses it from any caller with `coordinator_only`, and
+the MCP server does not offer it (`COORDINATOR_ONLY`).
 
 `renew` is the odd one and is worth a sentence. Every other verb here is
 somebody asking a host to do something; this one is the coordinator **handing a

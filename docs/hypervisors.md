@@ -41,7 +41,8 @@ What happens, from the phone to a session on a VM:
    them: a pool's token is its own kind, not a named secret.
 3. **The box looks at the pool.** Signed in with the limited token, it finds
    the Fleetwright machine images there (templates tagged
-   `fleetwright-image`) and reports them in its health, never the token. The
+   `fleetwright-image` that are in the fleet's resource set) and reports them
+   in its health, never the token. The
    coordinator offers each person the images on their own pools as
    `vmImages`, and both phones list them under New session › Where as "New
    machine from Fleetwright Debian 13 on rack".
@@ -56,17 +57,23 @@ What happens, from the phone to a session on a VM:
    the resource set, tagged `fleetwright-session`, with the time it must be
    gone by, when it was made, the image, the network and whose it is, and
    booted with a cloud-init drive holding one file: the coordinator, the
-   ticket, whose machine it is, your Claude login from your vault, and a
-   backstop for its end. Your SSH public keys go on the same drive, when you
-   keep some. Xen Orchestra is asked to destroy the drive once the machine
-   has booted.
+   ticket, whose machine it is, and a backstop for its end. Your SSH public
+   keys go on the same drive, when you keep some. **Not your Claude login**:
+   every box holding the pool's token may export the drive through Xen
+   Orchestra (below, and `docs/security.md`, G14). Xen Orchestra is asked to
+   destroy the drive once the machine has booted, which 5.211.0 does five
+   minutes after the machine is running with its drivers detected
+   (`vdiDelayBeforeRemovingCloudConfigDrive`).
 6. **The machine joins by itself.** `install/fleetwright-vm-join` wipes the
    drive first, moves the file beside the sidecar's key and starts the
    services, which the image left off. The sidecar enrols itself once at
    `/api/enroll/vm` with the ticket, under the name the coordinator derives
-   from it (`vm-<ticket id>`), hands your Claude login to its hub as a
-   runner's is handed, and deletes the file. It is then a temporary host in
-   every way: yours, placed only by name, retired with its key on disconnect.
+   from it (`vm-<ticket id>`). Then it asks for your Claude login over the
+   connection its key opened, and the box that made it hands it over, sealed
+   to the machine (`vmlogin`, `docs/intents.md`): only for a machine that box
+   made for you, by the VM's id, still running, and once. The hub keeps it as
+   a runner's, and the file is deleted. It is then a temporary host in every
+   way: yours, placed only by name, retired with its key on disconnect.
 7. **The session starts on it**, from the first health frame that says it
    can take one; a frame from before its login has arrived holds the start
    for the next.
@@ -515,7 +522,127 @@ the storage and networks it may use, and limits on vCPUs, memory and disk.
 A compromised box is then a quota's worth of VMs from the images in that
 set, and nothing on the pool that predates it. This is the bound to write
 down for the operator, because it is the one that holds when everything on
-our side has failed.
+our side has failed. It is a little wider than that, measured below: the
+token can also copy its own machines to templates outside the quota, and it
+can read everything on the Xen Orchestra.
+
+### What Xen Orchestra lets whom do
+
+Measured, not read off its documentation: xo-server **5.211.0**
+(`docker.io/ronivay/xen-orchestra:latest`, image `a7c2f28e636b`), its
+JSON-RPC called as the admin, as a user made the way `xo-setup.js` makes the
+fleet's (`user.create` with permission `none`, the subject of a resource set,
+signed in with the token it minted), and as a plain user with permission
+`none` and an `admin` ACL on one VM an admin made in no set. No XCP-ng was
+attached; a stand-in XAPI gave Xen Orchestra a pool, templates, VMs and a
+snapshot to check permissions on, and logged which calls Xen Orchestra let
+through to it. So the table is Xen Orchestra's own checks, exactly; what XAPI
+then does with a copy (which fields it carries over) is not measured here.
+
+| Method | Fleet's user | Plain user | Governed by (xo-server `src/`) |
+|---|---|---|---|
+| `resourceSet.create`, `.set`, `.delete`, `.addObject`, `.removeObject`, `.addSubject`, `.removeSubject`, `.addLimit` | refused: `not enough permissions`, `{"permission":"admin"}` | refused, the same | `api/resource-set.mjs`: `create.permission = 'admin'` and the same on each |
+| `resourceSet.getAll` | its own set only | `[]` | `xo-mixins/resource-sets.mjs`, `getAllResourceSets`: filtered to sets the user is a subject of unless `permission === 'admin'` |
+| `resourceSet.get` by id | **any set**, `fleetwright-made` included | **any set** | `api/resource-set.mjs`: `get` has no `permission` and no `resolve`, so only a sign-in |
+| `xo.getAllObjects` | **every object**: the pool, hosts, storage, every network, template, VM and snapshot, with all their fields | **every object** | `api/xo.mjs`: no `permission`; `xo.mjs`, `getObjects`, filters by nothing but the caller's filter |
+| `xo.getAllObjects`, a VM's `xenStoreData` | **verbatim**: values an admin set with `vm.set` on a VM made in no set came back as set | **verbatim** | the same; `vm.set`'s `xenStoreData` is filed under `vm-data/` (`api/vm.mjs`, `autoPrefix`), and a key given as `null` is deleted (measured) |
+| `user.getAll` (every user, with its `preferences`) | refused: `not enough permissions`, `{"permission":"admin"}` | refused, the same | `api/user.mjs`: `getAll.permission = 'admin'` |
+| `session.getUser` | its own user only | its own user only | `api/session.mjs`: the signed-in user's id |
+| `user.set { preferences }` on another user | refused: `a user can only change its own properties` | refused, the same | `api/user.mjs`, `set`: `id !== this.apiContext.user.id` for a caller who is not an admin |
+| REST `/rest/v0/users`, `/rest/v0/users/<id>` | `[]`; 403 `not enough privileges` | `[]`; 403 | the REST API's own privilege check; an admin gets every user with its `preferences` |
+| `disk.exportContent` of a cloud-init drive on a machine in its set | **allowed** with the `admin` ACL `vm.create` in the set gives: `$getFrom` returned; refused without it, `{"permission":"view"}` | refused, `view` | `api/disk.mjs`: `exportContent.resolve = { vdi: ['id', ['VDI', 'VDI-snapshot'], 'view'] }`, and a VDI's ACL follows its VM's. The stand-in XAPI served no export, so only Xen Orchestra's check is measured |
+| `tag.add` | on the VM it made (it holds an `admin` ACL there, as `vm.create` in a set gives) and that VM's snapshot; refused on every template, network, storage, host and other VM: `{"permission":"administrate","object":{"id":…}}` | on the VM it was given, and that VM's snapshots and clones; refused elsewhere, the same | `api/tag.mjs`: `add.resolve = { object: ['id', null, 'administrate'] }`; `xo-acl-resolver`: a VM-template is `or(checkSelf, checkMember('$pool'))` |
+| `customField.add` on a template | refused, `administrate` | refused | `api/custom-field.mjs`: `resolve object: ['id', null, 'administrate']`, and it writes only under `XenCenter.CustomFields.` |
+| `vm.set { name_label }` | on its own VM; refused on templates | on the VM it was given; refused on templates | `api/vm.mjs`: `set.resolve VM: ['id', ['VM', 'VM-snapshot', 'VM-template'], 'administrate']` |
+| `vm.set { resourceSet: null }` | refused: `not enough permissions` | refused | `api/vm.mjs`, `set`: `if (this.apiContext.permission !== 'admin') throw unauthorized()` |
+| `vm.convertToTemplate` | refused: `administrate` on the **pool** | refused, the same | `api/vm.mjs`: `await this.checkPermissions([[vm.$pool, 'administrate']])` |
+| `vm.snapshot` | allowed while the set has room; refused `not enough resources in resource set` when it has not | allowed (the VM had no disks; with disks it also needs `operate` on their storage) | `api/vm.mjs`: `resolve vm: ['id', 'VM', 'operate']`; a subject of the VM's set skips the storage check ("Workaround: allow Resource Set members to snapshot"); limits allocated |
+| `vm.copyToTemplate` on a snapshot it has | **allowed**, and still allowed with the set's limits exhausted | **allowed**: a template named and tagged as the plain user chose, in no set | `api/vm.mjs`: `copyToTemplate.resolve = { vm: ['id', ['VM-snapshot'], 'administrate'] }`, no pool check, no storage check, no limit allocated, no ACL given on the copy |
+| `vm.delete` on that template | refused, `administrate` | refused | the copy has no ACL for its maker |
+| `vm.clone` of a template (an image, the built-in one) | refused, `administrate` on the template | refused | `api/vm.mjs`: `clone.resolve vm: [… 'administrate']` |
+| `vm.clone` of a VM it holds | allowed within limits | **allowed**: a VM in no set (no disks; with disks, `operate` on their storage) | `api/vm.mjs`, `clone`: `checkPermissionOnSrs`, then an `admin` ACL on the clone |
+| `vm.copy` | refused: `operate` on the storage | refused | `api/vm.mjs`: `copy.resolve sr: ['sr', 'SR', 'operate']` |
+| `vm.create` with no resource set | refused: `administrate` on the pool | refused | `api/vm.mjs`, `create`: `if (resourceSet === undefined) await this.checkPermissions([[template.$pool, 'administrate']])` |
+| `vm.create` in the set from a template not in it | refused: `not enough permissions` | refused (not a subject) | `xo-mixins/resource-sets.mjs`, `checkResourceSetConstraints`: every template, storage and network must be in the set |
+| `vm.import` | refused: `administrate` on the storage | refused | `api/vm.mjs`: `import_.resolve sr: ['sr', 'SR', 'administrate']` |
+| `network.create` | refused: `administrate` on the pool | refused | `api/network.mjs`: `create.resolve = { pool: ['pool', 'pool', 'administrate'] }` |
+| `acl.add` | refused: `{"permission":"admin"}` | refused | `api/acl.mjs`: `add.permission = 'admin'` |
+| `user.set { permission: 'admin' }` on itself | refused: `this property can only be changed by an administrator` | refused | `api/user.mjs`, `set`: `[...noEditFields, 'permission'].some(…)` for a caller who is not an admin |
+
+What the code rests on, held to it:
+
+- **Only an admin writes a resource set**, so the lists in `xo-made.js` are
+  the admin's. Holds. Either list can be read by anybody signed in who has its
+  id, which costs nothing: they hold ids, and every id is in
+  `xo.getAllObjects` anyway.
+- **A tag is anybody's who holds `administrate` on the object**, and that is
+  the fleet's own user on every machine it makes, and anybody an admin gives
+  one VM. Nobody below an admin can tag a template, network, storage or host
+  directly. But a template with any name and any tags can be made by
+  anybody holding a VM: snapshot it, tag the snapshot, `vm.copyToTemplate`.
+  So nothing takes a tag alone: the policy job's kept disks, bases and
+  images are found by the lists (`keptBaseOn`, `baseOf`, `isFleetImage`),
+  the pool's own machine by the list (`isHolder`), and XCP-ng's built-in
+  template by `isDefaultTemplate`, which reads `is_default_template` or
+  `other_config.default_template`, neither of which any method below an
+  admin writes. A planted "Other install media" and a planted
+  `fleetwright-base` were both measured to be made, and neither is taken.
+- **Made in no set means made by an admin** was too strong. A plain user given
+  one VM in no set cloned it, and copied a snapshot of it to a template, both
+  in no set. The fleet's own user cannot: its machines are in the set and it
+  cannot take one out. Every reader of `outsideSets` already pairs it with a
+  list, so this changed nothing but the comment.
+- **The limited user sees what the fleet may use** was false: it sees every
+  object on the Xen Orchestra. A box reported every template tagged
+  `fleetwright-image`, every network, and every VM tagged as a session's
+  machine and named like one; a plain user's VM so renamed and tagged
+  appeared as a person's machine and was swept (Xen Orchestra refused the
+  delete). The box now reports, sweeps and works only what is in the fleet's
+  set, as the token reads it with `resourceSet.getAll`
+  (`src/fleet/host/xo-pools.js`, `fleetSetOf`), which only an admin can
+  change and only a subject of the set can make a VM in.
+- **The quota bounds the token** holds for VMs and not for templates: the
+  fleet's user can snapshot a machine it made and copy the snapshot to a
+  template, a full copy on the same storage that no limit counts, and cannot
+  then delete the copy. An admin removes those in Xen Orchestra.
+- **Only an admin reads what is on the edge routers** was false, and it was
+  where the pair's CARP password and the routers' key were kept: in each
+  router's `xenStoreData`, which both the fleet's user and the plain user read
+  back verbatim (dummy values). They are kept now in the preferences of a user
+  made for them, `fleetwright-edge-keys`, which only an admin reads
+  (`user.getAll`, above), and the routers carry a hash of the password and
+  the certificate's pin. The next policy job clears the old fields and builds
+  the routers again with new ones (`docs/security.md`, G14). The repo's own
+  `keepFor`, `keptFor` and `clearExposed` were run against this Xen
+  Orchestra: afterwards neither principal's `xo.getAllObjects` held any of
+  seven secret values, only the two marks.
+- **A machine's cloud-init drive** is readable by every box holding the
+  fleet's token until Xen Orchestra destroys it after boot: each passes Xen
+  Orchestra's check to export it, since the fleet's user is given `admin` on
+  every machine any box makes in the set. So it no longer carries the Claude
+  login, which the machine asks for once it has enrolled, and the ticket it
+  does carry lives fifteen minutes and is refused, said and undone if it is
+  spent twice (`docs/security.md`, G14). **The machine's own disk is under
+  the same check**, for its whole life: `xo-acl-resolver` grants a VDI to
+  anybody with the permission on a VM it is attached to, and `VDI-snapshot`
+  follows the disk it is a snapshot of, so every such box passes Xen
+  Orchestra's check to export the disk the hub keeps the login on (measured:
+  `$getFrom` for the disk of a machine made with the token; the stand-in XAPI
+  serves no export, so whether XAPI serves one of a running machine's disk is
+  not). Every such box is one the pool's owner approved, and already holds
+  a token that can delete the machine.
+- **A user per box would keep each box to its own machines.** Measured with
+  two users made as the fleet's is, both subjects of the one set: `vm.create`
+  gave the `admin` ACL to its caller alone; the other was refused
+  `disk.exportContent` on the machine's disk (`{"permission":"view"}`),
+  `vm.export`, `vm.clone` and `vm.copy` (`administrate`), `vm.snapshot` and
+  `vm.start` (`operate`), and `vm.set`, `tag.add` and `vm.delete`
+  (`administrate`); the maker was given each. `vm.create` with `share: true`
+  gives every subject the ACL, which is today's behaviour by another route.
+  Not built: a machine would answer only to the box that made it, so stopping,
+  extending, sweeping on expiry and handing over the login would all wait on
+  that one box, and each box would need a user and a token an admin job
+  minted for it (`docs/security.md`, G14).
 
 ## What `provision` may express
 
@@ -533,9 +660,10 @@ a box from before labs validates the enum and refuses it by name, the way
 `xosetup`'s `policy` phase was added, and only a box that reported a lab is
 asked. The lab rides in `network`, which the box checks is a lab it saw on
 that pool and saw empty. **The id must be an image the box itself saw
-on your pool**, tagged `fleetwright-image`: the box checks its own report,
-not the coordinator's word, and so must a network: one the box saw on that
-pool, which the resource set already bounds to the networks the fleet may use.
+on your pool**, tagged `fleetwright-image` and in the fleet's resource set:
+the box checks its own report, not the coordinator's word, and so must a
+network: one the box saw in the set on that pool, the networks the fleet may
+use. Xen Orchestra checks both again when the VM is made.
 No disk, address or cloud-init crosses the protocol. A compromised coordinator
 can ask for one of your images for a few hours, attributed to you, on a
 network the policy allows; it cannot ask for a VM on a network the policy
@@ -551,11 +679,19 @@ See "Machines from your pool", steps 4 to 7. What a leaked ticket costs is
 more than a runner's, because there is no GitHub token beside it: somebody
 holding it before the machine spends it could enrol a machine of their own as
 your temporary host and be started the session you asked for with it. It is
-single use, forty-five minutes at most, travels only on the machine's
-cloud-init drive, which the machine wipes as its first act and Xen
-Orchestra destroys after boot, and the machine spends it within a minute or
-two of being made. A runner's ticket cannot be spent at `/api/enroll/vm`,
-and a VM's cannot be spent at `/api/enroll/actions`.
+single use, fifteen minutes at most (as long as the fleet waits for a machine
+kept ready to join), travels only on the machine's cloud-init drive, which
+the machine wipes as its first act and Xen Orchestra destroys after boot, and
+the machine spends it after that wipe, as it boots. **Spent twice is said**:
+the spending is remembered until the ticket would have expired, and the whole
+ticket presented again is refused (`ticket_reused`), recorded as
+`vm.ticket-reused` for you and the fleet's admins, and the host it let in is
+taken out of the fleet with what it was running, because nothing can tell the
+machine from a copy of its drive. The same machine presenting it again with
+the same key, after an answer lost on the way back, is answered as before.
+Your Claude login is never on the drive: it is asked for after enrolment.
+A runner's ticket cannot be spent at `/api/enroll/vm`, and a VM's cannot be
+spent at `/api/enroll/actions`.
 
 ## Ending
 
@@ -769,11 +905,17 @@ purpose.
   and the machine that ran the job is always the first: its address is one the
   job knows, where a holder's is what its guest agent reports (`syslogTo`).
 
-**Where the key is kept.** On each router in Xen Orchestra, beside the pair's
-CARP password: Xen Orchestra's admins can read it, and the fleet's token
-cannot see the routers at all. A rebuild finds it there and keeps it. A router
-without the job's key (one from before this, or one whose key was lost) is
-**rebuilt once** to get it, one at a time for a pair. Each router now also
+**Where the key is kept.** In Xen Orchestra, beside the pair's CARP password,
+in the preferences of a user made for them, `fleetwright-edge-keys`, which
+only Xen Orchestra's admins read ("What Xen Orchestra lets whom do"). Each
+router carries only its certificate's pin, so the job can tell that the key
+it kept is the one the router has. A rebuild finds it there and keeps it. A
+router without the job's key (one from before this, or one whose key was
+lost) is **rebuilt once** to get it, one at a time for a pair. It was kept on
+the routers, in their `xenStoreData`, on the word that the fleet's token
+could not see them; every signed-in user reads that field, so the next
+policy job clears it and builds the routers again with a new key and a new
+password (`docs/security.md`, G14). Each router now also
 **keeps its WAN MAC across rebuilds** (the old router's own, or one made from
 the pool and which router it is), so the DHCP server on the way out hands the
 new router the address the old one had.
@@ -937,10 +1079,12 @@ for the first and `.3` for the second.
 - **Their advertisements carry an HMAC** of a password made for the pair,
   so a machine on the uplink cannot claim the gateway. OPNsense passes CARP's
   own packets before any rule here ("CARP defaults"), so the private-ranges
-  rule does not stop them. The password is kept on the two VMs in Xen
-  Orchestra (their `xenStoreData`), where the admin sign-in can read it and
-  the fleet's token cannot, since neither is in the resource set; a rebuilt
-  router is given the same one, so the old and the new agree.
+  rule does not stop them. The password is kept in Xen Orchestra where only
+  its admins read it, the preferences of the user `fleetwright-edge-keys`
+  ("What Xen Orchestra lets whom do"), and each router carries only a hash of
+  it, so the job knows which password the routers have; a rebuilt router is
+  given the same one, so the old and the new agree. It was in the two VMs'
+  `xenStoreData`, which every signed-in user reads (`docs/security.md`, G14).
 
 **Changing anything rebuilds them one at a time.** The second is replaced
 while the first carries the machines, then the first while the second does,
@@ -963,7 +1107,8 @@ their uplinks joined by a socket: the first came up master holding
 and no bad authentication. With the first powered off, the second became
 master and held 10.254.0.1. **Not yet run** on a real pool: CARP over Xen's
 netfront driver, which needs the uplink to carry multicast between the two
-VMs, and `xenStoreData` set through Xen Orchestra's `vm.set`.
+VMs. `vm.set`'s `xenStoreData`, which carries the two marks, has run against
+Xen Orchestra 5.211.0 with a stand-in XAPI, not a real pool.
 
 ### What the edge filters
 

@@ -91,6 +91,8 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink`; a removal from the fleet deletes it on each of the fleet's own boxes, asked with `forgetperson` at once or on the box's first report after it returns, and owed until the box itself says it is done (`#forgetOnBoxes`, `core.js`; `forget-person.js`; G13). Not on the person's own boxes, which act for them alone | `/api/state` per-account |
 | **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host that may hold it: the operator's boxes, and the member's own boxes and runners, never another member's (`mayActFor`, `hosts.js`) | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local), which deletes the renewal material with the token (until G13 it left it, and the next renewal wrote a fresh token back), and which a removal also asks of a box it takes out of the operator's tier, for every other person whose credential was live at the removal and nobody who joined since, then or, for a box away at the time, on its first report after it returns: each request names its person, so a box that put the debt off was otherwise told the emails of everybody who joined meanwhile (`#handBack`). The fleet's own boxes are asked instead to forget the person removed, with `forgetperson`: `<row>.env`, its metadata and `<row>.renewal.json` deleted in one act, asked at once or on the box's first report after it returns, and owed until the box itself says it is done (`#forgetOnBoxes`, `Connections.forget`, G13); not the person's own boxes. A copy held from the person's vault is not a link and `unlink` does not reach it; it stops because the minter serves no grant of somebody no longer in the fleet, and the box deletes it on that ask (`#onHostVault`, [vault.md](./vault.md)), or at once when it is asked to forget them; provider revoke (real) | `verify` verb |
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`, which until G13 left this file behind; `forgetperson`, for somebody removed; provider revoke | renewal-failure log |
+| **Machine ticket** (`fwt_…` minted for a machine on somebody's pool) | coordinator DO (`runnerTickets`), **hash only**; in flight on the machine's cloud-init drive | the Worker, as a hash; every box holding the pool's token may export the drive until Xen Orchestra destroys it after boot (G14) | single use, 15 minutes (`VM_TICKET_TTL_MS`) | spent at `/api/enroll/vm`; expiry | the spending is remembered until expiry: a second presentation is refused `ticket_reused`, recorded as `vm.ticket-reused` for the owner and the admins, and the host it enrolled revoked (`#vmTicketSpentTwice`, `core.js`) |
+| **Claude login on a session machine** | the box that made it: sidecar memory, from the owner's vault; the machine: `${stateDir}/runner-login.token`, `0600`, once handed over. **Not on its cloud-init drive** (G14) | that box; the machine's hub and its owner's sessions; and, at Xen Orchestra's check, every box holding the pool's token, which may export the machine's disk (G14, not measured whether XAPI serves it) | the person's (`claude setup-token`) | gone with the machine; the box hands it to a machine once (`XoPools#handLogin`) | `vm.claude` / `vm.claude-refused` events; `vm.ticket-reused` says when a revoked copy had been handed it |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry; `DELETE /api/enroll/{id}` by its minter or an admin; dropped when its minter is removed (`#forgetPerson`) | `outstanding()` (masked) |
 | **Telegram bot token** (archived) | host env (`FLEETWRIGHT_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `fleetwright doctor` names it |
 | **GitHub App private key** | **nowhere in this system** (ASPIRATIONAL: waits for the broker) | — | regenerate at first use | delete in GitHub | — |
@@ -439,9 +441,12 @@ machine of the fleet, through the coordinator.
   The disk goes to Xen Orchestra over the job's pinned connection. The image
   as published is kept on the pool as a template so a rebuild can copy it
   and write only the configuration's blocks into the copy, checked the same
-  way first; that template is visible to Xen Orchestra's admins only, is not
-  tagged for the fleet and is outside its resource set, so the fleet's token
-  can neither see nor clone it, and no box offers it for sessions. The router
+  way first; that template is not tagged for the fleet and is outside its
+  resource set, so the fleet's token cannot clone it (`vm.clone` asks
+  `administrate` on the template, measured refused) and no box offers it for
+  sessions. The token can see it: Xen Orchestra 5.211.0 shows a user who is
+  not an admin every object (`docs/hypervisors.md`, "What Xen Orchestra lets
+  whom do"), so its being kept is no secret, only its use. The router
   has no account anyone can sign in to (root's password is `*`) and no
   anti-lockout rule, so a lab, the only thing on its LAN side, cannot change
   the rules that keep it off the person's LAN. It is not tagged `fleetwright`,
@@ -521,19 +526,32 @@ machine of the fleet, through the coordinator.
   clone the images in the set onto the storage and networks in the set,
   within its limits. That is the bound the token always had, now reachable
   from every box the person approved instead of from their phone alone.
+  Measured on Xen Orchestra 5.211.0, the bound is wider in two ways
+  (`docs/hypervisors.md`, "What Xen Orchestra lets whom do"): the token reads
+  every object on the Xen Orchestra, not only the set's, and it can snapshot
+  a machine it made and `vm.copyToTemplate` the snapshot, which Xen
+  Orchestra counts against no limit (allowed with the set's limits
+  exhausted) and leaves the token unable to delete. Filling the pool's
+  storage with such copies is within its reach; an admin removes them.
 - **A machine from the pool is admitted by a ticket alone.** There is no
   GitHub token beside it, so a VM ticket admits a machine: single use, at
-  most forty-five minutes, bound to the person who asked, and spendable only
+  most fifteen minutes, bound to the person who asked, and spendable only
   at `/api/enroll/vm` (a runner's ticket is refused there, and a VM's at
   `/api/enroll/actions`). The name is derived from the ticket, never chosen.
-  It travels only on the machine's cloud-init drive, with the person's Claude
-  login from their vault; the machine wipes the drive as its first act and
-  Xen Orchestra is asked to destroy it after boot. Somebody who read the
-  drive before then (a pool admin, or anything that can read that storage)
-  could enrol a machine of their own as that person's temporary host and be
-  started the session asked for with it, and has their Claude login: the
-  same reach as reading the machine's own disk, which the hypervisor always
-  had. The box checks the image it clones is one it saw tagged
+  It travels only on the machine's cloud-init drive; the machine wipes the
+  drive as its first act, spends the ticket after, and Xen Orchestra is
+  asked to destroy the drive after boot. Somebody who read the drive before
+  then (a pool admin, anything that can read that storage, or any box holding
+  the pool's token, G14) and spent the ticket first could enrol a machine of
+  their own as that person's temporary host, be started the session asked
+  for with it, and be handed their Claude login if it asked before the
+  machine presented the ticket; when the machine does, it is refused, the
+  fleet records `vm.ticket-reused` for the owner and the admins, and the
+  host that spent it is revoked. **The Claude login is not on the drive**:
+  the machine asks for it once enrolled, and the box that made it seals it
+  to that machine (`vmlogin`). Reading the machine's own disk, where the hub
+  keeps it, is the reach the hypervisor always had, and every box holding
+  the token passes Xen Orchestra's check for it too (G14). The box checks the image it clones is one it saw tagged
   `fleetwright-image` on that person's pool, and a network one it saw on
   that pool, so the coordinator can name which of the person's images and
   which of the networks the policy allows, and nothing else.
@@ -621,10 +639,14 @@ machine of the fleet, through the coordinator.
   firewall's rules stay as built, and it cannot read or clear the logs. The
   API answers only HTTPS to the WAN address from private addresses, with a
   certificate the job made and the box pins, so the key is sent to nothing
-  else. The key lives on the routers in Xen Orchestra (admins only), in the
-  person's vault beside the pool's token, and in the memory of the boxes they
-  approved for the pool. A compromised coordinator sees none of it: the key
-  reaches the phone sealed, and the vault keeps it sealed.
+  else. The key lives in Xen Orchestra where only its admins read it (the
+  preferences of a user made for it, `fleetwright-edge-keys`, beside the
+  pair's CARP password; the routers carry only the certificate's pin and a
+  hash of the password), in the person's vault beside the pool's token, and
+  in the memory of the boxes they approved for the pool. Until G14 it was in
+  the routers' `xenStoreData`, which every user signed in to that Xen
+  Orchestra reads. A compromised coordinator sees none of it: the key reaches
+  the phone sealed, and the vault keeps it sealed.
 - **A pool's page from away** (`xolook`, `xoact`, `docs/manage.md`, "From
   away"). A box that holds a person's pool token reads the page for their
   phone and seals it to a key the phone made for that one look, so the
@@ -1147,7 +1169,8 @@ The test that would matter is the *absence* of egress control — see SEC-INJECT
   repositories (real, and free — `github-app.md`), *if* the install is on "Only
   select repositories." On "All repositories" this bound is absent.
 - **Reach off-box.** Container escape lands as an unprivileged host user **iff
-  rootless** (UNVERIFIED, §9-G4).
+  rootless** (measured on rootless podman in a lab, not yet on a deployed box,
+  §9-G4).
 
 **What does NOT bound it, today:**
 
@@ -1171,7 +1194,11 @@ bytes in, bytes out, and the CLI needs `HTTPS_PROXY` and no CA bundle.
 Until the seventh audit it could not have been measured at all: the config said
 `FilterType fixed`, which tinyproxy 1.11 rejects as a syntax error, so the
 proxy never started and an allowlisted box had no way out. It is ERE now, one
-anchored line per host. Until the eighth audit every session on such a box
+anchored line per host. It still did not start until it was first run on real
+podman: conf.c reads `Filter` as a double-quoted string, the path was written
+bare, and tinyproxy 1.11.3 said `Syntax error on line 16` and was restarted
+forever. The path is quoted now, and the test reads every line against
+tinyproxy's own grammar. Until the eighth audit every session on such a box
 shared one internal network, so each could reach the ports the others listened
 on (G9). Now a person's sessions share only their own, and the proxy, the one
 container on all of them, is started with forwarding off and filters by
@@ -1243,12 +1270,15 @@ network" on a box that has not turned the allowlist on.
 *Falsify:* grep `claude.js` `sandboxArgv` for `egressArgs`; `test/egress.test.js`
 pins that it is empty when open.
 
-**SEC-SESSION-5** (UNVERIFIED) — Rootless podman is claimed to map container-root
-to an unprivileged host user, so an escape is unprivileged on the host. This is
-**not proven**: `design.md §10` records every hardware test ran as root. The
-property MUST be treated as unverified until a non-root deployment is tested.
-*Falsify:* run the sandbox as a non-root service user and confirm `podman run`
-maps uid 0 in-container to the service uid on the host; today nothing asserts it.
+**SEC-SESSION-5** (MEASURED IN A LAB, NOT ON A DEPLOYED BOX) — Rootless podman
+maps container-root to an unprivileged host user, so an escape is unprivileged on
+the host. Under `--userns=nomap` that user is the first subordinate uid, not the
+service uid; measured on rootless podman 4.9.3 (§9-G4). `design.md §10` records
+every hardware test ran as root, so a deployed non-root box has still not been
+seen, and a box whose service runs as root falls back to `host`, where container
+root IS that uid.
+*Falsify:* read `/proc/<pid>/uid_map` of a session from the host: a line
+`0 <service uid> 1` means container root is the service user.
 
 ---
 
@@ -1546,10 +1576,142 @@ box. A pool's sign-in the sidecar holds in memory from the vault goes on the
 next vault pass, within ten minutes, not at once. A `/login for <email>` in
 flight at the removal is not cancelled.
 
+**G14 — The edge routers' secrets were in a field every Xen Orchestra user reads.**
+*Violates "the fleet's token cannot see the routers at all"
+(`edge-credentials.js`, `edge-router.js`, `docs/hypervisors.md`) and the
+edge key bullet in §4.1.* The policy job kept the pair's CARP password and the
+routers' key (the `fleetwright-watch` API key and secret, the salt, and the
+private key of the certificate the boxes pin) in each router's `xenStoreData`,
+so the next job could find them, on the word that only Xen Orchestra's admins
+read it. Measured on xo-server 5.211.0 (`docs/hypervisors.md`, "What Xen
+Orchestra lets whom do"): `xo.getAllObjects` has no permission check, and it
+returned an admin-made VM's `xenStoreData` verbatim to the fleet's limited user
+(signed in with the token every approved box holds) and to a plain user with
+permission `none` and nothing granted, dummy values standing in for the
+secrets. So every box approved for the pool, and anybody else with any
+account on that Xen Orchestra, could read them. What each was there to hold
+back, by this document and `docs/hypervisors.md` (reasoned, not exercised
+here): the key is what the router's API asks (the edge key bullet above says
+what it can do); the certificate's private key is what a box's pin holds the
+router to; the CARP password's HMAC is what stops "a machine on the uplink"
+claiming the gateway. **Fixed:** both are kept in the
+preferences of a Xen Orchestra user made for the purpose,
+`fleetwright-edge-keys` (permission `none`, a random password nobody keeps),
+one entry per pool (`EDGE_KEPT`, `keepFor`, `keptFor`). Measured on 5.211.0
+with the same three principals: an admin reads it back with `user.getAll`; the
+fleet's token and the plain user are refused `user.getAll` ("not enough
+permissions", `{"permission":"admin"}`), get only their own user from
+`session.getUser`, are refused `user.set` on it ("a user can only change its
+own properties"), get `[]` from the REST API's `/rest/v0/users` and 403 from
+`/rest/v0/users/<id>`, and none of `xo.getAllObjects`, `group.getAll`,
+`acl.getCurrentPermissions`, `resourceSet.getAll`, `cloudConfig.getAll` or
+`user.getAuthenticationTokens` carried the value. A router now carries only a
+SHA-256 of the password under a label of its own and the pin of its
+certificate (`fleetwright-carp-mark`, `fleetwright-watch-pin`), enough for the
+job to tell that what it kept is what the router has. The repo's own
+functions were run against that Xen Orchestra: the fleet's token and the plain
+user read the two marks and none of seven secret values. **Rotated on
+upgrade:** the next policy job takes `fleetwright-carp` and `fleetwright-watch`
+off every router that has them (`vm.set` with null, measured to delete them),
+whatever else it does; and on the way out's pool it rebuilds the routers even
+when the phone did not ask for the edge, since nothing kept matches them: a
+single router with a new key, a pair the way a pair that lost its password is
+made again (the second made first, a new password, the machines without a way
+out while it starts). The phone is handed the new key at the end of the job.
+`test/edge-router.test.js` ("after a build, nothing Xen Orchestra shows
+everybody signed in…", "routers that carry the pair's password and the key in
+the clear…"), `test/xo-setup.test.js` ("a router that carries its key in the
+clear…"), `test/edge-credentials.test.js`; each of the three regressions
+failed on the code before the fix. **Not fixed, and stated:** the old values
+stay valid on a router until the job that rebuilds it runs; a pool whose way
+out is no longer the edge's pool has the fields cleared and is rebuilt only by
+the next job that builds its edge; the values were readable before the
+upgrade, and anybody who read them then kept them until that rebuild. **Found
+beside it, and changed since:** a session machine's cloud-init drive held its
+ticket and the Claude login until Xen Orchestra destroys it after boot
+(`destroyCloudConfigVdiAfterBoot`, which 5.211.0 does five minutes after the
+machine is running with its drivers detected: `vdiDelayBeforeRemovingCloudConfigDrive`
+in its `@xen-orchestra/xapi`), and the fleet's user holds the `admin` ACL
+`vm.create` gives in its set on every machine any box made, so any box
+holding the token passes Xen Orchestra's check for `disk.exportContent` on
+another box's machine's drive in that window (measured: `$getFrom` returned to
+the fleet's user with the ACL, `not enough permissions` without it and to the
+plain user; the stand-in XAPI could not serve the export, so the bytes were not
+read). The router's own disk, made by the admin outside the set, is refused to
+both. Measured on the repo's own code before the change: the cloud-config a
+box handed `vm.create` carried `{"ticket":"fwt_…","owner":…,"claude":"sk-ant-…"}`;
+the ticket lived 45 minutes; and a second presentation, under another key,
+was answered `unclaimed` exactly as an unknown ticket is, recorded nothing,
+and left in the host the first presentation enrolled. **Changed:** the drive
+carries no Claude login. The machine asks for it once enrolled, with the
+`claude-login` frame a runner sends and no job token; the coordinator asks the
+boxes holding the owner's pools with `vmlogin`, a verb only it sends
+(`#vmClaude`), and the box that made the machine seals the login it holds
+from the vault to the machine's one-request key, only for a VM it noted making
+(by the id `vm.create` answered), still under that name, running, for that
+person, and once (`XoPools#handLogin`); the coordinator relays ciphertext.
+Not the minter: it hands a login out on GitHub's word about a job, and a
+hand-out on the coordinator's word alone would widen what a compromised one
+reaches. A machine's ticket lives fifteen minutes (`VM_TICKET_TTL_MS`, as long
+as `vmStandby` waits for a kept machine to join); its spending is remembered
+until then (`RunnerTickets#spentFor`), and the whole ticket presented again is
+refused `ticket_reused`, recorded as `vm.ticket-reused` for the owner and the
+admins (saying whether that host had been handed the login), and the host it
+enrolled is revoked with its held session, because a copy and the machine
+hold the same value and nothing tells them apart; the same key again is the
+machine retrying after a lost answer and is answered as before. A wrong secret
+under a machine's id, which every Xen Orchestra user sees as its name, is an
+unknown ticket and revokes nothing. `test/xo-pools.test.js` ("…never its
+owner’s login on the drive"), `test/pool-vms-coordinator.test.js` ("a
+machine’s ticket lives minutes, and spent twice…"), `test/vm-claude-login.test.js`
+(the drive, the enrolment from it, the login handed over through the
+coordinator, once); each failed on the code before (the join file carried
+`claude`; the second presentation was `unclaimed`; the drive carried the
+login). **Not closed, and stated:** the ticket is still on the drive, and
+nothing binds it to the machine: what the drive holds and the VM's id are both
+shown to whoever can export it, so a box that reads it while the machine boots
+and spends it first is let in, may be handed the login if it asks before the
+machine presents the ticket, and is revoked when the machine does; one that
+also stops the machine (it holds `admin` on it) is never caught that way,
+though the box that made the machine hands nothing to one that is not running.
+The machine's own disk is under the same check for its whole life:
+`xo-acl-resolver` grants a VDI to whoever has the permission on a VM it is
+attached to, and a `VDI-snapshot` follows its source, so every box holding the
+token passes Xen Orchestra's check to export the disk the hub keeps the login
+on (`runner-login.token`), as it did before this change (measured at Xen
+Orchestra's check: `$getFrom` for the disk of a machine made with the token;
+whether XAPI serves an export of a running machine's disk was not measured).
+Both come from one Xen Orchestra user for every box holding the token, with
+`admin` on every machine any of them made. Who those boxes are bounds it: the
+token is an item in the pool owner's vault, handed only to boxes that person
+approved (§4.1), so every box that passes the check is one they approved,
+and each already holds a token that makes, stops and deletes any machine in
+the set. What is left is one compromised box among a person's own
+reaching the machines the others made, not one person reaching another's. A
+user per box would narrow it to the machines a box made. Measured on 5.211.0
+with two users in the fleet's set and the stand-in XAPI: `vm.create` gave the
+`admin` ACL to its caller alone, and the other user was refused
+`disk.exportContent` on the machine's disk (`{"permission":"view"}`) and
+`vm.export`, `vm.snapshot`, `vm.clone`, `vm.copy`, `vm.start`, `vm.set`,
+`tag.add` and `vm.delete` on the machine, all of which the maker was given
+(`share: true` gives every subject of the set the ACL; the fleet does not pass
+it). Not built: each box would need its own user and token, minted by an admin
+job and kept in its own vault item, and a machine could then be stopped,
+extended, swept on expiry or handed its login only by the box that made it, so
+a box gone would strand its machines until an admin job removed them. The
+ACL taken off after the clone is not open to the limited user (`acl.remove` is
+an admin's). A box that restarts between making a machine and
+its asking hands it nothing (what it made is kept in memory), and a machine
+image built before this change does not ask, so its machines run with no
+login until it is rebuilt. The pool's own machine is made by the admin outside
+the set, so the fleet's user holds no ACL on it and Xen Orchestra refuses it
+the export (the check measured above without the ACL); its pin is bound to a
+name the coordinator chose, and was not changed.
+
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller. G8 is the one to read first on
 a box without podman: a member's sessions no longer go there, and an admin's
-still run as the account that holds everybody's credentials on it. G9–G13
+still run as the account that holds everybody's credentials on it. G9–G14
 surfaced later; what each leaves behind is in its status row.
 
 ### Status
@@ -1559,16 +1721,17 @@ surfaced later; what each leaves behind is in its status row.
 | **G1** | **corrected.** Every site now states the real bound: `intents.js`, `intents.md`, `connectors.md`, `design.md`, `coordinator.md`, `trust.md` ×2. The two `trust.md` conclusions that leaned on the understated baseline were re-derived and **both survive** — the vault refusal and the minting-key placement rest on the *delta*, which correcting the baseline widens rather than narrows. |
 | **G2** | **fixed.** The config frame `github-app.md` describes is built (`src/fleet/protocol/config-frame.js`), sent on every host connect, and held in the sidecar's memory. `saveRenewal` no longer stores `client`; `renew` accepts it and discards it so an older coordinator is not refused. The renewal timer moved from fleetwright to the sidecar, because the exchange needs the secret and the sidecar is the process that has it. `test/config-frame.test.js`, `test/github-renewal.test.js`. |
 | **G3** | **fixed.** `promptId` folds in a bounded, non-travelling digest of the dialog body, for the kinds that recur (`permission`, `trust`) and not for the one that does not (`resume`, whose body carries a live counter). `test/prompt.test.js`. |
-| **G4** | **built, not yet measured.** SEC-SESSION-5 stays unverified until a session on hardware reads `/proc/self/uid_map`. What changed: `sandboxArgv` used to pass no `--userns`, and rootless podman's default for that is `host` inside the caller's namespace, so container root WAS the service uid — the account that owns the credential and the socket directory ([`recommendations-review.md`](./recommendations-review.md) §1). Sessions now run `--userns=nomap` by default (`FLEETWRIGHT_SANDBOX_USERNS`, `src/core/sandbox-userns.js`), the same flag on every helper container that touches a session volume, the credential seeded over stdin rather than a bind mount the remapped root could not open, the hook socket reached through permission bits in a session directory behind a `0700` one (it was mounted `:U`, which chowned it away from the hub and left a restarted hub unable to make it again), the hub's stale-socket probe taught that `EACCES` is a live socket, and volumes from before moved into the namespace once on resume. On a box that runs the service as root the setting falls back to `host` with a warning, because podman refuses `nomap` there. `test/sandbox-userns.test.js`, `test/podman.test.js`, `test/hook-socket.test.js`. | (This row briefly claimed "fixed" on the strength of the pane-detection work in `test/real-panes.test.js`, which belongs to a different finding entirely — recorded rather than erased, because a security row marked fixed by an unrelated bug fix is exactly the failure this register exists to catch.) |
+| **G4** | **built, and measured on real rootless podman; not yet on a deployed box.** Podman 4.9.3, a throwaway non-root user (uid 1002) with one subordinate range, `231072:65536`. The session line `buildCommand` gave it carried `--userns=nomap`; replayed with only the name, image and TTY changed and `--network none` added (rootless networking does not start in that lab container: `slirp4netns … open("/dev/net/tun"): Permission denied`), `/proc/self/uid_map` inside read `0 1 65536` and `/proc/<pid>/uid_map` from the host `0 231072 65536`. Container pid 1 ran as host uid 231072, a directory the service user owns read `65534:65534` inside, a file container root wrote in `/work` was `231072` on disk, and `volumeAccount`, whose helper carries the same flag, read back what that container wrote. The same line without `--userns`, the one from before, mapped `0 1002 1`: container root was the service uid. Run as root, `resolveUserns` gave `host`, `validateConfig` returned the warning, the line carried no `--userns`, and `podman run --userns=nomap` there said `nomap is only supported in rootless mode`. What changed: `sandboxArgv` used to pass no `--userns`, and rootless podman's default for that is `host` inside the caller's namespace, so container root WAS the service uid — the account that owns the credential and the socket directory ([`recommendations-review.md`](./recommendations-review.md) §1). Sessions now run `--userns=nomap` by default (`FLEETWRIGHT_SANDBOX_USERNS`, `src/core/sandbox-userns.js`), the same flag on every helper container that touches a session volume, the credential seeded over stdin rather than a bind mount the remapped root could not open, the hook socket reached through permission bits in a session directory behind a `0700` one (it was mounted `:U`, which chowned it away from the hub and left a restarted hub unable to make it again), the hub's stale-socket probe taught that `EACCES` is a live socket, and volumes from before moved into the namespace once on resume. On a box that runs the service as root the setting falls back to `host` with a warning, because podman refuses `nomap` there. `test/sandbox-userns.test.js`, `test/podman.test.js`, `test/hook-socket.test.js`. | (This row briefly claimed "fixed" on the strength of the pane-detection work in `test/real-panes.test.js`, which belongs to a different finding entirely — recorded rather than erased, because a security row marked fixed by an unrelated bug fix is exactly the failure this register exists to catch.) |
 | **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
 | **G8** | **decided and fixed: refused, with no per-box opt-in.** A member's start or resume goes only to a box that reports `sandboxed: true` (the sandbox on, and no `FLEETWRIGHT_SANDBOX_ARGS` that end containment) or that they administer (`runsSessionsFor`); a box that has not said is treated as unsandboxed, a tag pick leaves such boxes out, and nothing else doing is refused `unsandboxed` with every box named. The snapshot's `takesSessions` and both phones' Resume follow the same rule and say why where they do not. Members' sessions already running on a direct box keep running and come back on boot until an operator stops them; `sandboxed` does not account for G4's `--userns=host` fallback; and until hosts update, members start and resume only on boxes they administer. The migrate helper's root path it compounded is closed (`install-root-sources.test.js`). `test/unsandboxed-hosts.test.js`, `test/unsandboxed-resume-ios-in-apps.test.js`, `test/unsandboxed-resume-android-in-apps.test.js`. |
-| **G9** | **fixed, not yet measured.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Like SEC-INJECT-2 as a whole, unmeasured until two people's sessions on one real box are seen unable to reach each other. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
-| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box; and the migrate helper takes the manifest address from a file root owns, not the service user's env file; and the sudoers answers `--repair` acts on, and every seed of root's records, come from root's own files; and root's CLI runs nothing from the service user's env file as root, chowns to no name in it, and hands its variables to no child. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box whose only node 24+ is in the service user's home (run as root, with a warning; the heal refuses) are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`, `migration-end-to-end.test.js`, `sidecar-store.test.js`, `reclaim.test.js`, `grants.test.js`, `xo-pools.test.js`, `xo-holder.test.js`. |
+| **G9** | **fixed, and measured as root; rootless not yet.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Measured on podman 4.9.3 (netavark 1.4.0) as root, with `ensureEgress` and `buildCommand` run for alice@ and bob@ through a `podman` that recorded each call: two networks, `10.89.201.0/24` and `10.89.202.0/24`, the proxy on both at `.2`, the second joined with `network connect` and nothing restarted, and each session line put its session on its owner's network told `HTTPS_PROXY=http://10.89.20x.2:3128`. From alice's session, bob's by address: `Network unreachable`; by name: `NXDOMAIN`; and the same the other way. Her own proxy answered: `CONNECT example.com:443` `403 Filtered`, `CONNECT <bob's address>:8080` `403 Access violation`. The proxy's address on bob's network and on the default one, `1.1.1.1:443`, and a container on the default network: `Network unreachable`; her one route is `10.89.201.0/24 dev eth0`, and `ip route add` through the proxy is `Operation not permitted`. The proxy reads `ip_forward=0`, where a container started without the flag reads `1`; two lab containers given `NET_ADMIN` and routes through it reached each other only while it was switched to `1`. Before, on the old single `agent-egress`, alice reached bob by address and by name; after the upgrade her new session did not reach his new one or his old one. Measuring found the proxy had never started (the `Filter` line, SEC-INJECT-2), fixed alongside. Not measured: rootless, which is how a box runs it, because that lab container cannot start a rootless network. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
+| **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box; and the migrate helper takes the manifest address from a file root owns, not the service user's env file; and the sudoers answers `--repair` acts on, and every seed of root's records, come from root's own files; and root's CLI runs nothing from the service user's env file as root, chowns to no name in it, and hands its variables to no child. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box whose only node 24+ is in the service user's home (run as root, with a warning; the heal refuses) are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`, `migration-end-to-end.test.js`, `sidecar-store.test.js`, `reclaim.test.js`, `grants.test.js`, `xo-pools.test.js`, `xo-holder.test.js`. **Measured on a box**, not only in temporary directories: Debian 13 under podman with systemd as PID 1, installed by `bootstrap.sh` from a release tarball and a loopback manifest, with a dedicated service user. With `FLEETWRIGHT_RELEASE_MANIFEST` pointed at a decoy in the service user's env file, `sudo -n fleetwright-migrate` printed `fetching http://127.0.0.1:8099/manifest.json` (root's file) and the decoy's log showed no request from root; with root's file missing, mode 664 or 646, owned by the service user, or empty, it refused and fetched nothing; `sudo -n FLEETWRIGHT_BASE=… fleetwright-migrate` got `sudo: sorry, you are not allowed to set the following environment variables`; a `release-channel` linked to `/etc/shadow` put none of it in the output; `fleetwright-reclaim` removed `releases/.stale-*` only, leaving a decoy base the env file named; root's `fleetwright doctor --repair` ran root's `systemctl` with root's environment (`uid=0 leak=`) and asked their `claude` as them (`uid=996`), never the `FLEETWRIGHT_SYSTEMCTL_BIN` their file named; and `--repair` with `FLEETWRIGHT_SYSTEM_UPGRADE=yes` in their file wrote no upgrades rule. The same run found four places the box disagreed with the installer, fixed with tests in `install-on-a-box.test.js` and `doctor.test.js`: the migrate and reclaim rules matched any arguments (`sudo -l fleetwright-migrate --some-arg` said yes; they now end in `""`); root's doctor described root's own store and said `ok updates can be applied without root` over a release tree the service user could not write, so the `sudo fleetwright doctor --repair` the service user's doctor advised repaired nothing (it now asks as the owner, about the hub's tree, and its repair hands the tree back); the commit-confirm timer was armed only by the wizard, so a `--no-wizard` install, every heal and an update left it disabled; and `uninstall.sh --purge` exited 1 after removing everything. And one the run confirmed from reading: `fleetwright-reclaim` globbed through `releases`, which sits in the service user's base, so a `releases` they replaced with a link to `/srv/rootdir` had root print `reclaimed .stale-precious` and remove root's directory. It now refuses a base or `releases` that is a link (`refusing: … is a symbolic link … nothing reclaimed`, exit 1), compares the physical path after changing into it, and removes only a directory or a link (`reclaim.test.js`). |
 | **G11** | **decided and fixed.** Operator boxes are outside a member's vault boundary. The coordinator remembers the SHA-256 of every GitHub code it hands a box (ten minutes, in Durable Object storage key `boxSignIns`, at most 64) and lists them beside each device's sign-in; the minter refuses a listed code before GitHub is asked (`box_sign_in`), so a sign-in started for a box never becomes a device's. A sign-in recorded before the fix could not be told from a phone's, so every one was ended: records now carry a version (`SIGNIN_VERSION`), one without it is no device's and renews into none, and each member's phone signs in to GitHub once more after the deploy. Vault items and approvals were not touched; an approval a forged sign-in made stays until its person removes it, and shows in their vault list with the fleet account that made it. A compromised coordinator can still begin its own flow or leave a code off the list, and an old coordinator sends no list and is served as before. `test/vault.test.js` (two G11 tests). |
 | **G12** | **fixed.** Protocol 14's `boxSecrets`, set by the coordinator on `start` and `resume` from whether the session's owner administers the box, decides whether the box's own named secrets may answer it; otherwise only the owner's vault does (`sessionSecret`). A member's `secret` start on a box they do not administer that speaks below 14 is refused `host_outdated`, and a member's `secrets` listing covers only boxes they administer. Fleet sessions started before the host update carry no flag, so the box's secrets stop answering them, admins' included, until resumed through a v14 coordinator; a resume on a host below 14 cannot be scoped. `test/box-secrets.test.js`, `test/box-secrets-hub.test.js`, `test/ownership.test.js`. |
 | **G13** | **fixed, except a member's own boxes.** A removal is a debt each live operator-tier enrolment owes until the box says it is paid: the coordinator-only `forgetperson`, asked at once or on the box's first answering report after it returns, retried after five minutes, with the old `stop` and `unlink` for a box too old to know it; the removals kept under Durable Object key `removals`, at most 200. The box bins the person's sessions with nothing to bring them back on boot, and deletes their Claude account, their sign-ins with the renewal material, and their vault copies. `unlink` now drops renewal material too. Their own boxes are not asked; a pool's sign-in held in sidecar memory goes on the next vault pass, within ten minutes; a `/login for <email>` in flight at the removal is not cancelled. `test/config-frame.test.js`, `test/forget-person.test.js`, `test/github-renewal.test.js`. |
+| **G14** | **fixed, rotated on upgrade.** The edge pair's CARP password and the routers' key, kept in their `xenStoreData` where `xo.getAllObjects` shows them to every signed-in user (measured on 5.211.0), are kept in the preferences of the `fleetwright-edge-keys` user, which only an admin reads back (measured); the routers carry a hash of the password and the certificate's pin. The next policy job clears the old fields from every router and rebuilds the edge on the way out's pool with a new password and key, asked or not. The old values stay valid until that rebuild. A session machine's cloud-init drive is readable through Xen Orchestra by any box holding the fleet's token until boot destroys it (measured at Xen Orchestra's check), so it no longer carries the Claude login: the machine asks once enrolled and the box that made it hands it over sealed (`vmlogin`); its ticket lives fifteen minutes, and spent twice it is refused, recorded as `vm.ticket-reused` and the host it let in revoked. Not closed: the ticket itself stays on the drive and cannot be bound to the machine, and the machine's own disk, where the login lands, passes the same check for its life (measured at Xen Orchestra's check, the export not measured). Both reach only boxes the pool's owner approved for it; a user per box would narrow them to the box that made the machine (measured) and is not built, since a box gone would strand its machines. `test/edge-router.test.js`, `test/xo-setup.test.js`, `test/edge-credentials.test.js`, `test/xo-pools.test.js`, `test/pool-vms-coordinator.test.js`, `test/vm-claude-login.test.js`. |
 
 ---
 
@@ -1673,7 +1836,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-SESSION-2 | State split by lifetime; only `forget` deletes volumes |
 | SEC-SESSION-3 | Not isolation between distrusting users on one host |
 | SEC-SESSION-4 | Egress is open; say so wherever containment is claimed |
-| SEC-SESSION-5 | (Unverified) rootless maps escape to an unprivileged user |
+| SEC-SESSION-5 | (Measured in a lab) rootless maps escape to an unprivileged user |
 | SEC-CRED-1 | Coordinator holds no secret that derives a session credential |
 | SEC-CRED-2 | Refresh tokens never reach a session |
 | SEC-CRED-3 | Credential files 0600/0700, re-checked on load |
