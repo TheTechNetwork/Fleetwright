@@ -37,11 +37,21 @@ const record = (extra = {}) => JSON.stringify({ v: 1, address: 'xo.lan', pin: PI
 
 /**
  * A Xen Orchestra stand-in: objects by type, every call recorded.
- * @param {{ objects?: any[], fail?: Record<string, string>, stats?: Record<string, any>, methods?: string[] }} [opts]
+ *
+ * THE FLEET'S RESOURCE SET is `set-1`, as the limited user reads it
+ * (resourceSet.getAll answers it only the sets it is a subject of): every
+ * template and network given is in it, as a policy job puts them there, and
+ * every VM given was made in it, as the fleet's own vm.create makes them.
+ * `outside` names the objects in no set of the fleet's: what somebody else
+ * made or was given, which Xen Orchestra shows the limited user all the same.
+ *
+ * @param {{ objects?: any[], fail?: Record<string, string>, stats?: Record<string, any>, methods?: string[], outside?: string[] }} [opts]
  */
-function xo({ objects = [], fail = {}, stats = {}, methods } = {}) {
+function xo({ objects = [], fail = {}, stats = {}, methods, outside = [] } = {}) {
   /** @type {Array<{ method: string, params: any }>} */
   const calls = [];
+  const theirs = new Set(outside);
+  const asSeen = (/** @type {any} */ o) => (o.type === 'VM' && !theirs.has(o.id) && o.resourceSet === undefined ? { ...o, resourceSet: 'set-1' } : o);
   const rpc = {
     closed: false,
     async call(/** @type {string} */ method, /** @type {any} */ params = {}) {
@@ -53,7 +63,10 @@ function xo({ objects = [], fail = {}, stats = {}, methods } = {}) {
       if (method === 'session.signIn') return { id: 'u1', permission: 'none' };
       if (method === 'xo.getAllObjects') {
         const f = params.filter || {};
-        return Object.fromEntries(objects.filter((o) => Object.entries(f).every(([k, v]) => o[k] === v)).map((o) => [o.id, o]));
+        return Object.fromEntries(objects.map(asSeen).filter((o) => Object.entries(f).every(([k, v]) => o[k] === v)).map((o) => [o.id, o]));
+      }
+      if (method === 'resourceSet.getAll') {
+        return [{ id: 'set-1', name: 'fleetwright', subjects: ['u1'], objects: objects.filter((o) => o.type !== 'VM' && !theirs.has(o.id)).map((o) => o.id) }];
       }
       if (method === 'system.getMethodsInfo' && methods) return Object.fromEntries(methods.map((m) => [m, { description: m }]));
       if (method === 'vm.create') return 'new-vm-id';
@@ -122,6 +135,31 @@ test('a look reports the pool’s machine images, and sweeps machines that are d
   assert.deepEqual(deleted.sort(), ['done', 'overdue'], 'stopped, or well past its end; never another VM');
   assert.ok(stand.calls.some((c) => c.method === 'vm.stop' && c.params.id === 'overdue'));
   assert.ok(stand.rpc.closed);
+});
+
+test('a look reports, sweeps and works only what is in the fleet’s resource set: a tag is something anybody given a VM can add', async () => {
+  // MEASURED on Xen Orchestra 5.211.0 (docs/hypervisors.md, "What Xen
+  // Orchestra lets whom do"): it shows a user who is not an admin every
+  // object, and one given administrate on a single VM can rename it, tag it
+  // as the fleet tags its machines, clone it, and copy a snapshot of it to a
+  // template carrying its tags. None of that puts anything in the fleet's set.
+  const now = Date.now();
+  const ours = { type: 'VM', id: 'ours', name_label: 'vm-bbbbbbbbbbbb', power_state: 'Running', tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${Math.floor((now + 60_000) / 1000)}`, `fleetwright-for:${ELI}`] };
+  const planted = { type: 'VM', id: 'planted', name_label: 'vm-aaaaaaaaaaaa', power_state: 'Halted', tags: [VM_IMAGE.sessionTag, `fleetwright-for:${ELI}`] };
+  const plantedImage = { type: 'VM-template', id: 'planted-image', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag] };
+  const office = { type: 'network', id: 'net-office', name_label: 'office', $pool: 'pool-1' };
+  const lan = { type: 'network', id: 'net-lan', name_label: 'lan', $pool: 'pool-1' };
+  const stand = xo({ objects: [pool, image, plantedImage, uplink, lan, office, ours, planted], outside: ['planted', 'planted-image', 'net-office'] });
+  const pools = holder(stand, () => now);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  const [seen] = pools.report();
+  assert.deepEqual(seen.images.map((/** @type {any} */ i) => i.id), [IMAGE], 'a template tagged as an image and outside the set is not one to offer');
+  assert.deepEqual(seen.networks.map((/** @type {any} */ n) => n.id), ['net-lan'], 'a network outside the set is not one a machine can be made on');
+  assert.deepEqual(seen.machines.map((/** @type {any} */ m) => m.name), ['vm-bbbbbbbbbbbb'], 'a VM tagged as a machine and outside the set is not one of ours');
+  const r = await pools.control({ owner: ELI, name: 'vm-aaaaaaaaaaaa', action: 'stop' });
+  assert.equal(r.notHere, true, r.text);
+  assert.deepEqual(stand.calls.filter((c) => c.params?.id === 'planted').map((c) => c.method), [], 'never swept, stopped or worked');
 });
 
 test('a machine is born allowed what its owner chose for the pool’s machines, and an answer that is not one reaches none', async () => {
@@ -212,7 +250,7 @@ test('a pool the token saw and no longer sees is reported missing, and for how l
   assert.equal('missing' in /** @type {any} */ (empty.report()[0]), false);
 });
 
-test('a machine is made from the person’s own image, on the uplink, with its ticket, its login and its end', async () => {
+test('a machine is made from the person’s own image, on the uplink, with its ticket and its end, and never its owner’s login on the drive', async () => {
   const now = Date.parse('2026-10-06T12:00:00Z');
   const stand = xo({ objects: [pool, image, uplink] });
   const pools = holder(stand, () => now);
@@ -246,7 +284,13 @@ test('a machine is made from the person’s own image, on the uplink, with its t
   // The power-off the machine schedules for itself is a backstop past the
   // longest it can be given; its end is the box's to keep, by the tag, so an
   // extension needs nothing from inside the machine.
-  assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: CLAUDE, minutes: 380 });
+  //
+  // NOT THE CLAUDE LOGIN, which this box holds for Eli (G14): every box
+  // holding the pool's token may export this drive through Xen Orchestra
+  // until boot destroys it. The machine asks for it once enrolled.
+  assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 380 });
+  assert.equal(pools.claude.get(ELI), CLAUDE, 'the box holds the login it keeps off the drive');
+  assert.ok(!made.cloudConfig.includes(CLAUDE), 'the drive carries the Claude login');
   assert.match(made.cloudConfig, /fleetwright-vm-join.*, \/run\/fleetwright\/join\.json\]$/m);
   // ON THE UPLINK, FENCED: the network file, the script and its unit, and
   // the unit started before the join script starts anything that listens.
@@ -270,7 +314,7 @@ test('a machine joins with root’s copy of the join script, and one cloned from
   // the join script out of it on the machine's first boot. Run here as
   // cloud-init runs it — the argv on the runcmd line — with the two places
   // it looks pointed at this test's directories.
-  const config = machineCloudConfig({ name: 'm', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60 });
+  const config = machineCloudConfig({ name: 'm', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 60 });
   const line = config.split('\n').find((l) => l.includes('fleetwright-vm-join')) ?? '';
   const argv = /^ {2}- \[sh, -c, '([^']*)', (\/run\/fleetwright\/join\.json)\]$/.exec(line);
   assert.ok(argv, `cloud-init does not run root’s copy: ${line}`);
@@ -488,7 +532,7 @@ function withMachine({ age = 10, left = 20, state = 'Running', fail = {}, owner 
   const stand = xo({ objects: [pool, image, vm], fail });
   const pools = holder(stand, () => now);
   pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
-  const asked = () => stand.calls.filter((c) => !['session.signIn', 'xo.getAllObjects'].includes(c.method)).map((c) => [c.method, c.params]);
+  const asked = () => stand.calls.filter((c) => !['session.signIn', 'xo.getAllObjects', 'resourceSet.getAll'].includes(c.method)).map((c) => [c.method, c.params]);
   return { pools, stand, asked, s };
 }
 
@@ -583,17 +627,16 @@ test('a machine is given its owner’s SSH keys and sudo when they keep some, an
   const pools = holder(xo());
   pools.adopt([{ email: ELI, items: [{ name: 'secret:SSH_AUTHORIZED_KEYS', value: `${key}\nnot a key\nrm -rf /\n` }] }]);
   assert.deepEqual(pools.ssh.get(ELI), [key], 'public keys only, a line each');
-  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60, sshKeys: [key] });
+  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 60, sshKeys: [key] });
   assert.match(config, /users:\n {2}- name: fleetwright\n/);
   assert.ok(config.includes(`      - ${JSON.stringify(key)}`));
-  assert.ok(!machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, claude: null, minutes: 60 }).includes('users:'));
+  assert.ok(!machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test', ticket: TICKET, owner: ELI, minutes: 60 }).includes('users:'));
 });
 
 test('the cloud-init a machine boots with is one join file and the join script, and carries what it was given', () => {
-  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test/x', ticket: TICKET, owner: ELI, claude: null, minutes: 60 });
+  const config = machineCloudConfig({ name: 'vm-abc', coordinatorUrl: 'https://fleet.test/x', ticket: TICKET, owner: ELI, minutes: 60 });
   assert.match(config, /^#cloud-config\nhostname: vm-abc\n/);
   assert.match(config, /"coordinator":"https:\/\/fleet.test"/, 'the bare origin');
-  assert.match(config, /"claude":null/);
 });
 
 test('a machine enrols itself with its ticket once, records its name, and hands its login over once', async (t) => {
@@ -601,6 +644,8 @@ test('a machine enrols itself with its ticket once, records its name, and hands 
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, 'vm-join.json');
   const hostKeyFile = join(dir, 'host-key.json');
+  // A FILE FROM A BOX OLDER THAN G14's FIX, which still put the login on the
+  // drive: a machine from an image built since uses it as given.
   writeFileSync(file, JSON.stringify({ v: 1, coordinator: 'https://fleet.test', ticket: TICKET, owner: 'Eli@Example.com', claude: CLAUDE, minutes: 60 }), { mode: 0o600 });
   const key = await generateKeyPair();
   /** @type {any[]} */

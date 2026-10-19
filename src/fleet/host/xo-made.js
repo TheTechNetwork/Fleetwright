@@ -24,11 +24,17 @@
 //   nothing to anyone; it is only a list.
 //
 // Xen Orchestra lets only its admins create, change or add to a resource set
-// (resourceSet.create, .set, .addObject and .removeObject are all
-// `permission = 'admin'` in xo-server), and shows a user who is not one only
-// the sets they are a subject of, so the fleet's limited user can neither
-// write either list nor read this one. Tags were the other candidate and
-// were not taken: tag.add asks only for `administrate` on the object, which
+// (resourceSet.create, .set, .delete, .addObject, .removeObject, .addSubject
+// and .removeSubject are all `permission = 'admin'` in xo-server; measured on
+// 5.211.0, each refused to the fleet's user and to a plain one with "not
+// enough permissions"), so the fleet's limited user cannot write either list.
+// It can read both: resourceSet.getAll lists only a user's own sets, but
+// resourceSet.get answers any set by its id to anybody signed in. Nothing in
+// them is secret: ids, of objects xo.getAllObjects shows it anyway.
+//
+// Tags were the other candidate and were not taken: tag.add asks only for
+// `administrate` on the object (measured: granted on a VM it was given, refused
+// on every template, network, storage and host), which
 // a principal below the admin can hold, and the fleet's own user holds it on
 // every VM it makes. A list in Xen Orchestra rather than on the box running
 // the job, because the next job may run on another box.
@@ -37,8 +43,11 @@
 // job made before there was a record. Xen Orchestra refuses vm.create without
 // a resource set to anyone without `administrate` on the pool, and only an
 // admin can move a VM out of one (vm.set's `resourceSet`), so a VM with none
-// was made by somebody at the pool's admin or above, never by the fleet's
-// limited user.
+// was never made by the fleet's limited user. Not only by an admin, though:
+// somebody given administrate on one VM that is in no set can clone it, and
+// copy a snapshot of it to a template, outside every set (vm.clone,
+// vm.snapshot and vm.copyToTemplate; measured on 5.211.0). Which is why
+// nothing takes this reading alone: every caller pairs it with the list.
 
 /** The resource set the fleet's limited user works in, by name. */
 export const FLEET_SET = 'fleetwright';

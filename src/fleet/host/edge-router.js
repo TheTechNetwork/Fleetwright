@@ -55,7 +55,7 @@ import { pipeline } from 'node:stream/promises';
 
 import { REQUIRED_HOSTS } from '../../core/egress.js';
 import { connectPinnedTls, splitAddress } from './xo-ws.js';
-import { EDGE_WATCH, keptOn, watchConfig, watchOf } from './edge-credentials.js';
+import { EDGE_KEPT, EDGE_WATCH, clearExposed, exposedOn, keepFor, keptFor, keptOn, markCarp, watchConfig } from './edge-credentials.js';
 import { VHD_BLOCK, sparseVhd } from './vhd.js';
 import { forgetMade, outsideSets, recordMade, setsOf } from './xo-made.js';
 
@@ -120,7 +120,13 @@ export const OPNSENSE_IMAGE = Object.freeze({
   }),
 });
 
-/** Names in Xen Orchestra. The edge is not tagged `fleetwright`, so the fleet's token cannot touch it. */
+/**
+ * Names in Xen Orchestra. The edge is not tagged `fleetwright` and is outside
+ * the fleet's resource set, so the fleet's token cannot change or clone it. It
+ * can see it, with every field Xen Orchestra keeps on it: `xo.getAllObjects`
+ * shows every signed-in user every object (measured on 5.211.0), which is why
+ * nothing secret is kept on it (edge-credentials.js, EDGE_KEPT).
+ */
 export const EDGE = Object.freeze({
   vm: 'fleetwright-edge',
   tag: 'fleetwright-edge',
@@ -191,7 +197,7 @@ export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
  * TWO EDGES (`ha` in edgeConfig): the CARP group of the uplink, each lab's
  * the next, and the second router's name in Xen Orchestra.
  */
-export const EDGE_HA = Object.freeze({ vhid: 1, second: 'fleetwright-edge-b', nodeTag: 'fleetwright-edge-node:', passwordKey: 'fleetwright-carp' });
+export const EDGE_HA = Object.freeze({ vhid: 1, second: 'fleetwright-edge-b', nodeTag: 'fleetwright-edge-node:' });
 
 /** The rule files' ids, less their last digit, which is each one's place in EDGE_FILTER.rules. */
 const RULE_FILE_UUID = '5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1';
@@ -1144,6 +1150,14 @@ export async function ensureEdge(opts) {
   const ours = vms.filter((v) => v?.$pool === pool && v?.tags?.includes?.(EDGE.tag));
   const second = ours.find((v) => v.tags.includes(`${EDGE_HA.nodeTag}1`)) ?? null;
   const edge = ours.find((v) => v !== second) ?? null;
+  // WHAT XEN ORCHESTRA SHOWED EVERYBODY: routers built before the pair's
+  // password and the key were kept where only an admin reads them carry both
+  // in the clear (edge-credentials.js, EDGE_KEPT). Taken off first, and never
+  // trusted again: nothing is kept for them, so a pair is made again with a
+  // new password and each router with a new key, and the person's phone is
+  // handed the new key at the end of the job.
+  const exposed = ours.some(exposedOn);
+  await clearExposed(admin, ours);
   const wantPair = ha ?? Boolean(second);
   if (!wantPair && !second) return ensureOne(opts, edge);
 
@@ -1160,7 +1174,7 @@ export async function ensureEdge(opts) {
   const now = edge ? await edgeState(admin, edge, opts) : null;
   const keep = opts.block ?? now?.blocks ?? false;
   const both = [edge, second].filter(Boolean);
-  const changed = now && (now.filterChanged || now.wantLabs !== now.hasLabs || !now.onLabs || !now.updates || now.unwatched);
+  const changed = now && (now.filterChanged || now.wantLabs !== now.hasLabs || !now.onLabs || !now.updates || now.unwatched || exposed);
   const secondState = second ? await edgeState(admin, second, opts) : null;
   const secondOnLabs = secondState ? secondState.onLabs && !secondState.unwatched : true;
 
@@ -1195,7 +1209,10 @@ export async function ensureEdge(opts) {
   // ONE AT A TIME, when both are there: the second is replaced while the
   // first carries the machines, then the first while the second does, with
   // the password the pair has, so the new one and the old one agree.
-  const known = pairPassword(edge) ?? pairPassword(second);
+  const kept = await keptFor(admin, pool);
+  // KNOWN only when a router carries its mark: what was kept for a build that
+  // never finished is not what the routers have.
+  const known = kept.carp && [edge, second].some((v) => keptOn(v, EDGE_KEPT.carpMark) === markCarp(/** @type {string} */ (kept.carp))) ? kept.carp : null;
   if (edge && second && known) {
     say('Rebuilding the edge routers one at a time. Machines behind them keep their way out, apart from a moment as each hands over.');
     for (const [node, old] of /** @type {Array<[0|1, any]>} */ ([[1, second], [0, edge]])) {
@@ -1219,6 +1236,7 @@ export async function ensureEdge(opts) {
   // starts and takes the address, and the first is rebuilt beside it. The
   // machines behind it have no way out only while the second starts.
   const password = randomBytes(16).toString('hex');
+  if (exposed) say('The edge routers’ shared password and the key your machines read them with were readable by everybody signed in to Xen Orchestra, so both routers are made again with new ones.');
   if (edge) {
     say('Making the second edge router, then handing over to it while the first is rebuilt. Machines behind it have no way out while the second starts.');
     // Each WAN MAC read before its router goes, so the new one is where it was.
@@ -1254,16 +1272,6 @@ export async function ensureEdge(opts) {
 }
 
 /**
- * The pair's CARP password where buildEdge kept it, or null.
- *
- * @param {any} v @returns {string|null}
- */
-function pairPassword(v) {
-  const p = keptOn(v, EDGE_HA.passwordKey);
-  return typeof p === 'string' && /^[0-9a-f]{16,64}$/.test(p) ? p : null;
-}
-
-/**
  * What an edge router has and what the policy asks of it.
  *
  * @param {any} admin @param {any} edge @param {{ block?: boolean|null, labs?: Array<{ id: string, open: boolean }>|null, watch?: unknown }} opts
@@ -1287,7 +1295,10 @@ async function edgeState(admin, edge, { block = null, labs = null, watch = null 
     // AN EDGE WITHOUT THE KEY THE JOB BRINGS (edge-credentials.js), from
     // before it could be watched or with its key lost, is rebuilt once, the
     // same way: the key the phone is handed must be the one the router has.
-    unwatched: watch !== null && watchOf(edge)?.key !== /** @type {{ key: string }} */ (watch).key,
+    unwatched: watch !== null && keptOn(edge, EDGE_KEPT.watchPin) !== /** @type {{ pin: string }} */ (watch).pin,
+    // CARRYING THE PAIR'S PASSWORD OR THE KEY IN THE CLEAR (ensureEdge): built
+    // again with new ones.
+    exposed: exposedOn(edge),
     onLabs: labs === null || labs.every((l, i) => vifs.some((v) => String(v?.device) === String(i + 2) && v?.$network === l.id)),
   };
 }
@@ -1301,20 +1312,22 @@ async function edgeState(admin, edge, { block = null, labs = null, watch = null 
 async function ensureOne(opts, edge, force = false) {
   const { admin, egress, block = null, labs = null, rebuilding, say } = opts;
   const st = edge ? await edgeState(admin, edge, opts) : null;
-  if (edge && st && (force || st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || st.unwatched)) {
+  if (edge && st && (force || st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || st.unwatched || st.exposed)) {
     const keep = block ?? st.blocks;
     rebuilding?.();
     if (!force) {
       say(
-        st.filterChanged
-          ? keep
-            ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.'
-            : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.'
-          : st.wantLabs !== st.hasLabs || !st.onLabs
-            ? `Rebuilding the edge router with ${labsSaid(st.wantLabs)}. Machines behind it have no way out until it is up.`
-            : !st.updates
-              ? 'Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.'
-              : 'Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it have no way out until it is up.',
+        st.exposed
+          ? 'Rebuilding the edge router with a new key: the one it had was readable by everybody signed in to Xen Orchestra. Machines behind it have no way out until it is up.'
+          : st.filterChanged
+            ? keep
+              ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.'
+              : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.'
+            : st.wantLabs !== st.hasLabs || !st.onLabs
+              ? `Rebuilding the edge router with ${labsSaid(st.wantLabs)}. Machines behind it have no way out until it is up.`
+              : !st.updates
+                ? 'Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.'
+                : 'Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it have no way out until it is up.',
       );
     }
     if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
@@ -1658,6 +1671,10 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
 
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
   const template = builtInTemplate(templates, pool, EDGE.template, 'the edge router');
+  // KEPT BEFORE ANYTHING IS MADE, where only an admin of Xen Orchestra reads
+  // them (edge-credentials.js, EDGE_KEPT): a router never has a password or a
+  // key the next job cannot find.
+  if (ha || watch) await keepFor(admin, pool, { carp: ha?.password ?? null, watch });
 
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: BUILD_STAGES, fill });
   /** The part with its bytes: what they are doing, and how many of how many, in MB. */
@@ -1829,14 +1846,13 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
     if (!vm) {
       vm = await admin.call('vm.create', { template: template.id, ...vmParams, VDIs: [] });
     }
-    // The pair's CARP password and the key the fleet reads it with, kept
-    // with each router where the next rebuild finds them (pairPassword,
-    // watchOf): Xen Orchestra's admins can read them, and the fleet's token
-    // cannot see the edge at all.
+    // WHICH PASSWORD AND WHICH KEY IT HAS, as marks and not the values:
+    // anybody signed in to Xen Orchestra reads this VM's xenStoreData. The
+    // values themselves were kept above, where only an admin reads them.
     if (ha || watch) {
       await admin.call('vm.set', {
         id: vm,
-        xenStoreData: { ...(ha ? { [EDGE_HA.passwordKey]: ha.password } : {}), ...(watch ? { [EDGE_WATCH.key]: JSON.stringify(watch) } : {}) },
+        xenStoreData: { ...(ha ? { [EDGE_KEPT.carpMark]: markCarp(ha.password) } : {}), ...(watch ? { [EDGE_KEPT.watchPin]: watch.pin } : {}) },
       });
     }
     if (vdi) await admin.call('vm.attachDisk', { vm, vdi, bootable: true, position: '0' });

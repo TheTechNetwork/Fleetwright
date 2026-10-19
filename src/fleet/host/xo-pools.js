@@ -23,14 +23,22 @@
 //           to be gone by, are removed with their disks. A machine powers
 //           itself off at its end, so stopped is the ordinary case.
 //   make    a machine from an image, for the person whose pool it is, booted
-//           with a ticket to enrol itself and a Claude login to run on; or the
-//           same machine in a lab, alone on one of the pool's lab networks
-//           (edge-router.js, LAB), whose rules are the edge's.
+//           with a ticket to enrol itself; or the same machine in a lab, alone
+//           on one of the pool's lab networks (edge-router.js, LAB), whose
+//           rules are the edge's.
+//   login   the Claude login a machine made here runs on, handed to it once
+//           it has enrolled, sealed to its key (`handLogin`): never on its
+//           cloud-init drive, which every box holding the pool's token may
+//           export through Xen Orchestra (docs/security.md, G14).
 //
 // WHAT THE LIMITED USER MAY DO is what its resource set allows: clone images
 // that are in the set onto storage and networks that are in the set, inside
 // its limits. Xen Orchestra enforces that, which is the bound that holds when
-// everything on our side has failed.
+// everything on our side has failed. Not quite all of it, measured on 5.211.0
+// (docs/hypervisors.md, "What Xen Orchestra lets whom do"): it may also
+// snapshot the machines it made and copy a snapshot to a template, which
+// vm.copyToTemplate counts against no limit and leaves it unable to delete;
+// and it sees every object on the pool, not only the set's (fleetSetOf).
 
 import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
@@ -38,7 +46,7 @@ import { connectXo, connectXoPlain } from './xo-ws.js';
 import { EDGE, GROUP_PREFIX, LAB, labsEachOf } from './edge-router.js';
 import { JOIN_RUNCMD, VM_IMAGE } from './vm-image.js';
 import { HOLDER } from './xo-holder.js';
-import { seal, xolookAad } from '../seal.js';
+import { seal, xolookAad, claudeBindingFor } from '../seal.js';
 import { xoActionArgs } from '../protocol/intents.js';
 import { machineGrantsOf } from '../../core/grants.js';
 
@@ -60,6 +68,9 @@ export const MAX_MINUTES = 350;
 const BACKSTOP_MINUTES = MAX_MINUTES + 30;
 /** How long past its end a machine may still be running before it is removed. */
 const GRACE_MS = 60_000;
+/** How long a machine made here is remembered for its login, and how many at most (XoPools#made). */
+const MADE_FORGET_MS = 24 * 60 * 60_000;
+const MAX_MADE = 64;
 /** A machine being resized is stopped on purpose, and the sweep leaves it be. */
 const BUSY_TAG = 'fleetwright-busy';
 /** When a machine was made, its image and its network, as tags beside its end. */
@@ -167,6 +178,39 @@ function labKind(n) {
   if (n.tags.includes(LAB.closedTag)) return 'closed';
   return null;
 }
+
+/**
+ * WHAT THE FLEET'S RESOURCE SET HOLDS, as the limited user reads it: the sets
+ * it is a subject of, which is all resourceSet.getAll answers a user who is
+ * not an admin, and what is in them.
+ *
+ * THE SET AND NOT WHAT THE TOKEN SEES, AND NOT THE TAGS. Xen Orchestra shows
+ * a user who is not an admin every object there is, its own or not
+ * (xo.getAllObjects checks only that somebody is signed in), and a tag is
+ * something anybody given administrate on one VM can add to it, to a clone of
+ * it, and to a snapshot of it that it then copies to a template: all measured
+ * on 5.211.0 (docs/hypervisors.md, "What Xen Orchestra lets whom do"). So a
+ * VM somebody else named `vm-…` and tagged as one of ours was reported as a
+ * person's machine, counted against their labs, and swept; a template tagged
+ * as an image was offered on the phones; and every network on the pool was
+ * offered, of which only those in the set can carry a machine. What is in the
+ * set only an admin of Xen Orchestra can change, and a VM is made in it only
+ * by a subject of the set (vm.create checks both).
+ *
+ * @param {any} rpc  signed in with the fleet's token
+ * @returns {Promise<{ ids: Set<string>, objects: Set<string> }>}
+ */
+async function fleetSetOf(rpc) {
+  const answer = await rpc.call('resourceSet.getAll');
+  const sets = /** @type {any[]} */ (Array.isArray(answer) ? answer : []);
+  return {
+    ids: new Set(sets.map((s) => String(s?.id))),
+    objects: new Set(sets.flatMap((s) => (Array.isArray(s?.objects) ? s.objects.map(String) : []))),
+  };
+}
+
+/** A VM made in the fleet's set. @param {any} v @param {{ ids: Set<string> }} set */
+const inFleetSet = (v, set) => typeof v?.resourceSet === 'string' && set.ids.has(v.resourceSet);
 
 /**
  * How many of the fleet's own machines have an interface on each network, by
@@ -385,6 +429,16 @@ export class XoPools {
     this.claude = new Map();
     /** @type {Map<string, string[]>} owner → their SSH public keys, for the machines made for them */
     this.ssh = new Map();
+    /**
+     * MACHINES THIS BOX MADE and has not yet handed a Claude login, by name:
+     * the VM's id Xen Orchestra answered vm.create with, and whose it is. The
+     * id is what tells the machine this box made from another VM somebody
+     * gave the same name and tags, which any box holding the fleet's token can
+     * make in its set. In memory, like the rest: a box that restarts before
+     * its machine asks has nothing to hand it, and says so (`handLogin`).
+     * @type {Map<string, { vm: string, owner: string, at: number }>}
+     */
+    this.made = new Map();
     /** @type {Map<string, Seen>} what the last look found, keyed as `held` */
     this.seen = new Map();
     /**
@@ -472,12 +526,15 @@ export class XoPools {
         const pools = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'pool' } })) || {}));
         const names = new Map(pools.map((p) => [p.id, String(p.name_label || p.id).slice(0, 80)]));
         const templates = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
+        // ONLY WHAT IS IN THE FLEET'S SET, of everything the token sees
+        // (fleetSetOf): images, networks and machines alike.
+        const set = await fleetSetOf(rpc);
         const images = templates
-          .filter((t) => t?.tags?.includes?.(VM_IMAGE.tag) && typeof t.id === 'string')
+          .filter((t) => t?.tags?.includes?.(VM_IMAGE.tag) && typeof t.id === 'string' && set.objects.has(t.id))
           .map((t) => ({ id: String(t.id), name: String(t.name_label || VM_IMAGE.name).slice(0, 80), pool: t.$pool ?? null, poolName: names.get(t.$pool) ?? null }));
-        await this.#sweep(rpc);
+        await this.#sweep(rpc, set);
         // THE NETWORKS A MACHINE CAN GO ON besides the uplink: the pool's that
-        // the fleet may use (what the limited user sees), for a machine that
+        // the fleet may use (what is in its set), for a machine that
         // should be reachable from the person's own network; and the group
         // networks, marked, which a machine joins as well as its own.
         const nets = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'network' } })) || {}));
@@ -488,7 +545,7 @@ export class XoPools {
         const occupied = labKinds.size ? await machinesOnNetworks(rpc, vms) : new Map();
         /** @type {Network[]} */
         const networks = nets
-          .filter((n) => typeof n?.id === 'string' && n.name_label !== EDGE.uplink)
+          .filter((n) => typeof n?.id === 'string' && n.name_label !== EDGE.uplink && set.objects.has(n.id))
           .map((n) => {
             const lab = labKind(n);
             const perPerson = lab ? labsEachOf([n], null) : null;
@@ -507,7 +564,7 @@ export class XoPools {
         // phone's page of it. Read after the sweep, so a removed one is gone.
         const imageNames = new Map(templates.map((t) => [t.id, String(t.name_label || '').slice(0, 80)]));
         const machines = vms
-          .filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag) && /^vm-[0-9a-f]{12}$/.test(String(v.name_label)))
+          .filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag) && /^vm-[0-9a-f]{12}$/.test(String(v.name_label)) && inFleetSet(v, set))
           .map((v) => {
             const until = Number(tagValue(v, VM_IMAGE.untilPrefix));
             const made = Number(tagValue(v, MADE_PREFIX));
@@ -597,16 +654,17 @@ export class XoPools {
   /**
    * Machines that are done, removed with their disks: stopped (a machine
    * powers itself off at its end), or still running well past the end it was
-   * given. Only machines this fleet made, by their tag; nothing else on the
-   * pool is touched.
+   * given. Only machines this fleet made, by their tag and made in its set
+   * (fleetSetOf: the tag alone is anybody's); nothing else on the pool is
+   * touched.
    *
-   * @param {any} rpc
+   * @param {any} rpc @param {{ ids: Set<string> }} set
    */
-  async #sweep(rpc) {
+  async #sweep(rpc, set) {
     const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
     for (const vm of vms) {
       const tags = Array.isArray(vm?.tags) ? vm.tags : [];
-      if (!tags.includes(VM_IMAGE.sessionTag) || tags.includes(BUSY_TAG)) continue;
+      if (!tags.includes(VM_IMAGE.sessionTag) || tags.includes(BUSY_TAG) || !inFleetSet(vm, set)) continue;
       const until = Number(tags.find((/** @type {string} */ t) => t.startsWith(VM_IMAGE.untilPrefix))?.slice(VM_IMAGE.untilPrefix.length)) * 1000;
       const overdue = Number.isFinite(until) && this.now() > until + GRACE_MS;
       if (vm.power_state !== 'Halted' && !overdue) continue;
@@ -665,6 +723,9 @@ export class XoPools {
     const until = made + life * 60;
     const claude = this.claude.get(who) ?? null;
     const keys = this.ssh.get(who) ?? [];
+    // NOT the Claude login: that is handed over once the machine has joined
+    // (handLogin), so the drive holds nothing of the person's but their
+    // public keys, and a ticket that is spent as the machine boots.
     /** @type {any} */
     let rpc = null;
     try {
@@ -709,7 +770,6 @@ export class XoPools {
           coordinatorUrl,
           ticket,
           owner: who,
-          claude,
           minutes: BACKSTOP_MINUTES,
           sshKeys: keys,
           // ON THE UPLINK, fenced from the machines beside it; on a network
@@ -720,9 +780,10 @@ export class XoPools {
           // policy and kept in the pool's record (src/core/grants.js).
           grants: record.grants ?? null,
         }),
-        // The drive holds the ticket and the Claude login: gone once the
-        // machine has booted, and wiped from inside before that (the join
-        // script), whichever comes first.
+        // The drive holds the ticket: wiped from inside as the machine's
+        // first act (the join script), before it spends it, and destroyed by
+        // Xen Orchestra five minutes after the machine has booted (5.211.0's
+        // vdiDelayBeforeRemovingCloudConfigDrive).
         destroyCloudConfigVdiAfterBoot: true,
         bootAfterCreate: true,
       });
@@ -743,6 +804,7 @@ export class XoPools {
           return { ok: false, text: `${labNet.name} ${on === null ? 'could not be seen to be yours alone' : 'was taken a moment ago by another machine'}, so the machine was removed again. Choose another lab.` };
         }
       }
+      this.#noteMade(name, { vm: String(vm), owner: who, at: this.now() });
       this.log.info(`sidecar: made ${name} from ${image.name} on ${record.address} for ${who}${labNet ? ` in ${labNet.name}` : ''}`);
       return {
         ok: true,
@@ -765,6 +827,88 @@ export class XoPools {
         /* closing */
       }
     }
+  }
+
+  /**
+   * Remember a machine this box made, for its login (handLogin). Bounded:
+   * a machine that never asks is forgotten after a day, and the oldest goes
+   * first past the cap.
+   *
+   * @param {string} name @param {{ vm: string, owner: string, at: number }} made
+   */
+  #noteMade(name, made) {
+    for (const [n, m] of this.made) if (this.now() - m.at > MADE_FORGET_MS) this.made.delete(n);
+    while (this.made.size >= MAX_MADE) {
+      const oldest = this.made.keys().next().value;
+      if (oldest === undefined) break;
+      this.made.delete(oldest);
+    }
+    this.made.set(name, made);
+  }
+
+  /**
+   * THE CLAUDE LOGIN for a machine this box made, once the machine has
+   * enrolled and asked over its own socket (the coordinator relays it as
+   * `vmlogin`). Sealed to `key`, which only that machine holds, so the
+   * coordinator carries what it cannot read.
+   *
+   * ONLY A MACHINE MADE HERE, FOR THAT PERSON, STILL RUNNING, ONCE. Made
+   * here is the VM's id this box noted at vm.create, not its name or tags:
+   * any box holding the fleet's token can make a VM in the set with both. It
+   * must still carry that name and be running, so a machine somebody
+   * stopped, paused or replaced is handed nothing; and it is handed once, so
+   * a second ask, which would be the coordinator's or a copy's, is refused.
+   * `notHere` when this box did not make it, so the coordinator asks the
+   * next; after a restart this box made nothing, as far as it knows.
+   *
+   * @param {{ owner: string, name: string, key: string }} ask
+   * @returns {Promise<{ ok: boolean, text: string, sealed?: any, notHere?: boolean, unreachable?: boolean }>}
+   */
+  async handLogin({ owner, name, key }) {
+    const who = String(owner || '').toLowerCase();
+    const made = this.made.get(String(name));
+    if (!made || made.owner !== who) return { ok: false, notHere: true, text: `${name} was not made by this box for ${who}, as far as it knows.` };
+    const token = this.claude.get(who);
+    if (!token) return { ok: false, text: `This box holds no Claude login of ${who}\u2019s to hand ${name}. Keep one in your vault (claude setup-token), then ask for the machine again.` };
+    const mine = [...this.held.values()].filter((h) => h.owner === who);
+    /** @type {string[]} */
+    const unreachable = [];
+    for (const { record } of mine) {
+      /** @type {any} */
+      let rpc = null;
+      try {
+        try {
+          rpc = await this.#signIn(record);
+        } catch (e) {
+          unreachable.push(`${record.address}: ${/** @type {Error} */ (e).message}`);
+          continue;
+        }
+        const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+        const vm = vms.find((v) => String(v?.id) === made.vm);
+        if (!vm) continue;
+        const set = await fleetSetOf(rpc);
+        if (vm.name_label !== name || tagValue(vm, FOR_PREFIX) !== who || !inFleetSet(vm, set)) {
+          this.made.delete(String(name));
+          return { ok: false, text: `${name} is not the machine this box made any more, so it is handed nothing.` };
+        }
+        if (vm.power_state !== 'Running') return { ok: false, text: `${name} is ${String(vm.power_state || 'not running').toLowerCase()}, so it is handed nothing.` };
+        this.made.delete(String(name));
+        const sealed = await seal({ to: key, aad: await claudeBindingFor(key), payload: { token } });
+        this.log.info(`sidecar: handed ${name} ${who}\u2019s Claude login`);
+        return { ok: true, text: `Handed ${name} your Claude login.`, sealed };
+      } catch (e) {
+        return { ok: false, text: `${record.address} would not say whether ${name} is the machine made here: ${/** @type {Error} */ (e).message}` };
+      } finally {
+        try {
+          rpc?.close();
+        } catch {
+          /* closing */
+        }
+      }
+    }
+    if (mine.length && unreachable.length === mine.length) return { ok: false, unreachable: true, text: `Your pools could not be reached from here: ${unreachable.join('; ')}` };
+    this.made.delete(String(name));
+    return { ok: false, text: `${name} is not on any of your pools any more, so it is handed nothing.` };
   }
 
   /**
@@ -799,7 +943,9 @@ export class XoPools {
           continue;
         }
         const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
-        const vm = vms.find((v) => v?.name_label === name && Array.isArray(v.tags) && v.tags.includes(VM_IMAGE.sessionTag));
+        // Made in the fleet's set, or it is somebody else's VM by that name.
+        const set = await fleetSetOf(rpc);
+        const vm = vms.find((v) => v?.name_label === name && Array.isArray(v.tags) && v.tags.includes(VM_IMAGE.sessionTag) && inFleetSet(v, set));
         if (!vm) continue;
         // MADE FOR SOMEBODY ELSE on the same Xen Orchestra is not there, as
         // far as this person is concerned.
@@ -1052,9 +1198,14 @@ export function groupPlace(id, taken) {
 
 /**
  * The cloud-init a machine boots with: one file the join script reads, and
- * the join script, which enrols the machine with the ticket, hands its
- * owner's Claude login to the hub, starts the services, and powers the
- * machine off at its end. See install/fleetwright-vm-join.
+ * the join script, which enrols the machine with the ticket, starts the
+ * services, and powers the machine off at its end. See
+ * install/fleetwright-vm-join.
+ *
+ * NO CLAUDE LOGIN. Xen Orchestra lets every box holding the pool's token
+ * export this drive until it is destroyed after boot (docs/security.md, G14),
+ * so the login is asked for once the machine has enrolled, from the box that
+ * made it (XoPools#handLogin), and only the ticket travels here.
  *
  * SSH, WHEN THE PERSON KEEPS KEYS: their public keys on the `fleetwright`
  * account, which may then use sudo. The machine is the sandbox, is theirs
@@ -1070,14 +1221,14 @@ export function groupPlace(id, taken) {
  * start (src/core/grants.js). Left out, it keeps the machine image's.
  *
  * @param {{
- *   name: string, coordinatorUrl: string, ticket: string, owner: string, claude: string|null, minutes: number, sshKeys?: string[],
+ *   name: string, coordinatorUrl: string, ticket: string, owner: string, minutes: number, sshKeys?: string[],
  *   isolate?: { subnet: string, gateway: string }|null, group?: { mac: string, address: string }|null,
  *   grants?: { upgrades?: boolean, reboot?: boolean }|null,
  * }} opts
  */
-export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, claude, minutes, sshKeys: keys = [], isolate = null, group = null, grants = null }) {
+export function machineCloudConfig({ name, coordinatorUrl, ticket, owner, minutes, sshKeys: keys = [], isolate = null, group = null, grants = null }) {
   const allowed = machineGrantsOf(grants);
-  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, ticket, owner, claude, minutes, ...(allowed ? { grants: allowed } : {}) });
+  const join = JSON.stringify({ v: 1, coordinator: new URL(coordinatorUrl).origin, ticket, owner, minutes, ...(allowed ? { grants: allowed } : {}) });
   const net = isolate || group ? JSON.stringify({ v: 1, ...(isolate ? { isolate } : {}), ...(group ? { group } : {}) }) : null;
   const block = (/** @type {string} */ text) => text.replace(/\n$/, '').split('\n').map((l) => (l ? `      ${l}` : ''));
   return [

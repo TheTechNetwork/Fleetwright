@@ -786,6 +786,10 @@ export class Sidecar {
       // A LAB IS A VM in a lab of its own (xo-pools.js, make), never a runner.
       if (intent.verb === 'provision' && (intent.params?.platform === 'vm' || intent.params?.platform === 'lab')) return reply(await this.#makeVm(intent));
       if (intent.verb === 'vmctl') return reply(await this.#vmctl(intent));
+      // A MACHINE THIS BOX MADE ASKING FOR ITS OWNER'S CLAUDE LOGIN, which is
+      // in this process's memory from their vault and goes out sealed to the
+      // machine's key (xo-pools.js, handLogin).
+      if (intent.verb === 'vmlogin') return reply(await this.#vmLoginFor(intent));
       // A POOL'S PAGE FOR A PHONE AWAY FROM IT, under the token in this
       // process's memory (xo-pools.js, look and act).
       if (intent.verb === 'xolook' || intent.verb === 'xoact') return reply(await this.#poolPage(intent));
@@ -1206,23 +1210,37 @@ export class Sidecar {
 
   /**
    * On a machine from somebody's hypervisor: tell the hub whose machine this
-   * is and the Claude login it runs on, from the file it was booted with.
-   * The hub may still be starting, so this tries for two minutes; once it has
-   * the login the file is forgotten (vm-join.js). Never rejects.
+   * is and the Claude login it runs on. The hub may still be starting, so
+   * this tries for two minutes; once it has the answer the file is forgotten
+   * (vm-join.js). Never rejects.
+   *
+   * THE LOGIN IS ASKED FOR, now that the machine has enrolled: the same
+   * `claude-login` frame a runner sends, without a job token, which the
+   * coordinator relays to the box that made this machine (`vmlogin`). It
+   * comes back sealed to a key made for the one ask. A file from a box older
+   * than that still carries the login, which is used as it was given.
    */
   async #handVmLogin() {
     const given = /** @type {{ email: string, token: string|null }} */ (this.vmLogin);
+    let token = given.token;
+    /** @type {string|null} */
+    let why = null;
+    if (!token) {
+      const said = await this.#askForClaudeLogin();
+      if (said.ok) token = said.token;
+      else why = said.text;
+    }
     for (let attempt = 0; attempt < 24; attempt++) {
       try {
-        const r = await this.hub.runnerLogin({ email: given.email, login: null, token: given.token });
+        const r = await this.hub.runnerLogin({ email: given.email, login: null, token });
         if (r.ok) {
           this.vmLogin = null;
           try {
             this.onVmLoginHanded?.();
           } catch { /* the file is gone or going; nothing reads it again */ }
-          this.log.info(given.token
+          this.log.info(token
             ? `sidecar: sessions ${given.email} starts on this machine run on their Claude login`
-            : `sidecar: this machine came with no Claude login for ${given.email}; sessions here have nothing to run on until one is kept in their vault`);
+            : `sidecar: this machine has no Claude login for ${given.email}, so sessions here have nothing to run on: ${why ?? 'none came with it'}`);
           return;
         }
         this.log.warn(`sidecar: the hub did not take this machine's Claude login: ${r.text}`);
@@ -1266,6 +1284,21 @@ export class Sidecar {
     }
     if (r.ok) setImmediate(() => void this.#pushHealth());
     return r;
+  }
+
+  /**
+   * A machine this box made asks for its owner's Claude login (`vmlogin`,
+   * relayed by the coordinator): handed sealed to its key, by xo-pools.js,
+   * only if this box made it for the actor. `notHere` from a box that holds
+   * no pools, so the coordinator asks the next.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   */
+  async #vmLoginFor(intent) {
+    if (!this.pools) return { ok: false, notHere: true, text: 'This box asks no vault, so it made no machine.' };
+    const owner = intent.actor ? String(intent.actor).toLowerCase() : '';
+    if (!owner) return { ok: false, text: 'A machine’s login is its owner’s, and this ask names nobody.' };
+    return this.pools.handLogin({ owner, name: String(intent.params.name || ''), key: String(intent.params.key || '') });
   }
 
   /**
@@ -1464,11 +1497,16 @@ export class Sidecar {
   async #askForClaudeLogin() {
     const { privateKey, publicKey } = await newSealKey();
     const audience = await claudeBindingFor(publicKey);
+    // A MACHINE FROM A POOL has no job token: it asks with its key alone,
+    // over the socket its enrolment opened (#handVmLogin).
+    /** @type {string|undefined} */
     let job;
-    try {
-      job = await /** @type {(a: string) => Promise<string>} */ (this.jobToken)(audience);
-    } catch (e) {
-      return { ok: false, text: `GitHub would not give this job a token to ask with: ${/** @type {Error} */ (e).message}` };
+    if (this.jobToken) {
+      try {
+        job = await this.jobToken(audience);
+      } catch (e) {
+        return { ok: false, text: `GitHub would not give this job a token to ask with: ${/** @type {Error} */ (e).message}` };
+      }
     }
     const id = `claude-${crypto.randomUUID()}`;
     /** @type {any} */
@@ -1481,7 +1519,7 @@ export class Sidecar {
       this.mintWaiters.set(id, { resolve, timer });
       let sent;
       try {
-        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'claude-login', id, hostId: this.hostId, job, key: publicKey });
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'claude-login', id, hostId: this.hostId, ...(job ? { job } : {}), key: publicKey });
       } catch {
         sent = false;
       }

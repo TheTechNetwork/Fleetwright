@@ -7,9 +7,9 @@
 // put on the box, rather than writing the instructions of an agent that has
 // root in a container.
 
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -19,9 +19,18 @@ import { toCommandLine } from '../src/fleet/host/sidecar.js';
 import { VERBS, validateIntent, PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { dispatch } from '../src/adapters/commands.js';
 
+// EVERY STORE SITS IN ONE DIRECTORY OF THIS RUN'S, removed at the end. Two
+// tests plant a file beside the store, in its parent, to prove a name cannot
+// reach it; with the stores straight under the system temp directory that was
+// a fixed /tmp/outside.md and /tmp/secret-key.md, shared by every run on the
+// box and never removed. A run as one user left them, and the next run as
+// another failed with EACCES writing them.
+const RUN = mkdtempSync(path.join(os.tmpdir(), 'profiles-run-'));
+after(() => rmSync(RUN, { recursive: true, force: true }));
+
 /** @param {Record<string, string>} files */
 function store(files) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'profiles-'));
+  const dir = mkdtempSync(path.join(RUN, 'profiles-'));
   for (const [name, body] of Object.entries(files)) writeFileSync(path.join(dir, name), body);
   return dir;
 }

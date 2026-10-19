@@ -233,6 +233,7 @@ test('a GitHub sign-in is exchanged here with the secret and goes back to its co
   });
   const deps = { store, env: { FLEETWRIGHT_GITHUB_CLIENT_ID: 'Iv-client', FLEETWRIGHT_GITHUB_CLIENT_SECRET: 'the-secret' }, pusher: recorder(), fetchImpl };
   const { fleet } = (await call(deps, '/fleets', { callback: 'https://their.coordinator/oauth/github/relayed', key: publicKey })).body;
+  const registered = structuredClone(Object.fromEntries(store.rows));
   const { cookie } = await startSignIn(deps, `${fleet}.inner-state-1`);
   const res = await call(deps, `/github/callback?code=c0de&state=${fleet}.inner-state-1`, undefined, { method: 'GET', cookie });
   assert.equal(res.status, 303);
@@ -247,9 +248,16 @@ test('a GitHub sign-in is exchanged here with the secret and goes back to its co
   assert.ok(!back.toString().includes('ghu_'), 'the token travelled in the clear');
   const opened = await openWith(privateKey, publicKey, sealed);
   assert.deepEqual(opened, { state: 'inner-state-1', accessToken: 'ghu_the-token', expiresIn: 28800, scope: '' });
-  // Nothing kept: no code, no token, no state.
-  const kept = JSON.stringify([...store.rows.entries()]);
-  for (const word of ['c0de', 'ghu_', 'ghr_', 'inner-state-1']) assert.ok(!kept.includes(word), word);
+  // Nothing kept: no code, no token, no state. The store after the sign-in is
+  // the store before it plus the fleet's sign-in counter, compared row for
+  // row. Searching the rows for the words instead failed about one run in a
+  // thousand: the fleet's record holds its secret's SHA-256 in hex, and `c0de`
+  // turns up in 61 of every 65,536 of those (38 in 40,000 runs, measured).
+  const kept = Object.fromEntries(store.rows);
+  assert.deepEqual(Object.keys(kept).sort(), [...Object.keys(registered), `n:oauth:${fleet}`].sort());
+  for (const [key, row] of Object.entries(registered)) assert.deepEqual(kept[key], row, key);
+  assert.deepEqual(Object.keys(kept[`n:oauth:${fleet}`]).sort(), ['used', 'window']);
+  assert.ok(Object.values(kept[`n:oauth:${fleet}`]).every(Number.isFinite), 'the counter holds numbers and nothing else');
 });
 
 test('a sign-in that went wrong goes back in one word, and one that is not a fleet’s goes nowhere', async () => {

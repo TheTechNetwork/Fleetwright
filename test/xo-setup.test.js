@@ -23,7 +23,7 @@ import path from 'node:path';
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits, syslogTo } from '../src/fleet/host/xo-setup.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
 import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupPolicySigninAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
-import { EDGE_WATCH, newWatch } from '../src/fleet/host/edge-credentials.js';
+import { EDGE_KEPT, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
 
 import { standIn, PASSWORD, skip, xenStoreAsXo } from './helpers/xo-stand-in.js';
@@ -831,8 +831,10 @@ test('a pair of edge routers is one edge to the phone, said to be a pair', { ski
   setups.cancel({ job: begun.xosetup.job, actor: 'eli@example.com' });
 });
 
-/** A key a router was built with, as buildEdge keeps it (edge-credentials.js). */
+/** A key a router was built with, as buildEdge keeps it (edge-credentials.js, EDGE_KEPT). */
 const WATCH = newWatch();
+/** The keeper, holding WATCH for p1, as the job that built the router left it. */
+const keeperOfWatch = () => ({ id: 'u-keys', email: EDGE_KEPT.user, permission: 'none', preferences: { [EDGE_KEPT.entry('p1')]: JSON.stringify({ v: 1, carp: null, watch: WATCH }) } });
 
 test('labs are made by the policy job, each its kind, kept in the set, and the edge already on them is left as it is', { skip }, async (t) => {
   // docs/hypervisors.md, "Labs". The edge is rebuilt when its labs change
@@ -841,13 +843,14 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
     sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'net-l1'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
     nets: { 'net-l1': 'fleetwright-lab-1', 'net-l2': 'fleetwright-lab-2' },
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch', 'fleetwright-edge-labs:oc'], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: JSON.stringify(WATCH) }) } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch', 'fleetwright-edge-labs:oc'], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_KEPT.watchPin]: WATCH.pin }) } },
     vifs: {
       w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' },
       a: { id: 'a', type: 'VIF', $VM: 'edge', device: '2', $network: 'net-l1' },
       b: { id: 'b', type: 'VIF', $VM: 'edge', device: '3', $network: 'net-l2' },
     },
   });
+  xo.users.push(keeperOfWatch());
   const { setups } = await machine({ coordinatorUrl: 'https://fleet.test' });
   const actor = 'eli@example.com';
   const { begun, reply, state } = await choosing(xo, setups, actor);
@@ -881,6 +884,37 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
   const [wEpk, wIv, wCt] = String(end.watch).split('.');
   const watch = /** @type {any} */ (await open({ ...reply, aad: xosetupWatchAad(begun.xosetup.job, xo.address), sealed: { epk: wEpk, iv: wIv, ct: wCt } }));
   assert.deepEqual(watch, { v: 1, address: xo.address, key: WATCH.key, secret: WATCH.secret, pin: WATCH.pin, routers: [{ name: 'fleetwright-edge', address: null }] });
+});
+
+test('a router that carries its key in the clear has it taken off by the next policy run, and is built again with a new one though the phone did not ask for the edge', { skip }, async (t) => {
+  // docs/security.md, G14. Measured on Xen Orchestra 5.211.0: every signed-in
+  // user reads every VM's xenStoreData with xo.getAllObjects, where the old
+  // build kept the routers' key and the pair's password. An upgrade must
+  // close that without anybody doing anything but change a policy.
+  // The VMs xo.getAllObjects answers with, as vm.set leaves them.
+  const vms = { edge: { id: 'edge', type: 'VM', $pool: 'p1', name_label: 'fleetwright-edge', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch'], power_state: 'Running', xenStoreData: xenStoreAsXo({ 'fleetwright-watch': JSON.stringify(WATCH) }) } };
+  const xo = await standIn(t, {
+    sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab'] }],
+    more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
+    vms,
+    vifs: { w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' } },
+  });
+  const { setups } = await machine({ coordinatorUrl: 'https://fleet.test' });
+  const actor = 'eli@example.com';
+  const { begun } = await choosing(xo, setups, actor);
+  // A change of limits and nothing else: no edge, no labs.
+  const limitsOnly = { v: 1, srs: ['sr2'], networks: ['net-lab'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 } };
+  assert.equal((await setups.policy({ job: begun.xosetup.job, sealed: await choose(begun, xo.address, limitsOnly), actor })).ok, true);
+  const end = await finished(setups, begun.xosetup.job, actor);
+  // WHAT EVERY SIGNED-IN USER READS no longer holds any of it.
+  const seen = JSON.stringify(vms);
+  for (const value of [WATCH.key, WATCH.secret, WATCH.prv.split('\n')[1]]) assert.ok(!seen.includes(value), 'the key was left where everybody signed in reads it');
+  // AND THE ROUTER IS BUILT AGAIN with a key nobody saw: stopped to be
+  // replaced, which here goes no further than this stand-in has a template
+  // for, and started again as it was.
+  const order = xo.calls.filter((c) => (c.method === 'vm.stop' || c.method === 'vm.start') && c.params.id === 'edge').map((c) => c.method);
+  assert.deepEqual(order, ['vm.stop', 'vm.start'], end.text);
+  assert.match(end.text, /no built-in "Other install media" template/);
 });
 
 test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves them as they are', () => {

@@ -122,7 +122,7 @@ import { VM_IMAGE, IMAGES, IMAGE_CHANNELS, ensureImage, removeImage, imageKeyOf,
 import { ensureHolder, isHolder } from './xo-holder.js';
 import { FLEET_SET, setsOf } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
-import { newWatch, watchOf } from './edge-credentials.js';
+import { clearExposed, exposedOn, keptFor, newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
@@ -182,7 +182,7 @@ const DEPLOY_HEARTBEAT_MS = 5 * 60_000;
 /** The tag on the network the edge router's WAN goes on: the way out of every lab. */
 export const EGRESS_TAG = 'fleetwright-egress';
 /** What building the edge router asks of the server, checked before anything is made. */
-export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start']);
+export const EDGE_METHODS = Object.freeze(['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start', 'user.getAll', 'user.create', 'user.set']);
 /** What making labs asks of the server, beside rebuilding the edge with them. */
 export const LAB_METHODS = Object.freeze(['network.create', 'tag.add', 'tag.remove', 'resourceSet.addObject']);
 /** What building the machine image asks of the server, checked before anything is made. */
@@ -1280,12 +1280,22 @@ export class XoSetups {
           }
         }
         ctx.summary = said.join(' ');
+        // WHAT XEN ORCHESTRA SHOWED EVERYBODY (edge-credentials.js, EDGE_KEPT):
+        // routers from before carry the pair's password and the key in their
+        // xenStoreData, which every signed-in user reads. Taken off every one
+        // now, whatever else this job does or fails to do; and where the edge
+        // is on the way out's pool it is built again with new ones even when
+        // the phone did not ask for the edge, so upgrading closes it.
+        const exposedPools = new Set((ctx.edges || []).filter(exposedOn).map((/** @type {any} */ v) => v.$pool));
+        await clearExposed(ctx.admin, ctx.edges || []);
+        const egressPool = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress)?.$pool;
+        const rotate = egressPool !== undefined && exposedPools.has(egressPool);
         // THE EDGE ROUTER, when the person asked for it: the uplink, then the
         // router on it (edge-router.js). Inside this step and not steps of its
         // own, so a phone that predates it still reads the progress as the
         // step it knows, with the machine's sentence under it saying where the
         // download and the disk have got to.
-        if (!p.edge && !p.image && !p.groups && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return;
+        if (!p.edge && !rotate && !p.image && !p.groups && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return;
         const rec = ctx.rec;
         // The words every time, for the screen that asks; an event only when
         // the stage changes or the bar has moved a twentieth, so a Lock
@@ -1302,7 +1312,7 @@ export class XoSetups {
         if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
         /** @type {string[]} */
         const built = [];
-        if (p.edge) {
+        if (p.edge || rotate) {
           const missing = EDGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the edge router cannot be built. The policy was applied.`);
         }
@@ -1325,7 +1335,7 @@ export class XoSetups {
         if (p.groups) {
           const made = await ensureGroups({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks, count: p.groups });
           if (made.length) built.push(`Made ${made.length === 1 ? 'a group network' : `${made.length} group networks`} for machines that work together.`);
-          if (!p.edge && !p.image && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return built.join(' ') || undefined;
+          if (!p.edge && !rotate && !p.image && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return built.join(' ') || undefined;
         }
         const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
         // LABS' NETWORKS, made before the edge is (re)built with an interface
@@ -1338,7 +1348,8 @@ export class XoSetups {
           if (made.made.length) built.push(`Made ${made.made.length === 1 ? 'a lab network' : `${made.made.length} lab networks`}.`);
           if (p.labsEach !== undefined && labs.length) built.push(p.labsEach === null ? 'One person may hold any number of labs.' : `One person may hold ${p.labsEach === 1 ? 'one lab' : `${p.labsEach} labs`} at once.`);
         }
-        const edgeAsked = p.edge || labs !== null;
+        const edgeAsked = p.edge || labs !== null || rotate;
+        if (rotate) built.push('The edge router’s key, and a pair’s shared password, were readable by everybody signed in to Xen Orchestra: they were taken off it, and it was built again with new ones.');
         // THE MACHINE IMAGE, after the router, on the same pool: it is built
         // on the uplink, so its install leaves through the router like every
         // machine cloned from it will (vm-image.js).
@@ -1565,7 +1576,8 @@ export class XoSetups {
     // this box, which is on the way to Xen Orchestra and so, usually, on the
     // routers' way out, and to the pool's own machine (syslogTo).
     const onPool = (ctx.edges || []).filter((/** @type {any} */ v) => v?.$pool === way.$pool);
-    ctx.watch = onPool.map(watchOf).find(Boolean) ?? newWatch({ now: this.now() });
+    const kept = await keptFor(ctx.admin, way.$pool);
+    ctx.watch = onPool.map((/** @type {any} */ v) => watchOf(v, kept.watch)).find(Boolean) ?? newWatch({ now: this.now() });
     ctx.watchPool = way.$pool;
     const syslog = syslogTo(ctx.holders, way.$pool, ctx.admin?.localAddress);
     return ensureEdge({
@@ -1605,7 +1617,14 @@ export class XoSetups {
    */
   async #handWatch(ctx) {
     const edges = (ctx.edges || []).filter((/** @type {any} */ v) => !ctx.watchPool || v?.$pool === ctx.watchPool);
-    const watch = ctx.watch ?? edges.map(watchOf).find(Boolean) ?? null;
+    // A JOB THAT BUILT NOTHING hands on the key kept for the routers there,
+    // when a router carries its pin: one cleared above carries none.
+    let watch = ctx.watch ?? null;
+    for (const pool of watch ? [] : new Set(edges.map((/** @type {any} */ v) => v?.$pool))) {
+      const kept = await keptFor(ctx.admin, pool);
+      watch = edges.filter((/** @type {any} */ v) => v?.$pool === pool).map((/** @type {any} */ v) => watchOf(v, kept.watch)).find(Boolean) ?? null;
+      if (watch) break;
+    }
     if (!watch) return;
     const routers = edges
       .map((/** @type {any} */ v) => ({ name: v.tags?.includes?.(`${EDGE_HA.nodeTag}1`) ? EDGE_HA.second : EDGE.vm, address: wanAddressOf(v) }))

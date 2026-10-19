@@ -222,6 +222,14 @@ export function allowlistFor(cfg) {
  * and the proxy does not start, so an allowlisted box had no way out at all
  * (seventh audit), and had it started, its regexes match anywhere in the host.
  *
+ * THE FILTER PATH IS QUOTED, for the same parser: conf.c reads `Filter` as a
+ * double-quoted string, and an unquoted path is a syntax error on that line.
+ * This wrote it bare until the proxy was first run on real podman (podman
+ * 4.9.3, tinyproxy 1.11.3 from sandbox/egress/Containerfile), where it logged
+ * "Syntax error on line 16", exited, and was restarted by `unless-stopped`
+ * forever, so no allowlisted session had a way out; and each next launch saw
+ * it not running and replaced it.
+ *
  * @param {string[]} hosts
  * @param {{ port?: number }} [opts]
  */
@@ -247,7 +255,7 @@ export function proxyConfig(hosts, { port = PROXY_PORT } = {}) {
     'FilterCaseSensitive No',
     'FilterURLs No',
     'FilterDefaultDeny Yes',
-    'Filter /etc/tinyproxy/allow.list',
+    'Filter "/etc/tinyproxy/allow.list"',
     '',
   ].join('\n');
 }
