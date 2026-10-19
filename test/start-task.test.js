@@ -46,15 +46,32 @@ test('a task reaches the session as its first message, newlines and all', { skip
   const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-task-'));
   /** @type {string[]} */
   const names = [];
+  // A TMUX SERVER OF ITS OWN. Without one this shares the box's default
+  // server with every other run of this file (two worktrees, a verify.sh beside
+  // a focused run): the second run is refused "duplicate session: build1", its
+  // cleanup kills the first run's session before that claude has written
+  // anything, and the session manager adopts every other run's session and
+  // hits its cap. Six concurrent runs failed 30 of 30 that way. TMUX_TMPDIR
+  // moves the socket into this test's directory; TMUX would override it from
+  // inside a tmux pane, so it goes for the duration.
+  const env = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX };
+  process.env.TMUX_TMPDIR = dir;
+  delete process.env.TMUX;
   t.after(() => {
     for (const n of names) killSession(n);
+    for (const [k, v] of Object.entries(env)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
     rmSync(dir, { recursive: true, force: true });
   });
   // A claude that writes down the last argument it was started with, which is
   // where buildCommand puts the first message, then waits like a prompt.
+  //
+  // It writes beside the file and renames it into place, so `said` exists only
+  // once it is whole. A plain `> said` creates the file before printf fills
+  // it, and a reader polling for existence then reads it empty: measured, a
+  // tight poll caught it between the two in 289 of 500 runs.
   const said = path.join(dir, 'said');
   const bin = path.join(dir, 'claude');
-  writeFileSync(bin, `#!/bin/sh\nfor a; do last="$a"; done\nprintf '%s' "$last" > '${said}'\nexec sleep 60\n`);
+  writeFileSync(bin, `#!/bin/sh\nfor a; do last="$a"; done\nprintf '%s' "$last" > '${said}.part'\nmv '${said}.part' '${said}'\nexec sleep 60\n`);
   chmodSync(bin, 0o755);
   const cfg = /** @type {any} */ ({
     stateDir: path.join(dir, 'state'),
