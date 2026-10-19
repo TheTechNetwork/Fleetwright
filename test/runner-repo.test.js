@@ -223,7 +223,8 @@ function fleet(boxes, reply = () => ({ ok: true, text: 'Asked GitHub.' })) {
   const core = new CoordinatorCore({ runnerRepo: 'fleet/runners' });
   for (const [hostId, protocol] of boxes) {
     core.registry.connect(hostId, () => {});
-    core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol, maxSessions: 5, running: 0, free: 5, labels: [] });
+    // Sandboxed, so a member's start may land (hosts.js runsSessionsFor).
+    core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol, maxSessions: 5, running: 0, free: 5, labels: [], sandboxed: true });
   }
   /** @type {Array<{ hostId: string, spec: any }>} */
   const sent = [];
@@ -371,7 +372,8 @@ test('the session asked for with a machine starts on it once, as its owner', asy
   assert.deepEqual(ticket?.start, { title: 'Build the Mac app', task });
 
   core.noteRunnerEnrolled('gha-eli-1', ticket);
-  core.registry.connect('gha-eli-1', () => {}, { ephemeral: true, owner: eli.email });
+  // Acting for its owner, as hostConnected decides from the enrolment.
+  core.registry.connect('gha-eli-1', () => {}, { ephemeral: true, owner: eli.email, actsFor: eli.email });
   const frame = { kind: 'health', health: { hub: { reachable: true }, protocol: 7, maxSessions: 1, running: 0, free: 1, labels: [] } };
   await core.onHostMessage('gha-eli-1', frame);
   await core.onHostMessage('gha-eli-1', frame);

@@ -72,6 +72,10 @@ export function runsNoSessions(hostId) {
  *   from a box that holds none, and from an older one.
  * @property {Array<{name: string, title?: string|null, createdBy?: string|null, deletedAt?: number|null, expiresAt?: number|null}>} [bin]
  * @property {{ state: 'fresh'|'expired'|'unknown', expiresAt: number|null, refreshable: boolean, account: string|null, plan: string|null, summary: string }|null} [credential]
+ * @property {boolean|null} [sandboxed]  whether this box runs its sessions in
+ *   the sandbox. Absent from an older box, which has not said; only `true`
+ *   lets a member's session onto a box they do not administer (hosts.js
+ *   runsSessionsFor).
  */
 
 /**

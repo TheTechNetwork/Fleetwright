@@ -54,7 +54,7 @@
 // than the one holding the session. The hub answers whatever it is sent and
 // asks nobody whose prompt it is, so this check is the only one.
 import { runsNoSessions } from './registry.js';
-import { mayActFor, administers } from './hosts.js';
+import { mayActFor, administers, runsSessionsFor } from './hosts.js';
 
 const PINNED = new Set([
   'resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge', 'answer',
@@ -180,6 +180,15 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
           : describeWhyNoHosts(registry),
       };
     }
+    // A BOX'S OWN NAMED SECRETS ARE ITS ADMINISTRATORS', so a member's
+    // `secrets` asks only the boxes they administer. Its operator placed them,
+    // and a session a member starts on an operator's box is served the
+    // member's own vault secret of that name and never the box's (the host's
+    // `boxSecrets` start param, set in core.js dispatch), so listing the box's
+    // names to them offered a choice that could not be had. Possibly no box at
+    // all, which core.js answers as an empty list: none is available to them,
+    // and that is an answer rather than a refusal.
+    if (verb === 'secrets' && scoped) return { kind: 'fanout', hosts: hosts.filter((h) => administers(h, requester)) };
     return { kind: 'fanout', hosts };
   }
 
@@ -652,6 +661,12 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         reason: `"${name}" lives on ${found.host.hostId}, which is ${found.host.state}: ${found.host.reason}`,
       };
     }
+    // A RESUME RUNS THE SESSION AGAIN, so it is held to the rule a start is:
+    // on a box whose sessions are not sandboxed, or that has not said, only
+    // someone who administers it (hosts.js runsSessionsFor). The session's
+    // owner still reaches it with stop, forget and the rest, which run
+    // nothing of theirs there (G8).
+    if (verb === 'resume' && !runsSessionsFor(host, requester)) return unsandboxed([host], verb);
     if (found.ageMs > maxPinAgeMs) {
       // We know where it WAS. Acting on a claim this old is guessing.
       return {
@@ -778,6 +793,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         reason: `${preferHost} acts for the person who enrolled it, and takes work only from them.`,
       };
     }
+    if (verb === 'start' && !runsSessionsFor(chosen, requester)) return unsandboxed([chosen], verb);
     if (takenOn(chosen)) return nameUnavailable;
     if ((chosen.health?.free ?? 0) <= 0) {
       return {
@@ -858,10 +874,19 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
           'from them, and a runner only from the person who asked for it.',
     };
   }
+  // A MEMBER'S START GOES ONLY WHERE ITS SESSION IS CONTAINED (hosts.js
+  // runsSessionsFor): a box that runs sessions directly is left out for
+  // anybody who does not administer it, and so is one that has not said. Left
+  // out rather than refused while somewhere else will do, so `tag: linux`
+  // finds the sandboxed Linux box instead of landing on the direct one; and
+  // when nowhere else will, refused with every box named, because the answer
+  // is a setting on those boxes and not a fault in the request (G8).
+  const contained = verb === 'start' ? usable.filter((h) => runsSessionsFor(h, requester)) : usable;
+  if (usable.length && !contained.length) return unsandboxed(usable, verb);
   // Not a box holding somebody else's claim on the name (takenOn, above), and
   // when every box that acts for them holds one, the name is taken everywhere
   // this start could go.
-  const open = usable.filter((h) => !takenOn(h));
+  const open = contained.filter((h) => !takenOn(h));
   if (!open.length) return nameUnavailable;
 
   const durable = open.filter((h) => !h.ephemeral);
@@ -927,6 +952,43 @@ function describeWhyNoHosts(registry) {
 function describeWhyNoHolders(registry) {
   if (!registry.reachable().length) return describeWhyNoHosts(registry);
   return 'No connected host holds credentials for you. A box another member enrolled, or a temporary machine somebody else asked for, acts only for them.';
+}
+
+/**
+ * Why a member's session will not go on these boxes: each runs its sessions
+ * without the sandbox, or has not said whether it does (hosts.js
+ * runsSessionsFor). Every box is named, because they are the fleet's own and
+ * acting for anyone is what put them here, and the way on is a setting on
+ * them that a person can change.
+ *
+ * @param {Array<import('./registry.js').HostEntry>} hosts
+ * @param {string} verb  `start` or `resume`
+ * @returns {Placement}
+ */
+function unsandboxed(hosts, verb) {
+  const doing = verb === 'resume' ? 'resume a session' : 'start work';
+  if (hosts.length === 1) {
+    const [h] = hosts;
+    return {
+      kind: 'refused',
+      code: 'unsandboxed',
+      reason: h.health?.sandboxed === false
+        ? `${h.hostId} runs sessions without the sandbox, as the account that holds everyone\u2019s credentials on ` +
+          `it, so only this fleet\u2019s admin can ${doing} there. Turning its sandbox on (FLEETWRIGHT_SANDBOX=1) ` +
+          'opens it to everyone it acts for.'
+        : `${h.hostId} has not said whether its sessions are sandboxed \u2014 it is older than that report \u2014 ` +
+          `so it is treated as running them without one, and only this fleet\u2019s admin can ${doing} there ` +
+          'until it is updated.',
+    };
+  }
+  return {
+    kind: 'refused',
+    code: 'unsandboxed',
+    reason:
+      `Every machine that could take this runs sessions without the sandbox, or has not said whether it does: ` +
+      `${hosts.map((h) => h.hostId).join(', ')}. Only this fleet\u2019s admin can ${doing} on those. Turning a ` +
+      'box\u2019s sandbox on (FLEETWRIGHT_SANDBOX=1), or updating one that has not said, opens it to everyone it acts for.',
+  };
 }
 
 /** @param {unknown} value */

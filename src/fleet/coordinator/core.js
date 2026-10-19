@@ -15,7 +15,7 @@
 import { HostRegistry, runsNoSessions, attributed } from './registry.js';
 import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
-import { HostIdentities, actsFor, mayActFor, believedCreator, administers } from './hosts.js';
+import { HostIdentities, actsFor, mayActFor, believedCreator, administers, runsSessionsFor } from './hosts.js';
 import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
@@ -105,6 +105,8 @@ const ENDED_SETUP = new Set(['done', 'failed', 'cancelled']);
 const RELAY_PROTOCOL = 12;
 /** The protocol a box speaks to read or work a pool's page for a phone away from it (`xolook`, `xoact`). */
 const POOL_PAGE_PROTOCOL = 13;
+/** The protocol a box speaks to keep its own named secrets from sessions of people who do not administer it (`boxSecrets`, v14). */
+const BOX_SECRETS_PROTOCOL = 14;
 /**
  * How long a probe through a phone may take. Longer than the fan-out's ten
  * seconds: every round trip of the TLS handshake crosses the coordinator twice
@@ -130,6 +132,21 @@ const MAX_CLAUDE_PER_WINDOW = 5;
 
 /** GitHub sign-ins and renewals one person's devices may finish in MINT_WINDOW_MS. */
 const MAX_GITHUB_PER_WINDOW = 20;
+/**
+ * How long a GitHub code handed to a box is remembered as a box's
+ * (#rememberBoxSignIn). GitHub's codes last ten minutes from when it issued
+ * them, which is before this hands one on, so the code is dead before it is
+ * forgotten.
+ */
+const BOX_SIGN_IN_TTL_MS = 10 * 60_000;
+/**
+ * How many it remembers at once, every one of which goes beside each device's
+ * sign-in to the minting Worker, which takes as many (minter/github.js,
+ * MAX_BOX_CODES). Past it a box's sign-in is refused rather than one
+ * forgotten early, because forgetting one is the hole this list closes.
+ */
+const MAX_BOX_SIGN_INS = 64;
+const BOX_SIGN_IN_RE = /^[0-9a-f]{64}$/;
 // A person's vault changes: a phone listing, keeping and approving, a few at
 // a time. Thirty in ten minutes is a busy afternoon and not a script.
 const MAX_VAULT_PER_WINDOW = 30;
@@ -326,7 +343,7 @@ export class CoordinatorCore {
    *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any>,
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
    *     linkedRepo?: (ask: { role: string, repo: string }) => Promise<any>,
-   *     github?: (ask: { sealed: unknown }) => Promise<any>,
+   *     github?: (ask: { sealed: unknown, boxCodes?: string[] }) => Promise<any>,
    *     vault?: (route: 'device'|'box', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
    * }} [opts]
@@ -572,6 +589,9 @@ export class CoordinatorCore {
       owner: enrolled?.owner ?? null,
       actsFor: person,
     });
+    // A box that refused a forgetting as a verb it did not know is asked
+    // again from its first report on this connection (#askForget).
+    this.#forgetNotBefore.delete(hostId);
     this.log.info(`coordinator: ${hostId} connected`);
     // WHAT THIS HOST NEEDS AND MUST NOT KEEP. One frame, a fixed set of named
     // values, sent on every connect — so a host enrolled tomorrow gets it by
@@ -731,6 +751,16 @@ export class CoordinatorCore {
         if (entry.actsFor) this.#handBack(entry, entry.actsFor, msg.health, { back: true, asOf: owed.handBackPending });
         delete owed.handBackPending;
         this.onStateChanged?.();
+      }
+      // A FORGETTING OWED SINCE SOMEBODY WAS REMOVED (#forgetOnBoxes), asked
+      // of a box that was away for it, or that did not confirm it, or that was
+      // too old to and has since reconnected. Any report whose hub is
+      // answering will do: the box finds the sessions itself.
+      if (
+        typeof owed?.forgetFrom === 'number' && !owed.revokedAt && entry?.connected &&
+        msg.health.hub?.reachable !== false && !(this.now() < (this.#forgetNotBefore.get(hostId) ?? 0))
+      ) {
+        void this.#askForget(entry);
       }
       const moved = this.registry.recordHealth(hostId, msg.health);
       // The outcome, not just the input: recordHealth silently ignores a host
@@ -2579,7 +2609,7 @@ export class CoordinatorCore {
     }
     // Their last credential's revocation did this already, and ONCE: run
     // again, every box of the fleet's was asked their work back twice
-    // (#handBackPerson), and the hosts it revoked were dropped for an empty
+    // (#forgetOnBoxes), and the hosts it revoked were dropped for an empty
     // list. A person with none left still has their machines taken back. Not
     // an operator leaving the tier: with no credential that works, they were
     // never an operator to begin with.
@@ -2727,8 +2757,9 @@ export class CoordinatorCore {
       }
     }
     // AND THEIR OWN WORK ON THE FLEET'S BOXES, after #retier so a removed
-    // admin's boxes, theirs alone now, are not among them.
-    this.#handBackPerson(address);
+    // admin's boxes, theirs alone now, are not among them: owed by each
+    // until the box itself says it is done, the ones away now included.
+    if (this.#forgetOnBoxes(address)) changed = true;
     if (changed) this.onStateChanged?.();
     return hosts;
   }
@@ -2914,7 +2945,7 @@ export class CoordinatorCore {
   /**
    * One request a box is asked to give something back with, sent and not
    * waited on: the removal that asks it is somebody's request, and a box that
-   * never answers must not hold it open (#handBack, #handBackPerson).
+   * never answers must not hold it open (#handBack, #askBackOld).
    *
    * @param {any} entry @param {string} verb @param {Record<string, string>} params @param {string} actor
    */
@@ -2925,63 +2956,291 @@ export class CoordinatorCore {
   }
 
   /**
-   * WHAT A REMOVED PERSON LEFT ON THE FLEET'S OWN BOXES, asked back as
-   * #handBack asks it of a removed admin's box for everybody else. Revoking
-   * their credentials stopped them asking the fleet for anything and left
-   * what they had already asked for: their sessions went on running on the
-   * operator's machines under their own Claude sign-in, and the GitHub and
-   * Cloudflare accounts they linked stayed on every one of those boxes, each
-   * able to push and deploy as somebody no longer in the fleet (seventh
-   * audit).
+   * WHAT A REMOVED PERSON LEFT ON THE FLEET'S OWN BOXES, and every one of
+   * those boxes told to forget it, the ones away at the time included.
    *
-   * So every connected box in the operator's tier, which is where a person's
-   * links fan out and their work is placed (hosts.js mayActFor), is asked to
-   * stop each session its last report filed under them and to unlink their
-   * three sign-ins. Not their own boxes: those act for them, hold nobody
-   * else's, and have nothing to give back to the fleet. Not another member's:
-   * none of theirs went there. Recorded with no actor and no session name, so
-   * the operator, and every member, sees that it was asked.
+   * Revoking their credentials stopped them asking the fleet for anything and
+   * left what they had already asked for: their sessions went on running on
+   * the operator's machines under their own Claude sign-in, and the GitHub and
+   * Cloudflare accounts they linked stayed on every one of those boxes (seventh
+   * audit). What answered that until now asked each CONNECTED box to stop the
+   * sessions its last report filed under them and to unlink their three
+   * sign-ins, and that left four things running in their name (ninth audit):
    *
-   * UNLINK IS THE BOX'S OWN LINKS AND NOTHING ELSE (commands.js): what a box
-   * holds from their vault is not a link, and its next vault ask wrote it
-   * back, freshly renewed, on every box they had approved. This header and
-   * the record both said those sign-ins were asked to be forgotten (eighth
-   * audit, r8-leads-1). What ends those is the minter, which is told who is
-   * still in the fleet on every box's ask and gives nothing for a grant of
-   * somebody who is not (#onHostVault), on any box, their own included; the
-   * box then deletes its copy on that ask, as it does when a grant is
-   * withdrawn from a phone. So the record says the two apart.
+   *   - a box away at the removal was never asked, then or when it came back;
+   *   - a session the last report did not list was not named, so it kept
+   *     running with their Remote Control link, or, ended with its box, was
+   *     brought back as them by the box's next boot (sessions.js restore);
+   *   - `unlink` left the renewal material, so the box's hourly renewal went
+   *     on trading their refresh token with the fleet's client secrets and
+   *     wrote a fresh GitHub token back into the row it had just emptied;
+   *   - and the request was sent and never checked, so a box that refused it
+   *     or never answered was reported as asked, which reads as done.
    *
-   * A BOX THAT IS NOT HERE IS NOT ASKED. An offline box owes it, and nothing
-   * asks it when it returns: a removed admin's box keeps that debt on its
-   * enrolment (handBackPending), but the debt there is a box's to everybody,
-   * and this one would be a list of removed people per box kept for good.
-   * Their links stay on such a box until an admin unlinks them there, and a
-   * session there until an admin stops it. Nor is a session named that the
-   * box's last report did not list, the first frame of a hub still starting
-   * among them (listsSessions): the sign-ins are still unlinked.
+   * So the removal is a debt each box in the operator's tier owes until the box
+   * itself says it is paid. The person goes on the list of removals
+   * (#noteRemoval), each such enrolment records the earliest removal it has
+   * not confirmed (`forgetFrom`, kept on the enrolment beside handBackPending
+   * and saved with it, so a restart keeps it), and the box is asked
+   * `forgetperson` for each person it owes (#askForget): now when it is
+   * connected, otherwise on its first report after it returns. The box finds
+   * the sessions itself, by who started them, so no report of ours has to
+   * have listed them, and clears what it keeps for them in one act
+   * (intents.js `forgetperson`). What it holds from their vault it deletes
+   * too, and the minter, told on every ask who is still in the fleet, gives
+   * no box anything of theirs again (#onHostVault; eighth audit).
+   *
+   * Not their own boxes: those act for them, hold nobody else's, and are their
+   * own machines, which the removal of a person does not take; the minter
+   * stops giving them anything from the vault, and an admin's DELETE takes the
+   * box itself. Not another member's: none of theirs went there. Not a box a
+   * removed admin's removal just took out of the tier: #retier ran first, and
+   * #handBack asks those for everybody else's. Recorded with no actor and no
+   * name, so the operator and every member see what each box was asked and
+   * what it said.
    *
    * @param {string} person  lower case
+   * @returns {boolean} whether any box owes it, so the caller saves
    */
-  #handBackPerson(person) {
-    for (const entry of this.registry.reachable()) {
-      if ((entry.actsFor ?? null) !== null) continue;
-      const listed = listsSessions(entry.health);
-      let stopped = 0;
-      for (const s of listed ? /** @type {any} */ (entry.health).sessions : []) {
-        if (typeof s?.name !== 'string' || !String(s.createdBy || '').startsWith('fleet:') || emailOf(s.createdBy) !== person) continue;
-        this.#askBack(entry, 'stop', { name: s.name }, person);
-        stopped++;
+  #forgetOnBoxes(person) {
+    const at = this.#noteRemoval(person);
+    let owed = false;
+    for (const enrolled of this.hostIds.hosts.values()) {
+      if (enrolled.revokedAt || actsFor(enrolled, (email) => this.#isOperator(email)) !== null) continue;
+      enrolled.forgetFrom = typeof enrolled.forgetFrom === 'number' ? Math.min(enrolled.forgetFrom, at) : at;
+      owed = true;
+      const entry = this.registry.hosts.get(enrolled.hostId);
+      if (entry?.connected) {
+        this.record({
+          event: 'host.asked-back',
+          hostId: enrolled.hostId,
+          text: `${enrolled.hostId} was asked to forget somebody removed from the fleet: to stop every session of theirs there and put it in its bin, and to delete the GitHub, Cloudflare and Claude sign-ins it keeps for them, renewal included. ${VAULT_AFTER_REMOVAL}`,
+        });
+        void this.#askForget(entry);
+      } else {
+        this.record({
+          event: 'host.asked-back',
+          hostId: enrolled.hostId,
+          text: `${enrolled.hostId} is offline, so it will be asked to forget somebody removed from the fleet the first time it reports in: to stop their sessions there and delete the sign-ins it keeps for them. Until it says it has, anything of theirs on it is still there. ${VAULT_AFTER_REMOVAL}`,
+        });
       }
-      for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, person);
+    }
+    this.#pruneRemovals();
+    return owed;
+  }
+
+  /**
+   * The people removed from the fleet that a box may still owe a forgetting,
+   * oldest first, each once: at most MAX_REMOVALS_KEPT, saved under its own
+   * key (serialiseRemovals). An email per removal and not per box, because a
+   * list of people on every enrolment would be the store's largest thing
+   * (test/do-key-bounds.test.js); a box keeps only the moment it is owed from.
+   * @type {Array<{ email: string, at: number }>}
+   */
+  #removed = [];
+
+  /** Boxes being asked right now, so a report arriving meanwhile does not ask again. @type {Set<string>} */
+  #forgetting = new Set();
+
+  /**
+   * When a box that owes a forgetting may next be asked from its reports:
+   * later, after one it did not confirm; never on this connection, after one
+   * it refused as a verb it does not know. Cleared when it connects, which is
+   * what an update ends with. In memory: a restart only asks sooner.
+   * @type {Map<string, number>}
+   */
+  #forgetNotBefore = new Map();
+
+  /**
+   * Put a person on the list of removals and say when, later than anything
+   * already on it so a box's `forgetFrom` orders them. Removed again after
+   * rejoining, they move to the end: a box that confirmed the first removal
+   * owes the second.
+   *
+   * @param {string} email @returns {number}
+   */
+  #noteRemoval(email) {
+    const last = this.#removed.length ? this.#removed[this.#removed.length - 1].at : 0;
+    const at = Math.max(this.now(), last + 1);
+    this.#removed = this.#removed.filter((r) => r.email !== email);
+    this.#removed.push({ email, at });
+    return at;
+  }
+
+  /**
+   * Keep the removals some box still owes, and nobody back in the fleet.
+   *
+   * A REMOVAL DROPPED WHILE A BOX STILL OWES IT IS SAID, not lost quietly:
+   * more than MAX_REMOVALS_KEPT people removed while a box was away is beyond
+   * what one stored value holds, and that box would otherwise come back and be
+   * asked for the later ones only. The record names the box and what an admin
+   * does about it. A revoked enrolment owes nothing; one readmitted keeps its
+   * `forgetFrom` (hosts.js enrol) and is asked for what is still listed.
+   */
+  #pruneRemovals() {
+    let oldest = Infinity;
+    for (const h of this.hostIds.hosts.values()) {
+      if (!h.revokedAt && typeof h.forgetFrom === 'number') oldest = Math.min(oldest, h.forgetFrom);
+    }
+    const kept = this.#removed.filter((r) => r.at >= oldest && !this.#hasLiveCredential(r.email));
+    const dropped = kept.length > MAX_REMOVALS_KEPT ? kept.splice(0, kept.length - MAX_REMOVALS_KEPT) : [];
+    this.#removed = kept;
+    if (!dropped.length) return;
+    const lastDropped = dropped[dropped.length - 1].at;
+    for (const h of this.hostIds.hosts.values()) {
+      if (h.revokedAt || typeof h.forgetFrom !== 'number' || h.forgetFrom > lastDropped) continue;
       this.record({
         event: 'host.asked-back',
-        hostId: entry.hostId,
-        text: listed
-          ? `${entry.hostId} was asked to stop ${stopped} session${stopped === 1 ? '' : 's'} somebody removed from the fleet had running there, and to unlink the GitHub, Cloudflare and Claude sign-ins they linked on it. ${VAULT_AFTER_REMOVAL}`
-          : `${entry.hostId} was asked to unlink the GitHub, Cloudflare and Claude sign-ins somebody removed from the fleet linked on it. ${VAULT_AFTER_REMOVAL} It has not reported its sessions since it connected, so any of theirs still running there were not named; an admin can stop them.`,
+        hostId: h.hostId,
+        text: `More people were removed from the fleet while ${h.hostId} was away than the fleet can keep a list of, so it will be asked to forget only the last ${MAX_REMOVALS_KEPT}. An admin should stop the sessions there of anybody removed before that, and unlink their sign-ins.`,
       });
     }
+  }
+
+  /**
+   * Ask one box to forget everybody it owes, and settle the debt by what it
+   * answers.
+   *
+   * ONLY ITS YES SETTLES ONE. A box that says it does not know the verb runs
+   * a release from before it: it is asked what it does understand, as a
+   * removal asked before this existed (#askBackOld), and is still owed the
+   * rest, asked again when it next connects, which is what an update ends
+   * with. One that does not answer, or whose hub could not, is asked again
+   * from a later report. What nobody can ask, an address this protocol cannot
+   * carry as an actor, is said for an admin to do by hand.
+   *
+   * Removals after the newest one asked here are left owed, for their own ask:
+   * this one cannot have settled them.
+   *
+   * @param {any} entry  its registry entry
+   */
+  async #askForget(entry) {
+    const hostId = entry.hostId;
+    if (this.#forgetting.has(hostId)) return;
+    const enrolled = this.hostIds.get(hostId);
+    if (!enrolled || enrolled.revokedAt || typeof enrolled.forgetFrom !== 'number') return;
+    const from = enrolled.forgetFrom;
+    const owed = this.#removed.filter((r) => r.at >= from && !this.#hasLiveCredential(r.email));
+    const upTo = this.#removed.length ? this.#removed[this.#removed.length - 1].at : from;
+    this.#forgetting.add(hostId);
+    /** @type {number[]} */
+    const still = [];
+    let refused = false;
+    let retry = false;
+    try {
+      const answers = await Promise.all(owed.map(async (r) => {
+        let reply;
+        try {
+          const box = this.registry.hosts.get(hostId) ?? entry;
+          reply = await this.send(box, { verb: 'forgetperson', params: {}, actor: r.email }, this.intentTimeoutMs);
+        } catch (e) {
+          // Refused by buildIntent before it left: the address is not one an
+          // actor can be, which no retry changes.
+          if (String(/** @type {Error} */ (e)?.message).startsWith('refusing to send a malformed intent')) return { r, said: 'unsayable' };
+          return { r, said: 'unanswered' };
+        }
+        if (reply?.ok === true) return { r, said: 'done', reply };
+        const code = reply?.error?.code;
+        return { r, said: code === 'unknown_verb' || code === 'unsupported_version' ? 'refused' : 'unanswered' };
+      }));
+      let people = 0;
+      let sessions = 0;
+      let counted = true;
+      for (const { r, said, reply } of /** @type {Array<{ r: { email: string, at: number }, said: string, reply?: any }>} */ (answers)) {
+        if (said === 'done') {
+          people++;
+          if (Number.isInteger(reply?.forgot?.sessions)) sessions += reply.forgot.sessions;
+          else counted = false;
+        } else if (said === 'refused') {
+          refused = true;
+          still.push(r.at);
+          this.#askBackOld(this.registry.hosts.get(hostId) ?? entry, r.email);
+        } else if (said === 'unanswered') {
+          retry = true;
+          still.push(r.at);
+        } else {
+          this.record({
+            event: 'host.asked-back',
+            hostId,
+            text: `${hostId} could not be asked to forget somebody removed from the fleet, because their address cannot be named to a box. An admin should stop their sessions there and unlink their sign-ins.`,
+          });
+        }
+      }
+      if (people) {
+        this.record({
+          event: 'host.asked-back',
+          hostId,
+          text:
+            `${hostId} says it has forgotten ${people === 1 ? 'somebody' : `${people} people`} removed from the fleet` +
+            (counted ? `: ${sessions} session${sessions === 1 ? '' : 's'} of theirs stopped and put in its bin, ` : ': their sessions stopped and put in its bin, ') +
+            'and the sign-ins it kept for them deleted, renewal included. It is a box saying so, which an honest one means.',
+        });
+      }
+      if (refused) {
+        this.record({
+          event: 'host.asked-back',
+          hostId,
+          text: `${hostId} runs a release too old to forget somebody removed from the fleet. It was asked to stop the sessions of theirs its last report listed and to unlink their sign-ins instead, which leaves the renewal of a GitHub or Cloudflare sign-in they left there running. It will be asked again when it reconnects; updating it is how that happens.`,
+        });
+      } else if (retry && !this.#forgetNotBefore.has(hostId)) {
+        this.record({
+          event: 'host.asked-back',
+          hostId,
+          text: `${hostId} did not confirm it forgot somebody removed from the fleet, so it will be asked again. Until it says it has, anything of theirs on it is still there.`,
+        });
+      }
+    } finally {
+      this.#forgetting.delete(hostId);
+    }
+    if (refused) this.#forgetNotBefore.set(hostId, Infinity);
+    else if (retry) this.#forgetNotBefore.set(hostId, this.now() + FORGET_RETRY_MS);
+    else this.#forgetNotBefore.delete(hostId);
+    // What it still owes: the oldest it did not confirm, or the first removal
+    // since this ask began.
+    const later = this.#removed.find((r) => r.at > upTo);
+    const next = Math.min(...still, later ? later.at : Infinity);
+    const now = this.hostIds.get(hostId);
+    if (!now || now.revokedAt) return;
+    if (Number.isFinite(next)) now.forgetFrom = next;
+    else delete now.forgetFrom;
+    this.#pruneRemovals();
+    this.onStateChanged?.();
+  }
+
+  /**
+   * What a box from before `forgetperson` is asked instead, for one person:
+   * to stop the sessions its last report filed under them and to unlink their
+   * three sign-ins, which is the whole of what a removal asked until then.
+   * Not a session its last report did not list, the first frame of a hub still
+   * starting among them (listsSessions).
+   *
+   * @param {any} entry @param {string} person  lower case
+   */
+  #askBackOld(entry, person) {
+    const listed = listsSessions(entry.health);
+    for (const s of listed ? /** @type {any} */ (entry.health).sessions : []) {
+      if (typeof s?.name !== 'string' || !String(s.createdBy || '').startsWith('fleet:') || emailOf(s.createdBy) !== person) continue;
+      this.#askBack(entry, 'stop', { name: s.name }, person);
+    }
+    for (const provider of HANDED_BACK_SIGN_INS) this.#askBack(entry, 'unlink', { provider }, person);
+  }
+
+  /** The removals a box may still owe, for storage. */
+  serialiseRemovals() {
+    return this.#removed.slice(-MAX_REMOVALS_KEPT).map((r) => ({ email: r.email, at: r.at }));
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it.
+   * @param {unknown} saved
+   */
+  restoreRemovals(saved) {
+    if (!Array.isArray(saved)) return;
+    this.#removed = saved
+      .slice(-MAX_REMOVALS_KEPT)
+      .filter((r) => typeof r?.email === 'string' && r.email.length <= 320 && emailOf(r.email) === r.email && Number.isFinite(r?.at))
+      .map((r) => ({ email: r.email, at: r.at }))
+      .sort((a, b) => a.at - b.at);
   }
 
   /**
@@ -3131,6 +3390,17 @@ export class CoordinatorCore {
         text: 'mint is sent by the coordinator for a runner that asked for a repository token. It cannot be called.',
       };
     }
+    // NOR IS FORGETTING A PERSON anybody's to ask: it is what removing them
+    // does (#forgetOnBoxes), sent straight to each box and never through
+    // here. From a caller it would bin somebody's work on every box the fleet
+    // runs, by naming them as the actor.
+    if (spec.verb === 'forgetperson') {
+      return {
+        ok: false,
+        error: { code: 'coordinator_only' },
+        text: 'forgetperson is sent by the coordinator when somebody is removed from the fleet. It cannot be called.',
+      };
+    }
 
     // Recorded BEFORE placement, and only for verbs that change something.
     //
@@ -3233,8 +3503,17 @@ export class CoordinatorCore {
       /** @type {Record<string, any>} */
       const params = { ...shaped.params };
       delete params.archive;
+      // And whether the box's own secrets may answer it, which is decided once
+      // the box is (below, #boxSecrets): never the caller's to say.
+      delete params.boxSecrets;
       const archive = this.linkedRepos.get(spec.requester?.email, 'archive')?.repo;
       if (archive) params.archive = archive;
+      spec = { ...spec, params };
+    }
+    if (spec.verb === 'resume') {
+      /** @type {Record<string, any>} */
+      const params = { ...shaped.params };
+      delete params.boxSecrets;
       spec = { ...spec, params };
     }
     if (spec.verb === 'provision' && (shaped.params.platform === 'vm' || shaped.params.platform === 'lab')) return this.#provisionVm(spec, shaped.params);
@@ -3291,6 +3570,24 @@ export class CoordinatorCore {
     }
 
 
+    if (placement.kind === 'fanout' && spec.verb === 'secrets' && !(placement.hosts || []).length) {
+      // NONE THAT ARE THEIRS TO USE, which is an answer and not a refusal: a
+      // member administers no connected box, and a box's own secrets go only
+      // to sessions of those who do (scheduler.js). Empty, so a picker shows
+      // nothing to choose rather than no picker; what they keep in their own
+      // vault is theirs on every box and is not a box's to list.
+      return {
+        ok: true,
+        fanout: true,
+        secrets: [],
+        sessions: [],
+        hosts: [],
+        text:
+          'No machine you administer is connected, so no named secrets kept on a machine are yours to grant. ' +
+          'A machine’s own secrets go only to sessions started by the people who administer it; a secret ' +
+          'in your own vault reaches your sessions by the same name.',
+      };
+    }
     if (placement.kind === 'fanout') {
       // A SHORT deadline of its own, not the intent timeout. This was the full
       // 60 seconds per host under Promise.all — so one connected-but-mute host
@@ -3497,6 +3794,7 @@ export class CoordinatorCore {
       };
     }
 
+    if ((spec.verb === 'start' || spec.verb === 'resume') && placement.host) spec = this.#boxSecrets(spec, placement.host);
     const outdated = placement.host ? this.#cannotCarry(placement.host, spec) : null;
     if (outdated) return outdated;
 
@@ -3707,6 +4005,14 @@ export class CoordinatorCore {
    * The code alone is no use to this process: GitHub refuses it without the
    * verifier that never left the phone.
    *
+   * NOR A BOX'S. A box that finishes a person's Connect holds its own
+   * verifier and is handed the code (#exchangeOnHost), and the sign-in the
+   * minter records here is what lets a request open that person's vault and
+   * approve a key. So every code this coordinator handed a box in the last
+   * ten minutes goes beside the ciphertext, as a hash, and the minter refuses
+   * one it finds inside: a sign-in started for a box is never a device's,
+   * whoever's credential sends it (#rememberBoxSignIn, G11).
+   *
    * @param {{ email?: string|null }|null} requester @param {any} body
    * @returns {Promise<Record<string, unknown>>}
    */
@@ -3733,13 +4039,80 @@ export class CoordinatorCore {
     }
     recent.push(now);
     this.claudeAsks.set(key, recent);
-    const r = await this.minter.github({ sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct } }).then(
+    const r = await this.minter.github({ sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, boxCodes: this.#boxSignInsNow() }).then(
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
     return r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
+  }
+
+  /**
+   * The codes handed to boxes that may still be live, as hashes: SHA-256, hex,
+   * which is how the minter compares one (minter/github.js). Kept in storage
+   * (fleet-do.js, `boxSignIns`), because this object is evicted between
+   * messages as a matter of course, and a box that waited for that would
+   * otherwise find the list empty.
+   * @type {Map<string, number>}
+   */
+  #boxSignIns = new Map();
+
+  /** The live hashes, the expired ones dropped. */
+  #boxSignInsNow() {
+    const now = this.now();
+    for (const [hash, at] of this.#boxSignIns) if (now - at >= BOX_SIGN_IN_TTL_MS) this.#boxSignIns.delete(hash);
+    return [...this.#boxSignIns.keys()];
+  }
+
+  /**
+   * Remember a GitHub code as a box's BEFORE the box is handed it, so the
+   * minting Worker refuses to record it as a device's sign-in
+   * (githubDeviceToken). False when MAX_BOX_SIGN_INS are already remembered,
+   * and then the box is not handed the code.
+   *
+   * WHY THE CODE AND NOT WHO SENDS IT. A box's root or sidecar account seals
+   * the code with the verifier it minted, and sends it with whatever fleet
+   * credential it can find; the coordinator cannot read the seal and the
+   * minter cannot tell one verifier from another. What only this process
+   * knows is which codes it relayed to a box, so that is what it says.
+   *
+   * Written to storage before the code leaves: a Durable Object holds an
+   * outgoing message until the writes before it are done, so the box is never
+   * holding a code the list in storage does not have.
+   *
+   * @param {string} code
+   */
+  async #rememberBoxSignIn(code) {
+    const hash = await hashSecret(code);
+    if (this.#boxSignInsNow().length >= MAX_BOX_SIGN_INS) return false;
+    this.#boxSignIns.set(hash, this.now());
+    this.onStateChanged?.();
+    return true;
+  }
+
+  /**
+   * For storage: each remembered hash and when, the live ones only.
+   * @returns {Array<[string, number]>}
+   */
+  serialiseBoxSignIns() {
+    this.#boxSignInsNow();
+    return [...this.#boxSignIns];
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it, and only
+   * what is still inside its window.
+   * @param {unknown} saved
+   */
+  restoreBoxSignIns(saved) {
+    const now = this.now();
+    for (const row of Array.isArray(saved) ? saved.slice(0, MAX_BOX_SIGN_INS) : []) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || !BOX_SIGN_IN_RE.test(row[0])) continue;
+      const at = row[1];
+      if (typeof at !== 'number' || !Number.isFinite(at) || at > now || now - at >= BOX_SIGN_IN_TTL_MS) continue;
+      this.#boxSignIns.set(row[0], at);
+    }
   }
 
   /**
@@ -4012,7 +4385,13 @@ export class CoordinatorCore {
     const { flow, refused } = this.#redeemFor(this.pendingGithub, state, requester);
     if (!flow) return refused;
 
-    if (flow.pkce) return this.#exchangeOnHost({ provider: 'github', flow, code, clientId, origin });
+    if (flow.pkce) {
+      // A BOX'S FROM HERE ON, before it is handed over (#rememberBoxSignIn).
+      if (!(await this.#rememberBoxSignIn(code))) {
+        return { ok: false, text: 'Too many GitHub sign-ins have been finished on boxes in the last ten minutes. Wait a few minutes and start again from the app.' };
+      }
+      return this.#exchangeOnHost({ provider: 'github', flow, code, clientId, origin });
+    }
 
     const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };
@@ -4566,6 +4945,39 @@ export class CoordinatorCore {
   }
 
   /**
+   * Whether the box's own named secrets may answer this session, written onto
+   * a `start` or `resume` once the box is chosen: `yes` when the person the
+   * session belongs to administers it (hosts.js administers), `no` otherwise.
+   *
+   * DECIDED HERE because this is where the knowledge is. The hub knows whose
+   * session it serves and which secret it was granted, and sees an actor with
+   * no role; only the coordinator knows who administers a box. So the
+   * decision travels as a flag the hub keeps on the record and consults on
+   * every `fleet-secret` request (src/core/secret-store.js), which is also
+   * what lets a rotation on the box reach a running session and the flag
+   * stay put. A coordinator refusal of every member's `secret` start would
+   * have been simpler and would have taken their own vault secrets with it.
+   *
+   * THE SESSION'S OWNER, not whoever pressed resume: an admin resuming a
+   * member's session must not open the box's secrets to it. A start's owner
+   * is its starter. The owner of an unattributed session is nobody the fleet
+   * knows, which the hub treats as somebody on the box (and the flag is then
+   * not consulted).
+   *
+   * @param {any} spec @param {any} host  the registry entry placement chose
+   */
+  #boxSecrets(spec, host) {
+    const requester = spec.requester ?? null;
+    let owner = requester;
+    if (spec.verb === 'resume') {
+      const claim = this.registry.findSessions(String(spec.params?.name || '')).find((c) => c.host?.hostId === host?.hostId);
+      const email = emailOf(claim?.createdBy);
+      if (email && email !== emailOf(requester?.email)) owner = { email, admin: this.#isOperator(email) };
+    }
+    return { ...spec, params: { ...spec.params, boxSecrets: administers(host, owner) ? 'yes' : 'no' } };
+  }
+
+  /**
    * A box too old to carry somebody's own runner repository, refused here
    * rather than sent. `buildIntent` drops a param newer than the host speaks,
    * which is right for an optional capability and wrong for this one: the
@@ -4601,6 +5013,25 @@ export class CoordinatorCore {
           `${host?.hostId} is too old to show a pool\u2019s page from away \u2014 it speaks protocol ` +
           `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${POOL_PAGE_PROTOCOL}. Update it and ask again.`,
       };
+    }
+    // A SECRET FOR SOMEBODY WHO DOES NOT ADMINISTER THE BOX, on a box too old
+    // to be told so: it would answer the session from the secrets its
+    // operator keeps there before the person's own vault, which is the leak
+    // `boxSecrets` exists to close. Dropping the flag is not an option either
+    // way round, so the start is refused and says what would let it through.
+    // Without a `secret` nothing is granted and the start goes ahead.
+    if (spec.verb === 'start' && spec.params?.secret && spec.params?.boxSecrets === 'no') {
+      const speaks = Number(host?.health?.protocol);
+      if (!(Number.isInteger(speaks) && speaks >= BOX_SECRETS_PROTOCOL)) {
+        return {
+          ok: false,
+          error: { code: 'host_outdated' },
+          text:
+            `${host?.hostId} is too old to keep the secrets its operator placed on it apart from yours \u2014 it ` +
+            `speaks protocol ${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ` +
+            `${BOX_SECRETS_PROTOCOL}. Start without a secret, or ask whoever runs it to update it.`,
+        };
+      }
     }
     // A TASK, for the same reason: dropped, the session starts idle — the thing
     // `task` exists to end — and the reply says it started.
@@ -5097,7 +5528,7 @@ export class CoordinatorCore {
    * removed person had approved went on being given their sign-ins, renewed
    * by the minter each time, and written back by the box over whatever the
    * hand-back's `unlink` had cleared, which reaches a box's own links and not
-   * its copy from the vault (#handBackPerson; eighth audit, r8-leads-1). Sent
+   * its copy from the vault (#askBackOld; eighth audit, r8-leads-1). Sent
    * with every ask rather than once at the removal, so a removal made while
    * the minter was unreachable is not missed, and a person who signs in again
    * is served again. The minter gives nothing for a grant whose account is
@@ -5569,7 +6000,7 @@ export class CoordinatorCore {
       // is cannot-tell.
       hosts: this.registry.list().map((h) => ({
         ...visibleHost(h, requester, this.registry.hosts.get(h.hostId)),
-        takesSessions: takesSessions(h, requester),
+        takesSessions: takesSessions(h, requester, this.registry.hosts.get(h.hostId)),
         administers: administers(this.registry.hosts.get(h.hostId), requester),
         ...(runsNoSessions(h.hostId) ? { holder: true } : {}),
       })),
@@ -6762,12 +7193,22 @@ function boxSaid(hostId, text) {
  * Whether a host would take a new session from this person now: the filter
  * placement applies (registry.js `schedulable`, scheduler.js) before it ranks.
  *
+ * AND THE TWO RULES ABOUT WHO, which it left out: a box another member
+ * enrolled acts only for them (hosts.js mayActFor), and a box whose sessions
+ * are not sandboxed, or that has not said, runs only the sessions of those who
+ * administer it (hosts.js runsSessionsFor, G8). Without them a phone offered a
+ * member machines a start refused. Both read the registry entry, which carries
+ * `actsFor`; list() leaves it out.
+ *
  * @param {any} host
- * @param {{ email?: string|null }|null} requester
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @param {any} entry  the host's registry entry
  */
-function takesSessions(host, requester) {
+function takesSessions(host, requester, entry) {
   if (!host?.connected || host.state !== 'healthy' || !host.health || runsNoSessions(host.hostId)) return false;
-  return !(host.ephemeral && host.owner && host.owner !== requester?.email);
+  if (host.ephemeral && host.owner && host.owner !== requester?.email) return false;
+  const whose = requester ? requester.email ?? null : null;
+  return mayActFor(entry, whose) && runsSessionsFor(entry, requester);
 }
 
 /**
@@ -6937,11 +7378,20 @@ const POOLS_LOST_EACH = 8;
  */
 const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
 
-/** The sign-ins a box is asked to forget for somebody it holds them for no longer (#handBack, #handBackPerson). */
+/**
+ * How many removals are kept for boxes that have not yet confirmed them
+ * (#removed): two hundred addresses at their widest is under 70KB, inside one
+ * Durable Object value, and more people than that removed while one box was
+ * away is said rather than kept (#pruneRemovals).
+ */
+const MAX_REMOVALS_KEPT = 200;
+/** How long a box that did not confirm a forgetting waits before its reports ask it again (#askForget). */
+const FORGET_RETRY_MS = 5 * 60_000;
+/** The sign-ins a box is asked to forget for somebody it holds them for no longer (#handBack, #askBackOld). */
 const HANDED_BACK_SIGN_INS = Object.freeze(['github', 'cloudflare', 'claude']);
 /**
  * What a removal does to the sign-ins a box holds from the person's vault,
- * which no `unlink` reaches (#handBackPerson). Said as the minter does it
+ * which no `unlink` reaches (#forgetOnBoxes). Said as the minter does it
  * and the box is asked to: the deleting is the box's, on its next ask.
  */
 const VAULT_AFTER_REMOVAL =

@@ -2354,6 +2354,7 @@ const OPENAPI = JSON.stringify({
                       "exchange",
                       "files",
                       "forget",
+                      "forgetperson",
                       "health",
                       "labels",
                       "link",

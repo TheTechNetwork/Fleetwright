@@ -36,6 +36,41 @@
 // recorded, so a refresh token from anywhere else still renews and is still
 // not a device's. `deviceSignedIn` is the check (vault.js, claude.js).
 //
+// NOT A BOX'S CODE. "Only the person's device had" stopped being true for a
+// sign-in a box finishes: a box that holds the GitHub client secret mints its
+// own PKCE verifier for a person's Connect (sidecar.js, #offerChallenges) and
+// is handed the code to finish with (#exchange). The root or sidecar account
+// of one of the operator's boxes, where every member's connects can be
+// placed, sealed that code and its own verifier here instead, with any fleet
+// credential it held, and the sign-in was recorded as the person's device:
+// enough to approve a key of the box's own against their vault (eighth audit,
+// G11). Nothing in a code or a verifier says which flow made it, and the
+// coordinator, which made the box's authorize URL and relayed its code, is
+// the one place that knows. So it lists, beside every device's sign-in, the
+// SHA-256 of each code it handed a box in the last ten minutes
+// (core.js, #rememberBoxSignIn), and a code on that list is refused before
+// GitHub is asked. Operator boxes are not inside a member's vault boundary:
+// only a sign-in the person's own phone started can become their device.
+//
+// AND EVERY SIGN-IN RECORDED BEFORE THAT, ENDED. A record holds token hashes
+// and nothing about which flow made them, so one a box forged before the list
+// cannot be told from a phone's, and its refresh token would have carried it
+// forward for the six months GitHub gives one. So a record carries
+// SIGNIN_VERSION from the change that closed G11 on, and one without it is no
+// device's: not signed in, and nothing renewed out of it is either. THE COST,
+// said plainly: every member's phone is refused once after this deploys, with
+// the not_a_device sentence that already tells them to sign out of GitHub
+// under Runners from this phone and sign in again, and is a device again from
+// that sign-in. Vault items and approvals are not touched; only who counts as
+// a device is. An epoch rather than a wipe, so nothing is deleted that a
+// person could not get back by signing in.
+//
+// The list is the coordinator's word and can only take away, as the members
+// list beside a box's vault ask is (vault.js): naming a phone's code refuses
+// a sign-in, which dropping the request already could. ABSENT, it is a
+// coordinator from before the list, served as before, so the two Workers
+// deploy in either order.
+//
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import { SEAL_KEY_RE, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, seal, open } from '../seal.js';
@@ -54,6 +89,23 @@ export const SIGNIN_PREFIX = 'signin:';
 const MAX_SIGNINS = 16;
 
 /**
+ * How many codes handed to boxes the coordinator may list beside a device's
+ * sign-in. It keeps at most this many (core.js, MAX_BOX_SIGN_INS), which a
+ * fleet of friends finishing box sign-ins over ten minutes never reaches, and
+ * it keeps the request well inside this Worker's body limit.
+ */
+export const MAX_BOX_CODES = 64;
+
+/**
+ * What a device sign-in record written since G11 was closed carries. A record
+ * without it is from before, when a box could forge one, and counts for
+ * nothing (deviceSignedIn, recordSignIn). Raising it ends every record again,
+ * at the same price: each person's phone signs in once.
+ */
+export const SIGNIN_VERSION = 2;
+const CODE_HASH_RE = /^[0-9a-f]{64}$/;
+
+/**
  * @typedef {object} GithubConfig
  * @property {(() => Promise<{ privateKey: CryptoKey, publicKey: string }>)|null} depositKey
  * @property {string} clientId
@@ -67,7 +119,7 @@ const MAX_SIGNINS = 16;
 /** @param {string} code @param {string} text */
 const refuse = (code, text) => ({ ok: false, error: { code }, text });
 
-/** A token's SHA-256, hex: what is recorded, so the record holds nothing that signs in. @param {string} token */
+/** A token's SHA-256, hex: what is recorded, so the record holds nothing that signs in. A code is compared by the same. @param {string} token */
 async function tokenHash(token) {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)));
   return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -81,12 +133,13 @@ function live(kept, now) {
 
 /**
  * Is this token one a device signed in for through this minter, for this
- * account, and not yet expired?
+ * account, not yet expired, and recorded since SIGNIN_VERSION?
  *
  * @param {any} row  what is kept under SIGNIN_PREFIX + the account id
  * @param {string} token @param {number} now
  */
 export async function deviceSignedIn(row, token, now) {
+  if (row?.v !== SIGNIN_VERSION) return false;
   const at = live(row?.access, now)[await tokenHash(token)];
   return at !== undefined;
 }
@@ -108,7 +161,10 @@ async function recordSignIn(store, userId, { accessToken, expiresAt, refreshToke
   const refresh = refreshToken ? await tokenHash(refreshToken) : null;
   const spentHash = spent ? await tokenHash(spent) : null;
   const key = `${SIGNIN_PREFIX}${userId}`;
-  const row = (await store.get(key)) || {};
+  // A record from before SIGNIN_VERSION is read as empty: its refresh tokens
+  // carry nothing forward, and a fresh sign-in starts the record again.
+  const kept = (await store.get(key)) || {};
+  const row = kept.v === SIGNIN_VERSION ? kept : {};
   const refreshes = live(row.refresh, now);
   if (spentHash) {
     if (!Object.hasOwn(refreshes, spentHash)) return;
@@ -117,12 +173,13 @@ async function recordSignIn(store, userId, { accessToken, expiresAt, refreshToke
   const accesses = live(row.access, now);
   accesses[access] = expiresAt;
   if (refresh) refreshes[refresh] = refreshExpiresAt;
-  await store.put(key, { access: live(accesses, now), refresh: live(refreshes, now) });
+  await store.put(key, { v: SIGNIN_VERSION, access: live(accesses, now), refresh: live(refreshes, now) });
 }
 
 /**
- * @param {unknown} ask  `{ sealed }`, opened here to `{ v: 1, grant: 'code'|'refresh',
- *   code?, verifier?, redirectUri?, refreshToken?, reply, at }`
+ * @param {unknown} ask  `{ sealed, boxCodes? }`: the request, opened here to
+ *   `{ v: 1, grant: 'code'|'refresh', code?, verifier?, redirectUri?, refreshToken?, reply, at }`,
+ *   and the coordinator's SHA-256 of each code it handed a box lately
  * @param {GithubConfig} config
  */
 export async function answerGithubToken(ask, config) {
@@ -135,6 +192,17 @@ export async function answerGithubToken(ask, config) {
   }
   const sealed = /** @type {any} */ (ask)?.sealed;
   if (!sealed || typeof sealed !== 'object') return refuse('bad_params', 'That is not a sealed GitHub sign-in.');
+  // Present and not a list of hashes is refused, as a malformed members list
+  // is: guessing at it either way is the wrong one.
+  const listed = /** @type {any} */ (ask)?.boxCodes;
+  /** @type {Set<string>|null} */
+  let boxCodes = null;
+  if (listed !== undefined) {
+    if (!Array.isArray(listed) || listed.length > MAX_BOX_CODES || listed.some((h) => typeof h !== 'string' || !CODE_HASH_RE.test(h))) {
+      return refuse('bad_params', 'The fleet’s list of sign-ins finished on boxes is not in the shape one takes.');
+    }
+    boxCodes = new Set(listed);
+  }
   let key;
   try {
     key = await config.depositKey();
@@ -165,6 +233,11 @@ export async function answerGithubToken(ask, config) {
     const redirectUri = String(inside.redirectUri || '');
     if (!CODE_RE.test(code) || !VERIFIER_RE.test(verifier) || !/^https:\/\/[^\s]+\/oauth\/github\/callback$/.test(redirectUri)) {
       return refuse('bad_params', 'That sign-in is missing its code, its PKCE verifier or its callback.');
+    }
+    // BEFORE GITHUB IS ASKED, so the code is not spent: the box it was handed
+    // to can still finish the sign-in it was started for, there.
+    if (boxCodes?.has(await tokenHash(code))) {
+      return refuse('box_sign_in', 'That GitHub sign-in was started for a box, so it is finished on that box and not by a device. Sign in to GitHub from your phone instead.');
     }
     form = { client_id: config.clientId, client_secret: config.clientSecret, code, code_verifier: verifier, redirect_uri: redirectUri };
   } else if (inside.grant === 'refresh') {

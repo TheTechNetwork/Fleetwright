@@ -109,6 +109,9 @@ const NONCE_SECRET_BYTES = 32;
  *   and is asked for back what it held then on its next report (core.js #forgetPerson):
  *   when it left, so it is asked for the people in the fleet then and nobody
  *   since (core.js #handBack), or `true` from before that was kept
+ * @property {number} [forgetFrom]  one of the fleet's own boxes that has not yet
+ *   said it forgot somebody removed since this moment (core.js #forgetOnBoxes),
+ *   asked on its next report and cleared by its own yes
  * @property {'ticket'|'runner-token'} [admittedBy]  for a RUNNER, which claim said
  *   whose it is: a ticket the fleet minted for one dispatch, or a reusable runner
  *   token whoever presses Run workflow spends
@@ -199,6 +202,33 @@ export function mayActFor(host, email) {
 export function administers(host, requester) {
   if (!requester || requester.admin) return true;
   return Boolean(host?.actsFor) && mayActFor(host, requester.email);
+}
+
+/**
+ * May this box run this person's session: start one, or resume one? On a box
+ * whose sessions are sandboxed, anyone it acts for (mayActFor, asked
+ * separately). On a box that runs them directly, only someone who administers
+ * it, because there a session is a tmux pane under the service user, which
+ * owns the loopback token, the hub, the tmux server and every person's
+ * credentials on the box. A member who could start one there would hold all of
+ * that, as any actor, without escaping anything (docs/security.md G8).
+ *
+ * THE BOX'S OWN WORD, `health.sandboxed`, and only `true` counts. A box too old
+ * to send it has not said, which is cannot tell (C-5) and never "sandboxed":
+ * the `sandbox` field beside it does not answer the question, because a
+ * sidecar from before #681 sent a variant and an image whether or not the box
+ * used them. So an older box takes members' work again when it is updated and
+ * says so, and until then only from those who administer it.
+ *
+ * One rule in one place, for the reason administers is: placement refuses or
+ * leaves a box out by it (scheduler.js), and the snapshot (core.js) tells a
+ * phone where a start would land by it.
+ *
+ * @param {{ actsFor?: string|null, health?: { sandboxed?: unknown }|null }|null|undefined} host  a registry entry
+ * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+ */
+export function runsSessionsFor(host, requester) {
+  return administers(host, requester) || host?.health?.sandboxed === true;
 }
 
 /**
@@ -382,6 +412,7 @@ export class HostIdentities {
       // re-keyed or readmitted is the one that held other people's sign-ins
       // as the fleet's, and nothing else remembers to ask it for them back.
       ...(previous?.handBackPending ? { handBackPending: previous.handBackPending } : {}),
+      ...(typeof previous?.forgetFrom === 'number' ? { forgetFrom: previous.forgetFrom } : {}),
       // HOW A RUNNER WAS ADMITTED, AND WHO STARTED ITS JOB, which are two facts
       // and not one. A reusable runner token says whose runner it is and
       // nothing about who pressed Run workflow; the minting Worker mints for

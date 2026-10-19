@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { Fleet } from '../worker/src/fleet-do.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { HttpAdapter } from '../src/adapters/http.js';
@@ -164,7 +165,9 @@ async function minter(extra = {}) {
   const lookup = async () => /** @type {any} */ (await (await minterWorker.fetch(new Request(`https://fleet.test${KEY_PATH}`), env)).json());
   /** The object starting again on the storage it had, as after an eviction. */
   const restart = () => { instance = new ClaudeLogins({ storage }, env); };
-  return { phone, box, deposit: deposit_, signIn: () => signIn(deposit.publicKey), renew, rows, calls, binding, lookup, restart, restore: () => { globalThis.fetch = real; } };
+  /** The minting Worker as a coordinator's service binding reaches it (fleet-do.js, env.MINTER). */
+  const service = { fetch: (/** @type {string} */ u, /** @type {any} */ i) => minterWorker.fetch(new Request(u, i), env) };
+  return { phone, box, deposit: deposit_, signIn: () => signIn(deposit.publicKey), renew, rows, calls, binding, service, lookup, restart, restore: () => { globalThis.fetch = real; } };
 }
 
 test('a person keeps their credentials once, and only a box they approved by its key is given them', async (t) => {
@@ -286,6 +289,101 @@ test('the GitHub token the vault hands a box opens no vault and changes no Claud
   assert.equal((await m.phone({ op: 'list' }, { github: await m.renew(PHONE_REFRESH) })).ok, true);
   // A refresh token kept anywhere else still renews here, into no device's token.
   assert.equal((await m.phone({ op: 'list' }, { github: await m.renew(COORDINATOR_REFRESH) })).error?.code, 'not_a_device');
+});
+
+test('a box finishing somebody’s GitHub sign-in cannot make it their device, before an eviction or after (G11)', async (t) => {
+  // FOUND IN THE EIGHTH AUDIT. A box holding the client secret mints its own
+  // PKCE verifier for a person's Connect and is handed the code to finish
+  // with. One of the operator's boxes, where everybody's connects can be
+  // placed, sealed that code and its verifier to the minter as a phone's
+  // sign-in instead, with a fleet credential of its own, and the minter
+  // recorded it as the person's device: from there it approved a key of its
+  // own against their vault.
+  const m = await minter();
+  t.after(m.restore);
+  const OPS = 'ops@example.com';
+  const ORIGIN = 'https://fleet.test';
+  const rows = new Map();
+  const state = {
+    storage: {
+      get: async (/** @type {string} */ k) => rows.get(k),
+      put: async (/** @type {string} */ k, /** @type {any} */ v) => rows.set(k, JSON.parse(JSON.stringify(v))),
+    },
+    blockConcurrencyWhile: (/** @type {() => any} */ fn) => fn(),
+    getWebSockets: () => [],
+    setAlarm: () => {},
+  };
+  const env = { FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch', FLEETWRIGHT_GITHUB_CLIENT_ID: 'Iv23liTEST', FLEETWRIGHT_GITHUB_CLIENT_SECRET: 'gh-secret', MINTER: m.service };
+  const fleet = new Fleet(/** @type {any} */ (state), /** @type {any} */ (env));
+  await new Promise((r) => setTimeout(r, 10)); // its own restore, first
+
+  // Eli connects GitHub on the operator's box, which offered its challenge.
+  const offered = fleet.core.offerOauth({ ok: true, connections: { catalogue: [{ provider: 'github', codeChallenge: 'c'.repeat(43) }] } }, 'ops-box', ELI, ORIGIN);
+  const flowState = new URL(offered.connections.catalogue[0].url).searchParams.get('state');
+  /** @type {any[]} */
+  const handed = [];
+  fleet.core.dispatch = /** @type {any} */ (async (/** @type {any} */ intent) => { handed.push(intent); return { ok: true, text: 'Connected GitHub.' }; });
+  assert.equal((await fleet.core.finishGithubAuthorization({ code: 'goodcode123', state: flowState, origin: ORIGIN, requester: { email: ELI } })).ok, true);
+  assert.equal(handed[0]?.verb, 'exchange');
+
+  // The box, with the code it was handed and the verifier it minted, as
+  // somebody else's fleet account.
+  const key = String((await m.lookup()).key);
+  /** @param {any} core @param {string} code @param {string} verifier @param {string} as */
+  const deviceSignIn = async (core, code, verifier, as) => {
+    const reply = await newSealKey();
+    const sealed = await seal({ to: key, aad: GITHUB_REQUEST_AAD, payload: { v: 1, grant: 'code', code, verifier, redirectUri: `${ORIGIN}/oauth/github/callback`, at: Date.now(), reply: reply.publicKey } });
+    return /** @type {any} */ (await core.githubDeviceToken({ email: as }, { sealed }));
+  };
+  const now = await deviceSignIn(fleet.core, handed[0].params.code, 'v'.repeat(64), OPS);
+  assert.equal(now.error?.code, 'box_sign_in', now.text);
+
+  // AND AFTER AN EVICTION, which the box can simply wait for: constructed
+  // over the same storage, as the object is.
+  await new Promise((r) => setImmediate(r));
+  const after = new Fleet(/** @type {any} */ (state), /** @type {any} */ (env));
+  await new Promise((r) => setTimeout(r, 10));
+  const later = await deviceSignIn(after.core, handed[0].params.code, 'v'.repeat(64), OPS);
+  assert.equal(later.error?.code, 'box_sign_in', later.text);
+
+  // A phone's own sign-in still finishes, through the same coordinator.
+  const own = await deviceSignIn(after.core, 'phonecode12', 'p'.repeat(64), ELI);
+  assert.equal(own.ok, true, own.text);
+});
+
+test('a sign-in recorded before G11 was closed is no device’s, nor is its renewal, until the phone signs in again (G11)', async (t) => {
+  // A record holds token hashes and nothing about which flow made them, so one
+  // a box forged before the fix cannot be told from a phone's. Every record
+  // from before is ended instead; the vault itself is not touched.
+  const m = await minter();
+  t.after(m.restore);
+  await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' });
+  const kept = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'grant', hostKey: kept.publicJwk, label: 'eli-box' })).ok, true);
+  const phoneToken = await m.signIn();
+
+  // The record as it was written before the epoch: the same, unmarked.
+  const { v: _epoch, ...before } = m.rows.get('signin:42');
+  m.rows.set('signin:42', before);
+  assert.equal((await m.phone({ op: 'list' }, { github: phoneToken })).error?.code, 'not_a_device');
+  assert.equal((await m.deposit(phoneToken, `sk-ant-oat01-${'m'.repeat(40)}`)).error?.code, 'not_a_device');
+  // Renewing its refresh token still renews, into no device's token.
+  assert.equal((await m.phone({ op: 'list' }, { github: await m.renew(PHONE_REFRESH) })).error?.code, 'not_a_device');
+
+  // The phone signs in once more, and is a device again.
+  const reply = await newSealKey();
+  const key = String((await m.lookup()).key);
+  const sealed = await seal({ to: key, aad: GITHUB_REQUEST_AAD, payload: { v: 1, grant: 'code', code: 'phonecode12', verifier: 'p'.repeat(64), redirectUri: 'https://fleet.test/oauth/github/callback', at: Date.now(), reply: reply.publicKey } });
+  const fresh = /** @type {any} */ (await (await m.service.fetch('https://minter.internal/github/token', { method: 'POST', body: JSON.stringify({ sealed }) })).json());
+  assert.equal(fresh.ok, true, fresh.text);
+  const again = String((await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: GITHUB_REPLY_AAD, sealed: fresh.sealed })).accessToken);
+  const listed = await m.phone({ op: 'list' }, { github: again });
+  assert.equal(listed.ok, true, listed.text);
+
+  // And nothing in the vault moved: the item, the approval, and what the box is given.
+  assert.deepEqual(listed.answer.items.map((/** @type {any} */ i) => i.name), ['secret:NPM_TOKEN']);
+  assert.deepEqual(listed.answer.grants.map((/** @type {any} */ g) => g.label), ['eli-box']);
+  assert.deepEqual((await m.box(kept)).answer.accounts[0].items.map((/** @type {any} */ i) => i.value), ['npm_abc']);
 });
 
 test('two boxes asking at once renew one refresh token once', async (t) => {
