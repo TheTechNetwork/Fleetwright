@@ -1,0 +1,177 @@
+name: Renovate pin
+
+# The half of a pin Renovate cannot write, written on Renovate's own pull
+# request instead of by a person.
+#
+# Renovate moves a NAME: a cloud image's build, the guest agent's release, the
+# installer's commit (renovate.json, customManagers). The address, the digest
+# and the sizes follow from the name and no datasource gives them, so three
+# scripts in scripts/ fetch them from the vendor's own checksum file or release
+# and write them beside it. Until one has run the name and the rest disagree
+# and a test is red, which is the point: a moved name with an old digest would
+# download the old image, or refuse the new one, and nobody would be told why.
+#
+# The pull request used to tell a person to run the script and commit what it
+# wrote, and the person was the slowest part of every one of those updates:
+# #1098 sat red for four days, was rebased three times as main moved, and lost
+# a hand-made pin to a rebase. This runs the scripts where Renovate's commit
+# lands and pushes what they write, so the pull request is green by the time
+# anybody reads it.
+#
+# NOT RENOVATE'S OWN postUpgradeTasks, because the hosted Mend app does not
+# run them; that is a self-hosted option. A workflow on the pull request is
+# the place a hosted bot's branch can be given a second commit.
+#
+# PUSHED WITH A TOKEN OF ITS OWN, RENOVATE_PIN_TOKEN, and not github.token.
+# A push made with the workflow token starts no workflow, by GitHub's rule
+# against runs that feed themselves, so CI would never run on the commit that
+# makes the pull request right and the checks would stay the red ones from
+# Renovate's commit. The token is a fine-grained personal access token for
+# this repository alone, Contents read and write, nothing else (docs/ci.md
+# says where it is made). Without it this job fails and says so rather than
+# push a commit nothing will check.
+#
+# RENOVATE KEEPS REBASING OVER IT. Renovate stops touching a branch somebody
+# else has committed to, unless that somebody is in gitIgnoredAuthors; the
+# address this commits as is there (renovate.json), so a rebase when main
+# moves still happens, drops this commit with it, and the `synchronize` that
+# follows runs this again. The pin is rewritten, never merged.
+#
+# ONCE A DAY TOO, over every open Renovate pull request, because a script can
+# refuse: each keeps the three-day soak from the vendor's own date and says
+# when it can run, and until then nothing moves the branch to run this again.
+# A pull request that waits for its soak is pinned the morning it has passed.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    # 06:00 UTC, after the vendors' overnight builds and before anybody reads.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # Which branches: the one this pull request is, or every open Renovate one.
+  branches:
+    # Renovate's own branches, from this repository and no fork: a fork's
+    # branch cannot be pushed to, and nothing here should try.
+    if: >
+      github.event_name != 'pull_request' ||
+      (startsWith(github.event.pull_request.head.ref, 'renovate/') &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-26.04
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          HEAD: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ "$EVENT" = pull_request ]; then
+            list=$(jq -cn --arg b "$HEAD" '[$b]')
+          else
+            list=$(gh pr list --repo "$REPO" --author 'app/renovate' --state open --limit 100 \
+              --json headRefName --jq '[.[].headRefName | select(startswith("renovate/"))]')
+          fi
+          echo "branches: $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  pin:
+    needs: branches
+    if: needs.branches.outputs.list != '[]'
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(needs.branches.outputs.list) }}
+    name: pin ${{ matrix.branch }}
+    steps:
+      - name: The token this pushes with is set
+        env:
+          TOKEN: ${{ secrets.RENOVATE_PIN_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::RENOVATE_PIN_TOKEN is not set, so nothing here can push a commit CI will run on. docs/ci.md, 'Renovate pins itself', says how to make it."
+            exit 1
+          fi
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ matrix.branch }}
+          token: ${{ secrets.RENOVATE_PIN_TOKEN }}
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.0'
+          cache: npm
+      # The scripts import the modules they pin, and those import their
+      # neighbours in src/; the same install CI's test job does.
+      - run: npm install --no-audit --no-fund
+
+      # ALL THREE, EVERY TIME. One pull request moves one name, and the two
+      # scripts whose name has not moved say "already pinned" and touch
+      # nothing, so there is nothing to decide here about which to run. Each
+      # runs to its own end: a refusal (a build inside its soak, a guest agent
+      # that will not run on an image here) fails this job with the script's
+      # own sentence, and what another script did pin is still committed.
+      - name: Pin what Renovate moved
+        id: pin
+        env:
+          # pin-xo-installer asks GitHub for the commit's date; past the
+          # anonymous rate limit with this.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          failed=0
+          for script in pin-images pin-guest-agent pin-xo-installer; do
+            echo "::group::node scripts/$script.mjs"
+            node "scripts/$script.mjs" || failed=1
+            echo "::endgroup::"
+          done
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+
+      # The commit, as github-actions[bot], which is the author renovate.json's
+      # gitIgnoredAuthors names; a message commitlint takes (the gate's rules,
+      # commitlint.config.mjs), with no script output in the body because a
+      # vendor's address is longer than a line may be. The diff is the record.
+      #
+      # A push that is refused is a branch Renovate moved while this ran; the
+      # push that moved it has already started this again on the new commit.
+      - name: Commit and push what was written
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -eu
+          if git diff --quiet; then
+            echo "nothing to write: every pin already agrees with its name"
+            exit 0
+          fi
+          git diff --stat
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A src
+          git commit -q -F - <<'MSG'
+          Pin the rest of what Renovate moved
+
+          Renovate moved a name; this is the address, digest and sizes that
+          follow from it, written from the vendor's own checksum file or
+          release by the pin scripts in scripts/, run on this pull request by
+          .github/workflows/renovate-pin.yml.
+          MSG
+          git push origin "HEAD:refs/heads/$BRANCH"
+
+      - name: A script refused
+        if: steps.pin.outputs.failed == '1'
+        run: |
+          echo "::error::a pin script refused; its own sentence above says why and, for a soak, when. The daily run tries again."
+          exit 1

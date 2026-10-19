@@ -213,7 +213,13 @@ Every download is pinned, and every pin is Renovate's to move, under the same
 rules as the packages above: exact versions, three days of soak, and a
 security fix that does not wait. Where a version alone is not the whole pin
 (an image or a file checked against a digest), Renovate moves the version and
-a script writes the rest; until it has run, a test names it and CI is red.
+a script writes the rest. The **Renovate pin** workflow
+(`.github/workflows/renovate-pin.yml`) runs those scripts on Renovate's own
+branch and pushes what they write, so the pull request is whole by the time
+anybody reads it; until that commit is there, a test names the script and CI
+is red. It pushes with a token of its own, `RENOVATE_PIN_TOKEN`, because a
+commit pushed with the workflow's token starts no CI (docs/ci.md, *Renovate
+pins itself*).
 
 | What | Where | Renovate reads it with | The rest of the pin |
 |---|---|---|---|

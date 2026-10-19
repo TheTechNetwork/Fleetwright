@@ -1152,12 +1152,14 @@ admin sign-in for as long as it runs:
   upstream release by moving the version in `GUEST_AGENT`, and nothing more:
   the file's address is a CI job number rather than the version, and
   upstream publishes no digest, so no datasource can say what the new file
-  is. `node scripts/pin-guest-agent.mjs` on that pull request's branch writes
+  is. `node scripts/pin-guest-agent.mjs`, run on that pull request's branch
+  by the Renovate pin workflow (`.github/workflows/renovate-pin.yml`), writes
   the other half from the release's own asset link, after checking the build
   is an x86-64 executable needing no newer glibc than the oldest image's
   (Ubuntu 24.04, 2.39) and that upstream's systemd unit has not changed.
-  Until it has run, the pull request is red and says why, and a box given the
-  mismatch builds without the agent rather than trust the old digest.
+  Until its commit is there, the pull request is red and says why, and a box
+  given the mismatch builds without the agent rather than trust the old
+  digest.
 
   **It says where it has got to.** The box running the job asks the
   coordinator for a report token for it, and the script posts each step to

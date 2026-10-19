@@ -42,7 +42,14 @@
     "",
     "A SECURITY FIX STILL DOES NOT WAIT. vulnerabilityAlerts overrides it to",
     "nothing, because the reasoning inverts: there the known-bad version is the",
-    "one already installed, and three days is three days of running it."
+    "one already installed, and three days is three days of running it.",
+    "",
+    "And one address. gitIgnoredAuthors is github-actions[bot], which is what",
+    ".github/workflows/renovate-pin.yml commits as when it writes the half of a",
+    "pin Renovate cannot (the customManagers below say which). Renovate leaves",
+    "a branch alone once somebody else has committed to it, unless that somebody",
+    "is named here; named, it still rebases when main moves, the rebase drops",
+    "the bot's commit, and the workflow writes it again."
   ],
   "extends": [
     "config:recommended"
@@ -51,6 +58,9 @@
   "prConcurrentLimit": 10,
   "prHourlyLimit": 4,
   "rebaseWhen": "behind-base-branch",
+  "gitIgnoredAuthors": [
+    "41898282+github-actions[bot]@users.noreply.github.com"
+  ],
   "minimumReleaseAge": "3 days",
   "internalChecksFilter": "strict",
   "packageRules": [
@@ -130,12 +140,12 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "The guest agent's pull request needs its file pinned by hand (the custom manager above says why), so it says how.",
+      "description": "The guest agent's pull request needs its file pinned (the custom manager above says why), so it says what does that.",
       "matchPackageNames": [
         "xen-project/xen-guest-agent"
       ],
       "prBodyNotes": [
-        "**Before merging:** run `node scripts/pin-guest-agent.mjs` on this branch and commit what it writes. Renovate moved the version; that script pins the file (address, size, SHA-256) and refuses a build that will not run on the images here. CI stays red until it has."
+        "**The file is pinned on this branch by the Renovate pin workflow**, which runs `node scripts/pin-guest-agent.mjs` and commits what it writes: the file's address, size and SHA-256 for the release Renovate moved to. CI is red until that commit is here. The script refuses a build that will not run on the images here, and then the workflow is red with its reason, which is a person's to read."
       ]
     },
     {
@@ -163,13 +173,13 @@
       "versioning": "loose"
     },
     {
-      "description": "The cloud images' pull request needs the rest of the pin written, so it says how.",
+      "description": "The cloud images' pull request needs the rest of the pin written, so it says what does that.",
       "matchDatasources": [
         "custom.debian-cloud",
         "custom.ubuntu-cloud"
       ],
       "prBodyNotes": [
-        "**Before merging:** run `node scripts/pin-images.mjs` on this branch and commit what it writes. Renovate moved the build; that script pins its address, digest and sizes from the vendor's own checksum file. It also refuses a build whose checksum file is younger than three days, saying when it can be pinned, which should not happen here (this pull request waited for that already) and is a thing to look into if it does. CI stays red until it has run."
+        "**The rest of the pin is written on this branch by the Renovate pin workflow**, which runs `node scripts/pin-images.mjs` and commits what it writes: the build's address, digest and sizes from the vendor's own checksum file. CI is red until that commit is here. The script refuses a build whose checksum file is younger than three days, saying when it can be pinned, and the workflow tries again each morning; that should not happen here (this pull request waited for that already) and is a thing to look into if it does."
       ]
     },
     {
@@ -192,7 +202,7 @@
       ],
       "minimumReleaseAgeBehaviour": "timestamp-optional",
       "prBodyNotes": [
-        "**Before merging:** run `node scripts/pin-xo-installer.mjs` on this branch and commit what it writes. Renovate moved the commit; that script pins `base` and the SHA-256 of every file the deploy reads at it, and refuses a commit younger than three days. CI stays red until it has. Read what changed upstream too: this script is run as root in a VM made with the pool's admin sign-in.",
+        "**The files are pinned on this branch by the Renovate pin workflow**, which runs `node scripts/pin-xo-installer.mjs` and commits what it writes: `base` and the SHA-256 of every file the deploy reads at the commit Renovate moved to. CI is red until that commit is here. The script refuses a commit younger than three days, and the workflow tries again each morning. Read what changed upstream before merging: this script is run as root in a VM made with the pool's admin sign-in, and no workflow reads it for you.",
         "**What changed upstream:** [{{{currentDigestShort}}}…{{{newDigestShort}}}](https://github.com/00o-sh/XenOrchestraInstallerUpdater/compare/{{{currentDigest}}}...{{{newDigest}}}). The fork has no tags, releases or changelog, so these commits are the whole record."
       ]
     },
