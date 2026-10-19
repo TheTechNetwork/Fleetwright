@@ -193,3 +193,26 @@ test("a refusal prints Apple's associated errors, which are the reason", () => {
   assert.match(fn, /meta\?\.associatedErrors/);
   assert.match(fn, /\.flat\(\)/, 'the errors are keyed by resource and must be flattened, not printed as objects');
 });
+
+test('App Review is told there is no login, on every submission', () => {
+  // 0.4.15 never reached a person: Apple's automated pass saw Sign in with
+  // Apple, no demo account and no notes, and stopped it as "submitted without
+  // a demo account". There is no account to give, so the notes say so first,
+  // then how to look around, and `demoAccountRequired` is written on the
+  // PATCH too, not only the POST that made the record once.
+  const fn = SRC.slice(SRC.indexOf('async function writeVersionFacts('), SRC.indexOf('async function main()'));
+  assert.match(fn, /const attributes = \{ \.\.\.contact, demoAccountRequired: false, notes: REVIEW_NOTES \}/);
+  assert.equal((fn.match(/attributes[,} ]/g) ?? []).length >= 2, true, 'the same attributes go on the PATCH and the POST');
+  // The source, not the export: the tool reads its secrets at import and
+  // refuses without them, which is right for the tool and no reason to set
+  // four fake ones here.
+  const notes = /REVIEW_NOTES = \[([\s\S]*?)\]\.join/.exec(SRC)?.[1] ?? '';
+  assert.match(notes, /^\s*'This app has no username-and-password login/);
+  // The button's words, as the app writes them (YouView.swift), so a renamed
+  // button fails here rather than sending a reviewer looking for the old one.
+  const you = readFileSync(new URL('../apps/ios/Fleetwright/YouView.swift', import.meta.url), 'utf8');
+  const button = /Button\("([^"]+)"\) \{\n\s*if !settings\.coordinatorURL\.isEmpty && !Demo\.isActive/.exec(you)?.[1];
+  assert.ok(button, 'the demo button is not where this test expects it');
+  assert.ok(notes.includes(`"${button}"`), `the notes do not name the button "${button}"`);
+  assert.ok(notes.length < 4000);
+});
