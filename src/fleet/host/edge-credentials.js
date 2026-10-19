@@ -39,7 +39,7 @@
 // useless to whoever reads it (markCarp, the certificate's pin), so the job
 // can tell whether what it kept is what the router has.
 
-import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, scryptSync, sign } from 'node:crypto';
 
 export const EDGE_WATCH = Object.freeze({
   user: 'fleetwright-watch',
@@ -243,12 +243,18 @@ export const EDGE_KEPT = Object.freeze({
 
 /**
  * A mark of the pair's CARP password, for a router to carry where anybody
- * signed in can read it: a SHA-256, with a label of its own, of 128 random
+ * signed in can read it: scrypt, salted with a label of its own, of 128 random
  * bits. It says which password a router has and nothing about what it is.
+ *
+ * SCRYPT, NOT A PLAIN HASH. 128 random bits need no stretching to stay unread,
+ * and a SHA-256 of them would do; but this is read by everybody signed in to
+ * the Xen Orchestra, and the stretching is what keeps it so if the password is
+ * ever one a person chose. One call a policy run, deterministic by the salt so
+ * the next job can compare.
  *
  * @param {string} password
  */
-export const markCarp = (password) => createHash('sha256').update(`fleetwright-carp-mark/v1\0${password}`).digest('hex');
+export const markCarp = (password) => scryptSync(password, 'fleetwright-carp-mark/v2', 32).toString('hex');
 
 /**
  * A value set on a router with `vm.set`'s xenStoreData, read back, or null.

@@ -278,7 +278,7 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
           // `vm-data/`, and a null one deleted, on the VM xo.getAllObjects
           // then shows to everybody signed in.
           case 'vm.set': {
-            const vm = vms[p.id];
+            const vm = Object.hasOwn(vms, p.id) ? vms[p.id] : undefined;
             if (vm && p.xenStoreData) {
               const data = { ...vm.xenStoreData };
               for (const [k, v] of Object.entries(p.xenStoreData)) {
