@@ -57,14 +57,34 @@ test('extras are validated as hostnames, lowercased, deduplicated and sorted', (
 
 test('the proxy config is CONNECT-only to 443, default-deny, exact-match', () => {
   const conf = proxyConfig(['api.anthropic.com']);
-  for (const line of ['ConnectPort 443', 'FilterDefaultDeny Yes', 'FilterType ere', 'FilterURLs No', 'Filter /etc/tinyproxy/allow.list', 'Port 3128']) {
+  for (const line of ['ConnectPort 443', 'FilterDefaultDeny Yes', 'FilterType ere', 'FilterURLs No', 'Filter "/etc/tinyproxy/allow.list"', 'Port 3128']) {
     assert.ok(conf.split('\n').includes(line), line);
   }
   assert.doesNotMatch(conf, /^ConnectPort 80$/m, 'no plain HTTP through a proxy that could then read it');
-  // tinyproxy's own grammar for the directive (conf.c, 1.11): any other word is
-  // a syntax error and the proxy does not start. `fixed` was one (seventh audit).
-  const type = conf.split('\n').find((l) => l.startsWith('FilterType'));
-  assert.match(type ?? '', /^FilterType (bre|ere|fnmatch)$/);
+  // tinyproxy's own grammar for each directive written here (conf.c, 1.11: the
+  // STDCONF table and its macros). A line that matches none is "Syntax error on
+  // line N", the proxy does not start, and a box on the allowlist has no way
+  // out. `FilterType fixed` was one (seventh audit). An unquoted Filter path was
+  // another: conf.c reads it as STR, a double-quoted string, and it was found
+  // only when the proxy ran on real podman and restarted forever.
+  const STR = '"([^"]+)"';
+  const BOOL = '(yes|on|no|off)';
+  const INT = '([0-9]+)';
+  const IP = '(([0-9]{1,3})\\.){3}[0-9]{1,3}';
+  /** @type {Record<string, string>} */
+  const grammar = {
+    port: INT, listen: IP, timeout: INT, maxclients: INT, connectport: INT,
+    disableviaheader: BOOL, filtercasesensitive: BOOL, filterurls: BOOL, filterdefaultdeny: BOOL,
+    loglevel: '(critical|error|warning|notice|connect|info)',
+    allow: `${IP}(/[0-9]+)?`,
+    filtertype: '(bre|ere|fnmatch)',
+    filter: STR,
+  };
+  for (const line of conf.split('\n').filter((l) => l.trim() && !l.startsWith('#'))) {
+    const word = line.trim().split(/[ \t]/)[0].toLowerCase();
+    const shape = grammar[word];
+    assert.ok(shape && new RegExp(`^[ \t]*${word}[ \t]+${shape}[ \t]*$`, 'i').test(line), `tinyproxy 1.11 refuses this line: ${line}`);
+  }
 });
 
 test('each allowed host matches itself and nothing that merely contains it', () => {
