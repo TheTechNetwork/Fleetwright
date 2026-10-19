@@ -79,6 +79,11 @@ internal object XoSetupNotice {
         val detail = if (state == "running") {
             XoSetup.buildDetail(data["build"], data["stage"]?.toIntOrNull(), data["stages"]?.toIntOrNull())
         } else null
+        // And what the bytes are doing, in megabytes, from the key: the
+        // machine's sentence names the storage and is never sent here.
+        val bytes = if (state == "running") {
+            XoSetup.bytesLine(data["doing"], data["build"], data["done"]?.toIntOrNull(), data["total"]?.toIntOrNull())
+        } else null
         val hostId = data["hostId"].orEmpty()
         val id = ("xosetup-$job").hashCode()
 
@@ -150,6 +155,7 @@ internal object XoSetupNotice {
                     else -> XoSetup.stepWords(data["phase"], step, of)
                 },
                 detail,
+                bytes,
                 hostId.takeIf { it.isNotBlank() }?.let { "on $it" },
             ).joinToString(" · ")
         }

@@ -382,6 +382,17 @@ test('Android: kind=xosetup becomes one ongoing notification per job, then one t
   assert.match(notice, /val policy = data\["purpose"\] == "policy"/);
   // The edge router's build moves the bar by how far it has got, not by step.
   assert.ok(notice.includes('if (fill != null) setProgress(1000, fill, false) else setProgress(of, step, false)'));
+  // What the bytes are doing, worded from the key the coordinator sends and
+  // never from the machine's sentence, which names the storage. The same
+  // words as the iOS Lock Screen's (XOSetupWords.bytes).
+  assert.ok(notice.includes('XoSetup.bytesLine(data["doing"], data["build"], data["done"]?.toIntOrNull(), data["total"]?.toIntOrNull())'));
+  assert.ok(!notice.includes('data["text"]'), 'the machine’s sentence reached the notification');
+  const xosetup = file('XoSetup.kt');
+  const ios = readFileSync(new URL('../apps/ios/Fleetwright/XOSetupActivity.swift', import.meta.url), 'utf8');
+  for (const words of ['Reading the blocks the configuration goes in', 'Downloading OPNsense', 'Downloading the image', 'Writing OPNsense to the pool, to keep', 'Writing the image to the pool, to keep', 'Writing the edge router’s disk', 'Writing the disk']) {
+    assert.ok(xosetup.includes(`"${words}"`), `Android has no words: ${words}`);
+    assert.ok(ios.includes(`"${words}"`), `iOS has no words: ${words}`);
+  }
   // Permission first, as every other notification here.
   assert.match(notice, /checkSelfPermission\(context, Manifest\.permission\.POST_NOTIFICATIONS\)/);
   // And an older update cannot move the bar backwards.

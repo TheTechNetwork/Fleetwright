@@ -249,5 +249,5 @@ test('Android: the form is the design’s tokens, 48dp, with nothing offered tha
   assert.ok(file('HypervisorSheet.kt').includes('part?.let { XoSetup.buildDetail(it.build, it.stage, it.stages) }'));
   assert.ok(!file('HypervisorSheet.kt').includes('building the edge router'), 'the sheet names one build for every build again');
   assert.ok(file('XoSetupNotice.kt').includes('XoSetup.buildDetail(data["build"], data["stage"]?.toIntOrNull(), data["stages"]?.toIntOrNull())'));
-  assert.ok(file('Fleet.kt').includes('BuildPart(stage, stages, fill, build)'));
+  assert.ok(file('Fleet.kt').includes('BuildPart(stage, stages, fill, build, doing.takeIf { moving }, done.takeIf { moving }, total.takeIf { moving })'));
 });
