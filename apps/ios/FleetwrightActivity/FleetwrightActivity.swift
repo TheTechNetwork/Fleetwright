@@ -122,11 +122,22 @@ struct XOSetupLines: View {
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.ink)
                 .contentTransition(.opacity)
-            // What the minutes are going on, while a build in parts runs:
-            // without it the step's name sits still for ten minutes and only
-            // the percentage moves, and a percentage of what is not said.
-            if !stale, let detail = XOSetupWords.detail(state) {
-                Text(detail)
+            // The step, and what the minutes are going on while a build in
+            // parts runs: the line the app's screen shows under its headline
+            // (XOSetupWords.stepLine), so the two say the same thing. Without
+            // it the step's name sat still for ten minutes and only the
+            // percentage moved, and a percentage of what was not said.
+            if !stale, XOSetupWords.isLive(state.state), state.of > 0 {
+                Text(XOSetupWords.stepLine(state, percent: false))
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .contentTransition(.opacity)
+            }
+            // And what the bytes are doing, in megabytes, while they move:
+            // the screen's sentence from the machine, less the release and
+            // the storage it names, which are never pushed (XOSetupWords.bytes).
+            if !stale, let bytes = XOSetupWords.bytes(state) {
+                Text(bytes)
                     .fleetType(.micro)
                     .foregroundStyle(Design.Palette.inkDim)
                     .contentTransition(.opacity)

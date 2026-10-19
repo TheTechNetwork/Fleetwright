@@ -515,6 +515,37 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(XOSetupWords.detail(building), "part 2 of 4", "the part is still known; the name is not made up")
         building.state = "done"
         XCTAssertNil(XOSetupWords.detail(building), "a finished job is not building anything")
+        // THE SCREEN'S LINE AND THE LOCK SCREEN'S ARE ONE: the step, the part,
+        // and on the screen the percentage, which the Lock Screen has in its
+        // corner. Asked for, with the two side by side.
+        building.state = "running"
+        building.build = "edge"
+        building.stage = 2
+        building.stages = 3
+        building.fill = 150
+        XCTAssertEqual(XOSetupWords.stepLine(building, percent: true), "Step 5 of 5 · building the edge router, part 2 of 3 · 15%")
+        XCTAssertEqual(XOSetupWords.stepLine(building, percent: false), "Step 5 of 5 · building the edge router, part 2 of 3")
+        XCTAssertEqual(XOSetupWords.stepLine(applying, percent: true), "Step 5 of 5", "nothing building, nothing said about one")
+        // What the bytes are doing, worded from the key: the machine's own
+        // sentence names the release and the storage and is never pushed.
+        XCTAssertNil(XOSetupWords.bytes(building), "no megabytes while none move")
+        building.doing = "read"
+        building.done = 192
+        building.total = 2238
+        XCTAssertEqual(XOSetupWords.bytes(building), "Reading the blocks the configuration goes in: 192 of 2238 MB")
+        building.doing = "download"
+        XCTAssertEqual(XOSetupWords.bytes(building), "Downloading OPNsense: 192 of 2238 MB")
+        building.build = "image"
+        XCTAssertEqual(XOSetupWords.bytes(building), "Downloading the image: 192 of 2238 MB", "the image is whichever was chosen, which is not pushed")
+        building.doing = "keep"
+        XCTAssertEqual(XOSetupWords.bytes(building), "Writing the image to the pool, to keep: 192 of 2238 MB")
+        building.doing = "something-newer"
+        XCTAssertEqual(XOSetupWords.bytes(building), "192 of 2238 MB", "the numbers are still known; the words are not made up")
+        building.state = "done"
+        XCTAssertNil(XOSetupWords.bytes(building))
+        building.state = "running"
+        building.total = 0
+        XCTAssertNil(XOSetupWords.bytes(building), "192 of 0 MB is not a count")
         // A push from a coordinator before these keys still decodes.
         let older = try JSONDecoder().decode(XOSetupAttributes.ContentState.self,
                                              from: Data(#"{"step":4,"of":5,"phase":"apply","state":"running","fill":420}"#.utf8))
