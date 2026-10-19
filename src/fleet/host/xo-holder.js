@@ -132,12 +132,13 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret
  *   askPin: () => Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>,
  *   secret?: string|null,
  *   again?: boolean,
+ *   removed?: (hostId: string) => void,
  *   grants?: { upgrades?: boolean, reboot?: boolean }|null,
  *   say?: (text: string) => void,
  * }} spec
  * @returns {Promise<string>} what was done, in a sentence for the phone
  */
-export async function ensureHolder({ admin, pool, egress, address, coordinatorUrl, askPin, secret = null, again = false, grants = null, say = () => {} }) {
+export async function ensureHolder({ admin, pool, egress, address, coordinatorUrl, askPin, secret = null, again = false, grants = null, say = () => {}, removed = () => {} }) {
   const sets = await setsOf(admin);
   const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
   const theirs = vms.filter((v) => v?.$pool === pool && isHolder(v, address, sets));
@@ -151,10 +152,19 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
   }
   // MADE AGAIN: the one that never joined goes, disk and all, before its
   // replacement is cloned, so the pool never has two answering for it.
+  //
+  // AND THE FLEET IS TOLD ITS NAME. A holder that had joined was an enrolled
+  // host under the name the coordinator gave it, which is the VM's name, and
+  // deleting the VM left that host on the phone for good: "unknown", then
+  // "not reporting", under the new one, with nothing to say why. The name is
+  // reported to the job (`removed`), which tells the coordinator, which
+  // retires the host (core.js, #onHolderRemoved). Only a name of the
+  // coordinator's own shape is reported: anything else on a VM is a label.
   for (const v of again ? theirs : []) {
     say(`Removing ${String(v.name_label).slice(0, 40)} to make the pool’s own machine again.`);
     if (v.power_state !== 'Halted') await admin.call('vm.stop', { id: v.id, force: true });
     await admin.call('vm.delete', { id: v.id, deleteDisks: true });
+    if (HOLDER.id.test(String(v.name_label))) removed(String(v.name_label));
   }
   // FROM THE POOL'S MACHINE IMAGE: Debian where there is one, else any of
   // the fleet's, and only the fleet's (vm-image.js, isFleetImage): it boots

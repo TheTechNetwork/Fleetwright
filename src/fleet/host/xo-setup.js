@@ -1405,6 +1405,9 @@ export class XoSetups {
             again: p.holderAgain,
             grants: p.grants,
             say: (text) => say(text, null),
+            // The one it removed, by name, so the coordinator retires that
+            // host rather than listing it as "not reporting" for good.
+            removed: (hostId) => this.emit({ event: 'xosetup.holder-removed', job: rec.job, hostId }),
           }));
         }
         return built.join(' ');
