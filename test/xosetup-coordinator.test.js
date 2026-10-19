@@ -254,20 +254,34 @@ test('a policy job building the edge router reaches the Lock Screen as a change,
   assert.equal(narrowProgress({ step: apply, of: 5, phase: 'apply', state: 'running', purpose: 'policy', fill: 1001 })?.fill, null, 'past the end is not a fill');
   assert.equal(narrowProgress({ step: apply, of: 5, phase: 'apply', state: 'running', purpose: 'policy', build: 'rm -rf' })?.build, null, 'a build from the fixed list only');
 
+  // WHAT THE BYTES ARE DOING, as a key and megabytes, so the Lock Screen can
+  // say "Writing the image's disk: 192 of 3072 MB" without the sentence,
+  // which names the storage. A new key is news; the counts ride with the bar.
+  await progress({ fill: 440, build: 'image', stage: 2, stages: 4, doing: 'keep', done: 192, total: 3072 });
+  assert.deepEqual(activities.at(-1).update.state, { step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running', fill: 440, build: 'image', stage: 2, stages: 4, doing: 'keep', done: 192, total: 3072 });
+  assert.equal(activities.at(-1).update.priority, 10, 'what the bytes are doing changed, which is news');
+  assert.deepEqual([sent.at(-1).message.data.doing, sent.at(-1).message.data.done, sent.at(-1).message.data.total], ['keep', '192', '3072']);
+  const narrowed = (/** @type {any} */ extra) => narrowProgress({ step: apply, of: 5, phase: 'apply', state: 'running', purpose: 'policy', ...extra });
+  assert.equal(narrowed({ doing: 'rm -rf', done: 1, total: 2 }).doing, null, 'a key from the fixed list only');
+  assert.deepEqual([narrowed({ doing: 'read', done: 3, total: 2 }).doing, narrowed({ doing: 'read', done: 1 }).done, narrowed({ doing: 'read', done: 1, total: 2_000_000 }).total], [null, null, null], 'the counts are held to each other and to a terabyte');
+  assert.ok(!('doing' in activities.at(-1).update.state && narrowed({}).doing !== null), 'nothing said about bytes that are not moving');
+  const n = activities.length;
+
   // THE BAR MOVING IS PACED. Apple throttles an app that spends its
   // priority-10 budget, which is what froze the Lock Screen at 5%: within
-  // thirty seconds only Android hears it, and after that it goes at 5.
-  await progress({ fill: 470, build: 'image', stage: 2, stages: 4 });
-  assert.equal(activities.length, 2, 'the bar moving was sent to Apple at once');
-  assert.equal(sent[2].message.data.fill, '470', 'Android draws every one');
+  // thirty seconds only Android hears it, and after that it goes at 5. The
+  // megabytes move with the bar, not as news.
+  await progress({ fill: 470, build: 'image', stage: 2, stages: 4, doing: 'keep', done: 400, total: 3072 });
+  assert.equal(activities.length, n, 'the bar moving was sent to Apple at once');
+  assert.equal(sent.at(-1).message.data.fill, '470', 'Android draws every one');
   clock.now += ACTIVITY_FILL_EVERY_MS;
-  await progress({ fill: 520, build: 'image', stage: 2, stages: 4 });
-  assert.deepEqual([activities[2].update.state.fill, activities[2].update.priority], [520, 5]);
+  await progress({ fill: 520, build: 'image', stage: 2, stages: 4, doing: 'keep', done: 600, total: 3072 });
+  assert.deepEqual([activities[n].update.state.fill, activities[n].update.state.done, activities[n].update.priority], [520, 600, 5]);
 
   await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: XOPOLICY_STEPS.length, of: XOPOLICY_STEPS.length, phase: 'done', state: 'done', purpose: 'policy', text: 'The edge router is up.' });
-  assert.equal(activities[3].update.event, 'end');
-  assert.equal(activities[3].update.priority, 10, 'the end is news');
-  assert.equal(sent[4].message.title, 'What the fleet may use is changed');
+  assert.equal(activities.at(-1).update.event, 'end');
+  assert.equal(activities.at(-1).update.priority, 10, 'the end is news');
+  assert.equal(sent.at(-1).message.title, 'What the fleet may use is changed');
 
   // A policy step from a host that did not say it is one is refused, as any
   // phase onboarding does not have is.
