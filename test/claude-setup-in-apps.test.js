@@ -66,7 +66,8 @@ test('Android: the same ask, in the same places, with the same words', () => {
 });
 
 test('Android: a refused start is not announced as a ready session', () => {
-  assert.match(ANDROID, /LocalNotice\.post\(context, if \(reply\.ok\) "Session ready" else "Could not start a session",/);
+  // Titled by which refusal, as on iOS (Fleet.Reply.refusedStartTitle).
+  assert.match(ANDROID, /LocalNotice\.post\(context, if \(reply\.ok\) "Session ready" else reply\.refusedStartTitle,/);
   assert.doesNotMatch(ANDROID, /LocalNotice\.post\(context, "Session ready"/);
 });
 

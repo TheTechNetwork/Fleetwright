@@ -499,7 +499,9 @@ fun FleetScreen(
                 // is an answer, and "Session ready" over "unknown (connected, no
                 // health report yet)" sent somebody looking for a session that
                 // did not exist.
-                LocalNotice.post(context, if (reply.ok) "Session ready" else "Could not start a session", reply.text.ifBlank { "Started." })
+                // And by WHICH refusal: one that is a setting on the machine
+                // is titled as that, not as a failure to try again.
+                LocalNotice.post(context, if (reply.ok) "Session ready" else reply.refusedStartTitle, reply.text.ifBlank { "Started." })
                 reply.text.ifBlank { "Started." }
             } catch (e: Exception) {
                 // A TIMEOUT IS NOT A FAILURE: `start` carries an idempotency
@@ -631,6 +633,7 @@ fun FleetScreen(
         SessionSheet(
             fleet = fleet,
             initial = session,
+            resumeKept = binHosts.firstOrNull { it.hostId == session.hostId }?.resumeKept,
             onDismiss = { inspecting = null },
             onChanged = { refresh(keepStatus = true) },
             onFiles = { browsing = session },
@@ -866,6 +869,7 @@ fun FleetScreen(
                             ),
                             session = session,
                             busy = busy,
+                            resumeKept = binHosts.firstOrNull { it.hostId == session.hostId }?.resumeKept,
                             onStop = { act { fleet.stop(session.name) } },
                             onAnswer = { option -> act { fleet.answer(session.name, option, session.prompt?.id) } },
                             onInspect = { inspecting = session },
@@ -923,6 +927,8 @@ private fun SessionCard(
     modifier: Modifier = Modifier,
     session: Fleet.Session,
     busy: Boolean,
+    /** Why Resume is not offered here, or null where it is (Fleet.FleetHost.resumeKept). */
+    resumeKept: String?,
     onStop: () -> Unit,
     onResume: () -> Unit,
     onAnswer: (Int) -> Unit,
@@ -1061,6 +1067,11 @@ private fun SessionCard(
                     // driving the session. The same words as its sheet.
                     TextButton(onClick = { onOpen(url) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Continue in Remote Control") }
                 }
+            } else if (session.resumable && resumeKept != null) {
+                // WHY, IN PLACE OF A BUTTON THE FLEET WOULD REFUSE (C-2): the
+                // machine runs sessions without the sandbox, or has not said,
+                // and this person does not administer it.
+                Text(resumeKept, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
             } else if (session.resumable) {
                 TextButton(onClick = onResume, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Resume") }
             }

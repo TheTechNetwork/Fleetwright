@@ -63,6 +63,8 @@ import java.util.Date
 fun SessionSheet(
     fleet: Fleet,
     initial: Fleet.Session,
+    /** Why Resume is not offered, as the list last read the session's machine (Fleet.FleetHost.resumeKept), or null where it is. */
+    resumeKept: String? = null,
     onDismiss: () -> Unit,
     onChanged: () -> Unit,
     /** Its workspace. Here and not on the card, where it sat beside the same row of actions twice. */
@@ -255,8 +257,10 @@ fun SessionSheet(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                     )
                     session.isRunning -> Text("Reading the screen…", style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
+                    // Resume is promised only where it is offered.
                     else -> Text(
-                        "Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back.",
+                        if (resumeKept == null) "Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back."
+                        else "Not running, so there is no screen to read. Output has what it printed.",
                         style = Design.Style.bodySmall,
                         color = Design.Palette.inkDim.now,
                     )
@@ -280,6 +284,9 @@ fun SessionSheet(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     if (session.isRunning) {
                         TextButton(onClick = { act { it.stop(session.name) } }, enabled = !busy) { Text("Stop") }
+                    } else if (session.resumable && resumeKept != null) {
+                        // The reason, where the fleet would refuse the button (C-2).
+                        Text(resumeKept, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
                     } else if (session.resumable) {
                         TextButton(onClick = { act { it.resume(session.name, "summary") } }, enabled = !busy) { Text("Resume") }
                     }
