@@ -998,6 +998,36 @@ The floor is `contents: read`. The jobs that raise their own:
 | `host-release.yml` — attach-deb | `contents: write` | uploads the debs to the release |
 | `apt-repo.yml` — publish | `contents: read` | reads releases; deploys the apt Worker with the Cloudflare token |
 | `sandbox.yml` | `packages: write` | pushes the session image to GHCR |
+| `renovate-pin.yml` | `contents: read`, `pull-requests: read` | lists Renovate's open pull requests; the push uses `RENOVATE_PIN_TOKEN`, not the workflow token (below) |
+
+## Renovate pins itself
+
+Renovate moves a name and cannot write what follows from it: a cloud image's
+address, digest and sizes, the guest agent's file, the installer's `base` and
+file digests ([dependencies.md](dependencies.md), *Everything else that is
+downloaded*). `renovate-pin.yml` runs the three `scripts/pin-*.mjs` on
+Renovate's branch when its pull request opens or moves, and once a day over
+every open one, and pushes what they write as `github-actions[bot]`.
+`renovate.json` names that address in `gitIgnoredAuthors`, so Renovate still
+rebases the branch when main moves; the rebase drops the pin and the workflow
+writes it again.
+
+| secret | where it comes from |
+|---|---|
+| `RENOVATE_PIN_TOKEN` | github.com → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate: this repository only, **Contents: Read and write**, nothing else |
+
+**It is not the workflow token on purpose.** A push made with `github.token`
+starts no workflow, by GitHub's rule against runs that trigger themselves, so
+CI would never run on the commit that makes the pull request right and the
+checks would stay the red ones from Renovate's commit. A fine-grained token
+scoped to one repository and one permission is the smallest thing that can push
+a commit CI sees. Without the secret the job fails and names it; nothing is
+pushed that nothing will check.
+
+A pin script can refuse: a build still inside its three-day soak, a guest agent
+that will not run on an image here. Then the job is red with the script's own
+sentence, which for a soak says when it can run; the daily run picks it up the
+morning after.
 
 ## What to set up first
 
