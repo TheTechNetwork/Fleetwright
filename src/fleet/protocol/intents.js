@@ -1963,6 +1963,51 @@ export const VERBS = Object.freeze({
       'Mint a one-hour GitHub token for one repository, for a runner the asking person owns, sealed so only that ' +
       'runner can read it. Sent by the coordinator on a runner\'s behalf; refused from anybody else.',
   },
+
+  // A MACHINE'S CLAUDE LOGIN, HANDED BY THE BOX THAT MADE IT, after it joined.
+  //
+  // It used to travel in the machine's cloud-init drive, which every box
+  // holding the pool's token may export through Xen Orchestra until the drive
+  // is destroyed after boot (docs/security.md, G14). Now the machine asks once
+  // it is enrolled, over its own socket, with the `claude-login` frame a
+  // runner sends; the coordinator sends this to the boxes holding the owner's
+  // pool, and only the box that made that machine for them answers. It seals
+  // the login it holds from the owner's vault to `key`, a key only the
+  // machine has, so the coordinator relays what it cannot read.
+  //
+  // WHOSE: the actor, never a parameter, as `forgetperson` is aimed. Sent by
+  // the coordinator and nobody else: dispatch refuses it, and no tool offers
+  // it (src/mcp/tools.js COORDINATOR_ONLY). A new verb and no version: a box
+  // from before it answers `unknown_verb`, and the coordinator asks the next.
+  //
+  // THE BOUND IS UNCHANGED. A compromised coordinator can ask for a login
+  // sealed to a key of its own for a machine that box made for that person,
+  // which it already reaches by starting a session there; the box hands it to
+  // a machine once, and only to one it made, by the VM's id, and running.
+  vmlogin: {
+    params: {
+      name: {
+        type: 'text',
+        required: true,
+        max: 15,
+        pattern: /^vm-[0-9a-f]{12}$/,
+        shapeName: 'a machine name (vm-…)',
+        describe: 'The machine asking, as the coordinator named it from its ticket.',
+      },
+      key: {
+        type: 'text',
+        required: true,
+        max: 87,
+        pattern: SEAL_KEY_RE,
+        shapeName: 'a P-256 public key',
+        describe: 'What the login is sealed to: a key only the asking machine holds.',
+      },
+    },
+    mutating: false,
+    summary:
+      'Hand a machine made on your pool your Claude login, sealed so only that machine can read it, once it has joined. ' +
+      'Sent by the coordinator on the machine\'s behalf, to the box that made it; refused from anybody else.',
+  },
 });
 
 /** @param {string} verb */

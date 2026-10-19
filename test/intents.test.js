@@ -127,6 +127,11 @@ test('the verb set is exactly what is documented', () => {
     // verb, so an older host answers `unknown_verb`; the version was spent on
     // `provision { network }` beside it. docs/hypervisors.md.
     'vmctl',
+    // A machine's Claude login, handed by the box that made it once the
+    // machine has joined, in place of its cloud-init drive (G14). Sent by the
+    // coordinator and by nobody else; a new verb, so an older box answers
+    // `unknown_verb` and the next is asked.
+    'vmlogin',
     'writefile',
     // v13: a pool's page through a box holding its token, for a phone away
     // from the pool's network. New verbs. docs/manage.md, "From away".

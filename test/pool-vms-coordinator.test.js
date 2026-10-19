@@ -162,7 +162,11 @@ test('the machine enrols with its ticket once, as its owner’s temporary host, 
   const host = core.hostIds.get(r.vm);
   assert.equal(host.owner, ELI);
   assert.equal(host.ephemeral, true);
-  assert.equal((await core.enrolVm({ ticket, publicJwk: key.publicJwk })).status, 403, 'single use');
+  // THE SAME MACHINE AGAIN, whose answer was lost on the way back: answered
+  // as before, and nothing else is let in (the next test).
+  const again = await core.enrolVm({ ticket, publicJwk: key.publicJwk });
+  assert.deepEqual([again.status, again.body.hostId], [200, r.vm]);
+  assert.equal(core.hostIds.get(r.vm).fingerprint, enrolled.body.fingerprint);
 
   // ITS FIRST FRAME, before it can take work: the start is held, not lost.
   // Acting for its owner, as hostConnected decides from the enrolment.
@@ -182,6 +186,57 @@ test('the machine enrols with its ticket once, as its owner’s temporary host, 
   assert.equal(start.spec.params.task, 'Run the tests');
   assert.equal(start.spec.actor, ELI);
   assert.ok(!core.runnerStarts.has(r.vm));
+});
+
+test('a machine’s ticket lives minutes, and spent twice it is refused, said to the owner and the admins, and the host it let in is taken out (G14)', async () => {
+  // The ticket travels on the machine's cloud-init drive, which every box
+  // holding the pool's token may export through Xen Orchestra. Whoever read it
+  // and the machine hold the same value, and the machine always presents it,
+  // so a second presentation means two parties had it.
+  let now = Date.parse('2026-10-19T12:00:00Z');
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI) } });
+  core.now = () => now;
+  core.runnerTickets.now = () => now;
+  const r = await core.dispatch(ask(eli, {}, { title: 'Try the build', task: 'Run the tests' }));
+  const ticket = asked[0].spec.params.ticket;
+  const id = ticket.split('_')[1];
+
+  // A COPY SPENT FIRST, from wherever its reader was.
+  const copy = await generateKeyPair();
+  assert.equal((await core.enrolVm({ ticket, publicJwk: copy.publicJwk })).status, 200);
+  assert.ok(core.runnerStarts.has(r.vm), 'the session asked for is held for whoever enrolled');
+
+  // THE NAME ALONE IS NOT THE TICKET: `vm-<id>` is shown to every Xen
+  // Orchestra user, so a wrong secret is an unknown ticket and touches nothing.
+  const guessed = await core.enrolVm({ ticket: `fwt_${id}_${'0'.repeat(48)}`, publicJwk: copy.publicJwk });
+  assert.deepEqual([guessed.status, guessed.body.error.code], [403, 'unclaimed']);
+  assert.ok(core.hostIds.get(r.vm) && !core.hostIds.get(r.vm).revokedAt, 'a guess revokes nothing');
+
+  // THE MACHINE ITSELF, minutes later, as it boots.
+  now += 2 * 60_000;
+  const machine = await generateKeyPair();
+  const second = await core.enrolVm({ ticket, publicJwk: machine.publicJwk });
+  assert.deepEqual([second.status, second.body.error.code], [403, 'ticket_reused']);
+  assert.ok(core.hostIds.get(r.vm).revokedAt, 'the host the copy enrolled is out of the fleet');
+  assert.ok(!core.runnerStarts.has(r.vm), 'and is started nothing');
+  const said = core.events.filter((/** @type {any} */ e) => e.event === 'vm.ticket-reused');
+  assert.equal(said.length, 1);
+  assert.equal(said[0].hostId, r.vm);
+  assert.match(said[0].text, /presented again after it had been spent/);
+  // WHO SEES IT: the owner and the fleet's admins, and no other member.
+  const seen = (/** @type {any} */ who) => core.snapshot(who).events.some((/** @type {any} */ e) => e.event === 'vm.ticket-reused');
+  assert.equal(seen({ email: 'ada@example.com', admin: true }), true, 'an admin');
+  assert.equal(seen({ email: ELI, admin: false }), true, 'its owner');
+  assert.equal(seen(sam), false, 'another member');
+
+  // FIFTEEN MINUTES, not a runner's forty-five: a copy kept for later is no
+  // ticket at all, and neither is its spending once that is past.
+  const r2 = await core.dispatch(ask(eli));
+  const late = asked.at(-1).spec.params.ticket;
+  now += 16 * 60_000;
+  assert.equal((await core.enrolVm({ ticket: late, publicJwk: machine.publicJwk })).body.error.code, 'unclaimed');
+  assert.equal((await core.enrolVm({ ticket, publicJwk: machine.publicJwk })).body.error.code, 'unclaimed');
+  assert.ok(!core.hostIds.get(r2.vm), 'nothing enrolled on the late one');
 });
 
 test('naming somebody else’s temporary machine does not put work on it', () => {
