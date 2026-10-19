@@ -25,7 +25,7 @@ import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LA
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { XOBUILD_DOING } from '../src/fleet/protocol/intents.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
-import { EDGE_WATCH, newWatch, watchOf } from '../src/fleet/host/edge-credentials.js';
+import { EDGE_KEPT, EDGE_WATCH, markCarp, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { VM_IMAGE } from '../src/fleet/host/vm-image.js';
 import { xenStoreAsXo } from './helpers/xo-stand-in.js';
 import { readVhd } from './helpers/vhd-read.js';
@@ -176,12 +176,20 @@ test('a download that is not the published image is never used, and nothing is l
   await assert.rejects(fetchImage({ dir, fetchImpl: refused }), /answered 404/);
 });
 
-/** A stand-in for Xen Orchestra's admin connection: answers from `objects`, records every call. */
+/**
+ * A stand-in for Xen Orchestra's admin connection: answers from `objects`,
+ * records every call. Its users (`objects.users`) are kept as xo-server's
+ * user.create and user.set leave them, preferences merged in, which is where
+ * the job keeps the pair's password and the key (edge-credentials.js,
+ * EDGE_KEPT).
+ */
 function xo(/** @type {Record<string, any[]>} */ objects, /** @type {Record<string, (p: any) => any>} */ answers = {}) {
   /** @type {[string, any][]} */
   const calls = [];
+  const users = objects.users ?? [];
   return {
     calls,
+    users,
     async call(/** @type {string} */ method, /** @type {any} */ params) {
       calls.push([method, params]);
       if (answers[method]) return answers[method](params);
@@ -191,13 +199,26 @@ function xo(/** @type {Record<string, any[]>} */ objects, /** @type {Record<stri
           (objects[type] || []).filter((o) => Object.entries(match).every(([k, v]) => o[k] === v)).map((o) => [o.id, o]),
         );
       }
+      if (method === 'user.getAll') return users;
+      if (method === 'user.create') {
+        users.push({ id: `u-${users.length + 1}`, email: params.email, permission: params.permission });
+        return users.at(-1).id;
+      }
+      if (method === 'user.set') {
+        const u = users.find((x) => x.id === params.id);
+        if (u && params.preferences) u.preferences = { ...u.preferences, ...params.preferences };
+        return true;
+      }
       return null;
     },
   };
 }
 
 /** What only reads, left out where the order of what is done is the point. */
-const READS = ['xo.getAllObjects', 'resourceSet.getAll'];
+const READS = ['xo.getAllObjects', 'resourceSet.getAll', 'user.getAll'];
+
+/** The keeper with what a job before kept for the pool, as the next job finds it. @param {{ carp?: string|null, watch?: any }} kept */
+const keeperWith = ({ carp = null, watch = null }) => [{ id: 'u-keys', email: EDGE_KEPT.user, permission: 'none', preferences: { [EDGE_KEPT.entry('p1')]: JSON.stringify({ v: 1, carp, watch }) } }];
 
 const GiB = 1024 ** 3;
 const SRS = [
@@ -711,14 +732,27 @@ test('a rebuild that fails leaves the old edge running as it was, and an edge as
 // ASKED FOR: "do ha will allow maintenance". A pair shares each gateway
 // address by CARP; booted in QEMU as a pair (docs/hypervisors.md).
 
-/** An admin stand-in that hands out VM ids in order and records xenStoreData. */
-function pairXo(/** @type {any[]} */ vms) {
+/** An admin stand-in that hands out VM ids in order, with what a job before kept (`users`). */
+function pairXo(/** @type {any[]} */ vms, /** @type {any[]} */ users = []) {
   let n = 0;
-  return xo({ VM: vms, 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => `vm-new-${++n}` });
+  return xo({ VM: vms, 'VM-template': [TEMPLATE], VIF: [], users }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => `vm-new-${++n}` });
 }
-const methodsOf = (/** @type {any} */ admin) => admin.calls.map((/** @type {any} */ c) => c[0]).filter((/** @type {string} */ m) => !READS.includes(m) && m !== 'vif.set');
+const methodsOf = (/** @type {any} */ admin) => admin.calls.map((/** @type {any} */ c) => c[0]).filter((/** @type {string} */ m) => !READS.includes(m) && m !== 'vif.set' && m !== 'user.create' && m !== 'user.set');
 const created = (/** @type {any} */ admin) => admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.create').map((/** @type {any} */ c) => c[1]);
-const passwords = (/** @type {any} */ admin) => admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.set' && c[1].xenStoreData).map((/** @type {any} */ c) => c[1].xenStoreData[EDGE_HA.passwordKey]);
+/** The pair's password as each build kept it, where only an admin reads it. */
+const passwords = (/** @type {any} */ admin) =>
+  admin.calls.filter((/** @type {any} */ c) => c[0] === 'user.set').map((/** @type {any} */ c) => JSON.parse(c[1].preferences[EDGE_KEPT.entry('p1')]).carp).filter(Boolean);
+/** What each router was given to carry: a mark of the password, never the password. */
+const marks = (/** @type {any} */ admin) => admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.set' && c[1].xenStoreData).map((/** @type {any} */ c) => c[1].xenStoreData);
+/** One of a pair as a build after the fix leaves it: tagged, and carrying the mark of the pair's password. @param {0|1} node @param {string} password */
+const routerOf = (node, password) => ({
+  id: node ? 'vm-b' : 'vm-a',
+  name_label: node ? EDGE_HA.second : EDGE.vm,
+  $pool: 'p1',
+  tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}${node}`],
+  power_state: 'Running',
+  xenStoreData: xenStoreAsXo({ [EDGE_KEPT.carpMark]: markCarp(password) }),
+});
 
 test('a pair asked for where there is none is two edges, each tagged with which it is and given the same password', async () => {
   const admin = pairXo([]);
@@ -727,6 +761,7 @@ test('a pair asked for where there is none is two edges, each tagged with which 
   const [p0, p1] = passwords(admin);
   assert.match(p0, /^[0-9a-f]{32}$/);
   assert.equal(p1, p0, 'two passwords, and neither would hear the other');
+  assert.deepEqual(marks(admin), [{ [EDGE_KEPT.carpMark]: markCarp(p0) }, { [EDGE_KEPT.carpMark]: markCarp(p0) }], 'each router carries which password it has, and not the password');
   assert.equal(admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.start').length, 2);
   assert.match(done, /two edge routers, sharing 10\.254\.0\.1: when one restarts, the other carries the machines behind them/);
 });
@@ -749,9 +784,9 @@ test('one edge becomes a pair with the way out gone only while the second starts
 
 test('a pair is rebuilt one at a time with the password it has, and the second goes first', async () => {
   const password = 'ab'.repeat(16);
-  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
-  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
-  const admin = pairXo([a, b]);
+  const a = routerOf(0, password);
+  const b = routerOf(1, password);
+  const admin = pairXo([a, b], keeperWith({ carp: password }));
   const { args, said } = edgeArgs(admin, { block: true });
   const done = await ensureEdge(args);
   const stops = admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.stop' || c[0] === 'vm.delete').map((/** @type {any} */ c) => `${c[0]} ${c[1].id}`);
@@ -762,7 +797,7 @@ test('a pair is rebuilt one at a time with the password it has, and the second g
   assert.ok(said.some((s) => /keep their way out/.test(s)));
   assert.match(done, /rebuilt, one at a time, dropping/);
   // A pair asked nothing new is left alone, and says where each is.
-  const still = pairXo([{ ...a, addresses: { '0/ipv4/0': '10.10.10.237' } }, b]);
+  const still = pairXo([{ ...a, addresses: { '0/ipv4/0': '10.10.10.237' } }, b], keeperWith({ carp: password }));
   const left = await ensureEdge(edgeArgs(still).args);
   assert.deepEqual(methodsOf(still), []);
   assert.match(left, /a pair on eth0\.10 sharing 10\.254\.0\.1, logging[\s\S]*fleetwright-edge at 10\.10\.10\.237, fleetwright-edge-b at an address Xen Orchestra does not know yet/);
@@ -770,24 +805,115 @@ test('a pair is rebuilt one at a time with the password it has, and the second g
 
 test('a rebuild of one of the pair that fails starts the old one again, and the other was never touched', async () => {
   const password = 'cd'.repeat(16);
-  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
-  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
-  const admin = xo({ VM: [a, b], 'VM-template': [TEMPLATE], VIF: [] }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } });
+  const a = routerOf(0, password);
+  const b = routerOf(1, password);
+  const admin = xo({ VM: [a, b], 'VM-template': [TEMPLATE], VIF: [], users: keeperWith({ carp: password }) }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } });
   await assert.rejects(ensureEdge(edgeArgs(admin, { block: true }).args), /no memory left on the host\. fleetwright-edge-b, which it was replacing, was started again/);
   assert.ok(!admin.calls.some((/** @type {any} */ c) => (c[0] === 'vm.stop' || c[0] === 'vm.delete') && c[1].id === 'vm-a'), 'the first carried the machines throughout');
 });
 
 test('going back to one removes the second and rebuilds the first on its own', async () => {
   const password = 'ef'.repeat(16);
-  const a = { id: 'vm-a', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}0`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
-  const b = { id: 'vm-b', name_label: EDGE_HA.second, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${EDGE_HA.nodeTag}1`], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_HA.passwordKey]: password }) };
-  const admin = pairXo([a, b]);
+  const admin = pairXo([routerOf(0, password), routerOf(1, password)], keeperWith({ carp: password }));
   const done = await ensureEdge(edgeArgs(admin, { ha: false }).args);
   const order = admin.calls.filter((/** @type {any} */ c) => ['vm.stop', 'vm.delete', 'vm.create'].includes(c[0])).map((/** @type {any} */ c) => `${c[0]} ${c[1].id ?? c[1].name_label}`);
   assert.deepEqual(order, ['vm.stop vm-b', 'vm.delete vm-b', 'vm.stop vm-a', `vm.create ${EDGE.vm}`, 'vm.delete vm-a']);
   assert.ok(!created(admin)[0].tags.some((/** @type {string} */ x) => x.startsWith(EDGE_HA.nodeTag)), 'one edge, not one of a pair');
   assert.deepEqual(passwords(admin), []);
   assert.match(done, /The edge router is up/);
+});
+
+// WHAT EVERYBODY SIGNED IN READS. Measured on Xen Orchestra 5.211.0:
+// `xo.getAllObjects` has no permission check, so the fleet's limited token,
+// held by every approved box, and any other user of that Xen Orchestra read
+// every VM with its xenStoreData, other_config, tags, name and description.
+// The pair's password and the key were kept in the routers' xenStoreData, and
+// came back verbatim to both (docs/security.md, G14).
+
+/**
+ * An admin stand-in whose VMs are what vm.create and vm.set made of them, as
+ * xo.getAllObjects then shows them: each key vm.set is given filed under
+ * `vm-data/`, a null one deleted. And the configuration each disk was written
+ * with, which is where the pair's password is and nowhere else here.
+ */
+function liveXo(/** @type {any[]} */ vms = [], /** @type {any[]} */ users = []) {
+  const objects = { VM: vms, 'VM-template': [TEMPLATE], VIF: [], users };
+  /** @type {string[]} */
+  const configs = [];
+  let n = 0;
+  const admin = xo(objects, {
+    'disk.import': () => ({ $sendTo: '/import/abc' }),
+    'vm.create': (p) => {
+      const id = `vm-new-${++n}`;
+      objects.VM.push({ id, type: 'VM', $pool: 'p1', power_state: 'Halted', ...p, xenStoreData: {} });
+      return id;
+    },
+    'vm.set': (p) => {
+      const vm = objects.VM.find((v) => v.id === p.id);
+      const data = { ...vm.xenStoreData };
+      for (const [k, v] of Object.entries(p.xenStoreData ?? {})) {
+        if (v === null) delete data[`vm-data/${k}`];
+        else data[`vm-data/${k}`] = v;
+      }
+      vm.xenStoreData = data;
+      return true;
+    },
+  });
+  const upload = async (/** @type {any} */ u) => {
+    configs.push(u.body.regions.map((/** @type {any} */ r) => r.replacement.toString('latin1')).join(''));
+    return 'vdi-1';
+  };
+  /** Everything xo.getAllObjects answers, as one string. */
+  const everything = async () => JSON.stringify(await Promise.all(['VM', 'VM-template', 'VIF'].map((type) => admin.call('xo.getAllObjects', { filter: { type } }))));
+  return { admin, objects, configs, upload, everything };
+}
+
+/** The pair's password, from the configuration a router's disk was written with. @param {string} config */
+const carpIn = (config) => /<vip>.*?<password>([0-9a-f]{32})<\/password>/.exec(config)?.[1];
+
+test('after a build, nothing Xen Orchestra shows everybody signed in holds the pair’s password or the key, and the next job still finds both', async () => {
+  const w = newWatch();
+  const live = liveXo();
+  await ensureEdge(edgeArgs(live.admin, { ha: true, watch: w, upload: live.upload }).args);
+  const password = carpIn(live.configs[0]);
+  assert.ok(password, 'the pair was built with a password');
+  assert.equal(carpIn(live.configs[1]), password);
+  const seen = await live.everything();
+  for (const [what, value] of Object.entries({ 'the pair’s password': password, 'the key': w.key, 'the key’s secret': w.secret, 'the certificate’s private key': w.prv.split('\n')[1] })) {
+    assert.ok(!seen.includes(/** @type {string} */ (value)), `${what} is in what xo.getAllObjects shows every signed-in user`);
+  }
+  // THE NEXT JOB finds both: the pair left alone with the same key, then
+  // rebuilt one at a time with the same password.
+  const before = live.admin.calls.length;
+  await ensureEdge(edgeArgs(live.admin, { watch: w, upload: live.upload }).args);
+  assert.ok(!live.admin.calls.slice(before).some(([m]) => m === 'vm.create'), 'a pair with the key the job kept was rebuilt');
+  await ensureEdge(edgeArgs(live.admin, { watch: w, block: true, upload: live.upload }).args);
+  assert.deepEqual(live.configs.slice(2).map(carpIn), [password, password], 'the rebuild did not keep the password the running router has');
+});
+
+test('routers that carry the pair’s password and the key in the clear have them taken off, and are made again with new ones', async () => {
+  // AN UPGRADE: a pair built before, its password and key in xenStoreData as
+  // the old build kept them, and nothing kept where only an admin reads.
+  const old = newWatch();
+  const oldPassword = '12'.repeat(16);
+  const clear = { 'fleetwright-carp': oldPassword, 'fleetwright-watch': JSON.stringify(old) };
+  const routers = /** @type {Array<0|1>} */ ([0, 1]).map((node) => ({ ...routerOf(node, oldPassword), tags: [EDGE.tag, EDGE.updatesTag, EDGE_WATCH.tag, `${EDGE_HA.nodeTag}${node}`], xenStoreData: xenStoreAsXo(clear) }));
+  const live = liveXo(routers);
+  const w = newWatch();
+  const { args, said } = edgeArgs(live.admin, { watch: w, upload: live.upload });
+  await ensureEdge(args);
+  // Taken off both, before anything else is done.
+  const cleared = live.admin.calls.filter(([m, p]) => m === 'vm.set' && Object.values(p.xenStoreData).every((v) => v === null)).map(([, p]) => p.id);
+  assert.deepEqual(cleared, ['vm-a', 'vm-b']);
+  assert.ok(live.admin.calls.findIndex(([m]) => m === 'vm.set') < live.admin.calls.findIndex(([m]) => m === 'vm.stop'), 'the old values stayed up while the routers were rebuilt');
+  // A new password: the old one was readable, so it is not trusted again.
+  const password = carpIn(live.configs[0]);
+  assert.match(String(password), /^[0-9a-f]{32}$/);
+  assert.notEqual(password, oldPassword, 'the pair kept the password everybody could read');
+  assert.equal(carpIn(live.configs[1]), password);
+  assert.ok(said.some((x) => /readable by everybody signed in to Xen Orchestra/.test(x)), said.join('\n'));
+  const seen = await live.everything();
+  for (const value of [oldPassword, old.key, old.secret, password, w.key, w.secret]) assert.ok(!seen.includes(/** @type {string} */ (value)));
 });
 
 test('a build that fails leaves nothing half-made behind', async () => {
@@ -937,11 +1063,12 @@ test('a router without the key the job brings is rebuilt once, keeping its WAN M
   assert.ok(said.includes('Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it have no way out until it is up.'), said.join('\n'));
   assert.deepEqual(params['vm.create'].VIFs[0], { network: 'net-wan', mac: '02:aa:bb:cc:dd:ee' }, 'the new router is not where the old one was on the way out');
   assert.ok(params['vm.create'].tags.includes(EDGE_WATCH.tag));
-  assert.deepEqual(watchOf({ xenStoreData: xenStoreAsXo(params['vm.set'].xenStoreData) }), w, 'the key is not kept where the next rebuild finds it');
+  assert.deepEqual(JSON.parse(admin.users[0].preferences[EDGE_KEPT.entry('p1')]).watch, w, 'the key is not kept where the next rebuild finds it');
+  assert.deepEqual(params['vm.set'].xenStoreData, { [EDGE_KEPT.watchPin]: w.pin }, 'the router does not say which key it has, or says more than that');
   assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
 
   // Built with this key: nothing done. With another (a lost one, a tag and no key): rebuilt.
-  const watched = { ...old, tags: [...old.tags, EDGE_WATCH.tag], xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: JSON.stringify(w) }) };
+  const watched = { ...old, tags: [...old.tags, EDGE_WATCH.tag], xenStoreData: xenStoreAsXo({ [EDGE_KEPT.watchPin]: w.pin }) };
   const same = xo({ VM: [watched], VIF: [wanVif] });
   await ensureEdge(edgeArgs(same, { watch: w }).args);
   assert.deepEqual(same.calls.map(([m]) => m).filter((m) => !READS.includes(m)), []);

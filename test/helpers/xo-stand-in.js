@@ -258,7 +258,38 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
             answer(u.id);
             break;
           }
-          case 'user.set': passwords.set(users.find((x) => x.id === p.id)?.email, p.password); answer(true); break;
+          case 'user.set': {
+            // As xo-server's updateUser does: a password only when one is
+            // given, and preferences merged in, a null one deleted.
+            const u = users.find((x) => x.id === p.id);
+            if (p.password !== undefined) passwords.set(u?.email, p.password);
+            if (u && p.preferences) {
+              const prefs = { ...u.preferences };
+              for (const [k, v] of Object.entries(p.preferences)) {
+                if (v === null || v === undefined) delete prefs[k];
+                else prefs[k] = v;
+              }
+              u.preferences = prefs;
+            }
+            answer(true);
+            break;
+          }
+          // AS ITS vm.set DOES TO xenStoreData: each key filed under
+          // `vm-data/`, and a null one deleted, on the VM xo.getAllObjects
+          // then shows to everybody signed in.
+          case 'vm.set': {
+            const vm = vms[p.id];
+            if (vm && p.xenStoreData) {
+              const data = { ...vm.xenStoreData };
+              for (const [k, v] of Object.entries(p.xenStoreData)) {
+                if (v === null) delete data[`vm-data/${k}`];
+                else data[`vm-data/${k}`] = v;
+              }
+              vm.xenStoreData = data;
+            }
+            answer(true);
+            break;
+          }
           case 'resourceSet.getAll': answer(sets); break;
           case 'resourceSet.create': {
             const set = { id: `rs-${sets.length}`, ...p };

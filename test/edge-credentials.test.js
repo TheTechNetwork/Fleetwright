@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import tls from 'node:tls';
 import { X509Certificate } from 'node:crypto';
 
-import { EDGE_WATCH, newWatch, selfSigned, sha512Crypt, watchConfig, watchOf } from '../src/fleet/host/edge-credentials.js';
+import { EDGE_KEPT, EDGE_WATCH, keepFor, keptFor, newWatch, selfSigned, sha512Crypt, watchConfig, watchOf } from '../src/fleet/host/edge-credentials.js';
 import { connectPinnedTls } from '../src/fleet/host/xo-ws.js';
 import { xenStoreAsXo } from './helpers/xo-stand-in.js';
 
@@ -67,11 +67,37 @@ test('what a router is given: one user with only the status pages and the key’
   assert.equal(watchConfig(w, []).syslog, '', 'no box to send to, no destination');
 });
 
-test('the key is found again where a router keeps it, and anything else is no key', () => {
+test('the key and the pair’s password are found again where the job keeps them, a router carries only the pin, and anything else is nothing kept', async () => {
+  // Xen Orchestra's users as xo-server keeps them: user.create, and user.set
+  // merging preferences in (measured on 5.211.0, where only an admin reads
+  // another user's back).
+  /** @type {any[]} */
+  const users = [{ id: 'u-admin', email: 'admin@admin.net', permission: 'admin' }];
+  const admin = {
+    async call(/** @type {string} */ method, /** @type {any} */ p) {
+      if (method === 'user.getAll') return users;
+      if (method === 'user.create') return users.push({ id: `u-${users.length}`, email: p.email, permission: p.permission }), users.at(-1).id;
+      if (method === 'user.set') return Object.assign(users.find((u) => u.id === p.id), { preferences: { ...users.find((u) => u.id === p.id).preferences, ...p.preferences } }), true;
+      throw new Error(`not asked: ${method}`);
+    },
+  };
   const w = newWatch();
-  assert.deepEqual(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: JSON.stringify(w) }) }), w);
-  for (const bad of [undefined, '', 'not json', JSON.stringify({ ...w, key: 'a|b' }), JSON.stringify({ ...w, pin: 'short' }), JSON.stringify({ ...w, v: 2 })]) {
-    assert.equal(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_WATCH.key]: bad }) }), null, String(bad).slice(0, 40));
+  assert.deepEqual(await keptFor(admin, 'p1'), { carp: null, watch: null }, 'nothing kept yet');
+  await keepFor(admin, 'p1', { carp: 'ab'.repeat(16), watch: w });
+  await keepFor(admin, 'p2', { carp: null, watch: newWatch() });
+  assert.deepEqual(await keptFor(admin, 'p1'), { carp: 'ab'.repeat(16), watch: w });
+  assert.equal(users.filter((u) => u.email === EDGE_KEPT.user).length, 1, 'a keeper made for each pool, where one holds them all');
+  assert.equal(users.find((u) => u.email === EDGE_KEPT.user).permission, 'none', 'the keeper can do something if somebody signs in as it');
+  // THE ROUTER'S PIN SAYS WHICH KEY IT HAS: only the kept one with that pin is it.
+  assert.deepEqual(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_KEPT.watchPin]: w.pin }) }, w), w);
+  assert.equal(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_KEPT.watchPin]: newWatch().pin }) }, w), null, 'a router built with another key');
+  assert.equal(watchOf({ xenStoreData: {} }, w), null, 'a router built with none');
+  assert.equal(watchOf({ xenStoreData: xenStoreAsXo({ [EDGE_KEPT.watchPin]: w.pin }) }, null), null, 'nothing kept');
+  // ANYTHING ELSE IS NOTHING KEPT.
+  const keeper = users.find((u) => u.email === EDGE_KEPT.user);
+  for (const bad of [undefined, '', 'not json', JSON.stringify({ v: 1, carp: 'short', watch: { ...w, key: 'a|b' } }), JSON.stringify({ v: 1, carp: 'AB'.repeat(16), watch: { ...w, pin: 'short' } }), JSON.stringify({ v: 1, watch: { ...w, v: 2 } })]) {
+    keeper.preferences[EDGE_KEPT.entry('p1')] = bad;
+    assert.deepEqual(await keptFor(admin, 'p1'), { carp: null, watch: null }, String(bad).slice(0, 40));
   }
 });
 

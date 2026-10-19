@@ -23,11 +23,21 @@
 //   - syslog sent to the boxes named, which is how what happened before a box
 //     looked survives the router's memory-backed /var.
 //
-// THE KEY IS KEPT where the next rebuild finds it, on the routers in Xen
-// Orchestra beside the pair's CARP password (only Xen Orchestra's admins can
-// read it; the fleet's token cannot see the routers at all), and it goes to the
-// person's phone sealed at the end of a policy job, which keeps it in their
-// vault with the pool's token. Only a box they approved for the pool holds it.
+// THE KEY IS KEPT where the next policy job finds it and nobody below an admin
+// of Xen Orchestra can read it (EDGE_KEPT, below), beside the pair's CARP
+// password, and it goes to the person's phone sealed at the end of a policy
+// job, which keeps it in their vault with the pool's token. Only a box they
+// approved for the pool holds it.
+//
+// NOT ON THE ROUTERS, where it was. Both were kept in each router's
+// xenStoreData, on the word that only Xen Orchestra's admins could read it and
+// the fleet's token could not see the routers at all. Measured on Xen
+// Orchestra 5.211.0, `xo.getAllObjects` has no permission check: every
+// signed-in user, the fleet's limited token on every approved box and any
+// unrelated user of that Xen Orchestra, reads every VM with its xenStoreData,
+// and read both back verbatim. What a router carries now is a mark of each,
+// useless to whoever reads it (markCarp, the certificate's pin), so the job
+// can tell whether what it kept is what the router has.
 
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 
@@ -46,8 +56,6 @@ export const EDGE_WATCH = Object.freeze({
   programs: Object.freeze(['kernel', 'unbound', 'dnsmasq', 'dpinger', 'suricata']),
   /** On a router built with all of the above. One without it is rebuilt once to get it. */
   tag: 'fleetwright-edge-watch',
-  /** Where the key is kept on each router in Xen Orchestra. */
-  key: 'fleetwright-watch',
 });
 
 const CRYPT64 = './0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -196,8 +204,54 @@ export function newWatch({ now = Date.now() } = {}) {
 }
 
 /**
- * What buildEdge kept on a router with `vm.set`'s xenStoreData, read back, or
- * null.
+ * WHERE THE POLICY JOB KEEPS WHAT IT MUST REMEMBER: the pair's CARP password,
+ * which a router rebuilt beside a running one must share, and the routers'
+ * key, which a rebuild keeps so the person's vault stays right. In the
+ * preferences of a user of Xen Orchestra made for it, `fleetwright-edge-keys`,
+ * one entry per pool.
+ *
+ * WHY THERE. It has to be in Xen Orchestra, because the next job may run on
+ * another box and the box that ran this one keeps nothing (xo-setup.js). And
+ * it has to be somewhere only an admin reads, which xenStoreData, other_config,
+ * tags and names are not: `xo.getAllObjects` shows all of them to anybody
+ * signed in. A user's preferences come back from `user.getAll`, which is
+ * `permission = 'admin'`, and from `session.getUser`, which answers only the
+ * user signed in. Measured on 5.211.0 with the fleet's token and with a plain
+ * user: `user.getAll` refused, "not enough permissions"; `session.getUser`
+ * their own user; `user.set` on the keeper refused, "a user can only change
+ * its own properties"; the REST API's `/rest/v0/users` an empty list and
+ * `/rest/v0/users/<id>` 403; and no answer to `xo.getAllObjects`, `group`,
+ * `acl`, `resourceSet`, `cloudConfig` or token calls carried the value. An
+ * admin read it back with `user.getAll`.
+ *
+ * NOBODY SIGNS IN AS IT: it is made with a random password nobody keeps, and
+ * with permission `none`, so it can do nothing if somebody did. An admin who
+ * deletes it loses nothing the routers need; the next job finds nothing kept,
+ * and makes and hands on new ones, the way a pair that lost its password is
+ * made again (edge-router.js, ensureEdge).
+ */
+export const EDGE_KEPT = Object.freeze({
+  user: 'fleetwright-edge-keys',
+  /** The preference a pool's entry is under. @param {string} pool */
+  entry: (pool) => `fleetwright-edge:${pool}`,
+  /** On each router, in xenStoreData: a mark of the pair's password, and the pin of the key's certificate. */
+  carpMark: 'fleetwright-carp-mark',
+  watchPin: 'fleetwright-watch-pin',
+  /** Where both were kept in the clear, before: cleared from every router that still has them. */
+  exposed: Object.freeze(['fleetwright-carp', 'fleetwright-watch']),
+});
+
+/**
+ * A mark of the pair's CARP password, for a router to carry where anybody
+ * signed in can read it: a SHA-256, with a label of its own, of 128 random
+ * bits. It says which password a router has and nothing about what it is.
+ *
+ * @param {string} password
+ */
+export const markCarp = (password) => createHash('sha256').update(`fleetwright-carp-mark/v1\0${password}`).digest('hex');
+
+/**
+ * A value set on a router with `vm.set`'s xenStoreData, read back, or null.
  *
  * UNDER `vm-data/`: Xen Orchestra files every key it is given there (its
  * vm.set prefixes them) and hands xenstore_data back as XAPI holds it, prefix
@@ -212,23 +266,88 @@ export function keptOn(vm, key) {
   return typeof raw === 'string' ? raw : null;
 }
 
+/** A router that still carries the pair's password or the key in the clear, as buildEdge kept them before. @param {any} vm */
+export const exposedOn = (vm) => EDGE_KEPT.exposed.some((k) => keptOn(vm, k) !== null);
+
 /**
- * The key a router was built with, where buildEdge kept it, or null.
+ * Those values taken off every router that has them (`vm.set` deletes a key
+ * given as null; measured on 5.211.0). What they were is not trusted again:
+ * the job finds nothing kept for them, and builds the routers again with new
+ * ones (edge-router.js, ensureEdge).
  *
- * @param {any} vm @returns {Watch|null}
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin @param {any[]} vms
+ * @returns {Promise<number>} how many were cleared
  */
-export function watchOf(vm) {
-  const raw = keptOn(vm, EDGE_WATCH.key);
-  if (typeof raw !== 'string') return null;
-  try {
-    const w = JSON.parse(raw);
-    const b64 = /^[A-Za-z0-9+/]{80}$/;
-    if (w?.v !== 1 || !b64.test(w.key) || !b64.test(w.secret) || !/^[./0-9A-Za-z]{1,16}$/.test(w.salt) || !/^[0-9a-f]{13}$/.test(w.refid)) return null;
-    if (!/^[0-9a-f]{64}$/.test(w.pin) || !String(w.crt).includes('BEGIN CERTIFICATE') || !String(w.prv).includes('BEGIN PRIVATE KEY')) return null;
-    return { v: 1, key: w.key, secret: w.secret, salt: w.salt, refid: w.refid, crt: w.crt, prv: w.prv, pin: w.pin };
-  } catch {
-    return null;
+export async function clearExposed(admin, vms) {
+  let n = 0;
+  for (const vm of vms.filter(exposedOn)) {
+    await admin.call('vm.set', { id: vm.id, xenStoreData: Object.fromEntries(EDGE_KEPT.exposed.map((k) => [k, null])) });
+    n++;
   }
+  return n;
+}
+
+/**
+ * A key, held to what newWatch makes, or null.
+ *
+ * @param {any} w @returns {Watch|null}
+ */
+function asWatch(w) {
+  const b64 = /^[A-Za-z0-9+/]{80}$/;
+  if (w?.v !== 1 || !b64.test(w.key) || !b64.test(w.secret) || !/^[./0-9A-Za-z]{1,16}$/.test(w.salt) || !/^[0-9a-f]{13}$/.test(w.refid)) return null;
+  if (!/^[0-9a-f]{64}$/.test(w.pin) || !String(w.crt).includes('BEGIN CERTIFICATE') || !String(w.prv).includes('BEGIN PRIVATE KEY')) return null;
+  return { v: 1, key: w.key, secret: w.secret, salt: w.salt, refid: w.refid, crt: w.crt, prv: w.prv, pin: w.pin };
+}
+
+/** @param {{ call: (method: string, params?: any) => Promise<any> }} admin */
+async function keeperOf(admin) {
+  const users = await admin.call('user.getAll');
+  return (Array.isArray(users) ? users : []).find((u) => u?.email === EDGE_KEPT.user) ?? null;
+}
+
+/**
+ * What the policy job kept for a pool: the pair's CARP password and the
+ * routers' key, each or null. Called with the admin session.
+ *
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin @param {string} pool
+ * @returns {Promise<{ carp: string|null, watch: Watch|null }>}
+ */
+export async function keptFor(admin, pool) {
+  const raw = (await keeperOf(admin))?.preferences?.[EDGE_KEPT.entry(pool)];
+  try {
+    const k = typeof raw === 'string' ? JSON.parse(raw) : null;
+    return { carp: typeof k?.carp === 'string' && /^[0-9a-f]{16,64}$/.test(k.carp) ? k.carp : null, watch: asWatch(k?.watch) };
+  } catch {
+    return { carp: null, watch: null };
+  }
+}
+
+/**
+ * The pair's password and the routers' key kept for a pool, the keeper made
+ * first when there is none. Before the routers that hold them are made, so a
+ * router never has one nothing kept.
+ *
+ * @param {{ call: (method: string, params?: any) => Promise<any> }} admin @param {string} pool
+ * @param {{ carp: string|null, watch: Watch|null }} kept
+ */
+export async function keepFor(admin, pool, { carp, watch }) {
+  let id = (await keeperOf(admin))?.id;
+  if (!id) {
+    id = await admin.call('user.create', { email: EDGE_KEPT.user, password: randomBytes(32).toString('base64url'), permission: 'none' });
+    if (typeof id !== 'string' || !id) throw new Error('Xen Orchestra made the user the edge routers’ keys are kept with without saying its id');
+  }
+  await admin.call('user.set', { id, preferences: { [EDGE_KEPT.entry(pool)]: JSON.stringify({ v: 1, carp, watch }) } });
+}
+
+/**
+ * The key a router was built with, when it is the one the job kept: the
+ * router carries its certificate's pin, and only the kept key with that pin is
+ * it. Null for a router built with another, or with none.
+ *
+ * @param {any} vm @param {Watch|null} kept @returns {Watch|null}
+ */
+export function watchOf(vm, kept) {
+  return kept && keptOn(vm, EDGE_KEPT.watchPin) === kept.pin ? kept : null;
 }
 
 /**
