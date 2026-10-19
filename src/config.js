@@ -101,7 +101,18 @@ export function loadConfig(env = process.env) {
   adoptLegacyEnv(env);
   // Kept as a parameter for symmetry with tests, but the helpers above read
   // process.env directly; swap it in so an injected env actually applies.
-  if (env !== process.env) process.env = /** @type {any} */ (env);
+  //
+  // IN PLACE, NOT BY ASSIGNMENT. bin/fleetwright hands this root's own
+  // environment so that root's children never see the service user's env
+  // file, and `process.env = env` did that only up to Node 24: from Node 26 a
+  // child spawned without `env:` inherits the real environment whatever
+  // object process.env was pointed at, so root's doctor ran root's systemctl
+  // with LEAKME=from-their-file (test/doctor.test.js, as root, on 26).
+  // Deleting and setting keys changes the environment itself, on every Node.
+  if (env !== process.env) {
+    for (const key of Object.keys(process.env)) if (!Object.hasOwn(env, key)) delete process.env[key];
+    Object.assign(process.env, env);
+  }
 
   const home = os.homedir();
   const stateDir = str('FLEETWRIGHT_STATE_DIR', preferExisting('/var/lib/fleetwright', '/var/lib/agent-hub'));
