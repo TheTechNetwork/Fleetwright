@@ -213,7 +213,10 @@ internal fun PolicyForm(
                         title = title,
                         line = imageThereLine(value) + builtFrom,
                         onClick = {
-                            onChange(choice.copy(imageActions = if (value == null) choice.imageActions - kind.key else choice.imageActions + (kind.key to value)))
+                            onChange(choice.copy(
+                                imageActions = if (value == null) choice.imageActions - kind.key else choice.imageActions + (kind.key to value),
+                                rebuiltForChannel = choice.rebuiltForChannel - kind.key,
+                            ))
                         },
                     )
                 }
@@ -239,14 +242,20 @@ internal fun PolicyForm(
         // that builds from either (C-2). Asked for: "Or should we build a path
         // for the images to use main/rolling?"
         if (choice.imageChannelChoice) {
+            // THROUGH withImageChannel, so an image there built from the other
+            // is marked to rebuild: otherwise Apply changes nothing and the
+            // screen opens again on what the image was (XoPolicy.Choice).
             Text("Built from", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+            val marked = choice.rebuiltForChannel.count { choice.imageActions[it] == XoPolicy.REBUILD }
             listOf(XoPolicy.CHANNEL_STABLE to "Released versions", XoPolicy.CHANNEL_ROLLING to "Every merge to main").forEach { (value, title) ->
+                val chosen = choice.imageChannel == value
                 RadioRow(
-                    selected = choice.imageChannel == value,
+                    selected = chosen,
                     enabled = enabled,
                     title = title,
-                    line = XoPolicy.imageChannelLine(value, present.isNotEmpty()),
-                    onClick = { onChange(choice.copy(imageChannel = value)) },
+                    line = XoPolicy.imageChannelLine(value, present.isNotEmpty() && !(chosen && marked > 0)) +
+                        (if (chosen && marked > 0) XoPolicy.channelRebuildLine(marked) else ""),
+                    onClick = { onChange(XoPolicy.withImageChannel(inv, choice, value)) },
                 )
             }
         }

@@ -3222,6 +3222,11 @@ class Settings(context: Context) {
     // everywhere), the old file is copied across once, the first time this
     // runs, and only then emptied. Not "fleetwright": SessionKind already has
     // that file, and two owners of one file is how a key gets overwritten.
+    /**
+     * Where a pool's page is kept as it was last seen (Manage.savedPage): app
+     * storage that Android leaves out of backups, never preferences.
+     */
+    val poolPages: java.io.File = java.io.File(context.noBackupFilesDir, "pool-pages")
     private val prefs = migrated(context)
 
     /** Not sensitive: an origin, and the app talks to no other. */

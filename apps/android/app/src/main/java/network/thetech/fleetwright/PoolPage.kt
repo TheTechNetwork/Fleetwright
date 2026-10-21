@@ -183,7 +183,16 @@ private fun StatusCard(watch: PoolWatch) {
         ) { words ->
             Text(words, style = Design.Style.body, color = tone)
         }
-        if (phase is PoolWatch.Phase.Stopped) Text(watch.lookedLine, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        if (phase is PoolWatch.Phase.Stopped) {
+            Text(watch.lookedLine, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        } else if (watch.fromSaved) {
+            // THE PAGE BELOW IS FROM LAST TIME, said with its time, so a row
+            // drawn before the pool answers is never taken for now (C-5).
+            watch.lookedAt?.let { at ->
+                val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(at))
+                Text(Manage.Words.savedPage(time), style = Design.Style.label, color = Design.Palette.inkDim.now)
+            }
+        }
         watch.user?.let { Text(Manage.Words.limitedUser(it), style = Design.Style.label, color = Design.Palette.inkDim.now) }
         if (canLookAgain) {
             OutlinedButton(onClick = { scope.launch { watch.start() } }, modifier = Modifier.heightIn(min = 48.dp)) {

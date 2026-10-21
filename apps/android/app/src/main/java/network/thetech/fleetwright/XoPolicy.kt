@@ -185,6 +185,9 @@ internal object XoPolicy {
         } else {
             "Fleetwright from the newest release. Machines made from the image update to each release."
         }) + (if (anyThere) " An image that is there keeps what it was built from until it is rebuilt." else "")
+    /** Under the channel when changing it marked images to rebuild: Apply does that, so it is said before it is pressed. */
+    fun channelRebuildLine(count: Int): String =
+        if (count == 1) " Apply rebuilds the image that is there to match." else " Apply rebuilds the $count images that are there to match."
     /** Beside an image that is there and was built from main. */
     const val BUILT_FROM_MAIN = " It was built from main."
 
@@ -275,6 +278,33 @@ internal object XoPolicy {
         if (!c.imageManageChoice) return emptyList()
         val present = imageKeysOn(inv, c.egress)
         return (inv.imageKinds ?: emptyList()).map { it.key }.filter { it in present && c.imageActions[it] == action }
+    }
+
+    /**
+     * WHAT AN IMAGE IS BUILT FROM ONLY CHANGES WHEN IT IS BUILT, so changing
+     * the channel marks every image there built from the other one to
+     * rebuild, where the machine rebuilds images, and changing it back
+     * unmarks them. Asked for: "the build from setting isn't saving": Apply
+     * kept the image as it was, and the screen opened again on what the image
+     * was built from. One the person marked to remove, or to rebuild by hand,
+     * is left as they said. The same as iOS (XOPolicy.Choice.setImageChannel).
+     */
+    fun withImageChannel(inv: Inventory, c: Choice, channel: String): Choice {
+        if (!c.imageManageChoice) return c.copy(imageChannel = channel)
+        val actions = c.imageActions.toMutableMap()
+        val marked = c.rebuiltForChannel.toMutableSet()
+        for (key in imageKeysOn(inv, c.egress)) {
+            val differs = imageChannelOn(inv, c.egress, key) != channel
+            val action = actions[key]
+            if (differs && action == null) {
+                actions[key] = REBUILD
+                marked += key
+            } else if (!differs && key in marked) {
+                if (action == REBUILD) actions -= key
+                marked -= key
+            }
+        }
+        return c.copy(imageChannel = channel, imageActions = actions, rebuiltForChannel = marked)
     }
 
     /** The router or an image is to be built now, on storage still to be picked. A rebuilt image is built like a new one. */
@@ -389,6 +419,8 @@ internal object XoPolicy {
         val imageActions: Map<String, String> = emptyMap(),
         /** The machine rebuilds and removes images (`image-manage` in begin's `can`). An older one keeps every image. */
         val imageManageChoice: Boolean = false,
+        /** The images marked to rebuild BECAUSE the channel changed, not by hand, so changing it back unmarks them and leaves a hand's alone. */
+        val rebuiltForChannel: Set<String> = emptySet(),
         /** How many group networks the way out's pool is to have. Asked for: "the 3 VMs need to reach each other". */
         val groups: Int = 0,
         /** The machine makes them (`groups` in begin's `can`). An older one cannot, so they are neither offered nor sent. */

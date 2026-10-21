@@ -653,6 +653,93 @@ internal object Manage {
         settings.xoLooked = all.put(address, at).toString()
     }
 
+    /**
+     * THE PAGE AS IT WAS LAST SEEN, drawn the moment the pool's page opens and
+     * replaced when the pool answers. Asked for: "why does connecting and
+     * loading info take so long": the page was blank for every second of the
+     * socket, the sign-in and seven reads. The same as Manage.swift.
+     *
+     * What is kept is what the page draws (names, states, sizes, addresses),
+     * never the token or anything that signs in: a file in the app's own
+     * storage that Android leaves out of backups, under a name made from the
+     * address. The screen says when it is from (C-5), and nothing can be done
+     * to a row until the pool itself has answered.
+     */
+    fun savedPage(settings: Settings, address: String): Snapshot? = runCatching {
+        val o = JSONObject(pageFile(settings, address).readText())
+        val components = o.getJSONObject("components").let { m -> m.keys().asSequence().associateWith { componentOf(m.getJSONObject(it)) } }
+        val disks = o.getJSONObject("disks").let { m ->
+            m.keys().asSequence().associateWith { id ->
+                val d = m.getJSONObject(id)
+                Disk(d.getString("id"), d.getString("name"), d.optLongOrNull("size"), d.optStringOrNull("storageId"))
+            }
+        }
+        val attachments = o.getJSONObject("attachments").let { m ->
+            m.keys().asSequence().associateWith { id ->
+                val a = m.getJSONObject(id)
+                Attachment(a.getString("vm"), a.optStringOrNull("vdi"), a.getBoolean("cd"), a.getString("position"))
+            }
+        }
+        Snapshot(components, disks, attachments)
+    }.getOrNull()
+
+    fun savePage(settings: Settings, address: String, page: Snapshot) {
+        runCatching {
+            val o = JSONObject()
+                .put("components", JSONObject().also { m -> page.components.forEach { (id, c) -> m.put(id, componentJson(c)) } })
+                .put("disks", JSONObject().also { m ->
+                    page.disks.forEach { (id, d) ->
+                        m.put(id, JSONObject().put("id", d.id).put("name", d.name).putOpt("size", d.size).putOpt("storageId", d.storageId))
+                    }
+                })
+                .put("attachments", JSONObject().also { m ->
+                    page.attachments.forEach { (id, a) ->
+                        m.put(id, JSONObject().put("vm", a.vm).putOpt("vdi", a.vdi).put("cd", a.cd).put("position", a.position))
+                    }
+                })
+            val file = pageFile(settings, address)
+            file.parentFile?.mkdirs()
+            val next = java.io.File(file.path + ".new")
+            next.writeText(o.toString())
+            next.renameTo(file)
+        }
+    }
+
+    private fun pageFile(settings: Settings, address: String): java.io.File {
+        val name = java.security.MessageDigest.getInstance("SHA-256").digest(address.toByteArray()).joinToString("") { "%02x".format(it) }
+        return java.io.File(settings.poolPages, "$name.json")
+    }
+
+    private fun componentJson(c: Component): JSONObject = JSONObject()
+        .put("id", c.id).put("kind", c.kind.name).put("name", c.name).putOpt("state", c.state?.name)
+        .putOpt("poolId", c.poolId).putOpt("containerId", c.containerId).putOpt("cpus", c.cpus)
+        .putOpt("memory", c.memory).putOpt("memoryUsed", c.memoryUsed).putOpt("size", c.size).putOpt("used", c.used)
+        .putOpt("address", c.address).putOpt("toolsRunning", c.toolsRunning).putOpt("storageType", c.storageType)
+        .putOpt("shared", c.shared).putOpt("software", c.software).put("holder", c.holder)
+
+    private fun componentOf(o: JSONObject): Component = Component(
+        id = o.getString("id"),
+        kind = Kind.valueOf(o.getString("kind")),
+        name = o.getString("name"),
+        state = o.optStringOrNull("state")?.let { State.valueOf(it) },
+        poolId = o.optStringOrNull("poolId"),
+        containerId = o.optStringOrNull("containerId"),
+        cpus = if (o.has("cpus")) o.getInt("cpus") else null,
+        memory = o.optLongOrNull("memory"),
+        memoryUsed = o.optLongOrNull("memoryUsed"),
+        size = o.optLongOrNull("size"),
+        used = o.optLongOrNull("used"),
+        address = o.optStringOrNull("address"),
+        toolsRunning = if (o.has("toolsRunning")) o.getBoolean("toolsRunning") else null,
+        storageType = o.optStringOrNull("storageType"),
+        shared = if (o.has("shared")) o.getBoolean("shared") else null,
+        software = o.optStringOrNull("software"),
+        holder = o.optBoolean("holder", false),
+    )
+
+    private fun JSONObject.optStringOrNull(key: String): String? = if (has(key) && !isNull(key)) getString(key) else null
+    private fun JSONObject.optLongOrNull(key: String): Long? = if (has(key) && !isNull(key)) getLong(key) else null
+
     // --- Sentences --------------------------------------------------------
 
     /** Every sentence the screens say about a pool, in one place, held equal to Manage.swift's by the shared table. */

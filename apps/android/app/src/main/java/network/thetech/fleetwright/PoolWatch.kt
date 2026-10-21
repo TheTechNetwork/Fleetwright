@@ -5,6 +5,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -62,7 +65,13 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
 
     var phase by mutableStateOf<Phase>(Phase.Idle)
         private set
-    var snapshot by mutableStateOf(Manage.Snapshot())
+
+    /** Starts as the page was last seen (Manage.savedPage), drawn until the pool answers. */
+    var snapshot by mutableStateOf(Manage.savedPage(settings, address) ?: Manage.Snapshot())
+        private set
+
+    /** What is drawn is the page as it was last seen, not yet the pool's answer. */
+    var fromSaved by mutableStateOf(!snapshot.isEmpty)
         private set
 
     /** The methods this Xen Orchestra lists. Null is cannot tell, which offers nothing (C-2). */
@@ -81,6 +90,15 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
 
     private var link: XoLink? = null
     private var polling: Job? = null
+
+    /** A read through a machine is in flight: a second is not started. */
+    private var relayingNow = false
+
+    /** The socket opened in this attempt; until it has, a machine may be asked as well. */
+    private var reached = false
+
+    /** Why the socket did not open, for a machine asked before it had said. */
+    private var socketWhy: String? = null
 
     /**
      * Bumped by every start and every stop. STOPPED WHILE IT WAITED: the page
@@ -111,13 +129,28 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
         }
         phase = Phase.Connecting
         val mine = ++generation
+        reached = false
+        socketWhy = null
+        // A MACHINE IS ASKED AS WELL once the socket has had DIRECT_FIRST_MS
+        // to open, rather than after its whole deadline; the socket goes on
+        // trying, and its answer replaces the machine's when it comes.
+        val early = scope.launch {
+            delay(DIRECT_FIRST_MS)
+            if (generation == mine && !reached && phase == Phase.Connecting) readThrough(Manage.Words.notYet)
+        }
         val opened = try {
             XoLink.open(address, pin)
         } catch (e: XoLink.Failure) {
             if (generation != mine) return
             if (e.kind == XoLink.Failure.Kind.WRONG_CERTIFICATE) {
+                // NOT ANOTHER POOL'S PAGE: a certificate that is not the one
+                // pinned is the news, and an ask under way is dropped with it.
+                early.cancel()
+                generation++
                 phase = Phase.Stopped(Manage.Words.wrongCertificate(address), retry = false)
             } else {
+                if (!relayingNow) early.cancel()
+                socketWhy = e.message
                 readThrough(e.message ?: "it did not answer")
             }
             return
@@ -125,14 +158,21 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
             // AWAY FROM THE POOL'S NETWORK: the socket never opened, which is
             // a pool this phone could not reach, so one of your machines is
             // asked to read it instead.
+            if (!relayingNow) early.cancel()
             if (generation != mine) return
+            socketWhy = e.message
             readThrough(e.message ?: "it did not answer")
             return
         }
+        if (!relayingNow) early.cancel()
         if (generation != mine) {
             opened.close()
             return
         }
+        reached = true
+        // The socket opened while a machine was being asked: it is this
+        // phone's own connection that the page now waits on.
+        if (phase == Phase.Relaying && via == null) phase = Phase.Connecting
         link = opened
         scope.launch {
             val why = opened.end.await()
@@ -143,12 +183,34 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
         } catch (e: Exception) {
             if (generation != mine) return
             drop(opened)
+            // A MACHINE ALREADY SHOWING THE PAGE goes on showing it.
+            if (via != null) return
             phase = Phase.Stopped(Manage.Words.signInRefused(address, e.message ?: "no reason given"), retry = false)
             return
         }
+        // ALL AT ONCE on the one socket, answered by id: the method list and
+        // each object type, where one after another was seven round trips.
         // A LIST THAT COULD NOT BE READ IS NOT AN EMPTY ONE: null draws no
         // action and says why, rather than drawing none and saying nothing.
-        val listed = runCatching { opened.call("system.getMethodsInfo") }.getOrNull() as? JSONObject
+        var next = Manage.Snapshot()
+        val listed: JSONObject?
+        try {
+            val (methodsAnswer, answers) = coroutineScope {
+                val m = async { runCatching { opened.call("system.getMethodsInfo") }.getOrNull() }
+                val all = Manage.objectTypes.map { type ->
+                    async { opened.call("xo.getAllObjects", JSONObject().put("filter", JSONObject().put("type", type))) }
+                }.awaitAll()
+                m.await() to all
+            }
+            listed = methodsAnswer as? JSONObject
+            for (got in answers) next = next.taking(got)
+        } catch (e: Exception) {
+            if (generation != mine) return
+            drop(opened)
+            if (via != null) return
+            phase = Phase.Stopped(Manage.Words.lost(e.message ?: "it stopped answering"), retry = true)
+            return
+        }
         if (generation != mine) return
         val methods = listed?.keys()?.asSequence()?.toSet()
         if (methods != null && "xo.getAllObjects" !in methods) {
@@ -156,20 +218,15 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
             phase = Phase.Stopped(Manage.Words.noObjects, retry = false)
             return
         }
-        var next = Manage.Snapshot()
-        try {
-            for (type in Manage.objectTypes) {
-                next = next.taking(opened.call("xo.getAllObjects", JSONObject().put("filter", JSONObject().put("type", type))))
-            }
-        } catch (e: Exception) {
-            if (generation != mine) return
-            drop(opened)
-            phase = Phase.Stopped(Manage.Words.lost(e.message ?: "it stopped answering"), retry = true)
-            return
-        }
-        if (generation != mine || link !== opened) return
+        if (link !== opened) return
+        // THE SOCKET TAKES OVER from a machine that answered first: what it
+        // would read again on its timer is now watched as it changes.
+        polling?.cancel()
+        polling = null
+        via = null
         this.methods = methods
         snapshot = next
+        fromSaved = false
         phase = Phase.Live
         touch()
         // NOTIFICATIONS THAT ARRIVED DURING THE READ waited in the channel,
@@ -256,6 +313,18 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
      * open; a failure then keeps what was shown and says so.
      */
     private suspend fun readThrough(why: String) {
+        // ONE AT A TIME: the early ask and a socket that then failed would
+        // otherwise both ask the fleet for the same page.
+        if (relayingNow) return
+        relayingNow = true
+        try {
+            readThroughOnce(why)
+        } finally {
+            relayingNow = false
+        }
+    }
+
+    private suspend fun readThroughOnce(why: String) {
         val first = via == null
         if (first) phase = Phase.Relaying
         val asked = generation
@@ -272,14 +341,25 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
                 phase = Phase.Stopped(Manage.Words.noObjects, retry = false)
                 return
             }
+            // THE SOCKET ANSWERED FIRST after all: its page is the newer one.
+            if (phase == Phase.Live && via == null) return
             methods = listed
             snapshot = Manage.Snapshot().taking(page.optJSONArray("objects"))
+            fromSaved = false
             via = r.hostId ?: Manage.Words.oneOfYours
             phase = Phase.Live
             touch()
             if (polling == null) poll()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             if (asked != generation) return
+            // THE SOCKET IS STILL IN PLAY, opening or open: it says what is,
+            // and a machine that could not help this once is not news.
+            if (link != null || (!reached && socketWhy == null)) {
+                if (phase == Phase.Relaying && via == null) phase = Phase.Connecting
+                return
+            }
             polling?.cancel()
             polling = null
             val host = via
@@ -287,7 +367,7 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
             phase = if (host != null) {
                 Phase.Stopped(Manage.Words.throughLost(host, e.message ?: "it stopped answering"), retry = true)
             } else {
-                Phase.Stopped(Manage.Words.unreachableEverywhere(address, why, e.message ?: "nothing answered"), retry = true)
+                Phase.Stopped(Manage.Words.unreachableEverywhere(address, socketWhy ?: why, e.message ?: "nothing answered"), retry = true)
             }
         }
     }
@@ -319,12 +399,22 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
     companion object {
         /** How often a page read through a machine is asked for again. */
         const val THROUGH_EVERY_MS = 20_000L
+
+        /**
+         * HOW LONG THE SOCKET IS GIVEN before a machine is asked as well. Away
+         * from the pool nothing answers, and the page used to wait out the
+         * socket's whole deadline before asking; on the pool's network the
+         * socket opens well inside this. The same as PoolWatch.swift.
+         */
+        const val DIRECT_FIRST_MS = 2_500L
     }
 
     /** The socket ended without being asked to: a phone that slept, a network that changed, a server that went. */
     private fun lost(which: XoLink, why: String) {
         if (link !== which) return
         link = null
+        // A MACHINE ALREADY SHOWING THE PAGE goes on showing it.
+        if (via != null) return
         if (phase == Phase.Live || phase == Phase.Connecting) phase = Phase.Stopped(Manage.Words.lost(why), retry = true)
     }
 
@@ -337,5 +427,6 @@ internal class PoolWatch(private val settings: Settings, val address: String, pr
         val now = System.currentTimeMillis()
         lookedAt = now
         Manage.rememberLooked(settings, address, now)
+        Manage.savePage(settings, address, snapshot)
     }
 }
