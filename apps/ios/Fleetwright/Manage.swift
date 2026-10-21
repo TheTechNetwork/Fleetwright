@@ -852,6 +852,17 @@ enum Manage {
         static func typePrompt(_ name: String) -> String { "Type \(name) to confirm." }
         static let actionsFooter = "Each action is here only because this Xen Orchestra lists its method. Shutting down, rebooting, "
             + "pausing and suspending ask first; forcing a VM off or deleting one asks for its name typed back."
+        /// THE CONSOLE (VMConsoleView): offered for a running VM while this
+        /// phone watches the pool itself. docs/manage.md, "The console".
+        static let console = "Console"
+        static let consoleAway = "The console opens only from the pool’s own network. Away from it, this phone reads the page through one of your machines, and a screen cannot come that way."
+        static func consoleOpening(_ name: String) -> String { "Opening the console of \(name)…" }
+        static let consoleShut = "Xen Orchestra closed the console before it showed anything. The pool’s limited user may not be allowed to operate this machine."
+        static let consoleEnded = "The console closed."
+        static func consoleRefused(_ why: String) -> String { "Xen Orchestra would not open the console: \(why)." }
+        static let openAgain = "Open again"
+        static let keyboard = "Keyboard"
+        static let ctrlAltDel = "Ctrl-Alt-Del"
         static let gone = "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it."
         static let lookAgain = "Look again"
         static let changePolicy = "Change what the fleet may use"

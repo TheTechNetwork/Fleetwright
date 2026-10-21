@@ -824,6 +824,16 @@ internal object Manage {
         fun typePrompt(name: String) = "Type $name to confirm."
         const val actionsFooter = "Each action is here only because this Xen Orchestra lists its method. Shutting down, rebooting, " +
             "pausing and suspending ask first; forcing a VM off or deleting one asks for its name typed back."
+        /** THE CONSOLE (ConsolePage): offered for a running VM while this phone watches the pool itself. docs/manage.md, "The console". */
+        const val console = "Console"
+        const val consoleAway = "The console opens only from the pool’s own network. Away from it, this phone reads the page through one of your machines, and a screen cannot come that way."
+        fun consoleOpening(name: String) = "Opening the console of $name…"
+        const val consoleShut = "Xen Orchestra closed the console before it showed anything. The pool’s limited user may not be allowed to operate this machine."
+        const val consoleEnded = "The console closed."
+        fun consoleRefused(why: String) = "Xen Orchestra would not open the console: $why."
+        const val openAgain = "Open again"
+        const val keyboard = "Keyboard"
+        const val ctrlAltDel = "Ctrl-Alt-Del"
         const val gone = "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it."
         const val lookAgain = "Look again"
         const val changePolicy = "Change what the fleet may use"

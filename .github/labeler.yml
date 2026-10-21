@@ -17,13 +17,14 @@
 
 # --- where -----------------------------------------------------------------
 
+# src/vnc is the VM console page, built into both apps (scripts/build-vnc.mjs).
 platform/ios:
   - changed-files:
-      - any-glob-to-any-file: ['apps/ios/**']
+      - any-glob-to-any-file: ['apps/ios/**', 'src/vnc/**']
 
 platform/android:
   - changed-files:
-      - any-glob-to-any-file: ['apps/android/**']
+      - any-glob-to-any-file: ['apps/android/**', 'src/vnc/**']
 
 # The Worker, the Node coordinator behind the tests, and the push path that
 # only the coordinator sends on.

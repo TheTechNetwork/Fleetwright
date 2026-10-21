@@ -138,6 +138,13 @@ jobs:
             node "scripts/$script.mjs" || failed=1
             echo "::endgroup::"
           done
+          # THE CONSOLE PAGE, rebuilt from the noVNC that is installed now. On
+          # a branch that did not move noVNC it writes the same bytes, which
+          # is nothing to commit. test/vnc-page.test.js fails a page that was
+          # not rebuilt.
+          echo "::group::npm run vnc"
+          npm run -s vnc || failed=1
+          echo "::endgroup::"
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
 
       # The commit, as github-actions[bot], which is the author renovate.json's
@@ -159,13 +166,14 @@ jobs:
           git diff --stat
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A src
+          git add -A src apps/ios/Fleetwright/vnc.html apps/android/app/src/main/assets/vnc.html
           git commit -q -F - <<'MSG'
           Pin the rest of what Renovate moved
 
           Renovate moved a name; this is the address, digest and sizes that
           follow from it, written from the vendor's own checksum file or
-          release by the pin scripts in scripts/, run on this pull request by
+          release by the pin scripts in scripts/, or the console page rebuilt
+          from the noVNC it moved, run on this pull request by
           .github/workflows/renovate-pin.yml.
           MSG
           git push origin "HEAD:refs/heads/$BRANCH"
