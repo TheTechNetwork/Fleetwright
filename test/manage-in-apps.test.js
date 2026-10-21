@@ -115,9 +115,17 @@ test('iOS: the token is the one setup handed back, and no password is reached fo
   assert.match(code, /link\.call\("session\.signIn", \["token": record\.token\]\)/);
   // Never the admin sign-in a person may keep for setup, and never a password.
   for (const banned of ['XOSaved', 'password', 'email']) assert.ok(!code.includes(banned), `the Manage code reaches for ${banned}`);
-  // And it is written nowhere: the only thing these files keep is when.
+  // And it is written nowhere: these files keep when the pool was last
+  // looked at, and the page as it was then, which is drawn until the pool
+  // answers (Manage.savedPage). The page is what the screen draws, in a
+  // protected file out of backups; never the token, never the Keychain.
   assert.ok(!/Keychain\.set\(/.test(code), 'the Manage code writes to the Keychain');
   assert.equal((code.match(/UserDefaults\.standard\.set\(/g) ?? []).length, 1, 'the Manage code keeps something besides when it last looked');
+  const saving = bare(IOS_MODEL).slice(bare(IOS_MODEL).indexOf('static func savePage('), bare(IOS_MODEL).indexOf('private static func pageFile('));
+  assert.match(saving, /JSONEncoder\(\)\.encode\(page\)/, 'what is saved is the page, a Snapshot');
+  assert.match(saving, /\.completeFileProtection/);
+  assert.match(saving, /isExcludedFromBackup = true/);
+  assert.ok(!/token/i.test(saving), 'the page file is written with nothing that signs in');
 });
 
 test('iOS: an action is drawn only from what the model offers, and asks by what it costs', () => {
@@ -272,7 +280,7 @@ test('Android: the page is under Machines, on the row that names the pool, and s
 
 test('both phones: the same sections, in the same order', () => {
   // The kinds are listed in the order each enum declares them.
-  assert.match(IOS_MODEL, /enum Kind: String, CaseIterable \{\s*case pool, host, vm, sr\s*\}/);
+  assert.match(IOS_MODEL, /enum Kind: String, CaseIterable(?:, Codable)? \{\s*case pool, host, vm, sr\s*\}/);
   assert.match(KT_MODEL, /enum class Kind\(val raw: String\) \{ POOL\("pool"\), HOST\("host"\), VM\("vm"\), SR\("sr"\) \}/);
   // A component's page: what it is, how it is, what it can do.
   const ios = bare(IOS_SCREEN);
@@ -300,7 +308,19 @@ test('both phones: a pool the phone could not reach is read through one of your 
   // opened is a pool this phone could not reach, and goes to the fleet; one
   // that opened and then went is still "ended". docs/manage.md, "From away".
   const ios = bare(IOS_WATCH);
-  assert.match(ios, /try await link\.open\(\)\s*\} catch XOLink\.Failure\.wrongCertificate \{[\s\S]{0,200}?\} catch \{[\s\S]{0,80}?await readThrough\(after: error\.localizedDescription\)[\s\S]{0,40}?\}\s*reached = true/);
+  assert.match(ios, /try await link\.open\(\)\s*\} catch XOLink\.Failure\.wrongCertificate \{[\s\S]{0,300}?\} catch \{[\s\S]{0,220}?await readThrough\(after: error\.localizedDescription\)[\s\S]{0,40}?\}\s*if !relayingNow \{ early\.cancel\(\) \}\s*reached = true/);
+  // A wrong certificate drops an ask under way with it, so a machine's late
+  // page never covers it.
+  assert.match(ios, /catch XOLink\.Failure\.wrongCertificate \{\s*early\.cancel\(\)\s*if stale\(\) \{ return \}\s*generation \+= 1/);
+  // AND NOT ONLY AFTER THE SOCKET'S WHOLE DEADLINE: a machine is asked as
+  // well once the socket has had directFirst, and the socket's answer, when
+  // it comes, takes over from the machine's. Asked for: "why does connecting
+  // and loading info take so long".
+  assert.match(ios, /static let directFirst: Duration = \.milliseconds\(2500\)/);
+  assert.match(ios, /try\? await Task\.sleep\(for: PoolWatch\.directFirst\)[\s\S]{0,200}?!self\.reached, self\.phase == \.connecting else \{ return \}\s*await self\.readThrough\(after: Manage\.Words\.notYet\)/);
+  assert.match(ios, /generation \+= 1\s*polling\?\.cancel\(\)\s*polling = nil\s*via = nil[\s\S]{0,80}?snapshot = next/);
+  // All at once on the one socket: the object types in a task group.
+  assert.match(ios, /withThrowingTaskGroup[\s\S]{0,120}?for type in Manage\.objectTypes \{\s*group\.addTask \{ XOLink\.Answer\(value: try await link\.call\("xo\.getAllObjects"/);
   assert.match(ios, /if reached \{\s*phase = \.stopped\(Manage\.Words\.lost\(reason\), retry: true\)\s*\} else \{\s*Task \{ await readThrough\(after: reason\) \}/);
   // Its own deadline, and only while the socket is still opening.
   assert.match(bare(IOS_LINK), /asyncAfter\(deadline: \.now\(\) \+ timeout\) \{ \[weak self\] in\s*guard let self, self\.lock\.withLock\(\{ self\.opening != nil \}\) else \{ return \}/);

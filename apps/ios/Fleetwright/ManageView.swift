@@ -223,6 +223,12 @@ struct PoolManageView: View {
                 Text(watch.lookedLine)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
+            } else if watch.fromSaved, let at = watch.lookedAt {
+                // THE PAGE BELOW IS FROM LAST TIME, said with its time, so a
+                // row drawn before the pool answers is never taken for now (C-5).
+                Text(Manage.Words.savedPage(at.formatted(date: .omitted, time: .shortened)))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
             }
             if let user = watch.user {
                 Text(Manage.Words.limitedUser(user))

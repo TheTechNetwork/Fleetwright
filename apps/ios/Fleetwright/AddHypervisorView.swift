@@ -1267,7 +1267,7 @@ struct AddHypervisorView: View {
         ForEach(kinds) { kind in
             if present.contains(kind.key), choice.imageManageChoice {
                 let action = choice.imageActions[kind.key] ?? .keep
-                Picker(selection: Binding(get: { action }, set: { choice.imageActions[kind.key] = $0 })) {
+                Picker(selection: Binding(get: { action }, set: { choice.imageActions[kind.key] = $0; choice.rebuiltForChannel.remove(kind.key) })) {
                     Text("Keep").tag(XOPolicy.ImageAction.keep)
                     Text("Rebuild").tag(XOPolicy.ImageAction.rebuild)
                     Text("Remove").tag(XOPolicy.ImageAction.remove)
@@ -1302,11 +1302,17 @@ struct AddHypervisorView: View {
     @ViewBuilder
     private func imageChannelRow(inv: XOPolicy.Inventory) -> some View {
         if choice.imageChannelChoice {
-            Picker(selection: $choice.imageChannel) {
+            // THROUGH setImageChannel, so an image there built from the other
+            // is marked to rebuild: otherwise Apply changes nothing and the
+            // screen opens again on what the image was (XOPolicy.Choice).
+            Picker(selection: Binding(get: { choice.imageChannel }, set: { choice.setImageChannel($0, in: inv) })) {
                 Text("Released versions").tag(XOPolicy.channelStable)
                 Text("Every merge to main").tag(XOPolicy.channelRolling)
             } label: {
-                policyRow("Built from", XOPolicy.imageChannelLine(choice.imageChannel, anyThere: !inv.imageKeys(on: choice.egress).isEmpty))
+                let marked = choice.rebuiltForChannel.filter { choice.imageActions[$0] == .rebuild }.count
+                let anyThere = !inv.imageKeys(on: choice.egress).isEmpty
+                policyRow("Built from", XOPolicy.imageChannelLine(choice.imageChannel, anyThere: anyThere && marked == 0)
+                    + (marked > 0 ? XOPolicy.channelRebuildLine(marked) : ""))
             }
             .tint(Design.Palette.accent)
             .frame(minHeight: 44)

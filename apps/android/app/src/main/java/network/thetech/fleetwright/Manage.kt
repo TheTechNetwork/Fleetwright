@@ -659,6 +659,10 @@ internal object Manage {
     object Words {
         const val watching = "Watching now. Changes arrive as Xen Orchestra makes them."
         fun connecting(address: String) = "Connecting to $address…"
+        fun savedPage(time: String) = "Showing the page as it was at $time until the pool answers."
+
+        /** Why a machine was asked while the socket was still opening. */
+        const val notYet = "it had not answered yet"
         const val never = "Not looked at from this phone yet."
         const val closed = "Nothing watches while the app is closed."
         fun lookedAt(time: String) = "Last looked at $time. $closed"

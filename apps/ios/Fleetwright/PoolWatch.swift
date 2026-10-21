@@ -62,6 +62,14 @@ final class PoolWatch {
 
     /// How a page read through a machine is asked for again, and how often.
     static let throughEvery: Duration = .seconds(20)
+    /// HOW LONG THE SOCKET IS GIVEN before a machine is asked as well. Away
+    /// from the pool nothing answers, and the page used to wait out the
+    /// socket's whole 15 seconds before asking; on the pool's network the
+    /// socket opens well inside this. Whichever answers first is drawn, and
+    /// the socket's answer replaces a machine's when it comes.
+    static let directFirst: Duration = .milliseconds(2500)
+    /// The page as it was last seen, drawn until the pool answers (Manage.savedPage).
+    private(set) var fromSaved = false
     private let fleet: Fleet?
     /// Holds this watch weakly, so letting go of the page ends it on its next turn.
     @ObservationIgnored private var polling: Task<Void, Never>?
@@ -75,6 +83,11 @@ final class PoolWatch {
 
     /// Outside the main actor, so letting go of this object closes the socket.
     private let holder = LinkHolder()
+    /// A read through a machine is in flight: a second is not started.
+    @ObservationIgnored private var relayingNow = false
+    /// Why the socket did not open, for a machine asked before it had said.
+    @ObservationIgnored private var socketWhy: String?
+
     /// While the first read is in flight, notifications wait here rather than
     /// changing a picture that is about to be replaced.
     @ObservationIgnored private var loading = false
@@ -84,6 +97,10 @@ final class PoolWatch {
         self.address = address
         self.fleet = fleet
         lookedAt = Manage.lastLooked(address)
+        if let saved = Manage.savedPage(address), !saved.isEmpty {
+            snapshot = saved
+            fromSaved = true
+        }
     }
 
     deinit {
@@ -115,6 +132,7 @@ final class PoolWatch {
         }
         phase = .connecting
         reached = false
+        socketWhy = nil
         // THE MAIN QUEUE, NOT A TASK PER MESSAGE. The socket hands messages
         // over in order, and Xen Orchestra's notifications only make sense in
         // order: an object that arrived and then went must not go and then
@@ -142,59 +160,102 @@ final class PoolWatch {
         // wait is not news then, and stop() has already said what is.
         func stale() -> Bool { holder.peek() !== link }
 
+        // A MACHINE IS ASKED AS WELL once the socket has had directFirst to
+        // open, rather than after its whole deadline; the socket goes on
+        // trying, and its answer replaces the machine's when it comes.
+        let early = Task { [weak self, weak link] in
+            try? await Task.sleep(for: PoolWatch.directFirst)
+            guard !Task.isCancelled, let self, let link, self.holder.peek() === link, !self.reached, self.phase == .connecting else { return }
+            await self.readThrough(after: Manage.Words.notYet)
+        }
         do {
             try await link.open()
         } catch XOLink.Failure.wrongCertificate {
+            // NOT ANOTHER POOL'S PAGE: a certificate that is not the one
+            // pinned is the news, and an ask under way is dropped with it.
+            early.cancel()
             if stale() { return }
+            generation += 1
             drop(link)
             phase = .stopped(Manage.Words.wrongCertificate(address), retry: false)
             return
         } catch {
+            if !relayingNow { early.cancel() }
             if stale() { return }
             drop(link)
+            socketWhy = error.localizedDescription
             await readThrough(after: error.localizedDescription)
             return
         }
+        // AN ASK ALREADY UNDER WAY IS LEFT TO FINISH: cancelled, it would
+        // come back as "none of your machines could read it". Its answer is
+        // replaced by the socket's when that comes, and one that failed is
+        // already being answered by it.
+        if !relayingNow { early.cancel() }
         reached = true
+        // The socket opened while a machine was being asked: it is this
+        // phone's own connection that the page now waits on.
+        if phase == .relaying, via == nil { phase = .connecting }
         do {
             _ = try await link.call("session.signIn", ["token": record.token])
         } catch {
             if stale() { return }
             drop(link)
+            // A MACHINE ALREADY SHOWING THE PAGE goes on showing it.
+            if via != nil { return }
             phase = .stopped(Manage.Words.signInRefused(address, error.localizedDescription), retry: false)
             return
         }
+        // ALL AT ONCE on the one socket, answered by id: the method list and
+        // each object type, where one after another was seven round trips.
         // A LIST THAT COULD NOT BE READ IS NOT AN EMPTY ONE: nil draws no
         // action and says why, rather than drawing none and saying nothing.
-        let listed = try? await link.call("system.getMethodsInfo")
-        if stale() { return }
-        let methods = (listed as? [String: Any]).map { Set($0.keys) }
-        if let methods, !methods.contains("xo.getAllObjects") {
-            drop(link)
-            phase = .stopped(Manage.Words.noObjects, retry: false)
-            return
-        }
         loading = true
+        // As XOLink.Answer, which carries a reply across tasks: a bare Any? is
+        // not Sendable, and a task group's results must be.
+        async let listed: XOLink.Answer = XOLink.Answer(value: try? await link.call("system.getMethodsInfo"))
         var next = Manage.Snapshot()
         do {
-            for type in Manage.objectTypes {
-                let got = try await link.call("xo.getAllObjects", ["filter": ["type": type]])
-                next.take(got)
+            let answers = try await withThrowingTaskGroup(of: XOLink.Answer.self) { group in
+                for type in Manage.objectTypes {
+                    group.addTask { XOLink.Answer(value: try await link.call("xo.getAllObjects", ["filter": ["type": type]])) }
+                }
+                var all: [XOLink.Answer] = []
+                for try await got in group { all.append(got) }
+                return all
             }
+            for got in answers { next.take(got.value) }
         } catch {
+            _ = await listed
             if stale() { return }
             loading = false
             held = []
             drop(link)
+            if via != nil { return }
             phase = .stopped(Manage.Words.lost(error.localizedDescription), retry: true)
             return
         }
+        let methods = (await listed.value as? [String: Any]).map { Set($0.keys) }
         if stale() { return }
+        if let methods, !methods.contains("xo.getAllObjects") {
+            loading = false
+            held = []
+            drop(link)
+            phase = .stopped(Manage.Words.noObjects, retry: false)
+            return
+        }
         for (method, params) in held { next.apply(method: method, params: params.value) }
         held = []
         loading = false
+        // THE SOCKET TAKES OVER from a machine that answered first: what it
+        // would read again on its timer is now watched as it changes.
+        generation += 1
+        polling?.cancel()
+        polling = nil
+        via = nil
         self.methods = methods
         snapshot = next
+        fromSaved = false
         phase = .live
         revision += 1
         touch()
@@ -274,9 +335,15 @@ final class PoolWatch {
     /// page is open; a failure then keeps what was shown and says so.
     private func readThrough(after why: String) async {
         guard let fleet else {
+            if phase == .connecting, reached { return }
             phase = .stopped(Manage.Words.unreachable(address, why), retry: true)
             return
         }
+        // ONE AT A TIME: the early ask and a socket that then failed would
+        // otherwise both ask the fleet for the same page.
+        if relayingNow { return }
+        relayingNow = true
+        defer { relayingNow = false }
         let first = via == nil
         if first { phase = .relaying }
         let asked = generation
@@ -296,22 +363,32 @@ final class PoolWatch {
             }
             var next = Manage.Snapshot()
             next.take(page["objects"])
+            // THE SOCKET ANSWERED FIRST after all: its page is the newer one.
+            if phase == .live, via == nil { return }
             methods = listed
             if next != snapshot || first { revision += 1 }
             snapshot = next
+            fromSaved = false
             via = r.hostId ?? Manage.Words.oneOfYours
             phase = .live
             touch()
             if polling == nil { poll() }
         } catch {
             if asked != generation { return }
+            // THE SOCKET IS STILL IN PLAY, opening or open: it says what is,
+            // and a machine that could not help this once is not news.
+            if holder.peek() != nil {
+                if phase == .relaying, via == nil { phase = .connecting }
+                return
+            }
+            let said = socketWhy ?? why
             polling?.cancel()
             polling = nil
             if let host = via {
                 via = nil
                 phase = .stopped(Manage.Words.throughLost(host, error.localizedDescription), retry: true)
             } else {
-                phase = .stopped(Manage.Words.unreachableEverywhere(address, why, error.localizedDescription), retry: true)
+                phase = .stopped(Manage.Words.unreachableEverywhere(address, said, error.localizedDescription), retry: true)
             }
         }
     }
@@ -366,6 +443,8 @@ final class PoolWatch {
         _ = holder.take()
         loading = false
         held = []
+        // A MACHINE ALREADY SHOWING THE PAGE goes on showing it.
+        if via != nil, !reached { return }
         if phase == .live || phase == .connecting {
             if reached {
                 phase = .stopped(Manage.Words.lost(reason), retry: true)
@@ -384,6 +463,7 @@ final class PoolWatch {
         let now = Date()
         lookedAt = now
         Manage.rememberLooked(address, at: now)
+        Manage.savePage(address, snapshot)
     }
 }
 
