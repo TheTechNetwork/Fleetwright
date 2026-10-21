@@ -34,7 +34,16 @@ import dgram from 'node:dgram';
 import http from 'node:http';
 
 import { EDGE_WATCH } from './edge-credentials.js';
+import { EDGE_UPDATES } from './edge-router.js';
 import { connectPinnedTls } from './xo-ws.js';
+
+/**
+ * HOW OFTEN XEN ORCHESTRA IS ASKED WHERE THE ROUTERS ARE: on the first poll,
+ * then every five minutes. Their addresses change when one is rebuilt or its
+ * lease moves, which is rare; asking every half minute would sign in to Xen
+ * Orchestra twice a minute for news that comes a few times a year.
+ */
+export const REREAD_MS = 5 * 60_000;
 
 /** How many lines a pool keeps, and how many of them may be DHCP's chatter. */
 export const EVENTS = Object.freeze({ keep: 40, dhcp: 12, text: 240 });
@@ -105,7 +114,7 @@ export function statusOf({ vip, unbound, gateways, leases }) {
 export class EdgeWatch {
   /**
    * @param {{
-   *   pools: { held: Map<string, { owner: string, record: any }> },
+   *   pools: { held: Map<string, { owner: string, record: any }>, edgeAddresses?: (key: string) => Promise<Map<string, string>|null> },
    *   connect?: typeof connectPinnedTls,
    *   createSocket?: () => dgram.Socket,
    *   port?: number,
@@ -132,6 +141,8 @@ export class EdgeWatch {
     this.learned = new Map();
     /** @type {Map<string, number>} keyed `owner address name`, when its syslog was last heard */
     this.heard = new Map();
+    /** @type {Map<string, { at: number, routers: Map<string, string>|null }>} keyed `owner address`: where Xen Orchestra last said the routers are, null when it could not be asked */
+    this.fromXo = new Map();
     /** @type {dgram.Socket|null} */
     this.socket = null;
     /** @type {ReturnType<typeof setInterval>|null} */
@@ -214,10 +225,16 @@ export class EdgeWatch {
     this.seen.set(k, entry);
   }
 
-  /** Where a router is read: where its syslog last came from, else where the policy job last saw it. @param {string} k @param {any} record @param {string} name */
+  /**
+   * Where a router is read: where its syslog last came from, else where Xen
+   * Orchestra says it is now, else where the policy job last saw it.
+   * @param {string} k @param {any} record @param {string} name
+   */
   #addressOf(k, record, name) {
     const learned = this.learned.get(k)?.get(name);
     if (learned) return learned;
+    const now = this.fromXo.get(k)?.routers?.get(name);
+    if (now) return now;
     const r = (record.edge.routers || []).find((/** @type {any} */ x) => x?.name === name);
     return typeof r?.address === 'string' && IPV4.test(r.address) ? r.address : null;
   }
@@ -230,8 +247,10 @@ export class EdgeWatch {
       const watched = this.watched();
       if (watched.length) this.#listen();
       for (const k of [...this.seen.keys()]) if (!watched.some(([w]) => w === k)) this.seen.delete(k);
+      for (const k of [...this.fromXo.keys()]) if (!watched.some(([w]) => w === k)) this.fromXo.delete(k);
       for (const [k, { record }] of watched) {
-        const names = [...new Set([...(record.edge.routers || []).map((/** @type {any} */ r) => r?.name), ...(this.learned.get(k)?.keys() ?? [])])].filter((n) => NAMES.includes(n));
+        await this.#reread(k);
+        const names = [...new Set([...(record.edge.routers || []).map((/** @type {any} */ r) => r?.name), ...(this.learned.get(k)?.keys() ?? []), ...(this.fromXo.get(k)?.routers?.keys() ?? [])])].filter((n) => NAMES.includes(n));
         /** @type {RouterState[]} */
         const routers = [];
         for (const name of names.sort()) routers.push(await this.#read(k, record, name));
@@ -246,13 +265,42 @@ export class EdgeWatch {
     }
   }
 
+  /**
+   * Ask Xen Orchestra where the routers are, on the first poll and every
+   * REREAD_MS after, through the pools this box holds (xo-pools.js,
+   * edgeAddresses). A box without that is left with what the policy job said.
+   * @param {string} k
+   */
+  async #reread(k) {
+    const ask = this.pools?.edgeAddresses;
+    if (typeof ask !== 'function') return;
+    const last = this.fromXo.get(k);
+    if (last && this.now() - last.at < REREAD_MS) return;
+    /** @type {Map<string, string>|null} */
+    let routers = null;
+    try {
+      routers = (await ask.call(this.pools, k)) ?? null;
+    } catch {
+      routers = null;
+    }
+    // COULD NOT ASK KEEPS WHAT WAS KNOWN: a Xen Orchestra that did not answer
+    // this once says nothing about where the routers went.
+    this.fromXo.set(k, { at: this.now(), routers: routers ?? last?.routers ?? null });
+  }
+
   /** @param {string} k @param {any} record @param {string} name @returns {Promise<RouterState>} */
   async #read(k, record, name) {
     const address = this.#addressOf(k, record, name);
     const heardAt = this.heard.get(`${k} ${name}`) ?? null;
     const base = { name, address, heardAt };
     if (!address) {
-      return { ...base, reached: null, role: null, dns: null, gateway: null, leases: null, problem: 'Xen Orchestra did not know its address when the policy last ran, and it has not sent this machine its logs.' };
+      // XEN ORCHESTRA SAID IT HAS NONE, or could not be asked: two different
+      // things, said as such (C-5).
+      const asked = this.fromXo.get(k)?.routers;
+      const problem = asked
+        ? `Xen Orchestra does not know its address yet: its guest agent arrives with its first update, after ${EDGE_UPDATES.hours}:00 UTC. It has not sent this machine its logs either.`
+        : 'Xen Orchestra did not know its address when the policy last ran, and it has not sent this machine its logs.';
+      return { ...base, reached: null, role: null, dns: null, gateway: null, leases: null, problem };
     }
     const ask = (/** @type {string} */ method, /** @type {string} */ path) => this.#call(address, record.edge, method, path);
     try {

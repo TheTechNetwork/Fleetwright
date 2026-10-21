@@ -43,7 +43,7 @@
 import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain } from './xo-ws.js';
-import { EDGE, GROUP_PREFIX, LAB, labsEachOf } from './edge-router.js';
+import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, labsEachOf, wanAddressOf } from './edge-router.js';
 import { JOIN_RUNCMD, VM_IMAGE } from './vm-image.js';
 import { HOLDER } from './xo-holder.js';
 import { seal, xolookAad, claudeBindingFor } from '../seal.js';
@@ -968,6 +968,54 @@ export class XoPools {
   }
 
   /**
+   * WHERE THE POOL'S EDGE ROUTERS ARE NOW, as Xen Orchestra has them from
+   * their guest agent, read with the person's own token: router name to WAN
+   * address, for the box watching them (edge-watch.js).
+   *
+   * Asked for because the addresses the policy job handed on were the ones
+   * Xen Orchestra knew then, and a router's guest agent arrives with its first
+   * daily update, after the job: every router built that way stayed "did not
+   * know its address" for good, though Xen Orchestra had known it for days.
+   *
+   * BY TAG, WHICH ANYBODY CAN ADD, and that is all right here: the address is
+   * only where the watcher knocks, and it sends the key only to the routers'
+   * own certificate (edge-watch.js #call). A running router is taken before
+   * one that is stopped. Null is could not ask, never "has none".
+   *
+   * @param {string} key  `owner address`, as `held` keeps it
+   * @returns {Promise<Map<string, string>|null>}
+   */
+  async edgeAddresses(key) {
+    const held = this.held.get(key);
+    if (!held) return null;
+    /** @type {any} */
+    let rpc = null;
+    try {
+      rpc = await this.#signIn(held.record);
+      const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+      const edges = vms
+        .filter((v) => Array.isArray(v?.tags) && v.tags.includes(EDGE.tag))
+        .sort((a, b) => Number(b?.power_state === 'Running') - Number(a?.power_state === 'Running'));
+      /** @type {Map<string, string>} */
+      const out = new Map();
+      for (const v of edges) {
+        const name = v.tags.includes(`${EDGE_HA.nodeTag}1`) ? EDGE_HA.second : EDGE.vm;
+        const ip = wanAddressOf(v);
+        if (ip && !out.has(name)) out.set(name, ip);
+      }
+      return out;
+    } catch {
+      return null;
+    } finally {
+      try {
+        rpc?.close();
+      } catch {
+        /* closing */
+      }
+    }
+  }
+
+  /**
    * A POOL'S PAGE, read here for a phone that cannot reach the pool from
    * where it is (`xolook`; docs/manage.md, "From away"). The same reads the
    * phone makes on the pool's own network, under the same person's token:
@@ -993,22 +1041,25 @@ export class XoPools {
       } catch (e) {
         return { ok: false, unreachable: true, text: `${address} could not be reached from here: ${/** @type {Error} */ (e).message}` };
       }
+      // ALL AT ONCE, on the one connection: the method list and each object
+      // type are asked together and answered by id, where one after another
+      // was seven round trips to Xen Orchestra before the phone saw anything.
+      const [listedR, ...gotR] = await Promise.allSettled([
+        rpc.call('system.getMethodsInfo'),
+        ...PAGE_TYPES.map((type) => rpc.call('xo.getAllObjects', { filter: { type } })),
+      ]);
       // A LIST THAT COULD NOT BE READ IS NOT AN EMPTY ONE, here as on the
       // phone: null offers no action, an empty list would say there are none.
       /** @type {string[]|null} */
       let methods = null;
-      try {
-        const listed = await rpc.call('system.getMethodsInfo');
-        if (listed && typeof listed === 'object') methods = Object.keys(listed).slice(0, 2000);
-      } catch {
-        /* cannot tell */
-      }
+      const listed = listedR.status === 'fulfilled' ? listedR.value : null;
+      if (listed && typeof listed === 'object') methods = Object.keys(listed).slice(0, 2000);
       /** @type {Record<string, any>[]} */
       const objects = [];
       if (!methods || methods.includes('xo.getAllObjects')) {
-        for (const type of PAGE_TYPES) {
-          const got = await rpc.call('xo.getAllObjects', { filter: { type } });
-          for (const o of Object.values(got || {})) {
+        for (const got of gotR) {
+          if (got.status === 'rejected') throw got.reason;
+          for (const o of Object.values(got.value || {})) {
             const kept = pageObject(o);
             if (kept) objects.push(kept);
           }

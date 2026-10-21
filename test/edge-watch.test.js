@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import https from 'node:https';
 import { EventEmitter } from 'node:events';
 
-import { EdgeWatch, EVENTS, kindOf, parseSyslog, statusOf } from '../src/fleet/host/edge-watch.js';
+import { EdgeWatch, EVENTS, REREAD_MS, kindOf, parseSyslog, statusOf } from '../src/fleet/host/edge-watch.js';
 import { newWatch } from '../src/fleet/host/edge-credentials.js';
 
 const ELI = 'eli@example.com';
@@ -143,4 +143,45 @@ test('syslog lines are the routers’ by name and address, a new address is lear
   assert.equal(r.events.filter((/** @type {any} */ e) => e.kind === 'dhcp').length, EVENTS.dhcp);
   assert.deepEqual(r.events[0], { at: 1_700_000_000_000, router: 'fleetwright-edge-b', kind: 'carp', text: 'carp: 1@xn1: BACKUP -> MASTER (master timed out)' }, 'the change of master was pushed out by DHCP');
   assert.match(r.routers[0].problem, /192\.168\.1\.40 did not answer: ECONNREFUSED/);
+});
+
+test('where a router is comes from Xen Orchestra now, asked on the first poll and every five minutes, not only from the policy run', async (t) => {
+  // The guest agent arrives with a router's first daily update, after the
+  // policy job that recorded "no address": the watch must not keep that for good.
+  const w = newWatch();
+  const { port, seen } = await router(t, w);
+  let now = 1_700_000_000_000;
+  /** @type {Map<string, string>|null} */
+  let xo = new Map();
+  let asked = 0;
+  const pools = {
+    ...holding(w, [{ name: 'fleetwright-edge', address: null }]),
+    async edgeAddresses(/** @type {string} */ k) {
+      asked++;
+      assert.equal(k, `${ELI} xo.lan`);
+      return xo;
+    },
+  };
+  const watch = new EdgeWatch({ pools, apiPort: port, createSocket: fakeSocket, now: () => now });
+
+  await watch.poll();
+  let r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0];
+  assert.equal(r.reached, null);
+  assert.match(r.problem, /does not know its address yet: its guest agent arrives with its first update, after 10:00 UTC/, 'Xen Orchestra was asked and said none, which is not the same as not asked');
+
+  xo = new Map([['fleetwright-edge', '127.0.0.1']]);
+  now += 60_000;
+  await watch.poll();
+  assert.equal(asked, 1, 'asked again inside five minutes');
+  now += REREAD_MS;
+  await watch.poll();
+  assert.equal(asked, 2);
+  r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0];
+  assert.deepEqual([r.address, r.reached, r.role], ['127.0.0.1', true, 'master'], 'read where Xen Orchestra says it is now');
+  assert.ok(seen.length > 0);
+
+  xo = null;
+  now += REREAD_MS;
+  await watch.poll();
+  assert.equal(/** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0].address, '127.0.0.1', 'a Xen Orchestra that did not answer once does not lose where the router was');
 });
