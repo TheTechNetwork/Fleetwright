@@ -288,6 +288,8 @@
     "holder": ["holder-c09fcd", "holder-c09fcd is this pool’s own Fleetwright machine. It was made with the admin sign-in, outside what the limited user may change, so nothing can be done to it from here. To replace it, use Make it again in the pool’s policy."],
     "watching": "Watching now. Changes arrive as Xen Orchestra makes them.",
     "connecting": ["xo.lan", "Connecting to xo.lan…"],
+    "savedPage": ["10:31", "Showing the page as it was at 10:31 until the pool answers."],
+    "notYet": "it had not answered yet",
     "never": "Not looked at from this phone yet.",
     "closed": "Nothing watches while the app is closed.",
     "plainPool": ["xo.lan", "xo.lan was set up over plain HTTP. This phone manages a pool only over HTTPS, with the certificate pinned at setup, so it does not connect to this one."],

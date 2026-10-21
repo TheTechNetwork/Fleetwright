@@ -64,6 +64,11 @@ enum XOPolicy {
             : "Fleetwright from the newest release. Machines made from the image update to each release.")
             + (anyThere ? " An image that is there keeps what it was built from until it is rebuilt." : "")
     }
+    /// Under the channel when changing it marked images to rebuild: Apply
+    /// does that, so it is said before it is pressed.
+    static func channelRebuildLine(_ count: Int) -> String {
+        count == 1 ? " Apply rebuilds the image that is there to match." : " Apply rebuilds the \(count) images that are there to match."
+    }
     /// Beside an image that is there and was built from main.
     static let builtFromMain = " It was built from main."
     /// What a lab network is called, and the most labs an edge has room for
@@ -370,6 +375,9 @@ enum XOPolicy {
         /// The machine rebuilds and removes images (`image-manage` in begin's
         /// `can`). An older one keeps every image, so neither is offered.
         var imageManageChoice = false
+        /// The images marked to rebuild BECAUSE the channel changed, not by
+        /// hand, so changing it back unmarks them and leaves a hand's alone.
+        var rebuiltForChannel: Set<String> = []
         /// How many group networks the way out's pool is to have. Asked for:
         /// "the 3 VMs need to reach each other".
         var groups = 0
@@ -451,6 +459,29 @@ enum XOPolicy {
             guard imageManageChoice else { return [] }
             let present = inv.imageKeys(on: egress)
             return (inv.imageKinds ?? []).map(\.key).filter { present.contains($0) && imageActions[$0] == action }
+        }
+
+        /// WHAT AN IMAGE IS BUILT FROM ONLY CHANGES WHEN IT IS BUILT, so
+        /// changing the channel marks every image there built from the other
+        /// one to rebuild, where the machine rebuilds images, and changing it
+        /// back unmarks them. Asked for: "the build from setting isn't saving":
+        /// Apply kept the image as it was, and the screen opened again on
+        /// what the image was built from. One the person marked to remove, or
+        /// to rebuild by hand, is left as they said.
+        mutating func setImageChannel(_ channel: String, in inv: Inventory) {
+            imageChannel = channel
+            guard imageManageChoice else { return }
+            for key in inv.imageKeys(on: egress) {
+                let differs = inv.imageChannel(on: egress, key: key) != channel
+                let action = imageActions[key] ?? .keep
+                if differs, action == .keep {
+                    imageActions[key] = .rebuild
+                    rebuiltForChannel.insert(key)
+                } else if !differs, rebuiltForChannel.contains(key) {
+                    if action == .rebuild { imageActions[key] = .keep }
+                    rebuiltForChannel.remove(key)
+                }
+            }
         }
 
         /// The router or an image is to be built now, on storage still to be

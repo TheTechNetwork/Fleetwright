@@ -38,17 +38,17 @@ enum Manage {
 
     // MARK: What is listed
 
-    enum Kind: String, CaseIterable {
+    enum Kind: String, CaseIterable, Codable {
         case pool, host, vm, sr
     }
 
     /// How a host or a VM is. Nil is cannot tell, and a pool or a storage
     /// repository has none of its own: its numbers say how it is.
-    enum State: String {
+    enum State: String, Codable {
         case running, stopped, suspended, paused, maintenance
     }
 
-    struct Component: Identifiable, Equatable {
+    struct Component: Identifiable, Equatable, Codable {
         let id: String
         let kind: Kind
         let name: String
@@ -84,7 +84,7 @@ enum Manage {
     }
 
     /// A VM's disk, for growing it.
-    struct Disk: Identifiable, Equatable {
+    struct Disk: Identifiable, Equatable, Codable {
         let id: String
         let name: String
         let size: Int64?
@@ -92,7 +92,7 @@ enum Manage {
     }
 
     /// A VBD: which disk is attached to which VM, and where.
-    struct Attachment: Equatable {
+    struct Attachment: Equatable, Codable {
         let vm: String
         let vdi: String?
         let cd: Bool
@@ -243,7 +243,7 @@ enum Manage {
 
     /// Everything read, kept current from the notifications Xen Orchestra
     /// pushes on the same socket rather than by asking again.
-    struct Snapshot: Equatable {
+    struct Snapshot: Equatable, Codable {
         var components: [String: Component] = [:]
         var disks: [String: Disk] = [:]
         var attachments: [String: Attachment] = [:]
@@ -711,6 +711,37 @@ enum Manage {
         UserDefaults.standard.set(all, forKey: lookedKey)
     }
 
+    /// THE PAGE AS IT WAS LAST SEEN, drawn the moment the pool's page opens
+    /// and replaced when the pool answers. Asked for: "why does connecting
+    /// and loading info take so long": the page was blank for every second
+    /// of the socket, the sign-in and seven reads.
+    ///
+    /// What is kept is what the page draws (names, states, sizes, addresses),
+    /// never the token or anything that signs in: a file in Application
+    /// Support, out of backups and closed while the phone is locked, under a
+    /// name made from the address. The screen says when it is from (C-5),
+    /// and nothing can be done to a row until the pool itself has answered.
+    static func savedPage(_ address: String) -> Snapshot? {
+        guard let url = pageFile(address), let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Snapshot.self, from: data)
+    }
+
+    static func savePage(_ address: String, _ page: Snapshot) {
+        guard let url = pageFile(address), let data = try? JSONEncoder().encode(page) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: [.atomic, .completeFileProtection])
+        var u = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? u.setResourceValues(values)
+    }
+
+    private static func pageFile(_ address: String) -> URL? {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let name = SHA256.hash(data: Data(address.utf8)).map { String(format: "%02x", $0) }.joined()
+        return base.appendingPathComponent("pool-pages", isDirectory: true).appendingPathComponent(name + ".json")
+    }
+
     // MARK: Sentences
 
     /// Every sentence the screens say about a pool, in one place, held equal
@@ -718,6 +749,9 @@ enum Manage {
     enum Words {
         static let watching = "Watching now. Changes arrive as Xen Orchestra makes them."
         static func connecting(_ address: String) -> String { "Connecting to \(address)…" }
+        static func savedPage(_ when: String) -> String { "Showing the page as it was at \(when) until the pool answers." }
+        /// Why a machine was asked while the socket was still opening.
+        static let notYet = "it had not answered yet"
         static let never = "Not looked at from this phone yet."
         static let closed = "Nothing watches while the app is closed."
         static func lookedAt(_ when: String) -> String { "Last looked at \(when). \(closed)" }

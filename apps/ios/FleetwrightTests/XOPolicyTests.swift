@@ -379,6 +379,31 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(older.imageChannel(on: "net-wan", key: "debian-13"), "stable")
     }
 
+    func testChangingWhatAnImageIsBuiltFromRebuildsTheImageThereSoApplyKeepsIt() throws {
+        // Asked for: "the build from setting isn't saving". It only takes
+        // effect on a build, so the image there is marked to rebuild.
+        let inv = try inventory(inventoryJSON(images: #"[{"pool":"pool-1","name":"Fleetwright Debian 13","key":"debian-13","channel":"stable"}]"#))
+        var c = XOPolicy.Choice.initial(for: inv)
+        c.imageManageChoice = true
+        c.setImageChannel(XOPolicy.channelRolling, in: inv)
+        XCTAssertEqual(c.imageActions["debian-13"], .rebuild)
+        c.setImageChannel(XOPolicy.channelStable, in: inv)
+        XCTAssertEqual(c.imageActions["debian-13"], .keep, "changing it back unmarks it")
+
+        // One the person marked to remove is left as they said.
+        var d = XOPolicy.Choice.initial(for: inv)
+        d.imageManageChoice = true
+        d.imageActions["debian-13"] = .remove
+        d.setImageChannel(XOPolicy.channelRolling, in: inv)
+        XCTAssertEqual(d.imageActions["debian-13"], .remove)
+
+        // A machine that cannot rebuild gets the choice alone.
+        var e = XOPolicy.Choice.initial(for: inv)
+        e.setImageChannel(XOPolicy.channelRolling, in: inv)
+        XCTAssertNil(e.imageActions["debian-13"])
+        XCTAssertEqual(e.imageChannel, "rolling")
+    }
+
     func testEachLimitIsHeldToTheMachinesBounds() throws {
         let inv = try inventory()
         XCTAssertEqual(inv.cpuRange, 1...16)
