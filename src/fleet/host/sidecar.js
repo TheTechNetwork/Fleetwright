@@ -62,6 +62,7 @@ import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { EdgeWatch } from './edge-watch.js';
+import { IntentKeys } from './intent-keys.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
@@ -389,6 +390,15 @@ export class Sidecar {
     this.claudeLoginReady = null;
     this.vaultKey = vaultKey;
     this.xoStateDir = xoStateDir;
+    /**
+     * THE KEYS A PERSON'S SIGNATURE IS CHECKED WITH, from the minter and never
+     * from the coordinator (intent-keys.js, docs/signed-intents.md). Every
+     * intent is checked and counted; none is refused for it yet.
+     * @type {IntentKeys|null}
+     */
+    this.intentKeys = vaultKey && transport?.origin
+      ? new IntentKeys({ origin: transport.origin, dir: xoStateDir, hostKey: vaultKey, ask: (request, signature) => this.#askKeys(request, signature), log: this.log })
+      : null;
     /** @type {XoPools|null} */
     // ON A POOL'S OWN MACHINE, the Xen Orchestra it was made to hold
     // (xo-holder.js): its health says so, and the coordinator asks it first.
@@ -675,6 +685,21 @@ export class Sidecar {
       return { v: PROTOCOL_VERSION, kind: 'reply', id, ok: false, text: checked.error, error: { code: checked.code } };
     }
     const intent = checked.intent;
+
+    // WHO SIGNED IT, counted and said, and never yet a reason to refuse
+    // (docs/signed-intents.md, phase 1). A signature that does not hold is
+    // logged with what it was for, so the fleet sees what enforcement would
+    // refuse before anything is.
+    if (this.intentKeys) {
+      try {
+        const { verdict } = await this.intentKeys.check(intent, this.hostId);
+        if (verdict === 'bad-signature' || verdict === 'unknown-key') {
+          this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries a signature that does not hold (${verdict}); not refused yet`);
+        }
+      } catch (e) {
+        this.log.warn(`sidecar: could not check ${intent.id}'s signature: ${/** @type {Error} */ (e).message}`);
+      }
+    }
 
     if (!isMutating(intent.verb)) return this.#run(intent);
 
@@ -1369,6 +1394,9 @@ export class Sidecar {
    * @returns {Promise<number>} how long until the next ask
    */
   async syncVault() {
+    // THE KEY LIST rides the vault's clock: the same ten minutes, the same
+    // socket, and the minter answers both.
+    void this.intentKeys?.refresh();
     const said = await this.#askVault();
     if (said.ok) {
       // POOLS OUT, before the hub sees the answer: kept in this process and
@@ -1432,6 +1460,35 @@ export class Sidecar {
       let sent;
       try {
         sent = this.transport.send({ v: PROTOCOL_VERSION, kind, id, hostId: this.hostId, job, ...extra });
+      } catch {
+        sent = false;
+      }
+      if (sent === false) {
+        this.mintWaiters.delete(id);
+        clearTimeout(timer);
+        resolve({ ok: false, text: 'this box was not connected to the fleet when it asked' });
+      }
+    });
+  }
+
+  /**
+   * The box's request for the fleet's device keys, sent and answered as a
+   * vault request is: what came back, or null when nothing did.
+   *
+   * @param {any} request @param {string} signature
+   */
+  async #askKeys(request, signature) {
+    const id = `keys-${crypto.randomUUID()}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.mintWaiters.delete(id);
+        resolve(null);
+      }, this.mintTimeoutMs);
+      timer.unref?.();
+      this.mintWaiters.set(id, { resolve, timer });
+      let sent;
+      try {
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'keys', id, hostId: this.hostId, request, signature });
       } catch {
         sent = false;
       }
@@ -1709,6 +1766,11 @@ export class Sidecar {
       // Sent rather than asked for, like the channel and the variant beside it:
       // a list of machines must not become a round trip per row.
       setLabels: this.facts?.labels?.set ?? [],
+      // WHAT THE SIGNATURES ON INTENTS HAVE BEEN FOUND TO BE, and whether this
+      // box has the minter's key list to check them with
+      // (docs/signed-intents.md, phase 1). Absent on a box with no enrolment
+      // key, which cannot ask for the list at all.
+      ...(this.intentKeys ? { signatures: this.intentKeys.report() } : {}),
       // WHICH SERVICE LOGS THIS BOX CAN READ, so a screen offers a button for
       // exactly those. The chat surface already checks — logButtons in
       // commands.js filters on unitInstalled, because "no log entries for
