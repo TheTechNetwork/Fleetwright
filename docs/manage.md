@@ -327,6 +327,45 @@ with the person's token on a machine that holds it, which is what it can
 already do by starting a session there; it cannot use one person's token for
 another, because the machine picks the token by the person it was asked for.
 
+### The console
+
+Asked for: "we should be able to connect to vm console". A running VM's page
+has a Console row, and it opens the machine's screen in the app.
+
+**Where it comes from.** Xen Orchestra serves a VM's screen as VNC over a
+WebSocket at `/api/consoles/<vm id>`. It reads the sign-in token from the
+`token` cookie on the upgrade request, then checks that the token's user may
+operate that machine (`setUpConsoleProxy` in xo-server). A user who may not
+gets the socket closed. The page then says "Xen Orchestra closed the console
+before it showed anything. The pool's limited user may not be allowed to
+operate this machine."
+
+**The phone holds the socket, a page draws it.** `XOConsole` and `XoConsole`
+open that socket with the pool's token, behind the same pinned certificate
+as the pool page. A wrong certificate stops the handshake before anything is
+written. A web view runs the bundled page, `vnc.html`, built from
+`src/vnc/page.js` by `npm run vnc`. It is noVNC fed through a channel the
+phone supplies, so the page never opens a socket and never sees the token.
+Its content security policy lets it fetch nothing. Both apps load it under
+`https://console.fleetwright.invalid/`, an address that resolves nowhere,
+because noVNC expects a secure context.
+
+**Only on the pool's own network.** The row appears while this phone watches
+the pool itself. When the page is read through one of your machines, the row
+says the console opens only from the pool's own network. A screen does not
+travel through the fleet.
+
+**Typing.** Keyboard raises the phone's keyboard, and each key goes to the
+machine as a key press. iOS catches keys in a native view, because it raises
+no keyboard for a web field focused from code. Android focuses the page's own
+field. Ctrl-Alt-Del sends that combination.
+
+**Kept current by Renovate.** noVNC is a pinned dev dependency. The Renovate
+pin workflow rebuilds the page on every Renovate branch, and
+`test/vnc-page.test.js` fails a page that does not match its source. That
+test also runs the page in a browser and completes a VNC handshake through
+the bridge.
+
 ### How it is held to the design
 
 - **One table, both phones.** `test/fixtures/parity/manage.json` holds the
@@ -372,8 +411,8 @@ another, because the machine picks the token by the person it was asked for.
   is next.
 
 **Next in this component:** migration and storage, with a Live Activity per
-migration; users, groups and roles; patching hosts; consoles last, because a
-VNC client is the largest single piece and is one per platform.
+migration; users, groups and roles; patching hosts. The console is built
+(above), on the pool's own network.
 
 ## Then the rest, on the same model
 
