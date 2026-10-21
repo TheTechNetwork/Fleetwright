@@ -21,9 +21,12 @@ import { intentSigningInput, keyId } from '../src/fleet/protocol/intent-signatur
 const NINA = 'nina@example.test';
 const QUIET = { info() {}, warn() {}, error() {}, debug() {} };
 
+/** Nina's, on box-b: what the session verbs below name. */
+const BUILD = { name: 'nightly', status: 'running', createdBy: `fleet:${NINA}`, prompt: { id: 'p-1', kind: 'permission', options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }] } };
+
 /** @param {string} hostId @param {number} [protocol] */
 const health = (hostId, protocol = PROTOCOL_VERSION) => ({
-  hostId, protocol, labels: [], maxSessions: 5, running: 0, free: 5, resumable: [], sessions: [],
+  hostId, protocol, labels: [], maxSessions: 5, running: 0, free: 5, resumable: [], sessions: hostId === 'box-b' ? [BUILD] : [],
   loadavg: [0, 0, 0], loggedIn: true, claudeAccounts: 1, hub: { reachable: true }, sandboxed: true,
 });
 
@@ -85,5 +88,25 @@ test('a signature reaches the box with what it was made over, and goes nowhere e
   const all = await ask('verify', { provider: 'github' }, '');
   assert.ok(all.frames.length >= 2, `fanned out to ${all.frames.length}`);
   assert.deepEqual(all.frames.map((f) => f.sig), all.frames.map(() => undefined));
+});
 
+// A SESSION'S VERBS GO WHERE THE SESSION IS, whatever box the caller names: the
+// coordinator ignores the name for routing them (scheduler.js, PINNED). So the
+// phone names the box its list showed the session on and signs for that, and
+// the signature travels when the session is still there. When it is not, the
+// work still reaches the box that holds it, unsigned, as an intent the phone
+// did not sign for that box.
+test('a signed session verb is carried to the box holding the session, and sent unsigned when the phone named another', async () => {
+  const { ask } = await fleet();
+  for (const [verb, params] of /** @type {const} */ ([
+    ['stop', { name: 'nightly' }],
+    ['peek', { name: 'nightly' }],
+    ['answer', { name: 'nightly', option: 1, promptId: 'p-1' }],
+    ['forget', { name: 'nightly' }],
+  ])) {
+    const there = await ask(verb, params, 'box-b');
+    assert.deepEqual(there.frames.map((f) => [f.host, f.sig]), [['box-b', there.sig]], `${verb} to the box holding it`);
+    const elsewhere = await ask(verb, params, 'box-a');
+    assert.deepEqual(elsewhere.frames.map((f) => [f.host, f.sig]), [['box-b', undefined]], `${verb} signed for another box`);
+  }
 });
