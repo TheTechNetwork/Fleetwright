@@ -24,7 +24,7 @@ import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-import { Accounts, extractOauthAccount } from './accounts.js';
+import { Accounts, emailFromActor, extractOauthAccount, normaliseEmail } from './accounts.js';
 import { hasSession, newSession, killSession, capturePane, sendKeys } from './tmux.js';
 import { sleep } from './claude.js';
 import { dewrapPane } from './pane.js';
@@ -669,6 +669,24 @@ export class LoginFlow {
     }
     this.cancel();
     return { ok: false, message: 'Sent the code, but no token appeared within a minute. Start again from the app.' };
+  }
+
+  /**
+   * A sign-in in this person's name, ended because they were removed from the
+   * fleet (forget-person.js): one linking their Claude account, whoever began
+   * it, or one they began themselves. Left, the pane kept waiting for a code
+   * with its authorization URL until the flow timed out, and the account the
+   * forgetting had just deleted came back if a code arrived first.
+   *
+   * @param {unknown} email
+   * @returns {boolean} whether one was ended
+   */
+  forget(email) {
+    const who = normaliseEmail(email);
+    if (!who || !this.isPending()) return false;
+    if (normaliseEmail(this.pending?.linkFor) !== who && emailFromActor(this.pending?.startedBy) !== who) return false;
+    this.cancel();
+    return true;
   }
 
   /** Tear the pane down without touching credentials. */

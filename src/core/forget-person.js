@@ -26,6 +26,9 @@
 //               writing the row back however often it was emptied
 //   the vault   what this box was given from their vault, which the minter
 //               stops giving on its next ask; deleted now rather than then
+//   a sign-in   a Claude login in their name still waiting for its code,
+//   under way   which kept its pane and its authorization URL until it timed
+//               out, and wrote back the account just deleted if a code came
 //
 // ONE PERSON'S FILES AND NOBODY ELSE'S. Each store is keyed by the address
 // normalised as everywhere on this box (accounts.js normaliseEmail), and a
@@ -43,21 +46,25 @@ import { log } from '../log.js';
  * @param {{ stateDir: string }} cfg
  * @param {{ forgetOwner: (email: string) => string[] }} sessions  the hub's SessionManager
  * @param {unknown} email
- * @returns {{ ok: boolean, text: string, forgot?: { sessions: number, claude: boolean, providers: string[], vault: boolean } }}
+ * @param {{ forget: (email: string) => boolean }|null} [login]  the hub's LoginFlow
+ * @returns {{ ok: boolean, text: string, forgot?: { sessions: number, claude: boolean, providers: string[], vault: boolean, login: boolean } }}
  */
-export function forgetPerson(cfg, sessions, email) {
+export function forgetPerson(cfg, sessions, email, login = null) {
   const who = normaliseEmail(email);
   if (!who) return { ok: false, text: 'That is not an address this box keeps anything under.' };
   const binned = sessions.forgetOwner(who);
+  // Before the account goes, so no code arriving meanwhile can write it back.
+  const signIn = login?.forget(who) ?? false;
   const claude = new Accounts(cfg.stateDir).remove(who);
   const providers = new Connections(cfg.stateDir).forget(who);
   const vault = forgetVault(cfg, who);
-  const forgot = { sessions: binned.length, claude, providers, vault };
+  const forgot = { sessions: binned.length, claude, providers, vault, login: signIn };
   const parts = [
     `${binned.length} session${binned.length === 1 ? '' : 's'} stopped and put in the bin`,
     claude ? 'their Claude account unlinked' : null,
     providers.length ? `their ${providers.map((p) => PROVIDERS[p]?.label ?? p).join(' and ')} sign-in${providers.length === 1 ? '' : 's'} and renewal deleted` : null,
     vault ? 'what their vault gave this box deleted' : null,
+    signIn ? 'a Claude sign-in in their name that was waiting for its code cancelled' : null,
   ].filter(Boolean);
   const text = `Forgot ${who}, who was removed from the fleet: ${parts.join(', ')}.`;
   log.info(`forget-person: ${text}`);

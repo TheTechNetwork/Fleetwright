@@ -12,7 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -28,6 +28,7 @@ import { Accounts } from '../src/core/accounts.js';
 import { Connections } from '../src/core/connectors.js';
 import { renewProviderTokens } from '../src/core/keepalive.js';
 import { applyVault, heldFor } from '../src/core/vault-store.js';
+import { LoginFlow } from '../src/core/login.js';
 import { admit } from './helpers/enrolled-hosts.js';
 
 const LOGGER = { info() {}, warn() {}, error() {}, debug() {} };
@@ -72,8 +73,19 @@ test('a box told to forget somebody removed ends their sessions and every sign-i
   }
   applyVault(cfg, { accounts: [NINA, KIM].map((email) => ({ email, login: '', items: [{ name: 'cloudflare', value: 'cf_access', expiresAt: null }] })) });
 
+  // AND A SIGN-IN OF HERS WAITING FOR ITS CODE, an admin linking her Claude
+  // account: its pane, and the directory the credential would land in.
+  const pane = new Set(['fw-login']);
+  const login = new LoginFlow(/** @type {any} */ ({ ...cfg, loginEnabled: true, loginTimeoutMs: 600_000, loginSessionName: 'fw-login' }), /** @type {any} */ ({
+    hasSession: (/** @type {string} */ name) => pane.has(name),
+    killSession: (/** @type {string} */ name) => { pane.delete(name); },
+  }));
+  const linkDir = join(stateDir, 'accounts', `pending-${NINA}`);
+  mkdirSync(linkDir, { recursive: true });
+  login.pending = { startedAt: Date.now(), startedBy: 'fleet:boss@example.test', url: 'https://claude.com/cai/oauth/authorize?code=true', mode: 'claudeai', linkFor: NINA, linkDir };
+
   const hubToken = ensureApiToken(cfg);
-  const adapter = new HttpAdapter(cfg, { sessions, login: /** @type {any} */ ({}), token: hubToken });
+  const adapter = new HttpAdapter(cfg, { sessions, login, token: hubToken });
   await adapter.start();
   t.after(() => adapter.server?.close());
   const port = /** @type {any} */ (adapter.server).address().port;
@@ -104,6 +116,11 @@ test('a box told to forget somebody removed ends their sessions and every sign-i
   assert.ok(connections.tokenFor(KIM, 'github') && connections.readRenewal(KIM, 'github'));
   assert.equal(heldFor(cfg, NINA), null);
   assert.ok(heldFor(cfg, KIM));
+  // HER SIGN-IN: the pane gone, nothing kept to land a credential in, and a
+  // code arriving now finishes nothing.
+  assert.equal(pane.has('fw-login'), false, 'the sign-in in her name is still waiting for its code');
+  assert.equal(existsSync(linkDir), false);
+  assert.match((await login.submitCode('a-code', 'fleet:boss@example.test')).message, /No login is waiting/);
   /** @type {string[]} */
   const renewed = [];
   const real = globalThis.fetch;
@@ -123,5 +140,5 @@ test('a box told to forget somebody removed ends their sessions and every sign-i
   // Asked again, as a box that did not confirm would be: nothing more to do.
   const again = await new HubClient({ baseUrl: `http://127.0.0.1:${port}`, token: hubToken }).forgetPerson(NINA);
   assert.equal(again.ok, true);
-  assert.deepEqual(again.forgot, { sessions: 0, claude: false, providers: [], vault: false });
+  assert.deepEqual(again.forgot, { sessions: 0, claude: false, providers: [], vault: false, login: false });
 });
