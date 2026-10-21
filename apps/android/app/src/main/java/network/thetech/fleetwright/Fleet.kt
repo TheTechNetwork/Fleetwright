@@ -1223,7 +1223,12 @@ class Fleet(
         host = host,
     )
 
-    suspend fun stop(name: String): Reply = intent("stop", mapOf("name" to name))
+    // THE SESSION'S VERBS NAME ITS BOX: `host` here is the one this phone's
+    // list showed the session on. The coordinator routes them to wherever the
+    // session is whatever is named, so the name changes nothing about where
+    // they go; it is what the phone signs for (DeviceSigning.kt), and the
+    // signature travels only when the session is still there.
+    suspend fun stop(name: String, host: String? = null): Reply = intent("stop", mapOf("name" to name), host = host)
 
     /**
      * Ask for a temporary machine — macOS, Windows, Linux or an Android emulator.
@@ -1479,13 +1484,14 @@ class Fleet(
      * `promptId` is what the host checks against the live pane, so a
      * notification tapped four minutes late cannot answer a different question.
      */
-    suspend fun answer(name: String, option: Int, promptId: String? = null): Reply =
+    suspend fun answer(name: String, option: Int, promptId: String? = null, host: String? = null): Reply =
         intent(
             "answer",
             buildMap {
                 put("name", name)
                 if (!promptId.isNullOrBlank()) put("promptId", promptId)
             },
+            host = host,
             numeric = mapOf("option" to option),
         )
 
@@ -1582,7 +1588,7 @@ class Fleet(
      * The verb that makes this more than a list of names. Everything else says
      * a session exists; this says whether it is stuck.
      */
-    suspend fun peek(name: String): Reply = intent("peek", mapOf("name" to name))
+    suspend fun peek(name: String, host: String? = null): Reply = intent("peek", mapOf("name" to name), host = host)
 
     // --- the workspace -------------------------------------------------------
     //
@@ -1620,7 +1626,7 @@ class Fleet(
 
     /** Forget a session and delete its volumes. Not undoable — the UI asks first. */
     /** Stop a session and put it in the bin. Recoverable — see [restore]. */
-    suspend fun forget(name: String): Reply = intent("forget", mapOf("name" to name))
+    suspend fun forget(name: String, host: String? = null): Reply = intent("forget", mapOf("name" to name), host = host)
 
     /**
      * Take a forgotten session back out of the bin.
@@ -1629,10 +1635,10 @@ class Fleet(
      * conversation and the workspace come back exactly as they were. Pinned to
      * the box still holding them, which the coordinator resolves.
      */
-    suspend fun restore(name: String): Reply = intent("restore", mapOf("name" to name))
+    suspend fun restore(name: String, host: String? = null): Reply = intent("restore", mapOf("name" to name), host = host)
 
     /** Delete for good. What [forget] used to do, kept as its own word. */
-    suspend fun purge(name: String): Reply = intent("purge", mapOf("name" to name))
+    suspend fun purge(name: String, host: String? = null): Reply = intent("purge", mapOf("name" to name), host = host)
 
     /**
      * Ask the coordinator to send this device a notification now.
@@ -1839,11 +1845,11 @@ class Fleet(
     suspend fun unlink(host: String, provider: String, scope: String? = null): Reply =
         intent("unlink", buildMap { put("provider", provider); if (scope != null) put("scope", scope) }, host = host)
 
-    suspend fun resume(name: String, choice: String? = null): Reply =
+    suspend fun resume(name: String, choice: String? = null, host: String? = null): Reply =
         intent("resume", buildMap {
             put("name", name)
             if (choice != null) put("choice", choice)
-        })
+        }, host = host)
 
     /**
      * Spend an ID token for a credential of this device's own.

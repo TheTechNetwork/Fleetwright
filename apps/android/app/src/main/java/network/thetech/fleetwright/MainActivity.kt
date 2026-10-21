@@ -870,10 +870,10 @@ fun FleetScreen(
                             session = session,
                             busy = busy,
                             resumeKept = binHosts.firstOrNull { it.hostId == session.hostId }?.resumeKept,
-                            onStop = { act { fleet.stop(session.name) } },
-                            onAnswer = { option -> act { fleet.answer(session.name, option, session.prompt?.id) } },
+                            onStop = { act { fleet.stop(session.name, session.hostId) } },
+                            onAnswer = { option -> act { fleet.answer(session.name, option, session.prompt?.id, session.hostId) } },
                             onInspect = { inspecting = session },
-                            onResume = { act { fleet.resume(session.name, "summary") } },
+                            onResume = { act { fleet.resume(session.name, "summary", session.hostId) } },
                             onOpen = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
                         )
                     }
