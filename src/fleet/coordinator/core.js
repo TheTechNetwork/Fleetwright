@@ -354,7 +354,7 @@ export class CoordinatorCore {
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
    *     linkedRepo?: (ask: { role: string, repo: string }) => Promise<any>,
    *     github?: (ask: { sealed: unknown, boxCodes?: string[] }) => Promise<any>,
-   *     vault?: (route: 'device'|'box', ask: Record<string, unknown>) => Promise<any> }|null,
+   *     vault?: (route: 'device'|'box'|'keys', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
    * }} [opts]
    */
@@ -825,6 +825,7 @@ export class CoordinatorCore {
     if (msg.kind === 'claude-login') return this.#onRunnerClaude(hostId, msg);
     // ANY BOX ASKING FOR WHAT ITS PEOPLE APPROVED IT TO HOLD, the same way.
     if (msg.kind === 'vault') return this.#onHostVault(hostId, msg);
+    if (msg.kind === 'keys') return this.#onHostKeys(hostId, msg);
     // AND THE BOX RUNNING A POLICY JOB, for the pin its pool's own machine
     // enrols with.
     if (msg.kind === 'holder-pin') return this.#onHolderPin(hostId, msg);
@@ -3305,15 +3306,21 @@ export class CoordinatorCore {
 
   /**
    * @param {any} host
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null,
+   *   sig?: string, kid?: string, issuedAt?: number }} spec
    * @param {number} [timeoutMs]
    */
   send(host, spec, timeoutMs = this.intentTimeoutMs) {
+    // A DEVICE'S SIGNATURE TRAVELS AS IT CAME, with the time and id it was made
+    // over, or it checks against nothing on the box (docs/signed-intents.md).
+    // Whether it holds is the box's to say; this only refuses to drop it.
+    const signed = typeof spec.sig === 'string' && typeof spec.kid === 'string' && Number.isSafeInteger(spec.issuedAt);
     const intent = buildIntent({
       id: spec.id || this.newId(),
       verb: spec.verb,
       params: spec.params || {},
       ...(spec.actor ? { actor: spec.actor } : {}),
+      ...(signed ? { sig: spec.sig, kid: spec.kid, issuedAt: spec.issuedAt } : {}),
       // WHAT THIS BOX SAYS IT SPEAKS, which matters for exactly one envelope.
       //
       // A host behind the fleet refuses every intent before reading the verb,
@@ -5716,6 +5723,65 @@ export class CoordinatorCore {
     );
     answer(r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });
+  }
+
+  /**
+   * A box asks for the signing keys people listed with the minter, to check
+   * the intents it is sent (docs/signed-intents.md). Relayed as the vault
+   * request is: the box's key must be the one it enrolled with, the members
+   * list goes beside it, and the answer goes back as the minter signed it.
+   * Nothing here can change what the box accepts: it checks the minter's
+   * signature against a key it fetched from an address this Worker never
+   * serves, so an answer made up here fails there.
+   *
+   * @param {string} hostId
+   * @param {any} msg
+   */
+  async #onHostKeys(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for the fleet's device keys without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the box asks again on its next pass */ }
+    };
+    const request = msg.request;
+    const signature = String(msg.signature || '');
+    const enrolled = this.hostIds?.get(hostId);
+    const k = request?.hostKey;
+    if (!request || typeof request !== 'object' || JSON.stringify(request).length > 1024 || signature.length > 200) {
+      answer({ ok: false, error: { code: 'bad_params' }, text: 'That request for the fleet’s device keys is not in the shape one takes.' });
+      return;
+    }
+    if (!enrolled?.publicJwk || enrolled.revokedAt || k?.x !== enrolled.publicJwk.x || k?.y !== enrolled.publicJwk.y) {
+      answer({ ok: false, error: { code: 'not_this_box' }, text: `That is not the key ${hostId} enrolled with.` });
+      return;
+    }
+    if (!this.minter?.vault) {
+      answer({ ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to list device keys.' });
+      return;
+    }
+    const now = this.now();
+    const key = `box-keys:${hostId}`;
+    const recent = (this.claudeAsks.get(key) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_BOX_VAULT_PER_WINDOW) {
+      answer({ ok: false, error: { code: 'too_many' }, text: `${hostId} has asked for the fleet’s device keys ${recent.length} times in ten minutes.` });
+      return;
+    }
+    recent.push(now);
+    this.claudeAsks.set(key, recent);
+    const r = await this.minter.vault('keys', { request, signature, members: this.#members() }).then(
+      (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+    answer(r.ok
+      ? { ok: true, payload: r.payload, signature: r.signature, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });
   }
 

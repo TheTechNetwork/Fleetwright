@@ -55,6 +55,11 @@
 import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../../core/text.js';
 import { SEAL_KEY_RE } from '../seal.js';
 
+/** A device's P-256 signature over an intent as WebCrypto makes one: r || s, 64 bytes, base64url (intent-signature.js). */
+export const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
+/** The id of the key that made it: the whole SHA-256 of its canonical JWK, hex, as a box key's hash is. */
+export const KID_RE = /^[0-9a-f]{64}$/;
+
 /** A Xen Orchestra address: a DNS name, an IPv4 address or a bracketed IPv6
  * one, with an optional port. No scheme and no path, so it can only ever name
  * a machine, and a host builds the URL itself. */
@@ -548,6 +553,9 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  *   change, and no param may ever be removed — test/protocol-appendonly.test.js
  *   holds the line, because that invariant is what makes the version RANGE sound
  *   (an old envelope stays a strict subset of a new one). See PROTOCOL_MIN.
+ * @property {'fleet'} [setBy]  written by the coordinator after the caller
+ *   asked, replacing anything sent, and so left out of what a device signs
+ *   (intent-signature.js, docs/signed-intents.md)
  */
 
 /**
@@ -770,6 +778,7 @@ export const VERBS = Object.freeze({
         pattern: REPO_RE,
         shapeName: 'owner/repo',
         since: 11,
+        setBy: 'fleet',
         describe:
           'Set by the fleet from your linked archive repository; anything sent here is replaced. Where this ' +
           'session is pushed, on a branch of its own, before it stops.',
@@ -787,6 +796,7 @@ export const VERBS = Object.freeze({
         required: false,
         values: ['yes', 'no'],
         since: 14,
+        setBy: 'fleet',
         describe:
           'Set by the fleet from whether you administer the machine; anything sent here is replaced. Whether ' +
           'a `secret` may be answered from the ones its operator keeps on it, or only from your own vault.',
@@ -938,6 +948,7 @@ export const VERBS = Object.freeze({
         required: false,
         values: ['yes', 'no'],
         since: 14,
+        setBy: 'fleet',
         describe:
           'Set by the fleet from whether the session\'s owner administers the machine; anything sent here is ' +
           'replaced.',
@@ -1486,6 +1497,7 @@ export const VERBS = Object.freeze({
         type: 'secret',
         required: false,
         max: 128,
+        setBy: 'fleet',
         describe: 'Minted by the coordinator. Anything sent here is discarded and replaced.',
       },
       // WHOSE REPOSITORY, set by the coordinator from the asking person's own
@@ -1501,6 +1513,7 @@ export const VERBS = Object.freeze({
         pattern: REPO_RE,
         shapeName: 'owner/repo',
         since: 6,
+        setBy: 'fleet',
         describe: 'Set by the coordinator from your own runner repository. Anything sent here is replaced.',
       },
     },
@@ -2024,6 +2037,8 @@ export function isMutating(verb) {
  * @property {Record<string, string|number>} params
  * @property {number} issuedAt
  * @property {string} [actor]
+ * @property {string} [sig]  a device's signature over the intent (intent-signature.js)
+ * @property {string} [kid]  the id of the key that made it
  */
 
 /**
@@ -2162,6 +2177,12 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
   if (shaped.ok === false) return shaped;
   const clean = shaped.params;
 
+  // A DEVICE'S SIGNATURE, carried and never required here: what it is worth is
+  // the box's to decide against the minter's key list (intent-signature.js,
+  // docs/signed-intents.md). Kept only whole and well formed, both or neither,
+  // so a box never checks half of one. A box from before them ignores both.
+  const signed = typeof env.sig === 'string' && SIG_RE.test(env.sig) && typeof env.kid === 'string' && KID_RE.test(env.kid);
+
   return {
     ok: true,
     intent: {
@@ -2177,6 +2198,7 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
       params: clean,
       issuedAt: /** @type {number} */ (env.issuedAt),
       ...(env.actor ? { actor: /** @type {string} */ (env.actor) } : {}),
+      ...(signed ? { sig: /** @type {string} */ (env.sig), kid: /** @type {string} */ (env.kid) } : {}),
     },
   };
 }
@@ -2291,10 +2313,10 @@ function checkParam(verb, key, ps, value) {
  * does not need pulling — the coordinator is the thing that is behind, and
  * telling the box to update would be the fleet prescribing its own symptom.
  *
- * @param {{ id: string, verb: string, params?: Record<string, string|number>, actor?: string, issuedAt?: number, speaks?: unknown }} opts
+ * @param {{ id: string, verb: string, params?: Record<string, string|number>, actor?: string, issuedAt?: number, speaks?: unknown, sig?: string, kid?: string }} opts
  * @returns {Intent}
  */
-export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(), speaks = null }) {
+export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(), speaks = null, sig = undefined, kid = undefined }) {
   // The version to SPEAK: the highest both ends understand. No higher than our
   // own, no higher than the host's reported max, and never below our own floor —
   // a host under the floor is reachable only by the rescue re-stamp below.
@@ -2333,6 +2355,7 @@ export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(
     params: spoken,
     issuedAt,
     ...(actor ? { actor } : {}),
+    ...(sig && kid ? { sig, kid } : {}),
   };
   const checked = validateIntent(intent);
   if (checked.ok === false) throw new Error(`refusing to send a malformed intent: ${checked.error}`);
