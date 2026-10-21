@@ -943,6 +943,16 @@ is read next, so a router Xen Orchestra had not seen yet is still found; the
 pinned certificate is what stops a line from somewhere else sending the key
 anywhere. Firewall log lines are not read.
 
+**Where it looks for a router**, in this order: where its syslog last came
+from; where Xen Orchestra says it is now, asked with the person's token on the
+first read and every five minutes after (`XoPools.edgeAddresses`); and only
+then where the policy job saw it. The job's address was the one Xen Orchestra
+knew when the job ran, and a router's guest agent arrives with its first
+daily update, after the job, so a router built that way used to stay "did not
+know its address" until the next apply. A router Xen Orchestra still has no
+address for is said as that, with when its guest agent comes; one it could not
+be asked about is said as the job's answer.
+
 **What the phone shows.** The pool's page gains an Edge routers card under its
 status, refreshed every 30 seconds while it is open:
 

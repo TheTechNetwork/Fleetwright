@@ -1450,3 +1450,51 @@ test('the key to a pool’s edge routers is kept with its token when it is whole
   assert.ok(other, 'a pool whose router key is malformed is still held');
   assert.equal(other.record.edge, undefined);
 });
+
+test('a pool’s page asks for the method list and every object type at once, not one after another', async () => {
+  // Seven round trips to Xen Orchestra, in turn, was the wait before a phone
+  // away from the pool saw anything.
+  const { stand, pools } = pageHolder();
+  /** @type {Array<() => void>} */
+  const waiting = [];
+  const call = stand.rpc.call;
+  let inFlight = 0;
+  let most = 0;
+  stand.rpc.call = async (/** @type {string} */ method, /** @type {any} */ params) => {
+    if (method === 'session.signIn') return call(method, params);
+    inFlight++;
+    most = Math.max(most, inFlight);
+    await new Promise((r) => waiting.push(() => r(null)));
+    inFlight--;
+    return call(method, params);
+  };
+  const key = await newSealKey();
+  const looking = pools.look({ owner: ELI, address: 'xo.lan', reply: key.publicKey });
+  while (waiting.length < 7) await new Promise((r) => setImmediate(r));
+  for (const go of waiting.splice(0)) go();
+  const r = await looking;
+  assert.equal(r.ok, true, r.text);
+  assert.equal(most, 7, 'the method list and the six types were all asked before any answer came');
+});
+
+test('where the pool’s edge routers are is read from Xen Orchestra now, by their tag, a running one first', async () => {
+  const edge = (/** @type {string} */ id, /** @type {string} */ ip, /** @type {string[]} */ tags, state = 'Running') => ({ type: 'VM', id, name_label: 'x', power_state: state, tags, addresses: { '0/ipv4/0': ip } });
+  const { stand, pools } = pageHolder({
+    objects: [
+      pool,
+      edge('old-a', '192.168.1.9', ['fleetwright-edge'], 'Halted'),
+      edge('a', '192.168.1.40', ['fleetwright-edge', 'fleetwright-edge-node:0']),
+      edge('b', '192.168.1.41', ['fleetwright-edge', 'fleetwright-edge-node:1']),
+      edge('not-one', '192.168.1.99', []),
+    ],
+  });
+  const got = await pools.edgeAddresses(`${ELI} xo.lan`);
+  assert.deepEqual([...(got ?? new Map()).entries()], [['fleetwright-edge', '192.168.1.40'], ['fleetwright-edge-b', '192.168.1.41']]);
+  assert.deepEqual(stand.calls[0], { method: 'session.signIn', params: { token: 'xo-limited-token' } }, 'under the person’s own token');
+  assert.equal(stand.rpc.closed, true);
+  assert.equal(await pools.edgeAddresses('sam@example.com xo.lan'), null, 'nobody else’s pool');
+  stand.rpc.call = async () => {
+    throw new Error('ECONNREFUSED');
+  };
+  assert.equal(await pools.edgeAddresses(`${ELI} xo.lan`), null, 'could not ask is null, never "has none"');
+});
