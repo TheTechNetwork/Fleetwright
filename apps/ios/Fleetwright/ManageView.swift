@@ -380,6 +380,7 @@ struct ComponentView: View {
             if let c = watch.snapshot.components[id] {
                 whatSection(c)
                 howSection(c)
+                consoleSection(c)
                 doSection(c)
             } else {
                 Text(Manage.Words.gone)
@@ -439,6 +440,27 @@ struct ComponentView: View {
             sectionHead(Manage.Words.howItIs)
         } footer: {
             Text(watch.currentLine)
+        }
+    }
+
+    // MARK: Its screen
+
+    /// THE CONSOLE, for a running VM, and only while this phone watches the
+    /// pool itself (C-2): read through one of your machines there is no
+    /// socket here to carry a screen, which is said rather than offered.
+    @ViewBuilder
+    private func consoleSection(_ c: Manage.Component) -> some View {
+        if c.kind == .vm, c.state == .running, !c.holder, watch.phase == .live {
+            Section {
+                if watch.via == nil {
+                    NavigationLink(Manage.Words.console) {
+                        VMConsoleView(address: watch.address, vm: c.id, name: c.name)
+                    }
+                    .frame(minHeight: 44)
+                } else {
+                    note(Manage.Words.consoleAway)
+                }
+            }
         }
     }
 

@@ -7,9 +7,11 @@ import SwiftUI
 /// box holding the pool last saw, and every fact may be missing: nil is
 /// CANNOT TELL and is said so, never drawn as a blank or a zero (C-5).
 ///
-/// THE CONSOLE IS XEN ORCHESTRA'S OWN, opened in the browser where you sign in
-/// to it. This phone never holds the pool's token, and a console stream
-/// through the fleet would make it hold one.
+/// THE CONSOLE HERE IS XEN ORCHESTRA'S OWN, opened in the browser where you
+/// sign in to it: this page is drawn from what the box holding the pool saw,
+/// and works without the pool's token on this phone. Where this phone does
+/// hold it, the pool's page opens the console in the app (VMConsoleView), on
+/// the pool's own network; a screen does not travel through the fleet.
 ///
 /// THE ACTIONS ARE THE BOX'S: it holds the token and works the machine under
 /// your name, and only a machine tagged as made for you (xo-pools.js,

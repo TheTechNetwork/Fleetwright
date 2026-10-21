@@ -1858,7 +1858,8 @@ struct Fleet {
         }
 
         /// The console in Xen Orchestra's own web UI, which signs you in
-        /// there: this phone never holds the pool's token.
+        /// there, so it needs no token on this phone. The pool's page has
+        /// one in the app (VMConsoleView) where this phone holds the token.
         var consoleURL: URL? {
             guard let vm, !address.isEmpty else { return nil }
             return URL(string: "https://\(address)/#/vms/\(vm)/console")
