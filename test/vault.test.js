@@ -28,6 +28,9 @@ import { vaultEnvFor, vaultSecret, vaultClaudeFile, vaultExpiryFor } from '../sr
 import { runnerAuthFor } from '../src/core/runner-login.js';
 import { pickCredentialSource } from '../src/core/podman.js';
 import { buildCommand } from '../src/core/claude.js';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
+import { startStubHub } from './helpers/stub-hub.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -829,4 +832,96 @@ test('a phone lists its signing key under its own address, and a box is given th
   assert.deepEqual((await m.keys(office)).payload.people, []);
   assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' }, { at })).error?.code, 'stale');
   assert.deepEqual((await m.keys(office)).payload.people, []);
+});
+
+test('a box checks the signature on an intent with keys the minter signed, which the coordinator carries and cannot add to', async (t) => {
+  // docs/signed-intents.md, phase 1: the real minter, coordinator and sidecar,
+  // with the box asking through the coordinator for the list and fetching the
+  // minter's key from the fleet's address itself. Counted and reported, and
+  // nothing refused yet.
+  const m = await minter();
+  t.after(m.restore);
+  const real = globalThis.fetch;
+  /** What the fleet's address serves for the minter's key, when a test changes it. @type {any} */
+  let served = null;
+  globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init) => {
+    if (String(url) !== `https://fleet.test${KEY_PATH}`) return real(url, init);
+    return served ? json(200, served) : m.service.fetch(String(url), init);
+  });
+  const iphone = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' })).ok, true);
+  const kid = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: iphone.publicJwk.x, y: iphone.publicJwk.y });
+
+  const boxKeys = await generateKeyPair();
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+  const core = new CoordinatorCore({ minter: /** @type {any} */ (m.binding), intentTimeoutMs: 2_000, logger: quiet });
+  await core.issueClient({ email: ELI }, 'phone');
+  await core.hostIds.enrol({ hostId: 'ops-box', publicJwk: boxKeys.publicJwk, enrolledBy: ELI });
+  const stub = await startStubHub({ host: 'ops-box' });
+  t.after(() => stub.close());
+  const dir = mkdtempSync(join(tmpdir(), 'fw-intent-keys-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const sidecarOn = () => new Sidecar({
+    hub: new HubClient({ baseUrl: stub.baseUrl, token: null }),
+    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { void core.onHostMessage('ops-box', f); return true; } }),
+    hostId: 'ops-box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, xoStateDir: dir, logger: quiet,
+    vaultKey: { publicJwk: boxKeys.publicJwk, sign: (/** @type {string} */ msg) => sign(boxKeys.privateJwk, msg) },
+  });
+  let sidecar = sidecarOn();
+  core.registry.connect('ops-box', (/** @type {any} */ f) => {
+    void sidecar.handle(f).then((reply) => { if (reply?.kind === 'reply') void core.onHostMessage('ops-box', reply); });
+  }, {});
+  await core.onHostMessage('ops-box', { v: PROTOCOL_VERSION, kind: 'health', hostId: 'ops-box', health: { hostId: 'ops-box', protocol: PROTOCOL_VERSION, labels: [], maxSessions: 5, running: 0, free: 5, resumable: [], sessions: [], loadavg: [0, 0, 0], loggedIn: true, claudeAccounts: 1, hub: { reachable: true }, sandboxed: true } });
+
+  // THE LIST, through the coordinator, taken because the minter signed it.
+  assert.equal(await sidecar.intentKeys?.refresh(), true, sidecar.intentKeys?.problem ?? '');
+  assert.ok(existsSync(join(dir, 'minter-signing.json')), 'the minter’s key is kept on the box');
+
+  let n = 0;
+  /** A start from Eli's phone, signed over `signed` and sent with `params`. @param {{ signed?: any, params?: any, key?: any, keyId?: string, unsigned?: boolean }} [o] */
+  const start = async (o = {}) => {
+    const id = `sig-intent-${String(++n).padStart(4, '0')}`;
+    const params = o.params ?? { name: `job-${n}` };
+    const issuedAt = Date.now();
+    const sig = await sign((o.key ?? iphone).privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params: o.signed ?? params, verb: 'start' }, 'ops-box'));
+    return core.dispatch({ verb: 'start', params, id, actor: ELI, requester: { email: ELI, admin: true }, preferHost: 'ops-box', ...(o.unsigned ? {} : { sig, kid: o.keyId ?? kid, issuedAt }) });
+  };
+  assert.equal((await start()).ok, true);
+  // Changed on the way: run, because phase 1 refuses nothing, and counted.
+  const changed = await start({ signed: { name: 'job-a' }, params: { name: 'job-b' } });
+  assert.equal(changed.ok, true, 'phase 1 refused something');
+  assert.equal((await start({ unsigned: true })).ok, true);
+  let seen = /** @type {any} */ (await sidecar.health()).signatures;
+  assert.equal(seen.keys, 1);
+  assert.deepEqual([seen.checked.signed, seen.checked['bad-signature'], seen.checked.unsigned], [1, 1, 1]);
+  assert.equal(seen.problem, undefined);
+
+  // A COORDINATOR ADDING A KEY OF ITS OWN to the list: the list is not taken,
+  // so an intent signed with that key is a key the box does not know.
+  const mallet = await generateKeyPair();
+  const malletKey = { kty: 'EC', crv: 'P-256', x: String(mallet.publicJwk.x), y: String(mallet.publicJwk.y) };
+  const malletId = await boxKeyHash(malletKey);
+  core.minter = /** @type {any} */ ({
+    vault: async (/** @type {string} */ route, /** @type {any} */ ask) => {
+      const r = await m.binding.vault(route, ask);
+      if (route === 'keys' && r.ok) r.payload.people[0].keys.push({ kid: malletId, key: malletKey, label: 'not a phone' });
+      return r;
+    },
+  });
+  assert.equal(await sidecar.intentKeys?.refresh(), false);
+  assert.match(String(sidecar.intentKeys?.problem), /not signed by the minter’s key/);
+  assert.equal((await start({ key: mallet, keyId: malletId })).ok, true);
+  seen = /** @type {any} */ (await sidecar.health()).signatures;
+  assert.equal(seen.checked['unknown-key'], 1, 'a key the coordinator slipped into the list was taken');
+  core.minter = /** @type {any} */ (m.binding);
+
+  // THE FLEET'S ADDRESS SERVING ANOTHER KEY, after a restart of the box: the
+  // kept one stays, and no list is taken until somebody deletes it.
+  sidecar = sidecarOn();
+  served = { ...(await m.lookup()), signing: malletKey };
+  assert.equal(await sidecar.intentKeys?.refresh(), false);
+  assert.match(String(/** @type {any} */ (await sidecar.health()).signatures.problem), /different signing key/);
+  rmSync(join(dir, 'minter-signing.json'));
+  served = null;
+  assert.equal(await sidecar.intentKeys?.refresh(), true, 'the minter’s own key, kept again once the old one was deleted');
 });
