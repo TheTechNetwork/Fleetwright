@@ -337,7 +337,13 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
     var sized by remember(id) { mutableStateOf(false) }
     // What each disk is to grow to, by its id, once a person has moved it.
     val growTo = remember(id) { mutableStateMapOf<String, Int>() }
+    var console by remember(id) { mutableStateOf(false) }
     val c = watch.snapshot.components[id]
+
+    if (console && c != null) {
+        ConsolePage(watch.settings, watch.address, c.id, c.name) { console = false }
+        return
+    }
 
     // The size controls start from what the VM has, once.
     LaunchedEffect(id, c != null) {
@@ -403,6 +409,16 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
             if (c.kind == Manage.Kind.VM) s.attachedDisks(c.id).forEach { d -> Fact(d.name, Manage.diskLine(d, s)) }
         }
         Hint(watch.currentLine)
+
+        // THE CONSOLE, for a running VM, and only while this phone watches
+        // the pool itself (C-2): read through one of your machines there is
+        // no socket here to carry a screen, which is said rather than offered.
+        if (c.kind == Manage.Kind.VM && c.state == Manage.State.RUNNING && !c.holder && watch.phase == PoolWatch.Phase.Live) {
+            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                if (watch.via == null) OpenRow(Manage.Words.console) { console = true }
+                else Hint(Manage.Words.consoleAway)
+            }
+        }
 
         SectionHead(Manage.Words.whatItCanDo)
         val methods = watch.methods

@@ -45,7 +45,7 @@ import org.json.JSONObject
  *
  * Every method here runs on the main thread, from [scope]: the composition's.
  */
-internal class PoolWatch(private val settings: Settings, val address: String, private val scope: CoroutineScope) {
+internal class PoolWatch(val settings: Settings, val address: String, private val scope: CoroutineScope) {
 
     sealed interface Phase {
         object Idle : Phase
