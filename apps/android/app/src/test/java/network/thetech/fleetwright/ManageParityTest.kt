@@ -268,6 +268,8 @@ class ManageParityTest {
             "actionsFooter" to Manage.Words.actionsFooter, "gone" to Manage.Words.gone, "lookAgain" to Manage.Words.lookAgain,
             "changePolicy" to Manage.Words.changePolicy, "reconnectServers" to Manage.Words.reconnectServers, "whatItIs" to Manage.Words.whatItIs, "howItIs" to Manage.Words.howItIs,
             "whatItCanDo" to Manage.Words.whatItCanDo, "oneOfYours" to Manage.Words.oneOfYours, "notYet" to Manage.Words.notYet,
+            "console" to Manage.Words.console, "consoleAway" to Manage.Words.consoleAway, "consoleShut" to Manage.Words.consoleShut,
+            "consoleEnded" to Manage.Words.consoleEnded, "openAgain" to Manage.Words.openAgain, "keyboard" to Manage.Words.keyboard, "ctrlAltDel" to Manage.Words.ctrlAltDel,
             "edgeHeading" to Manage.Words.edgeHeading, "edgeNobody" to Manage.Words.edgeNobody,
             "edgeUnasked" to Manage.Words.edgeUnasked, "edgeEvents" to Manage.Words.edgeEvents,
         )
@@ -278,7 +280,7 @@ class ManageParityTest {
             "wrongCertificate" to Manage.Words::wrongCertificate, "limitedUser" to Manage.Words::limitedUser,
             "typePrompt" to Manage.Words::typePrompt, "refused" to Manage.Words::refused, "lost" to Manage.Words::lost,
             "askingFleet" to Manage.Words::askingFleet, "edgeUnreached" to Manage.Words::edgeUnreached, "holder" to Manage.Words::holder,
-            "savedPage" to Manage.Words::savedPage,
+            "savedPage" to Manage.Words::savedPage, "consoleOpening" to Manage.Words::consoleOpening, "consoleRefused" to Manage.Words::consoleRefused,
         )
         for ((key, say) in single) assertEquals(key, arg(key, 1), say(arg(key, 0)))
 

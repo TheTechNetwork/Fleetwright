@@ -25,11 +25,13 @@
     "pretest": "node scripts/build-web.mjs",
     "browse": "node scripts/browse.mjs",
     "nojs": "node scripts/nojs.mjs",
+    "vnc": "node scripts/build-vnc.mjs",
     "verify": "./scripts/verify.sh"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.3",
     "@modelcontextprotocol/sdk": "1.32.1",
+    "@novnc/novnc": "1.7.0",
     "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "js-yaml": "5.5.0",

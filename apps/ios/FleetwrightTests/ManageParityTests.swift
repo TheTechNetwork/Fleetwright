@@ -254,6 +254,8 @@ final class ManageParityTests: XCTestCase {
             "actionsFooter": Manage.Words.actionsFooter, "gone": Manage.Words.gone, "lookAgain": Manage.Words.lookAgain,
             "changePolicy": Manage.Words.changePolicy, "reconnectServers": Manage.Words.reconnectServers, "whatItIs": Manage.Words.whatItIs, "howItIs": Manage.Words.howItIs,
             "whatItCanDo": Manage.Words.whatItCanDo, "oneOfYours": Manage.Words.oneOfYours, "notYet": Manage.Words.notYet,
+            "console": Manage.Words.console, "consoleAway": Manage.Words.consoleAway, "consoleShut": Manage.Words.consoleShut,
+            "consoleEnded": Manage.Words.consoleEnded, "openAgain": Manage.Words.openAgain, "keyboard": Manage.Words.keyboard, "ctrlAltDel": Manage.Words.ctrlAltDel,
             "edgeHeading": Manage.Words.edgeHeading, "edgeNobody": Manage.Words.edgeNobody,
             "edgeUnasked": Manage.Words.edgeUnasked, "edgeEvents": Manage.Words.edgeEvents,
         ]
@@ -264,7 +266,7 @@ final class ManageParityTests: XCTestCase {
             "wrongCertificate": Manage.Words.wrongCertificate, "limitedUser": Manage.Words.limitedUser,
             "typePrompt": Manage.Words.typePrompt, "refused": Manage.Words.refused, "lost": Manage.Words.lost,
             "askingFleet": Manage.Words.askingFleet, "edgeUnreached": Manage.Words.edgeUnreached, "holder": Manage.Words.holder,
-            "savedPage": Manage.Words.savedPage,
+            "savedPage": Manage.Words.savedPage, "consoleOpening": Manage.Words.consoleOpening, "consoleRefused": Manage.Words.consoleRefused,
         ]
         for (key, say) in single { XCTAssertEqual(say(arg(key, 0)), arg(key, 1), key) }
 
