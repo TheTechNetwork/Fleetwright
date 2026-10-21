@@ -21,7 +21,8 @@ import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
 import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
+import { intentSigningInput } from '../protocol/intent-signature.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -3307,20 +3308,18 @@ export class CoordinatorCore {
   /**
    * @param {any} host
    * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null,
-   *   sig?: string, kid?: string, issuedAt?: number }} spec
+   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> } }} spec
    * @param {number} [timeoutMs]
    */
   send(host, spec, timeoutMs = this.intentTimeoutMs) {
-    // A DEVICE'S SIGNATURE TRAVELS AS IT CAME, with the time and id it was made
-    // over, or it checks against nothing on the box (docs/signed-intents.md).
-    // Whether it holds is the box's to say; this only refuses to drop it.
-    const signed = typeof spec.sig === 'string' && typeof spec.kid === 'string' && Number.isSafeInteger(spec.issuedAt);
-    const intent = buildIntent({
+    const signed = typeof spec.sig === 'string' && SIG_RE.test(spec.sig) && typeof spec.kid === 'string' && KID_RE.test(spec.kid)
+      && Number.isSafeInteger(spec.issuedAt) && spec.signedOver;
+    const built = buildIntent({
       id: spec.id || this.newId(),
       verb: spec.verb,
       params: spec.params || {},
       ...(spec.actor ? { actor: spec.actor } : {}),
-      ...(signed ? { sig: spec.sig, kid: spec.kid, issuedAt: spec.issuedAt } : {}),
+      ...(signed ? { issuedAt: spec.issuedAt } : {}),
       // WHAT THIS BOX SAYS IT SPEAKS, which matters for exactly one envelope.
       //
       // A host behind the fleet refuses every intent before reading the verb,
@@ -3336,6 +3335,25 @@ export class CoordinatorCore {
       // drifted box still reports, so the fleet still knows the number.
       speaks: host?.health?.protocol,
     });
+    // A DEVICE'S SIGNATURE TRAVELS ONLY WITH WHAT IT WAS MADE OVER
+    // (docs/signed-intents.md): the id, the person, the box they named and the
+    // parameters they gave, compared in the bytes the box will check. Anything
+    // this file changes on the way breaks it, and each of those is somewhere
+    // the coordinator decided rather than the person: a box placement chose,
+    // a fan-out under its own id, an actor set to a pool's owner, a value
+    // checkParams cleaned, a parameter dropped for an older box. Those go
+    // unsigned, which is what the box then counts them as, rather than as a
+    // signature that does not hold, which is what would mean an attack.
+    let intent = built;
+    if (signed) {
+      const over = /** @type {{ id?: string, actor: string, host: string, params: Record<string, unknown> }} */ (spec.signedOver);
+      const asSigned = intentSigningInput({ id: String(over.id ?? ''), actor: over.actor, params: over.params, issuedAt: /** @type {number} */ (spec.issuedAt), verb: spec.verb }, over.host);
+      if (asSigned === intentSigningInput(built, String(host?.hostId ?? ''))) {
+        intent = { ...built, sig: /** @type {string} */ (spec.sig), kid: /** @type {string} */ (spec.kid) };
+      } else {
+        this.log.warn(`coordinator: ${built.verb} ${built.id} goes to ${host?.hostId ?? 'a box'} without its signature: it is not what was signed for ${over.host || 'no box'}`);
+      }
+    }
 
     // A waiter already holds this id: refuse loudly rather than clobber it.
     // The silent overwrite was a fleet-wide outage — the fan-out above used to
@@ -3365,7 +3383,8 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean, device?: string|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean, device?: string|null,
+   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> } }} spec
    *   `internal`, for `mint` only: set by the coordinator itself, never by a route
    *   `setupRouted`, for `xosetup` only: set by #setup once it has placed the job, never by a route
    *   `device`, the credential id of the phone asking, set by a route from the
@@ -3399,6 +3418,12 @@ export class CoordinatorCore {
     const shaped = checkParams(spec.verb, spec.params || {});
     if (shaped.ok === false) {
       return { ok: false, error: { code: shaped.code }, text: shaped.error };
+    }
+    // WHAT A DEVICE SIGNED, kept as it arrived and before anything here
+    // shapes, places or rewrites it, so `send` can tell whether what reaches
+    // the box is still that.
+    if (typeof spec.sig === 'string' && !spec.signedOver) {
+      spec = { ...spec, signedOver: { id: spec.id, actor: String(spec.actor ?? ''), host: String(spec.preferHost ?? ''), params: { ...(spec.params || {}) } } };
     }
 
     // A MINT IS THE COORDINATOR'S OWN, sent for a runner that asked on its

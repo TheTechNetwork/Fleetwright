@@ -1,0 +1,132 @@
+{
+  "why": "The bytes a phone signs for an intent, made by src/fleet/protocol/intent-signature.js, the function the box checks with. Both phones prove they build these exactly (IntentSigningTests.swift, IntentSigningTest.kt), and test/intent-signing-parity.test.js proves this file is what the box makes. docs/signed-intents.md.",
+  "key": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "WKn-ZIGevcwGIyyrzFoZNBdaq9_TsqzGl96oc0CWuis",
+      "y": "y77t-RvAHRKTsSGdIYUfweuOvwrvDD-Q3Hv5J0fSKbE"
+    },
+    "kid": "a93e72291a348aca0408b19ed3e84926ec7888c44e6b055fb3c2c5710d80bdea"
+  },
+  "cases": [
+    {
+      "why": "the plain case: a start with a name",
+      "intent": {
+        "actor": "nina@example.test",
+        "id": "app-8a6b2a7e-0c1d-4f6e-9b3a-1c2d3e4f5a6b",
+        "issuedAt": 1792558978141,
+        "verb": "start",
+        "params": {
+          "name": "build"
+        }
+      },
+      "host": "ops-box",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"nina@example.test\",\"host\":\"ops-box\",\"id\":\"app-8a6b2a7e-0c1d-4f6e-9b3a-1c2d3e4f5a6b\",\"issuedAt\":1792558978141,\"params\":{\"name\":\"build\"},\"verb\":\"start\"}"
+    },
+    {
+      "why": "no parameters at all, which is an empty object and not nothing",
+      "intent": {
+        "actor": "nina@example.test",
+        "id": "app-0001",
+        "issuedAt": 1792558978141,
+        "verb": "stop",
+        "params": {}
+      },
+      "host": "ops-box",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"nina@example.test\",\"host\":\"ops-box\",\"id\":\"app-0001\",\"issuedAt\":1792558978141,\"params\":{},\"verb\":\"stop\"}"
+    },
+    {
+      "why": "keys sorted by code unit, not as written: \"Z\" before \"a\", \"task\" after \"name\"",
+      "intent": {
+        "actor": "nina@example.test",
+        "id": "app-0002",
+        "issuedAt": 1,
+        "verb": "start",
+        "params": {
+          "task": "t",
+          "name": "n",
+          "Zeta": "z",
+          "alpha": "a"
+        }
+      },
+      "host": "b",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"nina@example.test\",\"host\":\"b\",\"id\":\"app-0002\",\"issuedAt\":1,\"params\":{\"Zeta\":\"z\",\"alpha\":\"a\",\"name\":\"n\",\"task\":\"t\"},\"verb\":\"start\"}"
+    },
+    {
+      "why": "an integer parameter is a JSON number, not a string",
+      "intent": {
+        "actor": "nina@example.test",
+        "id": "app-0003",
+        "issuedAt": 1792558978141,
+        "verb": "logs",
+        "params": {
+          "lines": 200,
+          "service": "hub"
+        }
+      },
+      "host": "ops-box",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"nina@example.test\",\"host\":\"ops-box\",\"id\":\"app-0003\",\"issuedAt\":1792558978141,\"params\":{\"lines\":200,\"service\":\"hub\"},\"verb\":\"logs\"}"
+    },
+    {
+      "why": "what JSON.stringify escapes: a quote, a backslash, and \\b \\f \\n \\r \\t by name",
+      "intent": {
+        "actor": "nina@example.test",
+        "id": "app-0004",
+        "issuedAt": 1792558978141,
+        "verb": "start",
+        "params": {
+          "name": "x",
+          "task": "say \"hi\"\\ then\b\f\n\r\tdone"
+        }
+      },
+      "host": "ops-box",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"nina@example.test\",\"host\":\"ops-box\",\"id\":\"app-0004\",\"issuedAt\":1792558978141,\"params\":{\"name\":\"x\",\"task\":\"say \\\"hi\\\"\\\\ then\\b\\f\\n\\r\\tdone\"},\"verb\":\"start\"}"
+    },
+    {
+      "why": "every other control character as \\u00XX in lower-case hex",
+      "intent": {
+        "actor": "nina@example.test",
+        "id": "app-0005",
+        "issuedAt": 1792558978141,
+        "verb": "start",
+        "params": {
+          "name": "x",
+          "task": "a\u0001b\u001fc\u000bd"
+        }
+      },
+      "host": "ops-box",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"nina@example.test\",\"host\":\"ops-box\",\"id\":\"app-0005\",\"issuedAt\":1792558978141,\"params\":{\"name\":\"x\",\"task\":\"a\\u0001b\\u001fc\\u000bd\"},\"verb\":\"start\"}"
+    },
+    {
+      "why": "and what it does not: a slash, DEL, U+2028 and U+2029 stay as they are",
+      "intent": {
+        "actor": "nina@example.test",
+        "id": "app-0006",
+        "issuedAt": 1792558978141,
+        "verb": "start",
+        "params": {
+          "name": "x",
+          "task": "a/bc d e"
+        }
+      },
+      "host": "ops-box",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"nina@example.test\",\"host\":\"ops-box\",\"id\":\"app-0006\",\"issuedAt\":1792558978141,\"params\":{\"name\":\"x\",\"task\":\"a/bc d e\"},\"verb\":\"start\"}"
+    },
+    {
+      "why": "nor anything outside ASCII: UTF-8, not \\u escapes, including a character outside the BMP",
+      "intent": {
+        "actor": "zoë@example.test",
+        "id": "app-0007",
+        "issuedAt": 1792558978141,
+        "verb": "start",
+        "params": {
+          "name": "x",
+          "title": "Café ☕ 🚀"
+        }
+      },
+      "host": "box-ü",
+      "input": "agent-fleet/v1/intent\n{\"actor\":\"zoë@example.test\",\"host\":\"box-ü\",\"id\":\"app-0007\",\"issuedAt\":1792558978141,\"params\":{\"name\":\"x\",\"title\":\"Café ☕ 🚀\"},\"verb\":\"start\"}"
+    }
+  ]
+}
