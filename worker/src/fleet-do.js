@@ -1410,6 +1410,12 @@ export class Fleet {
           // retries a `start` gets the original outcome rather than a second
           // session.
           id: typeof body.id === 'string' ? body.id : undefined,
+          // A DEVICE'S SIGNATURE over this intent, and the time it signed, carried
+          // to the box unchanged (docs/signed-intents.md). Nothing here checks it:
+          // the box does, against keys this Worker never hands out.
+          ...(typeof body.sig === 'string' && typeof body.kid === 'string' && Number.isSafeInteger(body.issuedAt)
+            ? { sig: body.sig, kid: body.kid, issuedAt: body.issuedAt }
+            : {}),
           // Which host, when the person picked one in the app. A placement
           // preference, never an intent parameter — see scheduler.js.
           preferHost: typeof body.host === 'string' ? body.host : undefined,

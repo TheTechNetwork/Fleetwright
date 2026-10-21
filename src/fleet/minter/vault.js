@@ -70,7 +70,7 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
-import { verify, signingInput } from '../crypto.js';
+import { verify, sign, signingInput } from '../crypto.js';
 import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS } from './claude.js';
@@ -86,6 +86,19 @@ export const OAUTH_PROVIDERS = Object.freeze({
 export const SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 /** Items a box approved for part of a vault may be named for (`grant` with `only`). */
 export const MAX_GRANT_ONLY = 8;
+
+/**
+ * Where a fleet address's signing keys are kept: `dk:<address>`, one row an
+ * address, beside the GitHub account it belongs to (docs/signed-intents.md).
+ * Keyed by the address and not the account because a box checks an intent by
+ * the address it names, and one row is what makes "this address is already
+ * somebody's" a single read.
+ */
+export const DEVICE_KEYS_PREFIX = 'dk:';
+/** Signing keys one person may keep listed: a phone, a tablet, a console or two. */
+export const MAX_DEVICE_KEYS = 8;
+/** Removed keys remembered, so a replayed older add cannot bring one back. */
+const MAX_DEVICE_TOMBSTONES = 24;
 
 /** The prefix a named secret's item carries, so it cannot be mistaken for a provider. */
 export const SECRET_PREFIX = 'secret:';
@@ -137,6 +150,8 @@ const SIGNATURE_RE = /^[A-Za-z0-9_-]{40,200}$/;
  * @typedef {object} VaultConfig
  * @property {(() => Promise<{ privateKey: CryptoKey, publicKey: string }>)|null} depositKey
  * @property {VaultStore|null} store
+ * @property {(() => Promise<{ privateJwk: any, publicJwk: any }>)|null} [signingKey]  what the key list a box is
+ *   given is signed with, made beside the deposit key (worker/src/minter.js)
  * @property {Record<string, { clientId: string, secret: string }>} [clients]  each OAuth provider's client, from the environment
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {() => number} [now]
@@ -332,7 +347,50 @@ async function runDeviceOp(inside, config, key, who, email, at) {
   const name = String(inside.name ?? '');
 
   if (inside.op === 'list') {
-    return { ok: true, answer: await describe(row, store, who.userId), text: `${who.login}’s vault.` };
+    const devices = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
+    return {
+      ok: true,
+      answer: { ...(await describe(row, store, who.userId)), devices: liveKeys(devices).map((k) => ({ ...k, yours: devices?.github === who.userId })) },
+      text: `${who.login}’s vault.`,
+    };
+  }
+
+  // A DEVICE'S SIGNING KEY, filed under the fleet address the request names
+  // (docs/signed-intents.md). A box takes a person's signature only with a key
+  // this lists for them, so a key under the wrong address is a forged actor:
+  // the address belongs to the first GitHub account that files a key under it,
+  // and another account's key for it is refused while that one keeps any.
+  if (inside.op === 'devicekey') {
+    const jwk = boxKey(inside.key);
+    if (!jwk) return refuse('bad_key', 'That is not a device’s signing key.');
+    const kid = await boxKeyHash(jwk);
+    const deviceLabel = String(inside.label ?? '').replace(/[^\w .@:'’()-]/g, '').trim().slice(0, 60);
+    const remove = inside.remove === true;
+    return withLock(`${DEVICE_KEYS_PREFIX}${email}`, async () => {
+      const kept = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
+      if (kept && kept.github !== who.userId && liveKeys(kept).length) {
+        return refuse('address_taken', `Signing keys for ${email} are filed by another GitHub account than ${who.login}. Nothing was changed. If that is not you, tell whoever runs the fleet.`);
+      }
+      /** @type {Array<{ kid: string, key: any, label: string, at: number, removed?: boolean }>} */
+      const keys = kept?.github === who.userId && Array.isArray(kept.keys) ? kept.keys : [];
+      const prior = keys.find((k) => k.kid === kid);
+      if (prior && Number(prior.at) >= at) return refuse('stale', 'That key has a newer change than this one, so this could be a replay. Nothing was changed.');
+      const others = keys.filter((k) => k.kid !== kid);
+      if (!remove && others.filter((k) => !k.removed).length >= MAX_DEVICE_KEYS) {
+        return refuse('too_many', `You keep ${MAX_DEVICE_KEYS} signing keys already. Remove one from a device you no longer use first.`);
+      }
+      const next = [...others, remove ? { kid, key: jwk, label: prior?.label ?? deviceLabel, at, removed: true } : { kid, key: jwk, label: deviceLabel, at }];
+      const tombstones = next.filter((k) => k.removed).sort((x, y) => x.at - y.at);
+      const dropped = new Set(tombstones.slice(0, Math.max(0, tombstones.length - MAX_DEVICE_TOMBSTONES)).map((k) => k.kid));
+      await store.put(`${DEVICE_KEYS_PREFIX}${email}`, { github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)) });
+      return {
+        ok: true,
+        answer: { kid },
+        text: remove
+          ? `Removed the signing key ${kid.slice(0, 16)}. Boxes stop taking it when they next ask.`
+          : `Listed ${deviceLabel || 'this device'}’s signing key (${kid.slice(0, 16)}) for ${email}.`,
+      };
+    });
   }
 
   if (inside.op === 'put' || inside.op === 'forget') {
@@ -652,4 +710,75 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
     }
   }
   return { email: String(grant.email || ''), login: row.login, items, problems };
+}
+
+/**
+ * The keys a row lists, without the ones removed.
+ *
+ * @param {any} row
+ * @returns {Array<{ kid: string, key: { kty: string, crv: string, x: string, y: string }, label: string, at: number }>}
+ */
+function liveKeys(row) {
+  if (!row || !Array.isArray(row.keys)) return [];
+  return row.keys
+    .filter((/** @type {any} */ k) => k && !k.removed && KEY_HASH_RE.test(String(k.kid)) && boxKey(k.key))
+    .map((/** @type {any} */ k) => ({ kid: String(k.kid), key: /** @type {any} */ (boxKey(k.key)), label: String(k.label || ''), at: Number(k.at) }));
+}
+
+/**
+ * The signing keys a box checks intents with, for the people in the fleet,
+ * signed with this minter's signing key so a box can tell this answer from
+ * one the coordinator that carried it made up (docs/signed-intents.md). The
+ * box pins that key from the well-known address the coordinator never serves.
+ *
+ * Public keys, so nothing is sealed: what the signature adds is who said it.
+ * `members` is the coordinator's and can only take away, as it does for the
+ * vault: a person it leaves off has no keys listed, and nobody it adds has
+ * any a person did not file.
+ *
+ * @param {unknown} ask  `{ request: { v: 1, hostKey, at }, signature, members }`,
+ *   the signature being the box's key over signingInput('vault-keys', request)
+ * @param {VaultConfig} config
+ */
+export async function answerVaultKeys(ask, config) {
+  if (!config.store || !config.signingKey) {
+    return refuse('no_signing_key', 'The minting Worker holds no signing key, so it lists no device keys. See docs/signed-intents.md.');
+  }
+  const { now = () => Date.now() } = config;
+  const req = /** @type {any} */ (ask)?.request;
+  const signature = String(/** @type {any} */ (ask)?.signature || '');
+  const jwk = boxKey(req?.hostKey);
+  const at = Number(req?.at);
+  const listed = /** @type {any} */ (ask)?.members;
+  if (req?.v !== 1 || !jwk || !Number.isFinite(at) || !SIGNATURE_RE.test(signature)) {
+    return refuse('bad_params', 'That is not a box’s request for the fleet’s device keys.');
+  }
+  if (!Array.isArray(listed) || listed.length > MAX_MEMBERS || listed.some((e) => typeof e !== 'string' || e.length > MEMBER_MAX_LENGTH)) {
+    return refuse('bad_params', 'The fleet’s list of who is in it is not in the shape one takes.');
+  }
+  if (Math.abs(now() - at) > DEPOSIT_MAX_AGE_MS) return refuse('stale', 'That request is more than ten minutes old. The box’s clock is wrong, or it is a replay.');
+  if (!(await verify(jwk, signature, signingInput('vault-keys', { v: 1, hostKey: jwk, at })))) {
+    return refuse('bad_signature', 'That request is not signed by the key it names.');
+  }
+  /** @type {{ privateJwk: any, publicJwk: any }} */
+  let signing;
+  try {
+    signing = await config.signingKey();
+  } catch (e) {
+    return refuse('bad_signing_key', `The signing key does not load: ${/** @type {Error} */ (e).message}.`);
+  }
+  const store = /** @type {VaultStore} */ (config.store);
+  /** @type {Array<{ email: string, keys: Array<{ kid: string, key: any, label: string }> }>} */
+  const people = [];
+  for (const email of [...new Set(listed.map(normaliseEmail).filter(Boolean))].sort()) {
+    const keys = liveKeys(await store.get(`${DEVICE_KEYS_PREFIX}${email}`)).map(({ kid, key, label: l }) => ({ kid, key, label: l }));
+    if (keys.length) people.push({ email, keys });
+  }
+  const payload = { v: 1, at: now(), host: await boxKeyHash(jwk), people };
+  return {
+    ok: true,
+    payload,
+    signature: await sign(signing.privateJwk, signingInput('vault-keys-answer', payload)),
+    text: people.length ? `Signing keys for ${people.length} ${people.length === 1 ? 'person' : 'people'}.` : 'Nobody in the fleet has listed a signing key.',
+  };
 }

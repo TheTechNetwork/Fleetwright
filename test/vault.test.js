@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
-import { generateKeyPair, sign, signingInput, fingerprint } from '../src/fleet/crypto.js';
+import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
@@ -155,6 +155,13 @@ async function minter(extra = {}) {
     return r;
   };
 
+  /** A box asking for the fleet's device keys, signed with its key, with who is in the fleet beside it. @param {{ publicJwk: any, privateJwk: any }} keys @param {{ members?: unknown, tamper?: boolean }} [o] */
+  const keysFor = async (keys, o = {}) => {
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: keys.publicJwk.x, y: keys.publicJwk.y }, at: Date.now() };
+    const signature = await sign(keys.privateJwk, signingInput('vault-keys', o.tamper ? { ...request, at: request.at + 1 } : request));
+    return call('/vault/keys', { request, signature, members: o.members ?? [ELI] });
+  };
+
   /** A Claude login deposited as fleetwright-claude-login and the phones seal one, and the coordinator relays it. @param {string} github @param {string|null} claude */
   const deposit_ = async (github, claude) =>
     call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now() } }), email: ELI });
@@ -167,7 +174,7 @@ async function minter(extra = {}) {
   const restart = () => { instance = new ClaudeLogins({ storage }, env); };
   /** The minting Worker as a coordinator's service binding reaches it (fleet-do.js, env.MINTER). */
   const service = { fetch: (/** @type {string} */ u, /** @type {any} */ i) => minterWorker.fetch(new Request(u, i), env) };
-  return { phone, box, deposit: deposit_, signIn: () => signIn(deposit.publicKey), renew, rows, calls, binding, service, lookup, restart, restore: () => { globalThis.fetch = real; } };
+  return { phone, box, keys: keysFor, deposit: deposit_, signIn: () => signIn(deposit.publicKey), signInAs: (/** @type {string} */ email) => signIn(deposit.publicKey, email), renew, rows, calls, binding, service, lookup, restart, restore: () => { globalThis.fetch = real; } };
 }
 
 test('a person keeps their credentials once, and only a box they approved by its key is given them', async (t) => {
@@ -456,7 +463,8 @@ test('a minter nobody gave a key makes its own once, and a phone finds it at the
   const [a, b] = await Promise.all([m.lookup(), m.lookup()]);
   assert.equal(a.ok, true, a.text);
   assert.equal(b.key, a.key, 'two first asks at once made two keys');
-  assert.deepEqual(Object.keys(a).sort(), ['key', 'ok', 'v'], 'the public answer says nothing but the key');
+  assert.deepEqual(Object.keys(a).sort(), ['key', 'ok', 'signing', 'v'], 'the public answer says nothing but the two public keys');
+  assert.equal(a.signing.d, undefined, 'the signing key’s private half left the minter');
   m.restart();
   assert.equal((await m.lookup()).key, a.key, 'the key did not survive the object starting again');
   const kept = await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' }, { to: a.key });
@@ -769,4 +777,56 @@ test('a pool’s own machine approved for its pool is given that record and noth
   // Approved again without `only`, as an ordinary box is, it holds the vault.
   assert.equal((await m.phone({ op: 'grant', hostKey: holder.publicJwk, label: 'holder-0a0b0c' })).ok, true);
   assert.deepEqual((await m.box(holder)).answer.accounts[0].items.map((/** @type {any} */ i) => i.name).sort(), ['claude', 'hypervisor:xo.lan', 'secret:NPM_TOKEN']);
+});
+
+test('a phone lists its signing key under its own address, and a box is given the list signed by a key it pins from the fleet’s address', async (t) => {
+  // docs/signed-intents.md. A box checks a person's signature only with a key
+  // this lists for them, so the list has to be the minter's and nobody
+  // else's: signed with a key the box pins from the well-known address, which
+  // the coordinator that carries the answer never serves.
+  const m = await minter();
+  t.after(m.restore);
+  const iphone = await generateKeyPair();
+  const office = await generateKeyPair();
+  const jwk = (/** @type {any} */ k) => ({ kty: 'EC', crv: 'P-256', x: k.publicJwk.x, y: k.publicJwk.y });
+
+  const added = await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' });
+  assert.equal(added.ok, true, added.text);
+  const kid = await boxKeyHash(jwk(iphone));
+  assert.equal(added.answer.kid, kid);
+  const list = await m.phone({ op: 'list' });
+  assert.deepEqual(list.answer.devices.map((/** @type {any} */ d) => [d.kid, d.label, d.yours]), [[kid, 'Eli’s iPhone', true]]);
+
+  // THE BOX'S LIST, signed by the key the well-known address names.
+  const pinned = (await m.lookup()).signing;
+  assert.ok(pinned?.x && pinned?.y && !pinned.d, 'the well-known address gives the signing key’s public half and nothing more');
+  const answer = await m.keys(office, { members: [ELI, DANA] });
+  assert.equal(answer.ok, true, answer.text);
+  assert.equal(await verify(pinned, answer.signature, signingInput('vault-keys-answer', answer.payload)), true);
+  assert.equal(answer.payload.host, await boxKeyHash(jwk(office)));
+  assert.deepEqual(answer.payload.people, [{ email: ELI, keys: [{ kid, key: jwk(iphone), label: 'Eli’s iPhone' }] }]);
+  // Changed on the way, it no longer checks.
+  assert.equal(await verify(pinned, answer.signature, signingInput('vault-keys-answer', { ...answer.payload, people: [] })), false);
+  // The same key across a restart of the object, or every box pinned the first.
+  m.restart();
+  assert.deepEqual((await m.lookup()).signing, pinned);
+
+  // ONLY PEOPLE IN THE FLEET, and only a box that signed its own request.
+  assert.deepEqual((await m.keys(office, { members: [DANA] })).payload.people, []);
+  assert.equal((await m.keys(office, { tamper: true })).error?.code, 'bad_signature');
+  assert.equal((await m.keys(office, { members: 'everyone' })).error?.code, 'bad_params');
+
+  // ANOTHER GITHUB ACCOUNT cannot file a key under Eli's address, whatever the coordinator says.
+  const mallet = await generateKeyPair();
+  const dana = await m.signInAs(DANA);
+  const taken = await m.phone({ op: 'devicekey', key: mallet.publicJwk }, { github: dana, person: ELI });
+  assert.equal(taken.error?.code, 'address_taken', taken.text);
+  assert.deepEqual((await m.keys(office)).payload.people[0].keys.map((/** @type {any} */ k) => k.kid), [kid]);
+
+  // REMOVED, and an older add replayed inside its ten minutes does not bring it back.
+  const at = Date.now() - 60_000;
+  assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, remove: true })).ok, true);
+  assert.deepEqual((await m.keys(office)).payload.people, []);
+  assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' }, { at })).error?.code, 'stale');
+  assert.deepEqual((await m.keys(office)).payload.people, []);
 });

@@ -30,10 +30,15 @@
 //   POST /vault/box       a box asks for what its people approved it to hold,
 //                         signed with the box's own key, beside the
 //                         coordinator's list of who is still in the fleet
+//   POST /vault/keys      a box asks for the signing keys people listed, to
+//                         check the intents it is sent against; the answer is
+//                         signed with this Worker's signing key
+//                         (docs/signed-intents.md)
 //
 // ONE THING ON THE INTERNET, and it is a public key:
 //
-//   GET /.well-known/fleetwright-minter   the deposit key's public half
+//   GET /.well-known/fleetwright-minter   the deposit key's public half, and
+//                                         the signing key's
 //
 // The deploy routes that one path of the fleet's own hostname here
 // (.github/workflows/worker.yml), and a route runs before the coordinator's
@@ -52,7 +57,8 @@
 import { answerMintRequest } from '../../src/fleet/minter/answer.js';
 import { answerDeposit, answerLogin, depositKeyAnswer } from '../../src/fleet/minter/claude.js';
 import { answerGithubToken, SIGNIN_PREFIX } from '../../src/fleet/minter/github.js';
-import { answerVaultDevice, answerVaultBox } from '../../src/fleet/minter/vault.js';
+import { answerVaultDevice, answerVaultBox, answerVaultKeys } from '../../src/fleet/minter/vault.js';
+import { generateKeyPair } from '../../src/fleet/crypto.js';
 import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
 
@@ -60,13 +66,15 @@ import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
 const MAX_BODY = 16 * 1024;
 
 /** Everything this Worker answers. */
-const ROUTES = ['/mint', '/runner-repo', '/linked-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login', '/vault/device', '/vault/box'];
+const ROUTES = ['/mint', '/runner-repo', '/linked-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login', '/vault/device', '/vault/box', '/vault/keys'];
 
 /** The one public path: the deposit key's public half, and nothing else. */
 export const KEY_PATH = '/.well-known/fleetwright-minter';
 
 /** Where the object keeps the key it made. */
 const DEPOSIT_ROW = 'deposit:key';
+/** Where the object keeps the key it signs a box's key list with: a P-256 private JWK. */
+const SIGNING_ROW = 'signing:key';
 
 /**
  * The imported key, per isolate. Importing is cheap and done once; the PEM it
@@ -183,6 +191,36 @@ export class ClaudeLogins {
     this.env = env;
     /** @type {Promise<string>|null} */
     this.made = null;
+    /** @type {Promise<{ privateJwk: any, publicJwk: any }>|null} */
+    this.signing = null;
+  }
+
+  /**
+   * The key the device-key list a box is given is signed with, made the first
+   * time it is asked and kept beside the deposit key, once, for the reason the
+   * deposit key is made once (depositSecret). A box pins its public half from
+   * the well-known address (docs/signed-intents.md), so a second key would be
+   * a box refusing every answer after the first.
+   *
+   * @returns {Promise<{ privateJwk: any, publicJwk: any }>}
+   */
+  signingKey() {
+    if (!this.signing) {
+      this.signing = (async () => {
+        const kept = await this.storage.get(SIGNING_ROW);
+        if (kept && typeof kept === 'object' && typeof kept.d === 'string') {
+          const { d: _d, key_ops: _ops, ...rest } = kept;
+          return { privateJwk: kept, publicJwk: { ...rest, key_ops: ['verify'] } };
+        }
+        const { privateJwk, publicJwk } = await generateKeyPair();
+        await this.storage.put(SIGNING_ROW, privateJwk);
+        return { privateJwk, publicJwk };
+      })();
+      this.signing.catch(() => {
+        this.signing = null;
+      });
+    }
+    return this.signing;
   }
 
   /**
@@ -223,8 +261,15 @@ export class ClaudeLogins {
     // ITS OWN KEY, to the Worker in front of it and to nothing else: no other
     // script is bound to this object. Not asked for when the secret is set.
     if (op === 'deposit-key') return json(200, { ok: true, secret: await this.depositSecret() });
-    if (op === 'vault/device' || op === 'vault/box') {
-      const config = vaultConfig(this.env, this.storage, () => this.depositSecret());
+    // THE PUBLIC HALF ONLY, for the well-known answer: the private half never
+    // leaves this object.
+    if (op === 'signing-key') {
+      const { publicJwk } = await this.signingKey();
+      return json(200, { ok: true, key: { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y } });
+    }
+    if (op === 'vault/device' || op === 'vault/box' || op === 'vault/keys') {
+      const config = vaultConfig(this.env, this.storage, () => this.depositSecret(), () => this.signingKey());
+      if (op === 'vault/keys') return json(200, await answerVaultKeys(body, config));
       return json(200, op === 'vault/device' ? await answerVaultDevice(body, config) : await answerVaultBox(body, config));
     }
     // A DEVICE'S GITHUB SIGN-IN finishes here too, beside the vault, because
@@ -252,12 +297,14 @@ export class ClaudeLogins {
  * @param {Record<string, any>} env
  * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} storage
  * @param {() => Promise<string>} own  the key the object made, when no secret is set
+ * @param {(() => Promise<{ privateJwk: any, publicJwk: any }>)|null} [signingKey]  the key a box's key list is signed with
  * @returns {import('../../src/fleet/minter/vault.js').VaultConfig}
  */
-function vaultConfig(env, storage, own) {
+function vaultConfig(env, storage, own, signingKey = null) {
   const secret = String(env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '');
   return {
     depositKey: secret ? () => depositKeyFor(secret) : async () => depositKeyFor(await own()),
+    signingKey,
     store: storage,
     clients: {
       github: { clientId: String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || ''), secret: String(env.FLEETWRIGHT_GITHUB_CLIENT_SECRET || '') },
@@ -287,9 +334,31 @@ async function publicKey(env) {
     return new Response(JSON.stringify({ ok: false, error: { code: 'no_deposit_key' }, text: 'This minting Worker has no storage bound, so it keeps no key.' }), { status: 503, headers });
   }
   try {
-    return new Response(JSON.stringify({ ok: true, v: 1, key: (await key()).publicKey }), { status: 200, headers });
+    return new Response(JSON.stringify({ ok: true, v: 1, key: (await key()).publicKey, ...(await signingPublic(env)) }), { status: 200, headers });
   } catch (e) {
     return new Response(JSON.stringify({ ok: false, error: { code: 'bad_deposit_key' }, text: `The deposit key does not load: ${/** @type {Error} */ (e).message}.` }), { status: 503, headers });
+  }
+}
+
+/**
+ * The signing key's public half, which a box pins to check the key list it is
+ * given (docs/signed-intents.md), or nothing when this Worker keeps no storage
+ * to make one in. Never a reason to fail the deposit key's answer beside it:
+ * a phone sealing a deposit has no use for it.
+ *
+ * @param {Record<string, any>} env
+ * @returns {Promise<{ signing?: { kty: string, crv: string, x: string, y: string } }>}
+ */
+async function signingPublic(env) {
+  if (!env.LOGINS) return {};
+  try {
+    const stub = env.LOGINS.get(env.LOGINS.idFromName('logins'));
+    const res = await stub.fetch('https://logins.internal/signing-key', { method: 'POST', body: '{}' });
+    /** @type {any} */
+    const r = await res.json().catch(() => null);
+    return r?.ok && r.key ? { signing: r.key } : {};
+  } catch {
+    return {};
   }
 }
 
@@ -377,7 +446,7 @@ export default {
     // THE VAULT, AND A DEVICE'S SIGN-IN when there is storage to record it
     // in. Without, a sign-in still finishes here and opens no vault, which a
     // minter with no storage does not keep anyway.
-    if (url.pathname === '/vault/device' || url.pathname === '/vault/box' || (url.pathname === '/github/token' && env.LOGINS)) {
+    if (url.pathname === '/vault/device' || url.pathname === '/vault/box' || url.pathname === '/vault/keys' || (url.pathname === '/github/token' && env.LOGINS)) {
       if (!env.LOGINS) return json(200, { ok: false, error: { code: 'no_store' }, text: 'The minting Worker has no storage bound, so it keeps no vault.' });
       const stub = env.LOGINS.get(env.LOGINS.idFromName('logins'));
       const res = await stub.fetch(`https://logins.internal${url.pathname}`, { method: 'POST', body: JSON.stringify(ask) });

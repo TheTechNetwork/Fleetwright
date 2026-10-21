@@ -272,7 +272,9 @@ test('a deposit goes only to the key the minter gives, only fresh, and forgettin
     const r = await f.depositAs({ pin: null });
     f.restore();
     assert.equal(r.ok, true, r.text);
-    assert.equal(f.rows.size, 1);
+    // One login kept. The other row the lookup leaves is the minter's signing
+    // key, made the first time its address is asked (docs/signed-intents.md).
+    assert.equal([...f.rows.keys()].filter((k) => k !== 'signing:key').length, 1);
   }
   // NO ROUTE AND NO PIN: nothing but the coordinator says what the key is, so
   // its claim is shown for checking and nothing is sent.
