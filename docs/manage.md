@@ -248,6 +248,29 @@ closed." and changes to "Watching now. Changes arrive as Xen Orchestra makes
 them." once it is connected. The time is kept per address, and is the only
 thing these screens write.
 
+### Opening fast
+
+Asked for: "why does connecting and loading info take so long". The page did
+each step after the last one. It waited out the socket's whole deadline
+before asking a machine, then signed in, read the method list, and read the
+six object types one at a time. Nothing was kept between visits, so every
+visit opened on a blank page.
+
+- **It opens on the page it showed last time.** The rows are drawn at once
+  from a file on the phone, and the status says "Showing the page as it was
+  at 14:02 until the pool answers." No row action is offered until the pool
+  has answered (C-5). The file holds the page alone and never the token. On
+  iOS it sits in Application Support with complete file protection and is
+  left out of backups. On Android it sits in `noBackupFilesDir`.
+- **It reads everything at once.** The method list and all six object types
+  are asked for together on the one socket, and the replies are told apart
+  by id. A machine reading the page for the phone does the same
+  (`xo-pools.js`, `look`).
+- **It asks a machine after 2.5 seconds**, not after the socket's deadline.
+  The socket keeps trying. When it opens, its page replaces the machine's and
+  the status goes back to watching. A machine's late answer never covers a
+  certificate that changed.
+
 ### From away, through your machines
 
 On 5G the page sat at "Connecting to 10.10.10.230…" and then gave a bare

@@ -459,9 +459,18 @@ in turn, if it may update itself (Machines made here), and says `rolling` in
 (`imageChannel` in the policy, `ensureImage`), and the template is tagged
 `fleetwright-channel:<suite>`, which is how the policy screen knows to say
 "It was built from main." beside one. An image that is there keeps what it
-was built from until it is rebuilt, and asked for the other suite without a
-rebuild, Apply says so. A rebuild from a phone that predates the choice keeps
-the suite the image had.
+was built from until it is rebuilt. A rebuild from a phone that predates the
+choice keeps the suite the image had.
+
+**Changing it marks the images there to rebuild.** Asked for: "the build from
+setting isn't saving". It was saved, but only a build reads it, so Apply kept
+the image as it was and the screen opened again on what the image had been
+built from. Now, where the machine rebuilds images (`image-manage`), choosing
+the other suite sets each image there that was built from the first one to
+Rebuild, and the line under the choice says "Apply rebuilds the image that is
+there to match." Choosing the first suite again puts them back to Keep. An
+image the person set to Remove, or to Rebuild themselves, is left as they set
+it. The same on both phones (`setImageChannel`, `withImageChannel`).
 
 **A rolling image is still a snapshot.** It is main at the moment it was
 built. A machine made from it then updates on its own; the image itself does
