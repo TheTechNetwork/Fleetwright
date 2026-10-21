@@ -19,6 +19,8 @@ struct SessionEntity: AppEntity, Identifiable {
     let name: String
     let title: String?
     let status: String
+    /// The box the list showed it on, which `stop` and `resume` sign for.
+    let host: String?
 
     static var typeDisplayRepresentation: TypeDisplayRepresentation { "Session" }
     static var defaultQuery = SessionQuery()
@@ -42,7 +44,7 @@ struct SessionQuery: EntityQuery {
         guard settings.configured else { return [] }
         let reply = try await Fleet(settings: settings).list()
         return (reply.sessions ?? []).map {
-            SessionEntity(id: $0.name, name: $0.name, title: $0.title, status: $0.status)
+            SessionEntity(id: $0.name, name: $0.name, title: $0.title, status: $0.status, host: $0.hostId)
         }
     }
 }
@@ -68,7 +70,7 @@ struct ResumeSessionIntent: AppIntent {
         }
         // "summary" rather than asking: nobody is going to answer a
         // resume-dialog question through Siri, and it is the cheaper option.
-        let reply = try await Fleet(settings: settings).resume(session.name, choice: "summary")
+        let reply = try await Fleet(settings: settings).resume(session.name, choice: "summary", host: session.host)
         return .result(dialog: IntentDialog(stringLiteral: reply.text ?? "Resumed \(session.label)"))
     }
 }
@@ -277,7 +279,7 @@ struct StopSessionIntent: AppIntent {
             dialog: IntentDialog(stringLiteral: "Stop \(session.label)? It can be resumed later.")
         )
         let settings = Settings()
-        let reply = try await Fleet(settings: settings).stop(session.name)
+        let reply = try await Fleet(settings: settings).stop(session.name, host: session.host)
         return .result(dialog: IntentDialog(stringLiteral: reply.text ?? "Stopped \(session.label)"))
     }
 }

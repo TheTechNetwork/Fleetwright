@@ -96,7 +96,7 @@ struct RecycleBinView: View {
         defer { busy = nil }
         do {
             let fleet = Fleet(settings: settings)
-            let reply = restore ? try await fleet.restore(name) : try await fleet.purge(name)
+            let reply = restore ? try await fleet.restore(name, host: host) : try await fleet.purge(name, host: host)
             // THE APP WRITES ITS OWN SENTENCE. The host's reply is written for
             // chat and ends in "/restore <name> brings it back" — correct
             // there, and nonsense here, where there is nothing to type and a

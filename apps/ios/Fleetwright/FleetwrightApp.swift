@@ -307,7 +307,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
         switch NotificationAnswers.decide(actionIdentifier: response.actionIdentifier, userInfo: info) {
         case let .answer(name, option, promptId):
-            await send(answer: option, to: name, promptId: promptId)
+            // The box the notification came from, which is the one it signs for.
+            await send(answer: option, to: name, promptId: promptId, host: info["hostId"] as? String)
         case let .stale(name):
             // SAID, NOT SWALLOWED. A button that quietly does nothing is worse
             // than no button: somebody taps it, the phone locks, and they
@@ -370,7 +371,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// a queue entry. The session opens either way, because whatever happened
     /// the next thing anybody wants is to see the question.
     @MainActor
-    private func send(answer option: Int, to name: String, promptId: String) async {
+    private func send(answer option: Int, to name: String, promptId: String, host: String?) async {
         // `self.settings` is set when the UI registers for push, and a lock
         // screen can reach this before any UI has run — a cold launch straight
         // into an action. Settings reads from UserDefaults, so building one
@@ -380,7 +381,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let settings = self.settings ?? Settings()
         guard settings.configured else { return open(name) }
         do {
-            let reply = try await Fleet(settings: settings).answer(name, option: option, promptId: promptId)
+            let reply = try await Fleet(settings: settings).answer(name, option: option, promptId: promptId, host: host)
             // THE HOST GETS THE LAST WORD. `promptId` is checked against the
             // live pane there, so a refusal here is a question that moved on in
             // the seconds this took — which is exactly the case the id exists

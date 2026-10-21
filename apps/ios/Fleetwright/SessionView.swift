@@ -134,7 +134,7 @@ struct SessionView: View {
                     }
                     ForEach(options) { option in
                         Button {
-                            act { try await fleet.answer(session.name, option: option.index, promptId: prompt.id) }
+                            act { try await fleet.answer(session.name, option: option.index, promptId: prompt.id, host: session.hostId) }
                         } label: {
                             HStack(spacing: Design.Space.insideTight) {
                                 // The ordinal, because an ordinal is what is
@@ -232,14 +232,14 @@ struct SessionView: View {
 
             Section {
                 if session.isRunning {
-                    Button("Stop") { act { try await fleet.stop(session.name) } }.disabled(busy)
+                    Button("Stop") { act { try await fleet.stop(session.name, host: session.hostId) } }.disabled(busy)
                 } else if session.isResumable, let why = resumeKept {
                     // The reason, where the fleet would refuse the button (C-2).
                     Text(why)
                         .fleetType(.bodySmall)
                         .foregroundStyle(Design.Palette.inkDim)
                 } else if session.isResumable {
-                    Button("Resume") { act { try await fleet.resume(session.name, choice: "summary") } }.disabled(busy)
+                    Button("Resume") { act { try await fleet.resume(session.name, choice: "summary", host: session.hostId) } }.disabled(busy)
                 }
                 NavigationLink("Files") {
                     FilesView(session: session.name, host: session.hostId, fleet: fleet)
@@ -263,7 +263,7 @@ struct SessionView: View {
             .listRowBackground(Design.Palette.card)
             .confirmationDialog("Forget \(session.label)?", isPresented: $confirmingForget, titleVisibility: .visible) {
                 Button("Forget — move it to the bin", role: .destructive) {
-                    act { try await fleet.forget(session.name) }
+                    act { try await fleet.forget(session.name, host: session.hostId) }
                 }
             } message: {
                 // IT CAN BE UNDONE, for seven days, and this said it could not.
@@ -322,7 +322,7 @@ struct SessionView: View {
     /// the reply box rather than blanking a screen somebody is reading.
     private func peek() async {
         do {
-            let reply = try await fleet.peek(session.name)
+            let reply = try await fleet.peek(session.name, host: session.hostId)
             pane = reply.text ?? ""
             paneAt = Date()
         } catch {
