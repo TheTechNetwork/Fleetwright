@@ -132,3 +132,22 @@ test('both apps warn about the partial copy before the round trip', () => {
     assert.match(src, /including anything after a #/, `${name} does not warn about a partial copy`);
   }
 });
+
+test('forgetting somebody removed ends their sign-in and leaves anybody else’s', () => {
+  // forget-person.js asks this of every box that forgets a person, so a test
+  // that matched too broadly would end the login an admin is in the middle
+  // of whenever any member is removed.
+  for (const [pendingFor, startedBy, ended] of [
+    ['nina@example.com', 'fleet:admin@example.com', true],
+    [null, 'fleet:Nina@Example.com', true],
+    ['kim@example.com', 'fleet:admin@example.com', false],
+    [null, 'web', false],
+  ]) {
+    const flow = pending(startedBy);
+    flow.pending.linkFor = pendingFor;
+    let killed = false;
+    flow.cancel = () => { killed = true; flow.pending = null; return { ok: true, message: '' }; };
+    assert.equal(flow.forget('nina@example.com'), ended, `${pendingFor} started by ${startedBy}`);
+    assert.equal(killed, ended);
+  }
+});

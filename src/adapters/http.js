@@ -408,7 +408,7 @@ export class HttpAdapter {
     // store involved are this process's. A route of its own rather than a
     // command, so no surface that types commands can reach it.
     if (p === '/api/forget-person' && method === 'POST') {
-      const r = forgetPerson(this.cfg, this.sessions, (await readJson(req)).email);
+      const r = forgetPerson(this.cfg, this.sessions, (await readJson(req)).email, this.login);
       return json(res, r.ok ? 200 : 400, r);
     }
 
