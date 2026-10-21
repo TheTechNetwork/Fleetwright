@@ -62,9 +62,11 @@ test('the idempotency key is minted when queued, not when sent', () => {
   assert.match(swift, /id: "app-\\\(UUID\(\)\.uuidString\)"/);
   assert.match(kotlin, /id = "app-" \+ UUID\.randomUUID\(\)/);
 
-  // And the sender uses the queued id when one is supplied.
-  assert.match(swiftFleet, /"id": idempotencyKey \?\? "app-/);
-  assert.match(kotlinFleet, /put\("id", idempotencyKey \?: \(/);
+  // And the sender uses the queued id when one is supplied: written into the
+  // body, or kept first (as `id`) so the phone signs the id it sends
+  // (DeviceSigning, docs/signed-intents.md).
+  assert.match(swiftFleet, /"id": idempotencyKey \?\? "app-|let id = idempotencyKey \?\? "app-/);
+  assert.match(kotlinFleet, /put\("id", idempotencyKey \?: \(|val id = idempotencyKey \?: \("app-"/);
 });
 
 test('only a delivery failure is held, never a refusal', () => {

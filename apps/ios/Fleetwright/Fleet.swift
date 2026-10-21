@@ -2536,6 +2536,7 @@ struct Fleet {
         for (key, value) in params {
             typed[key] = numeric.contains(key) ? (Int(value) ?? 0) : value
         }
+        let id = idempotencyKey ?? "app-\(UUID().uuidString)"
         var body: [String: Any] = [
             "verb": verb,
             "params": typed,
@@ -2546,9 +2547,24 @@ struct Fleet {
             // Supplied by the caller when this command has been HELD, so a
             // retry carries the id it was queued under. Minted here only for a
             // command being sent for the first time.
-            "id": idempotencyKey ?? "app-\(UUID().uuidString)",
+            "id": id,
         ]
-        if let host, !host.isEmpty { body["host"] = host }
+        if let host, !host.isEmpty {
+            body["host"] = host
+            // SIGNED BY THIS PHONE, for the box it names, over exactly what is
+            // sent (DeviceSigning.swift). Signed at sending, so a held command
+            // sent again later carries a fresh time. Until this phone's key is
+            // listed with the minter it goes unsigned, and listing is started.
+            let signing = DeviceSigning(settings: settings)
+            if let signed = signing.signature(verb: verb, params: typed, id: id, host: host) {
+                body["sig"] = signed.sig
+                body["kid"] = signed.kid
+                body["issuedAt"] = signed.issuedAt
+            } else {
+                let fleet = self
+                Task { await signing.listIfNeeded(fleet) }
+            }
+        }
         for (key, value) in extra { body[key] = value }
         do {
             let data = try await post("/api/intent", body: body)

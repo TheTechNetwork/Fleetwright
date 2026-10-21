@@ -175,6 +175,17 @@ struct PhoneVault {
         try await ask(fleet, op: "revoke", extra: ["key": grant.key]).text
     }
 
+    /// List this phone's signing key under the account it is signed in as, so
+    /// the fleet's boxes are given it by the minter and can check what this
+    /// phone signs (DeviceSigning.swift, docs/signed-intents.md). The minter
+    /// files it under the GitHub account this request carries, and refuses it
+    /// when that address's keys are another account's.
+    func listDeviceKey(_ fleet: Fleet, key: DeviceKey) async throws -> String {
+        try await ask(fleet, op: "devicekey", extra: [
+            "key": key.jwk, "label": key.hardware ? "iPhone (Secure Enclave)" : "iPhone (keychain)",
+        ]).text
+    }
+
     static func isSecretName(_ s: String) -> Bool {
         (1...64).contains(s.count) && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }
     }
