@@ -201,7 +201,7 @@ that, and does not remove it:
    every intent, and **enforces nothing**: it counts signed, unsigned and
    failing intents in its health report and writes a failing one to its own
    log, so the fleet can see what enforcement would refuse before anything is.
-2. **Phones and console sign.** A key per device in the Secure Enclave on iOS,
+2. **Phones and console sign.** *Phones built; the console not yet (below).* A key per device in the Secure Enclave on iOS,
    the Android Keystore with StrongBox where there is one, and WebCrypto in the
    console; registered with the minter at sign-in; every intent signed. Not
    behind Face ID per request: the key never leaves the hardware, and a
@@ -212,26 +212,52 @@ that, and does not remove it:
    sign-in signatures above ship here.
 4. **Pinned admins** on each box.
 
-## What phase 2 has to settle
+## Phase 2, as built
 
-Found while building phase 1, from the paths an intent takes through the
-coordinator. Each would make a correctly signed intent fail at the box, so each
-needs an answer before phones sign:
+**The phones sign** (`DeviceSigning.swift`, `DeviceSigning.kt`):
 
-- **The coordinator picks the box.** A start with no machine chosen is placed
-  after the phone signed, and the signature names a box. Either the app signs
-  for the box it is shown placement would pick, or a start signs for "a box I
-  may use" and each box's replay cache is all that stops it running twice.
-  The first is the recommendation: a start for a named box is what the app
-  mostly sends already.
-- **One intent, several boxes.** A fleet-wide `test` is sent to each box under
-  a new id, and `vmctl`, `xolook` and `xoact` try each box that holds the pool
-  in turn, with the actor set to the pool's owner. Signed per box by the app,
-  or covered by a delegation.
-- **A parameter newer than the box.** `buildIntent` drops an optional
-  parameter an older box would not understand. For a signed intent that turns
-  into a failed signature, so the coordinator should refuse to send a signed
-  intent it would have to change, and say the box needs updating.
+- **The key.** On iOS it lives in the Secure Enclave. Where there is none (the
+  simulator), it is a software key in the keychain, kept on this device only.
+  On Android it is a Keystore key, in StrongBox where the phone has it. The
+  label the minter lists says which.
+- **Listing it.** The phone lists the key with the minter once, through its own
+  GitHub sign-in (`devicekey`). It signs only after that, and only for the
+  account it is signed in as.
+- **Which intents.** A phone signs every intent that names its box. It signs
+  over the parameters exactly as sent.
+- **Matching the box byte for byte.** The canonical JSON is written out by hand
+  on both phones, because neither platform's encoder writes what JavaScript's
+  does. `test/fixtures/parity/intent-signing.json` holds the cases where
+  encoders differ, and all three implementations are tested against it.
+
+**The coordinator carries a signature only with what it was made over.**
+
+- **What it keeps.** `dispatch` keeps the id, the person, the box they named and
+  their parameters before anything shapes them.
+- **What it checks.** `send` compares the signing input of what goes out with
+  that, using the function the box uses.
+- **When it drops the signature.** Each of the paths found while building
+  phase 1 breaks the signature, so each sends the intent unsigned. That is what
+  the box counts it as, rather than as a signature that does not hold:
+  - the coordinator placing the intent;
+  - fanning it out under new ids;
+  - setting the actor to a pool's owner;
+  - cleaning a value in `checkParams`;
+  - dropping a parameter for an older box.
+
+  `test/signed-carry.test.js` holds each of those.
+
+**Still unsigned, and what phase 3 needs first:**
+
+- **Intents that name no box.** `stop`, `peek`, `answer`, `resume` and the
+  other session verbs name only the session. The phone knows which box a
+  session is on (the list says), so the next step is for it to name the box and
+  sign them too.
+- **An intent the coordinator changes.** Under enforcement, the coordinator
+  should refuse it, and say why, rather than send it unsigned to be refused by
+  the box.
+- **The console and MCP.** The console signs nothing yet. MCP callers need the
+  delegations described above.
 
 `docs/security.md` changes in step: SEC-COORD-2 moves from aspirational to
 observed after phase 1, and to enforced only after phase 3 is the default.
