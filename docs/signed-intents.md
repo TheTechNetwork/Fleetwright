@@ -225,6 +225,12 @@ that, and does not remove it:
   account it is signed in as.
 - **Which intents.** A phone signs every intent that names its box. It signs
   over the parameters exactly as sent.
+- **The session verbs too.** `stop`, `peek`, `answer`, `resume`, `forget`,
+  `restore` and `purge` name only a session, and the coordinator routes them to
+  wherever that session is. So the phone names the box its list showed the
+  session on, or the box a notification came from, and signs for that. Naming
+  it changes nothing about where they go. When the session has moved, the
+  intent reaches the box that holds it unsigned.
 - **Matching the box byte for byte.** The canonical JSON is written out by hand
   on both phones, because neither platform's encoder writes what JavaScript's
   does. `test/fixtures/parity/intent-signing.json` holds the cases where
@@ -249,10 +255,11 @@ that, and does not remove it:
 
 **Still unsigned, and what phase 3 needs first:**
 
-- **Intents that name no box.** `stop`, `peek`, `answer`, `resume` and the
-  other session verbs name only the session. The phone knows which box a
-  session is on (the list says), so the next step is for it to name the box and
-  sign them too.
+- **What a phone asks of no box.** A signature is for one box, so an intent
+  the coordinator places or fans out goes unsigned. Most of those only read
+  (`list`, `profiles`, `status` without a name). The ones that change something
+  are a `start` or `provision` with no box chosen, and `link` and `unlink`
+  across the fleet.
 - **An intent the coordinator changes.** Under enforcement, the coordinator
   should refuse it, and say why, rather than send it unsigned to be refused by
   the box.
