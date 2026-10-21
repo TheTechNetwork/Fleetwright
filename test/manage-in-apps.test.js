@@ -327,6 +327,14 @@ test('both phones: a pool the phone could not reach is read through one of your 
   const kt = bare(KT_WATCH);
   assert.equal((kt.match(/readThrough\(e\.message \?: "it did not answer"\)/g) ?? []).length, 2);
   assert.ok(kt.indexOf('readThrough(e.message') < kt.indexOf('link = opened'), 'only before the socket is open');
+  // The same early ask on Android, the same concurrent reads, and the same
+  // takeover; an ask already under way is left to finish rather than
+  // cancelled into "none of your machines could read it".
+  assert.match(kt, /const val DIRECT_FIRST_MS = 2_500L/);
+  assert.match(kt, /delay\(DIRECT_FIRST_MS\)\s*if \(generation == mine && !reached && phase == Phase\.Connecting\) readThrough\(Manage\.Words\.notYet\)/);
+  assert.equal((kt.match(/if \(!relayingNow\) early\.cancel\(\)/g) ?? []).length, 3);
+  assert.match(kt, /WRONG_CERTIFICATE\) \{\s*early\.cancel\(\)\s*generation\+\+\s*phase = Phase\.Stopped\(Manage\.Words\.wrongCertificate/);
+  assert.match(kt, /Manage\.objectTypes\.map \{ type ->\s*async \{ opened\.call\("xo\.getAllObjects"/);
 
   // SEALED TO A KEY MADE FOR THE ONE LOOK, under the AAD the host seals with;
   // the table's row is checked against seal.js above and on both phones.

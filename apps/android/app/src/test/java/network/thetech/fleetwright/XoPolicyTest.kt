@@ -310,6 +310,27 @@ class XoPolicyTest {
     }
 
     @Test
+    fun changingWhatAnImageIsBuiltFromRebuildsTheImageThereSoApplyKeepsIt() {
+        // Asked for: "the build from setting isn't saving". It only takes
+        // effect on a build, so the image there is marked to rebuild.
+        val inv = inventory(inventoryJson().put("images", JSONArray().put(JSONObject().put("pool", "pool-1").put("name", "Fleetwright Debian 13").put("key", "debian-13").put("channel", "stable"))))
+        val c = XoPolicy.defaults(inv).copy(imageManageChoice = true)
+        val rolling = XoPolicy.withImageChannel(inv, c, XoPolicy.CHANNEL_ROLLING)
+        assertEquals(XoPolicy.REBUILD, rolling.imageActions["debian-13"])
+        val back = XoPolicy.withImageChannel(inv, rolling, XoPolicy.CHANNEL_STABLE)
+        assertEquals("changing it back unmarks it", null, back.imageActions["debian-13"])
+
+        // One the person marked to remove is left as they said.
+        val removed = XoPolicy.withImageChannel(inv, c.copy(imageActions = mapOf("debian-13" to XoPolicy.REMOVE)), XoPolicy.CHANNEL_ROLLING)
+        assertEquals(XoPolicy.REMOVE, removed.imageActions["debian-13"])
+
+        // A machine that cannot rebuild gets the choice alone.
+        val older = XoPolicy.withImageChannel(inv, XoPolicy.defaults(inv), XoPolicy.CHANNEL_ROLLING)
+        assertEquals(null, older.imageActions["debian-13"])
+        assertEquals("rolling", older.imageChannel)
+    }
+
+    @Test
     fun theBindingsAreTheMachines() {
         // The same strings as xosetupInventoryAad and xosetupPolicyAad in
         // src/fleet/seal.js, and neither is setup's or the token's.
