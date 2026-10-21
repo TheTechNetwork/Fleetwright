@@ -103,10 +103,10 @@ export const UBUNTU_2404_IMAGE = Object.freeze({
   algorithm: /** @type {'sha256'} */ ('sha256'),
   // renovate: datasource=custom.ubuntu-cloud depName=noble
   build: 'release-20261017',
-  url: 'https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.img',
+  url: 'https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img',
   /** As published in that release's SHA256SUMS, and as downloaded. */
-  sha256: '6a81c37564db9b1ee84e141922625e1d7c5b389b99bb3c572e0243607d5bb4d2',
-  compressedSize: 625612288,
+  sha256: '04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94',
+  compressedSize: 621284352,
   rawSize: 3758096384,
 });
 
