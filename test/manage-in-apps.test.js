@@ -208,7 +208,7 @@ test('Android: the pin is checked in the handshake, before the upgrade is writte
   // ORDER: the handshake, then the upgrade request, the first bytes written.
   const open = code.slice(code.indexOf('suspend fun open('), code.indexOf('private fun upgrade('));
   assert.ok(open.indexOf('ssl.startHandshake()') > 0, 'the handshake is not started explicitly');
-  assert.ok(open.indexOf('upgrade(ssl, host, port)') > open.indexOf('ssl.startHandshake()'), 'the upgrade is written before the pin is checked');
+  assert.ok(open.indexOf('upgrade(ssl, host, port, path, cookie)') > open.indexOf('ssl.startHandshake()'), 'the upgrade is written before the pin is checked');
   // A wrong certificate is said as one, not as a connection that failed.
   assert.match(open, /if \(trust\.mismatch\) throw Failure\("the certificate was not the pinned one", Failure\.Kind\.WRONG_CERTIFICATE\)/);
   // Two trust managers in the app, and neither accepts a certificate that is

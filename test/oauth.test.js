@@ -577,7 +577,15 @@ test('the app flow is one tap on both phones, and the paste flow is not', () => 
   const code = (/** @type {string} */ src) =>
     src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
   assert.ok(!/WKWebView/.test(code(ios)), 'iOS must not draw the provider login itself');
-  assert.ok(!/\bWebView\b/.test(code(android)), 'Android must not draw it either');
+  // THE ONE WEB VIEW IS THE VM CONSOLE (ConsolePage.kt), which draws a
+  // machine's screen and asks for nothing: no sign-in, no password. It holds
+  // the rule's purpose another way, checked here: it shows only the page
+  // bundled with the app and never goes to an address, so no provider's login
+  // can ever be drawn in it. Every other file still may not have one.
+  const consolePage = read('apps/android/app/src/main/java/network/thetech/fleetwright/ConsolePage.kt');
+  assert.ok(!/\bWebView\b/.test(code(android.replace(consolePage, ''))), 'Android must not draw it either');
+  assert.match(code(consolePage), /shouldOverrideUrlLoading\(view: WebView, request: WebResourceRequest\) = true/);
+  assert.ok(!/\bloadUrl\(/.test(code(consolePage)), 'the console web view goes to an address');
 
   for (const [name, src] of [['iOS', ios], ['Android', android]]) {
     // The one-tap path is gated on the app flow. The paste route has no

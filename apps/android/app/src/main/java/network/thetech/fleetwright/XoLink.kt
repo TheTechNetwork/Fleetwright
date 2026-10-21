@@ -215,7 +215,18 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
          * WebSocket. Throws a [Failure] of kind WRONG_CERTIFICATE for a server
          * that answered with any other certificate, having sent it nothing.
          */
-        suspend fun open(address: String, pin: String, timeoutMs: Int = 15_000): XoLink = withContext(Dispatchers.IO) {
+        suspend fun open(address: String, pin: String, timeoutMs: Int = 15_000): XoLink {
+            val (ssl, rest) = handshake(address, pin, "/api/", null, timeoutMs)
+            return XoLink(ssl, ssl.inputStream, rest).also { it.startReading() }
+        }
+
+        /**
+         * The pinned TLS handshake and the WebSocket upgrade to [path], with
+         * [cookie] on the upgrade request when there is one: what the API and
+         * a VM's console (XoConsole) share. Answers the socket and whatever
+         * arrived after the upgrade's headers.
+         */
+        internal suspend fun handshake(address: String, pin: String, path: String, cookie: String?, timeoutMs: Int = 15_000): Pair<SSLSocket, ByteArray> = withContext(Dispatchers.IO) {
             val (host, port) = splitAddress(address)
             val trust = PinTrust(pin.lowercase())
             val context = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(trust), null) }
@@ -230,11 +241,11 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
                     if (trust.mismatch) throw Failure("the certificate was not the pinned one", Failure.Kind.WRONG_CERTIFICATE)
                     throw e
                 }
-                val rest = upgrade(ssl, host, port)
+                val rest = upgrade(ssl, host, port, path, cookie)
                 // From here a read waits on Xen Orchestra, which may say
                 // nothing for a long while and is not wrong to.
                 ssl.soTimeout = 0
-                XoLink(ssl, ssl.inputStream, rest).also { it.startReading() }
+                ssl to rest
             } catch (e: Exception) {
                 runCatching { raw.close() }
                 throw e
@@ -242,12 +253,13 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
         }
 
         /** The HTTP upgrade, answered with whatever arrived after its headers. */
-        private fun upgrade(ssl: SSLSocket, host: String, port: Int): ByteArray {
+        private fun upgrade(ssl: SSLSocket, host: String, port: Int, path: String, cookie: String?): ByteArray {
             val key = Base64.getEncoder().encodeToString(ByteArray(16).also { SecureRandom().nextBytes(it) })
             val hostHeader = if (host.contains(':')) "[$host]:$port" else "$host:$port"
             val out = ssl.outputStream
             out.write(
-                ("GET /api/ HTTP/1.1\r\nHost: $hostHeader\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                ("GET $path HTTP/1.1\r\nHost: $hostHeader\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    (if (cookie != null) "Cookie: $cookie\r\n" else "") +
                     "Sec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n\r\n").toByteArray(Charsets.ISO_8859_1),
             )
             out.flush()
