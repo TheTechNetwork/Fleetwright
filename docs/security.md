@@ -841,8 +841,11 @@ minter, which already decides who a person is from a GitHub sign-in the
 coordinator cannot make, becomes the directory of phone keys, and a box pins
 the minter's own key from an address the coordinator never serves. Phase 1 is
 built: a box checks every intent's signature against that list and counts what
-it found in its health (`intent-keys.js`), and refuses nothing for it, and no
-phone signs yet. So the bound above still holds whole.
+it found in its health (`intent-keys.js`), and refuses nothing for it. Phase 2
+is built for the phones: they sign each intent that names its box, with a key
+the minter lists, and the coordinator carries a signature only with what it was
+made over. Nothing is refused for a missing or failing signature yet, so the
+bound above still holds whole.
 *Falsify:* search host code for an intent refused because its signature does not
 hold; today there is none (`sidecar.js` counts and logs, then runs it).
 
@@ -1748,9 +1751,8 @@ surfaced later; what each leaves behind is in its status row.
 Stated plainly, because omission is where a security document lies.
 
 - **A compromised coordinator, today.** It can forge instructions and drive the
-  credential verbs (§4.1). Signed intents would fix it; boxes check signatures
-  and refuse nothing yet, and phones do not sign
-  ([`signed-intents.md`](signed-intents.md)). If this
+  credential verbs (§4.1). Signed intents would fix it; phones sign and boxes
+  check, and nothing is refused yet ([`signed-intents.md`](signed-intents.md)). If this
   matters to you, do not deploy the coordinator anywhere you would not deploy the
   thing it controls.
 - **Misuse of legitimately-held access by a session** (§7). Bounded in theft,
