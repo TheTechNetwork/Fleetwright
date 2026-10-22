@@ -318,12 +318,12 @@ struct FleetView: View {
                     // of eight. The card answers, stops, resumes and opens;
                     // the page does the rest, with its reply beside it.
                     SessionRow(session: session, busy: busy, resumeKept: resumeKept(session), fleet: fleet,
-                               stop: { await act { try await fleet.stop(session.name) } },
-                               resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
+                               stop: { await act { try await fleet.stop(session.name, host: session.hostId) } },
+                               resume: { await act { try await fleet.resume(session.name, choice: "summary", host: session.hostId) } },
                                answer: { option in
                                    await act {
                                        try await fleet.answer(session.name, option: option,
-                                                              promptId: session.prompt?.id)
+                                                              promptId: session.prompt?.id, host: session.hostId)
                                    }
                                },
                                changed: { await refresh(keepStatus: true) })

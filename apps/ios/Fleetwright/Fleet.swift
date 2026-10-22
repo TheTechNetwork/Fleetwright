@@ -706,7 +706,14 @@ struct Fleet {
         // exactly the shape of the night this feature was built after.
         return try await intent("start", params: params, host: host)
     }
-    func stop(_ name: String) async throws -> Reply { try await intent("stop", params: ["name": name]) }
+    // THE SESSION'S VERBS NAME ITS BOX: `host` here is the one this phone's
+    // list showed the session on. The coordinator routes them to wherever the
+    // session is whatever is named, so the name changes nothing about where
+    // they go; it is what the phone signs for (DeviceSigning.swift), and the
+    // signature travels only when the session is still there.
+    func stop(_ name: String, host: String? = nil) async throws -> Reply {
+        try await intent("stop", params: ["name": name], host: host)
+    }
 
     /// Ask for a temporary machine — macOS, Windows, Linux or an Android emulator.
     ///
@@ -981,10 +988,10 @@ struct Fleet {
     /// so what crosses this boundary is a digit. `promptId` is what the host
     /// checks against the live pane — a notification tapped four minutes late
     /// must not answer a different question.
-    func answer(_ name: String, option: Int, promptId: String? = nil) async throws -> Reply {
+    func answer(_ name: String, option: Int, promptId: String? = nil, host: String? = nil) async throws -> Reply {
         var params = ["name": name, "option": String(option)]
         if let promptId, !promptId.isEmpty { params["promptId"] = promptId }
-        return try await intent("answer", params: params, numeric: ["option"])
+        return try await intent("answer", params: params, host: host, numeric: ["option"])
     }
 
     /// A service journal, or what a session printed.
@@ -1444,10 +1451,10 @@ struct Fleet {
 
     enum Scope: String { case me, host }
 
-    func resume(_ name: String, choice: String? = nil) async throws -> Reply {
+    func resume(_ name: String, choice: String? = nil, host: String? = nil) async throws -> Reply {
         var params = ["name": name]
         if let choice { params["choice"] = choice }
-        return try await intent("resume", params: params)
+        return try await intent("resume", params: params, host: host)
     }
 
     /// Hand APNs' device token to the coordinator so it can wake this phone.
@@ -1459,7 +1466,9 @@ struct Fleet {
     ///
     /// The verb that makes the app more than a list of names. Everything else
     /// tells you a session exists; this tells you whether it is stuck.
-    func peek(_ name: String) async throws -> Reply { try await intent("peek", params: ["name": name]) }
+    func peek(_ name: String, host: String? = nil) async throws -> Reply {
+        try await intent("peek", params: ["name": name], host: host)
+    }
 
     // MARK: - The workspace
     //
@@ -1504,17 +1513,23 @@ struct Fleet {
     /// Forget a session and delete its volumes. Not undoable, which is why the
     /// UI asks first.
     /// Stop a session and put it in the bin. Recoverable — see `restore`.
-    func forget(_ name: String) async throws -> Reply { try await intent("forget", params: ["name": name]) }
+    func forget(_ name: String, host: String? = nil) async throws -> Reply {
+        try await intent("forget", params: ["name": name], host: host)
+    }
 
     /// Take a forgotten session back out of the bin.
     ///
     /// The volumes were never deleted, so this is a record move: the
     /// conversation and the workspace come back exactly as they were. Pinned
     /// to the box still holding them, which the coordinator resolves.
-    func restore(_ name: String) async throws -> Reply { try await intent("restore", params: ["name": name]) }
+    func restore(_ name: String, host: String? = nil) async throws -> Reply {
+        try await intent("restore", params: ["name": name], host: host)
+    }
 
     /// Delete for good. What `forget` used to do, kept as its own word.
-    func purge(_ name: String) async throws -> Reply { try await intent("purge", params: ["name": name]) }
+    func purge(_ name: String, host: String? = nil) async throws -> Reply {
+        try await intent("purge", params: ["name": name], host: host)
+    }
 
     /// Ask the coordinator to send this device a notification now.
     ///
@@ -2536,6 +2551,7 @@ struct Fleet {
         for (key, value) in params {
             typed[key] = numeric.contains(key) ? (Int(value) ?? 0) : value
         }
+        let id = idempotencyKey ?? "app-\(UUID().uuidString)"
         var body: [String: Any] = [
             "verb": verb,
             "params": typed,
@@ -2546,9 +2562,24 @@ struct Fleet {
             // Supplied by the caller when this command has been HELD, so a
             // retry carries the id it was queued under. Minted here only for a
             // command being sent for the first time.
-            "id": idempotencyKey ?? "app-\(UUID().uuidString)",
+            "id": id,
         ]
-        if let host, !host.isEmpty { body["host"] = host }
+        if let host, !host.isEmpty {
+            body["host"] = host
+            // SIGNED BY THIS PHONE, for the box it names, over exactly what is
+            // sent (DeviceSigning.swift). Signed at sending, so a held command
+            // sent again later carries a fresh time. Until this phone's key is
+            // listed with the minter it goes unsigned, and listing is started.
+            let signing = DeviceSigning(settings: settings)
+            if let signed = signing.signature(verb: verb, params: typed, id: id, host: host) {
+                body["sig"] = signed.sig
+                body["kid"] = signed.kid
+                body["issuedAt"] = signed.issuedAt
+            } else {
+                let fleet = self
+                Task { await signing.listIfNeeded(fleet) }
+            }
+        }
         for (key, value) in extra { body[key] = value }
         do {
             let data = try await post("/api/intent", body: body)

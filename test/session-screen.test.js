@@ -32,7 +32,7 @@ test('the state vocabulary is owned on the model, in one place', () => {
 });
 
 test('the pane is read through peek, shown unwrapped, and watched on a schedule that ends', () => {
-  assert.match(SCREEN, /fleet\.peek\(session\.name\)/);
+  assert.match(SCREEN, /fleet\.peek\(session\.name[,)]/);
   // Monospaced, sideways, never reflowed: a wrapped pane is a different picture.
   assert.match(SCREEN, /ScrollView\(\.horizontal[\s\S]{0,400}\.fleetType\(\.labelMono\)[\s\S]{0,200}fixedSize\(horizontal: true, vertical: false\)/);
   // Ten looks three seconds apart, nine ten seconds apart, and then a button.
