@@ -38,7 +38,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
-    var purgeTarget by remember { mutableStateOf<String?>(null) }
+    var purgeTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     // Flattened across hosts, soonest to go first: the deadline is what
     // somebody is deciding on, and which machine holds the volume is a detail
@@ -80,7 +80,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                                 onClick = {
                                     scope.launch {
                                         busy = true
-                                        val reply = Fleet(settings).restore(item.name)
+                                        val reply = Fleet(settings).restore(item.name, hostId)
                                         // THE APP WRITES ITS OWN SENTENCE. The
                                         // host's reply is written for chat and
                                         // ends in "/restore <name> brings it
@@ -93,12 +93,12 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                                     }
                                 },
                             ) { Text("Restore") }
-                            TextButton(enabled = !busy, onClick = { purgeTarget = item.name }) { Text("Delete now") }
+                            TextButton(enabled = !busy, onClick = { purgeTarget = hostId to item.name }) { Text("Delete now") }
                         }
                     }
                 }
 
-                purgeTarget?.let { target ->
+                purgeTarget?.let { (targetHost, target) ->
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                         Text("Delete $target for good?", style = MaterialTheme.typography.titleSmall)
                         Text(
@@ -112,7 +112,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                                 onClick = {
                                     scope.launch {
                                         busy = true
-                                        val reply = Fleet(settings).purge(target)
+                                        val reply = Fleet(settings).purge(target, targetHost)
                                         result = if (!reply.ok) reply.text else "Deleted $target."
                                         purgeTarget = null
                                         busy = false

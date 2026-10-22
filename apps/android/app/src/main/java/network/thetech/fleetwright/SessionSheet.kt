@@ -87,7 +87,7 @@ fun SessionSheet(
 
     suspend fun peek() {
         try {
-            pane = fleet.peek(session.name).text
+            pane = fleet.peek(session.name, session.hostId).text
             paneAt = System.currentTimeMillis()
         } catch (e: Exception) {
             // Keeps the last picture and says so, rather than blanking a
@@ -137,7 +137,7 @@ fun SessionSheet(
             // bin keeps a forgotten session and says so.
             text = { Text("It stays in the bin for seven days, where Restore brings it back. After that its conversation and workspace are deleted.") },
             confirmButton = {
-                TextButton(onClick = { confirmingForget = false; act { it.forget(session.name) } }) { Text("Forget — move it to the bin") }
+                TextButton(onClick = { confirmingForget = false; act { it.forget(session.name, session.hostId) } }) { Text("Forget — move it to the bin") }
             },
             dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text("Cancel") } },
         )
@@ -203,7 +203,7 @@ fun SessionSheet(
                     prompt.question?.let { Text(it, style = Design.Style.title, color = Design.Palette.ink.now) }
                     prompt.options.forEach { option ->
                         OutlinedButton(
-                            onClick = { act { it.answer(session.name, option.index, prompt.id) } },
+                            onClick = { act { it.answer(session.name, option.index, prompt.id, session.hostId) } },
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         ) {
@@ -283,12 +283,12 @@ fun SessionSheet(
                 // a dialog at 390dp with the type turned up.
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     if (session.isRunning) {
-                        TextButton(onClick = { act { it.stop(session.name) } }, enabled = !busy) { Text("Stop") }
+                        TextButton(onClick = { act { it.stop(session.name, session.hostId) } }, enabled = !busy) { Text("Stop") }
                     } else if (session.resumable && resumeKept != null) {
                         // The reason, where the fleet would refuse the button (C-2).
                         Text(resumeKept, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
                     } else if (session.resumable) {
-                        TextButton(onClick = { act { it.resume(session.name, "summary") } }, enabled = !busy) { Text("Resume") }
+                        TextButton(onClick = { act { it.resume(session.name, "summary", session.hostId) } }, enabled = !busy) { Text("Resume") }
                     }
                     // THE WORKSPACE, on running and stopped sessions alike:
                     // "collect what it produced" is a thing to do after.

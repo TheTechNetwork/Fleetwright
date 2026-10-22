@@ -114,7 +114,7 @@ test('Android owns the same vocabulary on its model, in the same words', () => {
 });
 
 test('the sheet watches the pane on the same schedule, unwrapped, and stops', () => {
-  assert.match(SHEET, /fleet\.peek\(session\.name\)/);
+  assert.match(SHEET, /fleet\.peek\(session\.name[,)]/);
   assert.match(SHEET, /QUICK_LOOKS = 10/);
   assert.match(SHEET, /QUICK_INTERVAL_MS = 3_000L/);
   assert.match(SHEET, /SLOW_LOOKS = 9/);

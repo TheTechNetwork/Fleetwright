@@ -35,7 +35,8 @@ class AnswerReceiver : BroadcastReceiver() {
         if (notificationId != 0) NotificationManagerCompat.from(context).cancel(notificationId)
 
         when (val decision = NotificationAnswers.decide(intent.action, data)) {
-            is NotificationAnswers.Decision.Answer -> send(context, decision)
+            // The box the notification came from, which is the one it signs for.
+            is NotificationAnswers.Decision.Answer -> send(context, decision, data["hostId"])
             is NotificationAnswers.Decision.Stale -> {
                 // SAID, NOT SWALLOWED. A button that quietly does nothing is
                 // worse than no button: somebody presses it, the screen goes
@@ -64,14 +65,14 @@ class AnswerReceiver : BroadcastReceiver() {
      * hours later is the exact thing the hour exists to prevent, and it would
      * arrive with nobody watching. Sent now or not at all.
      */
-    private fun send(context: Context, decision: NotificationAnswers.Decision.Answer) {
+    private fun send(context: Context, decision: NotificationAnswers.Decision.Answer, host: String?) {
         val settings = Settings(context.applicationContext)
         if (!settings.configured) return open(context, decision.name)
 
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val reply = Fleet(settings).answer(decision.name, decision.option, decision.promptId)
+                val reply = Fleet(settings).answer(decision.name, decision.option, decision.promptId, host)
                 // THE HOST GETS THE LAST WORD. `promptId` is checked against the
                 // live pane there, so a refusal here is a question that moved on
                 // in the seconds this took — the case the id exists for, and the
@@ -116,9 +117,10 @@ class AnswerReceiver : BroadcastReceiver() {
          * The extras on this intent are built from a push whose contents this
          * app does not control, and everything not on this list stops at the
          * notification. It is also what `decide` reads, so the two cannot drift
-         * into a button that depends on a field nobody put in the intent.
+         * into a button that depends on a field nobody put in the intent; and
+         * `hostId`, the box the answer is signed for.
          */
-        val KEYS = listOf("name", "promptId", "answers", "sentAt")
+        val KEYS = listOf("name", "promptId", "answers", "sentAt", "hostId")
 
         private const val TAG = "Fleetwright"
     }

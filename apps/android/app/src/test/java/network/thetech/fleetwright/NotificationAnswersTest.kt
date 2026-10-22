@@ -143,7 +143,8 @@ class NotificationAnswersTest {
         // The extras are built from a push this app does not control, so they
         // are named rather than copied wholesale — and the list the notification
         // fills in has to be the list `decide` reads, or a button ends up
-        // depending on a field nobody put in the intent.
-        assertEquals(listOf("name", "promptId", "answers", "sentAt"), AnswerReceiver.KEYS)
+        // depending on a field nobody put in the intent. `hostId` is the box
+        // the answer is signed for.
+        assertEquals(listOf("name", "promptId", "answers", "sentAt", "hostId"), AnswerReceiver.KEYS)
     }
 }

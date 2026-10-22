@@ -143,6 +143,18 @@ internal class PhoneVault(private val settings: Settings) {
         ask(fleet, "revoke", JSONObject().put("key", grant.key)).first
     }
 
+    /**
+     * List this phone's signing key under the account it is signed in as, so
+     * the fleet's boxes are given it by the minter and can check what this
+     * phone signs (DeviceSigning.kt, docs/signed-intents.md). The minter files
+     * it under the GitHub account this request carries, and refuses it when
+     * that address's keys are another account's.
+     */
+    suspend fun listDeviceKey(fleet: Fleet, key: DeviceKey): Result<String> = runCatching {
+        val label = if (key.hardware) "Android phone (Keystore hardware)" else "Android phone (Keystore)"
+        ask(fleet, "devicekey", JSONObject().put("key", key.jwk).put("label", label)).first
+    }
+
     companion object {
         val SECRET_NAME = Regex("^[A-Za-z0-9_.-]{1,64}$")
 
