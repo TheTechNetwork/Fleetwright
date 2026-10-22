@@ -173,7 +173,7 @@ node bin/fleetwright-sidecar doctor       # check this box can drive its fleetwr
 node bin/fleetwright-sidecar              # run
 ```
 
-Every setting is in `src/fleet/host/config.js`. Three are worth calling out:
+Every setting is in `src/fleet/host/config.js`. Four are worth calling out:
 
 - **`FLEETWRIGHT_COORDINATOR_URL` is required.** §5: the agent pins the origin
   it will talk to. A transport that will talk to whoever answers is the same
@@ -185,6 +185,13 @@ Every setting is in `src/fleet/host/config.js`. Three are worth calling out:
   passes the freshness check against a cache that has already forgotten it, and
   runs a second time. That is the exact failure the idempotency key exists to
   prevent, reintroduced by two constants drifting apart.
+- **`FLEETWRIGHT_REQUIRE_SIGNED=1` makes this box take only what a person
+  signed** on their phone, with a key the fleet's minter lists for them
+  ([`signed-intents.md`](signed-intents.md)). Off by default, because the
+  fleet's own work signs nothing yet: a box with it set refuses sign-in
+  finishes, held starts, keeping machines ready, linked repositories, the MCP
+  tools and the browser page. Health counts the unsigned intents a box has had,
+  which is what turning it on would refuse.
 - **`FLEETWRIGHT_IDLE_RESTART_MINUTES` defaults to 60, and 0 turns it off.** A
   session whose pane has not changed at all for that long is stopped and
   resumed. The useful case is one that wedged overnight, where the fix is
