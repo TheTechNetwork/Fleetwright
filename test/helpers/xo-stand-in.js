@@ -92,7 +92,7 @@ export function certificate() {
  *
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string>, servers?: XoServer[] }} [opts]
  */
-export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null) } = {}) {
+export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, watchdog = /** @type {any} */ (null), maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null) } = {}) {
   const { key, cert, pin } = givenTls ?? certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -314,7 +314,7 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
             if (p.expiresIn !== undefined && p.expiresIn > maxTokenMs) refuse('unknown error from the peer');
             else answer(as === FLEET_USER ? 'tok-limited-123' : 'tok-WRONG-USER');
             break;
-          case 'plugin.get': answer(plugin ? [plugin] : []); break;
+          case 'plugin.get': answer([plugin, watchdog].filter(Boolean)); break;
           default: answer(true);
         }
       }

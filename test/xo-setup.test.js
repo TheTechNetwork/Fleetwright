@@ -229,6 +229,21 @@ test('automatic updates switched off by a person stay off', { skip }, async (t) 
   assert.equal(end.state, 'done', end.text);
   assert.ok(!xo.calls.some((c) => c.method === 'plugin.configure'));
   assert.match(end.text, /left that way/);
+  assert.match(end.text, /reconnect watchdog is not on it/);
+});
+
+test('the reconnect watchdog a build carries is loaded and kept loading', { skip }, async (t) => {
+  const xo = await standIn(t, { watchdog: { id: 'fleetwright-reconnect', loaded: false, autoload: false } });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  for (const method of ['plugin.load', 'plugin.enableAutoload']) {
+    assert.ok(xo.calls.some((c) => c.method === method && c.params.id === 'fleetwright-reconnect'), method);
+  }
+  assert.match(end.text, /reconnects a pool it loses by itself/);
 });
 
 test('a sealed sign-in opens only for its own job and address, and only for whoever began it', async () => {

@@ -131,6 +131,8 @@ export const FLEET_USER = 'fleetwright';
 export { FLEET_SET };
 /** The installer's update plugin, as Xen Orchestra names a plugin: its package minus `xo-server-`. */
 export const UPDATES_PLUGIN = 'installer-updates';
+/** Fleetwright's reconnect watchdog, by the same rule: xo-server-fleetwright-reconnect. */
+export const RECONNECT_PLUGIN_ID = 'fleetwright-reconnect';
 
 /** What `inventory` checks the server offers before anything is changed. */
 export const REQUIRED_METHODS = Object.freeze([
@@ -1907,6 +1909,48 @@ export class XoSetups {
     }
   }
 
+  /**
+   * Load a plugin that is on the server and keep it loading, signed in as
+   * admin. Whether it is there at all is the installer's business: this only
+   * turns on what a build already carries. False when it is not there.
+   *
+   * @param {any} ctx
+   * @param {any[]} plugins what `plugin.get` answered
+   * @param {string} id
+   */
+  async #loadPlugin(ctx, plugins, id) {
+    const plugin = plugins.find((/** @type {any} */ p) => p?.id === id || p?.name === id);
+    if (!plugin) return false;
+    if (!plugin.loaded && Object.hasOwn(ctx.methods, 'plugin.load')) await ctx.admin.call('plugin.load', { id: plugin.id });
+    if (!plugin.autoload && Object.hasOwn(ctx.methods, 'plugin.enableAutoload')) {
+      await ctx.admin.call('plugin.enableAutoload', { id: plugin.id });
+    }
+    return true;
+  }
+
+  /**
+   * The installer's update plugin: loaded, and set to update once a day
+   * unless a person decided otherwise. The sentence it leaves on the job.
+   *
+   * @param {any} ctx
+   * @param {any[]} plugins what `plugin.get` answered
+   */
+  async #updates(ctx, plugins) {
+    if (!(await this.#loadPlugin(ctx, plugins, UPDATES_PLUGIN))) {
+      return 'The installer’s update plugin is not on this Xen Orchestra, so updates stay as they are.';
+    }
+    const plugin = plugins.find((/** @type {any} */ p) => p?.id === UPDATES_PLUGIN || p?.name === UPDATES_PLUGIN);
+    // TURNED ON ONLY WHERE NOBODY DECIDED. A person who switched automatic
+    // updates off said so, and setup is not the place to overrule them.
+    const configuration = plugin.configuration && typeof plugin.configuration === 'object' ? plugin.configuration : {};
+    if (configuration.autoUpdate === false) return 'Automatic updates are off on this Xen Orchestra, and were left that way.';
+    if (configuration.autoUpdate !== true && Object.hasOwn(ctx.methods, 'plugin.configure')) {
+      await ctx.admin.call('plugin.configure', { id: plugin.id, configuration: { ...configuration, autoUpdate: true } });
+      return 'Xen Orchestra now updates itself once a day.';
+    }
+    return 'Xen Orchestra already updates itself.';
+  }
+
   /** The steps, in XOSETUP_STEPS order. Each may return the sentence it leaves on the job. */
   #steps() {
     return [
@@ -2019,27 +2063,13 @@ export class XoSetups {
         ctx.limited = null;
         ctx.password = undefined;
       },
-      // updates
+      // updates, and the reconnect watchdog
       async (/** @type {any} */ ctx) => {
         if (!Object.hasOwn(ctx.methods, 'plugin.get')) return 'This Xen Orchestra does not list its plugins; updates stay as they are.';
         const plugins = (await ctx.admin.call('plugin.get')) || [];
-        const plugin = plugins.find((/** @type {any} */ p) => p?.id === UPDATES_PLUGIN || p?.name === UPDATES_PLUGIN);
-        if (!plugin) {
-          return 'The installer’s update plugin is not on this Xen Orchestra, so updates stay as they are.';
-        }
-        if (!plugin.loaded && Object.hasOwn(ctx.methods, 'plugin.load')) await ctx.admin.call('plugin.load', { id: plugin.id });
-        if (!plugin.autoload && Object.hasOwn(ctx.methods, 'plugin.enableAutoload')) {
-          await ctx.admin.call('plugin.enableAutoload', { id: plugin.id });
-        }
-        // TURNED ON ONLY WHERE NOBODY DECIDED. A person who switched automatic
-        // updates off said so, and setup is not the place to overrule them.
-        const configuration = plugin.configuration && typeof plugin.configuration === 'object' ? plugin.configuration : {};
-        if (configuration.autoUpdate === false) return 'Automatic updates are off on this Xen Orchestra, and were left that way.';
-        if (configuration.autoUpdate !== true && Object.hasOwn(ctx.methods, 'plugin.configure')) {
-          await ctx.admin.call('plugin.configure', { id: plugin.id, configuration: { ...configuration, autoUpdate: true } });
-          return 'Xen Orchestra now updates itself once a day.';
-        }
-        return 'Xen Orchestra already updates itself.';
+        const watchdog = await this.#loadPlugin(ctx, plugins, RECONNECT_PLUGIN_ID);
+        const after = watchdog ? ' It reconnects a pool it loses by itself.' : ' Fleetwright’s reconnect watchdog is not on it, so a pool it loses waits for Reconnect.';
+        return `${await this.#updates(ctx, plugins)}${after}`;
       },
       // hand-off
       async (/** @type {any} */ ctx) => {
