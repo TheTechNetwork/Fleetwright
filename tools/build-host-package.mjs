@@ -54,7 +54,7 @@ const stageName = `fleetwright-host-${version}`;
 const stage = path.join(OUT, stageName);
 
 /** Files copied verbatim. Directories are copied whole. */
-const VERBATIM = ['openapi.json', 'install', 'sandbox', 'src/web'];
+const VERBATIM = ['openapi.json', 'install', 'sandbox', 'src/web', 'xo-plugin'];
 
 const ENTRIES = [
   ['bin/fleetwright', 'lib/fleetwright.mjs'],

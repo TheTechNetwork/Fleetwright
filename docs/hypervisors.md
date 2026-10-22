@@ -2173,6 +2173,93 @@ the recovery, and `test/sidecar.test.js` the box looking again once a
 reconnect ends. **Not run:** a real Xen Orchestra or pool, and either phone on
 a device.
 
+### When Xen Orchestra loses a pool
+
+Asked for, about the push above: *"Has to be a better way, is this a known
+issue? Can we patch Xen to auto reconnect?"* It is known, and Xen
+Orchestra already retries: since July 2026 xo-server reconnects a server that
+drops, waiting longer each time up to a minute
+(`_xenServerAutoReconnect.mjs`). Reading that code rather than assuming it
+left two gaps, and the push above is mostly the first:
+
+- **A server stuck connecting.** When fetching a pool's events keeps failing,
+  xo-server waits, forgets the pool and marks its server `connecting`. Its
+  own retry only ever acts on `disconnected`, so nothing tries that server
+  again and the pool stays gone until somebody presses Reconnect.
+- **A Xen Orchestra older than that retry**, which leaves a dropped server
+  `disconnected` for good.
+
+So the fix runs inside Xen Orchestra, where it holds no token and no
+password: **Fleetwright's reconnect watchdog**, an xo-server plugin in
+`xo-plugin/xo-server-fleetwright-reconnect`. Once a minute it reads every
+server Xen Orchestra is registered with, and:
+
+- one `connecting` for ten minutes is disconnected and connected again, the
+  same thing Reconnect does, and turned back on whatever happens, so it never
+  leaves off a server a person had on. Ten minutes because a large pool's
+  first fetch takes a minute or two;
+- one `disconnected` for three minutes, past Xen Orchestra's own first quick
+  retries, is connected. On a Xen Orchestra that has the retry, that one
+  usually got there first;
+- each try on a server doubles the wait before the next, up to half an hour,
+  so a pool master that is really down is not asked every minute for a day.
+  A server that comes back starts again from the short wait.
+
+It leaves alone what Xen Orchestra and Reconnect leave alone: a server a
+person turned off stays off, and a server whose master refuses the password
+Xen Orchestra keeps for it, or whose pool is already connected through
+another server, is named once in xo-server's log and left for a person,
+because trying again cannot help and the first hammers the host with a wrong
+password. The push above still comes when a pool stays gone for five
+minutes; with the watchdog that mostly means one of those, or a master that
+is down.
+
+**Built into every Xen Orchestra Fleetwright installs.** The deploy puts the
+plugin beside the installer's own update plugin and names both in
+`BUNDLED_PLUGINS` (`installerConfig` in `src/fleet/host/xo-deploy.js`), so
+each build, and each update the update plugin makes, carries it. The
+configuration ends in `return 0`: the deploy script appends a
+`BUNDLED_PLUGINS` naming only its update plugin, the file is read with
+`source`, and without the `return` that line would replace ours. The plugin
+has no settings, so xo-server loads it the first time it sees it, and setup's
+last step loads it and keeps it loading as well, saying whether it is there:
+"It reconnects a pool it loses by itself", or that it is not on this Xen
+Orchestra, so a pool it loses waits for Reconnect.
+
+**On a Xen Orchestra installed without it**, one installed from source some
+other way or by a Fleetwright from before it, it is added once, as root on
+the Xen Orchestra machine, from a copy of `xo-plugin`:
+
+```sh
+scp -r xo-plugin root@<xen orchestra>:/root/
+ssh root@<xen orchestra> bash /root/xo-plugin/add-reconnect-watchdog.sh
+```
+
+It copies the plugin into the running build; where the installer builds
+bundled plugins in, it puts it beside the installer too and adds it to what
+`xo-install.cfg` already names, so updates keep it; and it restarts
+xo-server, which connects every enabled server as it starts, so a pool lost
+right now comes back with it. Where the installer has no bundled plugins it
+says that the next update leaves the watchdog out. **It needs a shell on
+that machine**, and a Xen Orchestra Fleetwright installed has no login (the
+`xo` account's key is one nobody holds), so one of those gets it by being
+installed again with this release, or from the VM's console by whoever can
+sign in there.
+
+**What has run, and what has not.** `test/xo-reconnect-plugin.test.js` drives
+the plugin against a stand-in that keeps xo-server's rules (connect refuses
+anything not `disconnected`, disconnect turns `enabled` off): a stuck server
+cycled and left on even when the cycle fails, a disconnected one connected
+after the grace, a disabled one untouched, a refused password said once, the
+waits growing to half an hour and starting again after a recovery. It also
+runs the script on a stand-in machine, as root only: an older install given
+it now and for later builds, once; a current one left as it was; a wrong
+directory refused with nothing changed. `test/xo-deploy.test.js` checks the
+plugin reaches the installer and that the configuration still names it once
+the deploy script's own line is appended, and `test/xo-setup.test.js` that
+setup loads it. **Not run:** a real xo-server loading it, or a real pool
+being lost and found.
+
 ### Next: a pool's first machine image
 
 - **A pool without Xen Orchestra** is built ("A pool without Xen Orchestra").

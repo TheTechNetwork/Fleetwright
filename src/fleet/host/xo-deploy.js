@@ -83,13 +83,14 @@
 
 import { createHash, generateKeyPairSync, randomBytes, sign as signWith } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { splitAddress } from './xo-ws.js';
+import { resource } from '../../core/resources.js';
 
 /**
  * The installer, pinned: one commit, and the SHA-256 of every file the deploy
@@ -127,6 +128,15 @@ export const MIN_ADMIN_PASSWORD = 12;
 export const STAGES = Object.freeze(['network', 'image', 'vm', 'boot', 'packages', 'build']);
 /** Where the certificate and key go in the VM: a directory under the script's `plugins/`, which is not a plugin. */
 const TLS_DIR = 'fleetwright-https';
+/**
+ * Fleetwright's reconnect watchdog, an xo-server plugin shipped beside the
+ * installer's own (xo-plugin/, and docs/hypervisors.md, "When Xen
+ * Orchestra loses a pool"). The installer copies the plugins it is told to
+ * into each build; this is the name it is told.
+ */
+export const RECONNECT_PLUGIN = 'xo-server-fleetwright-reconnect';
+/** The installer's own plugins Fleetwright keeps: its update plugin, which the script would otherwise add itself. */
+const BUNDLED_PLUGINS = ['xo-server-installer-updates', RECONNECT_PLUGIN];
 /** The longest a file of the installer may be, so a wrong answer cannot fill the disk. */
 const MAX_FILE = 2 * 1024 * 1024;
 /** How long the script may run. Its own wait is 60 minutes; this is the backstop past it. */
@@ -388,8 +398,16 @@ export function unusableSshKey() {
 /**
  * The installer's configuration for this VM. Only what differs from
  * `xo-install.sh`'s own defaults, which are the sample configuration's:
- * HTTPS on 443 with this machine's certificate, port 80 redirecting to it.
- * The script appends SELFUPGRADE=false and the update plugin itself.
+ * HTTPS on 443 with this machine's certificate, port 80 redirecting to it,
+ * and the plugins each build carries.
+ *
+ * IT ENDS IN `return`. xo-remote-deploy.sh appends two lines to this file
+ * as it writes it into the VM, SELFUPGRADE=false and a BUNDLED_PLUGINS
+ * naming only its update plugin, and the file is sourced by bash, so the
+ * appended line would replace the one here and the watchdog would never be
+ * built in. `return` ends a sourced file where it stands; SELFUPGRADE is
+ * set here instead, to what the script would have set it to. xo-install.sh
+ * and the update plugin both read the file with `source`.
  */
 export function installerConfig() {
   const dir = `/opt/xo-installer/plugins/${TLS_DIR}`;
@@ -402,6 +420,13 @@ export function installerConfig() {
     `PATH_TO_HTTPS_CERT="${dir}/cert.pem"`,
     `PATH_TO_HTTPS_KEY="${dir}/key.pem"`,
     'AUTOCERT="false"',
+    '# The installer\'s update plugin, and the watchdog that reconnects a pool',
+    '# Xen Orchestra has lost (xo-server-fleetwright-reconnect).',
+    `BUNDLED_PLUGINS="${BUNDLED_PLUGINS.join(',')}"`,
+    '# Not a git checkout, so the script cannot update itself.',
+    'SELFUPGRADE="false"',
+    '# The deploy script appends its own defaults below this line. They are not wanted.',
+    'return 0 2>/dev/null',
     '',
   ].join('\n');
 }
@@ -625,6 +650,9 @@ export async function prepareInstaller({ dir, installer, fetch, signal }) {
   mkdirSync(tlsDir, { recursive: true });
   writeFileSync(path.join(tlsDir, 'cert.pem'), tls.cert, { mode: 0o644 });
   writeFileSync(path.join(tlsDir, 'key.pem'), tls.key, { mode: 0o600 });
+  // THE WATCHDOG, beside the installer's own plugin: the script writes all
+  // of `plugins/` into the VM, and the configuration names it for the build.
+  cpSync(resource('xo-plugin', RECONNECT_PLUGIN), path.join(root, 'plugins', RECONNECT_PLUGIN), { recursive: true });
   const config = path.join(dir, 'xo-install.cfg');
   writeFileSync(config, installerConfig(), { mode: 0o600 });
   const sshKey = path.join(dir, 'xo.pub');

@@ -66,6 +66,8 @@ platform/host:
           # the MCP server does, and seals to the minting Worker's key.
           - 'src/fleet/claude-deposit.js'
           - 'sandbox/**'
+          # The xo-server plugin the host's Xen Orchestra install builds in.
+          - 'xo-plugin/**'
           - 'install/**'
           - 'apt/**'
           - 'archive/**'

@@ -27,6 +27,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 import { XoSetups, FLEET_USER } from '../src/fleet/host/xo-setup.js';
 import { probe } from '../src/fleet/host/xo-setup.js';
@@ -129,6 +130,7 @@ SSH_CTRL_DIR=$(mktemp -d)
 SSH_CMD=(ssh "\${ssh_opts[@]}" -o ControlMaster=auto -o ControlPath="$SSH_CTRL_DIR/cm" -o ControlPersist=120)
 mkdir -p '${seen}'
 cp "$SCRIPT_DIR/plugins/fleetwright-https/cert.pem" "$SCRIPT_DIR/plugins/fleetwright-https/key.pem" "$CONFIG" "$SSHKEY" '${seen}/'
+cp -r "$SCRIPT_DIR/plugins/xo-server-fleetwright-reconnect" '${seen}/'
 [ -f "$SCRIPT_DIR/xo-install.sh" ] && printf '%s\\n' "$NETWORK" > '${seen}/network'
 echo "Connecting to $TARGET..."
 "\${SSH_CMD[@]}" "$TARGET" "bash -s" <<'REMOTE' || exit $?
@@ -255,6 +257,14 @@ test('a pool with no Xen Orchestra gets one, and is added with it, from two pass
   const config = readFileSync(path.join(pool.seen, 'xo-install.cfg'), 'utf8');
   assert.match(config, /^PATH_TO_HTTPS_CERT="\/opt\/xo-installer\/plugins\/fleetwright-https\/cert.pem"$/m);
   assert.match(config, /^AUTOCERT="false"$/m);
+  // THE RECONNECT WATCHDOG, built in: its files beside the script, and named
+  // for the build in a line the script's own appended default cannot replace,
+  // because the file is sourced and returns before reaching it.
+  assert.ok(existsSync(path.join(pool.seen, 'xo-server-fleetwright-reconnect', 'index.js')));
+  const appended = path.join(pool.seen, 'as-written.cfg');
+  writeFileSync(appended, `${config}\nSELFUPGRADE=false\nBUNDLED_PLUGINS="xo-server-installer-updates"\n`);
+  const sourced = execFileSync('bash', ['-c', 'source "$1"; printf "%s %s" "$BUNDLED_PLUGINS" "$SELFUPGRADE"', 'bash', appended], { encoding: 'utf8' });
+  assert.equal(sourced, 'xo-server-installer-updates,xo-server-fleetwright-reconnect false');
   assert.equal(readFileSync(path.join(pool.seen, 'network'), 'utf8').trim(), 'Pool-wide network associated with eth0');
   assert.match(readFileSync(path.join(pool.seen, 'xo.pub'), 'utf8'), /^ssh-ed25519 [A-Za-z0-9+/=]+ /);
 

@@ -1,0 +1,18 @@
+{
+  "name": "xo-server-fleetwright-reconnect",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "commonjs",
+  "description": "Reconnects this Xen Orchestra's servers when one is left disconnected or stuck connecting, the way Reconnect in the Fleetwright app does, without anyone asking",
+  "keywords": [
+    "xen-orchestra",
+    "xo-server",
+    "plugin",
+    "fleetwright"
+  ],
+  "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  }
+}
