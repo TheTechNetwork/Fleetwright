@@ -202,6 +202,7 @@ let lastUpdates = null;
 const mint = loadMinter(cfg.mint);
 if (mint.problem) log.warn(`config: ${mint.problem}`);
 if (mint.minter) log.info(`this box mints repository tokens for runners, into ${mint.minter.owners.join(', ')}`);
+if (cfg.requireSigned) log.info('this box takes only requests a person signed (FLEETWRIGHT_REQUIRE_SIGNED); the fleet’s own unsigned work is refused here');
 
 const sidecar = new Sidecar({
     hub,
@@ -236,6 +237,8 @@ const sidecar = new Sidecar({
     // may not be able to (#270). See auto-labels.js and Sidecar#labels.
     labels: cfg.labels,
     maxSkewMs: cfg.maxSkewMs,
+    // FLEETWRIGHT_REQUIRE_SIGNED, from this box's own env file only.
+    requireSigned: cfg.requireSigned,
     promptText: cfg.promptText,
     idleRestartMs: cfg.idleRestartMs,
     // fleetwright's configuration as this process sees it — the defaults, since

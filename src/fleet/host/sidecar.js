@@ -63,6 +63,7 @@ import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
+import { needsSignature } from '../protocol/intent-signature.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
@@ -177,6 +178,7 @@ export class Sidecar {
    *   hostId?: string,
    *   labels?: string[],
    *   maxSkewMs?: number,
+   *   requireSigned?: boolean,
    *   logger?: Logger,
    *   healthIntervalMs?: number,
    *   promptText?: boolean,
@@ -204,7 +206,7 @@ export class Sidecar {
    *   onVmLoginHanded?: (() => void)|null,
    * }} opts
    */
-  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
+  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, requireSigned = false, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
     adoptUpdates = null,
     version = null,
     promptText = false,
@@ -294,6 +296,10 @@ export class Sidecar {
     // Whether a prompt that quotes the session may leave the box.
     this.promptText = promptText;
     this.maxSkewMs = maxSkewMs;
+    // TAKES ONLY WHAT A PERSON SIGNED (FLEETWRIGHT_REQUIRE_SIGNED, phase 3 of
+    // docs/signed-intents.md): the operator of this box said so in its own
+    // env file, and nothing the coordinator sends can turn it off.
+    this.requireSigned = requireSigned === true;
     this.log = logger;
     this.healthIntervalMs = healthIntervalMs;
     /** @type {any} */
@@ -686,19 +692,35 @@ export class Sidecar {
     }
     const intent = checked.intent;
 
-    // WHO SIGNED IT, counted and said, and never yet a reason to refuse
-    // (docs/signed-intents.md, phase 1). A signature that does not hold is
-    // logged with what it was for, so the fleet sees what enforcement would
-    // refuse before anything is.
+    // WHO SIGNED IT, counted and said on every box (docs/signed-intents.md,
+    // phase 1). A signature that does not hold is logged with what it was
+    // for, so the fleet sees what enforcement would refuse.
+    //
+    // AND REFUSED, on a box that takes only what a person signed (phase 3):
+    // anything needsSignature names that is not signed by a key the minter
+    // lists for its actor, whatever the reason. A box that cannot check at
+    // all, with no key of its own to ask the minter with or no list yet,
+    // refuses too: enforcement that lapses when the list is late is
+    // enforcement a coordinator can lapse by holding the list back.
+    /** @type {string|null} */
+    let verdict = null;
     if (this.intentKeys) {
       try {
-        const { verdict } = await this.intentKeys.check(intent, this.hostId);
+        verdict = (await this.intentKeys.check(intent, this.hostId)).verdict;
         if (verdict === 'bad-signature' || verdict === 'unknown-key') {
-          this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries a signature that does not hold (${verdict}); not refused yet`);
+          this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries a signature that does not hold (${verdict})${this.requireSigned ? '' : '; not refused, as this box does not enforce'}`);
         }
       } catch (e) {
         this.log.warn(`sidecar: could not check ${intent.id}'s signature: ${/** @type {Error} */ (e).message}`);
       }
+    }
+    if (this.requireSigned && verdict !== 'signed' && needsSignature(intent.verb)) {
+      const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null);
+      this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'}: ${why}`);
+      return {
+        v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'signature_required' },
+        text: `${this.hostId} takes only requests a person signed, and ${why}. Nothing was done.`,
+      };
     }
 
     if (!isMutating(intent.verb)) return this.#run(intent);
@@ -1770,7 +1792,18 @@ export class Sidecar {
       // box has the minter's key list to check them with
       // (docs/signed-intents.md, phase 1). Absent on a box with no enrolment
       // key, which cannot ask for the list at all.
-      ...(this.intentKeys ? { signatures: this.intentKeys.report() } : {}),
+      // And whether it refuses what is not signed (FLEETWRIGHT_REQUIRE_SIGNED),
+      // which is what the coordinator reads to refuse there first.
+      ...(this.intentKeys || this.requireSigned
+        ? {
+            signatures: {
+              ...(this.intentKeys
+                ? this.intentKeys.report()
+                : { keys: null, keysAt: null, checked: {}, problem: 'this box has no key of its own to ask the minter for the key list with, so it can check no signature' }),
+              ...(this.requireSigned ? { enforcing: true } : {}),
+            },
+          }
+        : {}),
       // WHICH SERVICE LOGS THIS BOX CAN READ, so a screen offers a button for
       // exactly those. The chat surface already checks — logButtons in
       // commands.js filters on unitInstalled, because "no log entries for
@@ -2574,4 +2607,30 @@ export function commandMeta(verb, params = {}, actor = '') {
     // takes an intent and nothing else, which is what keeps it testable.
     ...(verb === 'provision' && typeof params?.ticket === 'string' ? { ticket: params.ticket } : {}),
   };
+}
+
+/**
+ * Why a box that takes only signed requests refused one, as the rest of a
+ * sentence (Sidecar#handle). Each verdict is a different thing to fix, so each
+ * says which.
+ *
+ * @param {string|null} verdict  checkIntentSignature's, or null when this box
+ *   could not check at all
+ * @param {{ verb: string, actor?: string }} intent
+ * @param {string|null} problem  what the box's key list is missing, if anything
+ */
+export function unsignedReason(verdict, intent, problem) {
+  const who = intent.actor || 'nobody named';
+  switch (verdict) {
+    case 'unsigned':
+      return `this ${intent.verb} from ${who} was not signed`;
+    case 'unknown-key':
+      return `this ${intent.verb} is signed by a key the minter does not list for ${who}`;
+    case 'bad-signature':
+      return `the signature on this ${intent.verb} does not hold for what arrived, so it was changed after it was signed`;
+    case 'no-directory':
+      return `this box has no key list from the minter to check the signature on this ${intent.verb} with${problem ? ` (${problem})` : ''}`;
+    default:
+      return `this box cannot check signatures${problem ? ` (${problem})` : ''}`;
+  }
 }
