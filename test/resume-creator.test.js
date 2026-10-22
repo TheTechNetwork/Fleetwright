@@ -57,6 +57,10 @@ function box(t) {
     FLEETWRIGHT_RESUME_CHOICE: 'full',
     FLEETWRIGHT_SANDBOX_USERNS: 'host',
     FLEETWRIGHT_RC_TIMEOUT_MS: '200',
+    // The stub tmux never shows a resume dialog, which is the healthy case:
+    // the resume then waits out this before going on. The least it may be,
+    // rather than the 45 seconds a real box gives Claude to draw it.
+    FLEETWRIGHT_RESUME_DIALOG_WAIT_MS: '5000',
   });
   const registry = new Registry({ stateFile: path.join(dir, 'sessions.json'), spoolFile: path.join(dir, 'spool') });
   registry.upsert('shared1', { status: 'stopped', uuid: UUID, cwd: path.join(dir, 'work'), createdBy: 'fleet:member@example.com', account: 'shared' });

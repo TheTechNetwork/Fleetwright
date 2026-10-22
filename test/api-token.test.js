@@ -211,7 +211,13 @@ test('the fleetwright CLI can reach a service that now requires a token', async 
   //
   // Spawned for real rather than unit-tested, because what broke was the wiring
   // between two programs and nothing testing one of them would have seen it.
-  const { spawnSync } = await import('node:child_process');
+  //
+  // AND NOT WITH spawnSync. The hub answering it runs in this process, and a
+  // synchronous spawn holds this process's event loop until the child exits:
+  // the CLI's request was never answered, it was killed at the timeout with
+  // nothing printed, and nothing printed contains no "unauthorised". This
+  // passed for twenty seconds on every run without ever reaching the hub.
+  const { execFile } = await import('node:child_process');
   const h = await hub(t);
   const port = /** @type {any} */ (h.adapter.server).address().port;
   const env = {
@@ -226,12 +232,13 @@ test('the fleetwright CLI can reach a service that now requires a token', async 
     FLEETWRIGHT_TELEGRAM_TOKEN: '',
   };
 
-  const r = spawnSync(process.execPath, ['bin/fleetwright', 'list'], {
-    encoding: 'utf8', env, cwd: new URL('..', import.meta.url).pathname, timeout: 20_000,
+  const r = await new Promise((resolve) => {
+    execFile(process.execPath, ['bin/fleetwright', 'list'], { encoding: 'utf8', env, cwd: new URL('..', import.meta.url).pathname, timeout: 20_000 },
+      (error, stdout, stderr) => resolve({ code: error ? (error.code ?? error.signal) : 0, output: `${stdout}${stderr}` }));
   });
 
-  const output = `${r.stdout}${r.stderr}`;
-  assert.equal(output.includes('unauthorised'), false, `the CLI could not authenticate:\n${output}`);
+  assert.equal(r.output.includes('unauthorised'), false, `the CLI could not authenticate:\n${r.output}`);
+  assert.equal(r.code, 0, `the CLI did not get an answer from the hub:\n${r.output}`);
 });
 
 test('and says something useful when it genuinely cannot', () => {

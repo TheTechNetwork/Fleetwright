@@ -612,7 +612,13 @@ test('removing somebody from the fleet ends what their vault gives the fleet’s
   /** @type {any[]} */
   const handed = [];
   const sidecar = new Sidecar({
-    hub: /** @type {any} */ ({ vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; } }),
+    hub: /** @type {any} */ ({
+      vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; },
+      // Removing Dana asks the box to forget her too (forget-person.test.js
+      // has that end to end). Answered here, or the coordinator waits out the
+      // whole intent timeout for it and this file takes five minutes to exit.
+      forgetPerson: async () => ({ ok: true, text: 'forgotten', forgot: { sessions: 0, claude: false, providers: [], vault: false, login: false } }),
+    }),
     transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { void core.onHostMessage('ops-box', f); return true; } }),
     hostId: 'ops-box',
     watch: false,
@@ -621,8 +627,9 @@ test('removing somebody from the fleet ends what their vault gives the fleet’s
     vaultIntervalMs: 600_000,
     vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ msg) => sign(keys.privateJwk, msg) },
   });
-  // Only the vault's answers reach it: the hand-back's own requests are the hub's.
-  core.registry.connect('ops-box', (/** @type {any} */ f) => { if (f.kind === 'minted') void sidecar.handle(f); }, {});
+  core.registry.connect('ops-box', (/** @type {any} */ f) => {
+    void sidecar.handle(f).then((reply) => { if (reply?.kind === 'reply') void core.onHostMessage('ops-box', reply); });
+  }, {});
   const held = async () => {
     await sidecar.syncVault();
     return handed.at(-1).accounts.map((/** @type {any} */ a) => a.email).sort();
