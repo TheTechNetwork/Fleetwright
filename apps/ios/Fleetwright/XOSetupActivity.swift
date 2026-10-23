@@ -70,7 +70,8 @@ struct XOSetupAttributes: ActivityAttributes {
     let address: String
     /// `policy` for a change to what the fleet may use, whose end is not a
     /// hypervisor added; `deploy` for installing Xen Orchestra first;
-    /// `reconnect` for reconnecting a pool's servers; nil for adding one. Optional, so an activity a build
+    /// `reconnect` for reconnecting a pool's servers; `watchdog` for adding
+    /// the reconnect watchdog to its Xen Orchestra; nil for adding one. Optional, so an activity a build
     /// before it left on the Lock Screen still decodes, as the adding it was.
     var purpose: String? = nil
 }
@@ -117,6 +118,12 @@ enum XOSetupWords {
         case "servers": return "Reading Xen Orchestra’s servers"
         case "reconnect": return reconnectRunning
         case "wait": return "Waiting for the pools to come back"
+        // Adding the watchdog's own four (XOWATCHDOG_STEPS), after an
+        // install's `reach`, in the words the host leaves on the job.
+        case "find": return "Finding Xen Orchestra’s VM"
+        case "stop": return "Shutting it down"
+        case "add": return "Adding the watchdog to its disk"
+        case "start": return "Starting it again"
         case "done": return "Hypervisor added"
         default: return "Step \(min(step + 1, max(of, 1))) of \(max(of, 1))"
         }
@@ -201,6 +208,7 @@ enum XOSetupWords {
         if purpose == "policy", let end = policyEnd(s.state) { return end }
         if purpose == "deploy", let end = deployEnd(s.state) { return end }
         if purpose == "reconnect", let end = reconnectEnd(s.state) { return end }
+        if purpose == "watchdog", let end = watchdogEnd(s.state) { return end }
         switch s.state {
         case "done": return "Hypervisor added"
         case "failed": return "Hypervisor setup stopped"
@@ -247,6 +255,25 @@ enum XOSetupWords {
         case "done": return "Pools back"
         case "failed": return "The pools did not come back"
         case "cancelled": return "Reconnecting cancelled"
+        default: return nil
+        }
+    }
+
+    /// What adding the watchdog is, while it runs and before a step has been
+    /// reported, in the words the coordinator's banner uses for it
+    /// (WATCHDOG_TITLES in core.js).
+    static let watchdogRunning = "Adding the reconnect watchdog"
+
+    /// How adding the watchdog ended, in the banner's words for it
+    /// (WATCHDOG_TITLES), or nil while it has not. What became of Xen
+    /// Orchestra's VM is the machine's last sentence, which the screen shows
+    /// under this: the end title cannot say it, because only the host knows.
+    static func watchdogEnd(_ state: String) -> String? {
+        switch state {
+        case "done": return "Watchdog added"
+        case "failed": return "The watchdog was not added"
+        case "cancelled": return "Adding the watchdog cancelled"
+        case "waiting": return "Waiting for the root password"
         default: return nil
         }
     }

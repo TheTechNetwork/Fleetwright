@@ -103,6 +103,10 @@ an admin, beside what it governs; it opens the same policy flow as before.
 **Reconnect its servers** is the row beside it, for an admin, drawn only once
 the page has loaded and shows no pool, or lacks a pool name this phone kept
 from setup (`hypervisors.md`, "When a pool goes missing").
+**Add the reconnect watchdog** is under it, for an admin, on iOS: drawn
+whatever the page shows, because it goes in through the pool master and
+nothing the phone reads says whether the watchdog is already there
+(`hypervisors.md`, "When Xen Orchestra loses a pool").
 The Hypervisors section keeps its gate: it is drawn for a known admin, since
 the pools in it are the ones an admin set up from this phone.
 
@@ -228,6 +232,7 @@ so. What it costs to undo decides how it asks.
 | Enter, leave maintenance mode | `host.setMaintenanceMode`, else `host.disable` and `host.enable` | running; in maintenance mode | one tap |
 | Reboot a host | `host.restart` | running or in maintenance mode | names how many VMs this phone can see running on it |
 | Reconnect its servers, on the pool's page | not this token's: the admin sign-in sealed to one of your machines (`xosetup`, `purpose: reconnect`), which calls `server.enable`, or `server.disable` then `server.enable`, on each server that is not connected (`hypervisors.md`) | an admin's, once the page has loaded and shows no pool, or lacks a pool name kept from setup | Face ID or a fingerprint for a kept admin sign-in, else the admin password typed |
+| Add the reconnect watchdog, on the pool's page (iOS) | not this token's: the pool master's root password, sealed to one of your machines (`xosetup` `watchdog`), which shuts Xen Orchestra's VM down, puts the watchdog on its disk and starts it again (`hypervisors.md`) | an admin's, whatever the page shows | the pool master's SSH host key compared, then the root password typed |
 
 **A clean shutdown needs the guest's tools.** Xen Orchestra asks the guest to
 shut itself down, and a guest with no agent cannot hear it, so when Xen

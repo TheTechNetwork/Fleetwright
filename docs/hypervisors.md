@@ -2268,6 +2268,17 @@ of Debian 13's cloud image, which an install uses, has no feature it refuses
 to write (its superblock was read for this), and one that has is refused
 before anything is written, with the VM started again.
 
+On the iPhone it is **Add the reconnect watchdog**, an admin's row on the
+pool's page (`AddWatchdogView.swift`): the pool master's address, filled in
+when the phone's record for the pool names the one it was installed through;
+a machine that reaches it over SSH, found with the same probe an install
+uses; its host key compared; the root password; and what will happen said
+before the button. The phone checks the job's key under `xowatchdog-key`
+before it seals anything, and Xen Orchestra's address in the seal is the one
+the phone has saved for the pool. The steps then show on the screen and the
+Lock Screen as a watchdog's, and the machine's last sentence is the result.
+Android has no screen for it yet.
+
 *From a shell on that machine*, as root, from a copy of `xo-plugin`:
 
 ```sh
