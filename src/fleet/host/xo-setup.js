@@ -108,12 +108,13 @@
 
 import tls from 'node:tls';
 import net from 'node:net';
+import dns from 'node:dns/promises';
 import { randomBytes } from 'node:crypto';
 import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
-import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
-import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupPolicySigninAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XO_ADDRESS_RE, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xowatchdogAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupPolicySigninAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { machineGrantsOf } from '../../core/grants.js';
@@ -124,6 +125,7 @@ import { FLEET_SET, setsOf } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { clearExposed, exposedOn, keptFor, newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
+import { addToDisk, findXoVm, startXoVm, stopXoVm, waitForXo } from './xo-watchdog.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -449,9 +451,15 @@ export class XoSetups {
    *   relay?: { open: (relay: string) => Promise<import('node:stream').Duplex>, done: (relay: string) => void }|null,
    *   sleep?: (ms: number) => Promise<void>,
    *   onEnd?: ((ended: { job: string, purpose: string, state: string }) => void)|null,
+   *   waitXo?: typeof waitForXo,
+   *   resolveXo?: (host: string) => Promise<string[]>,
    * }} opts
    */
-  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, dropImage = removeImage, holderPin = null, imageReporter = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000, relay = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onEnd = null }) {
+  constructor({ signer, emit, stateDir, connect = connectXo, connectPlain = connectXoPlain, fingerprint, now = () => Date.now(), log, policyWaitMs = POLICY_WAIT_MS, coordinatorUrl = null, buildImage = ensureImage, dropImage = removeImage, holderPin = null, imageReporter = null, installer = INSTALLER, fetch = globalThis.fetch, xoRetryMs = 5_000, relay = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onEnd = null, waitXo = waitForXo, resolveXo = resolveAddresses }) {
+    // HOW ADDING THE WATCHDOG FINDS XEN ORCHESTRA'S VM AND WAITS FOR IT TO
+    // ANSWER AGAIN: the addresses its name resolves to, and a connection.
+    this.waitXo = waitXo;
+    this.resolveXo = resolveXo;
     this.policyWaitMs = policyWaitMs;
     // HOW A RECONNECT WAITS between its looks at Xen Orchestra, read against
     // `now`: its bounds (RECONNECT) are times on that clock, not counts of
@@ -687,6 +695,64 @@ export class XoSetups {
   }
 
   /**
+   * Adding the reconnect watchdog to a Xen Orchestra that predates it (phase
+   * `watchdog`, XOWATCHDOG_STEPS): begun as an install is, against the pool
+   * master that runs Xen Orchestra's VM, pinned to the SSH host key the
+   * person compared, and the job's key signed under its own context
+   * (`xowatchdog-key`), so neither key can pass for the other's.
+   *
+   * @param {{ address: string, pin?: string|null, relay?: string|null, actor: string|null }} args
+   */
+  async beginWatchdog({ address, pin, relay = null, actor }) {
+    this.#prune();
+    if (!actor) return { ok: false, text: 'Adding the watchdog has to be asked for by a signed-in person.' };
+    if (!this.signer) {
+      return {
+        ok: false,
+        text: 'This machine has no enrolment key to sign a job key with, so a phone could not tell the key was this machine’s. Enrol it with a pin first.',
+      };
+    }
+    if (relay !== null) {
+      return {
+        ok: false,
+        text: 'Adding the watchdog needs a machine that reaches the pool: it connects to the pool master over SSH, which this machine does not do through your phone. Ask from a machine on the pool’s network.',
+      };
+    }
+    if (!pin || !CERT_PIN_RE.test(pin)) return { ok: false, text: 'Adding the watchdog needs the pool master’s SSH host key you compared. Find a machine that can reach it from the app first.' };
+    if ([...this.jobs.values()].filter((j) => j.state === 'waiting' || j.state === 'running' || j.state === 'choosing').length >= 3) {
+      return { ok: false, text: 'This machine is already running three setups. Wait for one to finish.' };
+    }
+    const signer = /** @type {NonNullable<typeof this.signer>} */ (this.signer);
+    const job = randomBytes(6).toString('hex');
+    const key = await newSealKey();
+    const keySig = await signer.sign(signingInput('xowatchdog-key', { address, job, key: key.publicKey, pin }));
+    const hostKey = { kty: 'EC', crv: 'P-256', x: signer.publicJwk.x, y: signer.publicJwk.y };
+    this.jobs.set(job, {
+      job,
+      address,
+      hostKeyPin: pin,
+      purpose: 'watchdog',
+      pin: null,
+      plain: false,
+      trust: null,
+      actor,
+      key,
+      state: 'waiting',
+      step: 0,
+      of: XOWATCHDOG_STEPS.length,
+      phase: XOWATCHDOG_STEPS[0],
+      text: 'Waiting for the root password.',
+      at: this.now(),
+      cancelled: false,
+    });
+    return {
+      ok: true,
+      text: 'Ready for the root password. Check the key is this machine’s, then send it sealed.',
+      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['watchdog'] },
+    };
+  }
+
+  /**
    * @param {{ job: string, sealed: string, actor: string|null }} args
    */
   async run({ job, sealed, actor }) {
@@ -698,6 +764,7 @@ export class XoSetups {
     /** @type {any} */
     let inside;
     const deploy = rec.purpose === 'deploy';
+    const watchdog = rec.purpose === 'watchdog';
     const box = { epk: parts[0], iv: parts[1], ct: parts[2] };
     // UNDER THE SETUP'S NAME, OR A RECONNECT'S OR A POLICY CHANGE'S OWN: a
     // phone that knows this machine lists `reconnect-signin` and
@@ -708,9 +775,10 @@ export class XoSetups {
     /** @param {string} aad */
     const tryOpen = (aad) => openSealed({ privateKey: rec.key.privateKey, publicKey: rec.key.publicKey, aad, sealed: box });
     try {
-      inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : xosetupAad(job, rec.address));
+      inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : watchdog ? xowatchdogAad(job, rec.address) : xosetupAad(job, rec.address));
     } catch {
       if (deploy) return { ok: false, text: 'The passwords did not open with this job’s key. Start again from the app.' };
+      if (watchdog) return { ok: false, text: 'The root password did not open with this job’s key. Start again from the app.' };
       for (const [name, aad] of /** @type {const} */ ([['reconnect', xosetupReconnectSigninAad(job, rec.address)], ['policy', xosetupPolicySigninAad(job, rec.address)]])) {
         try {
           inside = await tryOpen(aad);
@@ -733,6 +801,24 @@ export class XoSetups {
     // here because this machine knows both. Checked here, before #execute,
     // which chooses its steps from `rec.purpose` and runs a whole setup for
     // anything else.
+    // ADDING THE WATCHDOG: the pool master's root password and the address
+    // Xen Orchestra answers on, and nothing handed back, so no reply key.
+    if (watchdog) {
+      const root = inside?.v === 1 && inside.purpose === 'watchdog' && typeof inside.root?.password === 'string' ? inside.root.password : '';
+      const target = inside?.v === 1 && typeof inside.xo?.address === 'string' ? inside.xo.address : '';
+      if (!root || root.length > 1024 || !XO_ADDRESS_RE.test(target)) {
+        rec.state = 'failed';
+        rec.text = !root
+          ? 'The sealed message had no root password for the pool master in it, so nothing was started.'
+          : 'The sealed message did not say where Xen Orchestra answers, so nothing was started.';
+        return { ok: false, text: rec.text, xosetup: status(rec) };
+      }
+      rec.xoAddress = target;
+      rec.state = 'running';
+      rec.text = 'Starting.';
+      void this.#execute(rec, { root });
+      return { ok: true, text: `Adding the reconnect watchdog to Xen Orchestra at ${target}, through the pool master at ${rec.address}.`, xosetup: status(rec) };
+    }
     const allowed = under === 'setup' ? [undefined, 'policy', 'reconnect'] : [under];
     if (!deploy && !allowed.includes(inside?.purpose)) {
       rec.state = 'failed';
@@ -999,7 +1085,7 @@ export class XoSetups {
         phase: rec.phase,
         state: rec.state,
         text: rec.text,
-        ...(policy ? { purpose: 'policy' } : rec.purpose === 'deploy' ? { purpose: 'deploy' } : reconnect ? { purpose: 'reconnect' } : {}),
+        ...(policy ? { purpose: 'policy' } : rec.purpose === 'deploy' ? { purpose: 'deploy' } : rec.purpose === 'watchdog' ? { purpose: 'watchdog' } : reconnect ? { purpose: 'reconnect' } : {}),
         ...(rec.part && rec.state === 'running' ? { fill: rec.part.fill } : {}),
         // THE PART OF A BUILD, and only of a build: an install's download is one
         // bar, and "part 1 of 1" on the Lock Screen would be words about nothing.
@@ -1030,8 +1116,9 @@ export class XoSetups {
     const policy = rec.purpose === 'policy';
     const deploy = rec.purpose === 'deploy';
     const reconnect = rec.purpose === 'reconnect';
-    const steps = policy ? this.#policySteps() : deploy ? this.#deploySteps() : reconnect ? this.#reconnectSteps() : this.#steps();
-    const keys = policy ? XOPOLICY_STEPS : deploy ? XODEPLOY_STEPS : reconnect ? XORECONNECT_STEPS : XOSETUP_STEPS;
+    const watchdog = rec.purpose === 'watchdog';
+    const steps = policy ? this.#policySteps() : deploy ? this.#deploySteps() : watchdog ? this.#watchdogSteps() : reconnect ? this.#reconnectSteps() : this.#steps();
+    const keys = policy ? XOPOLICY_STEPS : deploy ? XODEPLOY_STEPS : watchdog ? XOWATCHDOG_STEPS : reconnect ? XORECONNECT_STEPS : XOSETUP_STEPS;
     // TEN MINUTES SIGNED IN AS AN ADMIN, and no more, for a reconnect: read
     // by its steps on `now` between looks, and held by a timer too, which
     // closes the session under whatever call is waiting when the time is up,
@@ -1061,6 +1148,10 @@ export class XoSetups {
           if (reconnect) await this.#sealReconnect(ctx);
           rec.state = 'cancelled';
           rec.text = `Cancelled before ${STEP_WORDS[keys[i]] ?? `step ${i + 1}`}.${policy || (reconnect && !ctx.outcomes) ? ' Nothing was changed.' : ''}`;
+          if (watchdog) {
+            await this.#restoreXoVm(ctx);
+            rec.text = `${rec.text} ${ctx.vmState ?? 'Xen Orchestra’s VM was not touched.'}`;
+          }
           this.#report(rec);
           return;
         }
@@ -1086,6 +1177,7 @@ export class XoSetups {
       rec.state = 'done';
       rec.part = null;
       rec.text = [ctx.summary || (policy ? `${rec.address}: what the fleet may use is changed.` : `${rec.address} is in the fleet.`), ...ctx.notes].join(' ');
+      if (watchdog) rec.text = ctx.summary;
       this.#report(rec);
       this.log.info(`xosetup: ${rec.job} finished for ${rec.address}`);
     } catch (e) {
@@ -1096,6 +1188,13 @@ export class XoSetups {
       if (deploy && rec.cancelled) {
         rec.state = 'cancelled';
         rec.text = deployCancelled(rec.phase);
+      } else if (watchdog) {
+        // WHAT IS TRUE OF THE VM NOW, which the restore below settles: it is
+        // started again before these words are final (#restoreXoVm).
+        await this.#restoreXoVm(ctx);
+        rec.state = rec.cancelled ? 'cancelled' : 'failed';
+        const why = rec.cancelled ? `Cancelled before ${STEP_WORDS[rec.phase]?.toLowerCase() ?? 'the next step'}.` : `${STEP_WORDS[rec.phase] ?? 'Adding the watchdog'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
+        rec.text = `${why} ${ctx.vmState ?? 'Xen Orchestra’s VM was not touched.'}`.slice(0, 600);
       } else if (reconnect && rec.cancelled) {
         rec.state = 'cancelled';
         rec.text = ctx.outcomes
@@ -1141,6 +1240,10 @@ export class XoSetups {
       rec.part = null;
       rec.abort = null;
       rec.building = null;
+      // A VM THIS JOB STOPPED IS STARTED AGAIN, however the job ended, before
+      // the connection that can start it goes (#restoreXoVm does nothing if
+      // it is running or was never stopped).
+      if (watchdog) await this.#restoreXoVm(ctx);
       // AN INSTALL'S CONNECTION TO THE POOL MASTER, and the directory that
       // held the installer, the certificate's key and the SSH files, go
       // whichever way it ended.
@@ -1536,6 +1639,84 @@ export class XoSetups {
       },
       ...this.#steps(),
     ];
+  }
+
+  /**
+   * Adding the watchdog's steps, in XOWATCHDOG_STEPS order. xo-watchdog.js
+   * holds the scripts and says why it goes in through the pool master.
+   *
+   * @returns {Array<(ctx: any) => Promise<any>>}
+   */
+  #watchdogSteps() {
+    return [
+      // reach
+      async (/** @type {any} */ ctx) => {
+        const rec = ctx.rec;
+        rec.abort = new AbortController();
+        ctx.dir = jobDir();
+        ctx.root = { password: ctx.creds.root };
+        ctx.creds.root = undefined;
+        ctx.pool = await openPool({ address: rec.address, hostKey: rec.hostKeyPin, secret: ctx.root, dir: ctx.dir, signal: rec.abort.signal });
+      },
+      // find
+      async (/** @type {any} */ ctx) => {
+        const rec = ctx.rec;
+        const host = String(rec.xoAddress).replace(/^\[?([^\]]+?)\]?(?::\d+)?$/, '$1');
+        const ips = await this.resolveXo(host).catch(() => []);
+        if (!ips.length) throw new Error(`${host} does not resolve to an address from this machine, so its VM cannot be found by it. Nothing was changed.`);
+        ctx.vm = await findXoVm(ctx.pool, ips);
+        ctx.vmState = 'Xen Orchestra’s VM was not touched.';
+      },
+      // stop
+      async (/** @type {any} */ ctx) => {
+        if (!ctx.vm.running) return;
+        // MARKED STOPPED BEFORE ASKING, so a shutdown that half-happens is
+        // still started again on the way out.
+        ctx.stopped = true;
+        ctx.vmState = 'Xen Orchestra’s VM was shut down to add it and has not been started again.';
+        await stopXoVm(ctx.pool, ctx.vm.vm);
+      },
+      // add
+      async (/** @type {any} */ ctx) => {
+        const added = await addToDisk(ctx.pool, ctx.vm.vdi);
+        ctx.added = added;
+        if (added.leftover) this.log.warn(`xosetup: ${ctx.rec.job} left a VBD ${added.leftover} on the pool master's own domain`);
+      },
+      // start
+      async (/** @type {any} */ ctx) => {
+        const rec = ctx.rec;
+        const name = ctx.vm.name || 'Xen Orchestra’s VM';
+        if (!ctx.vm.running) {
+          ctx.summary = `The reconnect watchdog is on ${name}’s disk. The VM was not running and was left off; Xen Orchestra loads it when it next starts.`;
+          return;
+        }
+        await startXoVm(ctx.pool, ctx.vm.vm);
+        ctx.stopped = false;
+        ctx.vmState = 'Xen Orchestra’s VM was started again.';
+        const back = await this.waitXo(rec.xoAddress, { signal: rec.abort?.signal });
+        ctx.summary = back
+          ? `The reconnect watchdog is in Xen Orchestra at ${rec.xoAddress}, and it is answering again. It loaded as Xen Orchestra started, and reconnects a pool it loses by itself from now on.`
+          : `The reconnect watchdog is in Xen Orchestra at ${rec.xoAddress}, and ${name} was started again, but Xen Orchestra had not answered after five minutes. Look at it in the pool; it may still be starting.`;
+      },
+    ];
+  }
+
+  /**
+   * Start Xen Orchestra's VM again if this job stopped it and has not
+   * started it. Never throws; says what is true in `ctx.vmState`.
+   *
+   * @param {any} ctx
+   */
+  async #restoreXoVm(ctx) {
+    if (!ctx.stopped || !ctx.pool) return;
+    ctx.stopped = false;
+    try {
+      await startXoVm(ctx.pool, ctx.vm.vm);
+      ctx.vmState = 'Xen Orchestra’s VM was started again, as it was.';
+    } catch (e) {
+      ctx.vmState = `Xen Orchestra’s VM was shut down and did not start again (${scrub(/** @type {Error} */ (e).message, ctx.secrets ?? {})}): start it from the pool.`;
+      this.log.warn(`xosetup: ${ctx.rec.job} could not start Xen Orchestra's VM again`);
+    }
   }
 
   /**
@@ -2152,6 +2333,11 @@ export const STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
   packages: 'Installing packages',
   build: 'Building Xen Orchestra',
   admin: 'Replacing the default admin password',
+  // Adding the watchdog's own (XOWATCHDOG_STEPS), after `reach`.
+  find: 'Finding Xen Orchestra’s VM',
+  stop: 'Shutting it down',
+  add: 'Adding the watchdog to its disk',
+  start: 'Starting it again',
 }));
 
 /**
@@ -2709,4 +2895,16 @@ function plural(n, word, many = `${word}s`) {
 /** @param {number} bytes */
 function gib(bytes) {
   return `${Math.round(bytes / 1024 ** 3)} GiB`;
+}
+
+/**
+ * The addresses a name resolves to, or the address itself.
+ *
+ * @param {string} host
+ * @returns {Promise<string[]>}
+ */
+async function resolveAddresses(host) {
+  if (net.isIP(host)) return [host];
+  const found = await dns.lookup(host, { all: true });
+  return [...new Set(found.map((a) => a.address))];
 }

@@ -70,6 +70,13 @@ enum Seal {
     /// never opened as a setup's sign-in (xodeployAad in src/fleet/seal.js).
     static func xodeployAAD(job: String, address: String) -> String { "fleetwright-xodeploy/v1:\(job):\(address)" }
 
+    /// What the pool master's root password and Xen Orchestra's address are
+    /// sealed under for adding the reconnect watchdog: the job and the pool
+    /// master's address, under a name of its own, so a root password sealed
+    /// for this is never opened as an install's, which would also make a VM
+    /// (xowatchdogAad in src/fleet/seal.js).
+    static func xowatchdogAAD(job: String, address: String) -> String { "fleetwright-xowatchdog/v1:\(job):\(address)" }
+
     /// A pool's page read by one of your machines for this phone away from
     /// it, on its way back to the key made here for that one look: bound to
     /// the address, so one pool's page cannot be shown as another's

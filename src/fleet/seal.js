@@ -235,6 +235,19 @@ export function xodeployAad(job, address) {
 }
 
 /**
+ * What a phone seals the pool master's root password and Xen Orchestra's
+ * address under, for adding the reconnect watchdog to a Xen Orchestra that
+ * predates it (XOWATCHDOG_STEPS). Its own name, so the root password sealed
+ * for this can never be opened as an install's, which would also make a VM.
+ *
+ * @param {string} job
+ * @param {string} address  the pool master's, as the job was begun with
+ */
+export function xowatchdogAad(job, address) {
+  return `fleetwright-xowatchdog/v1:${job}:${address}`;
+}
+
+/**
  * What a pool's page is sealed under on its way from the box that read it to
  * the phone away from home that asked (`xolook`): the address, so the answer
  * for one pool cannot be shown as another's. There is no job to bind to; the

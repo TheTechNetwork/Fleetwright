@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits, syslogTo } from '../src/fleet/host/xo-setup.js';
-import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS } from '../src/fleet/protocol/intents.js';
 import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupPolicySigninAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
 import { EDGE_KEPT, newWatch } from '../src/fleet/host/edge-credentials.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
@@ -274,7 +274,7 @@ test('the limits are half of what the pool has, and every step has words', () =>
     limitsFrom([{ cpus: { cores: 6 } }, { cpus: { cores: 2 } }], [{ id: 's', size: 100, physical_usage: 20 }], [{ default_SR: 's' }]),
     { cpus: 4, memory: 1024 ** 3, disk: 10 * 1024 ** 3 },
   );
-  for (const key of [...XOSETUP_STEPS, ...XORECONNECT_STEPS]) assert.ok(STEP_WORDS[key], key);
+  for (const key of [...XOSETUP_STEPS, ...XORECONNECT_STEPS, ...XOWATCHDOG_STEPS]) assert.ok(STEP_WORDS[key], key);
 });
 
 test('a certificate nothing vouches for stops setup unless the person accepted it, before a byte is sent', { skip }, async (t) => {

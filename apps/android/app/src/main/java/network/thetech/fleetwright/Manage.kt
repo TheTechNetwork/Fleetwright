@@ -839,6 +839,8 @@ internal object Manage {
         const val changePolicy = "Change what the fleet may use"
         /** An admin's row, when the page shows none of the pool's pools or not every one this phone kept (XoReconnect.offered). */
         const val reconnectServers = "Reconnect its servers"
+        /** An admin's row, always: through the pool master, for a Xen Orchestra installed without the watchdog (XoWatchdog). */
+        const val addWatchdog = "Add the reconnect watchdog"
         const val whatItIs = "What it is"
         const val howItIs = "How it is"
         const val whatItCanDo = "What it can do"
