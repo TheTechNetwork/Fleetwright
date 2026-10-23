@@ -855,7 +855,13 @@ bound for every person who has listed a key and for anything with nobody named,
 and leaves a person with no key where they were: a coordinator can act as them
 on that box, which it can only because they sign nothing. So on a box left at
 the default, the bound above still holds whole for people with no key and for a
-box whose operator set `off`.
+box whose operator set `off`. A member with no phone lists a key from a browser
+through the minter's signing page, on a hostname the coordinator does not serve
+(`sign-page.js`); the coordinator still serves `/me`, which asks that page, so
+it can ask it to sign any of the five credential verbs, and the person reading
+each request there is the check. A key from either is listed by whoever
+finishes a GitHub sign-in as the person, so a coordinator that phishes that
+authorization gets a key listed, phone or browser alike.
 *Falsify:* on a box with the switch set, send it an unsigned `start`, one signed
 by a key the minter does not list, one carrying a delegation that covers another
 session, or one carrying a delegation its maker revoked; `sidecar.js` must refuse
@@ -863,7 +869,8 @@ each with `signature_required` (`test/vault.test.js` does). With `signers`, an
 unsigned `start` naming nobody must be refused, and one naming a person whose key
 the box has seen must stay refused after a restart and after a key list that
 leaves them out. On a box without the switch, nothing is refused for a
-signature.
+signature. On the signing host, every POST route of the minter must 404 and the
+page must sign no verb outside the five (`test/sign-page.test.js`).
 
 ### 4.2 Compromised host (root on the box)
 
