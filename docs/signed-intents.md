@@ -1,6 +1,7 @@
 # Signed intents: a box obeys a person, not the coordinator
 
-**Status: designed; phase 1 (observe only) is being built.** This is
+**Status: phases 1 and 2 built; phase 3's switch, delegations and signed
+sign-ins built; the browser signing page and pinned admins not yet.** This is
 SEC-COORD-2 in `docs/security.md` §4.1 and the third row of `docs/trust.md`'s
 table. Until phase 3 ships, no document may say the coordinator cannot forge an
 instruction, and none does.
@@ -156,10 +157,10 @@ both unneeded and unsafe:
 **MCP callers** (`docs/mcp.md`) are the coordinator acting on a person's
 behalf, so nothing they send can carry the person's signature. Under
 enforcement they act only through a **delegation the person signs on their
-phone**: "the coordinator may send these verbs, to these boxes, as me, until
-this time", at most a day, listed and revocable in the app, and checked by the
-box exactly as an intent is. Without one, an MCP call to an enforcing box is
-refused with a sentence saying which delegation would allow it.
+phone**: "the coordinator may send these verbs, to any box, as me, until this
+time", for a day or a week, listed and revocable in the app, and checked by the
+box exactly as an intent is ([Delegations](#delegations)). Without one, an MCP
+call to an enforcing box is refused with a sentence saying where to allow it.
 
 ## What the coordinator still says alone
 
@@ -171,9 +172,9 @@ with what a coordinator forging it could do:
 | `forgetperson`, on removal | delete a person's sessions and sign-ins on a box | stays unsigned: it can only take away, which is denial of service |
 | `vmlogin`, a machine asking for its owner's login | have a box hand a login to a machine that box made | stays unsigned; the box already checks the machine is one it made, running, and asked once (`XoPools#handLogin`) |
 | `mint`, a runner's token | ask a box to mint for a job | stays unsigned; the minter checks GitHub's own job token |
-| `exchange`, `link`, `renew`, finishing a sign-in | write a credential into a person's row | signed: the phone signs the sign-in when it starts it, for one provider, one box and ten minutes, and the coordinator carries that signature to the finish |
-| `vmctl stop` and `provision`, keeping machines ready | stop or make machines from a person's pool | covered by a delegation the phone signs when the person sets "keep N ready", for that pool and those two verbs |
-| a runner's held `start` | start a session on a runner | the person signed the `provision` that made the runner; the runner accepts the start that names that provision |
+| `exchange`, `link`, `renew`, finishing a sign-in | write a credential into a person's row | delegated: the phone signs a delegation when it finishes the sign-in, for one provider, that box and ten minutes, and the coordinator carries it to the box (built) |
+| `vmctl stop` and `provision`, keeping machines ready | stop or make machines from a person's pool | delegated: the phone signs two when the person sets "keep N ready", making machines from that image and ending machines, for a month, signed again daily (built) |
+| a runner's held `start` | start a session on a runner | delegated: the phone signs, with the `provision`, a delegation for that start's title, brief, mode and task on any box, for an hour (built) |
 
 ## Who may do what
 
@@ -223,8 +224,9 @@ that, and does not remove it:
 3. **Enforce, box by box.** `FLEETWRIGHT_REQUIRE_SIGNED=1` on a box refuses
    what phase 1 counted, then becomes the default once a release's health
    reports show no unsigned intents from current apps. Delegations and the
-   sign-in signatures above ship here. *The switch is built (below). The
-   default, the delegations and the signed sign-ins are not.*
+   sign-in signatures above ship here. *The switch, its `signers` mode, the
+   delegations and the signed sign-ins are built (below). The browser signing
+   page is not.*
 4. **Pinned admins** on each box.
 
 ## Phase 2, as built
@@ -275,16 +277,34 @@ and `link` and `unlink` across the fleet.
 
 ## Phase 3, as built so far
 
-**The switch.** `FLEETWRIGHT_REQUIRE_SIGNED=1`, in a box's own env file and
-nowhere the coordinator can reach. Off by default.
+**The switch.** `FLEETWRIGHT_REQUIRE_SIGNED`, in a box's own env file and
+nowhere the coordinator can reach, in one of three ways:
 
-**What the box refuses.** Every intent that `needsSignature` names, unless it
-is signed by a key the minter lists for its actor. The refusal is
-`signature_required`, with the reason in words:
+- `off` takes everything and counts it.
+- `signers` refuses what is not signed or delegated by anybody this box has been
+  shown a key for, and anything with nobody named. A box runs an intent with
+  nobody named as itself (`src/core/accounts.js`, the box's own row), so leaving
+  that open would let a coordinator drop the name and act as the box.
+- `all` refuses what is not signed or delegated, from anybody.
+
+A value that is none of these stops the sidecar starting.
+
+**Who signs, remembered.** A box keeps the people it has been shown a key for
+in `signers.json` beside the minter's key, and goes on enforcing for them across
+a restart and across a list that leaves them out. Leaving somebody off the
+members list it sends is all a coordinator can do to that list. A person stops
+being a signer only when the minter lists them, signed, with no keys: which it
+does for a person who removed every key they filed.
+
+**What the box refuses.** Every intent that `needsSignature` names, from a
+person the mode covers, unless it is signed or delegated by a key the minter
+lists for them. The refusal is `signature_required`, with the reason in words:
 
 - not signed;
 - signed by a key the minter does not list for that person;
-- a signature that does not hold for what arrived;
+- a signature or delegation that does not hold for what arrived;
+- a delegation that does not cover this intent, here, now;
+- a delegation its maker revoked;
 - the box has no key list from the minter yet, or no key of its own to ask for
   one.
 
@@ -297,31 +317,78 @@ coordinator says alone in the table above (`forgetperson`, `vmlogin`, `mint`).
 `intent-signature.js` holds both lists, and the box and the coordinator read
 the same ones.
 
-**The coordinator refuses first.** A box that enforces says so in its health
-(`signatures.enforcing`). For that box the coordinator refuses an intent that
-would arrive unsigned, sends nothing, and says which of two things happened:
-nobody signed it, or a person did and the fleet changed it on the way. The box
-cannot tell those apart. The coordinator can.
+**The coordinator refuses first.** A box that enforces says so in its health:
+`signatures.enforcing` is `true` for `all` and `signers` for `signers`. For an
+`all` box, and for an intent with nobody named to a `signers` box, the
+coordinator refuses what would arrive unsigned and undelegated, sends nothing,
+and says which of two things happened: nobody signed or delegated it, or a
+person signed it and the fleet changed it on the way.
 
-**What an enforcing box refuses today**, measured from the code, because none
-of it carries a person's signature yet:
+## Delegations
 
-- finishing a GitHub or Cloudflare sign-in on the box (`exchange`, then `link`);
-- the browser page's `connect` and `link`;
-- a session held until a runner or a pool machine joins;
-- keeping machines ready, and ending the ones no longer wanted (`provision`,
-  `vmctl stop`);
-- linked repositories and the runner repository (`linkrepo`, `runnerrepo`);
-- a hypervisor setup step the coordinator placed, rather than one the phone
-  named a box for;
-- every MCP call;
+A delegation is what a person signs on their phone to let the coordinator send
+something in their name later, when they are not there to sign it
+(`delegationSigningInput` in `intent-signature.js`):
+
+```
+agent-fleet/v1/delegation
+<canonical JSON of { actor, expires, hosts, id, issuedAt, match, v: 1, verbs }>
+```
+
+- **What it names, all of it signed:** the person, the verbs, the boxes (or
+  `["*"]` for whichever box the fleet places it on), parameters the intent must
+  carry exactly (`match`), and a window of at most a month.
+- **How a box checks it:** against the same key list it checks a signature with,
+  and then whether it covers this intent, to this box, now. A box takes a
+  delegation only on an intent with no signature, because what the person
+  signed for this request is the stronger word.
+- **What a coordinator can do with one:** exactly what it names, as often as it
+  likes, inside its window. It is a standing permission and not a single
+  request, which is why each is as short and as narrow as its purpose allows.
+- **Taking one back** goes to the minter, not the coordinator, because the
+  coordinator is what carries it. The phone files the id in its own keys' row
+  (`revokedelegation`, beside `devicekey`), the minter lists revoked ids beside
+  each person's keys, and a box refuses a revoked one from the next list it
+  takes, within ten minutes. Withdrawing it from the coordinator as well stops
+  an honest one carrying it.
+
+**The coordinator keeps them** (`delegations.js`): per person, at most eight
+live at once, under one Durable Object value. A renewal covering exactly what an
+older one covers replaces it, and a short one (an hour or less) gives way when a
+person's allowance is full. A standing one is never dropped to make room. `send`
+carries, with an intent that would go unsigned, the delegation that covers it
+and runs out soonest, and nothing when none does.
+
+**What each phone signs, and when.** Both phones sign these with the same key
+they sign intents with, and only once it is listed:
+
+| For | Verbs | Boxes | Match | Lasts |
+|---|---|---|---|---|
+| A request the fleet places (no box named) | that verb | any | every parameter as sent | ten minutes |
+| A start held until a runner or a pool machine joins | `start` | any | the title, brief, mode and task kept | an hour |
+| Finishing a GitHub or Cloudflare sign-in | `exchange`, `link`, `renew` | the box it was for, or any | the provider | ten minutes |
+| Keeping machines ready: making them | `provision` | any | `platform: vm` and the image | a month, signed again daily while kept |
+| Keeping machines ready: ending them | `vmctl` | any | `action: stop` | a month, the same |
+| An MCP client, chosen under You → Delegations | what the MCP tools offer, less `exchange` and `update` | any | nothing | a day or a week |
+
+The phones list every delegation under You → Delegations, with Revoke.
+
+**What an enforcing box still refuses**, because nothing a person signs covers it
+yet:
+
+- the browser page's `connect` and `link`, which wait for the signing page
+  below;
+- linked repositories and the runner repository when the minter cannot answer
+  and the coordinator asks a box instead (`linkrepo`, `runnerrepo`), unless an
+  MCP delegation covers them;
 - a removal's hand-back to a box leaving the fleet (`stop`, `unlink`), which
   that box's owner could ignore anyway.
 
-So the switch fits a box whose people use the app for sessions and files, and
-whose operator would rather lose those features on that box than trust the
-coordinator with it. Its health shows how many unsigned intents it has had,
-which is what turning it on would refuse.
+**The browser signing page is not built.** It needs a hostname the coordinator
+does not serve, an extra GitHub callback, and a way for a member with no phone
+to list a browser's key without the coordinator vouching for it. Until it
+exists, a member who uses only `/me` has no key, which `signers` leaves to take
+at their word.
 
 `docs/security.md` changes in step: SEC-COORD-2 moves from aspirational to
 observed after phase 1, and to enforced only after phase 3 is the default.
