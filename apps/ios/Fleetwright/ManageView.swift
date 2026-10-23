@@ -10,7 +10,8 @@ import SwiftUI
 /// that names it, reads as part of Machines rather than as an app of its own.
 /// Changing what the fleet may use there is a row on this page now, for an
 /// admin, beside what it governs; and so is reconnecting its servers, when
-/// Xen Orchestra shows none of the pool or not all of it (XOReconnect).
+/// Xen Orchestra shows none of the pool or not all of it (XOReconnect), and
+/// adding the reconnect watchdog that does that by itself (AddWatchdogView).
 ///
 /// THE ROWS ARE THE MACHINES TAB'S ROWS: a card of the one shape (RHYTHM 1),
 /// the name at a hostname's weight, the state word on the right in a tone that
@@ -74,6 +75,23 @@ struct PoolManageView: View {
                     AddHypervisorView(settings: settings, reconnectFor: pool.address, via: watch.via)
                 } label: {
                     Label(Manage.Words.reconnectServers, systemImage: "arrow.triangle.2.circlepath")
+                        .fleetType(.body)
+                        .frame(minHeight: 44)
+                }
+                .fleetCard(radius: Design.Radius.cardSmall)
+                .fleetRow()
+            }
+            // ADDING THE RECONNECT WATCHDOG, so the pool comes back by itself
+            // next time: an admin's, because it takes the pool master's root
+            // password. Offered whether or not the page has loaded, since it
+            // goes in through the pool master and not through Xen
+            // Orchestra, and whatever this page shows, because nothing this
+            // phone can read says whether the watchdog is already there.
+            if settings.showsAdmin, XOSetupKey.isAddress(pool.address) {
+                NavigationLink {
+                    AddWatchdogView(settings: settings, xoAddress: pool.address)
+                } label: {
+                    Label(WatchdogWords.title, systemImage: "arrow.clockwise.circle")
                         .fleetType(.body)
                         .frame(minHeight: 44)
                 }

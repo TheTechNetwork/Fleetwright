@@ -406,17 +406,18 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
     }
 }
 
-/** A `begin` answer with the address it was sent for, which `run` seals under. */
-private class Begun(val setup: Fleet.Setup, val hostId: String, val where: String)
+/** A `begin` answer with the address it was sent for, which `run` seals under. Adding the watchdog's too (XoWatchdogSheet). */
+internal class Begun(val setup: Fleet.Setup, val hostId: String, val where: String)
 
 /**
  * THE QUESTION THIS SCREEN ASKS, in the attention ring the design spends on
  * exactly this: the key, where on the pool master to read its own, and the
  * box. The heading carries the word, so the card reads the same with the
- * colour gone.
+ * colour gone. Adding the watchdog asks it in the same words, for the same
+ * root password.
  */
 @Composable
-private fun HostKeyAsk(hostId: String, address: String, key: Fleet.SshKey, matched: Boolean, enabled: Boolean, onMatched: (Boolean) -> Unit) {
+internal fun HostKeyAsk(hostId: String, address: String, key: Fleet.SshKey, matched: Boolean, enabled: Boolean, onMatched: (Boolean) -> Unit) {
     SectionHead("Its SSH host key")
     Column(
         Modifier
@@ -452,9 +453,16 @@ private fun HostKeyAsk(hostId: String, address: String, key: Fleet.SshKey, match
 /**
  * The bar and the sentence, as SetupProgress draws a setup's: the step words
  * crossfade when they change and the bar moves to its new place (MOTION 2).
+ * Adding the watchdog draws its own job with it, in its own words: [stateWords]
+ * says a state that is not a step (waiting, done, failed, cancelled) and is
+ * null for one that is, which [stepWords] says.
  */
 @Composable
-private fun DeployProgress(setup: Fleet.Setup) {
+internal fun DeployProgress(
+    setup: Fleet.Setup,
+    stateWords: (String) -> String? = ::deployStateWords,
+    stepWords: (String?, Int, Int) -> String = XoSetup::stepWords,
+) {
     val of = setup.of ?: 1
     val step = setup.step ?: 0
     val ended = setup.state == "done" || setup.state == "failed" || setup.state == "cancelled"
@@ -471,13 +479,7 @@ private fun DeployProgress(setup: Fleet.Setup) {
         "cancelled" -> Design.Palette.idle.now
         else -> Design.Palette.active.now
     }
-    val words = when (setup.state) {
-        "waiting" -> "Waiting for the passwords"
-        "done" -> "Xen Orchestra installed and added"
-        "failed" -> "Installing Xen Orchestra stopped"
-        "cancelled" -> "Installing Xen Orchestra cancelled"
-        else -> XoSetup.stepWords(setup.phase, step, of)
-    }
+    val words = stateWords(setup.state) ?: stepWords(setup.phase, step, of)
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         LinearProgressIndicator(
             progress = { shown },
@@ -495,4 +497,13 @@ private fun DeployProgress(setup: Fleet.Setup) {
         if (!ended && setup.state == "running") Text(XoDeploy.stepLine(step, of, fill), style = Design.Style.label, color = Design.Palette.inkDim.now)
         setup.text?.let { Quoted(it) }
     }
+}
+
+/** An install's words for a state that is not one of its steps, or null for one that is. */
+private fun deployStateWords(state: String): String? = when (state) {
+    "waiting" -> "Waiting for the passwords"
+    "done" -> "Xen Orchestra installed and added"
+    "failed" -> "Installing Xen Orchestra stopped"
+    "cancelled" -> "Installing Xen Orchestra cancelled"
+    else -> null
 }

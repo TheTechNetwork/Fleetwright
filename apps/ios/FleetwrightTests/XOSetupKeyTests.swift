@@ -77,4 +77,20 @@ final class XOSetupKeyTests: XCTestCase {
         XCTAssertTrue(XOSetupKey.isSSHKey("SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"))
         XCTAssertFalse(XOSetupKey.isSSHKey("MD5:aa:bb"))
     }
+
+    /// ADDING THE WATCHDOG is begun as an install is and signed under its
+    /// own context (`signingInput('xowatchdog-key', ...)` in xo-setup.js):
+    /// an install's key does not pass for it, nor its key for an install's,
+    /// because a root password sent to the wrong one makes a VM with it.
+    func testTheWatchdogsKeyIsSignedUnderItsOwnContext() throws {
+        let machine = Machine()
+        let body = "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(jobKey)\",\"pin\":\"\(somePin)\"}"
+        let sig = try machine.sign(XOSetupKey.watchdogSigningPrefix + body)
+        XCTAssertTrue(XOSetupKey.isSignedForWatchdog(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+        XCTAssertFalse(XOSetupKey.isSignedForDeploy(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+        let asInstall = try machine.sign(XOSetupKey.deploySigningPrefix + body)
+        XCTAssertFalse(XOSetupKey.isSignedForWatchdog(key: jobKey, keySig: asInstall, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+        let other = String(repeating: "cd", count: 32)
+        XCTAssertFalse(XOSetupKey.isSignedForWatchdog(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: other))
+    }
 }

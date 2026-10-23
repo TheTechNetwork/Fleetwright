@@ -96,7 +96,10 @@ test('iOS: the job key is checked over the bytes the machine signs, before anyth
   assert.ok(IOS.includes(`static let deploySigningPrefix = "${prefix}\\n"`));
   // The keys in canonical order, as the phone writes them by hand.
   assert.deepEqual(Object.keys(JSON.parse(json)), ['address', 'job', 'key', 'pin']);
-  assert.ok(IOS.includes('deploySigningPrefix + "{\\"address\\":\\"\\(address)\\",\\"job\\":\\"\\(job)\\",\\"key\\":\\"\\(key)\\",\\"pin\\":\\"\\(pin)\\"}"'));
+  // Written once for both jobs that go through a pool master, with the
+  // install's context passed in (the watchdog's is the other).
+  assert.ok(IOS.includes('isSignedOverHostKey(deploySigningPrefix, key: key, keySig: keySig, hostKey: hostKey, address: address, job: job, pin: pin)'));
+  assert.ok(IOS.includes('let signed = prefix + "{\\"address\\":\\"\\(address)\\",\\"job\\":\\"\\(job)\\",\\"key\\":\\"\\(key)\\",\\"pin\\":\\"\\(pin)\\"}"'));
   // The check comes before the seal, on the path that seals.
   const check = SCREEN.indexOf('XOSetupKey.isSignedForDeploy(');
   const sealed = SCREEN.indexOf('Seal.xodeployAAD(');
