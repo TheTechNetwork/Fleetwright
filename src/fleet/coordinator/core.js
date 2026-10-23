@@ -27,7 +27,7 @@ import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isM
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
-import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, handBack } from './oauth.js';
+import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, SIGNER_STATE_RE, signerReturnUrl, handBack, normaliseOrigin } from './oauth.js';
 import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
@@ -358,6 +358,7 @@ export class CoordinatorCore {
    *     github?: (ask: { sealed: unknown, boxCodes?: string[] }) => Promise<any>,
    *     vault?: (route: 'device'|'box'|'keys', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
+   *   signingOrigin?: string|null,
    * }} [opts]
    */
   constructor({
@@ -405,6 +406,11 @@ export class CoordinatorCore {
     // the secret makes the exchange itself, and one with neither keeps the
     // paste route.
     oauthRelay = null,
+    // THE BROWSER'S SIGNING PAGE, on the minting Worker's own hostname
+    // (src/fleet/minter/sign-page.js): where a GitHub sign-in that page
+    // started is sent back to. Configured, never taken from a request.
+    // Absent is a fleet whose browser page does not sign.
+    signingOrigin = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -423,6 +429,7 @@ export class CoordinatorCore {
     this.runnerRepo = runnerRepo;
     this.minter = minter;
     this.oauthRelay = oauthRelay?.url && oauthRelay?.fleet && oauthRelay?.privateJwk && oauthRelay?.publicKey ? oauthRelay : null;
+    this.signingOrigin = typeof signingOrigin === 'string' && signingOrigin.startsWith('https://') ? normaliseOrigin(signingOrigin) : null;
     // Single-use, minutes-long, and minted only when this coordinator itself
     // dispatches a run — so a runner's owner is decided before the job exists
     // rather than by a reusable secret sitting in a repository. Separate store
@@ -4319,6 +4326,15 @@ export class CoordinatorCore {
       return back
         ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to GitHub.' }
         : { ok: false, text: 'GitHub did not send back a code to finish signing in with. Try again from the app.' };
+    }
+    // THE SAME FOR THE BROWSER'S SIGNING PAGE, which goes back to the one
+    // signing origin this coordinator was given. The code is worth nothing
+    // here: the verifier never left that page.
+    if (SIGNER_STATE_RE.test(String(state ?? ''))) {
+      const back = signerReturnUrl({ code, state, signingOrigin: this.signingOrigin });
+      return back
+        ? { ok: true, device: back, text: 'Back to the signing page to finish listing this browser.' }
+        : { ok: false, text: this.signingOrigin ? 'GitHub did not send back a code to finish signing in with. Try again from the signing page.' : 'This fleet has no signing page for a browser.' };
     }
     // TWO FLOWS ARRIVE AT THIS ONE URL, and only one of them was ours.
     //

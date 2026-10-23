@@ -151,6 +151,9 @@ export class Fleet {
       // means this fleet cannot start machines and says so — see
       // docs/runner-central.md.
       runnerRepo: env.FLEETWRIGHT_RUNNER_REPO || null,
+      // The browser's signing page, on the minting Worker's own hostname: where
+      // a GitHub sign-in it started is sent back to (oauth.js, SIGNER_STATE_RE).
+      signingOrigin: env.FLEETWRIGHT_SIGNING_ORIGIN || null,
       // THE MINTING WORKER, over its service binding. Present only where a
       // deployment binds it (wrangler.production.toml); the fork-safe config
       // binds nothing, and a runner there is minted for by a box or not at
