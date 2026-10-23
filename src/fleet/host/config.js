@@ -114,7 +114,12 @@ export function loadSidecarConfig(env = process.env) {
     //               has been shown a key for, and anything with nobody named
     //   1, all      refuse what is not signed or delegated, from anybody
     // Anything else is not guessed at: validateSidecarConfig refuses it.
-    requireSigned: signedMode(str(env, 'FLEETWRIGHT_REQUIRE_SIGNED', 'off')),
+    //
+    // `signers` BY DEFAULT: a person who signs is protected on every box
+    // that runs this, and a person who does not is taken at their word as
+    // before. What it costs is the unsigned work a signer still does, which
+    // docs/signed-intents.md lists and the box's health counts.
+    requireSigned: signedMode(str(env, 'FLEETWRIGHT_REQUIRE_SIGNED', 'signers')),
 
     // May a notification quote the session — a path, a command line — or only
     // the question this fleet wrote? Off by default: the fuller form reaches a
