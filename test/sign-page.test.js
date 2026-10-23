@@ -192,7 +192,7 @@ test('the coordinator sends a signing page\u2019s GitHub sign-in back to the con
   const r = core.githubCallback({ code: 'browsercode1', state });
   assert.equal(r.ok, true);
   assert.equal(r.device, `https://${SIGN}/oauth/github/callback?code=browsercode1&state=${state}`);
-  assert.match(callbackPage(r), new RegExp(`location\\.replace\\("https://${SIGN.replace(/\./g, '\\.')}/oauth/github/callback\\?code=browsercode1`));
+  assert.ok(callbackPage(r).includes(`location.replace("https://${SIGN}/oauth/github/callback?code=browsercode1`), 'the page goes there');
   assert.equal(core.githubCallback({ code: 'browsercode1', state: 's.short' }).ok, false);
   // No signing page configured, or one that is not https: nowhere to send it.
   for (const signingOrigin of [null, 'http://sign.fleet.test']) {
