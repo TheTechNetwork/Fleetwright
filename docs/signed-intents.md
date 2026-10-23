@@ -135,10 +135,23 @@ the coordinator's word, like membership and admin below. Phase 1 found this the
 measured way: the first correctly signed start in the end-to-end test failed at
 the box, because `boxSecrets` had been added on the way.
 
-**The console** signs with a non-extractable WebCrypto key kept in IndexedDB,
-registered with the minter the way a phone's is. A browser profile is weaker
-custody than a phone's secure hardware, and the device list in the app says
-which kind each key is.
+**The console and the browser page.** This said once that the console would
+sign with a non-extractable WebCrypto key. Measured against the code, that is
+both unneeded and unsafe:
+
+- **The console needs nothing.** It sends one intent, `list`, which needs no
+  signature. Its answer buttons open the session's Remote Control link; they
+  do not send `answer`.
+- **The browser page cannot hold the key.** `/me` (`member-page.js`) is the
+  page that does send intents from a browser: `connect` and `link`, for a
+  member with no phone. The coordinator serves that page. A key the page held
+  would sign whatever the coordinator's script asked it to, and the coordinator
+  is the party this is built to distrust. Non-extractable does not help: the
+  script never needs to read the key, only to ask it to sign.
+- **What would work.** A page the coordinator neither serves nor can script,
+  on an origin of its own: the minter's, on a hostname the coordinator does not
+  share. That page would hold the key and sign. Until it exists, what `/me`
+  sends is unsigned, and a box that enforces refuses it.
 
 **MCP callers** (`docs/mcp.md`) are the coordinator acting on a person's
 behalf, so nothing they send can carry the person's signature. Under
@@ -201,15 +214,17 @@ that, and does not remove it:
    every intent, and **enforces nothing**: it counts signed, unsigned and
    failing intents in its health report and writes a failing one to its own
    log, so the fleet can see what enforcement would refuse before anything is.
-2. **Phones and console sign.** *Phones built; the console not yet (below).* A key per device in the Secure Enclave on iOS,
-   the Android Keystore with StrongBox where there is one, and WebCrypto in the
-   console; registered with the minter at sign-in; every intent signed. Not
+2. **Phones sign.** *Built. The console needs nothing, and the browser page
+   needs an origin the coordinator does not serve (above).* A key per device in
+   the Secure Enclave on iOS and the Android Keystore with StrongBox where there
+   is one, registered with the minter at sign-in; every intent signed. Not
    behind Face ID per request: the key never leaves the hardware, and a
    prompt on every tap is how a safety feature gets switched off.
 3. **Enforce, box by box.** `FLEETWRIGHT_REQUIRE_SIGNED=1` on a box refuses
    what phase 1 counted, then becomes the default once a release's health
    reports show no unsigned intents from current apps. Delegations and the
-   sign-in signatures above ship here.
+   sign-in signatures above ship here. *The switch is built (below). The
+   default, the delegations and the signed sign-ins are not.*
 4. **Pinned admins** on each box.
 
 ## Phase 2, as built
@@ -253,18 +268,60 @@ that, and does not remove it:
 
   `test/signed-carry.test.js` holds each of those.
 
-**Still unsigned, and what phase 3 needs first:**
+**What a phone asks of no box** goes unsigned, because a signature is for one
+box. Most of those only read (`list`, `profiles`, `status` without a name). The
+ones that change something are a `start` or `provision` with no box chosen,
+and `link` and `unlink` across the fleet.
 
-- **What a phone asks of no box.** A signature is for one box, so an intent
-  the coordinator places or fans out goes unsigned. Most of those only read
-  (`list`, `profiles`, `status` without a name). The ones that change something
-  are a `start` or `provision` with no box chosen, and `link` and `unlink`
-  across the fleet.
-- **An intent the coordinator changes.** Under enforcement, the coordinator
-  should refuse it, and say why, rather than send it unsigned to be refused by
-  the box.
-- **The console and MCP.** The console signs nothing yet. MCP callers need the
-  delegations described above.
+## Phase 3, as built so far
+
+**The switch.** `FLEETWRIGHT_REQUIRE_SIGNED=1`, in a box's own env file and
+nowhere the coordinator can reach. Off by default.
+
+**What the box refuses.** Every intent that `needsSignature` names, unless it
+is signed by a key the minter lists for its actor. The refusal is
+`signature_required`, with the reason in words:
+
+- not signed;
+- signed by a key the minter does not list for that person;
+- a signature that does not hold for what arrived;
+- the box has no key list from the minter yet, or no key of its own to ask for
+  one.
+
+The last one refuses on purpose. Enforcement that lapsed while the list was
+late would be enforcement a coordinator could lapse by holding the list back.
+
+**What it still takes unsigned.** The verbs whose answers a box reports by
+itself (`list`, `status`, `health`, `updates`, `profiles`), and the three the
+coordinator says alone in the table above (`forgetperson`, `vmlogin`, `mint`).
+`intent-signature.js` holds both lists, and the box and the coordinator read
+the same ones.
+
+**The coordinator refuses first.** A box that enforces says so in its health
+(`signatures.enforcing`). For that box the coordinator refuses an intent that
+would arrive unsigned, sends nothing, and says which of two things happened:
+nobody signed it, or a person did and the fleet changed it on the way. The box
+cannot tell those apart. The coordinator can.
+
+**What an enforcing box refuses today**, measured from the code, because none
+of it carries a person's signature yet:
+
+- finishing a GitHub or Cloudflare sign-in on the box (`exchange`, then `link`);
+- the browser page's `connect` and `link`;
+- a session held until a runner or a pool machine joins;
+- keeping machines ready, and ending the ones no longer wanted (`provision`,
+  `vmctl stop`);
+- linked repositories and the runner repository (`linkrepo`, `runnerrepo`);
+- a hypervisor setup step the coordinator placed, rather than one the phone
+  named a box for;
+- every MCP call;
+- a removal's hand-back to a box leaving the fleet (`stop`, `unlink`), which
+  that box's owner could ignore anyway.
+
+So the switch fits a box whose people use the app for sessions and files, and
+whose operator would rather lose those features on that box than trust the
+coordinator with it. Its health shows how many unsigned intents it has had,
+which is what turning it on would refuse.
 
 `docs/security.md` changes in step: SEC-COORD-2 moves from aspirational to
 observed after phase 1, and to enforced only after phase 3 is the default.

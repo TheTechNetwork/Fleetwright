@@ -833,7 +833,7 @@ update §4.1 in the same change.
 *Falsify:* diff the `VERBS` table (`intents.js`) against §4.1's capability list;
 any verb here that is not accounted for above is an unreconciled widening.
 
-**SEC-COORD-2** (ASPIRATIONAL) — Device-signed intents, verified host-side
+**SEC-COORD-2** (OPT-IN, PER BOX) — Device-signed intents, verified host-side
 against a key the coordinator did not vouch for, would reduce this bound to
 "deny service." Until built, no document may claim the coordinator cannot forge
 an instruction. Designed in [`signed-intents.md`](signed-intents.md): the
@@ -844,10 +844,17 @@ built: a box checks every intent's signature against that list and counts what
 it found in its health (`intent-keys.js`), and refuses nothing for it. Phase 2
 is built for the phones: they sign each intent that names its box, with a key
 the minter lists, and the coordinator carries a signature only with what it was
-made over. Nothing is refused for a missing or failing signature yet, so the
-bound above still holds whole.
-*Falsify:* search host code for an intent refused because its signature does not
-hold; today there is none (`sidecar.js` counts and logs, then runs it).
+made over. Phase 3's switch is built and off by default: a box run with
+`FLEETWRIGHT_REQUIRE_SIGNED=1` refuses whatever a person did not sign, so on
+that box the bound narrows to denial of service plus the three verbs the
+coordinator says alone (`forgetperson`, `vmlogin`, `mint`), each checked or
+harmless as `signed-intents.md` argues. On every other box the bound above still
+holds whole, and the switch costs the features `signed-intents.md` lists, which
+sign nothing yet.
+*Falsify:* on a box with the switch set, send it an unsigned `start` or one signed
+by a key the minter does not list; `sidecar.js` must refuse it with
+`signature_required` (`test/vault.test.js` does). On a box without it, nothing
+is refused for a signature.
 
 ### 4.2 Compromised host (root on the box)
 
@@ -1841,7 +1848,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 |---|---|
 | SEC-ACTOR-1 | Every component's compromise cost is bounded and written |
 | SEC-COORD-1 | Verb set and the blast-radius sentence stay in sync |
-| SEC-COORD-2 | (Aspirational) signed intents reduce coordinator compromise to DoS |
+| SEC-COORD-2 | (Opt-in per box) signed intents reduce coordinator compromise to DoS |
 | SEC-HOST-1 | A host holds credentials for itself and its members only |
 | SEC-HOST-2 | Multi-user hosts token-gate the loopback API |
 | SEC-SESSION-1 | Session identity is the bind-mounted socket |
