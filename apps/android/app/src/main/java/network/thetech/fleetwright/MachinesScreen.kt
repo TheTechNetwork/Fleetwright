@@ -112,6 +112,9 @@ fun MachinesScreen(
     // reason; the job itself starts over after a rotation (HypervisorSheet).
     var reconnectFor by rememberSaveable { mutableStateOf<String?>(null) }
     var reconnectVia by rememberSaveable { mutableStateOf<String?>(null) }
+    // A pool whose Xen Orchestra is having the reconnect watchdog added, by
+    // the address it answers on. Saveable for the same reason.
+    var watchdogFor by rememberSaveable { mutableStateOf<String?>(null) }
     // THE POOLS THIS PHONE KEEPS A TOKEN FOR, read again whenever a sheet that
     // could have added one closes. On this phone and nowhere else, so this is
     // the one place that can list them.
@@ -199,7 +202,7 @@ fun MachinesScreen(
     managing?.let { address ->
         held.firstOrNull { it.address == address }?.let { pool ->
             key(address) {
-                PoolPage(settings, pool, admin, onChangePolicy = { policyFor = address }, onDismiss = { managing = null }, onReconnect = { reconnectVia = null; reconnectFor = address })
+                PoolPage(settings, pool, admin, onChangePolicy = { policyFor = address }, onDismiss = { managing = null }, onReconnect = { reconnectVia = null; reconnectFor = address }, onAddWatchdog = { watchdogFor = address })
             }
         }
     }
@@ -211,6 +214,11 @@ fun MachinesScreen(
     reconnectFor?.let { pool ->
         key(pool, reconnectVia) {
             HypervisorSheet(settings, reconnectFor = pool, via = reconnectVia, onDismiss = { reconnectFor = null; reconnectVia = null })
+        }
+    }
+    watchdogFor?.let { pool ->
+        key(pool) {
+            XoWatchdogSheet(settings, xoAddress = pool, startPoolMaster = XoHandoff.poolMaster(settings, pool), onDismiss = { watchdogFor = null })
         }
     }
 

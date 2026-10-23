@@ -1367,6 +1367,18 @@ struct Fleet {
                          idempotencyKey: "app-\(UUID().uuidString)")
     }
 
+    /// Begin adding the reconnect watchdog to a Xen Orchestra that predates
+    /// it (`watchdog`), on ONE chosen machine, through the pool master that
+    /// runs its VM: pinned as an install is, to the SHA-256 of the pool
+    /// master's SSH host key the person compared. The reply's key is signed
+    /// under the watchdog's own context (XOSetupKey.isSignedForWatchdog), and
+    /// every later phase is a setup's. A host older than the phase answers
+    /// `host_outdated`, with words that say so.
+    func beginWatchdog(address: String, pin: String, host: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "watchdog", "address": address, "pin": pin], host: host,
+                         idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
     /// Begin onboarding a hypervisor on ONE chosen machine, pinning the
     /// certificate `xoprobe` saw there. The reply carries the key to seal the
     /// sign-in to, signed by the machine (SetupState).
