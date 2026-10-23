@@ -65,6 +65,9 @@ internal object XoSetup {
         STEPS.firstOrNull { it.first == phase }?.let { return it.second }
         // An install's own steps, before onboarding's (XoDeploy.STEPS).
         XoDeploy.words(phase)?.let { return it }
+        // And adding the watchdog's (XoWatchdog.STEPS), which a job reopened
+        // from its notification is drawn with.
+        XoWatchdog.words(phase)?.let { return it }
         val n = (step + 1).coerceIn(1, maxOf(of, 1))
         return "Step $n of ${maxOf(of, 1)}"
     }

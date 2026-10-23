@@ -64,6 +64,12 @@ import kotlinx.coroutines.launch
  * phone kept from setup. A page that has not loaded, or a pool that shows
  * every pool it had, offers nothing to reconnect (C-2, C-5).
  *
+ * ADD THE RECONNECT WATCHDOG is the last row, for an admin, whatever the page
+ * has read: it goes in through the pool master, not through Xen Orchestra,
+ * so nothing here can tell whether it is needed. The script leaves one that
+ * has it as it was, though its VM is still shut down and started again, which
+ * the sheet says before it asks for anything (XoWatchdogSheet).
+ *
  * THE ROWS ARE THE MACHINES TAB'S CARDS: one shape (RHYTHM 1), the name at a
  * hostname's weight, the state word on the right in a tone that only agrees
  * with it, then what it is and the numbers behind how it is. No row wears a
@@ -84,6 +90,7 @@ internal fun PoolPage(
     onChangePolicy: () -> Unit,
     onDismiss: () -> Unit,
     onReconnect: () -> Unit = {},
+    onAddWatchdog: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val watch = remember(pool.address) { PoolWatch(settings, pool.address, scope) }
@@ -151,6 +158,7 @@ internal fun PoolPage(
             Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
                 OpenRow(Manage.Words.changePolicy) { onChangePolicy() }
                 if (reconnect) OpenRow(Manage.Words.reconnectServers) { onReconnect() }
+                OpenRow(Manage.Words.addWatchdog) { onAddWatchdog() }
             }
         }
     }
