@@ -1,7 +1,7 @@
 # Signed intents: a box obeys a person, not the coordinator
 
-**Status: phases 1 and 2 built; phase 3's switch, delegations and signed
-sign-ins built; the browser signing page and pinned admins not yet.** This is
+**Status: phases 1 and 2 built; phase 3's switch, delegations, signed
+sign-ins and the browser signing page built; pinned admins not yet.** This is
 SEC-COORD-2 in `docs/security.md` §4.1 and the third row of `docs/trust.md`'s
 table. Until phase 3 ships, no document may say the coordinator cannot forge an
 instruction, and none does.
@@ -149,10 +149,10 @@ both unneeded and unsafe:
   would sign whatever the coordinator's script asked it to, and the coordinator
   is the party this is built to distrust. Non-extractable does not help: the
   script never needs to read the key, only to ask it to sign.
-- **What would work.** A page the coordinator neither serves nor can script,
-  on an origin of its own: the minter's, on a hostname the coordinator does not
-  share. That page would hold the key and sign. Until it exists, what `/me`
-  sends is unsigned, and a box that enforces refuses it.
+- **What works.** A page the coordinator neither serves nor can script, on an
+  origin of its own: the minter's, on a hostname the coordinator does not
+  share. That page holds the key and signs. It is built; see "The browser",
+  below.
 
 **MCP callers** (`docs/mcp.md`) are the coordinator acting on a person's
 behalf, so nothing they send can carry the person's signature. Under
@@ -226,7 +226,7 @@ that, and does not remove it:
    reports show no unsigned intents from current apps. Delegations and the
    sign-in signatures above ship here. *The switch, its `signers` mode, the
    delegations and the signed sign-ins are built (below), and `signers` is the
-   default. The browser signing page is not.*
+   default, and the browser signs through a page of the minter's (below).*
 4. **Pinned admins** on each box.
 
 ## Phase 2, as built
@@ -376,19 +376,72 @@ The phones list every delegation under You → Delegations, with Revoke.
 **What an enforcing box still refuses**, because nothing a person signs covers it
 yet:
 
-- the browser page's `connect` and `link`, which wait for the signing page
-  below;
+- the browser page's `connect` and `link` from a browser that has not listed
+  a key with the signing page below, or on a fleet that has no signing page;
 - linked repositories and the runner repository when the minter cannot answer
   and the coordinator asks a box instead (`linkrepo`, `runnerrepo`), unless an
   MCP delegation covers them;
 - a removal's hand-back to a box leaving the fleet (`stop`, `unlink`), which
   that box's owner could ignore anyway.
 
-**The browser signing page is not built.** It needs a hostname the coordinator
-does not serve, an extra GitHub callback, and a way for a member with no phone
-to list a browser's key without the coordinator vouching for it. Until it
-exists, a member who uses only `/me` has no key, which `signers` leaves to take
-at their word.
+## The browser
+
+`/me` (`member-page.js`) is served by the coordinator, so it cannot keep a key
+(above). The key is kept by a **signing page** the minting Worker serves on a
+hostname of its own (`src/fleet/minter/sign-page.js`), and `/me` asks it.
+
+**Where it is.** A repository variable, `FLEETWRIGHT_SIGNING_HOST`, names a
+hostname in a zone the Cloudflare account holds, `sign.fleet.example.com` say.
+The deploy (`.github/workflows/worker.yml`) gives the minter that hostname as a
+Custom Domain, tells it the fleet's origin (`FLEETWRIGHT_FLEET_ORIGIN`), and
+tells the coordinator the page's (`FLEETWRIGHT_SIGNING_ORIGIN`). A Custom
+Domain sends every path to the minter, and its POST routes trust that only the
+coordinator's binding reaches them, so on the signing host the minter answers
+three GETs, the page, GitHub's way back to it and the public key, and every
+other path is a 404. Unset, there is no signing page and `/me` signs nothing,
+as before.
+
+**Listing the browser's key** is a phone's listing, done by the page:
+
+1. The page makes a P-256 key, not extractable, and keeps it in its own
+   origin's IndexedDB. No script can read the private half out, the page's
+   included.
+2. It signs in to GitHub with a PKCE verifier it keeps, in a window of its own.
+   The App's callback is the coordinator's, and a state starting `s.` is sent
+   on to the configured signing origin and nowhere else (`oauth.js`,
+   `signerReturnUrl`). The code is worth nothing without the verifier, so the
+   coordinator seeing it changes nothing; no change to the GitHub App is
+   needed.
+3. It seals the code and verifier to the minter's deposit key, read from its
+   own origin rather than from anything relayed, and the minter finishes the
+   sign-in. Then the vault's `devicekey` request, sealed the same way, lists
+   the key for the address `/me` is signed in as, which the page shows before
+   anything is sent. Both go through `/me`, which adds the browser's fleet
+   credential, to `/api/github/device` and `/api/vault` and nowhere else; `/me`
+   carries bytes it cannot open.
+
+**Signing.** `/me` sends the page each change to an account, and the page shows
+it and signs only what the person approves there, one request at a time. A
+request for one machine (a Claude sign-in) is signed for that machine. One the
+fleet places or sends everywhere (reading what is connected, a pasted token, a
+provider's sign-in finished on the coordinator's page) is a delegation: that
+verb, those exact values, any machine, ten minutes, the same as the phones
+make. A secret is shown by its length. The page signs `connect`, `link`,
+`unlink`, `exchange` and `renew` and nothing else, so a tricked click still
+cannot sign a start or a provision, and only in the name of the address its
+key is listed for.
+
+**What it does not stop.** The coordinator serves `/me`, so it can ask the page
+to sign anything on that list, and the person reading the request on the page
+is the whole of the check. It can also serve a page of its own that looks like
+this one and phish a GitHub authorization, which is the same bound a phone's
+key has: a key is listed by whoever finishes a GitHub sign-in as the person
+(`docs/security.md`, SEC-COORD-2). A browser that clears its site data loses
+its key, and lists a new one the same way; the old one stays on the minter's
+list, unusable, until it is removed from the app under You, Devices.
+
+`test/sign-page.test.js` runs all of it in Chromium against the real minter,
+the coordinator's callback and `/me`.
 
 `docs/security.md` changes in step: SEC-COORD-2 moves from aspirational to
 observed after phase 1, and to enforced only after phase 3 is the default.
