@@ -50,6 +50,23 @@ class IntentSigningTest {
         }
     }
 
+    /**
+     * A delegation's bytes, the same way: the grant as the fixture holds it,
+     * built into the string intent-signature.js `delegationSigningInput`
+     * makes, which is what a box checks the delegation against.
+     */
+    @Test
+    fun buildsTheDelegationBytesTheBoxChecks() {
+        val delegations = fixture.getJSONArray("delegations")
+        assertTrue("the fixture lost its delegations", delegations.length() >= 4)
+        for (i in 0 until delegations.length()) {
+            val d = delegations.getJSONObject(i)
+            val grant = d.getJSONObject("grant")
+            val made = IntentSigning.delegationInput(grant.keys().asSequence().associateWith { grant.get(it) })
+            assertEquals(d.getString("why"), d.getString("input"), made)
+        }
+    }
+
     @Test
     fun namesItsKeyAsTheMinterFilesIt() {
         val key = fixture.getJSONObject("key")

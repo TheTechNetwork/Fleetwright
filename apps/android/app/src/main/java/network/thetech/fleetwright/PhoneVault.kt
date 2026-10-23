@@ -155,6 +155,15 @@ internal class PhoneVault(private val settings: Settings) {
         ask(fleet, "devicekey", JSONObject().put("key", key.jwk).put("label", label)).first
     }
 
+    /**
+     * Take back a delegation, at the minter: the coordinator carries
+     * delegations, so telling it alone would leave a dishonest one carrying
+     * this. Boxes refuse it from the next key list they take.
+     */
+    suspend fun revokeDelegation(fleet: Fleet, id: String, until: Long): Result<String> = runCatching {
+        ask(fleet, "revokedelegation", JSONObject().put("id", id).put("until", until)).first
+    }
+
     companion object {
         val SECRET_NAME = Regex("^[A-Za-z0-9_.-]{1,64}$")
 
