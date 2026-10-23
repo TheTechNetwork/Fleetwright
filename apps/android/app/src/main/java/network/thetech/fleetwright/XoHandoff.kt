@@ -101,6 +101,16 @@ internal object XoHandoff {
         }
 
     /**
+     * The pool master an install began with, from the record this phone keeps
+     * for the Xen Orchestra at [address], or null when the record names none:
+     * only an install's does. What adding the watchdog starts from, never a
+     * guess at one.
+     */
+    fun poolMaster(settings: Settings, address: String): String? = runCatching {
+        JSONObject(settings.secret(tokenName(address)) ?: return@runCatching null).optString("poolMaster")
+    }.getOrNull()?.takeIf { XoSetup.ADDRESS_RE.matches(it) }
+
+    /**
      * Open the token a finished job handed back and keep it. Null when there
      * is nothing to collect: not this phone's job, or not done yet.
      */

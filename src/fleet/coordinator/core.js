@@ -23,7 +23,7 @@ import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -1643,9 +1643,10 @@ export class CoordinatorCore {
   async #setup(spec, params) {
     const phase = String(params.phase);
     const owner = spec.requester?.email ? String(spec.requester.email).toLowerCase() : null;
-    // `deploy` is a `begin` too, for a pool with no Xen Orchestra: placed the
-    // same way, and its job recorded the same way.
-    if (phase === 'begin' || phase === 'deploy') {
+    // `deploy` is a `begin` too, for a pool with no Xen Orchestra, and so is
+    // `watchdog`, for adding the reconnect watchdog to one that predates it:
+    // placed the same way, and their jobs recorded the same way.
+    if (phase === 'begin' || phase === 'deploy' || phase === 'watchdog') {
       if (!params.address) {
         return { ok: false, error: { code: 'bad_params' }, text: `Say where Xen Orchestra answers: xosetup ${phase} needs an address.` };
       }
@@ -1678,11 +1679,11 @@ export class CoordinatorCore {
       const answer = await this.dispatch({ ...spec, preferHost: hostId, setupRouted: true });
       // A MACHINE OLDER THAN INSTALLING refuses the phase as a value it does
       // not know, in words about a parameter. Said instead as what it is.
-      if (phase === 'deploy' && answer?.ok === false && answer?.error?.code === 'bad_params') {
+      if ((phase === 'deploy' || phase === 'watchdog') && answer?.ok === false && answer?.error?.code === 'bad_params') {
         return {
           ok: false,
           error: { code: 'host_outdated' },
-          text: `${hostId} is too old to install Xen Orchestra. Update it and ask again.`,
+          text: `${hostId} is too old to ${phase === 'deploy' ? 'install Xen Orchestra' : 'add the reconnect watchdog'}. Update it and ask again.`,
           hostId,
         };
       }
@@ -2035,7 +2036,7 @@ export class CoordinatorCore {
     // hears only the end, as an ordinary notification.
     const targets = ended ? devices : devices.filter((d) => d.platform !== 'ios');
     if (!targets.length) return;
-    const title = { policy: POLICY_TITLES, deploy: DEPLOY_TITLES, reconnect: RECONNECT_TITLES, setup: SETUP_TITLES }[progress.purpose][progress.state];
+    const title = { policy: POLICY_TITLES, deploy: DEPLOY_TITLES, watchdog: WATCHDOG_TITLES, reconnect: RECONNECT_TITLES, setup: SETUP_TITLES }[progress.purpose][progress.state];
     const body = progress.text || `Step ${Math.min(progress.step + 1, progress.of)} of ${progress.of}`;
     try {
       await this.push.send(targets, {
@@ -7882,6 +7883,7 @@ const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done:
  * token stopped seeing. What the person wants back is the pools, so the end
  * says whether they came back rather than what was done to the servers.
  */
+const WATCHDOG_TITLES = Object.freeze({ running: 'Adding the reconnect watchdog', done: 'Watchdog added', failed: 'The watchdog was not added', cancelled: 'Adding the watchdog cancelled' });
 const RECONNECT_TITLES = Object.freeze({ running: 'Reconnecting Xen Orchestra\u2019s servers', done: 'Pools back', failed: 'The pools did not come back', cancelled: 'Reconnecting cancelled' });
 
 /**
@@ -7892,7 +7894,7 @@ const RECONNECT_TITLES = Object.freeze({ running: 'Reconnecting Xen Orchestra\u2
  * @property {number} of     how many steps there are
  * @property {string} phase  the step's key, or `done`
  * @property {'running'|'done'|'failed'|'cancelled'} state
- * @property {'setup'|'policy'|'deploy'|'reconnect'} purpose  adding a pool, changing what the fleet may use on one,
+ * @property {'setup'|'policy'|'deploy'|'watchdog'|'reconnect'} purpose  adding a pool, changing what the fleet may use on one,
  *   installing Xen Orchestra on a pool that has none and then adding it, or reconnecting Xen Orchestra's
  *   servers for a pool it stopped showing
  * @property {number|null} fill  how far the step now running has got, in thousandths, when the host can
@@ -7942,9 +7944,10 @@ export function narrowProgress(msg) {
   // one is refused like any phase onboarding does not have.
   // A RECONNECT the same way: its steps are its own after onboarding's
   // first two, and a host that says it is one is held to them.
-  const purpose = ['policy', 'deploy', 'reconnect'].includes(msg?.purpose) ? msg.purpose : 'setup';
+  // ADDING THE WATCHDOG the same way again: its steps are its own.
+  const purpose = ['policy', 'deploy', 'watchdog', 'reconnect'].includes(msg?.purpose) ? msg.purpose : 'setup';
   const phase = String(msg?.phase || '');
-  const steps = { policy: XOPOLICY_STEPS, deploy: XODEPLOY_STEPS, reconnect: XORECONNECT_STEPS, setup: XOSETUP_STEPS }[/** @type {SetupProgress['purpose']} */ (purpose)];
+  const steps = { policy: XOPOLICY_STEPS, deploy: XODEPLOY_STEPS, watchdog: XOWATCHDOG_STEPS, reconnect: XORECONNECT_STEPS, setup: XOSETUP_STEPS }[/** @type {SetupProgress['purpose']} */ (purpose)];
   if (!steps.includes(phase) && phase !== 'done') return null;
   return {
     step,

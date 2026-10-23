@@ -114,8 +114,15 @@ internal object XoSetupNotice {
         // core.js; XoReconnect.title). Counts only: the servers' names are
         // sealed to the screen that asked.
         val reconnect = data["purpose"] == XoReconnect.PURPOSE
+        // ADDING THE WATCHDOG takes Xen Orchestra away while it runs, and its
+        // end is whether the watchdog went in (WATCHDOG_TITLES in core.js;
+        // XoWatchdog.title). Whether the VM was started again is the
+        // machine's sentence, which only the screen is sent.
+        val watchdog = data["purpose"] == XoWatchdog.PURPOSE
         val title = if (reconnect) {
             XoReconnect.title(state)
+        } else if (watchdog) {
+            XoWatchdog.title(state)
         } else if (deploy) {
             when (state) {
                 "done" -> "Xen Orchestra installed and added"
@@ -141,16 +148,18 @@ internal object XoSetupNotice {
         val body = when (state) {
             "done" -> when {
                 reconnect -> "Open to see what each server came to."
+                watchdog -> if (hostId.isBlank()) "Open to see how Xen Orchestra was left." else "$hostId finished. Open to see how Xen Orchestra was left."
                 policy -> if (hostId.isBlank()) "Applied." else "$hostId applied it."
                 hostId.isBlank() -> "The pool is in the fleet."
                 else -> "$hostId finished. The pool is in the fleet."
             }
             "failed" -> if (hostId.isBlank()) "Open to see what stopped it." else "Open to see what stopped it on $hostId."
             "cancelled" -> "Stopped between steps, as asked."
-            "waiting" -> if (deploy) "Waiting for the passwords" else "Waiting for the sign-in"
+            "waiting" -> if (deploy) "Waiting for the passwords" else if (watchdog) "Waiting for the root password" else "Waiting for the sign-in"
             else -> listOfNotNull(
                 when {
                     reconnect -> XoReconnect.stepWords(data["phase"], step, of)
+                    watchdog -> XoWatchdog.stepWords(data["phase"], step, of)
                     policy -> XoPolicy.stepWords(data["phase"], step, of)
                     else -> XoSetup.stepWords(data["phase"], step, of)
                 },

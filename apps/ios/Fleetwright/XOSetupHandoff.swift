@@ -127,6 +127,18 @@ enum XOSetupHandoff {
         return nil
     }
 
+    /// The pool master a kept record says its Xen Orchestra was installed
+    /// through, or nil when it names none: only an install's record does
+    /// (`poolMaster`), and for a pool added as it was the field is left empty
+    /// for the person rather than filled with a guess.
+    static func poolMaster(of address: String) -> String? {
+        guard let record = Keychain.get(tokenAccount(address)),
+              let object = try? JSONSerialization.jsonObject(with: Data(record.utf8)) as? [String: Any],
+              let master = object["poolMaster"] as? String, XOSetupKey.isAddress(master)
+        else { return nil }
+        return master
+    }
+
     /// The record a machine sealed, as the JSON kept in the Keychain, or nil
     /// for anything that does not open under this job and address with this
     /// key, or opens to something with no token for that address in it.
