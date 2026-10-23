@@ -34,6 +34,14 @@
 // else. Nothing here is a new authority: the coordinator decides what a caller
 // may do and has not changed.
 //
+// AND IT SIGNS, where the fleet has a signing page (`signer`): a page the
+// minting Worker serves on a hostname of its own (src/fleet/minter/sign-page.js),
+// which keeps this browser's key where script from this origin, which the
+// coordinator serves, cannot reach it. This page opens it, asks it to sign
+// each change to an account, and passes on the two sealed requests listing
+// its key takes (`/api/github/device`, `/api/vault`) with this browser's
+// credential, which it cannot read and does not need to.
+//
 // THE DESIGN READ, which CLAUDE.md requires before any screen. A signed-in
 // utility page for one person's own credentials, in the fleet console's visual
 // language (docs/design-system.md), at this product's dials: ENERGY 1,
@@ -50,7 +58,7 @@
 // The comments are prose for people reading the source and keep the house
 // voice.
 
-import { BROWSER_CREDENTIAL_KEY } from './oauth.js';
+import { BROWSER_CREDENTIAL_KEY, FINISH_DELEGATION_KEY } from './oauth.js';
 
 /** @param {string} s */
 const esc = (s) =>
@@ -244,7 +252,7 @@ export function isMemberPath(path) {
  * being a hole: an anonymous caller gets a form and a stylesheet.
  *
  * @param {{ method: string, path: string }} req
- * @param {{ fleet: string, signIn: { google?: string|null, apple?: string|null } }} deps
+ * @param {{ fleet: string, signIn: { google?: string|null, apple?: string|null }, signer?: string|null }} deps
  * @returns {{ status: number, body: string, contentType: string, headers?: Record<string, string> } | null}
  *   null when the path is not ours, so the caller falls through.
  */
@@ -349,10 +357,12 @@ const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role
 /**
  * The page.
  *
- * @param {{ fleet: string, signIn: { google?: string|null, apple?: string|null } }} deps
+ * @param {{ fleet: string, signIn: { google?: string|null, apple?: string|null }, signer?: string|null }} deps
  */
-function memberPage({ fleet, signIn }) {
+function memberPage({ fleet, signIn, signer = null }) {
   const configured = Boolean(signIn.google || signIn.apple);
+  // Only an https origin is a signing page; anything else is no signing page.
+  const signing = typeof signer === 'string' && /^https:\/\/[A-Za-z0-9.-]+(:\d+)?$/.test(signer) ? signer : null;
   return `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Your credentials: ${esc(fleet)}</title>
@@ -402,6 +412,15 @@ ${signIn.apple ? '<script src="https://appleid.cdn-apple.com/appleauth/static/js
         <button class="link" id="signout">Sign out of this browser</button>
       </div>
     </div>
+    ${signing ? `<div class="card" id="signing">
+      <div class="row">
+        <div>
+          <h2>Signing</h2>
+          <div class="state" id="signing-state"></div>
+        </div>
+        <button id="signing-open">Open the signing page</button>
+      </div>
+    </div>` : ''}
     <div id="providers"></div>
     <p class="say" id="say" role="status"></p>
     <footer>
@@ -414,7 +433,7 @@ ${signIn.apple ? '<script src="https://appleid.cdn-apple.com/appleauth/static/js
   </section>
 </main>
 <script>
-${pageScript(signIn)}
+${pageScript(signIn, signing)}
 </script>
 </body></html>`;
 }
@@ -428,8 +447,9 @@ ${pageScript(signIn)}
  * in authorize-page.js.
  *
  * @param {{ google?: string|null, apple?: string|null }} signIn
+ * @param {string|null} signer  the signing page's origin, or null for none
  */
-function pageScript(signIn) {
+function pageScript(signIn, signer) {
   return `
 // WHERE THE CREDENTIAL LIVES, which docs/wanted.md correctly calls the harder
 // question on the web than it is on a phone. localStorage: it survives the tab
@@ -447,7 +467,11 @@ var KEY = ${scriptJson(BROWSER_CREDENTIAL_KEY)};
 var WHO = 'fleetwright.device';
 var token = null;
 var who = '';
-try { token = localStorage.getItem(KEY); who = localStorage.getItem(WHO) || ''; } catch (e) { token = null; }
+// THE ADDRESS, kept beside the credential, because a signature names the
+// person and the signing page lists its key for one address.
+var EMAIL = 'fleetwright.email';
+var email = '';
+try { token = localStorage.getItem(KEY); who = localStorage.getItem(WHO) || ''; email = localStorage.getItem(EMAIL) || ''; } catch (e) { token = null; }
 
 var out = document.getElementById('out');
 var inn = document.getElementById('in');
@@ -470,8 +494,161 @@ function show() {
   inn.hidden = !token;
   if (token) {
     document.getElementById('who').textContent = who || 'this browser';
+    renderSigning();
+    // A BROWSER THAT SIGNS reads nothing until its signing page is open: an
+    // unsigned read from it is one a box that takes only signed requests
+    // refuses, and the page would show that refusal as the whole answer.
+    if (SIGNER && signerKid && !signing()) {
+      tell(say, 'Open the signing page to read what you have connected. This browser signs what it sends from there.');
+      if (afterReady.indexOf(load) < 0) afterReady.push(load);
+      return;
+    }
     load();
   }
+}
+
+// --- the signing page ---------------------------------------------------------
+//
+// WHERE THIS BROWSER'S KEY IS, which is not here. Script on this origin is the
+// coordinator's to serve, so a key it could reach is a key the coordinator
+// could use; the signing page is the minter's (src/fleet/minter/sign-page.js),
+// and this page only asks it. Each ask waits there for the person to read and
+// sign it, and a decline there comes back as a refusal here with nothing sent.
+var SIGNER = ${scriptJson(signer)};
+var SIGNER_KEY = 'fleetwright.signer';
+var SIGNED_VERBS = ['connect', 'link', 'unlink', 'exchange', 'renew'];
+// The only requests the signing page may have this page send for it: its
+// GitHub sign-in and its vault request, both sealed to the minter.
+var RELAYS = { 'POST /api/github/device': true, 'POST /api/vault': true };
+var signerKid = null;
+try { signerKid = localStorage.getItem(SIGNER_KEY); } catch (e) { signerKid = null; }
+var signerWin = null;
+var signerReady = false;
+var waiting = {};
+var afterReady = [];
+
+function signing() {
+  return Boolean(SIGNER && signerKid && signerReady && signerWin && !signerWin.closed);
+}
+
+/** Opened in the click itself, or the browser blocks it. */
+function openSigner() {
+  if (signerWin && !signerWin.closed) { signerWin.focus(); return; }
+  signerReady = false;
+  signerWin = window.open(SIGNER + '/', 'fleetwright-signer', 'popup,width=480,height=760');
+  if (!signerWin) tell(say, 'The browser did not open the signing page. Allow pop-ups for this page and try again.', true);
+  renderSigning();
+}
+
+function renderSigning() {
+  var card = document.getElementById('signing');
+  if (!card) return;
+  var state = document.getElementById('signing-state');
+  var btn = document.getElementById('signing-open');
+  var open = Boolean(signerWin && !signerWin.closed);
+  // The one card that asks a question: a browser that signs, with nowhere
+  // open to sign in.
+  card.className = 'card' + (signerKid && !open ? ' asking' : '');
+  btn.hidden = !email;
+  btn.textContent = open ? 'Show the signing page' : 'Open the signing page';
+  if (!email) {
+    state.className = 'state';
+    state.textContent = 'Sign out of this browser and in again, so it knows which address to list a signing key for.';
+  } else if (open && signerReady && signerKid) {
+    state.className = 'state on';
+    state.textContent = 'This browser signs what it sends, as ' + email + '. Each request waits on the signing page for you.';
+  } else if (open && signerReady) {
+    state.className = 'state';
+    state.textContent = 'This browser has no signing key yet. List it on the signing page.';
+  } else if (signerKid) {
+    state.className = 'state off';
+    state.textContent = 'This browser signs what it sends, and the signing page is closed. Open it to send anything.';
+  } else {
+    state.className = 'state';
+    state.textContent = 'Machines that take only signed requests refuse what this page sends unsigned. The signing page keeps a key for this browser, on an address the coordinator does not serve.';
+  }
+}
+
+if (SIGNER) {
+  document.getElementById('signing-open').addEventListener('click', openSigner);
+  // A closed signing page is a change of state, and nothing else says so.
+  setInterval(function () {
+    if (signerWin && signerWin.closed) { signerWin = null; signerReady = false; renderSigning(); }
+  }, 1000);
+  window.addEventListener('message', function (e) {
+    if (e.origin !== SIGNER || !signerWin || e.source !== signerWin) return;
+    var m = e.data || {};
+    if (m.type === 'ready') {
+      signerReady = true;
+      signerKid = typeof m.kid === 'string' ? m.kid : null;
+      try { if (signerKid) localStorage.setItem(SIGNER_KEY, signerKid); else localStorage.removeItem(SIGNER_KEY); } catch (x) {}
+      if (!signerKid && email) signerWin.postMessage({ type: 'setup', email: email }, SIGNER);
+      renderSigning();
+      if (signerKid) { var run = afterReady; afterReady = []; run.forEach(function (f) { f(); }); }
+      return;
+    }
+    if (m.type === 'relay') { relayFor(m); return; }
+    if (typeof m.id === 'string' && waiting[m.id]) { var w = waiting[m.id]; delete waiting[m.id]; w(m); }
+  });
+}
+
+/** One sealed request the signing page asked this page to carry. */
+async function relayFor(m) {
+  var reply = { type: 'relayed', id: m.id, status: 0, body: null };
+  if (!RELAYS[String(m.method) + ' ' + String(m.path)] || !token) {
+    reply.body = { ok: false, text: 'This page passes on only the signing page\\u2019s GitHub sign-in and its vault request.' };
+  } else {
+    try {
+      var res = await fetch(m.path, {
+        method: m.method,
+        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+        body: JSON.stringify(m.body || {}),
+      });
+      reply.status = res.status;
+      reply.body = await res.json().catch(function () { return null; });
+    } catch (x) {
+      reply.body = { ok: false, text: 'This browser could not reach the coordinator, so nothing was sent.' };
+    }
+  }
+  if (signerWin && !signerWin.closed) signerWin.postMessage(reply, SIGNER);
+}
+
+/** Ask the signing page, and wait for the person there. A decline is a refusal. */
+function askSigner(msg) {
+  return new Promise(function (resolve, reject) {
+    if (!signing()) { reject(new Error('Open the signing page first. What this browser sends is signed there.')); return; }
+    var id = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+    msg.id = id;
+    var timer = setTimeout(function () {
+      delete waiting[id];
+      reject(new Error('The signing page did not answer in five minutes, so nothing was sent.'));
+    }, 5 * 60 * 1000);
+    waiting[id] = function (m) {
+      clearTimeout(timer);
+      if (m.type === 'declined') reject(new Error(m.text || 'Declined on the signing page, so nothing was sent.'));
+      else resolve(m);
+    };
+    signerWin.postMessage(msg, SIGNER);
+    try { signerWin.focus(); } catch (x) {}
+  });
+}
+
+/** Delegations this page holds for this visit, newest last, and nowhere else. */
+var held = [];
+
+/** Whether a delegation limited to these values covers these parameters, as a box decides it. */
+function covers(match, params) {
+  return Object.keys(match || {}).every(function (k) { return Object.prototype.hasOwnProperty.call(params, k) && String(params[k]) === String(match[k]); });
+}
+
+/** What a delegation may be limited to: the values a box can compare exactly. */
+function matchOf(params) {
+  var out = {};
+  Object.keys(params || {}).slice(0, 16).forEach(function (k) {
+    var v = params[k];
+    if (typeof v === 'string' || (typeof v === 'number' && isFinite(v))) out[k] = v;
+  });
+  return out;
 }
 
 /**
@@ -482,6 +659,32 @@ async function intent(verb, params, host, extra) {
   var body = { verb: verb, params: params || {} };
   if (host) body.host = host;
   if (extra) for (var k in extra) body[k] = extra[k];
+  // SIGNED, when this browser has a key listed. A request for one machine is
+  // signed for that machine. One the fleet places, or sends to every machine,
+  // cannot be: nobody knows the machine yet. That is a delegation, for this
+  // verb with exactly these values, for ten minutes.
+  if (SIGNER && signerKid && SIGNED_VERBS.indexOf(verb) >= 0) {
+    if (host) {
+      var it = { verb: verb, params: params || {}, actor: email, id: crypto.randomUUID(), issuedAt: Date.now() };
+      var signed = await askSigner({ type: 'sign', intent: it, host: host });
+      body.id = it.id;
+      body.sig = signed.sig;
+      body.kid = signed.kid;
+      body.issuedAt = it.issuedAt;
+    } else {
+      // ONE ALREADY SIGNED THAT COVERS THIS, with a minute left, is sent
+      // again rather than asked for again: reading what is connected after
+      // every change would otherwise be a second approval for each one.
+      var have = held.filter(function (h) {
+        return h.grant.verbs.indexOf(verb) >= 0 && h.grant.expires - Date.now() > 60 * 1000 && covers(h.grant.match, params || {});
+      })[0];
+      if (!have) {
+        have = (await askSigner({ type: 'delegate', grant: { verbs: [verb], hosts: ['*'], match: matchOf(params), lifetimeMs: 10 * 60 * 1000 } })).delegation;
+        held = held.filter(function (h) { return h.grant.expires > Date.now(); }).concat([have]).slice(-8);
+      }
+      body.delegation = have;
+    }
+  }
   var res;
   try {
     res = await fetch('/api/intent', {
@@ -512,7 +715,11 @@ async function intent(verb, params, host, extra) {
 function forget() {
   token = null;
   who = '';
-  try { localStorage.removeItem(KEY); localStorage.removeItem(WHO); } catch (e) {}
+  email = '';
+  // The key stays on the signing page, which is its own; this page forgets
+  // that it signs, because the next person here may not.
+  signerKid = null;
+  try { localStorage.removeItem(KEY); localStorage.removeItem(WHO); localStorage.removeItem(EMAIL); localStorage.removeItem(SIGNER_KEY); } catch (e) {}
   show();
 }
 
@@ -640,6 +847,31 @@ async function begin(entry, hosts, step) {
     // field for it. Coming back to this tab reads the fleet again rather
     // than trusting that it worked.
     if (entry.hint) step.appendChild(el('p', 'lede', entry.hint));
+    // A BROWSER THAT SIGNS signs the finish first. The page the provider
+    // sends it back to finishes the sign-in on a machine the fleet picks, so
+    // what it carries is a delegation for that provider's sign-in, for ten
+    // minutes, which it reads from here (oauth.js, finishingPage).
+    if (SIGNER && signerKid && !step.dataset.signed) {
+      var first = el('button', 'primary', 'Sign for this sign-in');
+      var said = el('p', 'say');
+      said.setAttribute('role', 'status');
+      first.addEventListener('click', async function () {
+        first.disabled = true;
+        tell(said, 'Read it on the signing page, and sign it there.');
+        try {
+          var d = await askSigner({ type: 'delegate', grant: { verbs: ['exchange', 'link', 'renew'], hosts: ['*'], match: { provider: entry.provider }, lifetimeMs: 10 * 60 * 1000 } });
+          try { localStorage.setItem(${scriptJson(FINISH_DELEGATION_KEY)} + entry.provider, JSON.stringify(d.delegation)); } catch (x) {}
+          step.dataset.signed = '1';
+          begin(entry, hosts, step);
+        } catch (e) {
+          first.disabled = false;
+          tell(said, e.message, true);
+        }
+      });
+      step.appendChild(first);
+      step.appendChild(said);
+      return;
+    }
     var go = el('a', 'btn', 'Sign in with ' + (entry.label || entry.provider));
     go.href = entry.url;
     go.target = '_blank';
@@ -798,7 +1030,8 @@ async function finish(idToken) {
   }
   token = body.token;
   who = (body.client && body.client.name) || '';
-  try { localStorage.setItem(KEY, token); localStorage.setItem(WHO, who); } catch (e) {}
+  email = String((body.client && body.client.email) || '').toLowerCase();
+  try { localStorage.setItem(KEY, token); localStorage.setItem(WHO, who); localStorage.setItem(EMAIL, email); } catch (e) {}
   show();
 }
 
