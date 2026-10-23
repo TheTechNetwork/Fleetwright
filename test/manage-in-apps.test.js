@@ -270,7 +270,7 @@ test('Android: notifications are applied in the order they arrived', () => {
 });
 
 test('Android: the page is under Machines, on the row that names the pool, and says when it was last looked at', () => {
-  assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}, onReconnect = \{ reconnectVia = null; reconnectFor = address \}\)/);
+  assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}, onReconnect = \{ reconnectVia = null; reconnectFor = address \}, onAddWatchdog = \{ watchdogFor = address \}\)/);
   assert.match(KT_MACHINES, /looked\?\.let \{ Manage\.Words\.rowLooked\(relative\(it\)\.toString\(\)\) \} \?: Manage\.Words\.never/);
   assert.match(bare(KT_SCREEN), /PoolWatch\.Phase\.Live -> watch\.currentLine/);
   assert.match(KT_MODEL, /fun lookedAt\(time: String\) = "Last looked at \$time\. \$closed"/);

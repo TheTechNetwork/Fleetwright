@@ -96,10 +96,12 @@ internal object XoDeploy {
      * Why no machine is offered when none reached the SSH server, with what
      * to check; null when one did, and its row says the rest. Machines too
      * old to look did not find it unreachable, and are named as that.
+     * [doing] is the job in a few words, for adding the watchdog (XoWatchdog),
+     * which asks the same of the same probe.
      */
-    fun nobody(probes: List<Fleet.Probe>, address: String): String? {
+    fun nobody(probes: List<Fleet.Probe>, address: String, doing: String = "install Xen Orchestra"): String? {
         if (probes.isEmpty()) {
-            return "No permanent machine is connected, so nothing could try $address. A machine has to be in the fleet to install Xen Orchestra."
+            return "No permanent machine is connected, so nothing could try $address. A machine has to be in the fleet to $doing."
         }
         if (probes.any { it.ssh?.reachable == true }) return null
         val missed = probes.filter { it.ssh?.reachable == false }.map { it.hostId }.sorted()
@@ -111,7 +113,7 @@ internal object XoDeploy {
                 "is on a network that can reach it: ${missed.joinToString(", ")}."
         }
         if (unsure.isNotEmpty()) lines += "Cannot tell from ${unsure.joinToString(", ")}, which has no ssh-keyscan to look with."
-        if (old.isNotEmpty()) lines += "Too old to install Xen Orchestra, so they did not look: ${old.joinToString(", ")}. Update one, then ask again."
+        if (old.isNotEmpty()) lines += "Too old to $doing, so they did not look: ${old.joinToString(", ")}. Update one, then ask again."
         return lines.joinToString(" ")
     }
 

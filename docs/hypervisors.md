@@ -2260,6 +2260,15 @@ as an install's, which would also make a VM. Then:
    Orchestra to answer. One that was off is left off, with the watchdog on
    its disk.
 
+On Android it is **Add the reconnect watchdog**, an admin's row on the pool's
+page (`XoWatchdogSheet.kt`): the pool master's address, filled in from the
+record an install kept and typed otherwise, a machine that reaches it over
+SSH, its host key compared as an install's is, a sentence saying Xen
+Orchestra goes away for a minute or two, and the root password. The address
+the phone keeps the pool under is sealed beside it, and is how the machine
+finds the VM. The steps follow on the screen and in the ongoing
+notification, and the end is the machine's own sentence.
+
 A VM this job stopped is started again on every way out, cancel included,
 before the connection that can start it closes, and the job's last words say
 whether it was. Xen Orchestra is unavailable for the minute or two this

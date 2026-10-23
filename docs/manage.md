@@ -103,9 +103,10 @@ an admin, beside what it governs; it opens the same policy flow as before.
 **Reconnect its servers** is the row beside it, for an admin, drawn only once
 the page has loaded and shows no pool, or lacks a pool name this phone kept
 from setup (`hypervisors.md`, "When a pool goes missing").
-**Add the reconnect watchdog** is under it, for an admin, on iOS: drawn
-whatever the page shows, because it goes in through the pool master and
-nothing the phone reads says whether the watchdog is already there
+**Add the reconnect watchdog** is there too, for an admin, on both phones
+(under Reconnect on iOS, last on Android): drawn whatever the page shows,
+because it goes in through the pool master and nothing the phone reads says
+whether the watchdog is already there
 (`hypervisors.md`, "When Xen Orchestra loses a pool").
 The Hypervisors section keeps its gate: it is drawn for a known admin, since
 the pools in it are the ones an admin set up from this phone.
