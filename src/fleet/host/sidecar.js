@@ -63,7 +63,7 @@ import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
-import { needsSignature } from '../protocol/intent-signature.js';
+import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
@@ -178,7 +178,7 @@ export class Sidecar {
    *   hostId?: string,
    *   labels?: string[],
    *   maxSkewMs?: number,
-   *   requireSigned?: boolean,
+   *   requireSigned?: boolean|'off'|'signers'|'all',
    *   logger?: Logger,
    *   healthIntervalMs?: number,
    *   promptText?: boolean,
@@ -298,8 +298,12 @@ export class Sidecar {
     this.maxSkewMs = maxSkewMs;
     // TAKES ONLY WHAT A PERSON SIGNED (FLEETWRIGHT_REQUIRE_SIGNED, phase 3 of
     // docs/signed-intents.md): the operator of this box said so in its own
-    // env file, and nothing the coordinator sends can turn it off.
-    this.requireSigned = requireSigned === true;
+    // env file, and nothing the coordinator sends can turn it off. `all`
+    // refuses what is not signed or delegated from anybody; `signers` from the
+    // people this box has been shown a key for, and anything with nobody named,
+    // which on the box's own hub is the box itself (src/core/accounts.js).
+    /** @type {'off'|'signers'|'all'} */
+    this.requireSigned = requireSigned === true || requireSigned === 'all' ? 'all' : requireSigned === 'signers' ? 'signers' : 'off';
     this.log = logger;
     this.healthIntervalMs = healthIntervalMs;
     /** @type {any} */
@@ -638,6 +642,20 @@ export class Sidecar {
   }
 
   /**
+   * Whether this box refuses this intent unless a person signed or delegated
+   * it. `signers` covers nobody named, because a box runs that as itself, and
+   * anybody it has been shown a key for, because a person who signs is a
+   * person a forged request in their name would be a forgery of.
+   *
+   * @param {{ actor?: string }} intent
+   */
+  #enforces(intent) {
+    if (this.requireSigned === 'all') return true;
+    if (this.requireSigned === 'off') return false;
+    return !actorEmail(intent.actor) || Boolean(this.intentKeys?.isSigner(intent.actor));
+  }
+
+  /**
    * Turn one inbound envelope into a reply. Exposed rather than private so a
    * test can drive it with no transport at all.
    *
@@ -707,14 +725,15 @@ export class Sidecar {
     if (this.intentKeys) {
       try {
         verdict = (await this.intentKeys.check(intent, this.hostId)).verdict;
-        if (verdict === 'bad-signature' || verdict === 'unknown-key') {
-          this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries a signature that does not hold (${verdict})${this.requireSigned ? '' : '; not refused, as this box does not enforce'}`);
+        if (verdict === 'bad-signature' || verdict === 'unknown-key' || verdict === 'revoked') {
+          const what = intent.sig ? 'a signature' : 'a delegation';
+          this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries ${what} that does not hold (${verdict})${this.requireSigned !== 'off' ? '' : '; not refused, as this box does not enforce'}`);
         }
       } catch (e) {
         this.log.warn(`sidecar: could not check ${intent.id}'s signature: ${/** @type {Error} */ (e).message}`);
       }
     }
-    if (this.requireSigned && verdict !== 'signed' && needsSignature(intent.verb)) {
+    if (this.#enforces(intent) && verdict !== 'signed' && verdict !== 'delegated' && needsSignature(intent.verb)) {
       const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null);
       this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'}: ${why}`);
       return {
@@ -1794,13 +1813,15 @@ export class Sidecar {
       // key, which cannot ask for the list at all.
       // And whether it refuses what is not signed (FLEETWRIGHT_REQUIRE_SIGNED),
       // which is what the coordinator reads to refuse there first.
-      ...(this.intentKeys || this.requireSigned
+      ...(this.intentKeys || this.requireSigned !== 'off'
         ? {
             signatures: {
               ...(this.intentKeys
                 ? this.intentKeys.report()
                 : { keys: null, keysAt: null, checked: {}, problem: 'this box has no key of its own to ask the minter for the key list with, so it can check no signature' }),
-              ...(this.requireSigned ? { enforcing: true } : {}),
+              // `true` for everybody, as it always read; `signers` for the
+              // people this box has seen a key for and nobody named.
+              ...(this.requireSigned === 'all' ? { enforcing: true } : this.requireSigned === 'signers' ? { enforcing: 'signers' } : {}),
             },
           }
         : {}),
@@ -2614,7 +2635,7 @@ export function commandMeta(verb, params = {}, actor = '') {
  * sentence (Sidecar#handle). Each verdict is a different thing to fix, so each
  * says which.
  *
- * @param {string|null} verdict  checkIntentSignature's, or null when this box
+ * @param {string|null} verdict  checkIntentSignature's or checkDelegation's, or null when this box
  *   could not check at all
  * @param {{ verb: string, actor?: string }} intent
  * @param {string|null} problem  what the box's key list is missing, if anything
@@ -2630,6 +2651,10 @@ export function unsignedReason(verdict, intent, problem) {
       return `the signature on this ${intent.verb} does not hold for what arrived, so it was changed after it was signed`;
     case 'no-directory':
       return `this box has no key list from the minter to check the signature on this ${intent.verb} with${problem ? ` (${problem})` : ''}`;
+    case 'not-covered':
+      return `what ${who} delegated does not cover this ${intent.verb} here, now`;
+    case 'revoked':
+      return `${who} revoked the delegation this ${intent.verb} carries`;
     default:
       return `this box cannot check signatures${problem ? ` (${problem})` : ''}`;
   }
