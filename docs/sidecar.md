@@ -185,13 +185,15 @@ Every setting is in `src/fleet/host/config.js`. Four are worth calling out:
   passes the freshness check against a cache that has already forgotten it, and
   runs a second time. That is the exact failure the idempotency key exists to
   prevent, reintroduced by two constants drifting apart.
-- **`FLEETWRIGHT_REQUIRE_SIGNED=1` makes this box take only what a person
-  signed** on their phone, with a key the fleet's minter lists for them
-  ([`signed-intents.md`](signed-intents.md)). Off by default, because the
-  fleet's own work signs nothing yet: a box with it set refuses sign-in
-  finishes, held starts, keeping machines ready, linked repositories, the MCP
-  tools and the browser page. Health counts the unsigned intents a box has had,
-  which is what turning it on would refuse.
+- **`FLEETWRIGHT_REQUIRE_SIGNED` decides whom this box takes unsigned work
+  from** ([`signed-intents.md`](signed-intents.md)). `all` refuses anything a
+  person did not sign on their phone, or delegate earlier, with a key the
+  fleet's minter lists for them. `signers` does the same for the people this box
+  has been shown a key for, and for anything with nobody named, which the box
+  would otherwise run as itself. `off` takes everything and counts it. Health
+  says how many unsigned and delegated intents the box has had, which is what
+  turning it on would refuse. A value that is none of the three stops the
+  sidecar starting rather than being read as `off`.
 - **`FLEETWRIGHT_IDLE_RESTART_MINUTES` defaults to 60, and 0 turns it off.** A
   session whose pane has not changed at all for that long is stopped and
   resumed. The useful case is one that wedged overnight, where the fix is
