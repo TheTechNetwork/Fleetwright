@@ -47,6 +47,20 @@ object IntentSigning {
     fun input(actor: String, id: String, issuedAt: Long, params: Map<String, Any?>, verb: String, host: String): String =
         signingInput("intent", mapOf("actor" to actor, "host" to host, "id" to id, "issuedAt" to issuedAt, "params" to params, "verb" to verb))
 
+    /**
+     * The bytes signed for a delegation, as `delegationSigningInput`: the
+     * grant, every field of it (`v`, `id`, `actor`, `verbs`, `hosts`, `match`,
+     * `issuedAt`, `expires`).
+     */
+    fun delegationInput(grant: Map<String, Any?>): String = signingInput("delegation", grant)
+
+    /**
+     * Verbs a box answers whoever asks, or takes from the fleet with nobody's
+     * signature (`UNSIGNED_VERBS` and `COORDINATOR_UNSIGNED_VERBS` in
+     * intent-signature.js): nothing to sign or delegate for these.
+     */
+    val unsignedVerbs = setOf("list", "status", "health", "updates", "profiles", "forgetperson", "vmlogin", "mint")
+
     /** `agent-fleet/v1/<context>\n<canonical JSON>`, as src/fleet/crypto.js `signingInput`. */
     fun signingInput(context: String, payload: Any?): String = "agent-fleet/v1/$context\n${canonical(payload)}"
 
@@ -219,6 +233,27 @@ internal class DeviceSigning(private val settings: Settings) {
         val issuedAt = System.currentTimeMillis()
         val sig = runCatching { key.sign(IntentSigning.input(email, id, issuedAt, params, verb, host)) }.getOrNull() ?: return null
         return Signed(sig, key.kid, issuedAt)
+    }
+
+    /**
+     * A delegation: what this phone signs to let the fleet send [verbs] to
+     * [hosts] (`["*"]` for whichever box it places them on) in this person's
+     * name for [lifetimeMs], each parameter in [match] exactly as given
+     * (docs/signed-intents.md, "Delegations"). A box checks it as it checks a
+     * signature. Null until this phone's key is listed, as [signature] is.
+     */
+    fun delegation(verbs: List<String>, hosts: List<String>, match: Map<String, Any?>, lifetimeMs: Long): JSONObject? {
+        if (email.isEmpty()) return null
+        val key = runCatching { DeviceKey.load() }.getOrNull() ?: return null
+        if (settings.deviceKeyListed != "${key.kid} $email") return null
+        val now = System.currentTimeMillis()
+        // A delegation's id is what it is revoked by, so never reused.
+        val grant = mapOf(
+            "v" to 1, "id" to java.util.UUID.randomUUID().toString().replace("-", ""), "actor" to email,
+            "verbs" to verbs, "hosts" to hosts, "match" to match, "issuedAt" to now, "expires" to now + lifetimeMs,
+        )
+        val sig = runCatching { key.sign(IntentSigning.delegationInput(grant)) }.getOrNull() ?: return null
+        return JSONObject().put("grant", JSONObject(grant)).put("sig", sig).put("kid", key.kid)
     }
 
     /**
