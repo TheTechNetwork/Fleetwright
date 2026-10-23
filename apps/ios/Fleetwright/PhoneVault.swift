@@ -186,6 +186,13 @@ struct PhoneVault {
         ]).text
     }
 
+    /// Take back a delegation, at the minter: the coordinator carries
+    /// delegations, so telling it alone would leave a dishonest one carrying
+    /// this. Boxes refuse it from the next key list they take.
+    func revokeDelegation(_ fleet: Fleet, id: String, until: Double) async throws -> String {
+        try await ask(fleet, op: "revokedelegation", extra: ["id": id, "until": Int(until)]).text
+    }
+
     static func isSecretName(_ s: String) -> Bool {
         (1...64).contains(s.count) && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }
     }
