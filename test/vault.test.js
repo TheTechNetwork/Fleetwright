@@ -841,19 +841,24 @@ test('a phone lists its signing key under its own address, and a box is given th
   assert.deepEqual((await m.keys(office)).payload.people, []);
 });
 
-test('a box checks the signature on an intent with keys the minter signed, which the coordinator carries and cannot add to', async (t) => {
-  // docs/signed-intents.md, phase 1: the real minter, coordinator and sidecar,
-  // with the box asking through the coordinator for the list and fetching the
-  // minter's key from the fleet's address itself. Counted and reported, and
-  // nothing refused yet.
+/**
+ * The real minter, coordinator and sidecar for one box, `ops-box`, with Eli's
+ * iPhone key listed and the box asking through the coordinator for the list and
+ * fetching the minter's key from the fleet's address itself
+ * (docs/signed-intents.md). The coordinator is not told whether the box
+ * enforces, so what the box does with an unsigned intent is the box's own.
+ *
+ * @param {import('node:test').TestContext} t @param {{ requireSigned?: boolean }} [opts]
+ */
+async function signingFleet(t, { requireSigned = false } = {}) {
   const m = await minter();
   t.after(m.restore);
   const real = globalThis.fetch;
-  /** What the fleet's address serves for the minter's key, when a test changes it. @type {any} */
-  let served = null;
+  /** What the fleet's address serves for the minter's key, when a test changes it. @type {{ value: any }} */
+  const served = { value: null };
   globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init) => {
     if (String(url) !== `https://fleet.test${KEY_PATH}`) return real(url, init);
-    return served ? json(200, served) : m.service.fetch(String(url), init);
+    return served.value ? json(200, served.value) : m.service.fetch(String(url), init);
   });
   const iphone = await generateKeyPair();
   assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' })).ok, true);
@@ -871,18 +876,15 @@ test('a box checks the signature on an intent with keys the minter signed, which
   const sidecarOn = () => new Sidecar({
     hub: new HubClient({ baseUrl: stub.baseUrl, token: null }),
     transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { void core.onHostMessage('ops-box', f); return true; } }),
-    hostId: 'ops-box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, xoStateDir: dir, logger: quiet,
+    hostId: 'ops-box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, xoStateDir: dir, logger: quiet, requireSigned,
     vaultKey: { publicJwk: boxKeys.publicJwk, sign: (/** @type {string} */ msg) => sign(boxKeys.privateJwk, msg) },
   });
-  let sidecar = sidecarOn();
+  /** The box as it runs now; `restart` replaces it, as a restarted sidecar would be. */
+  const box = { sidecar: sidecarOn(), restart() { this.sidecar = sidecarOn(); } };
   core.registry.connect('ops-box', (/** @type {any} */ f) => {
-    void sidecar.handle(f).then((reply) => { if (reply?.kind === 'reply') void core.onHostMessage('ops-box', reply); });
+    void box.sidecar.handle(f).then((reply) => { if (reply?.kind === 'reply') void core.onHostMessage('ops-box', reply); });
   }, {});
   await core.onHostMessage('ops-box', { v: PROTOCOL_VERSION, kind: 'health', hostId: 'ops-box', health: { hostId: 'ops-box', protocol: PROTOCOL_VERSION, labels: [], maxSessions: 5, running: 0, free: 5, resumable: [], sessions: [], loadavg: [0, 0, 0], loggedIn: true, claudeAccounts: 1, hub: { reachable: true }, sandboxed: true } });
-
-  // THE LIST, through the coordinator, taken because the minter signed it.
-  assert.equal(await sidecar.intentKeys?.refresh(), true, sidecar.intentKeys?.problem ?? '');
-  assert.ok(existsSync(join(dir, 'minter-signing.json')), 'the minter’s key is kept on the box');
 
   let n = 0;
   /** A start from Eli's phone, signed over `signed` and sent with `params`. @param {{ signed?: any, params?: any, key?: any, keyId?: string, unsigned?: boolean }} [o] */
@@ -893,42 +895,105 @@ test('a box checks the signature on an intent with keys the minter signed, which
     const sig = await sign((o.key ?? iphone).privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params: o.signed ?? params, verb: 'start' }, 'ops-box'));
     return core.dispatch({ verb: 'start', params, id, actor: ELI, requester: { email: ELI, admin: true }, preferHost: 'ops-box', ...(o.unsigned ? {} : { sig, kid: o.keyId ?? kid, issuedAt }) });
   };
+  /** A coordinator that adds a key of its own to the list it carries. */
+  const poisonList = async () => {
+    const mallet = await generateKeyPair();
+    const malletKey = { kty: 'EC', crv: 'P-256', x: String(mallet.publicJwk.x), y: String(mallet.publicJwk.y) };
+    const malletId = await boxKeyHash(malletKey);
+    core.minter = /** @type {any} */ ({
+      vault: async (/** @type {string} */ route, /** @type {any} */ ask) => {
+        const r = await m.binding.vault(route, ask);
+        if (route === 'keys' && r.ok) r.payload.people[0].keys.push({ kid: malletId, key: malletKey, label: 'not a phone' });
+        return r;
+      },
+    });
+    return { mallet, malletKey, malletId, heal: () => { core.minter = /** @type {any} */ (m.binding); } };
+  };
+  return { m, core, box, dir, served, start, poisonList };
+}
+
+test('a box checks the signature on an intent with keys the minter signed, which the coordinator carries and cannot add to', async (t) => {
+  // Phase 1: counted and reported, and nothing refused on a box that does not
+  // enforce.
+  const { m, box, dir, served, start, poisonList } = await signingFleet(t);
+
+  // THE LIST, through the coordinator, taken because the minter signed it.
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  assert.ok(existsSync(join(dir, 'minter-signing.json')), 'the minter’s key is kept on the box');
+
   assert.equal((await start()).ok, true);
-  // Changed on the way: run, because phase 1 refuses nothing, and counted.
+  // Changed on the way: run, because this box refuses nothing, and counted.
   const changed = await start({ signed: { name: 'job-a' }, params: { name: 'job-b' } });
-  assert.equal(changed.ok, true, 'phase 1 refused something');
+  assert.equal(changed.ok, true, 'a box that does not enforce refused something');
   assert.equal((await start({ unsigned: true })).ok, true);
-  let seen = /** @type {any} */ (await sidecar.health()).signatures;
+  let seen = /** @type {any} */ (await box.sidecar.health()).signatures;
   assert.equal(seen.keys, 1);
   assert.deepEqual([seen.checked.signed, seen.checked['bad-signature'], seen.checked.unsigned], [1, 1, 1]);
   assert.equal(seen.problem, undefined);
+  assert.equal(seen.enforcing, undefined);
 
   // A COORDINATOR ADDING A KEY OF ITS OWN to the list: the list is not taken,
   // so an intent signed with that key is a key the box does not know.
-  const mallet = await generateKeyPair();
-  const malletKey = { kty: 'EC', crv: 'P-256', x: String(mallet.publicJwk.x), y: String(mallet.publicJwk.y) };
-  const malletId = await boxKeyHash(malletKey);
-  core.minter = /** @type {any} */ ({
-    vault: async (/** @type {string} */ route, /** @type {any} */ ask) => {
-      const r = await m.binding.vault(route, ask);
-      if (route === 'keys' && r.ok) r.payload.people[0].keys.push({ kid: malletId, key: malletKey, label: 'not a phone' });
-      return r;
-    },
-  });
-  assert.equal(await sidecar.intentKeys?.refresh(), false);
-  assert.match(String(sidecar.intentKeys?.problem), /not signed by the minter’s key/);
+  const { mallet, malletKey, malletId, heal } = await poisonList();
+  assert.equal(await box.sidecar.intentKeys?.refresh(), false);
+  assert.match(String(box.sidecar.intentKeys?.problem), /not signed by the minter’s key/);
   assert.equal((await start({ key: mallet, keyId: malletId })).ok, true);
-  seen = /** @type {any} */ (await sidecar.health()).signatures;
+  seen = /** @type {any} */ (await box.sidecar.health()).signatures;
   assert.equal(seen.checked['unknown-key'], 1, 'a key the coordinator slipped into the list was taken');
-  core.minter = /** @type {any} */ (m.binding);
+  heal();
 
   // THE FLEET'S ADDRESS SERVING ANOTHER KEY, after a restart of the box: the
   // kept one stays, and no list is taken until somebody deletes it.
-  sidecar = sidecarOn();
-  served = { ...(await m.lookup()), signing: malletKey };
-  assert.equal(await sidecar.intentKeys?.refresh(), false);
-  assert.match(String(/** @type {any} */ (await sidecar.health()).signatures.problem), /different signing key/);
+  box.restart();
+  served.value = { ...(await m.lookup()), signing: malletKey };
+  assert.equal(await box.sidecar.intentKeys?.refresh(), false);
+  assert.match(String(/** @type {any} */ (await box.sidecar.health()).signatures.problem), /different signing key/);
   rmSync(join(dir, 'minter-signing.json'));
-  served = null;
-  assert.equal(await sidecar.intentKeys?.refresh(), true, 'the minter’s own key, kept again once the old one was deleted');
+  served.value = null;
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, 'the minter’s own key, kept again once the old one was deleted');
+});
+
+test('a box run with FLEETWRIGHT_REQUIRE_SIGNED refuses what a person did not sign, whatever the coordinator says', async (t) => {
+  // Phase 3, on the box. The coordinator here is not told the box enforces,
+  // so everything below reaches the box and the box alone decides.
+  const { core, box, start, poisonList } = await signingFleet(t, { requireSigned: true });
+
+  // BEFORE THE BOX HAS A KEY LIST: refused, even signed. Enforcement that
+  // lapsed until the list arrived would be enforcement a coordinator could
+  // lapse by holding the list back.
+  const early = await start();
+  assert.equal(early.error?.code, 'signature_required');
+  assert.match(early.text, /ops-box takes only requests a person signed, and this box has no key list from the minter/);
+
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  assert.equal((await start()).ok, true, 'a start Eli’s phone signed was refused');
+
+  const unsigned = await start({ unsigned: true });
+  assert.equal(unsigned.error?.code, 'signature_required');
+  assert.match(unsigned.text, /this start from eli@example\.com was not signed\. Nothing was done/);
+
+  const changed = await start({ signed: { name: 'job-a' }, params: { name: 'job-b' } });
+  assert.equal(changed.error?.code, 'signature_required');
+  assert.match(changed.text, /does not hold for what arrived/);
+
+  // A key the coordinator slipped in is not one the box takes, and the list
+  // carrying it is not taken: the box keeps the last list the minter signed,
+  // and that list does not have the key.
+  const { mallet, malletId, heal } = await poisonList();
+  assert.equal(await box.sidecar.intentKeys?.refresh(), false);
+  const forged = await start({ key: mallet, keyId: malletId });
+  assert.equal(forged.error?.code, 'signature_required');
+  assert.match(forged.text, /signed by a key the minter does not list for eli@example\.com/);
+  heal();
+
+  // WHAT NEEDS NO SIGNATURE STILL WORKS: a read every box answers, and one of
+  // the three things the coordinator says alone.
+  const host = core.registry.get('ops-box');
+  const listed = await core.send(host, { verb: 'list', params: {} });
+  assert.notEqual(listed.error?.code, 'signature_required');
+  const forget = await core.send(host, { verb: 'forgetperson', params: {}, actor: ELI });
+  assert.notEqual(forget.error?.code, 'signature_required');
+
+  const seen = /** @type {any} */ (await box.sidecar.health()).signatures;
+  assert.equal(seen.enforcing, true, 'the box does not say it enforces');
 });

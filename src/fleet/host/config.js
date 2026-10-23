@@ -107,6 +107,15 @@ export function loadSidecarConfig(env = process.env) {
     // host clock is not reliably synchronised.
     maxSkewMs: Math.max(0, int(env, 'FLEETWRIGHT_MAX_SKEW_MS', 300_000)),
 
+    // Take only what a person signed on their phone (docs/signed-intents.md,
+    // phase 3). Off by default: the coordinator still sends work of its own
+    // with nobody's signature on it (finishing a sign-in, a held start, keeping
+    // machines ready), and a box that enforces refuses all of it until the
+    // delegations that phase describes exist. Set 1 on a box whose people use
+    // the app, and whose operator wants a coordinator that was broken into to
+    // be unable to act on it as them.
+    requireSigned: str(env, 'FLEETWRIGHT_REQUIRE_SIGNED', '0') === '1',
+
     // May a notification quote the session — a path, a command line — or only
     // the question this fleet wrote? Off by default: the fuller form reaches a
     // lock screen through somebody else's servers, and the fleet may not belong
