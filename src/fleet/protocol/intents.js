@@ -54,6 +54,7 @@
 
 import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../../core/text.js';
 import { SEAL_KEY_RE } from '../seal.js';
+import { delegationShape } from './intent-signature.js';
 
 /** A device's P-256 signature over an intent as WebCrypto makes one: r || s, 64 bytes, base64url (intent-signature.js). */
 export const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
@@ -2039,6 +2040,9 @@ export function isMutating(verb) {
  * @property {string} [actor]
  * @property {string} [sig]  a device's signature over the intent (intent-signature.js)
  * @property {string} [kid]  the id of the key that made it
+ * @property {{ grant: any, sig: string, kid: string }} [delegation]  what the
+ *   person signed earlier to let the coordinator send this in their name
+ *   (intent-signature.js, checkDelegation)
  */
 
 /**
@@ -2182,6 +2186,9 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
   // docs/signed-intents.md). Kept only whole and well formed, both or neither,
   // so a box never checks half of one. A box from before them ignores both.
   const signed = typeof env.sig === 'string' && SIG_RE.test(env.sig) && typeof env.kid === 'string' && KID_RE.test(env.kid);
+  // A DELEGATION, carried the same way: only whole and in shape, never
+  // required here, and worth what the box finds it covers.
+  const delegation = signed ? null : delegationShape(env.delegation);
 
   return {
     ok: true,
@@ -2199,6 +2206,7 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
       issuedAt: /** @type {number} */ (env.issuedAt),
       ...(env.actor ? { actor: /** @type {string} */ (env.actor) } : {}),
       ...(signed ? { sig: /** @type {string} */ (env.sig), kid: /** @type {string} */ (env.kid) } : {}),
+      ...(delegation ? { delegation } : {}),
     },
   };
 }
@@ -2313,10 +2321,11 @@ function checkParam(verb, key, ps, value) {
  * does not need pulling — the coordinator is the thing that is behind, and
  * telling the box to update would be the fleet prescribing its own symptom.
  *
- * @param {{ id: string, verb: string, params?: Record<string, string|number>, actor?: string, issuedAt?: number, speaks?: unknown, sig?: string, kid?: string }} opts
+ * @param {{ id: string, verb: string, params?: Record<string, string|number>, actor?: string, issuedAt?: number, speaks?: unknown, sig?: string, kid?: string,
+ *   delegation?: { grant: any, sig: string, kid: string } }} opts
  * @returns {Intent}
  */
-export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(), speaks = null, sig = undefined, kid = undefined }) {
+export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(), speaks = null, sig = undefined, kid = undefined, delegation = undefined }) {
   // The version to SPEAK: the highest both ends understand. No higher than our
   // own, no higher than the host's reported max, and never below our own floor —
   // a host under the floor is reachable only by the rescue re-stamp below.
@@ -2355,7 +2364,7 @@ export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(
     params: spoken,
     issuedAt,
     ...(actor ? { actor } : {}),
-    ...(sig && kid ? { sig, kid } : {}),
+    ...(sig && kid ? { sig, kid } : delegation ? { delegation } : {}),
   };
   const checked = validateIntent(intent);
   if (checked.ok === false) throw new Error(`refusing to send a malformed intent: ${checked.error}`);

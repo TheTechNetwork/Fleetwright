@@ -75,6 +75,165 @@ export function intentSigningInput(intent, host) {
   });
 }
 
+// A DELEGATION: what a person signs on their phone to let the coordinator
+// send something in their name later, when they are not there to sign it
+// (docs/signed-intents.md, "Delegations"). Keeping machines ready, finishing a
+// sign-in the phone started, an MCP client acting for them, a start held until
+// a runner joins: each is the coordinator asking a box with nobody holding the
+// phone at that moment, and each is bounded by what the person signed.
+//
+// WHAT IT NAMES, all of it signed: the person (`actor`), the verbs, the boxes
+// (`hosts`, or `['*']` for whichever box the fleet places it on), parameters the
+// intent must carry exactly (`match`), and a window (`issuedAt` to `expires`).
+// The box checks every one, against the same key list it checks a signature
+// with, so a delegation is worth no more than the phone that made it.
+//
+// WHAT A COORDINATOR CAN STILL DO WITH ONE is exactly that, as many times as it
+// likes inside the window: it is a standing permission, not a single request,
+// and that is the whole reason a phone keeps them short and narrow. `id` is what
+// the person revokes it by: the minter lists revoked ids beside the keys, and a
+// box refuses a revoked one from the next list it takes.
+
+/** The longest a delegation may run, whatever its maker asked for. */
+export const DELEGATION_MAX_MS = 31 * 24 * 60 * 60_000;
+/** How far ahead of a box's clock a delegation may say it was made. */
+export const DELEGATION_SKEW_MS = 5 * 60_000;
+/** Size bounds a box holds a delegation to before it checks anything. */
+export const DELEGATION_LIMITS = Object.freeze({ verbs: 32, hosts: 32, match: 16, value: 8192, bytes: 16 * 1024 });
+
+const DELEGATION_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+const DELEGATION_HOST_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * @typedef {object} Grant
+ * @property {1} v
+ * @property {string} id
+ * @property {string} actor
+ * @property {string[]} verbs
+ * @property {string[]} hosts  box ids, or exactly ['*']
+ * @property {Record<string, string|number>} match
+ * @property {number} issuedAt
+ * @property {number} expires
+ */
+
+/**
+ * The grant in a delegation, if it is in the shape one takes, else null.
+ * Shape only: whether it holds is checkDelegation's to say.
+ *
+ * @param {unknown} raw
+ * @returns {Grant|null}
+ */
+export function grantShape(raw) {
+  const g = /** @type {any} */ (raw);
+  if (!g || typeof g !== 'object' || Array.isArray(g) || g.v !== 1) return null;
+  if (typeof g.id !== 'string' || !DELEGATION_ID_RE.test(g.id)) return null;
+  if (!actorEmail(g.actor)) return null;
+  const verbs = Array.isArray(g.verbs) ? g.verbs : null;
+  if (!verbs || !verbs.length || verbs.length > DELEGATION_LIMITS.verbs) return null;
+  if (verbs.some((/** @type {unknown} */ v) => typeof v !== 'string' || !Object.hasOwn(VERBS, v) || !needsSignature(/** @type {string} */ (v)))) return null;
+  const hosts = Array.isArray(g.hosts) ? g.hosts : null;
+  if (!hosts || !hosts.length || hosts.length > DELEGATION_LIMITS.hosts) return null;
+  if (!(hosts.length === 1 && hosts[0] === '*') && hosts.some((/** @type {unknown} */ h) => typeof h !== 'string' || !DELEGATION_HOST_RE.test(h))) return null;
+  const match = g.match ?? {};
+  if (!match || typeof match !== 'object' || Array.isArray(match) || Object.keys(match).length > DELEGATION_LIMITS.match) return null;
+  for (const v of Object.values(match)) {
+    if (typeof v === 'number' ? !Number.isFinite(v) : typeof v !== 'string' || v.length > DELEGATION_LIMITS.value) return null;
+  }
+  if (!Number.isSafeInteger(g.issuedAt) || !Number.isSafeInteger(g.expires)) return null;
+  if (g.expires <= g.issuedAt || g.expires - g.issuedAt > DELEGATION_MAX_MS) return null;
+  return {
+    v: 1, id: g.id, actor: String(g.actor), verbs: [...verbs], hosts: [...hosts],
+    match: /** @type {Record<string, string|number>} */ ({ ...match }), issuedAt: g.issuedAt, expires: g.expires,
+  };
+}
+
+/**
+ * The delegation an envelope carries, whole and in shape, or null. The size is
+ * held before anything else, because a box takes this from the coordinator.
+ *
+ * @param {unknown} raw
+ * @returns {{ grant: Grant, sig: string, kid: string }|null}
+ */
+export function delegationShape(raw) {
+  const d = /** @type {any} */ (raw);
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+  let bytes = 0;
+  try {
+    bytes = JSON.stringify(d).length;
+  } catch {
+    return null;
+  }
+  if (bytes > DELEGATION_LIMITS.bytes) return null;
+  if (typeof d.sig !== 'string' || !SIG_RE.test(d.sig) || typeof d.kid !== 'string' || !KID_RE.test(d.kid)) return null;
+  const grant = grantShape(d.grant);
+  return grant ? { grant, sig: d.sig, kid: d.kid } : null;
+}
+
+/**
+ * The bytes a device signs for a delegation.
+ *
+ * @param {Grant} grant
+ */
+export function delegationSigningInput(grant) {
+  return signingInput('delegation', {
+    actor: grant.actor, expires: grant.expires, hosts: grant.hosts, id: grant.id,
+    issuedAt: grant.issuedAt, match: grant.match, v: 1, verbs: grant.verbs,
+  });
+}
+
+/**
+ * Why a grant does not cover this intent to this box at this time, or null when
+ * it does. The coordinator asks this to choose which delegation to carry, and a
+ * box asks it again before it takes one.
+ *
+ * @param {Grant} grant
+ * @param {{ actor?: string, verb: string, params?: Record<string, unknown> }} intent
+ * @param {string} host
+ * @param {number} now
+ * @returns {string|null}
+ */
+export function delegationGap(grant, intent, host, now) {
+  if (actorEmail(intent.actor) !== actorEmail(grant.actor)) return `it was signed by ${grant.actor}, not ${intent.actor ?? 'nobody'}`;
+  if (!grant.verbs.includes(intent.verb)) return `it does not cover ${intent.verb}`;
+  if (!(grant.hosts[0] === '*' || grant.hosts.includes(host))) return `it does not cover ${host}`;
+  const params = intent.params ?? {};
+  for (const [k, v] of Object.entries(grant.match)) {
+    if (!Object.hasOwn(params, k) || String(params[k]) !== String(v)) return `it covers ${intent.verb} only with ${k} as signed`;
+  }
+  if (now > grant.expires) return 'it has run out';
+  if (grant.issuedAt - now > DELEGATION_SKEW_MS) return 'it says it was made in the future';
+  return null;
+}
+
+/**
+ * @typedef {'delegated'|'unknown-key'|'bad-signature'|'no-directory'|'not-covered'|'revoked'} DelegationVerdict
+ */
+
+/**
+ * What a box finds when it checks a delegation an unsigned intent carries.
+ *
+ *   delegated     signed by a key the minter lists for the person, covering this intent, here, now
+ *   not-covered   a real delegation that does not cover this intent (verb, box, parameters or time)
+ *   revoked       its maker revoked it, and the minter's list says so
+ *   unknown-key, bad-signature, no-directory  as checkIntentSignature
+ *
+ * @param {{ intent: { actor?: string, verb: string, params?: Record<string, unknown> }, delegation: unknown, host: string,
+ *   directory: Map<string, DirectoryKey[]>|null, revoked?: Map<string, Set<string>>|null, now: number }} args
+ * @returns {Promise<{ verdict: DelegationVerdict, label?: string, gap?: string, id?: string }>}
+ */
+export async function checkDelegation({ intent, delegation, host, directory, revoked = null, now }) {
+  const d = delegationShape(delegation);
+  if (!d) return { verdict: 'bad-signature' };
+  if (!directory) return { verdict: 'no-directory', id: d.grant.id };
+  const person = actorEmail(d.grant.actor);
+  const listed = person ? (directory.get(person) ?? []).find((k) => k.kid === d.kid) : undefined;
+  if (!listed) return { verdict: 'unknown-key', id: d.grant.id };
+  if (!(await verify(listed.key, d.sig, delegationSigningInput(d.grant)))) return { verdict: 'bad-signature', label: listed.label, id: d.grant.id };
+  if (person && revoked?.get(person)?.has(d.grant.id)) return { verdict: 'revoked', label: listed.label, id: d.grant.id };
+  const gap = delegationGap(d.grant, intent, host, now);
+  return gap ? { verdict: 'not-covered', label: listed.label, gap, id: d.grant.id } : { verdict: 'delegated', label: listed.label, id: d.grant.id };
+}
+
 /**
  * A key's id, the same for the same key however it was exported.
  *
