@@ -616,6 +616,12 @@ export class Sidecar {
         // way to the pool, which a phone does not carry.
         if (!p.address) return { ok: false, text: 'Say where the pool master answers.' };
         return this.xoSetups.beginDeploy({ address: String(p.address), pin: p.pin ? String(p.pin) : null, relay: p.relay ? String(p.relay) : null, actor });
+      case 'watchdog':
+        // A begin for adding the reconnect watchdog to a Xen Orchestra that
+        // predates it, through the pool master that runs its VM, pinned as
+        // an install is (xo-watchdog.js).
+        if (!p.address) return { ok: false, text: 'Say where the pool master answers.' };
+        return this.xoSetups.beginWatchdog({ address: String(p.address), pin: p.pin ? String(p.pin) : null, relay: p.relay ? String(p.relay) : null, actor });
       case 'run':
         return this.xoSetups.run({ job: String(p.job || ''), sealed: String(p.sealed || ''), actor });
       case 'status':

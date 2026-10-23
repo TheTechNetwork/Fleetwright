@@ -288,6 +288,24 @@ export const XORECONNECT_STEPS = Object.freeze([
   'wait', // until the servers touched are connected and their pools show again
 ]);
 
+/**
+ * What adding Fleetwright's reconnect watchdog to a Xen Orchestra that
+ * predates it does, in order, by key. Xen Orchestra's API cannot install a
+ * plugin, so it goes in through the pool master that runs Xen Orchestra's VM,
+ * with the root password from the phone, used once: the VM is shut down,
+ * its disk opened on the pool master, the watchdog put in with the same
+ * script a person would run inside it (xo-plugin/add-reconnect-watchdog.sh),
+ * and the VM started again. docs/hypervisors.md, "When Xen Orchestra loses a
+ * pool".
+ */
+export const XOWATCHDOG_STEPS = Object.freeze([
+  'reach', // SSH to the pool master, held to the host key the person accepted, as an install's
+  'find', // Xen Orchestra's VM, by the address it answers on, and its disk
+  'stop', // a clean shutdown; never forced
+  'add', // its disk opened on the pool master, the watchdog put in, the disk closed again
+  'start', // started again if it was running, and waited for until Xen Orchestra answers
+]);
+
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
 //
 // A VERSION BUMP IS A FLAG DAY, and this is the second one. Adding a VERB is
@@ -1821,6 +1839,14 @@ export const VERBS = Object.freeze({
   //           `policy` came: an older host refuses the value it does not
   //           know, loudly, and nothing needs a version.
   //
+  //   watchdog  `begin` for adding the reconnect watchdog to a Xen Orchestra
+  //           installed without it, through the pool master that runs its
+  //           VM: pinned and signed as `deploy` is, under its own context
+  //           (`xowatchdog-key`). The sealed `run` carries the pool master's
+  //           root password and the address Xen Orchestra answers on, and the
+  //           machine runs XOWATCHDOG_STEPS, reporting as `purpose: watchdog`.
+  //           Nothing is handed back. A phase for the reason `deploy` is one.
+  //
   //   A RECONNECT is a `begin` and a `run` like any setup's, whose sealed
   //           sign-in says `purpose: 'reconnect'`, as a policy job's says its
   //           own: the machine reconnects Xen Orchestra's servers for a pool
@@ -1838,7 +1864,7 @@ export const VERBS = Object.freeze({
   // answers `unknown_verb` and strands nothing.
   xosetup: {
     params: {
-      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel', 'policy', 'deploy'] },
+      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel', 'policy', 'deploy', 'watchdog'] },
       job: {
         type: 'text',
         required: false,
