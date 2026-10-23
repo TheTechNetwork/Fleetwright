@@ -113,7 +113,7 @@ test('Android: only a whole-vault grant for that machine, by that whole key, ski
   assert.match(rule, /val hash = keyHash\(jwk\)/);
   assert.match(vault, /fun keyHash\(jwk: JSONObject\): String \{[\s\S]*?return digest\.joinToString\(""\)/);
   // Both sheets that seal an admin's secret to a machine ask it the same way.
-  for (const name of ['HypervisorSheet.kt', 'XoDeploySheet.kt']) {
+  for (const name of ['HypervisorSheet.kt', 'XoDeploySheet.kt', 'XoWatchdogSheet.kt']) {
     const sheet = file(name);
     assert.ok(sheet.includes('PhoneVault.approves(it, hostId, setup.hostKey!!)'), name);
     assert.ok(!/grants\?\.any \{ it\.fingerprint == fingerprint \}/.test(sheet), `${name} approves any grant with the same prefix`);
