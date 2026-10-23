@@ -225,8 +225,8 @@ that, and does not remove it:
    what phase 1 counted, then becomes the default once a release's health
    reports show no unsigned intents from current apps. Delegations and the
    sign-in signatures above ship here. *The switch, its `signers` mode, the
-   delegations and the signed sign-ins are built (below). The browser signing
-   page is not.*
+   delegations and the signed sign-ins are built (below), and `signers` is the
+   default. The browser signing page is not.*
 4. **Pinned admins** on each box.
 
 ## Phase 2, as built
@@ -281,8 +281,8 @@ and `link` and `unlink` across the fleet.
 nowhere the coordinator can reach, in one of three ways:
 
 - `off` takes everything and counts it.
-- `signers` refuses what is not signed or delegated by anybody this box has been
-  shown a key for, and anything with nobody named. A box runs an intent with
+- `signers`, the default, refuses what is not signed or delegated by anybody
+  this box has been shown a key for, and anything with nobody named. A box runs an intent with
   nobody named as itself (`src/core/accounts.js`, the box's own row), so leaving
   that open would let a coordinator drop the name and act as the box.
 - `all` refuses what is not signed or delegated, from anybody.
