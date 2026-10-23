@@ -2302,8 +2302,11 @@ filesystem will not open for writing or the script refuses, the VM started
 again and said to be, one that will not start named, one that was off left
 off, and an install's sealed password not opened as this.
 `test/xosetup-coordinator.test.js` holds the phase's placement and its
-progress. **Not run:** a real xo-server loading it, a real pool master
-opening a VM's disk, or a real pool being lost and found.
+progress. **Run on a real one** on 23 Oct 2026, from a shell: the script on
+a Xen Orchestra a Fleetwright install made before the watchdog (Debian 13,
+built 21 Oct), which added it to the build and to `xo-install.cfg`, and
+xo-server registering it the first time it started. **Not run:** a real pool
+master opening a VM's disk, or a real pool being lost and found.
 
 ### Next: a pool's first machine image
 
