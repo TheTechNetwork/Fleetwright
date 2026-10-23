@@ -54,6 +54,24 @@ enum XOSetupKey {
     /// {address, job, key, pin}. A setup's signature does not pass for it,
     /// nor one over another pool master's key.
     static func isSignedForDeploy(key: String, keySig: String, hostKey: Fleet.Host.PublicKey, address: String, job: String, pin: String) -> Bool {
+        isSignedOverHostKey(deploySigningPrefix, key: key, keySig: keySig, hostKey: hostKey, address: address, job: job, pin: pin)
+    }
+
+    static let watchdogSigningPrefix = "agent-fleet/v1/xowatchdog-key\n"
+
+    /// And for adding the reconnect watchdog, which is begun as an install
+    /// is and signed the same way under a context of its own
+    /// (`xowatchdog-key`), so neither job's key passes for the other's: an
+    /// install's key would be sent a root password that makes a VM with it.
+    static func isSignedForWatchdog(key: String, keySig: String, hostKey: Fleet.Host.PublicKey, address: String, job: String, pin: String) -> Bool {
+        isSignedOverHostKey(watchdogSigningPrefix, key: key, keySig: keySig, hostKey: hostKey, address: address, job: job, pin: pin)
+    }
+
+    /// The check both jobs through a pool master share: only the context
+    /// differs, and the pin is always a host key's digest, never empty,
+    /// because there is no plain SSH for a person to accept.
+    private static func isSignedOverHostKey(_ prefix: String, key: String, keySig: String, hostKey: Fleet.Host.PublicKey,
+                                            address: String, job: String, pin: String) -> Bool {
         guard isJob(job), isPin(pin), Seal.isKey(key), isAddress(address),
               hostKey.kty == "EC", hostKey.crv == "P-256",
               let x = Seal.unb64(hostKey.x), x.count == 32,
@@ -62,7 +80,7 @@ enum XOSetupKey {
               let publicKey = try? P256.Signing.PublicKey(x963Representation: Data([0x04]) + x + y),
               let signature = try? P256.Signing.ECDSASignature(rawRepresentation: raw)
         else { return false }
-        let signed = deploySigningPrefix + "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(key)\",\"pin\":\"\(pin)\"}"
+        let signed = prefix + "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(key)\",\"pin\":\"\(pin)\"}"
         return publicKey.isValidSignature(signature, for: Data(signed.utf8))
     }
 
