@@ -158,8 +158,9 @@ struct XOSetupLines: View {
                     .tint(Design.Palette.active)
             }
             // A change to what the fleet may use is not a setup, and nor is
-            // reconnecting a pool's servers.
+            // reconnecting a pool's servers, or adding the watchdog.
             Text(purpose == "reconnect" ? "Xen Orchestra’s servers, on \(hostId)"
+                 : purpose == "watchdog" ? "The reconnect watchdog, on \(hostId)"
                  : purpose == "policy" ? "What the fleet may use, on \(hostId)" : "Hypervisor setup on \(hostId)")
                 .fleetType(.micro)
                 .foregroundStyle(Design.Palette.inkDim)
