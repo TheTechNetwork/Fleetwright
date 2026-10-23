@@ -24,8 +24,10 @@
 // box can never disagree about them: signingInput('intent', …) in the form
 // every other signature in the fleet takes (src/fleet/crypto.js).
 //
-// PHASE 1 ENFORCES NOTHING. checkIntentSignature says what it found, and the
-// sidecar counts it; nothing is refused for it yet.
+// ENFORCED ONLY WHERE A BOX ASKS FOR IT. checkIntentSignature says what it
+// found and the sidecar counts it everywhere; a box run with
+// FLEETWRIGHT_REQUIRE_SIGNED=1 also refuses an intent `needsSignature` names
+// that is not signed by a key the minter lists (phase 3).
 
 import { signingInput, verify } from '../crypto.js';
 import { VERBS, SIG_RE, KID_RE } from './intents.js';
@@ -34,6 +36,27 @@ export { SIG_RE, KID_RE };
 
 /** Verbs a box answers whoever asks, because what they say a box reports by itself. */
 export const UNSIGNED_VERBS = Object.freeze(['list', 'status', 'health', 'updates', 'profiles']);
+
+/**
+ * What the coordinator sends with nobody asking at that moment, and a box that
+ * enforces still takes unsigned (docs/signed-intents.md, "What the coordinator
+ * still says alone"). `forgetperson` can only take away, which a coordinator
+ * that stopped relaying could do anyway; a box checks `vmlogin` against the
+ * machines it made itself, and the minter checks GitHub's own job token behind
+ * `mint`. Nothing else the coordinator says alone is on this list: each of
+ * those waits for the delegations and signed sign-ins phase 3 describes, and
+ * an enforcing box refuses it until then.
+ */
+export const COORDINATOR_UNSIGNED_VERBS = Object.freeze(['forgetperson', 'vmlogin', 'mint']);
+
+/**
+ * Whether a box that enforces refuses this verb unless a person signed it.
+ *
+ * @param {string} verb
+ */
+export function needsSignature(verb) {
+  return !UNSIGNED_VERBS.includes(verb) && !COORDINATOR_UNSIGNED_VERBS.includes(verb);
+}
 
 /**
  * The bytes a device signs for one intent to one box.

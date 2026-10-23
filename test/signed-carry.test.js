@@ -28,12 +28,14 @@ const BUILD = { name: 'nightly', status: 'running', createdBy: `fleet:${NINA}`, 
 const health = (hostId, protocol = PROTOCOL_VERSION) => ({
   hostId, protocol, labels: [], maxSessions: 5, running: 0, free: 5, resumable: [], sessions: hostId === 'box-b' ? [BUILD] : [],
   loadavg: [0, 0, 0], loggedIn: true, claudeAccounts: 1, hub: { reachable: true }, sandboxed: true,
+  // box-strict runs with FLEETWRIGHT_REQUIRE_SIGNED=1, as its health says.
+  ...(hostId === 'box-strict' ? { signatures: { keys: 1, keysAt: Date.now(), checked: {}, enforcing: true } } : {}),
 });
 
 async function fleet() {
   const core = new CoordinatorCore({ intentTimeoutMs: 2_000, logger: QUIET });
   /** @type {Record<string, any[]>} */
-  const sent = { 'box-a': [], 'box-b': [], 'box-old': [] };
+  const sent = { 'box-a': [], 'box-b': [], 'box-old': [], 'box-strict': [] };
   for (const id of Object.keys(sent)) {
     core.hostConnected(id, (/** @type {any} */ msg) => {
       sent[id].push(msg);
@@ -47,14 +49,15 @@ async function fleet() {
   let n = 0;
   /**
    * A request from Nina's phone, signed for `host` over the params it sends.
-   * @param {string} verb @param {Record<string, unknown>} params @param {string} host
+   * Unsigned, with `{ unsigned: true }`: the app before its key is listed, or MCP.
+   * @param {string} verb @param {Record<string, unknown>} params @param {string} host @param {{ unsigned?: boolean }} [opts]
    */
-  const ask = async (verb, params, host) => {
+  const ask = async (verb, params, host, { unsigned = false } = {}) => {
     const id = `signed-intent-${String(++n).padStart(4, '0')}`;
     const issuedAt = Date.now();
     const sig = await sign(privateJwk, intentSigningInput({ actor: NINA, id, issuedAt, params, verb }, host));
     const before = Object.fromEntries(Object.entries(sent).map(([h, frames]) => [h, frames.length]));
-    const r = await core.dispatch({ verb, params, id, actor: NINA, requester: { email: NINA, admin: true }, ...(host ? { preferHost: host } : {}), sig, kid, issuedAt });
+    const r = await core.dispatch({ verb, params, id, actor: NINA, requester: { email: NINA, admin: true }, ...(host ? { preferHost: host } : {}), ...(unsigned ? {} : { sig, kid, issuedAt }) });
     /** The intents this request put on each socket. */
     const frames = Object.entries(sent).flatMap(([h, all]) => all.slice(before[h]).filter((m) => m.kind === 'intent').map((m) => ({ host: h, ...m })));
     return { r, frames, sig };
@@ -109,4 +112,37 @@ test('a signed session verb is carried to the box holding the session, and sent 
     const elsewhere = await ask(verb, params, 'box-a');
     assert.deepEqual(elsewhere.frames.map((f) => [f.host, f.sig]), [['box-b', undefined]], `${verb} signed for another box`);
   }
+});
+
+// A BOX THAT TAKES ONLY SIGNED REQUESTS says so in its health, and the
+// coordinator refuses there what the box would refuse, saying which of two
+// things is true that the box cannot tell apart: nobody signed it, or somebody
+// did and the fleet changed it. Nothing is sent either way, and what needs no
+// signature still goes.
+test('a box that enforces is sent what a person signed, and nothing unsigned that needs a signature', async () => {
+  const { ask } = await fleet();
+
+  const signed = await ask('start', { name: 'strict-ok' }, 'box-strict');
+  assert.equal(signed.r.ok, true, signed.r.text);
+  assert.deepEqual(signed.frames.map((f) => [f.host, f.sig]), [['box-strict', signed.sig]]);
+
+  const bare = await ask('start', { name: 'strict-bare' }, 'box-strict', { unsigned: true });
+  assert.equal(bare.r.error?.code, 'signature_required');
+  assert.match(bare.r.text, /box-strict takes only requests a person signed on their phone, and this one was not signed/);
+  assert.deepEqual(bare.frames, []);
+
+  // Signed, then tidied here: checkParams collapses the two spaces.
+  const changed = await ask('start', { name: 'strict-tidy', title: 'two  spaces' }, 'box-strict');
+  assert.equal(changed.r.error?.code, 'signature_required');
+  assert.match(changed.r.text, /changed on its way through the fleet/);
+  assert.deepEqual(changed.frames, []);
+
+  // `list` needs no signature anywhere, so the fan-out still reaches it.
+  const listed = await ask('list', {}, '', { unsigned: true });
+  assert.ok(listed.frames.some((f) => f.host === 'box-strict'), 'list did not reach the enforcing box');
+
+  // And a box that does not enforce still takes the unsigned request.
+  const elsewhere = await ask('start', { name: 'relaxed' }, 'box-a', { unsigned: true });
+  assert.equal(elsewhere.r.ok, true, elsewhere.r.text);
+  assert.deepEqual(elsewhere.frames.map((f) => f.host), ['box-a']);
 });

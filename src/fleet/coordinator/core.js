@@ -21,7 +21,7 @@ import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
 import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
-import { intentSigningInput } from '../protocol/intent-signature.js';
+import { intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
@@ -3353,6 +3353,15 @@ export class CoordinatorCore {
       } else {
         this.log.warn(`coordinator: ${built.verb} ${built.id} goes to ${host?.hostId ?? 'a box'} without its signature: it is not what was signed for ${over.host || 'no box'}`);
       }
+    }
+    // A BOX THAT TAKES ONLY SIGNED REQUESTS (FLEETWRIGHT_REQUIRE_SIGNED on it,
+    // said in its health) would refuse this unsigned, so it is refused here,
+    // with what is true about this request that the box cannot know: whether
+    // a person signed it and the fleet changed it, or nobody signed it at all.
+    // The box still refuses it itself if one reaches it; this only says why
+    // first, and sends nothing.
+    if (host?.health?.signatures?.enforcing === true && !intent.sig && needsSignature(intent.verb)) {
+      return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed)));
     }
 
     // A waiter already holds this id: refuse loudly rather than clobber it.
@@ -8095,4 +8104,27 @@ export function deviceText(r) {
   return r.error?.code === 'not_yours'
     ? 'That device is somebody else\u2019s. Removing other people\u2019s devices needs an admin credential on this fleet.'
     : 'That device was not registered.';
+}
+
+/**
+ * Said when a box takes only signed requests and this one would reach it
+ * unsigned (CoordinatorCore#send). Two different afternoons, so two sentences:
+ * a person signed it and something here changed it on the way, which signing
+ * again from the same place will not fix; or nothing signed it, which is the
+ * app before its key is listed, the MCP tools, the browser page, or the
+ * fleet's own work.
+ *
+ * @param {string} hostId @param {boolean} wasSigned
+ */
+function signatureRequired(hostId, wasSigned) {
+  return {
+    ok: false,
+    error: { code: 'signature_required' },
+    text: wasSigned
+      ? `${hostId} takes only requests a person signed, and this one was changed on its way through the fleet ` +
+        '(a value was tidied, or a setting this box is too old for was left out), so your signature no longer holds. Nothing was sent.'
+      : `${hostId} takes only requests a person signed on their phone, and this one was not signed. ` +
+        'The app signs once your phone’s key is listed, which it does after you sign in to GitHub under Runners. ' +
+        'The MCP tools, the browser page and the fleet’s own work sign nothing yet. Nothing was sent.',
+  };
 }
