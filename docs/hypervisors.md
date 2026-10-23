@@ -2226,9 +2226,49 @@ last step loads it and keeps it loading as well, saying whether it is there:
 "It reconnects a pool it loses by itself", or that it is not on this Xen
 Orchestra, so a pool it loses waits for Reconnect.
 
-**On a Xen Orchestra installed without it**, one installed from source some
-other way or by a Fleetwright from before it, it is added once, as root on
-the Xen Orchestra machine, from a copy of `xo-plugin`:
+**On a Xen Orchestra installed without it**, one installed by a Fleetwright
+from before it or from source some other way, there are two ways in.
+
+*From the app, through the pool master.* Asked for, about one with no shell
+on it: *"There has to be a way to install the watchdog via the app."* Xen
+Orchestra's API can load a plugin and cannot install one, and one Fleetwright
+installed has no login (the `xo` account's key is one nobody holds). What
+does reach inside it is the pool master that runs its VM, with the root
+password the phone already seals for an install. So `xosetup` has a phase
+`watchdog` (XOWATCHDOG_STEPS, `src/fleet/host/xo-watchdog.js`), begun and
+pinned as an install is: the pool master's SSH host key compared, the job's
+key signed under its own context (`xowatchdog-key`), and the root password
+and Xen Orchestra's address sealed under their own name
+(`xowatchdogAad`), so a root password sealed for this can never be opened
+as an install's, which would also make a VM. Then:
+
+1. **reach** the pool master, held to that key, the password used once;
+2. **find** Xen Orchestra's VM by the address it answers on, as its guest
+   agent reports it, or by the name an install gives it when it is stopped
+   and exactly one VM has it; its system disk; and that the pool master can
+   open that disk at all (not on storage local to another host). Two VMs
+   that could be it are refused;
+3. **stop** it with a clean shutdown, never a forced one;
+4. **add**: the disk plugged into the pool master's own domain, the
+   filesystem holding `/opt/xo` found by mounting each read-only first, then
+   mounted for writing, and `add-reconnect-watchdog.sh --no-restart` run
+   inside it with `chroot`, with `/dev` and `/proc` bound in. The same script
+   a person runs from a shell, so it writes what that would and nothing
+   else. Unmounted, unplugged and the VBD destroyed by a trap, however it
+   went;
+5. **start** it again if it was running, and wait up to five minutes for Xen
+   Orchestra to answer. One that was off is left off, with the watchdog on
+   its disk.
+
+A VM this job stopped is started again on every way out, cancel included,
+before the connection that can start it closes, and the job's last words say
+whether it was. Xen Orchestra is unavailable for the minute or two this
+takes. The pool master's kernel is old (4.19 on XCP-ng 8.3); the filesystem
+of Debian 13's cloud image, which an install uses, has no feature it refuses
+to write (its superblock was read for this), and one that has is refused
+before anything is written, with the VM started again.
+
+*From a shell on that machine*, as root, from a copy of `xo-plugin`:
 
 ```sh
 scp -r xo-plugin root@<xen orchestra>:/root/
@@ -2240,11 +2280,7 @@ bundled plugins in, it puts it beside the installer too and adds it to what
 `xo-install.cfg` already names, so updates keep it; and it restarts
 xo-server, which connects every enabled server as it starts, so a pool lost
 right now comes back with it. Where the installer has no bundled plugins it
-says that the next update leaves the watchdog out. **It needs a shell on
-that machine**, and a Xen Orchestra Fleetwright installed has no login (the
-`xo` account's key is one nobody holds), so one of those gets it by being
-installed again with this release, or from the VM's console by whoever can
-sign in there.
+says that the next update leaves the watchdog out.
 
 **What has run, and what has not.** `test/xo-reconnect-plugin.test.js` drives
 the plugin against a stand-in that keeps xo-server's rules (connect refuses
@@ -2257,8 +2293,17 @@ it now and for later builds, once; a current one left as it was; a wrong
 directory refused with nothing changed. `test/xo-deploy.test.js` checks the
 plugin reaches the installer and that the configuration still names it once
 the deploy script's own line is appended, and `test/xo-setup.test.js` that
-setup loads it. **Not run:** a real xo-server loading it, or a real pool
-being lost and found.
+setup loads it. `test/xo-watchdog.test.js` runs the way in through the pool
+master against a stand-in for its own domain that keeps XAPI's rules (a disk
+opened there only while its VM is off, a VM started only once its disk is
+given back): the VM found by address and by name and refused when it is not
+certain, the files the script is handed, the disk given back when the
+filesystem will not open for writing or the script refuses, the VM started
+again and said to be, one that will not start named, one that was off left
+off, and an install's sealed password not opened as this.
+`test/xosetup-coordinator.test.js` holds the phase's placement and its
+progress. **Not run:** a real xo-server loading it, a real pool master
+opening a VM's disk, or a real pool being lost and found.
 
 ### Next: a pool's first machine image
 
