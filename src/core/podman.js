@@ -1009,23 +1009,35 @@ function seedVaultToken(cfg, volume, picked) {
  * `chmod 600` after it, so the file is never readable at any point of its
  * existence rather than only at the end.
  *
+ * WRITTEN BESIDE AND RENAMED IN, never truncated in place, because this runs
+ * against the volume of a session that is still going: the vault's renewed
+ * login is put in while Claude Code is reading it. Claude Code reads its
+ * credentials file again whenever it changes, and one that read the file
+ * between `>` emptying it and the write filling it answered that turn with
+ * "Not logged in · Please run /login" — measured on 2.1.306 against a
+ * loopback stand-in, not supposed. A rename is one step for a reader: the
+ * old file or the new one, never neither. The other kind of login is removed
+ * after the new one is in place, for the same reason.
+ *
  * Exported for the test that pins that property, because the container that
  * would prove it does not run in CI.
  *
  * @param {Array<{ name: string, data: Buffer }>} files  basenames under /dest
- * @param {string[]} [remove]  basenames under /dest to delete first
+ * @param {string[]} [remove]  basenames under /dest to delete once the files are in
  */
 export function seedScript(files, remove = []) {
   const lines = ['set -e', 'umask 077'];
-  for (const name of remove) {
+  const seedable = (/** @type {string} */ name) => {
     if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error(`not a seedable name: ${name}`);
-    lines.push(`rm -f '/dest/${name}'`);
-  }
+    return name;
+  };
   for (const { name, data } of files) {
-    if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error(`not a seedable name: ${name}`);
-    lines.push(`printf '%s' '${data.toString('base64')}' | base64 -d > '/dest/${name}'`);
-    lines.push(`chmod 600 '/dest/${name}'`);
+    const dest = `/dest/${seedable(name)}`;
+    lines.push(`printf '%s' '${data.toString('base64')}' | base64 -d > '${dest}.seed'`);
+    lines.push(`chmod 600 '${dest}.seed'`);
+    lines.push(`mv -f '${dest}.seed' '${dest}'`);
   }
+  for (const name of remove) lines.push(`rm -f '/dest/${seedable(name)}'`);
   return `${lines.join('\n')}\n`;
 }
 
