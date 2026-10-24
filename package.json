@@ -41,7 +41,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "jose": "6.2.12",
+    "jose": "6.2.13",
     "oauth4webapi": "3.8.8"
   },
   "cloudflare": {
