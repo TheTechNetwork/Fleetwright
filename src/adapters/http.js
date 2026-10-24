@@ -40,7 +40,7 @@ import { unsafeSandboxArgs } from '../core/sandbox-args.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
 import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
-import { applyVault, vaultClaudePeople } from '../core/vault-store.js';
+import { applyVault, vaultClaudePeople, vaultBox } from '../core/vault-store.js';
 import { refreshVaultSessions } from '../core/vault-sessions.js';
 import { forgetPerson } from '../core/forget-person.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
@@ -264,9 +264,13 @@ export class HttpAdapter {
         // it for its own command line: a fleet person's session runs on their
         // vault's and nothing else (podman.js, pickCredentialSource), so a box
         // holding only vault logins counted nobody and was marked degraded.
+        // On a vault box the linked ones are left out: nothing there runs on
+        // them, the box's own command line included (accounts.js,
+        // operatorAccount), so counting them said a session could start on an
+        // account no session is given.
         claudeAccounts: (() => {
           try {
-            return new Accounts(this.cfg.stateDir).list().length + vaultClaudePeople(this.cfg);
+            return (vaultBox(this.cfg) ? 0 : new Accounts(this.cfg.stateDir).list().length) + vaultClaudePeople(this.cfg);
           } catch {
             return null;
           }

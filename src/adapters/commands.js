@@ -120,8 +120,8 @@ import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
-import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
-import { heldFor, vaultToken } from '../core/vault-store.js';
+import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW, operatorAccount } from '../core/accounts.js';
+import { heldFor, vaultToken, vaultBox, vaultClaudePeople } from '../core/vault-store.js';
 import { runnerAuthKind, runnerAuthFor } from '../core/runner-login.js';
 import { checkClaudeAuth, describeTokenCheck } from '../core/claude-token-check.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
@@ -398,6 +398,34 @@ function parseResumeChoice(word) {
 }
 
 /**
+ * The refusal a link made on this box gets, or null where one may be made.
+ *
+ * NOTHING IS LINKED ON A VAULT BOX (vault-store.js, "A VAULT BOX"). Its own
+ * command line, local web page and chat run as a person who approved it, on
+ * what that person keeps in their vault (accounts.js, operatorAccount), so a
+ * token or a Claude login linked here would be used by nobody, and would be
+ * the second copy of somebody's credential that the vault exists to end. Said
+ * where the link would have been made, with where it is made instead.
+ * Forgetting one already here (`unlink`, `/login logout`, `/accounts remove`)
+ * still works: that is how the copies go.
+ *
+ * `row` is whose link it would be. Only the box's own row is refused: a fleet
+ * person's, made through the fleet, is the coordinator's to refuse.
+ *
+ * @param {Ctx} ctx @param {string|symbol|null} row
+ * @returns {{ ok: false, text: string }|null}
+ */
+function vaultLinkRefusal(ctx, row) {
+  if (row !== HOST_ROW || !vaultBox(ctx.cfg)) return null;
+  const host = ctx.cfg.hostname || 'This box';
+  return {
+    ok: false,
+    text: `${host} takes every credential from the vault of somebody who approved it, so nothing is linked on it — `
+      + `keep it under You › Credentials in the app or on the vault page in a browser, and approve ${ctx.cfg.hostname || 'this machine'}.`,
+  };
+}
+
+/**
  * What is connected on this box, for the person asking, plus what could be.
  *
  * ONE PLACE THAT KNOWS ABOUT BOTH KINDS OF CREDENTIAL. Claude is an OAuth
@@ -563,7 +591,9 @@ async function verifyClaude(ctx) {
     // to link what they already kept — and a kept token that was revoked was
     // reported as nothing at all while every session on the runner stopped
     // at "401 OAuth access token is invalid".
-    const auth = runnerAuthFor(ctx.cfg, emailFromActor(ctx.actor));
+    // The person the pick named when it is a vault token: on a vault box,
+    // the operator, for somebody on the box itself (accounts.js).
+    const auth = runnerAuthFor(ctx.cfg, emailFromActor(ctx.actor) ?? (picked.tokenFile ? picked.account : null));
     if (auth && auth.kind !== 'linked') {
       lines.push('');
       lines.push(`A session you start on ${ctx.cfg.hostname} runs on ${
@@ -605,18 +635,27 @@ async function verifyClaude(ctx) {
       + 'fleetwright clears it.',
     );
   }
+  // FROM A VAULT, for everybody on a vault box, the operator included (a
+  // fleet person's login is only ever a vault's, and only a vault box has
+  // one): "linked" would send somebody to link what they keep in their vault,
+  // which a vault box refuses.
+  const kept = vaultBox(ctx.cfg);
   lines.push('');
   lines.push(
-    mine
-      ? `A session you start would run on YOUR linked account (${picked.account}).`
-      : 'A session you start would run on the shared account for this box.',
+    kept
+      ? `A session you start would run on the Claude login ${picked.account} keeps in their vault.`
+      : mine
+        ? `A session you start would run on YOUR linked account (${picked.account}).`
+        : 'A session you start would run on the shared account for this box.',
   );
-  lines.push(describeCredential(state, mine ? 'your linked account' : "this box's credential"));
+  lines.push(describeCredential(state, kept ? `${picked.account}’s vault login` : mine ? 'your linked account' : "this box's credential"));
   if (state.state === 'expired' && !state.refreshable) {
     lines.push(
-      mine
-        ? 'Connect Claude again to replace it — until then your sessions come up logged out.'
-        : 'Run /login on this box to replace it — until then new sessions come up logged out.',
+      kept
+        ? 'The vault renews it and gives this box the new one on its next pass; if it stays expired, sign in to Claude again under You › Credentials.'
+        : mine
+          ? 'Connect Claude again to replace it — until then your sessions come up logged out.'
+          : 'Run /login on this box to replace it — until then new sessions come up logged out.',
     );
   }
   // WHEN SOMETHING WILL HAPPEN, which is the question this screen was actually
@@ -712,6 +751,27 @@ function describeBin(bin) {
  * @param {any} ctx
  */
 function describeAccounts(ctx) {
+  // ON A VAULT BOX NOTHING LINKED HERE IS USED (vault-store.js, "A VAULT
+  // BOX"): a session runs on the Claude login its starter keeps in their
+  // vault, the box's own command line's included, so the count that means
+  // something is of those. Counting the linked ones here would say a session
+  // could run on an account no session is given.
+  if (vaultBox(ctx.cfg)) {
+    let n;
+    try {
+      n = vaultClaudePeople(ctx.cfg);
+    } catch (e) {
+      return `could not read what the vault gave this box (${/** @type {Error} */ (e).message})`;
+    }
+    // A runner has its answer with no vault login too, as below.
+    const runner = n ? null : describeRunnerAuth(runnerAuthKind(ctx.cfg));
+    if (runner) return runner;
+    const operator = operatorAccount(ctx.cfg);
+    const local = operator.email ? `this box’s own command line runs as ${operator.email}` : `this box’s own command line runs as nobody: ${operator.why}`;
+    return n
+      ? `${n} ${n === 1 ? 'person’s vault gives' : 'people’s vaults give'} this box a Claude login — a session runs as whoever starts it; ${local}`
+      : `NOBODY’S VAULT GIVES THIS BOX A CLAUDE LOGIN — sessions started here cannot do anything; ${local}`;
+  }
   // THIS READ A PROPERTY NOTHING EVER SET, and therefore always answered
   // "nobody". `ctx.accounts` appears in no ctx anywhere — every other command
   // builds the store the way the line below does — so
@@ -1463,6 +1523,18 @@ export const COMMANDS = {
           : { ok: false, text: `${email} has no linked account.` };
       }
       const linked = store.list();
+      // ON A VAULT BOX THE LIST IS OF COPIES NOBODY USES, and saying it is
+      // the list of who can start a session would be the opposite of true.
+      if (vaultBox(ctx.cfg)) {
+        return {
+          ok: true,
+          text: linked.length
+            ? `Linked here, and not used:\n${linked.map((e) => `  ${e}`).join('\n')}\n\n`
+              + 'This box takes every Claude login from the vaults of the people who approved it, so a session runs on '
+              + 'what its starter keeps there. Remove these with /accounts remove <email>.'
+            : 'Nothing is linked here. This box takes every Claude login from the vaults of the people who approved it.',
+        };
+      }
       return {
         ok: true,
         // THE SHARED FALLBACK NO LONGER EXISTS. Both sentences here described
@@ -1490,6 +1562,13 @@ export const COMMANDS = {
     run: async (ctx, args) => {
       const sub = (args[0] || '').toLowerCase();
       if (sub === 'status') return { ok: true, text: describe(ctx.login.status()) };
+      // A LOGIN STARTED HERE IS A LINK, whether for a named person or for the
+      // box, whose own login is adopted as a linked account when the service
+      // starts (accounts.js, adoptBoxAccount). Cancel and logout still work.
+      if (sub !== 'cancel' && sub !== 'logout') {
+        const refused = vaultLinkRefusal(ctx, HOST_ROW);
+        if (refused) return refused;
+      }
       if (sub === 'for') {
         // Linking a person, not logging in the box. Same OAuth, same pasted
         // code \u2014 but the credential lands in the accounts store under their
@@ -1549,6 +1628,13 @@ export const COMMANDS = {
       // which is the entire reason the verbs are connect/link/unlink and not
       // github/cloudflare.
       const structured = connectionsPayload(ctx, {}, { host: boxRow });
+      // THE LISTING STILL ANSWERS: it says what is here, which is what a
+      // person tidying a vault box up needs to see. Asking for a token page
+      // to make one is the link.
+      if (which) {
+        const refused = vaultLinkRefusal(ctx, boxRow ? HOST_ROW : rowForActor(ctx.actor));
+        if (refused) return refused;
+      }
       if (!which) {
         const have = new Map(structured.connected.map((c) => [c.provider, c]));
         return {
@@ -1594,17 +1680,21 @@ export const COMMANDS = {
       if (!isProvider(provider)) {
         return { ok: false, text: `No provider called "${provider}". Try /connect on its own to see the list.` };
       }
-      const checked = await verifyToken(provider, secret);
-      if (!checked.ok) return { ok: false, text: checked.message };
-      const store = new Connections(ctx.cfg.stateDir);
       // WHOSE ROW. `--host` is the box's shared one, which the coordinator
       // gates on admin; anything else is the caller's own, and an actor whose
       // identity cannot be resolved gets a refusal rather than the shared row.
+      // Decided before the token is sent to the provider, so a refusal does
+      // not cost a check against GitHub first.
       const boxRow = flags?.has('host') === true;
       const row = boxRow ? HOST_ROW : rowForActor(ctx.actor);
       if (row === null) {
         return { ok: false, text: 'Could not tell whose credential this is, so nothing was stored.' };
       }
+      const refused = vaultLinkRefusal(ctx, row);
+      if (refused) return refused;
+      const checked = await verifyToken(provider, secret);
+      if (!checked.ok) return { ok: false, text: checked.message };
+      const store = new Connections(ctx.cfg.stateDir);
       const saved = store.save(row, provider, secret, checked.account ?? null, checked.granted ?? null);
       return {
         ok: saved.ok,
@@ -1663,6 +1753,9 @@ export const COMMANDS = {
       // Fails closed. There is no row to write to, so nothing is written —
       // rather than falling back to one other people read.
       if (row === null) return { ok: false, text: 'Could not tell whose connection this is, so nothing was stored.' };
+      // What keeps a link alive is part of the link.
+      const refused = vaultLinkRefusal(ctx, row);
+      if (refused) return refused;
       const store = new Connections(ctx.cfg.stateDir);
       const saved = store.saveRenewal(row, provider, { clientId, refresh });
       if (!saved.ok) return { ok: false, text: saved.message };

@@ -20,6 +20,7 @@ import path from 'node:path';
 import { pushArchive, workspacePatch, archiveFiles, archiveSession, branchFor, MAX_FILE_BYTES } from '../src/core/archive.js';
 import { Registry } from '../src/core/registry.js';
 import { Connections } from '../src/core/connectors.js';
+import { HOST_ROW } from '../src/core/accounts.js';
 import { applyVault } from '../src/core/vault-store.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
 
@@ -229,6 +230,37 @@ test('a session is pushed as the person who started it, and as nobody else', asy
   assert.equal(rec?.archiveBranch, 'fleetwright/deb14/job-20261007T120000Z');
   assert.equal(rec?.archiveOk, true);
   assert.equal(gh.refs[branchFor('deb14', /** @type {any} */ (rec))], rec?.archiveCommit);
+});
+
+test('on a vault box a session started on the box itself is pushed as its operator, from their vault', async () => {
+  // Its operator is a named person who approved the box (accounts.js,
+  // operatorAccount), so there is somebody to push as, and never the box's
+  // own row. Where nobody can be named, the reason why is the refusal.
+  const dir = scratch('archive-vault-box-');
+  const cfg = /** @type {any} */ ({ stateDir: dir, hostname: 'deb14', sandbox: false, stateFile: path.join(dir, 'state.json'), spoolFile: path.join(dir, 'spool') });
+  const registry = new Registry({ stateFile: cfg.stateFile, spoolFile: cfg.spoolFile });
+  registry.upsert('boxjob', { status: 'stopped', cwd: scratch('archive-cwd-'), archive: 'eli/work', createdBy: 'cli' });
+  registry.upsert('boxjob', { createdAt: Date.UTC(2026, 9, 7, 12) });
+  new Connections(dir).save(HOST_ROW, 'github', 'ghu_box');
+  const gh = github();
+
+  applyVault({ stateDir: dir }, { accounts: [{ email: 'eli@example.com', items: [{ name: 'github', value: 'ghu_eli', expiresAt: Date.now() + 3_600_000 }] }] });
+  /** @type {string[]} */
+  const auth = [];
+  const seen = /** @type {any} */ (async (/** @type {string} */ u, /** @type {any} */ init) => { auth.push(init?.headers?.authorization); return gh.impl(u, init); });
+  const done = await archiveSession({ cfg, registry, name: 'boxjob', reason: 'stop', fetchImpl: seen, broker: '' });
+  assert.equal(done.ok, true, done.text);
+  assert.ok(auth.length && auth.every((a) => a === 'Bearer ghu_eli'), 'pushed with something other than the operator’s vault');
+
+  applyVault({ stateDir: dir }, { accounts: [
+    { email: 'eli@example.com', items: [{ name: 'github', value: 'ghu_eli', expiresAt: Date.now() + 3_600_000 }] },
+    { email: 'ann@example.com', items: [{ name: 'github', value: 'ghu_ann', expiresAt: Date.now() + 3_600_000 }] },
+  ] });
+  const calls = gh.calls.length;
+  const two = await archiveSession({ cfg, registry, name: 'boxjob', reason: 'stop', fetchImpl: gh.impl, broker: '' });
+  assert.equal(two.ok, false);
+  assert.match(two.text, /2 people’s vaults give this box something, so set FLEETWRIGHT_OPERATOR/);
+  assert.equal(gh.calls.length, calls, 'nothing asked of GitHub');
 });
 
 test('the fleet’s archive reaches the hub as one token, and nothing else does', () => {

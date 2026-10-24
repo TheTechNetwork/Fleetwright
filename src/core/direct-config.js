@@ -78,12 +78,15 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
   // been staged — and for whom, which a resume asks.
   const fresh = !existsSync(path.join(dir, '.credentials.json')) && !existsSync(path.join(dir, RUNNER_MARK));
 
-  /** @type {{ source: string|null, accountMeta?: string|null, account: string, why?: string }|null} */
+  /** @type {{ source: string|null, tokenFile?: string, accountMeta?: string|null, account: string, why?: string }|null} */
   let picked;
   if (fresh) {
     picked = pickCredentialSource(cfg, actor);
     if (!picked.source) {
-      const email = emailFromActor(actor);
+      // WHOSE VAULT TOKEN, when it is one: the person the pick named, who on
+      // a vault box is the operator for a session started on the box itself
+      // and has no email in the actor to be found by.
+      const email = emailFromActor(actor) ?? (picked.tokenFile ? picked.account : null);
       const auth = runnerAuthFor(cfg, email);
       if (!auth) return { ok: false, message: noAccountRefusal(cfg, picked) };
       return stageForRunner(cfg, dir, cwd, email, auth, true);

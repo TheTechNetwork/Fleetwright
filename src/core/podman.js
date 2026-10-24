@@ -28,12 +28,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'no
 import path from 'node:path';
 import { log } from '../log.js';
 import { readHouseRules } from './rules.js';
-import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAccount } from './accounts.js';
+import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAccount, normaliseEmail, HOST_ROW } from './accounts.js';
 import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
 import { sessionImage, variantOf, pinnedByEnv } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
-import { vaultClaudeSource } from './vault-store.js';
+import { vaultClaudeSource, vaultBox } from './vault-store.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -743,16 +743,23 @@ export function credentialSourceForAccount(cfg, account) {
   // box credential into a named row, so the honest answer for an old volume is
   // the account that adoption produced — resolved through the operator, which
   // is the same person.
-  if (account === 'shared') {
-    const email = operatorAccount(cfg).email;
-    if (!email) return null;
-    const store = new Accounts(cfg.stateDir);
-    const linked = store.credentialPathFor(email);
-    return linked ? { source: linked, accountMeta: store.accountMetaPathFor(email), account: email } : null;
-  }
+  const operator = operatorAccount(cfg).email;
+  const email = account === 'shared' ? operator : normaliseEmail(account);
+  if (!email) return null;
   // A PERSON'S ACCOUNT IS THEIR VAULT'S, as a start's is (pickCredentialSource),
-  // so a resume comes back on today's copy of what they keep there.
-  return vaultClaudeSource(cfg, account);
+  // so a resume comes back on today's copy of what they keep there. On a
+  // vault box that includes the operator's.
+  if (vaultBox(cfg)) return vaultClaudeSource(cfg, email);
+  // OFF ONE, THE OPERATOR'S LINKED ACCOUNT, which is what their session
+  // started on. This read the vault for every account once fleet people's
+  // logins moved there, and a box that stands alone has no vault: so every
+  // local session's resume found no credential and kept the one it had until
+  // that ran out. Nobody else's: a fleet person's session runs on their vault
+  // and on nothing linked here.
+  if (email !== operator) return null;
+  const store = new Accounts(cfg.stateDir);
+  const linked = store.credentialPathFor(email);
+  return linked ? { source: linked, accountMeta: store.accountMetaPathFor(email), account: email } : null;
 }
 
 /**
@@ -769,6 +776,11 @@ export function credentialSourceForAccount(cfg, account) {
  * Naming the shared credential is not moving anywhere: every session from
  * before one-account-per-person ran on it.
  *
+ * A SESSION STARTED ON THE BOX ITSELF is held to the operator the same way:
+ * on a vault box every account is a vault's, and a volume that named some
+ * other person who approved this box would otherwise come back on their
+ * vault's login, for a session they never started.
+ *
  * @param {import('../config.js').Config} cfg
  * @param {string} volume
  * @param {string|null} actor  the session's creator
@@ -776,9 +788,12 @@ export function credentialSourceForAccount(cfg, account) {
  */
 function volumeClaim(cfg, volume, actor) {
   const claimed = volumeAccount(cfg, volume);
+  if (!claimed || claimed === 'shared') return claimed;
   const creator = emailFromActor(actor ?? undefined);
-  if (!claimed || claimed === 'shared' || !creator) return claimed;
-  return claimed.toLowerCase() === creator.toLowerCase() ? claimed : null;
+  if (creator) return claimed.toLowerCase() === creator.toLowerCase() ? claimed : null;
+  if (rowForActor(actor) !== HOST_ROW) return claimed;
+  const operator = operatorAccount(cfg).email;
+  return operator && claimed.toLowerCase() === operator ? claimed : null;
 }
 
 /**
@@ -1128,6 +1143,17 @@ export function pickCredentialSource(cfg, actor) {
   // see operatorAccount and docs/one-account-per-person.md.
   const operator = operatorAccount(cfg);
   if (!operator.email) return { source: null, accountMeta: null, account: 'nobody', why: operator.why };
+  // ON A VAULT BOX, THE OPERATOR'S VAULT AND NOTHING LINKED HERE, by the rule
+  // a fleet person's session follows above: the operator is one of the
+  // people who approved this box (vault-store.js, "A VAULT BOX").
+  if (vaultBox(cfg)) {
+    return vaultClaudeSource(cfg, operator.email) ?? {
+      source: null,
+      accountMeta: null,
+      account: operator.email,
+      why: `${operator.email}’s vault gives this box no Claude login — keep one under You › Credentials in the app or on the vault page in a browser`,
+    };
+  }
   return {
     source: store.credentialPathFor(operator.email),
     accountMeta: store.accountMetaPathFor(operator.email),

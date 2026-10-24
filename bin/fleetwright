@@ -25,7 +25,8 @@ import { releaseLayout } from '../src/core/release-apply.js';
 import { checkRelease } from '../src/core/release-check.js';
 import { accessSync, constants as fsConstants, mkdirSync } from 'node:fs';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
-import { Accounts } from '../src/core/accounts.js';
+import { Accounts, operatorAccount } from '../src/core/accounts.js';
+import { vaultBox, vaultClaudePeople, vaultClaudeSource } from '../src/core/vault-store.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
 import { asServiceUser } from '../src/core/as-service-user.js';
 
@@ -277,14 +278,35 @@ async function doctor({ repair = false } = {}) {
   // login is one way to get one (it is adopted into a linked row at start-up),
   // not the requirement: this row read "FAIL claude logged in" on a box where
   // the app had just linked an account and a session was about to run on it.
-  const linked = new Accounts(cfg.stateDir).list();
-  const accountOk = linked.length > 0 || authOk;
-  const accountDetail = linked.length
-    ? `${linked.length} linked: ${linked.join(', ')}`
-    : authOk
-      ? `${authDetail} — the box's own login, adopted as a linked account when the service starts`
-      : 'connect one from the app, or run: fleetwright login';
-  ok('a Claude account to run sessions as', accountOk, accountDetail);
+  //
+  // ON A VAULT BOX NOTHING LINKED IS USED (src/core/vault-store.js): a session
+  // runs on its starter's vault login, the box's own command line on the
+  // operator's, and `fleetwright login` is refused. So the row counts vaults
+  // and names whom this command line runs as.
+  if (vaultBox(cfg)) {
+    try {
+      const n = vaultClaudePeople(cfg);
+      const operator = operatorAccount(cfg);
+      const local = !operator.email
+        ? `this command line runs as nobody: ${operator.why}`
+        : vaultClaudeSource(cfg, operator.email)
+          ? `this command line runs as ${operator.email}`
+          : `this command line runs as ${operator.email}, whose vault gives this box no Claude login`;
+      ok('a Claude account to run sessions as', n > 0, `${n} from the fleet’s vaults; ${local}`);
+    } catch (e) {
+      // UNREADABLE IS NOT EMPTY: the vault is the service user's, 0700.
+      ok('a Claude account to run sessions as', false, `could not read the vault (${e.message}) — run this as root or as the service user`);
+    }
+  } else {
+    const linked = new Accounts(cfg.stateDir).list();
+    const accountOk = linked.length > 0 || authOk;
+    const accountDetail = linked.length
+      ? `${linked.length} linked: ${linked.join(', ')}`
+      : authOk
+        ? `${authDetail} — the box's own login, adopted as a linked account when the service starts`
+        : 'connect one from the app, or run: fleetwright login';
+    ok('a Claude account to run sessions as', accountOk, accountDetail);
+  }
 
   ok(`workdir ${cfg.workdir}`, true);
   ok(`state dir ${cfg.stateDir}`, true);

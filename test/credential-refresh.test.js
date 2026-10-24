@@ -281,20 +281,32 @@ test('a refresh that fails is not fatal to the resume', async (t) => {
 // --- resolving an account to a file -----------------------------------------
 
 test('an account resolves to its own file, or to nothing at all', async (t) => {
+  // ON A BOX THAT STANDS ALONE, the operator's linked account, under its
+  // name and under the `shared` an old volume recorded. Resolving every
+  // account through the vault left a standalone box's own sessions with no
+  // credential on every resume, because such a box has no vault.
   const s = stubPodman(t);
-  const alice = s.signIn('alice@example.com');
-
-  assert.equal(credentialSourceForAccount(s.cfg(), 'alice@example.com')?.source, alice);
-  // 'shared' resolves through the box's operator, which is what adoption
-  // produced: the box's own login, never a fleet person's vault.
-  assert.equal(credentialSourceForAccount(s.cfg(), 'shared'), null);
+  assert.equal(credentialSourceForAccount(s.cfg(), 'shared'), null, 'nobody linked, nobody to resolve to');
   const operator = s.linkOnBox('operator@example.com');
   assert.equal(credentialSourceForAccount(s.cfg(), 'shared')?.source, operator);
-  assert.equal(credentialSourceForAccount(s.cfg(), 'operator@example.com'), null, 'linked on the box is the box’s, not the person’s');
+  assert.equal(credentialSourceForAccount(s.cfg(), 'operator@example.com')?.source, operator);
   // Not "fall back to shared": a linked account that has gone away is a
   // different situation from never having had one, and the caller has to be
   // able to tell them apart to say something true about it.
   assert.equal(credentialSourceForAccount(s.cfg(), 'nobody@example.com'), null);
+  // And not anybody linked who is not the operator: their sessions are not
+  // this command line's.
+  s.linkOnBox('other@example.com');
+  assert.equal(credentialSourceForAccount(s.cfg({ operator: 'operator@example.com' }), 'other@example.com'), null);
+
+  // ON A VAULT BOX every account is a vault's, the operator's included, and a
+  // link on the box is nobody's (vault-store.js, "A VAULT BOX").
+  const alice = s.signIn('alice@example.com');
+  assert.equal(credentialSourceForAccount(s.cfg(), 'alice@example.com')?.source, alice);
+  assert.equal(credentialSourceForAccount(s.cfg(), 'operator@example.com'), null, 'linked on the box is not the person’s');
+  // `shared` is the operator, who on a vault box is the one person whose vault
+  // gives it something.
+  assert.equal(credentialSourceForAccount(s.cfg(), 'shared')?.source, alice);
 });
 
 test('a person with nothing linked here is seeded the Claude login from their vault, at start and on resume', async (t) => {
@@ -332,8 +344,48 @@ test('a person’s volume is never read as the box’s own, so it is never given
   const r = refreshSeededCredentials(s.cfg(), 'alices', { account: null, actor: null });
 
   assert.equal(r.refreshed, false);
-  assert.equal(r.account, 'alice@example.com');
+  // Started on the box itself and naming somebody other than its operator,
+  // which is cannot-tell (volumeClaim).
+  assert.equal(r.account, null);
   assert.equal(s.seeds().length, 0, 'nothing reached her volume, the operator’s login least of all');
+});
+
+test('a session started on a vault box resumes on its operator’s vault login, and never on another approver’s', async (t) => {
+  // A volume is the session's own to write, so what it names is a claim. A
+  // session started on the box itself is held to the operator, as a fleet
+  // person's is held to them: on a vault box every account is a vault's, and
+  // a volume naming another person who approved the box would otherwise come
+  // back on that person's login.
+  const s = stubPodman(t, { volumes: ['claude-ops', 'work-ops'], oauthAccount: { emailAddress: 'bob@example.com' } });
+  s.linkOnBox('ann@example.com');
+  s.signIn('bob@example.com');
+  const ann = s.signIn('ann@example.com');
+  const cfg = s.cfg({ operator: 'ann@example.com' });
+
+  const claimed = refreshSeededCredentials(cfg, 'ops', { account: null, actor: 'cli' });
+  assert.equal(claimed.refreshed, false);
+  assert.equal(s.seeds().length, 0, 'bob’s login reached a session he did not start');
+
+  // Recorded as the operator's, which is what a start on the box writes: today's vault copy, not the link.
+  const own = refreshSeededCredentials(cfg, 'ops', { account: 'ann@example.com', actor: 'cli' });
+  assert.equal(own.refreshed, true, own.why);
+  assert.equal(own.account, 'ann@example.com');
+  assert.match(s.seeded(), /a-ann@example\.com/);
+  // The link carries a refresh token and a vault's copy never does.
+  assert.doesNotMatch(s.seeded(), /refreshToken/, 'the link on the box was seeded, not her vault’s copy');
+  assert.doesNotMatch(s.seeded(), /a-bob/);
+  assert.equal(credentialSourceForAccount(cfg, 'ann@example.com')?.source, ann);
+});
+
+test('a session started on a box that stands alone resumes on today’s copy of its operator’s linked account', async (t) => {
+  // The regression a vault-only resume made: no vault on such a box, so no
+  // credential, so every resume kept the copy it had until that ran out.
+  const s = stubPodman(t, { volumes: ['claude-mine', 'work-mine'] });
+  s.linkOnBox('operator@example.com');
+  const r = refreshSeededCredentials(s.cfg(), 'mine', { account: 'operator@example.com', actor: 'cli' });
+  assert.equal(r.refreshed, true, r.why);
+  assert.equal(r.account, 'operator@example.com');
+  assert.match(s.seeded(), /a-operator@example\.com/);
 });
 
 test('a sign-in the vault renews reaches the sessions already running on it, and only theirs', async (t) => {
