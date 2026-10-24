@@ -202,6 +202,22 @@ jobs:
 
       # WHAT IT LOOKS LIKE ON THE DUO, as pictures attached to the run. Not a
       # test: scripts/ios-duo-look.sh says why, and skips without a Duo.
+      # THE HINGE, so the pictures can open the Duo: simctl cannot. MIT, a
+      # bash script and an Objective-C helper it compiles with this Xcode and
+      # runs inside the simulator; read before it was adopted, no network. At a
+      # commit, not a tag or `brew install`, because a tag can move and this
+      # runs code inside the simulator. Only the pictures use it.
+      - name: Fetch hinge
+        env:
+          HINGE_COMMIT: abd539d612054ea0e4733b3b49ac94a16a91350f # v0.2.0
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/hinge"
+          git init -q "$dir"
+          git -C "$dir" fetch -q --depth 1 https://github.com/artemnovichkov/hinge.git "$HINGE_COMMIT"
+          git -C "$dir" checkout -q FETCH_HEAD
+          echo "HINGE=$dir/bin/hinge" >> "$GITHUB_ENV"
+
       - name: iPhone Duo pictures
         working-directory: apps/ios
         run: ../../scripts/ios-duo-look.sh
