@@ -162,14 +162,16 @@ test('no document names an archived surface\'s settings without saying so', () =
   );
 });
 
-test('the account remedy still names two live ways to do it', () => {
+test('the account remedy names the two steps that exist', () => {
   // DELETING THE DEAD ROUTE IS HALF THE JOB. A remedy trimmed to nothing is the
-  // "reason without a remedy" this message was rewritten to stop being, so the
-  // two surfaces that DO exist have to survive the edit.
+  // "reason without a remedy" this message was rewritten to stop being. The
+  // steps are the vault's now (docs/vault.md): keep the login, approve the
+  // machine. A sign-in on the box is not one of them any more.
   const registry = readFileSync(new URL('../src/fleet/coordinator/registry.js', import.meta.url), 'utf8');
   const mcp = readFileSync(new URL('../src/mcp/server.js', import.meta.url), 'utf8');
   for (const [name, src] of [['the registry', code(registry)], ['the MCP renderer', code(mcp)]]) {
-    assert.match(src, /Link one from the app/, `${name} no longer offers the app`);
-    assert.match(src, /fleetwright login for/, `${name} no longer offers the box`);
+    assert.match(src, /Keep your Claude login under You › Credentials in the app/, `${name} no longer names the vault`);
+    assert.match(src, /approve this machine from its page/, `${name} no longer names approving the machine`);
+    assert.doesNotMatch(src, /fleetwright login for/, `${name} still sends people to sign in on the box`);
   }
 });

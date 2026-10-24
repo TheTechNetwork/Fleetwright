@@ -64,7 +64,7 @@ const BASELINE = Object.freeze({
   runnerrepo: { repo: 6 },
   linkrepo: { role: 11, repo: 11 },
   mint: { repo: 1, job: 1, key: 1 },
-  setuptoken: { code: 1, reply: 1 },
+  setuptoken: { code: 1, reply: 1, kind: 15 },
   xoprobe: { address: 1, relay: 12 },
   xosetup: { phase: 1, job: 1, address: 1, pin: 1, sealed: 1, trust: 1, plain: 1, relay: 12 },
   xolook: { address: 13, reply: 13 },

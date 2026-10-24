@@ -224,14 +224,12 @@ function describeHealth(h) {
   } else if (typeof h.claudeAccounts === 'number') {
     lines.push(
       h.claudeAccounts > 0
-        ? `claude: ${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'} linked — sessions run as whoever starts them`
-        // AND THE REMEDY NAMED TELEGRAM, WHICH IS ARCHIVED. Two of the three
-        // places this sentence appears sent people to an adapter that no
-        // longer exists — in the message a beta tester's first run ended at.
-        // A remedy pointing at a surface the product does not have is worse
-        // than no remedy: it costs a search before it costs a shell.
-        : 'claude: NOBODY HAS LINKED AN ACCOUNT — a session started here cannot do anything. ' +
-            'Link one from the app, or on the box with `fleetwright login for <email>`',
+        ? `claude: ${h.claudeAccounts} login${h.claudeAccounts === 1 ? '' : 's'} here — sessions run as whoever starts them`
+        // THE REMEDY IS THE VAULT. It named Telegram, which is archived, and
+        // then a sign-in on the box, which is gone: a person's login is kept
+        // in their vault and a host has it once they approve that host.
+        : 'claude: NOBODY’S VAULT GIVES THIS HOST A CLAUDE LOGIN — a session started here cannot do anything. ' +
+            'Keep your Claude login under You › Credentials in the app, and approve this machine from its page.',
     );
   } else if (h.loggedIn === true) {
     // An older host with no claudeAccounts field. Its own login is all we know.

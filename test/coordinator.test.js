@@ -101,7 +101,7 @@ test('a box with no Claude account of its own is NOT degraded for it', () => {
   assert.equal(reg.get('box')?.state, 'healthy');
 });
 
-test('a box nobody has linked an account on is degraded, because nothing can start', () => {
+test('a box no vault gives a Claude login is degraded, because nothing can start', () => {
   // The question that replaced it. Zero is a real fault with a real remedy;
   // WHOSE account is missing is a per-session question, answered by name at the
   // point somebody asks.
@@ -110,7 +110,7 @@ test('a box nobody has linked an account on is degraded, because nothing can sta
   reg.recordHealth('box', health({ claudeAccounts: 0 }));
 
   assert.equal(reg.get('box')?.state, 'degraded');
-  assert.match(reg.get('box')?.reason || '', /nobody has linked/);
+  assert.match(reg.get('box')?.reason || '', /nobody’s vault gives this host a Claude login/);
   assert.equal(reg.schedulable().length, 0);
 });
 
@@ -868,7 +868,7 @@ test('a host that goes degraded says so once, not every fifteen seconds', async 
   assert.equal(reg.recordHealth('box', health()), null, 'a repeat of the same state is not news');
   const down = reg.recordHealth('box', health({ claudeAccounts: 0 }));
   assert.equal(down?.to, 'degraded');
-  assert.match(String(down?.reason), /nobody has linked/);
+  assert.match(String(down?.reason), /nobody’s vault gives this host a Claude login/);
 
   assert.equal(reg.recordHealth('box', health({ claudeAccounts: 0 })), null, 'still degraded is not a new event');
   assert.equal(reg.recordHealth('box', health({ claudeAccounts: 0 })), null);

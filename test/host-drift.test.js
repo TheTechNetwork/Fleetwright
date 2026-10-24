@@ -123,7 +123,7 @@ test('drift is checked before the rungs whose remedies it would block', () => {
   // everything else.
   const h = fleet({ protocol: BELOW_FLOOR, claudeAccounts: 0, hub: { reachable: false, reason: 'down' } });
   assert.match(h.reason, /speaks protocol/);
-  assert.doesNotMatch(h.reason, /Link one from the app/);
+  assert.doesNotMatch(h.reason, /Keep your Claude login under You › Credentials/);
 });
 
 test('an in-step host is untouched by any of this', () => {
