@@ -1179,8 +1179,11 @@ struct Fleet {
     /// NEVER HELD. The outbox keeps what it holds on disk and replays it, and a
     /// code is a live credential for the minutes it lasts. Passing an id is
     /// what keeps a send that could not reach the fleet out of the outbox.
-    func setupToken(host: String, code: String? = nil, reply: String? = nil) async throws -> Reply {
+    /// `kind: "login"` asks for the whole sign-in `claude auth login` makes,
+    /// which Remote Control needs, in place of a setup-token (protocol 15).
+    func setupToken(host: String, code: String? = nil, reply: String? = nil, kind: String? = nil) async throws -> Reply {
         var params: [String: String] = [:]
+        if let kind { params["kind"] = kind }
         if let code { params["code"] = code }
         if let reply { params["reply"] = reply }
         return try await intent("setuptoken", params: params, host: host, idempotencyKey: "app-\(UUID().uuidString)")

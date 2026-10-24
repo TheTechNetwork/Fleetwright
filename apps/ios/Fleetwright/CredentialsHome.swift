@@ -37,7 +37,7 @@ struct CredentialsHome: View {
                     CredentialsView(settings: settings, host: nil, linkedOnly: true)
                 }
             } footer: {
-                Text("A token goes to every machine in the fleet, because it is yours rather than any one box's. Claude is per person too: a session runs on the account of whoever started it.")
+                Text("Everything a session you start uses comes from your vault, on the machines you approve.")
             }
         }
         .scrollContentBackground(.hidden)

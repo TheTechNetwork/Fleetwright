@@ -146,9 +146,11 @@ struct HostView: View {
             logsSection
 
             Section {
-                NavigationLink("Sign in to Claude") {
-                    CredentialsView(settings: settings, host: hostId, onlyClaude: true)
-                }
+                // NO "SIGN IN TO CLAUDE" HERE ANY MORE. It signed a person in on
+                // this machine for this machine, which then held its own refresh
+                // token; a person's login is kept in their vault and this
+                // machine is given it once they approve it, below
+                // (docs/vault.md).
                 if let fingerprint = enrolled?.fingerprint, !fingerprint.isEmpty {
                     // NEXT TO THE MACHINE IT IDENTIFIES. It lived in a separate
                     // list of names, which is the one place it cannot do its

@@ -22,6 +22,10 @@ struct PhoneVault {
     struct Item: Hashable {
         let name: String
         let at: Double
+        /// For Claude, which kind is kept: `login`, the sign-in Remote Control
+        /// needs, or `token`, a setup-token that runs sessions only. Nil for
+        /// anything else, and from a minter from before it said.
+        var kind: String? = nil
     }
 
     struct Grant: Hashable {
@@ -97,7 +101,7 @@ struct PhoneVault {
     func list(_ fleet: Fleet) async throws -> Contents {
         let answer = try await ask(fleet, op: "list").answer
         let items = (answer["items"] as? [[String: Any]] ?? []).map {
-            Item(name: $0["name"] as? String ?? "", at: ($0["at"] as? NSNumber)?.doubleValue ?? 0)
+            Item(name: $0["name"] as? String ?? "", at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, kind: $0["kind"] as? String)
         }
         let grants = (answer["grants"] as? [[String: Any]] ?? []).map {
             Grant(key: $0["key"] as? String ?? "", fingerprint: $0["fingerprint"] as? String ?? "",

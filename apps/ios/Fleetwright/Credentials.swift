@@ -53,8 +53,8 @@ struct CredentialsView: View {
     /// give up, and only on CI.
     private var footerText: String {
         if linkedOnly {
-            return "Linked on a box rather than kept in your vault. A link on a box wins there; forget one and "
-                + "that box uses what your vault keeps."
+            return "Linked on a box before your vault was the only place credentials came from. Sessions you start "
+                + "do not use these any more; forget them to take them off the box."
         }
         if onlyClaude && host == nil {
             return "Sessions run on the account of whoever started them, so signing in links YOURS, on the "

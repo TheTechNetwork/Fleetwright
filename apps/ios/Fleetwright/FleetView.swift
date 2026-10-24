@@ -142,14 +142,6 @@ struct FleetView: View {
     /// Hosts, for the bin — which is fleet-wide and therefore needs them all.
     @State private var fleetHosts: [Fleet.FleetHost] = []
     private var binCount: Int { fleetHosts.reduce(0) { $0 + ($1.health?.bin?.count ?? 0) } }
-    /// Machines where THIS PERSON has connected Claude. Nil until asked.
-    ///
-    /// The count a host reports is a fleet-wide fact — how many people can
-    /// start something here — and a guest joining a fleet where somebody else
-    /// has connected would read as "set up" while being unable to start
-    /// anything. Whose account is missing is a question about the person
-    /// asking, so it is asked as them.
-    @State private var myClaudeHosts: [String]?
 
     /// Nowhere to run anything yet.
     ///
@@ -162,9 +154,13 @@ struct FleetView: View {
     /// yet", and a nil answer here is "we have not asked" — neither is
     /// evidence of anything, and claiming setup is needed on the strength of a
     /// missing answer is the benign-looking lie this project keeps refusing.
+    ///
+    /// WHETHER THEIR VAULT KEEPS A CLAUDE LOGIN, which is where a session's
+    /// comes from now (docs/vault.md). It asked which machines had their
+    /// Claude linked, a per-machine sign-in that sessions no longer use.
     private var needsSetup: Bool {
-        guard !fleetHosts.isEmpty, let mine = myClaudeHosts else { return false }
-        return mine.isEmpty
+        guard !fleetHosts.isEmpty, let claude else { return false }
+        return claude == .missing || claude == .needsGitHub
     }
     @State private var status = ""
     @State private var busy = false
@@ -299,14 +295,14 @@ struct FleetView: View {
                             ContentUnavailableView {
                                 Label("Nothing set up yet", systemImage: "person.badge.key")
                             } description: {
-                                Text("A session runs on YOUR Claude account. Sign in to Claude on one of "
-                                     + "these machines and you can start work here.")
+                                Text("A session runs on YOUR Claude account. Keep your login in your vault "
+                                     + "once, and every machine you approve uses it.")
                             } actions: {
-                                // THE SAME SIGN-IN A MACHINE'S PAGE OFFERS, not a
-                                // second credentials screen: it asks which machine
-                                // when there is more than one.
-                                NavigationLink("Connect Claude") {
-                                    CredentialsView(settings: settings, host: nil, onlyClaude: true)
+                                // THE VAULT'S CLAUDE ROWS, the same as Set up
+                                // Claude everywhere else: one login a person,
+                                // not one a machine.
+                                NavigationLink("Set up Claude") {
+                                    ClaudeSetupView(settings: settings)
                                 }
                             }
                         } else {
@@ -637,23 +633,6 @@ struct FleetView: View {
         // the sessions above have already said which it was.
         if let got = try? await reporting { fleetHosts = got }
 
-        // ONLY WHEN THERE IS NOTHING TO SHOW. This is a fan-out across the
-        // fleet, and asking it on every refresh would spend a round trip per
-        // pull to answer a question that only matters on an empty screen — the
-        // one case where nothing else is competing for the time.
-        if sessions.isEmpty {
-            // NOT `?? []`, AND THIS ONE DECIDES WHAT SCREEN SOMEBODY SEES.
-            //
-            // `myClaudeHosts` is optional precisely so that "we have not asked"
-            // and "asked, and nobody" stay different — needsSetup says so in as
-            // many words two hundred lines up. Coalescing a FAILED ask to the
-            // empty array collapses them, and the app then tells a person whose
-            // fleet is perfectly set up that nothing is set up yet, because one
-            // request did not come back.
-            if let reply = try? await fleet.connections() {
-                myClaudeHosts = reply.connections?.linked("claude")?.hosts ?? []
-            }
-        }
     }
 
     /// Why a session is not offered Resume, as its machine last reported, or

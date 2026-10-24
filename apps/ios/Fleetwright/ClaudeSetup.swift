@@ -97,14 +97,14 @@ struct ClaudeSetup: View {
                     }
                     Button(busy ? "Starting…" : "Make it on \(machine)") { Task { await startOnMachine() } }
                         .disabled(busy || machine.isEmpty)
-                    Text("\(machine) runs claude setup-token for you. The token comes back sealed to this phone, "
-                         + "and the machine keeps no copy.")
+                    Text("\(machine) signs you in to Claude, the kind of login Remote Control needs. It comes back "
+                         + "sealed to this phone, and the machine keeps no copy.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
                 Text(machines.isEmpty
-                     ? "On a computer, run claude setup-token, sign in, and paste the line it prints here."
-                     : "Or, on a computer, run claude setup-token, sign in, and paste the line it prints here.")
+                     ? "On a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control."
+                     : "Or, on a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                 SecureField("Token from claude setup-token", text: $draft)
@@ -150,7 +150,7 @@ struct ClaudeSetup: View {
         defer { busy = false }
         result = ""
         do {
-            let reply = try await Fleet(settings: settings).setupToken(host: machine)
+            let reply = try await Fleet(settings: settings).setupToken(host: machine, kind: "login")
             guard reply.ok != false, let raw = reply.url, let url = URL(string: raw) else {
                 result = reply.text ?? "\(machine) did not start a sign-in."
                 failed = true
@@ -173,7 +173,7 @@ struct ClaudeSetup: View {
         let sending = code.trimmingCharacters(in: .whitespacesAndNewlines)
         code = ""
         do {
-            result = try await phone.keepTokenFromMachine(Fleet(settings: settings), host: pageHost, code: sending)
+            result = try await phone.keepFromMachine(Fleet(settings: settings), host: pageHost, code: sending)
             failed = false
             page = nil
             onKept()
