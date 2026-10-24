@@ -14,9 +14,13 @@
 # Connect did not accept the Duo's display types when the device shipped, so a
 # Duo directory there would be an upload that fails.
 #
-# THE POSE IS WHATEVER THE SIMULATOR BOOTS IN. simctl has no verb to fold or
-# rotate the Duo, so these show one pose, and the script says which size it got
-# so nobody mistakes it for the others. Folding is still a person in Simulator.
+# BOTH DISPLAYS, EVERY TIME. The Duo simulator has two, and `simctl io
+# screenshot` refuses to guess between them, so each picture is taken once per
+# display the simulator lists, named by its pixel size: 2007x2853 is the inner
+# display unfolded, 1398x2034 the outer one. Whichever the simulator booted
+# into shows the app; the other shows what that display does meanwhile. simctl
+# has no verb to fold or rotate, so the other poses are still a person in
+# Simulator.
 #
 # SKIPS, LOUDLY, WITHOUT A DUO. The image's simulators change without a commit,
 # and a missing device is the image's news, not this change's failure.
@@ -58,6 +62,12 @@ xcrun simctl bootstatus "$UDID" -b >/dev/null
 xcrun simctl status_bar "$UDID" override --time "09:41" --batteryState charged --batteryLevel 100
 xcrun simctl install "$UDID" "$APP"
 
+# The displays, as simctl names them. It lists them only in the refusal to
+# pick one, so that refusal is the listing: "--display=3  LCD-1 ... 2007x2853".
+DISPLAYS="$(xcrun simctl io "$UDID" screenshot /dev/null 2>&1 \
+  | sed -nE 's/.*--display=([0-9]+).* ([0-9]+x[0-9]+).*/\1:\2/p' || true)"
+[ -n "$DISPLAYS" ] || DISPLAYS="default:"
+
 mkdir -p "$OUT"
 for tab in "${TABS[@]}"; do
   xcrun simctl terminate "$UDID" "$BUNDLE_ID" 2>/dev/null || true
@@ -65,13 +75,19 @@ for tab in "${TABS[@]}"; do
   # The demo fleet answers from constants, so this is the time to draw, not
   # to fetch.
   sleep 4
-  xcrun simctl io "$UDID" screenshot "$OUT/duo-$tab.png" >/dev/null
+  for d in $DISPLAYS; do
+    id="${d%%:*}" size="${d#*:}"
+    if [ "$id" = default ]; then
+      xcrun simctl io "$UDID" screenshot "$OUT/duo-$tab.png" >/dev/null
+    else
+      # A display that is off may refuse; that is news about the pose, not a
+      # failure, and the other display's picture still stands.
+      xcrun simctl io "$UDID" screenshot --display="$id" "$OUT/duo-$tab-$size.png" >/dev/null \
+        || echo "::warning::display $id ($size) gave no picture of $tab"
+    fi
+  done
 done
 
-size="$(python3 -c "
-import struct,sys
-with open(sys.argv[1],'rb') as h:
-    h.seek(16); w,hh=struct.unpack('>II',h.read(8))
-print(f'{w}x{hh}')
-" "$OUT/duo-sessions.png")"
-echo "iPhone Duo pictures in $OUT, $size pixels (2007x2853 is unfolded portrait, 1398x2034 the outer display)"
+ls "$OUT"/*.png >/dev/null 2>&1 || { echo "::error::the Duo gave no pictures at all"; exit 1; }
+echo "iPhone Duo pictures in $OUT, one per tab per display (2007x2853 inner, unfolded; 1398x2034 outer):"
+ls "$OUT"
