@@ -844,7 +844,7 @@ built: a box checks every intent's signature against that list and counts what
 it found in its health (`intent-keys.js`), and refuses nothing for it. Phase 2
 is built for the phones: they sign each intent that names its box, with a key
 the minter lists, and the coordinator carries a signature only with what it was
-made over. Phase 3's switch is built and off by default: a box run with
+made over. Phase 3's switch is built, and `signers` is its default: a box run with
 `FLEETWRIGHT_REQUIRE_SIGNED=all` refuses whatever a person did not sign or
 delegate, so on that box the bound narrows to denial of service, plus what the
 people on it delegated (each delegation names its verbs, boxes, parameters and
@@ -853,8 +853,9 @@ verbs the coordinator says alone (`forgetperson`, `vmlogin`, `mint`), each
 checked or harmless as `signed-intents.md` argues. `signers` gives the same
 bound for every person who has listed a key and for anything with nobody named,
 and leaves a person with no key where they were: a coordinator can act as them
-on that box, which it can only because they sign nothing. On a box with the
-switch off the bound above still holds whole.
+on that box, which it can only because they sign nothing. So on a box left at
+the default, the bound above still holds whole for people with no key and for a
+box whose operator set `off`.
 *Falsify:* on a box with the switch set, send it an unsigned `start`, one signed
 by a key the minter does not list, one carrying a delegation that covers another
 session, or one carrying a delegation its maker revoked; `sidecar.js` must refuse

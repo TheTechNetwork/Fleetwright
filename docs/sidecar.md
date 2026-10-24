@@ -190,7 +190,8 @@ Every setting is in `src/fleet/host/config.js`. Four are worth calling out:
   person did not sign on their phone, or delegate earlier, with a key the
   fleet's minter lists for them. `signers` does the same for the people this box
   has been shown a key for, and for anything with nobody named, which the box
-  would otherwise run as itself. `off` takes everything and counts it. Health
+  would otherwise run as itself, and is the default. `off` takes everything and
+  counts it. Health
   says how many unsigned and delegated intents the box has had, which is what
   turning it on would refuse. A value that is none of the three stops the
   sidecar starting rather than being read as `off`.

@@ -1129,7 +1129,7 @@ test('a box that enforces for signers refuses unsigned work for people with keys
 // THE SWITCH IS READ, NOT GUESSED: a box's operator sets it in an env file,
 // and a value the sidecar does not know is a typo in a setting that exists to
 // refuse things, so it stops the start rather than reading as off.
-test('FLEETWRIGHT_REQUIRE_SIGNED is off, signers or all, and anything else is refused at start', async () => {
+test('FLEETWRIGHT_REQUIRE_SIGNED is off, signers or all, signers when unset, and anything else is refused at start', async () => {
   const { loadSidecarConfig, validateSidecarConfig } = await import('../src/fleet/host/config.js');
   const read = (/** @type {string|undefined} */ v) => loadSidecarConfig({
     FLEETWRIGHT_COORDINATOR_URL: 'stdio:local', ...(v === undefined ? {} : { FLEETWRIGHT_REQUIRE_SIGNED: v }),
@@ -1137,7 +1137,7 @@ test('FLEETWRIGHT_REQUIRE_SIGNED is off, signers or all, and anything else is re
   for (const [raw, mode] of [['0', 'off'], ['off', 'off'], ['1', 'all'], ['all', 'all'], ['signers', 'signers'], ['Signers', 'signers']]) {
     assert.equal(read(raw).requireSigned, mode, raw);
   }
-  assert.equal(read(undefined).requireSigned, 'off');
+  assert.equal(read(undefined).requireSigned, 'signers');
   const typo = read('singers');
   assert.equal(typo.requireSigned, null);
   assert.ok(validateSidecarConfig(typo).errors.some((e) => /FLEETWRIGHT_REQUIRE_SIGNED is not one of off, signers or all/.test(e)));
