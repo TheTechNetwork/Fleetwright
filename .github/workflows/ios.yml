@@ -73,7 +73,9 @@ jobs:
   # provisioning profile. Signing problems are a separate class of failure and
   # should not be able to hide a syntax error.
   build:
-    runs-on: macos-latest
+    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
+    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -201,7 +203,9 @@ jobs:
       github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: build
-    runs-on: macos-latest
+    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
+    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    runs-on: xcode-27
     environment: production
     outputs:
       # So the job that hands the build to testers can tell "uploaded" from
@@ -748,7 +752,9 @@ jobs:
   screenshots:
     name: store screenshots
     if: github.event_name == 'release' && !github.event.release.prerelease
-    runs-on: macos-latest
+    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
+    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    runs-on: xcode-27
     # A WALL. A simulator that never finishes booting is a job that never
     # ends, and the submission waits behind this job: 0.4.14 sat for over
     # half an hour that way with everything else done. Three boots in a row

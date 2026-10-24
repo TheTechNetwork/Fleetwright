@@ -17,6 +17,10 @@
 # FAILS RATHER THAN FALLING BACK. An image without this Xcode is a build that
 # would be letterboxed on the Duo, and quietly building it anyway is the
 # failure this script exists to stop. Move XCODE when a newer one ships.
+#
+# THE IMAGE, NOT JUST THE VERSION. macos-latest carries Xcode 26 alone; the
+# jobs that call this run on GitHub's `xcode-27` label, whose default is 27.0,
+# which is why selecting 27.1 here still matters.
 set -euo pipefail
 
 XCODE="27.1"
