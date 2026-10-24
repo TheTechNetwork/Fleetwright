@@ -62,6 +62,7 @@ import { SEAL_KEY_RE, DEPOSIT_AAD, atRestAad, claudeBindingFor, seal, open } fro
 import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { runnerJobProblem, runnerJobRepoProblem, githubUser } from '../../core/repo-tokens.js';
 import { deviceSignedIn } from './github.js';
+import { probeClaude } from '../../core/claude-token-probe.js';
 
 /** How old a deposit may be when it arrives. Minutes, because a person made it just now. */
 export const DEPOSIT_MAX_AGE_MS = 10 * 60_000;
@@ -110,6 +111,36 @@ const CLI_TOKEN_RE = /^(?:gho_|ghp_|github_pat_)/;
 
 /** @param {string} code @param {string} text */
 const refuse = (code, text) => ({ ok: false, error: { code }, text });
+
+/**
+ * ASKED BEFORE IT IS KEPT. A token was taken on its shape alone, so a
+ * mistyped paste, a token for another account that was since revoked, or a
+ * line copied from the wrong place was "kept for your runners", and the first
+ * a person heard of it was a runner whose sessions all stopped at their first
+ * message. Now Claude is asked, with the one-token request a session would
+ * make (src/core/claude-token-probe.js): a refusal keeps nothing and says so,
+ * and an answer that cannot be read either way keeps it and says that too,
+ * because the API being unreachable from here is not the token's fault.
+ *
+ * Used by a deposit here and by the vault's own `put` (vault.js), which keep
+ * the same row.
+ *
+ * @param {string} token @param {typeof fetch} fetchImpl
+ * @returns {Promise<{ refusal: ReturnType<typeof refuse> } | { said: string }>}
+ */
+export async function checkBeforeKeeping(token, fetchImpl) {
+  const check = await probeClaude({ token }, { fetchImpl });
+  if (check.state === 'rejected') {
+    return {
+      refusal: refuse(
+        'rejected_token',
+        `Claude refused that token just now (401${check.why ? `: ${check.why}` : ''}). Nothing was kept. Make a new one with \`claude setup-token\` and paste that.`,
+      ),
+    };
+  }
+  if (check.state === 'accepted') return { said: ' Claude accepted it just now.' };
+  return { said: ` Whether Claude takes it could not be told just now (${check.why ?? `the API answered ${check.status}`}), so the first runner given it will find out.` };
+}
 
 /** A fleet account as the coordinator names one, compared without case. @param {unknown} s */
 const fleetEmail = (s) => String(s ?? '').trim().toLowerCase();
@@ -203,12 +234,14 @@ export async function answerDeposit(ask, config) {
     await config.logins?.put(who.userId, { at, login: who.login, forgotten: true });
     return { ok: true, login: who.login, forgotten: true, text: `Forgot ${who.login}’s Claude login. Their runners use the runner repository’s API key from now on.` };
   }
+  const checked = await checkBeforeKeeping(claude, fetchImpl);
+  if ('refusal' in checked) return checked.refusal;
   const stored = await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: { token: claude } });
   await config.logins?.put(who.userId, { at, login: who.login, email, sealed: stored });
   return {
     ok: true,
     login: who.login,
-    text: `Kept a Claude login for ${who.login}. Runners ${who.login} starts will run on it; nobody else’s will.`,
+    text: `Kept a Claude login for ${who.login}. Runners ${who.login} starts will run on it; nobody else’s will.${checked.said}`,
   };
 }
 
