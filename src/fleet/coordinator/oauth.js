@@ -500,6 +500,32 @@ export function deviceReturnUrl({ code, state, provider = 'github' }) {
   return `fleetwright://${host}?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
 }
 
+/**
+ * A sign-in the browser's signing page started (src/fleet/minter/sign-page.js),
+ * on the minter's own hostname. The same arrangement as a device's: the page
+ * made the state and holds the PKCE verifier, nothing is stored here, and the
+ * code goes back to the page, which finishes the exchange through the minter.
+ * Its own prefix because it goes back to a different place: the signing
+ * origin this coordinator was configured with, never one from the request.
+ */
+export const SIGNER_STATE_RE = /^s\.[A-Za-z0-9_-]{22,128}$/;
+
+/**
+ * Where a signing page's sign-in goes back to: that page's callback on the
+ * configured signing origin, with the code and the state, each checked
+ * against its shape and percent-encoded.
+ *
+ * @param {{ code: unknown, state: unknown, signingOrigin: string|null }} q
+ * @returns {string|null}  null when either does not look like one, or there is no signing page
+ */
+export function signerReturnUrl({ code, state, signingOrigin }) {
+  const c = String(code ?? '');
+  const st = String(state ?? '');
+  const base = normaliseOrigin(signingOrigin);
+  if (!base || !base.startsWith('https://') || !CODE_RE.test(c) || !SIGNER_STATE_RE.test(st)) return null;
+  return `${base}/oauth/github/callback?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
+}
+
 /** What a state this coordinator minted looks like (a uuid), as far as a page will carry one. */
 const BOX_STATE_RE = /^[A-Za-z0-9-]{16,64}$/;
 
@@ -513,6 +539,14 @@ const SEALED_RE = /^[A-Za-z0-9_-]{16,4096}$/;
  * fall back to the app every time.
  */
 export const BROWSER_CREDENTIAL_KEY = 'fleetwright.credential';
+
+/**
+ * Where `/me` leaves the delegation its signing page signed for one
+ * provider's sign-in, `<this><provider>`, for the finishing page below to
+ * carry with the finish and then forget. Without one the finish goes as it
+ * did, unsigned, which a box that takes only signed requests refuses.
+ */
+export const FINISH_DELEGATION_KEY = 'fleetwright.finish.';
 
 /**
  * What the provider's redirect hands back for a box's flow, checked and
@@ -634,13 +668,23 @@ function finishingPage(finish, text) {
   var finish = ${scriptJson(finish)};
   var back = ${scriptJson(back)};
   var token = null;
+  var delegation = null;
   try { token = localStorage.getItem(${scriptJson(BROWSER_CREDENTIAL_KEY)}); } catch (e) { token = null; }
   if (!token) { location.replace(back); return; }
+  // What this browser's signing page signed for this sign-in, used once.
+  try {
+    var held = localStorage.getItem(${scriptJson(FINISH_DELEGATION_KEY)} + finish.provider);
+    localStorage.removeItem(${scriptJson(FINISH_DELEGATION_KEY)} + finish.provider);
+    delegation = held ? JSON.parse(held) : null;
+  } catch (e) { delegation = null; }
   var say = document.getElementById('say');
+  var body = {};
+  for (var k in finish) body[k] = finish[k];
+  if (delegation && typeof delegation === 'object') body.delegation = delegation;
   fetch('/api/oauth/finish', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
-    body: JSON.stringify(finish)
+    body: JSON.stringify(body)
   }).then(function (res) {
     return res.json().then(function (body) { return { status: res.status, body: body || {} }; });
   }).then(function (r) {
