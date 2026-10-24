@@ -76,10 +76,10 @@ jobs:
     # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
     # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
     runs-on: xcode-27
-    # ON WHAT SHIPS AND ON WHAT IS NEXT. 27.1 is what TestFlight and the store
-    # are built with; 27.2 is built and tested beside it, because the Duo's
-    # Pencil arrived with it and the next SDK's breakage is cheaper seen here
-    # than on the day it becomes the one that ships. Neither cancels the other.
+    # ON WHAT SHIPS AND ON THE FLOOR. 27.2 is what TestFlight builds and the
+    # store submits (the Duo's Pencil arrived with it); 27.1 is the oldest SDK
+    # that draws the Duo edge to edge, built beside it so nothing comes to need
+    # 27.2 by accident. Neither cancels the other. scripts/select-xcode.sh.
     strategy:
       fail-fast: false
       matrix:

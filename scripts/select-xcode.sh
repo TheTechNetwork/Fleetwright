@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Point xcodebuild at the Xcode the app ships with, on every macOS job.
 #
-#   ./scripts/select-xcode.sh          # 27.1, what ships
-#   ./scripts/select-xcode.sh 27.2     # what is next, built beside it
+#   ./scripts/select-xcode.sh          # 27.2, what ships
+#   ./scripts/select-xcode.sh 27.1     # the Duo's first SDK, built beside it
 #
 # WHY IT IS PINNED AT ALL. The SDK an app is BUILT with decides how iPhone Duo
 # draws it, whatever the deployment target says: built with the iOS 26 SDK it
@@ -25,10 +25,14 @@
 set -euo pipefail
 
 # WHAT SHIPS, and what is built beside it. ios.yml's build job compiles and
-# tests on both, so a change that needs the next SDK, or breaks on it, is seen
-# before it ships; TestFlight and the store take the first. Move SHIPS when the
-# next one is final.
-SHIPS="27.1"
+# tests on both. TestFlight builds with SHIPS, and the store submits that same
+# upload, so this line is what the store gets too.
+#
+# 27.2, ON ITS RELEASE CANDIDATE. It is the release that brought Apple Pencil
+# to the Duo, and Apple has accepted submissions built with the 27.2 RC since
+# 20 October. 27.1 stays in the build matrix as the oldest SDK that draws the
+# Duo edge to edge, so nothing here quietly comes to need 27.2.
+SHIPS="27.2"
 XCODE="${1:-$SHIPS}"
 SDK_PREFIX="$XCODE"
 
