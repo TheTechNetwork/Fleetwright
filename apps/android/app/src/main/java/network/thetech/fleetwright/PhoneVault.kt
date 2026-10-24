@@ -23,7 +23,12 @@ import java.security.MessageDigest
  */
 internal class PhoneVault(private val settings: Settings) {
 
-    data class Item(val name: String, val at: Long)
+    /**
+     * `kind`, for Claude: `login`, the sign-in Remote Control needs, or `token`,
+     * a setup-token that runs sessions only. Null for anything else, and from a
+     * minter from before it said.
+     */
+    data class Item(val name: String, val at: Long, val kind: String? = null)
 
     /**
      * One box this person approved. [key] is the whole SHA-256 of the box's
@@ -61,7 +66,7 @@ internal class PhoneVault(private val settings: Settings) {
         val grants = answer.optJSONArray("grants")
         return Contents(
             items = (0 until (items?.length() ?: 0)).mapNotNull { i ->
-                items?.optJSONObject(i)?.let { Item(it.optString("name"), it.optLong("at")) }
+                items?.optJSONObject(i)?.let { Item(it.optString("name"), it.optLong("at"), it.optString("kind").ifBlank { null }) }
             },
             grants = (0 until (grants?.length() ?: 0)).mapNotNull { i ->
                 grants?.optJSONObject(i)?.let {

@@ -184,8 +184,8 @@ fun CredentialsSheet(
                 Text(
                     when {
                         linkedOnly ->
-                            "Linked on a box rather than kept in your vault. A link on a box wins there; forget one " +
-                                "and that box uses what your vault keeps."
+                            "Linked on a box before your vault was the only place credentials came from. Sessions you start " +
+                                "do not use these any more; forget them to take them off the box."
                         onlyClaude ->
                             "This machine has no Claude account of its own. Sessions run on the account of whoever " +
                                 "started them, so connecting here links YOURS — and somebody who has not connected " +

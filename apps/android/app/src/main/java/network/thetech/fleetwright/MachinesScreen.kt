@@ -549,7 +549,6 @@ private fun MachinePage(
     var labels by remember(hostId) { mutableStateOf(reporting?.labels ?: emptyList()) }
     var setLabels by remember(hostId) { mutableStateOf(reporting?.setLabels ?: emptyList()) }
     var newLabel by remember { mutableStateOf("") }
-    var claudeOpen by remember { mutableStateOf(false) }
     var rebooting by remember { mutableStateOf(false) }
     var rebootPin by remember { mutableStateOf("") }
     var rebootConfirm by remember { mutableStateOf("") }
@@ -612,9 +611,6 @@ private fun MachinePage(
         run { it.labels(hostId, add = wanted) }
     }
 
-    if (claudeOpen) {
-        CredentialsSheet(settings, hostId, onDismiss = { claudeOpen = false }, onlyClaude = true)
-    }
     if (poolPage) VmMachinePage(settings, hostId, onDismiss = { poolPage = false })
     if (confirmingRevoke) {
         AlertDialog(
@@ -728,9 +724,10 @@ private fun MachinePage(
         if (result.isNotBlank()) Quoted(result)
 
         SectionHead("Identity")
-        if (h != null) {
-            OutlinedButton(onClick = { claudeOpen = true }) { Text("Sign in to Claude") }
-        }
+        // NO "SIGN IN TO CLAUDE" HERE ANY MORE. It signed a person in on this
+        // machine for this machine, which then held its own refresh token; a
+        // person's login is kept in their vault and this machine is given it
+        // once they approve it, below (docs/vault.md).
         member?.fingerprint?.takeIf { it.isNotBlank() }?.let { fp ->
             // NEXT TO THE MACHINE IT IDENTIFIES, to be compared with what the
             // box itself prints.

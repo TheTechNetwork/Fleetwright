@@ -237,19 +237,38 @@ internal class PhoneGitHub(private val settings: Settings) {
     }
 
     /**
-     * Finish a token one of your machines is making, and keep it: send the code
-     * with a key made for this one answer, open what comes back, and deposit it
-     * exactly as a pasted token is deposited. The token exists in the clear only
-     * in this function's memory, between the two seals.
+     * Keep a whole Claude sign-in one of your machines made, the kind Remote
+     * Control needs: sealed to the minter as a token is, with `signIn` where a
+     * token is `claude`. The minter keeps it and alone renews it.
      */
-    suspend fun keepTokenFromMachine(fleet: Fleet, host: String, code: String): Result<String> = runCatching {
+    suspend fun depositClaudeSignIn(fleet: Fleet, signIn: JSONObject): Result<String> = runCatching {
+        val pin = minterKey(fleet)
+        val github = accessToken(fleet)
+        val payload = JSONObject().put("v", 1).put("github", github).put("signIn", signIn).put("at", System.currentTimeMillis())
+        val r = fleet.depositClaudeLogin(Seal.seal(pin, Seal.DEPOSIT_AAD, payload))
+        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "The minter refused it." })
+        r.optString("text")
+    }
+
+    /**
+     * Finish what one of your machines is making, and keep it: send the code
+     * with a key made for this one answer, open what comes back, and deposit
+     * it. It exists in the clear only in this function's memory, between the
+     * two seals. A machine from before protocol 15 makes a setup-token where a
+     * sign-in was asked for, and that is kept too, and said.
+     */
+    suspend fun keepFromMachine(fleet: Fleet, host: String, code: String): Result<String> = runCatching {
         val key = Seal.newKey()
-        val reply = fleet.setupToken(host, code = code, reply = key.publicKey)
+        val reply = fleet.setupToken(host, code = code, reply = key.publicKey, kind = "login")
         val sealed = reply.sealed
-        if (!reply.ok || sealed == null) error(reply.text.ifBlank { "$host did not make a token." })
-        val token = Seal.open(key, Seal.SETUP_TOKEN_AAD, sealed).optString("token")
+        if (!reply.ok || sealed == null) error(reply.text.ifBlank { "$host did not sign you in." })
+        val inside = Seal.open(key, Seal.SETUP_TOKEN_AAD, sealed)
+        val signIn = inside.optJSONObject("signIn")
+        if (signIn != null) return@runCatching depositClaudeSignIn(fleet, signIn).getOrThrow()
+        val token = inside.optString("token")
         if (token.isBlank()) error("The answer did not open with this phone's key, so it was not used.")
-        depositClaudeLogin(fleet, token).getOrThrow()
+        val kept = depositClaudeLogin(fleet, token).getOrThrow()
+        "$kept $host is older and made a setup-token, which runs sessions but cannot open Remote Control. Update it and make your login again for Remote Control."
     }
 
     private fun github(method: String, url: String, token: String, body: JSONObject?): Pair<Int, String> {
