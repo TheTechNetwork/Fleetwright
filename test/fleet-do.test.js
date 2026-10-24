@@ -744,7 +744,7 @@ test('one member’s requests displace their own records, never the fleet’s or
     const code = await pin({ ephemeral: true });
     assert.equal((await call(f, '/api/enroll/host', 'POST', { code, hostId: `t-${i}`, publicJwk })).status, 200);
     f.core.hostConnected(`t-${i}`, () => {});
-    f.core.hostDisconnected(`t-${i}`, 'job done');
+    f.core.hostDisconnected(`t-${i}`, 'socket closed: 1000 shutting down');
   }
   await new Promise((r) => setTimeout(r, 0));
 

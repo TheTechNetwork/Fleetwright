@@ -152,12 +152,6 @@ export class HostRegistry {
   }
 
   /**
-   * Called when an ephemeral host is retired, so its key can be revoked too.
-   * @type {((hostId: string, reason: string) => void)|null}
-   */
-  onRetired = null;
-
-  /**
    * A host has dialled in.
    * @param {string} hostId
    * @param {(msg: object) => void} send
@@ -238,20 +232,23 @@ export class HostRegistry {
     host.state = 'offline';
     host.reason = reason;
 
-    // AN EPHEMERAL HOST THAT DROPS IS GONE, not offline.
+    // AN EPHEMERAL HOST THAT DROPS LEAVES THE LIST, and keeps its key.
     //
     // The comment above is right for a real box: it may come back, and its
     // last known sessions are the best guess about where a resume would land.
-    // A CI runner will not come back — the job ended and the machine was
-    // destroyed — and keeping it would fill the registry with corpses, one per
-    // build, each of them a name the scheduler still considers and a row in
-    // somebody's app.
+    // A CI runner whose job ended will not, and keeping its row would fill
+    // the registry with corpses, one per build, each a name the scheduler
+    // still considers and a row in somebody's app. So the row goes now.
     //
-    // Retired here rather than swept later, because the disconnect IS the
-    // event: there is nothing to wait for.
+    // THE KEY DOES NOT GO WITH IT. A dropped socket is not a finished job: a
+    // runner whose connection blipped (a 1006 six minutes in) had its key
+    // revoked here, and spent the rest of its hour refused as "that host has
+    // been revoked" with nothing anybody could start on it. One that dials
+    // back is let in on the key it enrolled with. One that closed saying it
+    // was shutting down is retired at once by core.js hostDisconnected, and
+    // one that just vanished by retireStranded, ten minutes after.
     if (host.ephemeral) {
       this.hosts.delete(hostId);
-      this.onRetired?.(hostId, reason);
       return;
     }
     host.send = () => {

@@ -543,9 +543,6 @@ export class CoordinatorCore {
      */
     this.mcpAuthorizations = new Authorizations({ now });
     this.registry = new HostRegistry({ now });
-    // An ephemeral host that drops is retired by the registry; the key it
-    // enrolled with has to go with it, which only the core can do.
-    this.registry.onRetired = (hostId, reason) => this.ephemeralHostRetired(hostId, reason);
     // Credentials issued to devices, one per phone, each revocable alone.
     this.clients = new ClientRegistry({ now });
     // The ID tokens that have already bought one of those. A token is
@@ -684,8 +681,15 @@ export class CoordinatorCore {
     // A RELAY TO A MACHINE THAT HAS GONE carries nothing, and the phone is
     // told so rather than left pumping bytes at a socket nobody reads.
     this.relays.closeForHost(hostId, `${hostId} left the fleet's socket, so nothing reaches it through this phone now.`);
+    const ephemeral = this.registry.get(hostId)?.ephemeral === true;
     this.registry.disconnect(hostId, reason);
     this.log.warn(`coordinator: ${hostId} disconnected (${reason})`);
+    // A TEMPORARY HOST THAT SAID GOODBYE is retired now: the host closes with
+    // 1000 only as it shuts down (transports/websocket.js), so its key need
+    // not outlive the job by the ten minutes retireStranded waits. Any other
+    // close is a dropped connection, which a runner dials back from on the
+    // key it enrolled with.
+    if (ephemeral && /^socket closed: 1000\b/.test(reason)) this.ephemeralHostRetired(hostId, reason);
   }
 
   /**

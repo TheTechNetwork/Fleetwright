@@ -55,16 +55,13 @@ test('a fleet of only temporary hosts refuses, and says why', () => {
   assert.match(p.reason, /lost when it goes/);
 });
 
-test('disconnecting retires it instead of leaving a corpse', () => {
+test('disconnecting takes it off the list, leaving the key for retireStranded', () => {
   const r = fleet();
-  const retired = [];
-  r.onRetired = (id, why) => retired.push([id, why]);
   add(r, 'runner-1', { ephemeral: true });
   assert.equal(r.list().length, 1);
 
-  r.disconnect('runner-1', 'job finished');
+  r.disconnect('runner-1', 'socket closed: 1006');
   assert.deepEqual(r.list(), [], 'one corpse per build is not a fleet');
-  assert.deepEqual(retired, [['runner-1', 'job finished']], 'the key is revoked by the listener');
 });
 
 test('a real host that drops is KEPT, as it always was', () => {

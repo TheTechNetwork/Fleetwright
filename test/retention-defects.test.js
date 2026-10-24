@@ -277,6 +277,31 @@ test('6. a temporary machine missing ten minutes is retired, counted from when i
   assert.ok(core.events.some((e) => e.event === 'host.retired' && e.hostId === 'vm-gone'));
 });
 
+test('6. a temporary machine whose socket dropped keeps its key, and is let back in', async () => {
+  // Revoked on the drop, a runner whose connection blipped six minutes in
+  // spent the rest of its hour refused as "that host has been revoked".
+  let now = Date.UTC(2026, 9, 24, 22, 39);
+  const core = new CoordinatorCore({ logger: silent, now: () => now });
+  core.hostIds.now = () => now;
+  const { publicJwk } = await generateKeyPair();
+  await core.hostIds.enrol({ hostId: 'gha-runner-1', publicJwk, ephemeral: true });
+  core.hostConnected('gha-runner-1', () => {});
+  now += 6 * 60_000;
+  core.hostDisconnected('gha-runner-1', 'socket closed: 1006');
+  assert.equal(core.hostIds.get('gha-runner-1')?.revokedAt, null, 'a blip is not a finished job');
+  assert.ok(!core.registry.get('gha-runner-1'), 'but it is not offered work while away');
+  now += 5_000;
+  core.hostConnected('gha-runner-1', () => {});
+  assert.equal(core.registry.get('gha-runner-1')?.connected, true);
+  assert.deepEqual(core.retireStranded(), []);
+
+  core.hostDisconnected('gha-runner-1', 'socket closed: 1006');
+  assert.deepEqual(core.retireStranded(), [], 'first seen missing');
+  now += 11 * 60_000;
+  assert.deepEqual(core.retireStranded(), ['gha-runner-1'], 'one that never comes back is retired as before');
+  assert.ok(core.hostIds.get('gha-runner-1')?.revokedAt);
+});
+
 test('6. on the Worker, a retired temporary machine is revoked in storage at once, not at the next host\'s connect', async () => {
   const fleet = workerFleet();
   const { publicJwk } = await generateKeyPair();
