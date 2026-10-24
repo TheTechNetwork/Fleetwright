@@ -97,6 +97,17 @@ internal class PhoneVault(private val settings: Settings) {
         ask(fleet, "forget", JSONObject().put("name", name)).first
     }
 
+    /**
+     * Whether a kept credential still works, asked by the minter of the
+     * service it is for (vault.js, testItem). Anything short of accepted,
+     * cannot tell included, comes back as a failure, so it is drawn as one.
+     */
+    suspend fun test(fleet: Fleet, name: String): Result<String> = runCatching {
+        val (text, answer) = ask(fleet, "test", JSONObject().put("name", name))
+        if (answer.optString("state") != "accepted") error(text)
+        text
+    }
+
     /** Sign in to GitHub or Cloudflare for the vault: this phone runs the page, the minter keeps the result. */
     suspend fun connect(context: Context, fleet: Fleet, provider: String): Result<String> = runCatching {
         val start = if (provider == "github") fleet.githubDeviceStart() else fleet.cloudflareDeviceStart()
@@ -191,6 +202,22 @@ internal class PhoneVault(private val settings: Settings) {
         fun approves(grants: List<Grant>, hostId: String, jwk: JSONObject): Boolean {
             val hash = keyHash(jwk)
             return grants.any { it.only.isEmpty() && it.label == hostId && it.key == hash }
+        }
+
+        /**
+         * The kept credentials there is a service to ask about. A named secret
+         * and a hypervisor's token have none, so they get no Test button.
+         */
+        fun isTestable(name: String): Boolean = name in setOf("claude", "github", "cloudflare")
+
+        /** What forgetting one costs, said before it is done. */
+        fun forgetting(name: String): String = when (name) {
+            "claude" ->
+                "Runners you start go back to the runner repository's API key, and boxes stop being given it. " +
+                    "Getting it back means a new token from claude setup-token."
+            "github", "cloudflare" ->
+                "Boxes stop being given it when they next ask. Getting it back means signing in again from this page."
+            else -> "Boxes stop being given it when they next ask. Getting it back means typing it in again."
         }
 
         /** How a vault item is named to a person. */
