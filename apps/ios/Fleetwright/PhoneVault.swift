@@ -129,6 +129,15 @@ struct PhoneVault {
         try await ask(fleet, op: "forget", extra: ["name": name]).text
     }
 
+    /// Whether a kept credential still works, asked by the minter of the
+    /// service it is for (vault.js, testItem). Anything short of accepted,
+    /// cannot tell included, comes back as a failure, so it is drawn as one.
+    func test(_ fleet: Fleet, name: String) async throws -> String {
+        let r = try await ask(fleet, op: "test", extra: ["name": name])
+        guard r.answer["state"] as? String == "accepted" else { throw FleetError.message(r.text) }
+        return r.text
+    }
+
     /// Sign in to GitHub or Cloudflare for the vault: this phone runs the page, the minter keeps the result.
     @MainActor
     func connect(_ fleet: Fleet, provider: String) async throws -> String {
@@ -203,6 +212,25 @@ struct PhoneVault {
     static func keyHash(_ key: Fleet.Host.PublicKey) -> String {
         let canonical = "{\"crv\":\"\(key.crv)\",\"kty\":\"\(key.kty)\",\"x\":\"\(key.x)\",\"y\":\"\(key.y)\"}"
         return SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The kept credentials there is a service to ask about. A named secret
+    /// and a hypervisor's token have none, so they get no Test button.
+    static func isTestable(_ name: String) -> Bool {
+        ["claude", "github", "cloudflare"].contains(name)
+    }
+
+    /// What forgetting one costs, said before it is done.
+    static func forgetting(_ name: String) -> String {
+        switch name {
+        case "claude":
+            return "Runners you start go back to the runner repository's API key, and boxes stop being given it. "
+                + "Getting it back means a new token from claude setup-token."
+        case "github", "cloudflare":
+            return "Boxes stop being given it when they next ask. Getting it back means signing in again from this page."
+        default:
+            return "Boxes stop being given it when they next ask. Getting it back means typing it in again."
+        }
     }
 
     /// How a vault item is named to a person.
