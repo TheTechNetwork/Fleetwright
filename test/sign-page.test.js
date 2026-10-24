@@ -201,6 +201,19 @@ test('the coordinator sends a signing page\u2019s GitHub sign-in back to the con
   }
 });
 
+test('a Cloudflare sign-in the signing page started goes back to it too, for the vault to keep', () => {
+  const state = `s.${'b'.repeat(32)}`;
+  const cloudflareOauth = { clientId: 'cf-id', clientSecret: 'cf-secret', scopes: 'account-settings.read offline_access' };
+  const core = new CoordinatorCore({ cloudflareOauth, signingOrigin: `https://${SIGN}` });
+  const r = core.cloudflareCallback({ code: 'cfcode1234', state });
+  assert.equal(r.ok, true);
+  assert.equal(r.device, `https://${SIGN}/oauth/cloudflare/callback?code=cfcode1234&state=${state}`);
+  // Not the box flow's finishing page, which would hand the code to a
+  // machine: the signing page holds the verifier, and the minter exchanges.
+  assert.equal(r.finish, undefined);
+  assert.equal(new CoordinatorCore({ cloudflareOauth, signingOrigin: null }).cloudflareCallback({ code: 'cfcode1234', state }).ok, false);
+});
+
 /** The first value `get` gives that is not undefined, within ten seconds. @template T @param {() => T|undefined} get @returns {Promise<T>} */
 async function until(get) {
   for (let i = 0; i < 200; i++) {
@@ -223,15 +236,13 @@ async function browser() {
   return null;
 }
 
-test('in a browser: /me opens the signing page, lists its key with a GitHub sign-in, and sends only what was signed there', { timeout: 120_000 }, async (t) => {
+test('in a browser: /me opens the vault’s signing page, which lists its key through it, and carries nothing else', { timeout: 120_000 }, async (t) => {
   const b = await browser();
   if (!b) return t.skip('no browser to run the pages in');
   const m = await signingMinter();
   const core = new CoordinatorCore({ githubApp: { clientId: 'Iv23liTEST', clientSecret: 'gh-secret' }, signingOrigin: `https://${SIGN}` });
-  /** What /me sent to /api/intent, in order, and what the finishing page sent. @type {any[]} */
-  const sent = [];
-  /** @type {any[]} */
-  const finished = [];
+  /** Every API request /me made, as `METHOD /path`. @type {string[]} */
+  const asked = [];
   try {
     const context = await b.newContext();
     await context.addInitScript(({ email }) => {
@@ -271,42 +282,25 @@ test('in a browser: /me opens the signing page, lists its key with a GitHub sign
         const r = core.githubCallback({ code: u.searchParams.get('code'), state: u.searchParams.get('state') });
         return route.fulfill({ status: r.ok ? 200 : 400, contentType: 'text/html', body: callbackPage(r) });
       }
-      if (u.pathname === '/oauth/cloudflare/callback') {
-        const finish = { provider: /** @type {const} */ ('cloudflare'), state: String(u.searchParams.get('state')), code: String(u.searchParams.get('code')) };
-        return route.fulfill({ status: 200, contentType: 'text/html', body: callbackPage({ ok: true, text: 'Finishing.', finish }) });
-      }
       if (u.pathname === '/me') {
         const page = /** @type {any} */ (memberRoutes({ method: 'GET', path: '/me' }, { fleet: 'Test fleet', signIn: { google: null, apple: null }, signer: `https://${SIGN}` }));
         return route.fulfill({ status: 200, contentType: page.contentType, body: page.body });
       }
       if (u.pathname.startsWith('/me/')) return route.fulfill({ status: 404, body: '' });
+      asked.push(`${req.method()} ${u.pathname}`);
       const body = JSON.parse(req.postData() || '{}');
       assert.equal(req.headers().authorization, 'Bearer fw_test_credential');
       if (u.pathname === '/api/github/device') return route.fulfill({ contentType: 'application/json', body: JSON.stringify(await m.post('/github/token', { sealed: body.sealed, boxCodes: [] })) });
       if (u.pathname === '/api/vault') return route.fulfill({ contentType: 'application/json', body: JSON.stringify(await m.post('/vault/device', { sealed: body.sealed, email: ELI })) });
-      if (u.pathname === '/api/oauth/finish') {
-        finished.push(body);
-        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, text: 'Cloudflare connected.' }) });
-      }
-      if (u.pathname === '/api/intent') {
-        sent.push(body);
-        const reply = body.verb === 'connect' && !body.params?.provider
-          ? { ok: true, connections: { catalogue: [{ provider: 'github', label: 'GitHub' }, { provider: 'claude', label: 'Claude' }, { provider: 'cloudflare', label: 'Cloudflare', flow: 'app', url: 'https://dash.cloudflare.test/oauth2/auth?x=1' }], connected: [], hosts: ['box1'] } }
-          : body.verb === 'connect'
-            ? { ok: true, connections: { catalogue: [{ provider: 'claude', url: 'https://claude.ai/oauth/authorize?x=1' }] } }
-            : { ok: true, text: 'Connected.' };
-        return route.fulfill({ contentType: 'application/json', body: JSON.stringify(reply) });
-      }
-      return route.fulfill({ status: 404, body: '' });
+      return route.fulfill({ status: 404, contentType: 'application/json', body: '{"ok":false}' });
     }
 
     const me = await context.newPage();
     await me.goto(`${FLEET}/me`);
-    // No key yet: the first read goes unsigned, as it did before.
-    await me.waitForFunction(() => document.querySelectorAll('#providers .card').length === 3);
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].sig, undefined);
-    assert.equal(sent[0].delegation, undefined);
+    // NOTHING IS READ OR LINKED FROM HERE: the vault is the signing page's.
+    await me.waitForSelector('#in:not([hidden])');
+    assert.equal(await me.$('#providers'), null);
+    assert.match(String(await me.textContent('#signing-state')), /kept in your vault/);
 
     // OPEN, AND LIST: the signing page shows the address, and GitHub's
     // window opens from its button.
@@ -316,87 +310,29 @@ test('in a browser: /me opens the signing page, lists its key with a GitHub sign
     await signer.waitForSelector('#list:not([disabled])');
     await signer.click('#list');
     await signer.waitForSelector('#listed:not([hidden])', { timeout: 30_000 });
-    assert.equal(m.github.exchanged, 1, 'GitHub exchanged the code once, with the page\u2019s verifier');
-    const listed = m.directory().get(ELI) ?? [];
-    assert.equal(listed.length, 1);
-    assert.match(String(await signer.textContent('#listed-who')), new RegExp(`as ${ELI} with this browser\u2019s key ${listed[0].kid.slice(0, 16)}`));
-    await me.waitForFunction(() => /signs what it sends/.test(document.getElementById('signing-state')?.textContent || ''));
+    assert.equal(m.github.exchanged, 1, 'GitHub exchanged the code once, with the page’s verifier');
+    assert.equal((m.directory().get(ELI) ?? []).length, 1);
+    await me.waitForFunction(() => /Open on the signing page/.test(document.getElementById('signing-state')?.textContent || ''));
 
-    // A CLAUDE SIGN-IN is for one machine, so it is signed for that machine.
-    await me.click('#providers .card:nth-child(2) button');
-    await signer.waitForSelector('#ask:not([hidden])');
-    assert.equal(await signer.textContent('#ask-head'), 'Sign this for box1?');
-    await signer.click('#approve');
-    await me.waitForFunction(() => document.querySelector('#providers .card:nth-child(2) input') !== null);
-    const claude = sent.at(-1);
-    assert.equal(claude.host, 'box1');
-    assert.equal((await checkIntentSignature({ intent: { ...claude, actor: ELI }, sig: claude.sig, kid: claude.kid, host: 'box1', directory: m.directory() })).verdict, 'signed');
-
-    // A TOKEN goes to every machine, so it carries a delegation for exactly
-    // that token; the secret is shown by its length, not its value.
-    await me.click('#providers .card:nth-child(1) button');
-    await me.fill('#providers .card:nth-child(1) input', 'ghp_browser_token');
-    await me.press('#providers .card:nth-child(1) input', 'Enter');
-    await signer.waitForSelector('#ask:not([hidden])');
-    assert.equal(await signer.textContent('#ask-head'), 'Let the fleet do this in your name?');
-    assert.match(String(await signer.textContent('#ask-lines')), /hidden, 17 characters/);
-    assert.doesNotMatch(String(await signer.textContent('#ask-lines')), /ghp_browser_token/);
-    await signer.click('#approve');
-    const link = await until(() => sent.find((x) => x.verb === 'link'));
-    const covers = (/** @type {any} */ params) => checkDelegation({ intent: { verb: 'link', params, actor: ELI }, delegation: link.delegation, host: 'box7', directory: m.directory(), now: Date.now() });
-    assert.equal((await covers(link.params)).verdict, 'delegated');
-    assert.equal((await covers({ ...link.params, secret: 'ghp_somebody_elses' })).verdict, 'not-covered', 'a different token is not covered');
-    // Then what is connected is read again, which goes to every machine, so
-    // it too is a delegation, asked once for this visit.
-    await signer.waitForSelector('#ask:not([hidden])');
-    assert.match(String(await signer.textContent('#ask-lines')), /read or start connecting your accounts/);
-    await signer.click('#approve');
-    const reread = await until(() => sent.slice(sent.indexOf(link)).find((x) => x.verb === 'connect'));
-    assert.equal((await checkDelegation({ intent: { verb: 'connect', params: {}, actor: ELI }, delegation: reread.delegation, host: 'box1', directory: m.directory(), now: Date.now() })).verdict, 'delegated');
-    await me.waitForFunction(() => document.querySelectorAll('#providers .card').length === 3);
-
-    // DECLINED THERE IS REFUSED HERE, with nothing sent.
-    const before = sent.length;
-    await me.click('#providers .card:nth-child(1) button');
-    await me.fill('#providers .card:nth-child(1) input', 'ghp_second_token');
-    await me.press('#providers .card:nth-child(1) input', 'Enter');
-    await signer.waitForSelector('#ask:not([hidden])');
-    await signer.click('#decline');
-    await me.waitForFunction(() => /declined it on the signing page/.test(document.querySelector('#providers .card:nth-child(1) .say')?.textContent || ''));
-    assert.equal(sent.length, before);
-
-    // A PROVIDER'S SIGN-IN finishes on a page of the coordinator's, on a
-    // machine the fleet picks, so it is signed first, as a delegation that
-    // page carries with the finish and then forgets.
-    await me.click('#providers .card:nth-child(3) button');
-    await me.click('#providers .card:nth-child(3) button.primary:not([aria-expanded])');
-    await signer.waitForSelector('#ask:not([hidden])');
-    assert.match(String(await signer.textContent('#ask-lines')), /finish a sign-in/);
-    await signer.click('#approve');
-    await me.waitForSelector('#providers .card:nth-child(3) a.btn');
-    const back = await context.newPage();
-    await back.goto(`${FLEET}/oauth/cloudflare/callback?code=cfcode1234&state=abcdefghijklmnop1234`);
-    const finish = await until(() => finished[0]);
-    assert.equal(finish.code, 'cfcode1234');
-    assert.equal((await checkDelegation({ intent: { verb: 'exchange', params: { provider: 'cloudflare' }, actor: ELI }, delegation: finish.delegation, host: 'box3', directory: m.directory(), now: Date.now() })).verdict, 'delegated');
-    assert.equal(await back.evaluate(() => localStorage.getItem('fleetwright.finish.cloudflare')), null, 'used once');
-    await back.close();
-
-    // CLOSED, then back: the key is still there, and nothing is read until
-    // the signing page is open again; then the read is delegated.
-    await signer.close();
-    await me.reload();
-    await me.waitForFunction(() => /Open the signing page to read/.test(document.getElementById('say')?.textContent || ''));
-    assert.equal(sent.length, before);
-    const [again] = await Promise.all([me.waitForEvent('popup'), me.click('#signing-open')]);
-    await again.waitForSelector('#listed:not([hidden])');
-    await again.waitForSelector('#ask:not([hidden])');
-    assert.match(String(await again.textContent('#ask-lines')), /read or start connecting your accounts/);
-    await again.click('#approve');
-    await me.waitForFunction(() => document.querySelectorAll('#providers .card').length === 3);
-    const read = sent.at(-1);
-    assert.equal(read.verb, 'connect');
-    assert.equal((await checkDelegation({ intent: { verb: 'connect', params: {}, actor: ELI }, delegation: read.delegation, host: 'box1', directory: m.directory(), now: Date.now() })).verdict, 'delegated');
+    // WHAT /me CARRIES FOR IT, and nothing past that: an intent it would
+    // carry only for the one verb that makes a Claude sign-in, and a route
+    // off its list not at all. Asked as the signing page would ask.
+    /** @param {any} relay */
+    const carry = (relay) => signer.evaluate((r) => new Promise((resolve) => {
+      window.addEventListener('message', function on(e) {
+        if (e.data?.type !== 'relayed' || e.data.id !== r.id) return;
+        window.removeEventListener('message', on);
+        resolve(e.data.body);
+      });
+      window.opener.postMessage({ type: 'relay', ...r }, 'https://fleet.test');
+    }), relay);
+    const before = asked.length;
+    assert.match(String((await carry({ id: 'start-1', method: 'POST', path: '/api/intent', body: { verb: 'start', params: {} } }))?.text), /only what the signing page needs/);
+    assert.match(String((await carry({ id: 'admin-1', method: 'GET', path: '/api/admin/clients' }))?.text), /only what the signing page needs/);
+    assert.equal(asked.length, before, 'neither reached the coordinator');
+    await carry({ id: 'hosts-1', method: 'GET', path: '/api/hosts/enrolled' });
+    assert.equal(asked.at(-1), 'GET /api/hosts/enrolled', 'a listed route did');
+    assert.ok(!asked.some((a) => a === 'POST /api/intent'), '/me sent no intent of its own');
     await context.close();
     if (failed) throw failed;
   } finally {

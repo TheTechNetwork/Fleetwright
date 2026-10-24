@@ -19,36 +19,41 @@
 // A dead end reached by following the instructions.
 //
 // So this is the credentials half of the browser surface docs/wanted.md asks
-// for, and DELIBERATELY ONLY THAT HALF. It signs you in and it adds your
-// accounts. It does not list, start, stop or read a session: the apps do that,
-// the agent does that, and a second place to drive the fleet is a second place
-// for the two to disagree about what is running.
+// for, and DELIBERATELY ONLY THAT HALF. It signs you in and it opens the place
+// your accounts are kept. It does not list, start, stop or read a session: the
+// apps do that, the agent does that, and a second place to drive the fleet is
+// a second place for the two to disagree about what is running.
 //
 // NO BUNDLER, NO FRAMEWORK, NO BUILD STEP, for the same reason
 // `mcp/authorize-page.js` has none: this string has to be served identically
 // by a Node process and by a Worker, and the only third-party script on it is
 // the sign-in script belonging to the provider whose sign-in it is.
 //
-// It talks to two routes that already existed and adds no others:
-// `POST /api/session` for the credential, `POST /api/intent` for everything
-// else. Nothing here is a new authority: the coordinator decides what a caller
-// may do and has not changed.
+// It talks to one route of its own, `POST /api/session`, for the credential.
+// Nothing here is a new authority: the coordinator decides what a caller may
+// do and has not changed.
 //
-// AND IT SIGNS, where the fleet has a signing page (`signer`): a page the
-// minting Worker serves on a hostname of its own (src/fleet/minter/sign-page.js),
-// which keeps this browser's key where script from this origin, which the
-// coordinator serves, cannot reach it. This page opens it, asks it to sign
-// each change to an account, and passes on the two sealed requests listing
-// its key takes (`/api/github/device`, `/api/vault`) with this browser's
-// credential, which it cannot read and does not need to.
+// YOUR ACCOUNTS ARE IN YOUR VAULT, AND THE VAULT IS NOT HERE. Every
+// credential a person's session uses is kept once, by the minter
+// (src/fleet/minter/vault.js), and a machine refuses to keep one of its own
+// for a person (src/fleet/host/sidecar.js, VAULT_ONLY). This page used to link
+// accounts on machines, one by one, and on a fleet where every machine says
+// no to that, those buttons led only to the refusal. The vault is read and
+// changed on the signing page, which the minting Worker serves on a hostname
+// of its own (src/fleet/minter/sign-page.js), where script from this origin,
+// which the coordinator serves, cannot reach it or what it shows. This page
+// opens it and carries what it sends with this browser's credential, which
+// it cannot read and does not need to: requests sealed to the minter, the
+// list of machines, and the one signed request that makes a Claude sign-in.
 //
 // THE DESIGN READ, which CLAUDE.md requires before any screen. A signed-in
 // utility page for one person's own credentials, in the fleet console's visual
 // language (docs/design-system.md), at this product's dials: ENERGY 1,
-// RHYTHM 1, MOTION 1. Calm recedes and trouble comes forward, so the cards are
-// one uniform shape and the ONLY one that breaks it is the card asking a
-// question: a Claude account that is not connected, which is the thing that
-// will refuse a session an hour from now.
+// RHYTHM 1, MOTION 2. Calm recedes and trouble comes forward, so the cards are
+// one uniform shape. None of them asks a question any more: whether a Claude
+// sign-in is kept is the vault's to say, and this page cannot read it, so the
+// card that asks is on the signing page (C-5: a state it does not know is not
+// one it shows).
 //
 // NO EM DASH IN THE STRINGS ON THIS PAGE, and that is deliberate rather than
 // an oversight. CLAUDE.md records an exception to R-02 covering 41 strings in
@@ -58,7 +63,7 @@
 // The comments are prose for people reading the source and keep the house
 // voice.
 
-import { BROWSER_CREDENTIAL_KEY, FINISH_DELEGATION_KEY } from './oauth.js';
+import { BROWSER_CREDENTIAL_KEY } from './oauth.js';
 
 /** @param {string} s */
 const esc = (s) =>
@@ -399,9 +404,11 @@ ${signIn.apple ? '<script src="https://appleid.cdn-apple.com/appleauth/static/js
   </section>
 
   <!-- SIGNED IN -------------------------------------------------------------
-       The provider list is NOT in this file. It arrives from the host, with
-       the real URLs and the real scopes, which is the entire reason the verbs
-       are connect/link/unlink rather than one verb per vendor. -->
+       What is kept is NOT on this page and never was this page's to read. It
+       is in the person's vault, which the minter holds, and the signing page
+       on the minter's own address is where it is read and changed. This card
+       opens that page; when the fleet has none it says so rather than
+       offering a button that leads nowhere. -->
   <section id="in" hidden>
     <div class="card">
       <div class="row">
@@ -415,18 +422,20 @@ ${signIn.apple ? '<script src="https://appleid.cdn-apple.com/appleauth/static/js
     ${signing ? `<div class="card" id="signing">
       <div class="row">
         <div>
-          <h2>Signing</h2>
+          <h2>Your vault</h2>
           <div class="state" id="signing-state"></div>
         </div>
-        <button id="signing-open">Open the signing page</button>
+        <button class="primary" id="signing-open">Open your vault</button>
       </div>
-    </div>` : ''}
-    <div id="providers"></div>
+    </div>` : `<div class="card">
+      <h2>Your vault</h2>
+      <p class="state">This fleet has no signing page, so a browser cannot reach your vault. Keep your Claude
+        sign-in and your other credentials from the Fleetwright app, under You, Credentials.</p>
+    </div>`}
     <p class="say" id="say" role="status"></p>
     <footer>
-      <p>Every account here stays yours. It is stored on the machines in this fleet for your sessions to
-        use, it is never shown back to you or to anybody else, and you can take it off at the provider
-        whenever you like.</p>
+      <p>Your credentials are kept once, in your vault, which the minter holds and the coordinator cannot
+        read. A machine is given them only after you approve it there, and you can take any of them back.</p>
       <p>This browser holds a credential for ${esc(fleet)} until you sign out. It is listed as a device
         like any phone, and whoever runs the fleet can revoke it.</p>
     </footer>
@@ -467,8 +476,8 @@ var KEY = ${scriptJson(BROWSER_CREDENTIAL_KEY)};
 var WHO = 'fleetwright.device';
 var token = null;
 var who = '';
-// THE ADDRESS, kept beside the credential, because a signature names the
-// person and the signing page lists its key for one address.
+// THE ADDRESS, kept beside the credential, because the signing page lists its
+// key for one address and a vault request names it.
 var EMAIL = 'fleetwright.email';
 var email = '';
 try { token = localStorage.getItem(KEY); who = localStorage.getItem(WHO) || ''; email = localStorage.getItem(EMAIL) || ''; } catch (e) { token = null; }
@@ -477,12 +486,6 @@ var out = document.getElementById('out');
 var inn = document.getElementById('in');
 var say = document.getElementById('say');
 var outSay = document.getElementById('out-say');
-var providers = document.getElementById('providers');
-
-// The host a Claude sign-in was started on, so the code goes back to the same
-// box. A login is a pane on ONE machine: a second step that landed elsewhere
-// would type a live credential into a box that never asked for one.
-var pendingHost = null;
 
 function tell(el, text, bad) {
   el.textContent = text || '';
@@ -495,47 +498,36 @@ function show() {
   if (token) {
     document.getElementById('who').textContent = who || 'this browser';
     renderSigning();
-    // A BROWSER THAT SIGNS reads nothing until its signing page is open: an
-    // unsigned read from it is one a box that takes only signed requests
-    // refuses, and the page would show that refusal as the whole answer.
-    if (SIGNER && signerKid && !signing()) {
-      tell(say, 'Open the signing page to read what you have connected. This browser signs what it sends from there.');
-      if (afterReady.indexOf(load) < 0) afterReady.push(load);
-      return;
-    }
-    load();
   }
 }
 
 // --- the signing page ---------------------------------------------------------
 //
-// WHERE THIS BROWSER'S KEY IS, which is not here. Script on this origin is the
-// coordinator's to serve, so a key it could reach is a key the coordinator
-// could use; the signing page is the minter's (src/fleet/minter/sign-page.js),
-// and this page only asks it. Each ask waits there for the person to read and
-// sign it, and a decline there comes back as a refusal here with nothing sent.
+// WHERE THIS PERSON'S CREDENTIALS ARE, which is not here. Script on this
+// origin is the coordinator's to serve, so a credential it could read is one
+// the coordinator could read. The vault is the minter's, and so is the
+// signing page that opens it (src/fleet/minter/sign-page.js): it keeps this
+// browser's key, reads and changes the vault with requests sealed to the
+// minter, and signs the one request a machine needs to make a Claude sign-in.
+// This page opens it and carries what it sends, with this browser's
+// credential, which the signing page has none of.
 var SIGNER = ${scriptJson(signer)};
-var SIGNER_KEY = 'fleetwright.signer';
-var SIGNED_VERBS = ['connect', 'link', 'unlink', 'exchange', 'renew'];
-// The only requests the signing page may have this page send for it: its
-// GitHub sign-in and its vault request, both sealed to the minter.
-var RELAYS = { 'POST /api/github/device': true, 'POST /api/vault': true };
-var signerKid = null;
-try { signerKid = localStorage.getItem(SIGNER_KEY); } catch (e) { signerKid = null; }
+// WHAT IT MAY HAVE THIS PAGE SEND, and nothing else: its GitHub sign-in and
+// its vault requests, both sealed to the minter; the list of machines, to
+// approve one and to pick where a Claude sign-in is made; and that sign-in's
+// own request, which it signs. Not a general relay: a signing page that could
+// have this credential start or stop anything would be a second door to the
+// fleet that nobody reviewed as one.
+var RELAYS = { 'POST /api/github/device': true, 'POST /api/vault': true, 'GET /api/hosts/enrolled': true, 'POST /api/intent': true };
+var RELAYED_VERBS = ['setuptoken'];
 var signerWin = null;
 var signerReady = false;
-var waiting = {};
-var afterReady = [];
-
-function signing() {
-  return Boolean(SIGNER && signerKid && signerReady && signerWin && !signerWin.closed);
-}
 
 /** Opened in the click itself, or the browser blocks it. */
 function openSigner() {
   if (signerWin && !signerWin.closed) { signerWin.focus(); return; }
   signerReady = false;
-  signerWin = window.open(SIGNER + '/', 'fleetwright-signer', 'popup,width=480,height=760');
+  signerWin = window.open(SIGNER + '/', 'fleetwright-signer', 'popup,width=520,height=820');
   if (!signerWin) tell(say, 'The browser did not open the signing page. Allow pop-ups for this page and try again.', true);
   renderSigning();
 }
@@ -546,26 +538,16 @@ function renderSigning() {
   var state = document.getElementById('signing-state');
   var btn = document.getElementById('signing-open');
   var open = Boolean(signerWin && !signerWin.closed);
-  // The one card that asks a question: a browser that signs, with nowhere
-  // open to sign in.
-  card.className = 'card' + (signerKid && !open ? ' asking' : '');
   btn.hidden = !email;
-  btn.textContent = open ? 'Show the signing page' : 'Open the signing page';
+  btn.textContent = open ? 'Show the signing page' : 'Open your vault';
   if (!email) {
-    state.className = 'state';
-    state.textContent = 'Sign out of this browser and in again, so it knows which address to list a signing key for.';
-  } else if (open && signerReady && signerKid) {
-    state.className = 'state on';
-    state.textContent = 'This browser signs what it sends, as ' + email + '. Each request waits on the signing page for you.';
+    state.textContent = 'Sign out of this browser and in again, so it knows which address your vault is for.';
   } else if (open && signerReady) {
-    state.className = 'state';
-    state.textContent = 'This browser has no signing key yet. List it on the signing page.';
-  } else if (signerKid) {
-    state.className = 'state off';
-    state.textContent = 'This browser signs what it sends, and the signing page is closed. Open it to send anything.';
+    state.textContent = 'Open on the signing page. Keep this page open while you use it: what it sends goes through here.';
+  } else if (open) {
+    state.textContent = 'Opening the signing page.';
   } else {
-    state.className = 'state';
-    state.textContent = 'Machines that take only signed requests refuse what this page sends unsigned. The signing page keeps a key for this browser, on an address the coordinator does not serve.';
+    state.textContent = 'Your Claude sign-in, GitHub, Cloudflare and named secrets are kept in your vault. It opens on the signing page, an address the coordinator does not serve, so this page never sees what is in it.';
   }
 }
 
@@ -580,32 +562,36 @@ if (SIGNER) {
     var m = e.data || {};
     if (m.type === 'ready') {
       signerReady = true;
-      signerKid = typeof m.kid === 'string' ? m.kid : null;
-      try { if (signerKid) localStorage.setItem(SIGNER_KEY, signerKid); else localStorage.removeItem(SIGNER_KEY); } catch (x) {}
-      if (!signerKid && email) signerWin.postMessage({ type: 'setup', email: email }, SIGNER);
+      if (email) signerWin.postMessage({ type: 'setup', email: email }, SIGNER);
       renderSigning();
-      if (signerKid) { var run = afterReady; afterReady = []; run.forEach(function (f) { f(); }); }
       return;
     }
-    if (m.type === 'relay') { relayFor(m); return; }
-    if (typeof m.id === 'string' && waiting[m.id]) { var w = waiting[m.id]; delete waiting[m.id]; w(m); }
+    if (m.type === 'relay') relayFor(m);
   });
 }
 
-/** One sealed request the signing page asked this page to carry. */
+/** One request the signing page asked this page to carry. */
 async function relayFor(m) {
   var reply = { type: 'relayed', id: m.id, status: 0, body: null };
-  if (!RELAYS[String(m.method) + ' ' + String(m.path)] || !token) {
-    reply.body = { ok: false, text: 'This page passes on only the signing page\\u2019s GitHub sign-in and its vault request.' };
+  var method = String(m.method);
+  var path = String(m.path);
+  var body = m.body && typeof m.body === 'object' ? m.body : {};
+  if (!RELAYS[method + ' ' + path] || !token || (path === '/api/intent' && RELAYED_VERBS.indexOf(body.verb) < 0)) {
+    reply.body = { ok: false, text: 'This page passes on only what the signing page needs for your vault, and that was not it.' };
   } else {
     try {
-      var res = await fetch(m.path, {
-        method: m.method,
-        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
-        body: JSON.stringify(m.body || {}),
-      });
+      var init = { method: method, headers: { authorization: 'Bearer ' + token } };
+      if (method !== 'GET') { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
+      var res = await fetch(path, init);
       reply.status = res.status;
       reply.body = await res.json().catch(function () { return null; });
+      // REVOKED IS A SIGNED-OUT STATE, here as everywhere: a page that kept
+      // carrying a credential the fleet has forgotten would fail every
+      // request on the signing page with a different message each time.
+      if (res.status === 401) {
+        forget();
+        reply.body = { ok: false, text: 'This browser is no longer signed in to the fleet. Sign in again on the credentials page.' };
+      }
     } catch (x) {
       reply.body = { ok: false, text: 'This browser could not reach the coordinator, so nothing was sent.' };
     }
@@ -613,113 +599,11 @@ async function relayFor(m) {
   if (signerWin && !signerWin.closed) signerWin.postMessage(reply, SIGNER);
 }
 
-/** Ask the signing page, and wait for the person there. A decline is a refusal. */
-function askSigner(msg) {
-  return new Promise(function (resolve, reject) {
-    if (!signing()) { reject(new Error('Open the signing page first. What this browser sends is signed there.')); return; }
-    var id = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2);
-    msg.id = id;
-    var timer = setTimeout(function () {
-      delete waiting[id];
-      reject(new Error('The signing page did not answer in five minutes, so nothing was sent.'));
-    }, 5 * 60 * 1000);
-    waiting[id] = function (m) {
-      clearTimeout(timer);
-      if (m.type === 'declined') reject(new Error(m.text || 'Declined on the signing page, so nothing was sent.'));
-      else resolve(m);
-    };
-    signerWin.postMessage(msg, SIGNER);
-    try { signerWin.focus(); } catch (x) {}
-  });
-}
-
-/** Delegations this page holds for this visit, newest last, and nowhere else. */
-var held = [];
-
-/** Whether a delegation limited to these values covers these parameters, as a box decides it. */
-function covers(match, params) {
-  return Object.keys(match || {}).every(function (k) { return Object.prototype.hasOwnProperty.call(params, k) && String(params[k]) === String(match[k]); });
-}
-
-/** What a delegation may be limited to: the values a box can compare exactly. */
-function matchOf(params) {
-  var out = {};
-  Object.keys(params || {}).slice(0, 16).forEach(function (k) {
-    var v = params[k];
-    if (typeof v === 'string' || (typeof v === 'number' && isFinite(v))) out[k] = v;
-  });
-  return out;
-}
-
-/**
- * One intent, with this browser's credential. Refusals arrive as data and name
- * a reason; only the transport throws.
- */
-async function intent(verb, params, host, extra) {
-  var body = { verb: verb, params: params || {} };
-  if (host) body.host = host;
-  if (extra) for (var k in extra) body[k] = extra[k];
-  // SIGNED, when this browser has a key listed. A request for one machine is
-  // signed for that machine. One the fleet places, or sends to every machine,
-  // cannot be: nobody knows the machine yet. That is a delegation, for this
-  // verb with exactly these values, for ten minutes.
-  if (SIGNER && signerKid && SIGNED_VERBS.indexOf(verb) >= 0) {
-    if (host) {
-      var it = { verb: verb, params: params || {}, actor: email, id: crypto.randomUUID(), issuedAt: Date.now() };
-      var signed = await askSigner({ type: 'sign', intent: it, host: host });
-      body.id = it.id;
-      body.sig = signed.sig;
-      body.kid = signed.kid;
-      body.issuedAt = it.issuedAt;
-    } else {
-      // ONE ALREADY SIGNED THAT COVERS THIS, with a minute left, is sent
-      // again rather than asked for again: reading what is connected after
-      // every change would otherwise be a second approval for each one.
-      var have = held.filter(function (h) {
-        return h.grant.verbs.indexOf(verb) >= 0 && h.grant.expires - Date.now() > 60 * 1000 && covers(h.grant.match, params || {});
-      })[0];
-      if (!have) {
-        have = (await askSigner({ type: 'delegate', grant: { verbs: [verb], hosts: ['*'], match: matchOf(params), lifetimeMs: 10 * 60 * 1000 } })).delegation;
-        held = held.filter(function (h) { return h.grant.expires > Date.now(); }).concat([have]).slice(-8);
-      }
-      body.delegation = have;
-    }
-  }
-  var res;
-  try {
-    res = await fetch('/api/intent', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
-    // NAMES THE LAYER. "TypeError: Failed to fetch" is a true sentence about
-    // the wrong thing: it sends somebody looking at their account when the
-    // browser never reached the coordinator.
-    throw new Error('This browser could not reach the coordinator, so nothing was sent. Check the connection and try again.');
-  }
-  if (res.status === 401 || res.status === 403) {
-    // REVOKED IS A SIGNED-OUT STATE, not an error to read. A page that kept
-    // showing a credential the fleet has forgotten would fail every action
-    // with a different message each time.
-    forget();
-    throw new Error('This browser is no longer signed in to the fleet. Sign in again.');
-  }
-  try {
-    return await res.json();
-  } catch (e) {
-    throw new Error('The coordinator answered with something that was not an intent reply (HTTP ' + res.status + ').');
-  }
-}
-
 function forget() {
   token = null;
   who = '';
   email = '';
-  // The key stays on the signing page, which is its own; this page forgets
-  // that it signs, because the next person here may not.
-  signerKid = null;
-  try { localStorage.removeItem(KEY); localStorage.removeItem(WHO); localStorage.removeItem(EMAIL); localStorage.removeItem(SIGNER_KEY); } catch (e) {}
+  try { localStorage.removeItem(KEY); localStorage.removeItem(WHO); localStorage.removeItem(EMAIL); } catch (e) {}
   show();
 }
 
@@ -727,286 +611,6 @@ document.getElementById('signout').addEventListener('click', function () {
   forget();
   tell(outSay, 'Signed out of this browser. The credential is still in the fleet\\u2019s device list until it is revoked there.');
 });
-
-/**
- * What is connected, asked of the fleet rather than remembered here.
- *
- * Bare \`connect\` fans out, and the interesting part is where the hosts
- * DISAGREE: a token reaches the machines that were reachable when it was
- * stored, so one enrolled later has none.
- */
-async function load() {
-  providers.textContent = '';
-  tell(say, 'Asking the fleet what you have connected.');
-  var reply;
-  try {
-    // \`oauthFinish\`: this page can finish a GitHub or Cloudflare sign-in,
-    // because the coordinator's callback page runs on this origin and finishes
-    // it with the credential above. Without it the fleet offers the paste
-    // route only.
-    reply = await intent('connect', {}, null, { oauthFinish: true });
-  } catch (e) {
-    tell(say, e.message, true);
-    return;
-  }
-  if (!reply || reply.ok === false) {
-    tell(say, (reply && reply.text) || 'The fleet did not answer, so what you have connected cannot be read right now.', true);
-    return;
-  }
-  tell(say, '');
-  render(reply.connections || {});
-}
-
-/** @param {any} c */
-function render(c) {
-  var catalogue = c.catalogue || [];
-  var connected = {};
-  (c.connected || []).forEach(function (x) { connected[x.provider] = x; });
-  var hosts = c.hosts || [];
-
-  providers.textContent = '';
-  if (!catalogue.length) {
-    // NULL IS CANNOT TELL, NEVER NOTHING. No catalogue means no machine
-    // answered, which is a fact about the fleet and not about this person's
-    // accounts, so it must not render as an empty list of providers.
-    tell(say, 'No machine in this fleet answered, so what you have connected cannot be read right now. Try again in a moment.', true);
-    return;
-  }
-  catalogue.forEach(function (entry) {
-    providers.appendChild(card(entry, connected[entry.provider], hosts));
-  });
-}
-
-function el(tag, cls, text) {
-  var e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
-}
-
-/** @param {any} entry @param {any} have @param {string[]} hosts */
-function card(entry, have, hosts) {
-  var asking = !have && entry.provider === 'claude';
-  var box = el('div', 'card' + (asking ? ' asking' : ''));
-  var row = el('div', 'row');
-  var left = el('div');
-  left.appendChild(el('h2', null, entry.label || entry.provider));
-
-  var state = el('div', 'state');
-  if (have) {
-    state.className = 'state on';
-    var line = 'Connected' + (have.account ? ' as ' + have.account : '');
-    // ABSENT FROM, not "missing": a connected credential already carries a
-    // \`missing\`, which is the PERMISSIONS it was not granted. Two different
-    // absences, and one word for both tells somebody the wrong thing.
-    if (have.absentFrom && have.absentFrom.length) line += '. Not yet on ' + have.absentFrom.join(', ');
-    if (have.missing && have.missing.length) line += '. Not granted: ' + have.missing.join(', ');
-    state.textContent = line;
-  } else if (asking) {
-    state.className = 'state off';
-    state.textContent = 'Not connected. A session you start will be refused until it is.';
-  } else {
-    state.textContent = 'Not connected';
-  }
-  left.appendChild(state);
-  row.appendChild(left);
-
-  var go = el('button', null, have ? 'Replace' : 'Connect');
-  if (!have) go.className = 'primary';
-  go.setAttribute('aria-expanded', 'false');
-  row.appendChild(go);
-  box.appendChild(row);
-
-  var step = el('div', 'step');
-  step.hidden = true;
-  box.appendChild(step);
-  go.addEventListener('click', function () {
-    step.hidden = !step.hidden;
-    go.setAttribute('aria-expanded', String(!step.hidden));
-    if (!step.hidden) begin(entry, hosts, step);
-  });
-  return box;
-}
-
-/**
- * Start a connection. Two shapes, and the difference is not cosmetic.
- *
- * A TOKEN belongs to the person: it is minted on the provider's own page and
- * pasted back, and it goes to every host at once. A CLAUDE SIGN-IN is a login
- * the CLI drives in a pane on one machine, so both halves have to reach the
- * same box, which is why this asks which one rather than guessing.
- *
- * @param {any} entry @param {string[]} hosts @param {HTMLElement} step
- */
-async function begin(entry, hosts, step) {
-  step.textContent = '';
-  if (entry.flow === 'app' && entry.url) {
-    // A SIGN-IN WITH THE PROVIDER, NOT A PASTE. The page it ends on is this
-    // coordinator's, on this origin, and it finishes the connection itself
-    // with this browser's credential, so there is nothing to paste and no
-    // field for it. Coming back to this tab reads the fleet again rather
-    // than trusting that it worked.
-    if (entry.hint) step.appendChild(el('p', 'lede', entry.hint));
-    // A BROWSER THAT SIGNS signs the finish first. The page the provider
-    // sends it back to finishes the sign-in on a machine the fleet picks, so
-    // what it carries is a delegation for that provider's sign-in, for ten
-    // minutes, which it reads from here (oauth.js, finishingPage).
-    if (SIGNER && signerKid && !step.dataset.signed) {
-      var first = el('button', 'primary', 'Sign for this sign-in');
-      var said = el('p', 'say');
-      said.setAttribute('role', 'status');
-      first.addEventListener('click', async function () {
-        first.disabled = true;
-        tell(said, 'Read it on the signing page, and sign it there.');
-        try {
-          var d = await askSigner({ type: 'delegate', grant: { verbs: ['exchange', 'link', 'renew'], hosts: ['*'], match: { provider: entry.provider }, lifetimeMs: 10 * 60 * 1000 } });
-          try { localStorage.setItem(${scriptJson(FINISH_DELEGATION_KEY)} + entry.provider, JSON.stringify(d.delegation)); } catch (x) {}
-          step.dataset.signed = '1';
-          begin(entry, hosts, step);
-        } catch (e) {
-          first.disabled = false;
-          tell(said, e.message, true);
-        }
-      });
-      step.appendChild(first);
-      step.appendChild(said);
-      return;
-    }
-    var go = el('a', 'btn', 'Sign in with ' + (entry.label || entry.provider));
-    go.href = entry.url;
-    go.target = '_blank';
-    go.rel = 'noopener noreferrer';
-    go.addEventListener('click', function () {
-      window.addEventListener('focus', function () { load(); }, { once: true });
-    });
-    step.appendChild(go);
-    return;
-  }
-  if (entry.provider !== 'claude') {
-    // The catalogue carries the provider's own page with the scopes already
-    // ticked, and the hint that says what they are for.
-    if (entry.hint) step.appendChild(el('p', 'lede', entry.hint));
-    step.appendChild(paste(entry, entry.url, 'Open ' + (entry.label || entry.provider), 'Paste the token', 'Connect', null));
-    return;
-  }
-
-  if (hosts.length > 1 && !pendingHost) {
-    step.appendChild(el('p', 'lede', 'A Claude sign-in happens on one machine, and the code goes back to that same machine. Which one?'));
-    var picker = el('div', 'hosts');
-    hosts.forEach(function (h) {
-      var chip = el('button', 'chip', h);
-      chip.addEventListener('click', function () {
-        pendingHost = h;
-        begin(entry, hosts, step);
-      });
-      picker.appendChild(chip);
-    });
-    step.appendChild(picker);
-    return;
-  }
-
-  if (!pendingHost) pendingHost = hosts[0] || null;
-  step.appendChild(el('p', 'lede', 'Starting a Claude sign-in on ' + (pendingHost || 'this fleet') + '.'));
-  var reply;
-  try {
-    reply = await intent('connect', { provider: 'claude', scope: 'me' }, pendingHost);
-  } catch (e) {
-    step.textContent = '';
-    step.appendChild(el('p', 'say bad', e.message));
-    pendingHost = null;
-    return;
-  }
-  step.textContent = '';
-  if (!reply || reply.ok === false) {
-    step.appendChild(el('p', 'say bad', (reply && reply.text) || 'That was refused.'));
-    pendingHost = null;
-    return;
-  }
-  var url = null;
-  var cat = (reply.connections && reply.connections.catalogue) || [];
-  cat.forEach(function (x) { if (x.provider === 'claude' && x.url) url = x.url; });
-  if (!url) {
-    // A REPLY WITH NO URL IS NOT A FAILURE TO HIDE. The pane may still be
-    // opening, and the honest answer names what to do rather than showing an
-    // empty box with a paste field under it.
-    step.appendChild(el('p', 'say', reply.text || 'The sign-in started, and that machine has not published its address yet. Press Connect again in a moment.'));
-    return;
-  }
-  step.appendChild(paste(entry, url, 'Open the Claude sign-in', 'Paste the code it gives you', 'Link', pendingHost));
-}
-
-/**
- * The two halves of every connection: a link out, and a field to paste into.
- *
- * A FORM, so Enter submits. A paste field with a button beside it that only
- * answers a click is a form nobody can finish from a keyboard, and pressing
- * Enter is what everybody does after pasting.
- *
- * @param {any} entry @param {string|null} url @param {string} open
- * @param {string} placeholder @param {string} action @param {string|null} host
- */
-function paste(entry, url, open, placeholder, action, host) {
-  var form = document.createElement('form');
-  form.className = 'step';
-  if (url) {
-    var a = el('a', 'btn', open);
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    form.appendChild(a);
-  }
-  var field = document.createElement('input');
-  field.type = 'password';
-  field.autocomplete = 'off';
-  field.spellcheck = false;
-  field.setAttribute('autocapitalize', 'off');
-  field.setAttribute('autocorrect', 'off');
-  field.setAttribute('aria-label', placeholder);
-  field.placeholder = placeholder;
-  // An on-screen keyboard covers the bottom third of a phone, and this field
-  // is at the bottom of a card near the bottom of the page.
-  field.addEventListener('focus', function () {
-    if (field.scrollIntoView) field.scrollIntoView({ block: 'center' });
-  });
-  form.appendChild(field);
-
-  var send = el('button', 'primary', action);
-  send.type = 'submit';
-  form.appendChild(send);
-  var result = el('p', 'say');
-  result.setAttribute('role', 'status');
-  form.appendChild(result);
-
-  form.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    var secret = field.value.trim();
-    if (!secret) { tell(result, 'Nothing to send yet.', true); field.focus(); return; }
-    send.disabled = true;
-    tell(result, 'Checking it with ' + (entry.label || entry.provider) + '.');
-    var reply;
-    try {
-      reply = await intent('link', { provider: entry.provider, secret: secret, scope: 'me' }, host);
-    } catch (e2) {
-      send.disabled = false;
-      tell(result, e2.message, true);
-      return;
-    }
-    send.disabled = false;
-    // THE FIELD IS CLEARED EITHER WAY. A token left in an input is a token in
-    // the DOM for as long as the page is open, and a refusal is the case where
-    // somebody is most likely to leave the tab and come back to it.
-    field.value = '';
-    if (!reply || reply.ok === false) {
-      tell(result, (reply && reply.text) || 'That was refused.', true);
-      return;
-    }
-    pendingHost = null;
-    tell(result, reply.text || 'Connected.');
-    load();
-  });
-  return form;
-}
-
 // --- signing in -------------------------------------------------------------
 
 /** One ID token, exchanged for a credential of this browser's own. */
