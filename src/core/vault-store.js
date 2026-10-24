@@ -32,11 +32,24 @@
 // WRITTEN WHOLE ON EVERY ANSWER: a person missing from the answer has removed
 // this box, or emptied their vault, and their files go. That is what makes
 // removing a box from a phone reach the box within one sidecar pass.
+//
+// A VAULT BOX is one that has taken one answer, and stays one. The sidecar
+// hands the hub every answer the minter gives (sidecar.js, syncVault): the
+// people who approved this box, which is an empty list when nobody has, and
+// an empty list again when the minter says this is not the key the box
+// enrolled with. It hands over nothing when the minter is silent, so a box in
+// a fleet with no minter, or in no fleet, never becomes one. From the first
+// answer the box's own command line runs as a person whose vault gives it
+// something (accounts.js, operatorAccount) and links nothing of its own
+// (commands.js, vaultLinkRefusal): a link made on the box is the second copy
+// of somebody's login the vault exists to end, and a box that has been told
+// what its people keep does not go back to keeping its own when one answer
+// comes back empty.
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, unlinkSync, existsSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 
-import { normaliseEmail } from './accounts.js';
+import { normaliseEmail, emailFromActor, rowForActor, operatorAccount, HOST_ROW } from './accounts.js';
 import { PROVIDERS } from './connectors.js';
 
 /** A named secret's name, as secret-store.js accepts one. */
@@ -44,6 +57,67 @@ const SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** @param {{ stateDir: string }} cfg */
 export const vaultDir = (cfg) => path.join(cfg.stateDir, 'vault');
+
+/**
+ * The record that this box has taken a vault answer. A dot-file, so the
+ * sweep of people no longer in the answer never matches it.
+ *
+ * @param {{ stateDir: string }} cfg
+ */
+const vaultBoxMark = (cfg) => path.join(vaultDir(cfg), '.vault-box');
+
+/**
+ * Whether this box has taken a vault answer (see "A VAULT BOX" above). The
+ * directory counts as well as the mark, because applyVault is the only thing
+ * that makes it and a box that took answers before the mark existed has one.
+ * Removing the directory is how a box goes back to standing alone.
+ *
+ * @param {{ stateDir: string }} cfg
+ */
+export function vaultBox(cfg) {
+  return existsSync(vaultBoxMark(cfg)) || existsSync(vaultDir(cfg));
+}
+
+/**
+ * The people whose vaults give this box something: everybody in the last
+ * answer, which the minter makes of the people who approved this box and
+ * nobody else (src/fleet/minter/vault.js). Sorted, so a sentence naming them
+ * reads the same twice.
+ *
+ * @param {{ stateDir: string }} cfg
+ * @returns {string[]}
+ */
+export function vaultPeople(cfg) {
+  try {
+    // The same reading of a file name as the sweep in applyVault, so a
+    // person's Claude files are never taken for a person of their own.
+    return readdirSync(vaultDir(cfg))
+      .map((f) => /^(.+?)\.(json|claude|claude-credentials\.json|claude-account\.json)$/.exec(f))
+      .flatMap((m) => (m && m[2] === 'json' && normaliseEmail(m[1]) === m[1] ? [m[1]] : []))
+      .sort();
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return [];
+    throw e;
+  }
+}
+
+/**
+ * Whose vault a session's credentials come from, or null when they come from
+ * the box: the fleet person who started it, and on a vault box the operator
+ * for a session started on the box itself (accounts.js, operatorAccount),
+ * whose `email` is null when nobody can be named. Null for that session on a
+ * box that stands alone, which keeps its own row as before, and for a fleet
+ * actor that does not parse, which the box's own readers refuse.
+ *
+ * @param {{ stateDir: string, operator?: string|null }} cfg @param {string|null|undefined} actor
+ * @returns {{ email: string|null }|null}
+ */
+export function vaultHolder(cfg, actor) {
+  const email = emailFromActor(actor ?? null);
+  if (email) return { email };
+  if (rowForActor(actor) !== HOST_ROW || !vaultBox(cfg)) return null;
+  return { email: operatorAccount(/** @type {any} */ (cfg)).email };
+}
 
 /**
  * @typedef {{ value: string, expiresAt: number|null, signIn?: boolean, login?: Record<string, unknown>, account?: Record<string, unknown> }} HeldItem
@@ -106,6 +180,9 @@ export function applyVault(cfg, bundle) {
   const dir = vaultDir(cfg);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
+  // WRITTEN FOR AN EMPTY ANSWER TOO: being told nobody approved this box is
+  // still being told, and is what makes it a vault box.
+  if (!existsSync(vaultBoxMark(cfg))) writePrivate(vaultBoxMark(cfg), `${new Date().toISOString()}\n`);
   /** @type {Set<string>} */
   const kept = new Set();
   /** @type {string[]} */

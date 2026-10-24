@@ -31,8 +31,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { isValidName } from './names.js';
-import { emailFromActor } from './accounts.js';
-import { vaultSecret } from './vault-store.js';
+import { vaultSecret, vaultHolder } from './vault-store.js';
 
 /**
  * The names of the secrets this box holds, sorted, for the `secrets` verb and
@@ -182,7 +181,9 @@ export function boxSecretsServed(rec) {
  * The answer to a session's `fleet-secret <name>`, as the hook socket gives
  * it: the grant on its record decides (answerSecretRequest), then this box's
  * store if it may answer this session (boxSecretsServed), then the session
- * owner's vault. Read now, so a rotation reaches a running session.
+ * owner's vault: for one started on the box itself, the operator's, on a vault
+ * box (vault-store.js, vaultHolder). Read now, so a rotation reaches a running
+ * session.
  *
  * @param {{ secretsDir: string, stateDir: string }} cfg
  * @param {{ createdBy?: string|null, secret?: string|null, boxSecrets?: boolean|null }|null|undefined} rec  the session's record
@@ -194,6 +195,6 @@ export function sessionSecret(cfg, rec, requested) {
     granted: rec?.secret ?? null,
     read: (n) =>
       (boxSecretsServed(rec) ? readNamedSecret(cfg.secretsDir, n) : null) ??
-      vaultSecret(cfg, emailFromActor(rec?.createdBy ?? null), n),
+      vaultSecret(cfg, vaultHolder(cfg, rec?.createdBy ?? null)?.email ?? null, n),
   });
 }

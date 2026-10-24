@@ -20,8 +20,8 @@ import { shouldFollowRevert } from './core/restart-watch.js';
 import { versionDrift } from './core/release-apply.js';
 import { reclaimStale } from './core/reclaim.js';
 import { Connections, PROVIDERS } from './core/connectors.js';
-import { rowForActor, emailFromActor } from './core/accounts.js';
-import { vaultEnvFor, vaultExpiryFor } from './core/vault-store.js';
+import { rowForActor } from './core/accounts.js';
+import { vaultEnvFor, vaultExpiryFor, vaultHolder } from './core/vault-store.js';
 import { loadEnvFile } from './core/env-file.js';
 import { sessionSecret } from './core/secret-store.js';
 import { HttpAdapter } from './adapters/http.js';
@@ -128,11 +128,13 @@ export async function main() {
           // person who kept GitHub in their vault and linked nothing here had
           // no token at all: the box's second copy was the one that counted.
           // Somebody operating the box itself, with no fleet identity, gets
-          // the box's own row, as before.
+          // the box's own row on a box that stands alone, and the operator's
+          // vault on a vault box, where nothing linked here is used
+          // (vaultHolder; accounts.js, operatorAccount).
           secretsFor: (name) => {
             const who = registry.get(name)?.createdBy ?? null;
-            const email = emailFromActor(who);
-            if (email) return vaultEnvFor(cfg, email);
+            const vault = vaultHolder(cfg, who);
+            if (vault) return vaultEnvFor(cfg, vault.email);
             const file = pickSecretsFile(cfg, who);
             if (!file) return null;
             /** @type {Record<string, string>} */
@@ -148,8 +150,8 @@ export async function main() {
           // box's own row is asked of its renewal metadata.
           expiryFor: (name, provider) => {
             const who = registry.get(name)?.createdBy ?? null;
-            const email = emailFromActor(who);
-            if (email) return vaultExpiryFor(cfg, email, provider);
+            const vault = vaultHolder(cfg, who);
+            if (vault) return vaultExpiryFor(cfg, vault.email, provider);
             return new Connections(cfg.stateDir).renewalDueAt(rowForActor(who), provider);
           },
           // The named-secret resolver. The GRANT is on the record — the name

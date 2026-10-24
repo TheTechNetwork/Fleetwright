@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 
 import { applyVault } from '../src/core/vault-store.js';
+import { Accounts } from '../src/core/accounts.js';
 import { ensureDirectConfig, directConfigDir, removeDirectConfig } from '../src/core/direct-config.js';
 import { buildCommand } from '../src/core/claude.js';
 
@@ -92,6 +93,46 @@ test('nothing in their vault for this box is a refusal that names the box, not a
   assert.match(r.message, /person@example\.com keeps no Claude login in their vault that this box was given/);
   assert.match(r.message, /approve box-1 from its page/);
   assert.equal(existsSync(directConfigDir(cfg, 'one')), false, 'nothing is staged for a session that will not start');
+});
+
+test('a direct session started on a vault box runs on its operator’s vault, a sign-in or a token, and never on a link', () => {
+  // The operator of a vault box is a person who approved it (accounts.js,
+  // operatorAccount); here the one person, who has also linked an account on
+  // the box that nothing should read.
+  const { cfg, cwd, stateDir } = box();
+  new Accounts(stateDir).save('person@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'linked-here', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 } }));
+  const signedIn = ensureDirectConfig(cfg, 'mine', 'cli', { cwd });
+  assert.equal(signedIn.ok, true, signedIn.ok ? '' : signedIn.message);
+  if (!signedIn.ok) return;
+  assert.equal(signedIn.account, 'person@example.com');
+  assert.equal(tokenIn(join(signedIn.dir, '.credentials.json')), 'tok-1');
+
+  // A setup-token, which has no credentials file: found by the person the
+  // pick named, since a session on the box itself has no email of its own.
+  applyVault({ stateDir }, { accounts: [{ email: 'person@example.com', items: [{ name: 'claude', value: `sk-ant-oat01-${'p'.repeat(40)}`, expiresAt: null }] }] });
+  const token = ensureDirectConfig(cfg, 'tok', 'web', { cwd });
+  assert.equal(token.ok, true, token.ok ? '' : token.message);
+  if (!token.ok) return;
+  assert.equal(token.account, 'person@example.com');
+  assert.equal(token.auth?.kind, 'token');
+  assert.match(String(/** @type {any} */ (token.auth).file), /vault\/person@example\.com\.claude$/);
+});
+
+test('a direct session started on a box that stands alone runs on its operator’s linked account, and resumes on it', () => {
+  const { cfg, cwd, stateDir } = box({ link: false });
+  new Accounts(stateDir).save('ops@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'linked-1', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 } }));
+  const first = ensureDirectConfig(cfg, 'mine', 'cli', { cwd });
+  assert.equal(first.ok, true, first.ok ? '' : first.message);
+  if (!first.ok) return;
+  assert.equal(first.account, 'ops@example.com');
+  assert.equal(read(join(first.dir, '.credentials.json')).claudeAiOauth.accessToken, 'linked-1');
+
+  // Relinked since: the resume takes today's copy.
+  new Accounts(stateDir).save('ops@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'linked-2', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 } }));
+  const again = ensureDirectConfig(cfg, 'mine', 'cli', { account: 'ops@example.com', cwd });
+  assert.equal(again.ok, true);
+  if (!again.ok) return;
+  assert.equal(read(join(again.dir, '.credentials.json')).claudeAiOauth.accessToken, 'linked-2');
 });
 
 test('a resume keeps its account and takes today\'s credential, and keeps what the CLI wrote', () => {

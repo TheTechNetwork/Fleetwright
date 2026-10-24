@@ -66,8 +66,8 @@ import { capturePane, hasSession } from './tmux.js';
 import { sandboxNames, workspaceExists } from './podman.js';
 import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
-import { vaultToken } from './vault-store.js';
-import { rowForActor, HOST_ROW } from './accounts.js';
+import { vaultToken, vaultHolder } from './vault-store.js';
+import { operatorAccount } from './accounts.js';
 import { log } from '../log.js';
 
 /** How often a running session with an archive is pushed again. */
@@ -466,17 +466,20 @@ export function runnerToken(socketPath, repo) {
 /**
  * The owner's GitHub credential for this repository: their connection on this
  * box, or on a runner a token its broker mints for them. Never the box's own
- * row: an archive is pushed AS the person who started the session.
+ * row: an archive is pushed AS the person who started the session. On a vault
+ * box a session started on the box itself is the operator's, a named person
+ * whose vault gives this box their GitHub (vault-store.js, vaultHolder).
  *
  * @param {import('../config.js').Config} cfg @param {string|null|undefined} owner @param {string} repo
  * @param {{ broker?: string }} [opts]
  * @returns {Promise<{ token: string } | { token: null, why: string }>}
  */
 export async function ownerToken(cfg, owner, repo, { broker = process.env.FLEETWRIGHT_RUNNER_BROKER || '' } = {}) {
-  const row = rowForActor(owner);
-  if (row === null || row === HOST_ROW) return { token: null, why: 'nobody signed in started it, so there is no one to push as' };
+  const holder = vaultHolder(cfg, owner);
+  if (!holder) return { token: null, why: 'nobody signed in started it, so there is no one to push as' };
+  if (!holder.email) return { token: null, why: operatorAccount(cfg).why };
   // FROM THEIR VAULT, as everything of a fleet person's is (vault-store.js).
-  const own = vaultToken(cfg, row, 'github');
+  const own = vaultToken(cfg, holder.email, 'github');
   if (own) return { token: own };
   if (broker) {
     const minted = await runnerToken(broker, repo);

@@ -131,3 +131,16 @@ test('a --box-secrets that is not yes or no is refused, not guessed at', async (
   assert.equal(r.text, '--box-secrets is yes or no.');
   assert.equal(registry.get('odd'), null, 'a session was started on a word nobody can read');
 });
+
+test('a session somebody started on the box itself is answered from the box, then from its operator’s vault', async (t) => {
+  // On a vault box the box's own command line runs as a person who approved
+  // it (accounts.js, operatorAccount), so their vault is the one after the
+  // box's store, as a member's own vault is after it for an admin's session.
+  // Bob is the one person here.
+  const { cfg, run, fetched } = box(t);
+  applyVault(cfg, { accounts: [{ email: 'bob@example.com', items: [{ name: 'secret:DEPLOY_KEY', value: 'bobs-deploy-key' }, { name: 'secret:BOB_NPM', value: 'bobs-npm' }] }] });
+  await run('cli', '/new local --secret=BOB_NPM');
+  assert.equal(fetched('local', 'BOB_NPM'), 'bobs-npm');
+  await run('web', '/new mixed --secret=DEPLOY_KEY');
+  assert.equal(fetched('mixed'), 'operators-deploy-key', 'the box’s own store still answers first');
+});
