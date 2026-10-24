@@ -56,10 +56,15 @@ is meant literally.
 
 ### What is built
 
-1. **The 27.1 SDK, pinned.** `scripts/select-xcode.sh` selects Xcode 27.1 in
-   every macOS job (`ios.yml`'s build, TestFlight and screenshots, and CodeQL's
-   Swift build) and fails if the image does not carry it, rather than building
-   the letterboxed app. The deployment target stays iOS 26 for the reason
+1. **The SDK, pinned, on the image that has it.** `macos-latest` carried Xcode 26
+   alone, so every build before this round was the letterboxed one. The macOS
+   jobs run on GitHub's `xcode-27` image, and `scripts/select-xcode.sh` picks an
+   exact build or fails: **TestFlight ships on Xcode 27.2** (RC, 27B48, the
+   release that brought Pencil to the Duo) and the store submits that upload;
+   the build job also compiles and tests on **27.1** (27A9275), the oldest SDK
+   that draws the Duo edge to edge. Unit tests run on the image's iPhone Duo
+   simulator, and `scripts/ios-duo-look.sh` attaches a picture of each tab on it
+   to every run. The deployment target stays iOS 26 for the reason
    `project.yml` gives.
 2. **Sessions and Machines are list beside page.** `ListBesideDetail` wraps each
    in a `NavigationSplitView`: unfolded, the list stays on screen beside the
