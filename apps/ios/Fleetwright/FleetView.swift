@@ -70,7 +70,10 @@ struct FleetApp: View {
                 })
             }
             Tab("Machines", systemImage: "server.rack", value: Tabs.machines) {
-                NavigationStack { MachinesView(settings: settings, opening: $openHost, openingPool: $openPool) }
+                ListBesideDetail(nothingOpen: "No machine open", systemImage: "server.rack",
+                                 hint: "Pick a machine and its page opens here, beside the list.") {
+                    MachinesView(settings: settings, opening: $openHost, openingPool: $openPool)
+                }
             }
             Tab("You", systemImage: "person.crop.circle", value: Tabs.you) {
                 NavigationStack { YouView(settings: settings) }
@@ -172,7 +175,9 @@ struct FleetView: View {
     @AppStorage("claudeSetupPutOff") private var claudePutOff = false
 
     var body: some View {
-        NavigationStack {
+        // Beside its page where there is room: ListBesideDetail says why.
+        ListBesideDetail(nothingOpen: "No session open", systemImage: "square.stack.3d.up",
+                         hint: "Pick a session and its pane opens here, beside the list.") {
             List {
                 // FIRST, ALWAYS, ABOVE THE LIST. docs/psychology.md names
                 // "nothing needs you" as the most important state in the

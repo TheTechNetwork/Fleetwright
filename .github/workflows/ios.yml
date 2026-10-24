@@ -77,6 +77,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh
+
       - name: Install XcodeGen
         # Skip brew's formula-index refresh, which regularly costs more than
         # the install it precedes.
@@ -205,6 +209,10 @@ jobs:
       uploaded: ${{ steps.creds.outputs.have }}
     steps:
       - uses: actions/checkout@v7.0.1
+
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh
 
       - name: Check there are credentials to upload with
         id: creds
@@ -750,6 +758,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
+
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh
+
       - name: Install XcodeGen
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
