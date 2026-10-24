@@ -30,6 +30,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { Accounts } from '../src/core/accounts.js';
 import minterWorker, { ClaudeLogins } from '../worker/src/minter.js';
 import { actionsIssuer } from './helpers/actions-issuer.js';
+import { standInClaude } from './helpers/stand-in-claude.js';
 
 const OWNER = 'eli@example.com';
 const TOKEN = 'sk-ant-oat01-eli-subscription-0123456789abcdef';
@@ -75,6 +76,8 @@ async function fleet(opts = {}) {
   });
   const beneath = globalThis.fetch;
   globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init = {}) => {
+    const claude = standInClaude(url, init);
+    if (claude) return claude;
     const u = new URL(String(url));
     if (u.hostname !== 'api.github.com') return beneath(url, init);
     const who = users[String(init.headers?.authorization || '').replace(/^Bearer /, '')];

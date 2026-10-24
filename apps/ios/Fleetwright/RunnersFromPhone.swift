@@ -132,15 +132,15 @@ struct YourVault: View {
     let settings: Settings
     @State private var contents: PhoneVault.Contents?
     @State private var boxes: [Fleet.Host] = []
-    @State private var claudeDraft = ""
     @State private var secretName = ""
     @State private var secretValue = ""
     @State private var busy = false
     @State private var result = ""
     @State private var failed = false
+    /// The item a Forget is waiting on, until the dialog is answered.
+    @State private var forgetting: String?
 
     private var vault: PhoneVault { PhoneVault(settings: settings) }
-    private var phone: PhoneGitHub { PhoneGitHub(settings: settings) }
 
     /// The fingerprints of boxes still in this fleet, worked out here from
     /// their keys, never the ones the fleet lists beside them.
@@ -186,11 +186,33 @@ struct YourVault: View {
             Text(kept.items.isEmpty ? "Nothing kept yet." : "Kept: " + kept.items.map { PhoneVault.label($0.name) }.joined(separator: ", ") + ".")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.ink)
-            ForEach(kept.items, id: \.name) { item in
-                Button("Forget \(PhoneVault.label(item.name))", role: .destructive) {
-                    act { try await vault.forget(Fleet(settings: settings), name: item.name) }
+                .confirmationDialog("Forget \(PhoneVault.label(forgetting ?? ""))?",
+                                    isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Forget", role: .destructive) {
+                        if let name = forgetting {
+                            act { try await vault.forget(Fleet(settings: settings), name: name) }
+                        }
+                    }
+                } message: {
+                    Text(PhoneVault.forgetting(forgetting ?? ""))
                 }
-                .disabled(busy)
+            // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
+            // revoked sat here as "Kept" until a runner stopped at its first
+            // message. Offered only where there is a service to ask (C-2).
+            //
+            // FORGET ASKS FIRST. It was one tap, beside the button people come
+            // here to press, and it took the Claude login out from under every
+            // runner without a word.
+            ForEach(kept.items, id: \.name) { item in
+                if PhoneVault.isTestable(item.name) {
+                    Button("Test \(PhoneVault.label(item.name))") {
+                        act { try await vault.test(Fleet(settings: settings), name: item.name) }
+                    }
+                    .disabled(busy)
+                }
+                Button("Forget \(PhoneVault.label(item.name))", role: .destructive) { forgetting = item.name }
+                    .disabled(busy)
             }
         } else {
             Text("Loading your vault…")
@@ -199,28 +221,11 @@ struct YourVault: View {
         }
 
         // CLAUDE, kept the same way: this is the vault's Claude row, which
-        // runners and approved boxes both use.
-        Text("Runners you start can use your Claude subscription instead of the runner repository's API key. "
-             + "Make the token on a computer with claude setup-token, and paste it here.")
-            .fleetType(.label)
-            .foregroundStyle(Design.Palette.inkDim)
-        SecureField("Token from claude setup-token", text: $claudeDraft)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-        Button("Keep for my runners") {
-            act {
-                let text = try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: claudeDraft)
-                claudeDraft = ""
-                return text
-            }
-        }
-        .disabled(busy || claudeDraft.isBlank)
-        if contents?.items.contains(where: { $0.name == "claude" }) == true {
-            Button("Forget my Claude login", role: .destructive) {
-                act { try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: nil) }
-            }
-            .disabled(busy)
-        }
+        // runners and approved boxes both use. The same rows as Set up Claude,
+        // so a machine can make the token here too, rather than a paste field
+        // that wanted a computer from somebody holding a phone. Its own Forget
+        // went: it was a second button doing what Forget Claude above does.
+        ClaudeSetup(settings: settings) { Task { await reload() } }
 
         Button("Keep GitHub for my boxes") {
             act { try await vault.connect(Fleet(settings: settings), provider: "github") }
