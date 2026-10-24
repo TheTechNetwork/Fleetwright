@@ -345,7 +345,7 @@ test('the credential is seeded over stdin, never bind-mounted', async (t) => {
   assert.match(seed, /--network none/);
   assert.ok(!seed.includes("it's"), 'the credential itself is not on the command line');
   assert.ok(s.stdin().includes(Buffer.from(credential).toString('base64')), 'the bytes travelled on stdin');
-  assert.match(s.stdin(), /chmod 600 '\/dest\/\.credentials\.json'/);
+  assert.match(s.stdin(), /chmod 600 '\/dest\/\.credentials\.json\.seed'\nmv -f '\/dest\/\.credentials\.json\.seed' '\/dest\/\.credentials\.json'/);
 });
 
 test('every helper container that touches a volume carries the same userns flag', async (t) => {
@@ -381,9 +381,36 @@ test('seedScript keeps a credential inside its quotes whatever it contains', asy
   assert.equal(lines[0], 'set -e');
   assert.equal(lines[1], 'umask 077', 'never readable, not merely readable-then-fixed');
   for (const line of lines.slice(2)) {
-    assert.match(line, /^(printf '%s' '[A-Za-z0-9+/=]+' \| base64 -d > '\/dest\/[A-Za-z0-9._-]+'|chmod 600 '\/dest\/[A-Za-z0-9._-]+')$/, line);
+    assert.match(line, /^(printf '%s' '[A-Za-z0-9+/=]+' \| base64 -d > '\/dest\/[A-Za-z0-9._-]+'|chmod 600 '\/dest\/[A-Za-z0-9._-]+'|mv -f '\/dest\/[A-Za-z0-9._-]+' '\/dest\/[A-Za-z0-9._-]+')$/, line);
   }
   assert.throws(() => seedScript([{ name: '../etc/passwd', data: Buffer.from('') }]), /not a seedable/);
+});
+
+// A RUNNING SESSION READS THIS FILE WHILE IT IS RESEEDED. Claude Code reads its
+// credentials again whenever the file changes, and one that caught it emptied
+// by `>` answered "Not logged in". So the file is replaced, never truncated:
+// a new inode, whole, private, the other kind of login gone only after, and
+// nothing left beside it. Run with a real `sh` on a directory standing in for
+// the volume, because the container that would run it does not run in CI.
+test('seedScript replaces a login in a live volume in one step, never empties it', async (t) => {
+  const { mkdtempSync, writeFileSync, readFileSync, statSync, readdirSync, rmSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const vol = mkdtempSync(path.join(tmpdir(), 'fw-seed-'));
+  t.after(() => rmSync(vol, { recursive: true, force: true }));
+  writeFileSync(path.join(vol, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"old"}}');
+  writeFileSync(path.join(vol, '.claude-token'), 'sk-ant-oat01-old');
+  const before = statSync(path.join(vol, '.credentials.json')).ino;
+
+  const fresh = '{"claudeAiOauth":{"accessToken":"new"}}\n';
+  const script = seedScript([{ name: '.credentials.json', data: Buffer.from(fresh) }], ['.claude-token']).replaceAll("'/dest/", `'${vol}/`);
+  execFileSync('sh', [], { input: script });
+
+  const after = statSync(path.join(vol, '.credentials.json'));
+  assert.notEqual(after.ino, before, 'written over in place, so a reader could have found it empty');
+  assert.equal(readFileSync(path.join(vol, '.credentials.json'), 'utf8'), fresh);
+  assert.equal(after.mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(vol), ['.credentials.json'], 'the other kind of login is still there, or a half-written file was left beside it');
 });
 
 test('a volume from before nomap is moved into the session namespace, once', async (t) => {
