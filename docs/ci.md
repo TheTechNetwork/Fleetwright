@@ -408,7 +408,7 @@ credentials it copied. **One manual step:** add
 `https://<the coordinator's hostname>/relay/v1/github/callback` to the GitHub
 App's callback URLs before the first sign-in goes through the relay.
 
-And four repository **variables**:
+And five repository **variables**:
 
 | variable | |
 |---|---|
@@ -416,6 +416,7 @@ And four repository **variables**:
 | `FLEETWRIGHT_AUTH_ALLOW` | who may sign in: `@yourdomain.com`, or whole addresses. **Empty allows nobody.** A repository variable here, synced to the Worker **as a secret** — it decides who can reach a fleet and must not be a committed var, because Cloudflare keeps vars and secrets in one namespace and a committed var clobbers the synced secret on every deploy |
 | `FLEETWRIGHT_GITHUB_CLIENT_ID` | the GitHub App's client id, passed to the minting Worker at deploy as the issuer of the JWT it signs. Public |
 | `FLEETWRIGHT_GITHUB_MINT_OWNERS` | the GitHub accounts whose repositories the minting Worker may mint runner tokens into, comma separated. **Empty mints for nobody** — the App is installable by any account, and this is where "not a guest's" is decided |
+| `FLEETWRIGHT_SIGNING_HOST` | optional: a hostname, in a zone the Cloudflare account holds, for the browser's signing page (`docs/signed-intents.md`, "The browser"). The deploy gives it to the minting Worker as a Custom Domain and tells the coordinator its origin. Unset, `/me` signs nothing |
 
 The other two sign-in settings — `FLEETWRIGHT_AUTH_ISSUERS` and
 `FLEETWRIGHT_AUTH_AUDIENCES` — are **not** synced from GitHub: they are public

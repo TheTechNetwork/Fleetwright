@@ -1,5 +1,5 @@
 {
-  "why": "The bytes a phone signs for an intent, made by src/fleet/protocol/intent-signature.js, the function the box checks with. Both phones prove they build these exactly (IntentSigningTests.swift, IntentSigningTest.kt), and test/intent-signing-parity.test.js proves this file is what the box makes. docs/signed-intents.md.",
+  "why": "The bytes a phone signs for an intent, and for a delegation (`delegations`), made by src/fleet/protocol/intent-signature.js, the function the box checks with. Both phones prove they build these exactly (IntentSigningTests.swift, IntentSigningTest.kt), and test/intent-signing-parity.test.js proves this file is what the box makes. docs/signed-intents.md.",
   "key": {
     "jwk": {
       "kty": "EC",
@@ -127,6 +127,93 @@
       },
       "host": "box-ü",
       "input": "agent-fleet/v1/intent\n{\"actor\":\"zoë@example.test\",\"host\":\"box-ü\",\"id\":\"app-0007\",\"issuedAt\":1792558978141,\"params\":{\"name\":\"x\",\"title\":\"Café ☕ 🚀\"},\"verb\":\"start\"}"
+    }
+  ],
+  "delegations": [
+    {
+      "why": "keeping machines ready: a standing permission to make machines from one image, on whichever box holds the pool, for thirty days",
+      "grant": {
+        "v": 1,
+        "id": "keepready-make-3f9c1a2b4d5e6f70",
+        "actor": "nina@example.test",
+        "verbs": [
+          "provision"
+        ],
+        "hosts": [
+          "*"
+        ],
+        "match": {
+          "platform": "vm",
+          "template": "0b2d6a4e-1c3f-4a5b-8d7e-9f0a1b2c3d4e"
+        },
+        "issuedAt": 1792558978141,
+        "expires": 1795150978141
+      },
+      "input": "agent-fleet/v1/delegation\n{\"actor\":\"nina@example.test\",\"expires\":1795150978141,\"hosts\":[\"*\"],\"id\":\"keepready-make-3f9c1a2b4d5e6f70\",\"issuedAt\":1792558978141,\"match\":{\"platform\":\"vm\",\"template\":\"0b2d6a4e-1c3f-4a5b-8d7e-9f0a1b2c3d4e\"},\"v\":1,\"verbs\":[\"provision\"]}"
+    },
+    {
+      "why": "finishing a sign-in: three verbs, one box, one provider, ten minutes",
+      "grant": {
+        "v": 1,
+        "id": "signin-github-Zk3q9TQ2mH8v",
+        "actor": "nina@example.test",
+        "verbs": [
+          "exchange",
+          "link",
+          "renew"
+        ],
+        "hosts": [
+          "ops-box"
+        ],
+        "match": {
+          "provider": "github"
+        },
+        "issuedAt": 1792558978141,
+        "expires": 1792559578141
+      },
+      "input": "agent-fleet/v1/delegation\n{\"actor\":\"nina@example.test\",\"expires\":1792559578141,\"hosts\":[\"ops-box\"],\"id\":\"signin-github-Zk3q9TQ2mH8v\",\"issuedAt\":1792558978141,\"match\":{\"provider\":\"github\"},\"v\":1,\"verbs\":[\"exchange\",\"link\",\"renew\"]}"
+    },
+    {
+      "why": "a request the fleet places, with a number among its parameters and text that needs escaping",
+      "grant": {
+        "v": 1,
+        "id": "placed-0000000000000001",
+        "actor": "nina@example.test",
+        "verbs": [
+          "start"
+        ],
+        "hosts": [
+          "*"
+        ],
+        "match": {
+          "name": "build",
+          "task": "say \"hi\" — then\nstop",
+          "minutes": 30
+        },
+        "issuedAt": 1792558978141,
+        "expires": 1792559578141
+      },
+      "input": "agent-fleet/v1/delegation\n{\"actor\":\"nina@example.test\",\"expires\":1792559578141,\"hosts\":[\"*\"],\"id\":\"placed-0000000000000001\",\"issuedAt\":1792558978141,\"match\":{\"minutes\":30,\"name\":\"build\",\"task\":\"say \\\"hi\\\" — then\\nstop\"},\"v\":1,\"verbs\":[\"start\"]}"
+    },
+    {
+      "why": "an MCP client for a day, with nothing to match",
+      "grant": {
+        "v": 1,
+        "id": "mcp-claude-desktop-0001",
+        "actor": "nina@example.test",
+        "verbs": [
+          "peek",
+          "start",
+          "stop"
+        ],
+        "hosts": [
+          "*"
+        ],
+        "match": {},
+        "issuedAt": 1792558978141,
+        "expires": 1792645378141
+      },
+      "input": "agent-fleet/v1/delegation\n{\"actor\":\"nina@example.test\",\"expires\":1792645378141,\"hosts\":[\"*\"],\"id\":\"mcp-claude-desktop-0001\",\"issuedAt\":1792558978141,\"match\":{},\"v\":1,\"verbs\":[\"peek\",\"start\",\"stop\"]}"
     }
   ]
 }

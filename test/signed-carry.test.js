@@ -16,7 +16,8 @@ import assert from 'node:assert/strict';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { generateKeyPair, sign } from '../src/fleet/crypto.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
-import { intentSigningInput, keyId } from '../src/fleet/protocol/intent-signature.js';
+import { delegationSigningInput, intentSigningInput, keyId } from '../src/fleet/protocol/intent-signature.js';
+import { validateIntent } from '../src/fleet/protocol/intents.js';
 
 const NINA = 'nina@example.test';
 const QUIET = { info() {}, warn() {}, error() {}, debug() {} };
@@ -62,7 +63,7 @@ async function fleet() {
     const frames = Object.entries(sent).flatMap(([h, all]) => all.slice(before[h]).filter((m) => m.kind === 'intent').map((m) => ({ host: h, ...m })));
     return { r, frames, sig };
   };
-  return { ask };
+  return { ask, core, sent, privateJwk, kid };
 }
 
 test('a signature reaches the box with what it was made over, and goes nowhere else', async () => {
@@ -128,7 +129,7 @@ test('a box that enforces is sent what a person signed, and nothing unsigned tha
 
   const bare = await ask('start', { name: 'strict-bare' }, 'box-strict', { unsigned: true });
   assert.equal(bare.r.error?.code, 'signature_required');
-  assert.match(bare.r.text, /box-strict takes only requests a person signed on their phone, and this one was not signed/);
+  assert.match(bare.r.text, /box-strict takes only requests a person signed, and nothing nina@example\.test signed covers this start/);
   assert.deepEqual(bare.frames, []);
 
   // Signed, then tidied here: checkParams collapses the two spaces.
@@ -145,4 +146,100 @@ test('a box that enforces is sent what a person signed, and nothing unsigned tha
   const elsewhere = await ask('start', { name: 'relaxed' }, 'box-a', { unsigned: true });
   assert.equal(elsewhere.r.ok, true, elsewhere.r.text);
   assert.deepEqual(elsewhere.frames.map((f) => f.host), ['box-a']);
+});
+
+// WHAT THE FLEET SENDS IN A PERSON'S NAME WHILE THEY ARE NOT THERE carries what
+// they signed earlier to allow it: a delegation, kept here and attached by
+// `send` to whatever it covers. The box checks it; this side only chooses
+// which to carry, so a box that enforces is sent the unsigned request with it,
+// and refused here only when nothing the person signed covers it.
+test('an unsigned request goes to a box that enforces with a delegation that covers it, and not without one', async () => {
+  const { ask, core, privateJwk, kid } = await fleet();
+  const now = Date.now();
+  /** @param {Record<string, any>} over */
+  const delegation = async (over = {}) => {
+    const grant = { v: 1, id: `held-start-${Math.random().toString(36).slice(2, 12)}`, actor: NINA, verbs: ['start'], hosts: ['*'], match: { name: 'held' }, issuedAt: now, expires: now + 3_600_000, ...over };
+    return { grant, sig: await sign(privateJwk, delegationSigningInput(grant)), kid };
+  };
+
+  // Nothing kept: refused here, as before.
+  assert.equal((await ask('start', { name: 'held' }, 'box-strict', { unsigned: true })).r.error?.code, 'signature_required');
+
+  // Somebody else's is not kept for Nina, nor hers for somebody else.
+  const ninas = await delegation();
+  assert.equal(core.keepDelegation('kim@example.test', ninas).error?.code, 'not_yours');
+  assert.equal(core.keepDelegation(NINA, { ...ninas, grant: { ...ninas.grant, hosts: ['*', 'box-a'] } }).error?.code, 'bad_params');
+
+  // Kept: carried with the start it covers, whole, and in the shape the box
+  // reads it in.
+  assert.equal(core.keepDelegation(NINA, ninas).ok, true);
+  const held = await ask('start', { name: 'held' }, 'box-strict', { unsigned: true });
+  assert.equal(held.r.ok, true, held.r.text);
+  assert.equal(held.frames.length, 1);
+  assert.deepEqual(held.frames[0].delegation, ninas);
+  const atBox = validateIntent(held.frames[0]);
+  assert.equal(atBox.ok, true);
+  assert.deepEqual(/** @type {any} */ (atBox).intent.delegation, ninas);
+
+  // Not for another session name, which is what she signed it with.
+  assert.equal((await ask('start', { name: 'other' }, 'box-strict', { unsigned: true })).r.error?.code, 'signature_required');
+
+  // A request she signed herself travels with her signature, not the delegation.
+  const signed = await ask('start', { name: 'held' }, 'box-strict');
+  assert.equal(signed.frames[0].sig, signed.sig);
+  assert.equal(signed.frames[0].delegation, undefined);
+
+  // Withdrawn: no longer carried.
+  assert.equal(core.dropDelegation({ email: NINA }, ninas.grant.id).ok, true);
+  assert.deepEqual(core.delegationsFor({ email: NINA }), []);
+  assert.equal((await ask('start', { name: 'held' }, 'box-strict', { unsigned: true })).r.error?.code, 'signature_required');
+
+  // Carried inline with the request that needs it, as a phone sends one for a
+  // request the fleet places, and kept for the person asking.
+  const inline = await delegation({ match: { name: 'placed' } });
+  const r = await core.dispatch({ verb: 'start', params: { name: 'placed' }, actor: NINA, requester: { email: NINA, admin: true }, preferHost: 'box-strict', delegation: inline });
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(core.delegationsFor({ email: NINA }).map((g) => g.id), [inline.grant.id]);
+});
+
+test('a renewal replaces what it renews, and a person’s short delegations give way to new ones', async () => {
+  const { Delegations, MAX_DELEGATIONS_PER_PERSON } = await import('../src/fleet/coordinator/delegations.js');
+  const store = new Delegations();
+  const { privateJwk, publicJwk } = await generateKeyPair();
+  const kid = await keyId({ kty: 'EC', crv: 'P-256', x: String(publicJwk.x), y: String(publicJwk.y) });
+  let n = 0;
+  const make = async (/** @type {Record<string, any>} */ over) => {
+    const grant = { v: 1, id: `grant-${String(++n).padStart(12, '0')}`, actor: NINA, verbs: ['provision'], hosts: ['*'], match: { template: 't-1' }, issuedAt: Date.now(), expires: Date.now() + 20 * 86_400_000, ...over };
+    return { grant, sig: await sign(privateJwk, delegationSigningInput(grant)), kid };
+  };
+  // Keeping machines ready, renewed every day: one kept, the newest.
+  for (let i = 0; i < 3; i++) assert.equal(store.put(NINA, await make({ expires: Date.now() + (20 + i) * 86_400_000 })).ok, true);
+  assert.deepEqual(store.listFor(NINA).map((g) => g.id), [`grant-${String(3).padStart(12, '0')}`]);
+  // A request the fleet places, signed for ten minutes each, more than the
+  // allowance holds: the nearest its end gives way each time.
+  for (let i = 0; i < MAX_DELEGATIONS_PER_PERSON + 4; i++) {
+    assert.equal(store.put(NINA, await make({ verbs: ['start'], match: { name: `job-${i}` }, expires: Date.now() + 600_000 + i })).ok, true, `placed request ${i}`);
+  }
+  assert.equal(store.listFor(NINA).length, MAX_DELEGATIONS_PER_PERSON);
+  assert.ok(store.listFor(NINA).some((g) => g.verbs[0] === 'provision'), 'a standing delegation gave way to a short one');
+  // Standing ones are never dropped to make room.
+  const full = new Delegations();
+  for (let i = 0; i < MAX_DELEGATIONS_PER_PERSON; i++) assert.equal(full.put(NINA, await make({ match: { template: `t-${i}` } })).ok, true);
+  assert.equal(full.put(NINA, await make({ match: { template: 'one-more' } })).error?.code, 'too_many');
+});
+
+test('a full delegation store still fits in one Durable Object value', async () => {
+  const { Delegations, MAX_DELEGATION_STORE_BYTES } = await import('../src/fleet/coordinator/delegations.js');
+  const store = new Delegations();
+  const { privateJwk, publicJwk } = await generateKeyPair();
+  const kid = await keyId({ kty: 'EC', crv: 'P-256', x: String(publicJwk.x), y: String(publicJwk.y) });
+  let refused = false;
+  for (let i = 0; i < 5000 && !refused; i++) {
+    const actor = `${String(i).padStart(5, '0')}${'e'.repeat(50)}@example.test`;
+    const grant = { v: 1, id: `g${String(i).padStart(20, '0')}`, actor, verbs: ['provision', 'vmctl'], hosts: ['*'], match: { template: '0'.repeat(36) }, issuedAt: Date.now(), expires: Date.now() + 86_400_000 };
+    const r = store.put(actor, { grant, sig: await sign(privateJwk, delegationSigningInput(grant)), kid });
+    if (r.ok === false) refused = true;
+  }
+  assert.ok(refused, 'the delegation store did not refuse');
+  assert.ok(JSON.stringify(store.serialise()).length <= MAX_DELEGATION_STORE_BYTES);
 });
