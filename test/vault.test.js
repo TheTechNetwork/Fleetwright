@@ -31,7 +31,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
-import { standInClaude, revokeClaude } from './helpers/stand-in-claude.js';
+import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -171,9 +171,9 @@ async function minter(extra = {}) {
     return call('/vault/keys', { request, signature, members: o.members ?? [ELI] });
   };
 
-  /** A Claude login deposited as fleetwright-claude-login and the phones seal one, and the coordinator relays it. @param {string} github @param {string|null} claude */
-  const deposit_ = async (github, claude) =>
-    call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now() } }), email: ELI });
+  /** A Claude login deposited as fleetwright-claude-login and the phones seal one, and the coordinator relays it. @param {string} github @param {string|null} claude @param {Record<string, unknown>} [extra] */
+  const deposit_ = async (github, claude, extra = {}) =>
+    call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now(), ...extra } }), email: ELI });
 
   /** The coordinator's minter binding, as fleet-do.js makes it. */
   const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask) };
@@ -183,7 +183,9 @@ async function minter(extra = {}) {
   const restart = () => { instance = new ClaudeLogins({ storage }, env); };
   /** The minting Worker as a coordinator's service binding reaches it (fleet-do.js, env.MINTER). */
   const service = { fetch: (/** @type {string} */ u, /** @type {any} */ i) => minterWorker.fetch(new Request(u, i), env) };
-  return { phone, box, keys: keysFor, deposit: deposit_, signIn: () => signIn(deposit.publicKey), signInAs: (/** @type {string} */ email) => signIn(deposit.publicKey, email), renew, rows, calls, binding, service, lookup, restart, restore: () => { globalThis.fetch = real; } };
+  /** The vault's object renewing a sign-in for a runner's hand-out, as claude.js asks it to. @param {string} id */
+  const fresh = (id) => instance.fetch(new Request('https://logins.internal/claude/fresh', { method: 'POST', body: JSON.stringify({ id }) })).then((r) => r.json());
+  return { phone, box, keys: keysFor, deposit: deposit_, fresh, signIn: () => signIn(deposit.publicKey), signInAs: (/** @type {string} */ email) => signIn(deposit.publicKey, email), renew, rows, calls, binding, service, lookup, restart, restore: () => { globalThis.fetch = real; } };
 }
 
 test('a person keeps their credentials once, and only a box they approved by its key is given them', async (t) => {
@@ -1198,4 +1200,77 @@ test('a vault tests what it keeps with the service each is for, and says when th
   assert.equal((await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' })).ok, true);
   assert.equal((await m.phone({ op: 'test', name: 'secret:NPM_TOKEN' })).error?.code, 'not_testable');
 
+});
+
+test('a whole Claude sign-in is kept once, renewed by the minter alone, and no box is given its refresh token', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  const a = await generateKeyPair();
+  const b = await generateKeyPair();
+  // TEN MINUTES LEFT, so the first box to ask renews it. Granted the scopes
+  // Claude Code 2.1.306 signs in for, which a renewal keeps: asking for fewer
+  // would hand every box a narrower token than the person signed in for.
+  const signedInFor = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload'];
+  const made = claudeSignInFor('eli', 10 * 60_000, signedInFor);
+  const kept = await m.phone({ op: 'put', name: 'claude', signIn: made });
+  assert.equal(kept.ok, true, kept.text);
+  assert.match(kept.text, /Kept your Claude sign-in .* with Remote Control\. It is renewed here and nowhere else\. Claude accepted it just now\./);
+  const listed = await m.phone({ op: 'list' });
+  assert.deepEqual(listed.answer.items.find((/** @type {any} */ i) => i.name === 'claude'), { name: 'claude', at: listed.answer.items.find((/** @type {any} */ i) => i.name === 'claude').at, kind: 'login' });
+  assert.ok(![...m.rows.values()].some((v) => JSON.stringify(v).includes(made.oauth.refreshToken)), 'nothing readable at rest');
+
+  await m.phone({ op: 'grant', hostKey: a.publicJwk, label: 'a' });
+  await m.phone({ op: 'grant', hostKey: b.publicJwk, label: 'b' });
+  const before = claudeRenewals.count;
+  const [one, two] = await Promise.all([m.box(a), m.box(b)]);
+  assert.equal(claudeRenewals.count - before, 1, 'one renewal however many boxes asked');
+  for (const r of [one, two]) {
+    const claude = r.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude');
+    assert.match(claude.value, /^sk-ant-oat01-renewed/);
+    assert.ok(claude.expiresAt > Date.now() + 7 * 3_600_000);
+    assert.equal(claude.login.subscriptionType, 'max');
+    assert.deepEqual(claude.login.scopes, signedInFor);
+    assert.equal(claude.account.emailAddress, 'eli@example.com');
+    assert.equal(claude.account.notAField, undefined, 'only the account fields Claude Code reads are kept');
+    assert.ok(!JSON.stringify(r.answer).includes('sk-ant-ort01'), 'a box is never given a refresh token');
+    assert.deepEqual(r.answer.accounts[0].problems, []);
+  }
+  // The rotated pair is what is kept: asking again renews nothing.
+  await m.box(a);
+  assert.equal(claudeRenewals.count - before, 1);
+
+  // A RUNNER'S HAND-OUT renews through the vault's object, under its lock,
+  // and is the bearer alone.
+  const forRunner = await m.fresh('42');
+  assert.equal(forRunner.ok, true, forRunner.text);
+  assert.match(forRunner.token, /^sk-ant-oat01-renewed/);
+  assert.equal(Object.keys(forRunner).includes('refreshToken'), false);
+
+  const tested = await m.phone({ op: 'test', name: 'claude' });
+  assert.equal(tested.answer.state, 'accepted', tested.text);
+});
+
+test('a Claude sign-in Claude will not renew says so, and is given out only until it runs out', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  const office = await generateKeyPair();
+  const made = claudeSignInFor('eli', 5 * 60_000);
+  made.oauth.refreshToken = `sk-ant-ort01-revoked-${'x'.repeat(40)}`;
+  // BY A DEPOSIT this time, the phones' other route to the same row.
+  const deposited = await m.deposit(await m.signIn(), null, { signIn: made });
+  assert.equal(deposited.ok, true, deposited.text);
+  assert.match(deposited.text, /Kept eli’s Claude sign-in\. .*Remote Control works on them/);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+
+  const given = await m.box(office);
+  const claude = given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude');
+  assert.equal(claude.value, made.oauth.accessToken, 'still good for five minutes, so still given');
+  assert.match(given.answer.accounts[0].problems.join(' '), /Claude refused to renew it \(Refresh token not found or invalid\)\. Sign in to Claude again from your phone/);
+  const tested = await m.phone({ op: 'test', name: 'claude' });
+  assert.equal(tested.answer.state, 'rejected');
+  assert.match(tested.text, /Claude refused to renew it/);
+
+  // A sign-in with no refresh token, or a malformed one, is not kept at all.
+  const bad = await m.phone({ op: 'put', name: 'claude', signIn: { oauth: { accessToken: made.oauth.accessToken } } });
+  assert.equal(bad.error?.code, 'bad_token');
 });

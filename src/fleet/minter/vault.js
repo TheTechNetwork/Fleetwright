@@ -75,6 +75,7 @@ import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
 import { probeClaude } from '../../core/claude-token-probe.js';
+import { claudeSignIn, freshClaude } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
@@ -263,6 +264,29 @@ const notADevice = refuse(
   'That GitHub token is not one this phone signed in for through the fleet, so it opens no vault. If this phone signed in to GitHub before the fleet checked for that, sign out of GitHub under Runners from this phone and sign in again.',
 );
 
+/**
+ * A person's Claude sign-in, renewed if it is due, for a runner's hand-out
+ * (claude.js, answerLogin), which runs in the Worker in front of this object
+ * and so cannot hold the lock a renewal needs. The bearer only: the refresh
+ * token does not leave this object.
+ *
+ * @param {unknown} ask  `{ id }`, the GitHub account id
+ * @param {VaultConfig} config
+ */
+export async function answerClaudeFresh(ask, config) {
+  const missing = notConfigured(config);
+  if (missing) return missing;
+  const id = String(/** @type {any} */ (ask)?.id || '');
+  if (!/^[0-9]{1,20}$/.test(id)) return refuse('bad_params', 'That is not a GitHub account id.');
+  const loaded = await loadKey(config);
+  if (!loaded.ok) return /** @type {any} */ (loaded).refusal;
+  const { fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = config;
+  const store = /** @type {VaultStore} */ (config.store);
+  const { held, problem } = await withLock(`row:${id}`, () => freshClaude(store, /** @type {any} */ (loaded).key, id, { fetchImpl, now }));
+  if (!held) return refuse('no_claude_login', problem ?? 'No Claude login is kept for that account.');
+  return { ok: true, token: held.bearer, expiresAt: held.expiresAt, text: problem ?? '' };
+}
+
 /** @param {VaultConfig} config */
 function notConfigured(config) {
   return !config.depositKey || !config.store
@@ -434,7 +458,10 @@ async function runDeviceOp(inside, config, key, who, email, at) {
 
   if (inside.op === 'put' || inside.op === 'forget') {
     const kind = itemKind(name);
-    if (kind === 'claude') return putClaude(store, key, who, email, at, inside.op === 'forget' ? null : String(inside.value ?? ''), config.fetchImpl);
+    if (kind === 'claude') {
+      const what = inside.op === 'forget' ? null : inside.signIn !== undefined ? { signIn: inside.signIn } : String(inside.value ?? '');
+      return putClaude(store, key, who, email, at, what, config.fetchImpl);
+    }
     if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
     }
@@ -610,14 +637,15 @@ async function testItem(name, row, config, key, who, save) {
   /** @param {'accepted'|'rejected'|'unknown'} state @param {string} text */
   const said = (state, text) => /** @type {const} */ ({ ok: true, answer: { name, state }, text });
   if (name === 'claude') {
-    const held = await store.get(`gh:${who.userId}`);
-    if (!held?.sealed || held.forgotten) return refuse('not_kept', 'Your vault holds no Claude login to test. Keep one first.');
-    let token;
-    try {
-      token = String((await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad(who.userId), sealed: held.sealed })).token || '');
-    } catch {
-      return said('rejected', 'Your Claude login does not open with this minter’s key, so nothing could be given it. Keep it again.');
-    }
+    const row = await store.get(`gh:${who.userId}`);
+    if (!row?.sealed || row.forgotten) return refuse('not_kept', 'Your vault holds no Claude login to test. Keep one first.');
+    // A SIGN-IN IS RENEWED FIRST if it is due, as a box would be handed it,
+    // so a refresh token Claude no longer takes is found here and not by a
+    // box once the access token runs out.
+    const { held, problem, refused } = await freshClaude(store, key, who.userId, config);
+    if (!held) return said('rejected', problem ?? 'Your Claude login does not open with this minter’s key, so nothing could be given it. Keep it again.');
+    if (problem) return said(refused ? 'rejected' : 'unknown', problem);
+    const token = held.bearer;
     const r = await probeClaude({ token }, { fetchImpl: config.fetchImpl });
     if (r.state === 'accepted') {
       return said('accepted', r.status === 429 || r.status === 529
@@ -682,11 +710,17 @@ function label(name) {
  * fleet account kept beside it, which a runner's hand-out matches against the
  * runner's owner (claude.js, answerLogin).
  *
+ * A whole sign-in a machine made (`{ signIn }`, claude-login.js) is kept in
+ * the same row as a setup-token, and replaces it: one Claude login a person.
+ *
  * @param {VaultStore} store @param {{ publicKey: string }} key
  * @param {{ userId: string, login: string }} who @param {string} email
- * @param {number} at @param {string|null} token @param {typeof fetch} fetchImpl
+ * @param {number} at @param {string|{ signIn: unknown }|null} what @param {typeof fetch} fetchImpl
  */
-async function putClaude(store, key, who, email, at, token, fetchImpl) {
+async function putClaude(store, key, who, email, at, what, fetchImpl) {
+  const signIn = what !== null && typeof what === 'object' ? claudeSignIn(what.signIn) : null;
+  if (what !== null && typeof what === 'object' && !signIn) return refuse('bad_token', 'That is not a Claude sign-in. Make it on a machine again.');
+  const token = signIn ? signIn.oauth.accessToken : /** @type {string|null} */ (what);
   if (token !== null && !CLAUDE_RE.test(token)) {
     return refuse('bad_token', 'That is not a Claude token. Paste the one line `claude setup-token` printed.');
   }
@@ -697,10 +731,18 @@ async function putClaude(store, key, who, email, at, token, fetchImpl) {
     return /** @type {const} */ ({ ok: true, text: 'Forgot your Claude login. Boxes and runners stop being given it.' });
   }
   // ASKED FIRST, as a deposit asks (claude.js, checkBeforeKeeping).
-  const checked = await checkBeforeKeeping(token, fetchImpl);
+  const checked = await checkBeforeKeeping(token, fetchImpl, signIn ? 'login' : 'token');
   if ('refusal' in checked) return checked.refusal;
-  await store.put(`gh:${who.userId}`, { at, login: who.login, email, sealed: await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: { token } }) });
-  return /** @type {const} */ ({ ok: true, text: `Kept your Claude login for your runners and the boxes you approve.${checked.said}` });
+  await store.put(`gh:${who.userId}`, {
+    at, login: who.login, email, kind: signIn ? 'login' : 'token',
+    sealed: await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: signIn ?? { token } }),
+  });
+  return /** @type {const} */ ({
+    ok: true,
+    text: signIn
+      ? `Kept your Claude sign-in for your runners and the boxes you approve, with Remote Control. It is renewed here and nowhere else.${checked.said}`
+      : `Kept your Claude login for your runners and the boxes you approve.${checked.said}`,
+  });
 }
 
 /**
@@ -712,11 +754,13 @@ async function putClaude(store, key, who, email, at, token, fetchImpl) {
  */
 async function describe(row, store, userId) {
   const claude = await store.get(`gh:${userId}`);
-  /** @type {Array<{ name: string, at: number }>} */
+  /** @type {Array<{ name: string, at: number, kind?: string }>} */
   const items = Object.entries(row.items)
     .filter(([, v]) => v && !v.forgotten && v.sealed)
     .map(([n, v]) => ({ name: n, at: Number(v.at) }));
-  if (claude?.sealed && !claude.forgotten) items.push({ name: 'claude', at: Number(claude.at) });
+  // WHICH KIND, because only a sign-in opens Remote Control, and a phone that
+  // said "Kept" over a setup-token let a person think it did.
+  if (claude?.sealed && !claude.forgotten) items.push({ name: 'claude', at: Number(claude.at), kind: claude.kind === 'login' ? 'login' : 'token' });
   items.sort((x, y) => (x.name < y.name ? -1 : 1));
   const grants = Object.entries(row.grants)
     .filter(([, g]) => g && !g.revoked && g.jwk)
@@ -808,7 +852,7 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
   // named its fleet account since grants began, so one naming nobody is
   // nobody's on the list.
   if (members && !members.has(normaliseEmail(grant.email))) return null;
-  /** @type {Array<{ name: string, value: string, expiresAt: number|null }>} */
+  /** @type {Array<{ name: string, value: string, expiresAt: number|null, login?: Record<string, unknown>, account?: Record<string, unknown> }>} */
   const items = [];
   /** @type {string[]} */
   const problems = [];
@@ -847,13 +891,19 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
     }
   }
   if (changed) await store.put(`v:${userId}`, row);
-  const claude = only && !only.has('claude') ? null : await store.get(`gh:${userId}`);
-  if (claude?.sealed && !claude.forgotten) {
-    try {
-      const inside = /** @type {any} */ (await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad(userId), sealed: claude.sealed }));
-      items.push({ name: 'claude', value: String(inside.token), expiresAt: null });
-    } catch {
-      problems.push('Your Claude login does not open with this minter’s key; deposit it again.');
+  if (!only || only.has('claude')) {
+    // A SIGN-IN GOES OUT AS ITS ACCESS TOKEN, renewed first if it is due, and
+    // never with its refresh token (claude-login.js). `value` is the bearer
+    // either way, so a box from before sign-ins uses it as the token it
+    // always took; `login` and `account` are what a newer box writes a
+    // credentials file from, which is what Remote Control needs.
+    const { held, problem } = await freshClaude(store, key, userId, config);
+    if (problem) problems.push(problem);
+    if (held?.kind === 'login' && held.oauth) {
+      const { scopes, subscriptionType, rateLimitTier } = held.oauth;
+      items.push({ name: 'claude', value: held.bearer, expiresAt: held.expiresAt, login: { scopes, subscriptionType, rateLimitTier }, account: held.account ?? {} });
+    } else if (held) {
+      items.push({ name: 'claude', value: held.bearer, expiresAt: null });
     }
   }
   return { email: String(grant.email || ''), login: row.login, items, problems };
