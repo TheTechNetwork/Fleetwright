@@ -223,7 +223,7 @@ test('a box that enforces for the people it knows says what would have carried a
   assert.equal(bare.frames.length, 1, 'sent to the box, which decides');
   assert.equal(bare.r.error?.code, 'signature_required');
   assert.match(bare.r.text, /^box-signers takes only requests a person signed, and this start from nina@example\.test was not signed\. Nothing was done\. /);
-  assert.match(bare.r.text, /allow an MCP client under Delegations on the You tab/);
+  assert.match(bare.r.text, /To fix it, open the Fleetwright app on your phone, go to You → Delegations, and under An MCP client tap Allow for a day or Allow for a week\. Then ask again\./);
 
   // With the phone's MCP delegation kept, the same request carries it and is
   // taken.
