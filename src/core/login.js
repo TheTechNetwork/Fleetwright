@@ -57,18 +57,47 @@ const AUTH_URL_RE =
 // exact kind, so a new kind number does not silently stop the capture.
 const SETUP_TOKEN_RE = /\bsk-ant-[a-z]+\d*-[A-Za-z0-9_-]{20,}/;
 
+/** A line as full as a wrapped one is (pane.js, dewrapPane, which uses the same number). */
+const FULL_LINE = 60;
+
 /**
  * The token a `claude setup-token` pane printed, or null.
  *
- * De-wrapped first: the token is longer than a terminal line, and reading it
- * off the raw pane would take the first line of it and lose the rest.
+ * WHOLE, ACROSS EVERY LINE IT WRAPPED ONTO. The token is longer than a
+ * terminal line, and Claude Code does not leave the wrapping to the terminal:
+ * it draws the token one column in and wraps it itself, so every line after
+ * the first starts with a space too. Measured on 2.1.306 in an 80-column
+ * pane: ` sk-ant-oat01-` and 66 more on the first line, the remaining 29 on
+ * the next, behind the same space. dewrapPane joins only a line with no
+ * space in it, which is right for prose and wrong here, so the token ended
+ * at 79 of its 108 characters, every time, and Claude refused it at the
+ * minter with "OAuth access token is invalid".
+ *
+ * So the line the token starts on is followed by hand: while the token runs
+ * to the end of a full line, the next line is more of it if, trimmed, it is
+ * nothing but the token's characters. The blank line Claude Code leaves under
+ * the token, or the sentence after it, ends it.
  *
  * @param {string} pane
  * @returns {string|null}
  */
 export function setupTokenFrom(pane) {
-  const m = dewrapPane(String(pane || '')).match(SETUP_TOKEN_RE);
-  return m ? m[0] : null;
+  const lines = String(pane || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(SETUP_TOKEN_RE);
+    if (!m || m.index === undefined) continue;
+    let token = m[0];
+    let line = lines[i].trimEnd();
+    let ranToEnd = m.index + m[0].length === line.length;
+    for (let j = i + 1; ranToEnd && line.length >= FULL_LINE && j < lines.length; j++) {
+      const next = lines[j].trim();
+      if (!/^[A-Za-z0-9_-]+$/.test(next)) break;
+      token += next;
+      line = lines[j].trimEnd();
+    }
+    return token;
+  }
+  return null;
 }
 
 const SUCCESS_RE = /Login successful|Logged in as|Successfully (?:logged|signed) in|authentication successful/i;
