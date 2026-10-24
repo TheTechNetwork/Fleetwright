@@ -8280,13 +8280,13 @@ function signatureRequired(hostId, wasSigned, intent) {
 }
 
 /**
- * How a person comes to have signed for what the fleet sends without them,
- * which is the one thing to do about either refusal. Named where it is on both
- * phones (DelegationsView.swift, YouScreen.kt).
+ * What to do about either refusal, as steps: the screen and the buttons, named
+ * as both phones name them (DelegationsView.swift, YouScreen.kt). Whoever reads
+ * it is usually an MCP client's person, told by an agent, with no app open.
  */
 const DELEGATION_REMEDY =
-  'The app signs what you do in it. For what the fleet does in your name later, it signs a delegation: when you set machines to keep ready, ' +
-  'when you finish a sign-in, and when you allow an MCP client under Delegations on the You tab.';
+  'To fix it, open the Fleetwright app on your phone, go to You \u2192 Delegations, and under An MCP client tap Allow for a day or Allow for a week. ' +
+  'Then ask again. A request you make in the app is signed as you send it; this lets the fleet send one for you.';
 
 /**
  * A box's refusal of a request that reached it with neither a signature nor a

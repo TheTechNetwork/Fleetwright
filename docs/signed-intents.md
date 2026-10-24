@@ -327,8 +327,9 @@ person signed it and the fleet changed it on the way.
 A named person's request to a `signers` box is sent, because only the box knows
 whether it has seen that person's key. When the box refuses it for having
 neither a signature nor a delegation, the coordinator adds to the box's words
-what would have carried it, so an MCP client told "was not signed" also hears
-where its person allows one: Delegations, on the You tab.
+what to do about it, as steps: open the app, go to You → Delegations, and under
+An MCP client tap Allow for a day or Allow for a week. The coordinator's own
+refusal ends the same way.
 
 ## Delegations
 
