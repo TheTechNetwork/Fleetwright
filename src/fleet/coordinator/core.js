@@ -109,6 +109,8 @@ const RELAY_PROTOCOL = 12;
 const POOL_PAGE_PROTOCOL = 13;
 /** The protocol a box speaks to keep its own named secrets from sessions of people who do not administer it (`boxSecrets`, v14). */
 const BOX_SECRETS_PROTOCOL = 14;
+/** The protocol a box speaks to make a whole Claude sign-in for a vault (`setuptoken` with `kind: login`, v15). */
+const VAULT_SIGNIN_PROTOCOL = 15;
 /**
  * How long a machine's ticket lives: as long as the fleet waits for a machine
  * kept ready to enrol before it takes it to have failed (vm-standby.js), and
@@ -5164,6 +5166,25 @@ export class CoordinatorCore {
             `${BOX_SECRETS_PROTOCOL}. Start without a secret, or ask whoever runs it to update it.`,
         };
       }
+    }
+    // A WHOLE CLAUDE SIGN-IN, which dropped is a setup-token: an older box
+    // is not handed `kind` and makes the token it always made, which cannot
+    // open Remote Control, and which such a box took off its pane cut short
+    // at the terminal's width (login.js, setupTokenFrom), so Claude refused
+    // it with a 401 at the minter. Asked for by name, on a phone, and found
+    // there as a refusal that said nothing about the machine. Refused here,
+    // before any sign-in page is opened, saying which machine and what it
+    // needs.
+    if (spec.verb === 'setuptoken' && spec.params?.kind === 'login') {
+      const speaks = Number(host?.health?.protocol);
+      if (Number.isInteger(speaks) && speaks >= VAULT_SIGNIN_PROTOCOL) return null;
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text:
+          `${host?.hostId} is too old to make a whole Claude sign-in, which Remote Control needs \u2014 it speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${VAULT_SIGNIN_PROTOCOL}. Update it, or make the sign-in on another machine.`,
+      };
     }
     // A TASK, for the same reason: dropped, the session starts idle — the thing
     // `task` exists to end — and the reply says it started.
