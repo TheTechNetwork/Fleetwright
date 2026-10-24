@@ -56,7 +56,13 @@ struct VMConsoleView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .bottomBar) {
-                Button(Manage.Words.keyboard) { typing.toggle() }
+                // The keyboard has a symbol and takes it, so it can stand in the
+                // Duo's vertical bar. Ctrl-Alt-Del does not: the words ARE the
+                // information, so it stays horizontal, as Apple's own guidance
+                // keeps text that means something on its own.
+                Button { typing.toggle() } label: {
+                    Label(Manage.Words.keyboard, systemImage: "keyboard")
+                }
                     .disabled(!model.connected)
                 Spacer()
                 Button(Manage.Words.ctrlAltDel) { model.ctrlAltDel() }

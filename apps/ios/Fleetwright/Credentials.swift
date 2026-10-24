@@ -534,6 +534,7 @@ struct CredentialsView: View {
             if let handed = handedBack(back) {
                 let reply = try await Fleet(settings: settings).finishSignIn(
                     provider: handed.provider, state: handed.state, code: handed.code, sealed: handed.sealed,
+                    host: pendingHost ?? host,
                 )
                 await load()
                 result = reply.text ?? (reply.ok == false ? "Nothing was connected." : "Connected with \(provider.label).")

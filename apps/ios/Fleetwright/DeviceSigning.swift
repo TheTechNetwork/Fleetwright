@@ -32,6 +32,18 @@ enum IntentSigning {
         signingInput("intent", ["actor": actor, "host": host, "id": id, "issuedAt": issuedAt, "params": params, "verb": verb])
     }
 
+    /// The bytes signed for a delegation, as `delegationSigningInput`: the grant,
+    /// every field of it (`v`, `id`, `actor`, `verbs`, `hosts`, `match`,
+    /// `issuedAt`, `expires`).
+    static func delegationInput(_ grant: [String: Any]) -> String {
+        signingInput("delegation", grant)
+    }
+
+    /// Verbs a box answers whoever asks, or takes from the fleet with nobody's
+    /// signature (`UNSIGNED_VERBS` and `COORDINATOR_UNSIGNED_VERBS` in
+    /// intent-signature.js): nothing to sign or delegate for these.
+    static let unsignedVerbs: Set<String> = ["list", "status", "health", "updates", "profiles", "forgetperson", "vmlogin", "mint"]
+
     /// `agent-fleet/v1/<context>\n<canonical JSON>`, as src/fleet/crypto.js `signingInput`.
     static func signingInput(_ context: String, _ payload: Any) -> String {
         "agent-fleet/v1/\(context)\n\(canonical(payload))"
@@ -177,6 +189,29 @@ struct DeviceSigning {
         let input = IntentSigning.input(actor: email, id: id, issuedAt: issuedAt, params: params, verb: verb, host: host)
         guard let sig = try? key.sign(input) else { return nil }
         return (sig, key.kid, issuedAt)
+    }
+
+    /// A delegation: what this phone signs to let the fleet send `verbs` to
+    /// `hosts` (`["*"]` for whichever box it places them on) in this person's
+    /// name for `lifetime` seconds, each parameter in `match` exactly as given
+    /// (docs/signed-intents.md, "Delegations"). A box checks it as it checks a
+    /// signature. Nil until this phone's key is listed, as `signature` is.
+    func delegation(verbs: [String], hosts: [String], match: [String: Any], lifetime: TimeInterval) -> [String: Any]? {
+        guard !email.isEmpty, let key = try? DeviceKey.load(),
+              UserDefaults.standard.string(forKey: Self.listedKey) == "\(key.kid) \(email)"
+        else { return nil }
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        let grant: [String: Any] = [
+            "v": 1, "id": Self.delegationId(), "actor": email, "verbs": verbs, "hosts": hosts, "match": match,
+            "issuedAt": now, "expires": now + Int(lifetime * 1000),
+        ]
+        guard let sig = try? key.sign(IntentSigning.delegationInput(grant)) else { return nil }
+        return ["grant": grant, "sig": sig, "kid": key.kid]
+    }
+
+    /// A delegation's id: what it is revoked by, so never reused.
+    static func delegationId() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
     /// List this phone's key with the minter for the account it is signed in

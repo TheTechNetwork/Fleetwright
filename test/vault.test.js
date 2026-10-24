@@ -29,7 +29,7 @@ import { runnerAuthFor } from '../src/core/runner-login.js';
 import { pickCredentialSource } from '../src/core/podman.js';
 import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
-import { intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
+import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
 import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor } from './helpers/stand-in-claude.js';
 
@@ -843,10 +843,23 @@ test('a phone lists its signing key under its own address, and a box is given th
 
   // REMOVED, and an older add replayed inside its ten minutes does not bring it back.
   const at = Date.now() - 60_000;
+  // Listed with no key, which is what tells a box he signs nothing now.
   assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, remove: true })).ok, true);
-  assert.deepEqual((await m.keys(office)).payload.people, []);
+  assert.deepEqual((await m.keys(office)).payload.people, [{ email: ELI, keys: [] }]);
   assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' }, { at })).error?.code, 'stale');
-  assert.deepEqual((await m.keys(office)).payload.people, []);
+  assert.deepEqual((await m.keys(office)).payload.people, [{ email: ELI, keys: [] }]);
+
+  // A DELEGATION REVOKED is listed beside his keys until it would have run
+  // out, and only the account that files his keys can revoke one.
+  assert.equal((await m.phone({ op: 'devicekey', key: office.publicJwk, label: 'Eli’s iPad' })).ok, true);
+  const until = Date.now() + 3_600_000;
+  assert.equal((await m.phone({ op: 'revokedelegation', id: 'mcp-claude-desktop-01', until })).ok, true);
+  assert.deepEqual((await m.keys(office)).payload.people[0].revoked, ['mcp-claude-desktop-01']);
+  assert.equal((await m.phone({ op: 'revokedelegation', id: 'mcp-claude-desktop-02', until }, { github: dana, person: ELI })).error?.code, 'address_taken');
+  assert.equal((await m.phone({ op: 'revokedelegation', id: 'short', until })).error?.code, 'bad_params');
+  // A key added afterwards keeps the revocations.
+  assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' })).ok, true);
+  assert.deepEqual((await m.keys(office)).payload.people[0].revoked, ['mcp-claude-desktop-01']);
 });
 
 /**
@@ -856,7 +869,7 @@ test('a phone lists its signing key under its own address, and a box is given th
  * (docs/signed-intents.md). The coordinator is not told whether the box
  * enforces, so what the box does with an unsigned intent is the box's own.
  *
- * @param {import('node:test').TestContext} t @param {{ requireSigned?: boolean }} [opts]
+ * @param {import('node:test').TestContext} t @param {{ requireSigned?: boolean|'off'|'signers'|'all' }} [opts]
  */
 async function signingFleet(t, { requireSigned = false } = {}) {
   const m = await minter();
@@ -922,7 +935,18 @@ async function signingFleet(t, { requireSigned = false } = {}) {
     });
     return { mallet, malletKey, malletId, heal: () => { core.minter = /** @type {any} */ (m.binding); } };
   };
-  return { m, core, box, dir, served, start, poisonList };
+  /**
+   * What Eli's phone signs to let the fleet send something in his name later.
+   * @param {Record<string, any>} over
+   */
+  const delegate = async (over = {}) => {
+    const grant = {
+      v: 1, id: `dlg-${Math.random().toString(36).slice(2, 14)}-0000`, actor: ELI, verbs: ['start'], hosts: ['ops-box'], match: { name: 'held' },
+      issuedAt: Date.now(), expires: Date.now() + 3_600_000, ...over,
+    };
+    return { grant, sig: await sign(iphone.privateJwk, delegationSigningInput(grant)), kid };
+  };
+  return { m, core, box, dir, served, start, poisonList, delegate, iphone };
 }
 
 test('a box checks the signature on an intent with keys the minter signed, which the coordinator carries and cannot add to', async (t) => {
@@ -1009,6 +1033,116 @@ test('a box run with FLEETWRIGHT_REQUIRE_SIGNED refuses what a person did not si
 
   const seen = /** @type {any} */ (await box.sidecar.health()).signatures;
   assert.equal(seen.enforcing, true, 'the box does not say it enforces');
+});
+
+// WHAT THE FLEET SENDS IN SOMEBODY'S NAME WHILE THEY ARE AWAY, on a box that
+// takes only what a person signed: taken with a delegation Eli's phone signed,
+// checked against the minter's list as a signature is, and refused from the
+// next list once he revokes it, which goes to the minter and not to the
+// coordinator that carries it.
+test('a box that enforces takes what a person delegated, until the minter lists it as revoked', async (t) => {
+  const { m, core, box, start, delegate } = await signingFleet(t, { requireSigned: 'all' });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+
+  const held = await delegate();
+  assert.equal(core.keepDelegation(ELI, held).ok, true);
+  assert.equal((await start({ params: { name: 'held' }, unsigned: true })).ok, true, 'a start Eli delegated was refused');
+  // Covers what it names and nothing else: another session name is refused.
+  const other = await start({ params: { name: 'other' }, unsigned: true });
+  assert.equal(other.error?.code, 'signature_required');
+
+  // A delegation the coordinator changed on the way does not hold.
+  core.delegations.forget(ELI);
+  core.delegations.byPerson.set(ELI, [{ ...held, grant: { ...held.grant, match: { name: 'other' } } }]);
+  const tampered = await start({ params: { name: 'other' }, unsigned: true });
+  assert.equal(tampered.error?.code, 'signature_required');
+  assert.match(tampered.text, /signature on this start does not hold/);
+  core.delegations.forget(ELI);
+
+  // Revoked from the phone, through the minter: refused from the next list.
+  assert.equal(core.keepDelegation(ELI, held).ok, true);
+  assert.equal((await m.phone({ op: 'revokedelegation', id: held.grant.id, until: held.grant.expires })).ok, true);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true);
+  const revoked = await start({ params: { name: 'held' }, unsigned: true });
+  assert.equal(revoked.error?.code, 'signature_required');
+  assert.match(revoked.text, /revoked the delegation this start carries/);
+
+  // A COORDINATOR CHOOSING ONE THAT DOES NOT COVER, which an honest one never
+  // does: a real delegation of Eli's, for another box, sent straight to this
+  // one. The box checks the cover itself rather than trusting the choice.
+  const elsewhere = await delegate({ hosts: ['build-box'] });
+  const wrong = await box.sidecar.handle({
+    v: PROTOCOL_VERSION, kind: 'intent', id: 'dlg-elsewhere-0001', verb: 'start', params: { name: 'held' },
+    actor: ELI, issuedAt: Date.now(), delegation: elsewhere,
+  });
+  assert.equal(wrong.error?.code, 'signature_required');
+  assert.match(wrong.text, /what eli@example\.com delegated does not cover this start here, now/);
+
+  // Counted. The start for another name arrived with no delegation at all,
+  // because the coordinator carries only one that covers what it sends.
+  const seen = /** @type {any} */ (await box.sidecar.health()).signatures;
+  assert.deepEqual(
+    [seen.checked.delegated, seen.checked.unsigned, seen.checked['bad-signature'], seen.checked.revoked, seen.checked['not-covered']],
+    [1, 1, 1, 1, 1],
+  );
+});
+
+// THE DEFAULT THE FLEET IS MOVING TO: refuse unsigned work in the name of a
+// person who signs, and anything with nobody named, which the box would run as
+// itself. A person with no key is still taken at their word, and a person
+// the box has seen a key for stays a signer across a restart and a list that
+// leaves them out, until the minter says, signed, that they removed every key.
+test('a box that enforces for signers refuses unsigned work for people with keys and for nobody, and remembers who signs', async (t) => {
+  const { m, core, box, start, iphone } = await signingFleet(t, { requireSigned: 'signers' });
+  const host = core.registry.get('ops-box');
+
+  // Nobody named: refused before any list, because the box runs it as itself.
+  const anon = await core.send(host, { verb: 'start', params: { name: 'anon' } });
+  assert.equal(anon.error?.code, 'signature_required');
+  assert.match(anon.text, /this start from nobody named was not signed/);
+
+  // Before the box has seen Eli's key, his word is taken as it always was.
+  assert.equal((await start({ unsigned: true })).ok, true);
+
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true);
+  assert.equal((await start()).ok, true, 'a start Eli signed was refused');
+  assert.equal((await start({ unsigned: true })).error?.code, 'signature_required');
+  // Somebody with no key is still taken at their word.
+  assert.notEqual((await core.send(host, { verb: 'start', params: { name: 'kims' }, actor: 'kim@example.com' })).error?.code, 'signature_required');
+
+  // A restarted box with no list yet, and then a list that leaves Eli out (a
+  // coordinator dropping him from the members it sends): still a signer.
+  box.restart();
+  assert.equal((await start({ unsigned: true })).error?.code, 'signature_required', 'a restart forgot who signs');
+  const kept = core.minter;
+  core.minter = /** @type {any} */ ({ vault: (/** @type {string} */ r, /** @type {any} */ a) => kept.vault(r, r === 'keys' ? { ...a, members: [] } : a) });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true);
+  assert.equal((await start({ unsigned: true })).error?.code, 'signature_required', 'a list leaving Eli out stopped the box enforcing for him');
+  core.minter = kept;
+
+  // Eli removes his only key: the minter lists him with none, and he is taken at his word again.
+  assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, remove: true })).ok, true);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true);
+  assert.equal((await start({ unsigned: true })).ok, true);
+
+  assert.equal(/** @type {any} */ (await box.sidecar.health()).signatures.enforcing, 'signers');
+});
+
+// THE SWITCH IS READ, NOT GUESSED: a box's operator sets it in an env file,
+// and a value the sidecar does not know is a typo in a setting that exists to
+// refuse things, so it stops the start rather than reading as off.
+test('FLEETWRIGHT_REQUIRE_SIGNED is off, signers or all, signers when unset, and anything else is refused at start', async () => {
+  const { loadSidecarConfig, validateSidecarConfig } = await import('../src/fleet/host/config.js');
+  const read = (/** @type {string|undefined} */ v) => loadSidecarConfig({
+    FLEETWRIGHT_COORDINATOR_URL: 'stdio:local', ...(v === undefined ? {} : { FLEETWRIGHT_REQUIRE_SIGNED: v }),
+  });
+  for (const [raw, mode] of [['0', 'off'], ['off', 'off'], ['1', 'all'], ['all', 'all'], ['signers', 'signers'], ['Signers', 'signers']]) {
+    assert.equal(read(raw).requireSigned, mode, raw);
+  }
+  assert.equal(read(undefined).requireSigned, 'signers');
+  const typo = read('singers');
+  assert.equal(typo.requireSigned, null);
+  assert.ok(validateSidecarConfig(typo).errors.some((e) => /FLEETWRIGHT_REQUIRE_SIGNED is not one of off, signers or all/.test(e)));
 });
 
 test('a Claude token Claude refuses is not kept, by the vault or by a deposit, and nothing it replaced is lost', async (t) => {

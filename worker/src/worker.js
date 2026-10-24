@@ -191,6 +191,9 @@ const handler = {
           audiences: String(env.FLEETWRIGHT_AUTH_AUDIENCES || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean),
           appleService: env.FLEETWRIGHT_AUTH_APPLE_SERVICE || null,
         }),
+        // Where this browser signs what it sends, when the minter serves a
+        // signing page (src/fleet/minter/sign-page.js). Absent, it signs nothing.
+        signer: env.FLEETWRIGHT_SIGNING_ORIGIN || null,
       });
       if (answer) {
         // The page is where a member pastes a token and finishes a

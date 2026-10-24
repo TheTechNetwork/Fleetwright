@@ -73,9 +73,24 @@ jobs:
   # provisioning profile. Signing problems are a separate class of failure and
   # should not be able to hide a syntax error.
   build:
-    runs-on: macos-latest
+    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
+    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    runs-on: xcode-27
+    # ON WHAT SHIPS AND ON THE FLOOR. 27.2 is what TestFlight builds and the
+    # store submits (the Duo's Pencil arrived with it); 27.1 is the oldest SDK
+    # that draws the Duo edge to edge, built beside it so nothing comes to need
+    # 27.2 by accident. Neither cancels the other. scripts/select-xcode.sh.
+    strategy:
+      fail-fast: false
+      matrix:
+        xcode: ['27.1', '27.2']
+    name: build (Xcode ${{ matrix.xcode }})
     steps:
       - uses: actions/checkout@v7.0.1
+
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh "${{ matrix.xcode }}"
 
       - name: Install XcodeGen
         # Skip brew's formula-index refresh, which regularly costs more than
@@ -140,6 +155,10 @@ jobs:
       # that breaks when the runner image changes its device set, which happens
       # without warning and looks like a code failure. This asks the runner what
       # it has and fails loudly if the answer is nothing.
+      #
+      # THE DUO FIRST, when the image has one: it is the iPhone whose layout
+      # changed last, so it is the one most worth running the tests on. Any
+      # iPhone otherwise.
       - name: Unit tests
         working-directory: apps/ios
         run: |
@@ -150,8 +169,7 @@ jobs:
               | select(.key | test("iOS"))
               | .value[]
               | select(.name | startswith("iPhone"))
-              | .udid
-            ] | first // empty')
+            ] | (map(select(.name == "iPhone Duo")) + .) | first | .udid // empty')
           if [ -z "$device" ]; then
             echo "::error::no iOS iPhone simulator is available on this runner"
             xcrun simctl list devices available
@@ -182,6 +200,35 @@ jobs:
           fi
           grep -E 'Executed [0-9]+ test' /tmp/xcodebuild-test.log | tail -3
 
+      # WHAT IT LOOKS LIKE ON THE DUO, as pictures attached to the run. Not a
+      # test: scripts/ios-duo-look.sh says why, and skips without a Duo.
+      # THE HINGE, so the pictures can open the Duo: simctl cannot. MIT, a
+      # bash script and an Objective-C helper it compiles with this Xcode and
+      # runs inside the simulator; read before it was adopted, no network. At a
+      # commit, not a tag or `brew install`, because a tag can move and this
+      # runs code inside the simulator. Only the pictures use it.
+      - name: Fetch hinge
+        env:
+          HINGE_COMMIT: abd539d612054ea0e4733b3b49ac94a16a91350f # v0.2.0
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/hinge"
+          git init -q "$dir"
+          git -C "$dir" fetch -q --depth 1 https://github.com/artemnovichkov/hinge.git "$HINGE_COMMIT"
+          git -C "$dir" checkout -q FETCH_HEAD
+          echo "HINGE=$dir/bin/hinge" >> "$GITHUB_ENV"
+
+      - name: iPhone Duo pictures
+        working-directory: apps/ios
+        run: ../../scripts/ios-duo-look.sh
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: iphone-duo-xcode-${{ matrix.xcode }}
+          path: apps/ios/build/duo-look/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # TestFlight. Runs on a published release, and skips itself rather than
   # failing when the App Store Connect credentials are not set up yet.
   testflight:
@@ -197,7 +244,9 @@ jobs:
       github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: build
-    runs-on: macos-latest
+    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
+    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    runs-on: xcode-27
     environment: production
     outputs:
       # So the job that hands the build to testers can tell "uploaded" from
@@ -205,6 +254,10 @@ jobs:
       uploaded: ${{ steps.creds.outputs.have }}
     steps:
       - uses: actions/checkout@v7.0.1
+
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh
 
       - name: Check there are credentials to upload with
         id: creds
@@ -740,7 +793,9 @@ jobs:
   screenshots:
     name: store screenshots
     if: github.event_name == 'release' && !github.event.release.prerelease
-    runs-on: macos-latest
+    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
+    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    runs-on: xcode-27
     # A WALL. A simulator that never finishes booting is a job that never
     # ends, and the submission waits behind this job: 0.4.14 sat for over
     # half an hour that way with everything else done. Three boots in a row
@@ -750,6 +805,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
+
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh
+
       - name: Install XcodeGen
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'

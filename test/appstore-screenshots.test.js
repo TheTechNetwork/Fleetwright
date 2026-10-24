@@ -240,7 +240,15 @@ test('a macOS runner takes the screenshots on a full release, and the submission
   // the submit job downloads; committed ones still win.
   const yml = readFileSync(new URL('../.github/workflows/ios.yml', import.meta.url), 'utf8');
   const shots = yml.slice(yml.indexOf('  screenshots:'), yml.indexOf('  release-app-store:'));
-  assert.match(shots, /runs-on: macos-latest/);
+  // ON THE IMAGE THE SHIPPING BUILD COMES FROM, not on a named label: the
+  // pictures are of the app TestFlight uploads, so a screenshots job left on
+  // an older Xcode would show the store an app that is not the one it gets.
+  // This said `macos-latest` until the iPhone Duo round moved both jobs to the
+  // xcode-27 image (docs/watch-and-duo.md).
+  const runsOn = (job) => job.match(/^ {4}runs-on: (\S+)$/m)?.[1];
+  const testflight = yml.slice(yml.indexOf('  testflight:'), yml.indexOf('  distribute:'));
+  assert.match(runsOn(shots) ?? '', /^(macos-|xcode-)/, 'the screenshots need a macOS runner');
+  assert.equal(runsOn(shots), runsOn(testflight), 'screenshots and the TestFlight build run on different images');
   assert.match(shots, /!github\.event\.release\.prerelease/, 'screenshots would be taken on a prerelease, which has no store page');
   assert.match(shots, /\.\/scripts\/ios-screenshots\.sh/);
   assert.match(shots, /upload-artifact@/);
