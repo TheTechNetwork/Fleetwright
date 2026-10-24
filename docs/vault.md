@@ -16,10 +16,17 @@ person removes the box.
 |---|---|---|
 | GitHub | the sign-in's access and refresh tokens | the access token, eight hours; renewed in the minter |
 | Cloudflare | the sign-in's access and refresh tokens | the access token; renewed in the minter |
-| Claude | a `claude setup-token`, the same one runners use | the token |
+| Claude | the sign-in `claude auth login` makes, access and refresh token and the account, made on a machine and kept by the phone; or a `claude setup-token` | a sign-in's access token, its expiry and account, as the credentials file Claude Code reads; renewed in the minter. A setup-token as it is |
 | named secrets | `secret:NAME`, any value up to 8 KiB | the value, by name |
 | SSH keys | `secret:SSH_AUTHORIZED_KEYS`, public keys one a line, from You › Credentials › SSH keys | the value, as any named secret is; a machine made on the person's pool takes them on its `fleetwright` account ([hypervisors.md](./hypervisors.md), "Working a machine") |
 | hypervisors | `hypervisor:ADDRESS`, the record a pool's setup handed the phone | the record, held in the sidecar's memory and never given to the hub or a session ([hypervisors.md](./hypervisors.md), "Machines from your pool") |
+
+**Every credential a fleet person's session uses comes from here**, and from
+nothing on the box: not a Claude account linked on it, not a GitHub token
+linked on it. What is linked on a box is that box's operator's, for its own
+command line. "Make every cred come from the minter" was asked after a person
+forgot their Claude login in the vault and a runner lost it while a box went
+on running on a copy of its own (see "On the box").
 
 A box never holds a refresh token. Renewing happens in one place, inside the
 minter's single Durable Object, under a lock per person, so however many boxes
@@ -206,16 +213,64 @@ it with `$(cat …)` and never carries it. Written whole on every answer, so a
 person who removed the box, or emptied their vault, is gone from it on the
 next pass.
 
-Every reader already there reads it, and **a link made on the box wins**,
-because something a person connected on this machine with their own hands is
-the more specific decision:
+Every reader there reads it, and **for a person the fleet started a session
+for, it is the only source**. A link on the box used to win, so a box held a
+second copy of a person's login, renewed on its own clock, and the vault was
+read for GitHub only when a link file also existed, which left a person who
+kept GitHub in their vault and linked nothing on the box with no token at all:
 
-| reader | from the vault when |
+| reader | from the vault |
 |---|---|
-| the broker (`git`, `gh`, `wrangler`, `fleet-cred`) | nothing for that provider is linked here |
-| the person's connections listing (`/connect`, what a phone's Credentials shows) | nothing for that provider is linked here; the row says `vault: true`, so a box holding only the vault's copy counts as having it and is not named as "not on" |
-| a session's Claude login | no Claude account is linked here: a direct session gets `CLAUDE_CODE_OAUTH_TOKEN` with `ANTHROPIC_API_KEY` unset, a sandboxed one is seeded `.claude-token` for its entrypoint to export |
-| `fleet-secret NAME` | the box has no secret of that name, or its own may not answer this session: one the fleet started for somebody who does not administer the box is answered from their vault alone ([security.md](./security.md) G12) |
+| a session's Claude login | always. A sign-in is the credentials file and account a sandboxed session is seeded and a direct one is staged with; a setup-token is seeded `.claude-token`, or `CLAUDE_CODE_OAUTH_TOKEN` in a direct session's environment |
+| the broker (`git`, `gh`, `wrangler`, `fleet-cred`) | always, with the token's expiry |
+| the box's own GitHub checks for that person (`runnerrepo`, `linkrepo`, `githubaccess`, `provision`, an archive's push) | always |
+| the box's health (`claudeAccounts`) | counts the people whose vault gives it a Claude login, so a box holding only those is not called one nobody can start a session on |
+| `fleet-secret NAME` | the box's own secrets answer only a session of somebody who administers the box ([security.md](./security.md) G12), and the person's vault otherwise |
+
+**A sign-in, on the box, has no refresh token.** The minter gives a box a
+sign-in's access token, expiry, scopes and account (`src/fleet/minter/claude-login.js`),
+and the box writes them as the credentials file Claude Code reads. A Claude
+Code with no refresh token does not try to renew; it reads the file again.
+So when the minter renews the sign-in, which it does when a box asks with
+under half an hour left, the box writes the new access token into every
+session already running on that person's login (`src/core/vault-sessions.js`):
+a sandboxed session's conversation volume, written the way a start writes it,
+and a direct session's staged copy. A session that started yesterday keeps
+running past the token it started with.
+
+That is measured, not read off the code. Claude Code 2.1.306, the version the
+session image pins, was run with only the files a box writes, against a
+loopback stand-in for Anthropic's hosts (a lab certificate authority, a proxy
+that answers for `anthropic.com`, `claude.ai` and `claude.com` and refuses
+everything else, dummy tokens):
+
+| What the box does | What Claude Code did |
+|---|---|
+| writes the sign-in, no refresh token | `claude auth status`: logged in, `claude.ai`, the account and its plan |
+| — | `claude remote-control`: every eligibility check passed, registered with the access token, came up Ready and polled for work |
+| rewrites the file between two turns of one running session | the next turn carried the new token |
+| rewrites it while the old one has two minutes left | used the old one, then the new; no attempt to renew |
+| rewrites it after Anthropic starts refusing the old one | the next turn carried the new token |
+| could not reach the minter, so the file stays expired | that turn failed with "Failed to authenticate. API Error: 401 OAuth token has expired.", and nothing hung |
+
+Not once did it try to renew. One thing the lab found: a turn that read the
+file while a reseed had emptied it answered "Not logged in", so a volume's
+login is now written beside the file and renamed in (`seedScript`,
+`src/core/podman.js`). What the lab cannot show is Anthropic's side, that a
+renewed access token opens Remote Control on its real servers; it is the same
+kind of token `claude auth login` writes, sent the same way.
+
+**Asking a box to keep a person's credential is refused.** `connect` and `link`
+for oneself, and a GitHub sign-in finished on a box, answer that credentials
+are kept in the vault now. `unlink` still works, so a link made before this can
+be taken off a box, and both phones list those under Linked on machines with
+Forget. Neither phone has a "Sign in to Claude" on a machine's page any more.
+
+**A volume that names a person stays theirs.** A conversation volume names the
+account it was seeded for. One that named somebody this box held no link for
+used to be read as the box's own, and resumed on the operator's login; now it
+is that person's, and a resume that finds nothing in their vault for this box
+keeps the credential the volume has.
 
 A hypervisor's record is the exception to all of this: the sidecar takes it
 out of the answer before fleetwright sees it, holds it in memory, and uses it
@@ -229,9 +284,19 @@ vault's, read from the same row.
 
 ## What it cannot do, said plainly
 
-**Remote Control on a vault Claude login.** A setup-token can only make model
-requests. A session that needs Remote Control needs a full login linked on that
-box, which still works and still wins.
+**Remote Control on a setup-token.** A setup-token can only make model
+requests. Remote Control needs the whole sign-in, which a machine makes for the
+vault (*Make it on <machine>* in the app, `setuptoken` with `kind: login`), and
+the vault says which of the two it keeps. A sign-in handed to a box without
+its refresh token opens Remote Control in Claude Code 2.1.306 against a
+stand-in (above); against Anthropic itself it has not been seen yet, so say so
+if a session on a box comes up without a link.
+
+**Renewing if Anthropic changes how.** The minter renews a sign-in the way
+Claude Code 2.1.42 does, at `platform.claude.com/v1/oauth/token` with Claude
+Code's public client. If that moves, renewing fails with Claude's words in the
+vault's problems and in Test, and boxes keep the access token they have until
+it runs out.
 
 **Revoking on the spot.** Removing a box stops it being given anything from the
 next ask, and the box deletes what it holds when it asks, within ten minutes.

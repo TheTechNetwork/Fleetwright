@@ -128,17 +128,17 @@ and "dead host" is the one it retries.
 | `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
 | `sandbox` | `to?` (`minimal`\|`browser`) | ✅ | `/sandbox [minimal\|browser]` |
 | `labels` | `add?`, `remove?` | ✅ | `/labels [+label\|-label]` |
-| `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
-| `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
+| `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect` lists; with a provider only `scope: host` (the box's own, admin-only) is a command, and a person's own is refused: their credentials are kept in their vault ([vault.md](./vault.md)) |
+| `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token> --host` for the box's own; a person's own is refused, as `connect` is |
 | `verify` | `provider`, `scope?` | | `/verify <provider>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
 | `forgetperson` | — (the person is the actor) | ✅ | sidecar-local — `POST /api/forget-person` on the hub's loopback: every session the person started here stopped and binned, and their Claude account, sign-ins, renewal material and vault copies deleted. Coordinator only |
 | `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
-| `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — exchanged with the host's PKCE verifier, then `/link` and `/renew` |
+| `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — refused for a person before the code is spent: their GitHub is finished by the minter for their phone ([vault.md](./vault.md)) |
 | `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket`, `repo?` (v6) | ✅ | `/provision <platform> [minutes]` |
 | `runnerrepo` | `repo` (`owner/repo`, v6) | | `/runnerrepo <owner/repo>` |
 | `linkrepo` | `role` (`archive`\|`runners`\|`templates`, v11), `repo` (`owner/repo`, v11) | | `/linkrepo <role> <owner/repo>` |
-| `setuptoken` | `code?` (secret), `reply?` (a P-256 public key) | ✅ | `/setuptoken` starts `claude setup-token` in a pane and returns the sign-in page; `/setuptoken <code> <reply>` finishes it and returns the token sealed to `reply` |
+| `setuptoken` | `code?` (secret), `reply?` (a P-256 public key), `kind?` (`token`\|`login`, v15) | ✅ | `/setuptoken` starts `claude setup-token` in a pane and returns the sign-in page; `/setuptoken <code> <reply>` finishes it and returns the token sealed to `reply`. `--login` (`kind: login`) makes the whole `claude auth login` sign-in instead, which Remote Control needs, read from its own directory only and sealed to `reply` as `signIn` |
 | `mint` | `repo` (`owner/repo`), `job` (a GitHub Actions job token), `key` (a P-256 public key) | | sidecar-local — `/githubaccess <owner/repo>` asks the hub what the person can do there; the token is minted and sealed in the sidecar |
 | `vmlogin` | `name` (`vm-<12 hex>`), `key` (a P-256 public key) | | sidecar-local — the Claude login the box holds from the machine's owner's vault, sealed to `key`, for a machine this box made for them (by the VM's id), still running, and only once. Coordinator only |
 | `xoprobe` | `address` (host or IP, optional port), `relay?` (v12: a relay through the asking phone) | | sidecar-local — one TLS handshake and one GET of `/signin`; answers reachable, Xen Orchestra or not, and the certificate's SHA-256. Beside it, `ssh-keyscan` at the address on port 22: where no Xen Orchestra answered, `ssh` says the host keys' fingerprints and whether the machine can install Xen Orchestra there. Fanned out to every permanent machine; with `relay`, sent to the relay's machine alone and run through the phone: one attempt, HTTPS only, and no `ssh-keyscan`. A fan-out that reached nothing names a machine that can work through a phone (`relay.hostId`). Admin only |
