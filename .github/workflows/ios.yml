@@ -76,12 +76,21 @@ jobs:
     # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
     # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
     runs-on: xcode-27
+    # ON WHAT SHIPS AND ON WHAT IS NEXT. 27.1 is what TestFlight and the store
+    # are built with; 27.2 is built and tested beside it, because the Duo's
+    # Pencil arrived with it and the next SDK's breakage is cheaper seen here
+    # than on the day it becomes the one that ships. Neither cancels the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        xcode: ['27.1', '27.2']
+    name: build (Xcode ${{ matrix.xcode }})
     steps:
       - uses: actions/checkout@v7.0.1
 
       - name: Select Xcode
         # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
-        run: ./scripts/select-xcode.sh
+        run: ./scripts/select-xcode.sh "${{ matrix.xcode }}"
 
       - name: Install XcodeGen
         # Skip brew's formula-index refresh, which regularly costs more than
@@ -146,6 +155,10 @@ jobs:
       # that breaks when the runner image changes its device set, which happens
       # without warning and looks like a code failure. This asks the runner what
       # it has and fails loudly if the answer is nothing.
+      #
+      # THE DUO FIRST, when the image has one: it is the iPhone whose layout
+      # changed last, so it is the one most worth running the tests on. Any
+      # iPhone otherwise.
       - name: Unit tests
         working-directory: apps/ios
         run: |
@@ -156,8 +169,7 @@ jobs:
               | select(.key | test("iOS"))
               | .value[]
               | select(.name | startswith("iPhone"))
-              | .udid
-            ] | first // empty')
+            ] | (map(select(.name == "iPhone Duo")) + .) | first | .udid // empty')
           if [ -z "$device" ]; then
             echo "::error::no iOS iPhone simulator is available on this runner"
             xcrun simctl list devices available
@@ -187,6 +199,19 @@ jobs:
             exit 1
           fi
           grep -E 'Executed [0-9]+ test' /tmp/xcodebuild-test.log | tail -3
+
+      # WHAT IT LOOKS LIKE ON THE DUO, as pictures attached to the run. Not a
+      # test: scripts/ios-duo-look.sh says why, and skips without a Duo.
+      - name: iPhone Duo pictures
+        working-directory: apps/ios
+        run: ../../scripts/ios-duo-look.sh
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: iphone-duo-xcode-${{ matrix.xcode }}
+          path: apps/ios/build/duo-look/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # TestFlight. Runs on a published release, and skips itself rather than
   # failing when the App Store Connect credentials are not set up yet.

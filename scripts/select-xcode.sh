@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Point xcodebuild at the Xcode the app ships with, on every macOS job.
 #
-#   ./scripts/select-xcode.sh
+#   ./scripts/select-xcode.sh          # 27.1, what ships
+#   ./scripts/select-xcode.sh 27.2     # what is next, built beside it
 #
 # WHY IT IS PINNED AT ALL. The SDK an app is BUILT with decides how iPhone Duo
 # draws it, whatever the deployment target says: built with the iOS 26 SDK it
@@ -23,8 +24,23 @@
 # which is why selecting 27.1 here still matters.
 set -euo pipefail
 
-XCODE="27.1"
-SDK_PREFIX="27.1"
+# WHAT SHIPS, and what is built beside it. ios.yml's build job compiles and
+# tests on both, so a change that needs the next SDK, or breaks on it, is seen
+# before it ships; TestFlight and the store take the first. Move SHIPS when the
+# next one is final.
+SHIPS="27.1"
+XCODE="${1:-$SHIPS}"
+SDK_PREFIX="$XCODE"
+
+# THE BUILD, NOT ONLY THE NUMBER. An image can carry a beta under the same
+# Xcode_27.2.app name it later gives the release candidate, so a version that
+# matches is not yet the one meant. 27.2's is the RC, the first build Apple
+# accepts submissions from.
+case "$XCODE" in
+  27.1) BUILD="27A9275" ;;
+  27.2) BUILD="27B48" ;;
+  *) echo "::error::no build is recorded for Xcode $XCODE in this script"; exit 1 ;;
+esac
 
 app=""
 for candidate in "/Applications/Xcode_${XCODE}.app" /Applications/Xcode_"${XCODE}".*.app; do
@@ -48,4 +64,10 @@ case "$sdk" in
     ;;
 esac
 
-echo "using $app ($(xcodebuild -version | tr '\n' ' ')), iOS SDK $sdk"
+got="$(xcodebuild -version | awk '/Build version/ {print $3}')"
+if [ "$got" != "$BUILD" ]; then
+  echo "::error::$app is build $got, not $BUILD"
+  exit 1
+fi
+
+echo "using $app (Xcode $XCODE, build $got), iOS SDK $sdk"
