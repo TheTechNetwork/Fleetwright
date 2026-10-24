@@ -427,8 +427,16 @@ export const XOWATCHDOG_STEPS = Object.freeze([
 // 14`) and would serve its own secrets to any session granted the name, so
 // the coordinator refuses a `secret` start for somebody who does not
 // administer such a box rather than send it. docs/security.md, G12.
+//
+// v15, 24 Oct 2026: A WHOLE CLAUDE SIGN-IN FOR THE VAULT. `setuptoken` gained
+// `kind`, and `login` makes the sign-in `claude auth login` makes in place of
+// a setup-token: Remote Control needs it, and the vault keeps it and the
+// minter alone renews it, so no box holds a refresh token of its own
+// (src/fleet/minter/claude-login.js). A host from before it is not handed
+// the parameter (`since: 15`) and makes a setup-token, which comes back as a
+// token rather than a sign-in, and the phone says so.
 /** @type {number} */
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -1742,9 +1750,17 @@ export const VERBS = Object.freeze({
   // pasted one is kept, so the coordinator relays an address and a ciphertext
   // and never the token. A new verb rather than a parameter on `connect`: an
   // older host answers `unknown_verb`, which strands nothing.
+  //
+  // `kind: login` makes the whole sign-in `claude auth login` makes, in place
+  // of a setup-token, sealed the same way: Remote Control needs it, and it is
+  // kept in the person's vault and renewed by the minter alone, so no box
+  // holds a refresh token of its own (src/fleet/minter/claude-login.js). A
+  // host from before v15 is not handed `kind` and makes a setup-token, which
+  // the phone tells from a sign-in by what comes back sealed.
   setuptoken: {
     params: {
       code: { type: 'secret', required: false, max: 512 },
+      kind: { type: 'enum', required: false, values: ['token', 'login'], since: 15 },
       reply: {
         type: 'text',
         required: false,

@@ -410,7 +410,7 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   // every box now, and two beta testers read that banner and concluded the
   // fleet was dead while `fleet_start` worked on the same machine.
   assert.equal(/NOT LOGGED IN/.test(text), false, 'a healthy host is being reported as broken');
-  assert.match(text, /2 accounts linked/);
+  assert.match(text, /2 logins here/);
   // Both facts travelled on every health frame and only `fleet_verify` and
   // `fleetwright update` ever looked at them.
   assert.match(text, /11 minutes left/);
@@ -440,8 +440,8 @@ test('a host nobody has linked an account on says so, and says how to fix it', a
     params: { name: 'fleet_health', arguments: {} },
   });
   const text = String(reply.result.content[0].text);
-  assert.match(text, /NOBODY HAS LINKED AN ACCOUNT/);
-  assert.match(text, /login for/);
+  assert.match(text, /NOBODY’S VAULT GIVES THIS HOST A CLAUDE LOGIN/);
+  assert.match(text, /approve this machine from its page/);
 });
 
 test('a runner with nobody linked says what its sessions run on, not that they cannot run', async () => {
@@ -471,7 +471,7 @@ test('a runner with nobody linked says what its sessions run on, not that they c
   ])) {
     const text = await healthOf(kind);
     assert.match(text, said, `${kind}: ${text}`);
-    assert.doesNotMatch(text, /NOBODY HAS LINKED/, `${kind}: a runner was reported as unable to run anything`);
+    assert.doesNotMatch(text, /NOBODY’S VAULT GIVES/, `${kind}: a runner was reported as unable to run anything`);
   }
 });
 
@@ -495,7 +495,7 @@ test('an older host that cannot answer is not reported as broken', async () => {
     method: 'tools/call',
     params: { name: 'fleet_health', arguments: {} },
   });
-  assert.equal(/NOT LOGGED IN|NOBODY HAS LINKED/.test(String(reply.result.content[0].text)), false);
+  assert.equal(/NOT LOGGED IN|NOBODY’S VAULT GIVES/.test(String(reply.result.content[0].text)), false);
 });
 
 test('tag says it places work rather than filtering a list', async () => {

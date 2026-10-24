@@ -60,7 +60,7 @@ export function runsNoSessions(hostId) {
  * @property {boolean|null} loggedIn  the box's OWN Claude login. Kept for
  *   display — it is what `claude auth status` says on that machine — and no
  *   longer used to judge health: a box has no Claude account of its own.
- * @property {number|null} [claudeAccounts]  how many people have linked one
+ * @property {number|null} [claudeAccounts]  how many people's Claude logins the host holds: from their vaults, or linked on it for its own command line
  * @property {'owner'|'key'|'none'|null} [runnerAuth]  on a runner, what a session
  *   with no linked account runs on: the owner's kept Claude login, the runner
  *   repository's API key, or nothing. Null off a runner and from older hosts.
@@ -412,14 +412,13 @@ export class HostRegistry {
         ? 'this runner has no Claude login for whoever started it and its repository has no ANTHROPIC_API_KEY, ' +
           'so no session started here can do anything. Keep your Claude login for your runners under You › ' +
           'Credentials in the app, or add ANTHROPIC_API_KEY to the runner repository’s Actions secrets'
-        : 'nobody has linked a Claude account on this host, so no session started here can do anything. ' +
-        // TELEGRAM WAS ARCHIVED AND THIS SENTENCE DID NOT NOTICE. It is the
-        // message a beta tester's first run ended at — the one the comment
-        // above calls "a reason without a remedy is half of it" — and half of
-        // the remedy it gave was a surface the product no longer has.
-        // SAID AS A PHONE SHOWS IT: this is the line under the machine's name,
-        // and backticks and an <email> placeholder were drawn there literally.
-        'Link one from the app. On the box itself, fleetwright login for and your email address does the same.';
+        : 'nobody’s vault gives this host a Claude login, so no session started here can do anything. ' +
+        // TELEGRAM WAS ARCHIVED AND THIS SENTENCE DID NOT NOTICE, and then
+        // neither did linking: a person's login is kept in their vault and a
+        // host has it once they approve that host (docs/vault.md), so the
+        // remedy is those two steps and not a sign-in on the box.
+        // SAID AS A PHONE SHOWS IT: this is the line under the machine's name.
+        'Keep your Claude login under You › Credentials in the app, and approve this machine from its page.';
     } else if (health.credential?.state === 'expired' && health.credential.refreshable === false) {
       // A DIFFERENT FAILURE FROM `loggedIn === false`, and the one that was
       // invisible. `loggedIn` reports on the box's own home directory; this
