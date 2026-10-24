@@ -26,27 +26,27 @@ const intent = (verb, params, actor) => ({
   ...(actor ? { actor } : {}),
 });
 
-test('whose account is derived from the actor, never from a parameter', () => {
-  // The whole security argument in one line: a caller can say WHAT to connect
-  // and never WHOSE. Change this and the aiming attack comes back.
-  const line = toCommandLine({ verb: 'connect', params: { provider: 'claude', scope: 'me' }, actor: 'guest@example.com' });
-  assert.equal(line, '/login for guest@example.com');
+test('a person’s credential is never made on a box for that box, and never aimed at somebody', () => {
+  // IT WAS `/login for <the actor>`: a caller could say WHAT to connect and
+  // never WHOSE. Now it is nothing at all. A person's Claude login and tokens
+  // are kept in their vault and given to the boxes they approve (docs/vault.md),
+  // and a sign-in made on a box for that box held a second copy, renewed on
+  // that box's clock; the vault's sign-in is made on a machine with
+  // `setuptoken` and goes back sealed to the phone (setup-token.test.js).
+  for (const actor of ['guest@example.com', 'telegram:12345']) {
+    for (const params of [{ provider: 'claude', scope: 'me' }, { provider: 'github' }]) {
+      assert.throws(() => toCommandLine({ verb: 'connect', params, actor }), /Your credentials are kept in your vault now, not on a machine/);
+    }
+    for (const params of [{ provider: 'claude', secret: 'code_x' }, { provider: 'github', secret: 'ghp_x' }]) {
+      assert.throws(() => toCommandLine({ verb: 'link', params, actor }), /kept in your vault/);
+    }
+  }
 
-  // And it cannot be overridden: the parameter does not exist, so an intent
+  // And it cannot be aimed: the parameter does not exist, so an intent
   // carrying one is refused before any of this runs.
   assert.equal(
     validateIntent(intent('connect', { provider: 'claude', scope: 'me', email: 'victim@example.com' })).ok,
     false,
-  );
-});
-
-test('an unattributed caller cannot link "their" account', () => {
-  // Telegram, the CLI, anything with no verified email. Defaulting to the box
-  // would silently do the admin-only thing on behalf of somebody who never
-  // asked for it, so it refuses instead.
-  assert.throws(
-    () => toCommandLine({ verb: 'connect', params: { provider: 'claude', scope: 'me' }, actor: 'telegram:12345' }),
-    /signed-in identity/,
   );
 });
 
@@ -78,13 +78,13 @@ test('a box has no Claude account to sign in or out of', () => {
   );
 });
 
-test('each provider lands on the command that already existed', () => {
+test('what is left of the per-box verbs lands on the command that already existed', () => {
+  // Listing what a box has, and forgetting what it had: a link made on a box
+  // before the vault was the only source is still removable from a phone.
   const as = 'me@example.com';
   const cases = [
     [{ verb: 'connect', params: {} }, '/connect'],
-    [{ verb: 'connect', params: { provider: 'github' } }, '/connect github'],
-    [{ verb: 'link', params: { provider: 'github', secret: 'ghp_x' } }, '/link github ghp_x'],
-    [{ verb: 'link', params: { provider: 'claude', secret: 'code_x' } }, '/code code_x'],
+    [{ verb: 'link', params: { provider: 'github', secret: 'ghp_x', scope: 'host' } }, '/link github ghp_x --host'],
     [{ verb: 'unlink', params: { provider: 'cloudflare' } }, '/unlink cloudflare'],
     [{ verb: 'unlink', params: { provider: 'claude' } }, `/accounts remove ${as}`],
   ];
@@ -98,7 +98,7 @@ test('the credential is masked on the way to the pane', () => {
   // redact.js's table precisely because these are the two lines toCommandLine
   // can produce with a live credential in them.
   const secret = 'ghp_notarealtokenatall0000';
-  for (const params of [{ provider: 'github', secret }, { provider: 'claude', secret }]) {
+  for (const params of [{ provider: 'github', secret, scope: 'host' }]) {
     const line = toCommandLine({ verb: 'link', params, actor: 'me@example.com' });
     assert.ok(line.includes(secret), 'the command itself must carry it');
     assert.equal(redactCommandLine(line).includes(secret), false, 'the log must not');
@@ -215,10 +215,8 @@ test('scope reaches the host, so the admin gate is not a no-op', () => {
     toCommandLine({ verb: 'link', params: { provider: 'github', secret: 'ghp_x', scope: 'host' }, actor: as }),
     '/link github ghp_x --host',
   );
-  assert.equal(
-    toCommandLine({ verb: 'link', params: { provider: 'github', secret: 'ghp_x' }, actor: as }),
-    '/link github ghp_x',
-  );
+  // And without it there is no line at all for a person's own (above).
+  assert.throws(() => toCommandLine({ verb: 'link', params: { provider: 'github', secret: 'ghp_x' }, actor: as }), /kept in your vault/);
   assert.equal(
     toCommandLine({ verb: 'unlink', params: { provider: 'cloudflare', scope: 'host' }, actor: as }),
     '/unlink cloudflare --host',

@@ -33,7 +33,7 @@ import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
 import { sessionImage, variantOf, pinnedByEnv } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
-import { vaultClaudeFile } from './vault-store.js';
+import { vaultClaudeSource } from './vault-store.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -743,17 +743,16 @@ export function credentialSourceForAccount(cfg, account) {
   // box credential into a named row, so the honest answer for an old volume is
   // the account that adoption produced — resolved through the operator, which
   // is the same person.
-  const email = account === 'shared' ? operatorAccount(cfg).email : account;
-  if (!email) return null;
-  const store = new Accounts(cfg.stateDir);
-  const linked = store.credentialPathFor(email);
-  if (!linked) {
-    // The same vault fallback a start has, so a resume comes back on the
-    // token it started with rather than signed out.
-    const fromVault = vaultClaudeFile(cfg, email);
-    return fromVault ? { source: null, tokenFile: fromVault, accountMeta: null, account: email } : null;
+  if (account === 'shared') {
+    const email = operatorAccount(cfg).email;
+    if (!email) return null;
+    const store = new Accounts(cfg.stateDir);
+    const linked = store.credentialPathFor(email);
+    return linked ? { source: linked, accountMeta: store.accountMetaPathFor(email), account: email } : null;
   }
-  return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
+  // A PERSON'S ACCOUNT IS THEIR VAULT'S, as a start's is (pickCredentialSource),
+  // so a resume comes back on today's copy of what they keep there.
+  return vaultClaudeSource(cfg, account);
 }
 
 /**
@@ -790,9 +789,8 @@ function volumeClaim(cfg, volume, actor) {
  * field on the registry record, which is most of the ones anybody has running
  * when this ships.
  *
- * Returns "shared" for a volume with no email in it, because that is what the
- * shared credential's metadata looks like when the box has one, and null when
- * the read fails at all — cannot-tell, not shared.
+ * Returns the email the volume names, and null when it names none or the
+ * read fails at all: cannot-tell, never shared.
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} volume
@@ -810,10 +808,14 @@ export function volumeAccount(cfg, volume) {
     const parsed = JSON.parse(text);
     const email = parsed?.emailAddress ?? parsed?.email_address;
     if (typeof email !== 'string' || !email) return null;
-    // Whether that email is a LINKED account or the shared one is answered by
-    // the store, not by the shape of the address: the shared credential has an
-    // email too, and it is not a per-person account.
-    return new Accounts(cfg.stateDir).credentialPathFor(email) ? email : 'shared';
+    // THE PERSON IT NAMES, and never "shared" for somebody this box holds
+    // nothing for. It used to be "shared" for any email not linked here, which
+    // was the box's own credential's name; with a person's login coming from
+    // their vault alone, a person whose vault had stopped giving this box
+    // theirs would have been read as "shared" and handed the box operator's.
+    // Named, a resume asks their vault and keeps what it has when that says
+    // nothing (refreshSeededCredentials).
+    return email;
   } catch {
     return null;
   }
@@ -888,17 +890,11 @@ function seedHouseRules(cfg, volume) {
 export function noAccountRefusal(cfg, picked) {
   return (
     `No Claude account to give this session on ${cfg.hostname}: ${picked.why ?? 'none is linked on this box'}.\n`
-    // NAMES THE MACHINE, and does not name a screen. Claude is linked PER
-    // MACHINE, so "connect one" without saying which box is an instruction
-    // somebody can follow and still not fix this — they connect on the host
-    // they happen to be looking at, and the scheduler puts the next session
-    // somewhere else.
-    //
-    // The screen was named too, and named wrongly: it said "under Your
-    // credentials in the app", which on iOS hid Claude and on Android does
-    // not exist. A remedy pointing at a surface that cannot perform it is
-    // worse than one that just says what is needed.
-    + `Connect a Claude account for ${cfg.hostname} from the app, or run \`fleetwright login\` on that box.`
+    // NAMES THE MACHINE: a person's login is kept once, in their vault, and a
+    // machine has it only once they approve that machine. Keeping one is
+    // half of the remedy and approving this box is the other, and saying
+    // which box is what makes the second half something they can do.
+    + `Keep your Claude login under You › Credentials in the app, and approve ${cfg.hostname} from its page.`
   );
 }
 
@@ -955,10 +951,13 @@ function seedCredentials(cfg, volume, picked, actor = null) {
   // credential-broker.js. Nothing about the Claude credential changes — that
   // one is read by a CLI we do not control, from a path it expects, so it is
   // still a file in the volume.
+  // THE TOKEN GOES, when a sign-in is seeded: the entrypoint prefers the
+  // credentials file, and a token left beside it is a second credential for
+  // nobody to have.
   const r = podman(
     cfg,
     ['run', '--rm', '-i', ...usernsArgs(cfg), '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg), 'sh'],
-    { input: seedScript(files) },
+    { input: seedScript(files, ['.claude-token']) },
   );
   if (r.status !== 0) {
     return {
@@ -990,7 +989,10 @@ function seedVaultToken(cfg, volume, picked) {
   const r = podman(
     cfg,
     ['run', '--rm', '-i', ...usernsArgs(cfg), '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg), 'sh'],
-    { input: seedScript([{ name: '.claude-token', data }]) },
+    // THE CREDENTIALS FILE GOES: the entrypoint takes it over the token, so
+    // one left from a sign-in the person has since replaced with a token, or
+    // from a link on this box, would go on winning.
+    { input: seedScript([{ name: '.claude-token', data }], ['.credentials.json']) },
   );
   if (r.status !== 0) return { ok: false, message: `could not seed the vault's Claude login into ${volume}: ${r.stderr.trim().slice(0, 200)}` };
   log.info(`sandbox: seeded ${picked.account}'s Claude login from their vault into ${volume}`);
@@ -1007,18 +1009,35 @@ function seedVaultToken(cfg, volume, picked) {
  * `chmod 600` after it, so the file is never readable at any point of its
  * existence rather than only at the end.
  *
+ * WRITTEN BESIDE AND RENAMED IN, never truncated in place, because this runs
+ * against the volume of a session that is still going: the vault's renewed
+ * login is put in while Claude Code is reading it. Claude Code reads its
+ * credentials file again whenever it changes, and one that read the file
+ * between `>` emptying it and the write filling it answered that turn with
+ * "Not logged in · Please run /login" — measured on 2.1.306 against a
+ * loopback stand-in, not supposed. A rename is one step for a reader: the
+ * old file or the new one, never neither. The other kind of login is removed
+ * after the new one is in place, for the same reason.
+ *
  * Exported for the test that pins that property, because the container that
  * would prove it does not run in CI.
  *
  * @param {Array<{ name: string, data: Buffer }>} files  basenames under /dest
+ * @param {string[]} [remove]  basenames under /dest to delete once the files are in
  */
-export function seedScript(files) {
+export function seedScript(files, remove = []) {
   const lines = ['set -e', 'umask 077'];
-  for (const { name, data } of files) {
+  const seedable = (/** @type {string} */ name) => {
     if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error(`not a seedable name: ${name}`);
-    lines.push(`printf '%s' '${data.toString('base64')}' | base64 -d > '/dest/${name}'`);
-    lines.push(`chmod 600 '/dest/${name}'`);
+    return name;
+  };
+  for (const { name, data } of files) {
+    const dest = `/dest/${seedable(name)}`;
+    lines.push(`printf '%s' '${data.toString('base64')}' | base64 -d > '${dest}.seed'`);
+    lines.push(`chmod 600 '${dest}.seed'`);
+    lines.push(`mv -f '${dest}.seed' '${dest}'`);
   }
+  for (const name of remove) lines.push(`rm -f '/dest/${seedable(name)}'`);
   return `${lines.join('\n')}\n`;
 }
 
@@ -1089,20 +1108,20 @@ export function pickCredentialSource(cfg, actor) {
   const email = emailFromActor(actor);
   const store = new Accounts(cfg.stateDir);
   if (email) {
-    const linked = store.credentialPathFor(email);
-    if (linked) return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
-    // THEIR VAULT'S CLAUDE LOGIN, when they linked none here: the token they
-    // kept once, given to this box because they approved it (vault-store.js).
-    // A link on this box is the more specific decision, which is why it is
-    // asked first.
-    const fromVault = vaultClaudeFile(cfg, email);
-    if (fromVault) return { source: null, tokenFile: fromVault, accountMeta: null, account: email };
+    // THEIR VAULT'S CLAUDE LOGIN AND NOTHING ELSE: the sign-in or token they
+    // keep once, given to this box because they approved it (vault-store.js).
+    // A Claude account linked on this box used to come first, and was the
+    // second copy of the person's login that the vault exists to end: renewed
+    // on this box's clock, and made from this box's page. What is linked
+    // here now is the box operator's, for the box's own command line.
+    const fromVault = vaultClaudeSource(cfg, email);
+    if (fromVault) return fromVault;
     // NO FALLBACK TO THE BOX ANY MORE. This used to return the machine's own
     // account here, on the grounds that a shared org plan is a licence somebody
     // chose to share. True of an org and false of a guest — and the standing
     // rule for guests is that they bring their own everything, which was a
     // policy nobody could see being applied. Now it is structural.
-    return { source: null, accountMeta: null, account: email, why: `${email} has not linked a Claude account` };
+    return { source: null, accountMeta: null, account: email, why: `${email} keeps no Claude login in their vault that this box was given` };
   }
   // An actor with no email is somebody operating the box: Telegram, the CLI,
   // the local web UI. They run as a PERSON now rather than as the machine —

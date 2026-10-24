@@ -20,6 +20,7 @@ import path from 'node:path';
 import { pushArchive, workspacePatch, archiveFiles, archiveSession, branchFor, MAX_FILE_BYTES } from '../src/core/archive.js';
 import { Registry } from '../src/core/registry.js';
 import { Connections } from '../src/core/connectors.js';
+import { applyVault } from '../src/core/vault-store.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
@@ -205,7 +206,7 @@ test('a session is pushed as the person who started it, and as nobody else', asy
   const gh = github();
   const none = await archiveSession({ cfg, registry, name: 'job', reason: 'stop', fetchImpl: gh.impl, broker: '' });
   assert.equal(none.ok, false);
-  assert.match(none.text, /^Not archived to eli\/work: GitHub is not connected for its owner on this box/);
+  assert.match(none.text, /^Not archived to eli\/work: its owner’s vault gives this box no GitHub sign-in/);
   assert.equal(gh.calls.length, 0);
   assert.equal(registry.get('job')?.archiveOk, false, 'the outcome is on the record, for the phones');
 
@@ -213,7 +214,11 @@ test('a session is pushed as the person who started it, and as nobody else', asy
   new Connections(dir).save('', 'github', 'ghu_box');
   assert.match((await archiveSession({ cfg, registry, name: 'boxjob', reason: 'stop', fetchImpl: gh.impl, broker: '' })).text, /nobody signed in started it/);
 
-  new Connections(dir).save('eli@example.com', 'github', 'ghu_eli');
+  // LINKED ON THE BOX IS NOT THEIRS: a fleet person is pushed as what their
+  // vault gives this box, and nothing else.
+  new Connections(dir).save('eli@example.com', 'github', 'ghu_linked_here');
+  assert.match((await archiveSession({ cfg, registry, name: 'job', reason: 'stop', fetchImpl: gh.impl, broker: '' })).text, /vault gives this box no GitHub sign-in/);
+  applyVault({ stateDir: dir }, { accounts: [{ email: 'eli@example.com', items: [{ name: 'github', value: 'ghu_eli', expiresAt: Date.now() + 3_600_000 }] }] });
   /** @type {string[]} */
   const auth = [];
   const seen = /** @type {any} */ (async (/** @type {string} */ u, /** @type {any} */ init) => { auth.push(init?.headers?.authorization); return gh.impl(u, init); });

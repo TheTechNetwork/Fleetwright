@@ -66,7 +66,7 @@ import { capturePane, hasSession } from './tmux.js';
 import { sandboxNames, workspaceExists } from './podman.js';
 import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
-import { Connections } from './connectors.js';
+import { vaultToken } from './vault-store.js';
 import { rowForActor, HOST_ROW } from './accounts.js';
 import { log } from '../log.js';
 
@@ -475,14 +475,15 @@ export function runnerToken(socketPath, repo) {
 export async function ownerToken(cfg, owner, repo, { broker = process.env.FLEETWRIGHT_RUNNER_BROKER || '' } = {}) {
   const row = rowForActor(owner);
   if (row === null || row === HOST_ROW) return { token: null, why: 'nobody signed in started it, so there is no one to push as' };
-  const own = new Connections(cfg.stateDir).tokenFor(row, 'github');
+  // FROM THEIR VAULT, as everything of a fleet person's is (vault-store.js).
+  const own = vaultToken(cfg, row, 'github');
   if (own) return { token: own };
   if (broker) {
     const minted = await runnerToken(broker, repo);
     if (minted) return { token: minted };
     return { token: null, why: 'this runner could not be given a token for it — the fleet’s events say why' };
   }
-  return { token: null, why: 'GitHub is not connected for its owner on this box' };
+  return { token: null, why: 'its owner’s vault gives this box no GitHub sign-in' };
 }
 
 /**

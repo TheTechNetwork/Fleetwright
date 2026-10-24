@@ -91,9 +91,9 @@ test('a task reaches the session as its first message, newlines and all', { skip
     loginEnabled: true,
     sandboxCredentialsFile: '',
   });
-  // A linked account, so a session on this box has someone to run as.
-  const { Accounts } = await import('../src/core/accounts.js');
-  new Accounts(cfg.stateDir).save('e@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+  // A Claude login from their vault, so a session on this box has someone to run as.
+  const { applyVault } = await import('../src/core/vault-store.js');
+  applyVault(cfg, { accounts: [{ email: 'e@example.com', items: [{ name: 'claude', value: 'sk-ant-oat01-x' }] }] });
 
   const registry = new Registry({ stateFile: cfg.stateFile, spoolFile: cfg.spoolFile });
   const sessions = new SessionManager(cfg, registry, null);

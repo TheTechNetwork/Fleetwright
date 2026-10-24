@@ -40,7 +40,8 @@ import { unsafeSandboxArgs } from '../core/sandbox-args.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
 import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
-import { applyVault } from '../core/vault-store.js';
+import { applyVault, vaultClaudePeople } from '../core/vault-store.js';
+import { refreshVaultSessions } from '../core/vault-sessions.js';
 import { forgetPerson } from '../core/forget-person.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
@@ -258,9 +259,14 @@ export class HttpAdapter {
         // that refuses used to answer [] and this reported nobody linked, on a
         // box with people linked. Letting it throw instead would take the whole
         // of /api/state with it, which is a worse answer than an honest gap.
+        //
+        // WHOSE VAULTS GIVE THIS BOX A CLAUDE LOGIN, beside what is linked on
+        // it for its own command line: a fleet person's session runs on their
+        // vault's and nothing else (podman.js, pickCredentialSource), so a box
+        // holding only vault logins counted nobody and was marked degraded.
         claudeAccounts: (() => {
           try {
-            return new Accounts(this.cfg.stateDir).list().length;
+            return new Accounts(this.cfg.stateDir).list().length + vaultClaudePeople(this.cfg);
           } catch {
             return null;
           }
@@ -398,7 +404,21 @@ export class HttpAdapter {
     if (p === '/api/vault' && method === 'POST') {
       const r = applyVault(this.cfg, await readJson(req));
       if (r.ok) log.info(`http: vault: ${r.text}`);
-      return json(res, r.ok ? 200 : 400, r);
+      // AND THE SESSIONS ALREADY RUNNING on a login that changed, which would
+      // otherwise stop when the access token they started with ran out
+      // (vault-sessions.js). After the answer, so the sidecar is not held up
+      // by a container being run to write a file.
+      if (r.ok && r.claudeChanged?.length) {
+        const changed = r.claudeChanged;
+        setImmediate(() => {
+          try {
+            refreshVaultSessions(this.cfg, /** @type {any} */ (this.sessions), changed);
+          } catch (e) {
+            log.warn(`http: vault: could not give running sessions the new Claude login: ${/** @type {Error} */ (e).message}`);
+          }
+        });
+      }
+      return json(res, r.ok ? 200 : 400, { ok: r.ok, text: r.text });
     }
 
     // SOMEBODY REMOVED FROM THE FLEET, whose sessions and sign-ins here are

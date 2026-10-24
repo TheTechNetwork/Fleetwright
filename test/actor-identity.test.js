@@ -27,6 +27,7 @@ import { commandMeta, toCommandLine } from '../src/fleet/host/sidecar.js';
 import { Accounts, emailFromActor, rowForActor, HOST_ROW } from '../src/core/accounts.js';
 import { Connections } from '../src/core/connectors.js';
 import { pickSecretsFile, pickCredentialSource } from '../src/core/podman.js';
+import { applyVault } from '../src/core/vault-store.js';
 import { dispatch } from '../src/adapters/commands.js';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'actor-'));
@@ -58,42 +59,23 @@ test('an intent with no actor still records no actor', () => {
   assert.equal(rowForActor(''), HOST_ROW);
 });
 
-test('a member’s token lands in THEIR row, through the real command path', async () => {
+test('a member’s token is not kept on a box at all, and never reaches the box’s row', () => {
+  // IT USED TO LAND IN THEIR ROW, and this test held that it did not land in
+  // the box's. A fleet person's credentials are kept in their vault now and a
+  // box is given them from there (vault-store.js), so a `link` for oneself is
+  // refused before it becomes a command line: there is no line that could
+  // reach the shared row, and no second copy of theirs on the box.
   const state = dir();
   const store = new Connections(state);
-  // The operator's box-wide token, set from the CLI.
   store.save(HOST_ROW, 'github', 'the-operators-token', 'org');
-
-  // A fleet member links their own, exactly as the sidecar would drive it.
-  const meta = commandMeta('link', {}, `fleet:${FROM_THE_COORDINATOR}`);
-  const line = toCommandLine({
-    verb: 'link',
-    params: { provider: 'github', secret: 'the-guests-token' },
-    actor: FROM_THE_COORDINATOR,
-  });
-  assert.equal(line, '/link github the-guests-token');
-
-  const ctx = /** @type {any} */ ({
-    cfg: { stateDir: state, hostname: 'box', loginEnabled: true },
-    actor: meta.actor,
-    login: { status: () => ({ loggedIn: false }) },
-  });
-  // Verification is a network call; stub it so this test is about identity.
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(JSON.stringify({ login: 'guest' }), { status: 200 });
-  try {
-    const reply = await dispatch(ctx, line);
-    assert.equal(reply.ok, true, reply.text);
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-
-  // THE ASSERTION THE WHOLE FILE IS FOR.
-  const theirs = readFileSync(store.envPathFor(FROM_THE_COORDINATOR), 'utf8');
-  assert.ok(theirs.includes('the-guests-token'));
-  const boxes = readFileSync(store.envPathFor(HOST_ROW), 'utf8');
-  assert.ok(boxes.includes('the-operators-token'), 'the operator’s token was not overwritten');
-  assert.equal(boxes.includes('the-guests-token'), false, 'the member’s token did not reach the shared row');
+  assert.throws(
+    () => toCommandLine({ verb: 'link', params: { provider: 'github', secret: 'the-guests-token' }, actor: FROM_THE_COORDINATOR }),
+    /Your credentials are kept in your vault now, not on a machine/,
+  );
+  assert.throws(() => toCommandLine({ verb: 'connect', params: { provider: 'github' }, actor: FROM_THE_COORDINATOR }), /kept in your vault/);
+  // The box's own, by an administrator, is still a line.
+  assert.equal(toCommandLine({ verb: 'link', params: { provider: 'github', secret: 'tok', scope: 'host' }, actor: FROM_THE_COORDINATOR }), '/link github tok --host');
+  assert.ok(readFileSync(store.envPathFor(HOST_ROW), 'utf8').includes('the-operators-token'));
 });
 
 test('and a session seeded for that member gets theirs, not the box’s', () => {
@@ -132,14 +114,14 @@ test('per-person Claude credentials resolve over the fleet too', () => {
   // the box, which is what "failed safe" used to mean here.
   const before = pickCredentialSource(cfg, `fleet:${FROM_THE_COORDINATOR}`);
   assert.equal(before.source, null);
-  assert.match(String(before.why), /has not linked/);
+  assert.match(String(before.why), /keeps no Claude login in their vault/);
 
-  // With a credential on file it must pick theirs. Written directly, because
-  // this test is about the lookup and not about the login flow.
-  new Accounts(state).save(FROM_THE_COORDINATOR, JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+  // With their vault's login on this box it must pick theirs. Written
+  // directly, because this test is about the lookup and not about the vault.
+  applyVault(cfg, { accounts: [{ email: FROM_THE_COORDINATOR, items: [{ name: 'claude', value: 'sk-ant-oat01-x' }] }] });
   const picked = pickCredentialSource(cfg, `fleet:${FROM_THE_COORDINATOR}`);
   assert.equal(picked.account, FROM_THE_COORDINATOR);
-  assert.ok(picked.source && existsSync(picked.source));
+  assert.ok(picked.tokenFile && existsSync(picked.tokenFile));
 });
 
 test('the sidecar never hands the command registry a bare actor', () => {

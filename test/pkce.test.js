@@ -226,76 +226,28 @@ test('a connect reply carries a challenge only for a provider whose secret is on
   assert.equal('codeChallenge' in claude, false);
 });
 
-test('exchange spends the verifier, exchanges with the frame\'s secret, and stores by /link and /renew', async (t) => {
+test('a person’s sign-in is not finished on a box: it is refused before the code is spent or GitHub is asked', async (t) => {
+  // IT USED TO BE: exchange spent the verifier, asked GitHub with the frame's
+  // secret, and stored the result by /link and /renew in the person's row on
+  // this box. A person's GitHub is kept in their vault now and finished by the
+  // minter for their phone (vault.test.js), so a box keeps no second copy.
   /** @type {any[]} */
   const seen = [];
-  const fetchImpl = async (/** @type {string} */ url, /** @type {any} */ init) => {
-    seen.push({ url, body: Object.fromEntries(new URLSearchParams(String(init.body))) });
-    return new Response(JSON.stringify({ token_type: 'bearer', access_token: 'gho_token', refresh_token: 'ghr_refresh', expires_in: 28800 }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const fetchImpl = async (/** @type {string} */ url) => {
+    seen.push(url);
+    return new Response(JSON.stringify({ token_type: 'bearer', access_token: 'gho_token', expires_in: 28800 }), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const { sidecar, commands } = await host(t, { fetchImpl });
   await sidecar.handle(FRAME);
-  const offered = await sidecar.handle(intent({ verb: 'connect', params: {}, actor: 'a@b.com' }));
-  const challenge = offered.connections.catalogue[0].codeChallenge;
-
+  await sidecar.handle(intent({ verb: 'connect', params: {}, actor: 'a@b.com' }));
   const r = await sidecar.handle(intent({
     verb: 'exchange',
     params: { provider: 'github', code: 'the-code', clientId: 'Iv23liTEST', origin: 'https://fleet.example' },
     actor: 'a@b.com',
   }));
-
-  assert.equal(r.ok, true, r.text);
-  assert.match(r.text, /renews it by itself/);
-  assert.equal(seen.length, 1);
-  assert.equal(seen[0].url, 'https://github.com/login/oauth/access_token');
-  assert.equal(seen[0].body.client_secret, 'shh-secret', 'the secret from the frame, held in memory');
-  assert.equal(seen[0].body.code, 'the-code');
-  assert.equal(seen[0].body.redirect_uri, 'https://fleet.example/oauth/github/callback');
-  assert.equal(challengeFor(seen[0].body.code_verifier), challenge, 'the verifier that hashes to the challenge offered');
-  assert.deepEqual(commands.filter((c) => !c.startsWith('/connect')), [
-    '/link github gho_token',
-    '/renew github Iv23liTEST ghr_refresh',
-  ]);
-  assert.equal(commands.some((c) => c.includes('shh-secret')), false, 'the client secret never becomes a command line');
-});
-
-test('exchange without a pending verifier is refused, and a second exchange finds the first one spent', async (t) => {
-  const fetchImpl = async () => (new Response(JSON.stringify({ token_type: 'bearer', access_token: 't', expires_in: 3600 }), { status: 200, headers: { 'content-type': 'application/json' } }));
-  const { sidecar } = await host(t, { fetchImpl });
-  await sidecar.handle(FRAME);
-  const params = { provider: 'github', code: 'c', clientId: 'id', origin: 'https://fleet.example' };
-
-  const cold = await sidecar.handle(intent({ verb: 'exchange', params, actor: 'a@b.com' }));
-  assert.equal(cold.ok, false);
-  assert.match(cold.text, /No GitHub sign-in is waiting/);
-
-  await sidecar.handle(intent({ verb: 'connect', params: {}, actor: 'a@b.com' }));
-  const first = await sidecar.handle(intent({ verb: 'exchange', params, actor: 'a@b.com' }));
-  assert.equal(first.ok, true);
-  const again = await sidecar.handle(intent({ verb: 'exchange', params, actor: 'a@b.com' }));
-  assert.equal(again.ok, false, 'spent');
-});
-
-test('somebody else cannot spend a verifier minted for another person', async (t) => {
-  const fetchImpl = async () => (new Response(JSON.stringify({ token_type: 'bearer', access_token: 't' }), { status: 200, headers: { 'content-type': 'application/json' } }));
-  const { sidecar } = await host(t, { fetchImpl });
-  await sidecar.handle(FRAME);
-  await sidecar.handle(intent({ verb: 'connect', params: {}, actor: 'a@b.com' }));
-  const r = await sidecar.handle(intent({
-    verb: 'exchange', params: { provider: 'github', code: 'c', clientId: 'id', origin: 'https://fleet.example' }, actor: 'b@b.com',
-  }));
   assert.equal(r.ok, false);
+  assert.match(r.text, /Your credentials are kept in your vault now/);
+  assert.deepEqual(seen, [], 'nothing asked of GitHub');
+  assert.equal(commands.some((c) => c.startsWith('/link') || c.startsWith('/renew')), false);
 });
 
-test('a provider refusing the exchange is the provider\'s words, and nothing is stored', async (t) => {
-  const fetchImpl = async () => (new Response(JSON.stringify({ error: 'bad_verification_code', error_description: 'The code passed is incorrect or expired.' }), { status: 200, headers: { 'content-type': 'application/json' } }));
-  const { sidecar, commands } = await host(t, { fetchImpl });
-  await sidecar.handle(FRAME);
-  await sidecar.handle(intent({ verb: 'connect', params: {}, actor: 'a@b.com' }));
-  const r = await sidecar.handle(intent({
-    verb: 'exchange', params: { provider: 'github', code: 'c', clientId: 'id', origin: 'https://fleet.example' }, actor: 'a@b.com',
-  }));
-  assert.equal(r.ok, false);
-  assert.match(r.text, /incorrect or expired/);
-  assert.equal(commands.some((c) => c.startsWith('/link')), false);
-});

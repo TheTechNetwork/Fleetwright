@@ -14,7 +14,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -115,4 +115,75 @@ test('the fleet verb becomes the command, and the journal never sees the code', 
   assert.equal(line, `/setuptoken code#state ${phone.publicKey}`);
   assert.ok(!redactCommandLine(line).includes('code#state'));
   assert.throws(() => toCommandLine({ verb: 'setuptoken', params: { code: 'code#state' }, actor: 'eli@example.com' }), /reply/);
+});
+
+/** A pane running `claude auth login` that writes the sign-in into its own directory once a code is typed. */
+function fakeSignInPane(/** @type {{ writes?: boolean }} */ o = {}) {
+  const io = fakePane();
+  const send = io.sendKeys;
+  io.sendKeys = (n, keys) => {
+    send(n, keys);
+    const dir = /CLAUDE_CONFIG_DIR='([^']+)'/.exec(io.command)?.[1];
+    if (keys.includes('Enter') && dir && o.writes !== false) {
+      writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: SIGN_IN.oauth }));
+      writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: SIGN_IN.account, other: 'not sent' }));
+    }
+    return { status: 0 };
+  };
+  return io;
+}
+
+const SIGN_IN = {
+  oauth: { accessToken: `sk-ant-oat01-${'a'.repeat(60)}`, refreshToken: `sk-ant-ort01-${'r'.repeat(60)}`, expiresAt: 1_900_000_000_000, scopes: ['user:inference', 'user:sessions:claude_code'], subscriptionType: 'max' },
+  account: { accountUuid: 'u-1', emailAddress: 'eli@example.com' },
+};
+
+test('a machine makes a whole Claude sign-in for a vault, seals it to the phone, and keeps nothing', async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), 'vault-signin-'));
+  const io = fakeSignInPane();
+  const cfg = /** @type {any} */ ({ loginEnabled: true, loginTimeoutMs: 600_000, loginSessionName: 'fw-login', stateDir, workdir: stateDir, claudeBin: 'claude', hostname: 'deb13' });
+  const login = new LoginFlow(cfg, /** @type {any} */ (io));
+  const ctx = /** @type {any} */ ({ cfg, login, actor: 'fleet:eli@example.com', sessions: {} });
+
+  const started = await dispatch(ctx, '/setuptoken --login');
+  assert.equal(started.ok, true, started.text);
+  assert.equal(started.url, URL_);
+  assert.match(io.command, /CLAUDE_CONFIG_DIR='[^']*pending-signin-[^']*' 'claude' auth login --claudeai; sleep 120/);
+  const dir = /** @type {any} */ (login.pending).linkDir;
+
+  // Not a /code for the box's own login, nor somebody else's to finish.
+  assert.equal((await login.submitCode('code#state', 'fleet:eli@example.com')).ok, false);
+  assert.equal((await login.finishVaultSignIn('code#state', 'fleet:mallory@example.com')).ok, false);
+  assert.equal(io.typed.length, 0);
+
+  const phone = await newSealKey();
+  const done = await dispatch(ctx, `/setuptoken --login code#state ${phone.publicKey}`);
+  assert.equal(done.ok, true, done.text);
+  assert.match(done.text, /Signed in to Claude on deb13\. It went back sealed to whoever asked, and this box kept no copy\./);
+  assert.ok(!JSON.stringify({ text: done.text }).includes('sk-ant-'));
+  const inside = await open({ privateKey: phone.privateKey, publicKey: phone.publicKey, aad: SETUP_TOKEN_AAD, sealed: done.sealed });
+  assert.deepEqual(inside, { v: 1, signIn: SIGN_IN });
+  assert.equal(existsSync(dir), false, 'the directory holding the only copy is gone');
+  assert.equal(io.alive, false);
+
+  // The fleet verb, and the journal never sees the code.
+  const line = toCommandLine({ verb: 'setuptoken', params: { kind: 'login', code: 'code#state', reply: phone.publicKey }, actor: 'eli@example.com' });
+  assert.equal(line, `/setuptoken --login code#state ${phone.publicKey}`);
+  assert.equal(toCommandLine({ verb: 'setuptoken', params: { kind: 'login' }, actor: 'eli@example.com' }), '/setuptoken --login');
+  assert.ok(!redactCommandLine(line).includes('code#state'));
+});
+
+test('a sign-in the CLI wrote anywhere but its own directory is not sealed to anyone', async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), 'vault-signin-'));
+  const io = fakeSignInPane({ writes: false });
+  // The box's own login sits where the linking flow would also have looked.
+  const cfg = /** @type {any} */ ({ loginEnabled: true, loginTimeoutMs: 600_000, loginSessionName: 'fw-login', stateDir, workdir: stateDir, claudeBin: 'claude', hostname: 'deb13' });
+  const login = new LoginFlow(cfg, /** @type {any} */ (io));
+  assert.equal((await login.startVaultSignIn({ actor: 'fleet:eli@example.com' })).ok, true);
+  const dir = /** @type {any} */ (login.pending).linkDir;
+  const done = await login.finishVaultSignIn('code#state', 'fleet:eli@example.com');
+  assert.equal(done.ok, false);
+  assert.equal(done.signIn, undefined);
+  assert.match(done.message, /no sign-in appeared within a minute/);
+  assert.equal(existsSync(dir), false);
 });
