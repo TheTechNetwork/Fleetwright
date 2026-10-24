@@ -841,10 +841,23 @@ test('a phone lists its signing key under its own address, and a box is given th
 
   // REMOVED, and an older add replayed inside its ten minutes does not bring it back.
   const at = Date.now() - 60_000;
+  // Listed with no key, which is what tells a box he signs nothing now.
   assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, remove: true })).ok, true);
-  assert.deepEqual((await m.keys(office)).payload.people, []);
+  assert.deepEqual((await m.keys(office)).payload.people, [{ email: ELI, keys: [] }]);
   assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' }, { at })).error?.code, 'stale');
-  assert.deepEqual((await m.keys(office)).payload.people, []);
+  assert.deepEqual((await m.keys(office)).payload.people, [{ email: ELI, keys: [] }]);
+
+  // A DELEGATION REVOKED is listed beside his keys until it would have run
+  // out, and only the account that files his keys can revoke one.
+  assert.equal((await m.phone({ op: 'devicekey', key: office.publicJwk, label: 'Eli’s iPad' })).ok, true);
+  const until = Date.now() + 3_600_000;
+  assert.equal((await m.phone({ op: 'revokedelegation', id: 'mcp-claude-desktop-01', until })).ok, true);
+  assert.deepEqual((await m.keys(office)).payload.people[0].revoked, ['mcp-claude-desktop-01']);
+  assert.equal((await m.phone({ op: 'revokedelegation', id: 'mcp-claude-desktop-02', until }, { github: dana, person: ELI })).error?.code, 'address_taken');
+  assert.equal((await m.phone({ op: 'revokedelegation', id: 'short', until })).error?.code, 'bad_params');
+  // A key added afterwards keeps the revocations.
+  assert.equal((await m.phone({ op: 'devicekey', key: iphone.publicJwk, label: 'Eli’s iPhone' })).ok, true);
+  assert.deepEqual((await m.keys(office)).payload.people[0].revoked, ['mcp-claude-desktop-01']);
 });
 
 /**
@@ -881,7 +894,12 @@ async function signingFleet(t, { requireSigned = false } = {}) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const sidecarOn = () => new Sidecar({
     hub: new HubClient({ baseUrl: stub.baseUrl, token: null }),
-    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { void core.onHostMessage('ops-box', f); return true; } }),
+    // NOT ITS HEALTH: the coordinator is not told whether this box enforces, so
+    // what the box does with an unsigned intent is the box's own to decide. A
+    // box pushes health after a verb that changes it, and under load that push
+    // landed before the next request, so the coordinator refused it first and
+    // the test read the coordinator's sentence instead of the box's.
+    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { if (f?.kind !== 'health') void core.onHostMessage('ops-box', f); return true; } }),
     hostId: 'ops-box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, xoStateDir: dir, logger: quiet, requireSigned,
     vaultKey: { publicJwk: boxKeys.publicJwk, sign: (/** @type {string} */ msg) => sign(boxKeys.privateJwk, msg) },
   });

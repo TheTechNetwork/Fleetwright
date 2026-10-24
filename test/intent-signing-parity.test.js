@@ -14,13 +14,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { intentSigningInput, keyId } from '../src/fleet/protocol/intent-signature.js';
+import { delegationSigningInput, intentSigningInput, keyId } from '../src/fleet/protocol/intent-signature.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/parity/intent-signing.json', import.meta.url), 'utf8'));
 
 test('each intent’s signing input in the phones’ fixture is the one a box builds', () => {
   assert.ok(fixture.cases.length >= 8, 'the fixture lost its cases');
   for (const c of fixture.cases) assert.equal(intentSigningInput(c.intent, c.host), c.input, c.why);
+});
+
+test('each delegation’s signing input in the fixture is the one a box checks a delegation with', () => {
+  assert.ok(fixture.delegations.length >= 4, 'the fixture lost its delegations');
+  for (const d of fixture.delegations) assert.equal(delegationSigningInput(d.grant), d.input, d.why);
 });
 
 test('and the key id the phones send is the one the minter lists the key under', async () => {
