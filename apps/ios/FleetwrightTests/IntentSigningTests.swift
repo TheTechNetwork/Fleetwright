@@ -42,6 +42,27 @@ final class IntentSigningTests: XCTestCase {
         }
     }
 
+    /// A delegation's bytes, the same way: the grant as the fixture holds it,
+    /// built into the string intent-signature.js `delegationSigningInput`
+    /// makes, which is what a box checks the delegation against.
+    func testBuildsTheDelegationBytesTheBoxChecks() throws {
+        let delegations = try XCTUnwrap(fixture()["delegations"] as? [[String: Any]])
+        XCTAssertGreaterThanOrEqual(delegations.count, 4, "the fixture lost its delegations")
+        for d in delegations {
+            let raw = try XCTUnwrap(d["grant"] as? [String: Any])
+            // JSONSerialization hands numbers back as NSNumber; the phone builds
+            // a grant from Int, so the fixture's numbers are read as Int too.
+            func native(_ v: Any) -> Any {
+                if let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.intValue }
+                if let m = v as? [String: Any] { return m.mapValues(native) }
+                if let a = v as? [Any] { return a.map(native) }
+                return v
+            }
+            let grant = raw.mapValues(native)
+            XCTAssertEqual(IntentSigning.delegationInput(grant), d["input"] as? String, d["why"] as? String ?? "")
+        }
+    }
+
     func testNamesItsKeyAsTheMinterFilesIt() throws {
         let key = try XCTUnwrap(fixture()["key"] as? [String: Any])
         let jwk = try XCTUnwrap(key["jwk"] as? [String: String])
