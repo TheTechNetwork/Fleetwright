@@ -22,7 +22,7 @@ import { HttpAdapter } from '../src/adapters/http.js';
 import { ensureApiToken } from '../src/core/api-token.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { forgetJwks } from '../src/fleet/coordinator/oidc.js';
-import { newDepositKey } from '../src/fleet/seal.js';
+import { newDepositKey, seal, DEPOSIT_AAD } from '../src/fleet/seal.js';
 import { depositClaudeLogin, MINTER_KEY_PATH } from '../src/fleet/claude-deposit.js';
 import { saveRunnerLogin, runnerTokenFile, runnerAuthKind } from '../src/core/runner-login.js';
 import { ensureDirectConfig } from '../src/core/direct-config.js';
@@ -30,7 +30,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { Accounts } from '../src/core/accounts.js';
 import minterWorker, { ClaudeLogins } from '../worker/src/minter.js';
 import { actionsIssuer } from './helpers/actions-issuer.js';
-import { standInClaude } from './helpers/stand-in-claude.js';
+import { standInClaude, claudeSignInFor, claudeRenewals } from './helpers/stand-in-claude.js';
 
 const OWNER = 'eli@example.com';
 const TOKEN = 'sk-ant-oat01-eli-subscription-0123456789abcdef';
@@ -86,12 +86,14 @@ async function fleet(opts = {}) {
 
   // The minting Worker's own storage object, with an in-memory storage under it.
   const rows = new Map();
-  const logins = new ClaudeLogins({ storage: { get: async (k) => rows.get(k), put: async (k, v) => { rows.set(k, v); } } });
   const env = {
     FLEETWRIGHT_MINTER_DEPOSIT_KEY: deposit.secret,
     FLEETWRIGHT_GITHUB_MINT_OWNERS: 'acme',
     LOGINS: { idFromName: () => 'logins', get: () => ({ fetch: (/** @type {string} */ u, /** @type {any} */ i) => logins.fetch(new Request(u, i)) }) },
   };
+  // Given the Worker's environment, as the runtime gives it, so the object
+  // opens what the Worker sealed with the same deposit key.
+  const logins = new ClaudeLogins({ storage: { get: async (k) => rows.get(k), put: async (k, v) => { rows.set(k, v); } } }, env);
   /** Every body the minter was sent, as it arrived. @type {any[]} */
   const toMinter = [];
   const core = new CoordinatorCore({
@@ -193,7 +195,10 @@ async function fleet(opts = {}) {
     globalThis.fetch = beneath;
     issuer.restore();
   };
-  return { core, rows, toMinter, depositAs, runnerJoins, depositKey: deposit.publicKey, restore };
+  /** A whole sign-in deposited as the phones send one, sealed here and relayed by the coordinator. @param {any} signIn */
+  const depositSignIn = async (signIn) =>
+    core.depositClaudeLogin({ email: OWNER }, { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github: 'gho_eli', signIn, at: Date.now() } }) });
+  return { core, rows, toMinter, depositAs, depositSignIn, runnerJoins, depositKey: deposit.publicKey, restore };
 }
 
 test('a deposited login reaches the runner its owner started, and nothing between can read it', async (t) => {
@@ -218,6 +223,20 @@ test('a deposited login reaches the runner its owner started, and nothing betwee
   }
   assert.ok(f.core.events.some((e) => e.event === 'claude.deposited' && e.actor === OWNER));
   assert.match(String(f.core.events.find((e) => e.event === 'runner.claude')?.text), /eli@example\.com.s runner .* was given eli Claude login/);
+});
+
+test('a runner is given a kept sign-in’s access token, renewed first by the vault, and never its refresh token', async (t) => {
+  const f = await fleet();
+  t.after(f.restore);
+  const made = claudeSignInFor('eli', 60_000);
+  const kept = await f.depositSignIn(made);
+  assert.equal(kept.ok, true, kept.text);
+  const before = claudeRenewals.count;
+  const { told, down } = await f.runnerJoins();
+  assert.equal(claudeRenewals.count - before, 1, 'due, so renewed before it was handed out');
+  assert.equal(told.email, OWNER);
+  assert.match(String(told.token), /^sk-ant-oat01-renewed/);
+  assert.ok(!JSON.stringify([down, [...f.rows.values()]]).includes('sk-ant-ort01'), 'no refresh token leaves the vault, nor rests readable');
 });
 
 test('a runner is told to use its API key whenever the login is not its owner’s to have', async (t) => {

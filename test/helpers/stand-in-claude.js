@@ -3,8 +3,56 @@
 // test sends a made-up token to the real API. A token with `revoked` in it, or
 // one a test revoked after it was kept (revokeClaude), is refused as the API
 // refuses one; any other is answered.
+//
+// And Claude's token address, for the minter renewing a whole sign-in
+// (src/fleet/minter/claude-login.js): a refresh token is answered once with a
+// new pair, slowly so two renewals at once overlap, and refused after that, as
+// a rotated refresh token is. Counted, so a renewal made twice is seen.
 
 import { MESSAGES_URL } from '../../src/core/claude-token-probe.js';
+import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID } from '../../src/fleet/minter/claude-login.js';
+
+/** Renewals asked for, and refresh tokens already used. */
+export const claudeRenewals = { count: 0, used: new Set() };
+
+/** A sign-in as `claude auth login` writes one, `expiresIn` ms from now. @param {string} name @param {number} [expiresIn] */
+export function claudeSignInFor(name, expiresIn = 8 * 3_600_000) {
+  return {
+    oauth: {
+      accessToken: `sk-ant-oat01-${name}-${'a'.repeat(40)}`,
+      refreshToken: `sk-ant-ort01-${name}-${'r'.repeat(40)}`,
+      expiresAt: Date.now() + expiresIn,
+      scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+      subscriptionType: 'max',
+      rateLimitTier: 'default_claude_max_20x',
+    },
+    account: { accountUuid: `uuid-${name}`, emailAddress: `${name}@example.com`, organizationUuid: 'org-1', billingType: 'stripe_subscription', notAField: 'dropped' },
+  };
+}
+
+/**
+ * Claude's token address, or null when this is not a request to it.
+ *
+ * @param {unknown} url @param {any} [init]
+ * @returns {Promise<Response>|null}
+ */
+function standInClaudeToken(url, init) {
+  if (String(url) !== CLAUDE_TOKEN_URL) return null;
+  return (async () => {
+    const f = JSON.parse(String(init.body || '{}'));
+    claudeRenewals.count += 1;
+    await new Promise((r) => setTimeout(r, 20));
+    const reply = (/** @type {number} */ status, /** @type {any} */ body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    if (f.grant_type !== 'refresh_token' || f.client_id !== CLAUDE_CLIENT_ID) return reply(400, { error: 'invalid_request' });
+    const old = String(f.refresh_token || '');
+    if (!old.startsWith('sk-ant-ort01-') || old.includes('revoked') || claudeRenewals.used.has(old)) {
+      return reply(400, { error: 'invalid_grant', error_description: 'Refresh token not found or invalid' });
+    }
+    claudeRenewals.used.add(old);
+    const n = claudeRenewals.count;
+    return reply(200, { access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}`, expires_in: 28800, scope: String(f.scope || '') });
+  })();
+}
 
 /** Tokens revoked after they were kept, as a person revoking one at claude.ai would. */
 const revoked = new Set();
@@ -18,12 +66,14 @@ export function revokeClaude(token) {
  * Claude's answer to this request, or null when it is not a request to Claude.
  *
  * @param {unknown} url @param {any} [init]
- * @returns {Response|null}
+ * @returns {Response|Promise<Response>|null}
  */
 export function standInClaude(url, init = {}) {
+  const token = standInClaudeToken(url, init);
+  if (token) return /** @type {any} */ (token);
   if (String(url) !== MESSAGES_URL) return null;
-  const token = String(init.headers?.authorization || '').replace(/^Bearer /, '') || String(init.headers?.['x-api-key'] || '');
-  const refused = token.includes('revoked') || revoked.has(token);
+  const bearer = String(init.headers?.authorization || '').replace(/^Bearer /, '') || String(init.headers?.['x-api-key'] || '');
+  const refused = bearer.includes('revoked') || revoked.has(bearer);
   const body = refused
     ? { type: 'error', error: { type: 'authentication_error', message: 'Invalid bearer token' } }
     : { type: 'message', content: [{ type: 'text', text: 'o' }] };

@@ -63,6 +63,7 @@ import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { runnerJobProblem, runnerJobRepoProblem, githubUser } from '../../core/repo-tokens.js';
 import { deviceSignedIn } from './github.js';
 import { probeClaude } from '../../core/claude-token-probe.js';
+import { claudeSignIn } from './claude-login.js';
 
 /** How old a deposit may be when it arrives. Minutes, because a person made it just now. */
 export const DEPOSIT_MAX_AGE_MS = 10 * 60_000;
@@ -96,6 +97,8 @@ const CLI_TOKEN_RE = /^(?:gho_|ghp_|github_pat_)/;
  * @typedef {object} LoginStore  one row per GitHub account id
  * @property {(id: string) => Promise<any>} get
  * @property {(id: string, row: any) => Promise<void>} put
+ * @property {(id: string) => Promise<{ ok: boolean, token?: string, expiresAt?: number|null, text?: string }>} [fresh]
+ *   a sign-in renewed if it is due, by the vault's object, which is the one writer
  */
 
 /**
@@ -125,16 +128,21 @@ const refuse = (code, text) => ({ ok: false, error: { code }, text });
  * Used by a deposit here and by the vault's own `put` (vault.js), which keep
  * the same row.
  *
+ * A sign-in is asked the same way, with its access token, which is the
+ * bearer a session sends.
+ *
  * @param {string} token @param {typeof fetch} fetchImpl
+ * @param {'token'|'login'} [kind]
  * @returns {Promise<{ refusal: ReturnType<typeof refuse> } | { said: string }>}
  */
-export async function checkBeforeKeeping(token, fetchImpl) {
+export async function checkBeforeKeeping(token, fetchImpl, kind = 'token') {
   const check = await probeClaude({ token }, { fetchImpl });
   if (check.state === 'rejected') {
+    const again = kind === 'login' ? 'Sign in to Claude again.' : 'Make a new one with `claude setup-token` and paste that.';
     return {
       refusal: refuse(
         'rejected_token',
-        `Claude refused that token just now (401${check.why ? `: ${check.why}` : ''}). Nothing was kept. Make a new one with \`claude setup-token\` and paste that.`,
+        `Claude refused that ${kind === 'login' ? 'sign-in' : 'token'} just now (401${check.why ? `: ${check.why}` : ''}). Nothing was kept. ${again}`,
       ),
     };
   }
@@ -174,7 +182,8 @@ export async function depositKeyAnswer(config) {
  *
  * @param {unknown} ask  what the coordinator relayed: `{ sealed, email }`, the
  *   fleet account that sent it beside a seal opened here to
- *   `{ v: 1, github, claude: string|null, at }`
+ *   `{ v: 1, github, claude: string|null, at }`, or `signIn` in place of
+ *   `claude`: the whole sign-in a machine made (claude-login.js)
  * @param {ClaudeConfig} config
  */
 export async function answerDeposit(ask, config) {
@@ -209,7 +218,9 @@ export async function answerDeposit(ask, config) {
   if (Math.abs(now() - at) > DEPOSIT_MAX_AGE_MS) {
     return refuse('stale', 'That deposit was made more than ten minutes ago, so it could be a replay. Make it again.');
   }
-  const claude = inside.claude === null ? null : String(inside.claude || '');
+  const signIn = inside.signIn === undefined ? null : claudeSignIn(inside.signIn);
+  if (inside.signIn !== undefined && !signIn) return refuse('bad_token', 'That is not a Claude sign-in. Make it on a machine again.');
+  const claude = signIn ? signIn.oauth.accessToken : inside.claude === null ? null : String(inside.claude || '');
   if (claude !== null && !TOKEN_RE.test(claude)) {
     return refuse('bad_token', 'That is not a Claude token. Paste the one line `claude setup-token` printed.');
   }
@@ -234,14 +245,16 @@ export async function answerDeposit(ask, config) {
     await config.logins?.put(who.userId, { at, login: who.login, forgotten: true });
     return { ok: true, login: who.login, forgotten: true, text: `Forgot ${who.login}’s Claude login. Their runners use the runner repository’s API key from now on.` };
   }
-  const checked = await checkBeforeKeeping(claude, fetchImpl);
+  const checked = await checkBeforeKeeping(claude, fetchImpl, signIn ? 'login' : 'token');
   if ('refusal' in checked) return checked.refusal;
-  const stored = await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: { token: claude } });
-  await config.logins?.put(who.userId, { at, login: who.login, email, sealed: stored });
+  const stored = await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: signIn ?? { token: claude } });
+  await config.logins?.put(who.userId, { at, login: who.login, email, kind: signIn ? 'login' : 'token', sealed: stored });
   return {
     ok: true,
     login: who.login,
-    text: `Kept a Claude login for ${who.login}. Runners ${who.login} starts will run on it; nobody else’s will.${checked.said}`,
+    text: signIn
+      ? `Kept ${who.login}’s Claude sign-in. Runners and the boxes ${who.login} approves run on it, and Remote Control works on them; it is renewed here and nowhere else.${checked.said}`
+      : `Kept a Claude login for ${who.login}. Runners ${who.login} starts will run on it; nobody else’s will.${checked.said}`,
   };
 }
 
@@ -305,14 +318,26 @@ export async function answerLogin(ask, config) {
     );
   }
   let token;
-  try {
-    const key = await /** @type {() => Promise<{ privateKey: CryptoKey, publicKey: string }>} */ (config.depositKey)();
-    const inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad(claims.actorId), sealed: held.sealed });
-    token = String(inside?.token || '');
-  } catch {
-    // Kept under another account, or under a key since replaced. Not an
-    // error to guess past: the person deposits again.
-    return refuse('unsealed', `The login kept for ${claims.actor} does not open with this minter’s key. Deposit it again.`);
+  if (held.kind === 'login') {
+    // A SIGN-IN IS RENEWED BEFORE IT IS HANDED OUT, and only in the vault's
+    // object, under the person's lock: renewing rotates the refresh token,
+    // and this Worker is not the one writer (claude-login.js). The runner is
+    // given the access token, never the refresh token.
+    const fresh = config.logins?.fresh ? await config.logins.fresh(claims.actorId) : null;
+    if (!fresh?.ok || !fresh.token) {
+      return refuse('no_claude_login', `${claims.actor}’s Claude sign-in could not be given out: ${fresh?.text ?? 'the vault did not answer'} This runner falls back to its repository’s ANTHROPIC_API_KEY if it has one.`);
+    }
+    token = String(fresh.token);
+  } else {
+    try {
+      const key = await /** @type {() => Promise<{ privateKey: CryptoKey, publicKey: string }>} */ (config.depositKey)();
+      const inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad(claims.actorId), sealed: held.sealed });
+      token = String(inside?.token || '');
+    } catch {
+      // Kept under another account, or under a key since replaced. Not an
+      // error to guess past: the person deposits again.
+      return refuse('unsealed', `The login kept for ${claims.actor} does not open with this minter’s key. Deposit it again.`);
+    }
   }
   const login = String(held.login || claims.actor);
   const sealed = await seal({ to: runnerKey, aad: audience, payload: { token, login } });

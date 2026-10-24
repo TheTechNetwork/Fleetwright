@@ -57,7 +57,7 @@
 import { answerMintRequest } from '../../src/fleet/minter/answer.js';
 import { answerDeposit, answerLogin, depositKeyAnswer } from '../../src/fleet/minter/claude.js';
 import { answerGithubToken, SIGNIN_PREFIX } from '../../src/fleet/minter/github.js';
-import { answerVaultDevice, answerVaultBox, answerVaultKeys } from '../../src/fleet/minter/vault.js';
+import { answerVaultDevice, answerVaultBox, answerVaultKeys, answerClaudeFresh } from '../../src/fleet/minter/vault.js';
 import { generateKeyPair } from '../../src/fleet/crypto.js';
 import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
@@ -156,6 +156,7 @@ function loginsFrom(ns) {
     put: async (id, row) => {
       await call('put', { id, row });
     },
+    fresh: async (id) => /** @type {any} */ (await call('claude/fresh', { id })),
   };
 }
 
@@ -266,6 +267,11 @@ export class ClaudeLogins {
     if (op === 'signing-key') {
       const { publicJwk } = await this.signingKey();
       return json(200, { ok: true, key: { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y } });
+    }
+    // A SIGN-IN RENEWED FOR A RUNNER here, under the vault's lock, because
+    // the Worker in front cannot hold it (src/fleet/minter/claude-login.js).
+    if (op === 'claude/fresh') {
+      return json(200, await answerClaudeFresh(body, vaultConfig(this.env, this.storage, () => this.depositSecret())));
     }
     if (op === 'vault/device' || op === 'vault/box' || op === 'vault/keys') {
       const config = vaultConfig(this.env, this.storage, () => this.depositSecret(), () => this.signingKey());
