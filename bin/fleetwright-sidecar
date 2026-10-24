@@ -202,7 +202,8 @@ let lastUpdates = null;
 const mint = loadMinter(cfg.mint);
 if (mint.problem) log.warn(`config: ${mint.problem}`);
 if (mint.minter) log.info(`this box mints repository tokens for runners, into ${mint.minter.owners.join(', ')}`);
-if (cfg.requireSigned) log.info('this box takes only requests a person signed (FLEETWRIGHT_REQUIRE_SIGNED); the fleet’s own unsigned work is refused here');
+if (cfg.requireSigned === 'all') log.info('this box takes only requests a person signed or delegated (FLEETWRIGHT_REQUIRE_SIGNED=all)');
+else if (cfg.requireSigned === 'signers') log.info('this box takes only signed or delegated requests from people it has seen a signing key for, and none with nobody named (FLEETWRIGHT_REQUIRE_SIGNED=signers)');
 
 const sidecar = new Sidecar({
     hub,

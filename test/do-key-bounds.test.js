@@ -88,6 +88,9 @@ const BOUNDED = {
   boxSignIns: 'src/fleet/coordinator/core.js',
   // The people removed that a box has not yet said it forgot: MAX_REMOVALS_KEPT.
   removals: 'src/fleet/coordinator/core.js',
+  // What people signed for the fleet to do in their name: a refusal past
+  // MAX_DELEGATIONS_PER_PERSON and a byte backstop on the whole store.
+  delegations: 'src/fleet/coordinator/delegations.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */

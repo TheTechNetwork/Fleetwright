@@ -151,6 +151,9 @@ export class Fleet {
       // means this fleet cannot start machines and says so — see
       // docs/runner-central.md.
       runnerRepo: env.FLEETWRIGHT_RUNNER_REPO || null,
+      // The browser's signing page, on the minting Worker's own hostname: where
+      // a GitHub sign-in it started is sent back to (oauth.js, SIGNER_STATE_RE).
+      signingOrigin: env.FLEETWRIGHT_SIGNING_ORIGIN || null,
       // THE MINTING WORKER, over its service binding. Present only where a
       // deployment binds it (wrangler.production.toml); the fork-safe config
       // binds nothing, and a runner there is minted for by a box or not at
@@ -214,6 +217,9 @@ export class Fleet {
         // it forgot, each box's debt being a moment on its enrolment above
         // (core.js #forgetOnBoxes).
         this.state.storage.put('removals', this.core.serialiseRemovals()),
+        // What people signed for the fleet to send in their name while they
+        // are not there, kept ready machines' for a month (delegations.js).
+        this.state.storage.put('delegations', this.core.delegations.serialise()),
       ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
@@ -286,6 +292,7 @@ export class Fleet {
       this.core.restorePushLimits(await this.state.storage.get('pushLimits'));
       this.core.restoreBoxSignIns(await this.state.storage.get('boxSignIns'));
       this.core.restoreRemovals(await this.state.storage.get('removals'));
+      this.core.delegations.restore(await this.state.storage.get('delegations'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       // Written straight back when a pin saved before pins had ids was given
       // one, so the id a listing shows still cancels it after the next restart.
@@ -1316,8 +1323,28 @@ export class Fleet {
         sealed: body?.sealed,
         origin: url.origin,
         requester: requesterFor(client),
+        delegation: body?.delegation,
       });
       return json(r, r.ok ? 200 : 400);
+    }
+
+    // WHAT A PERSON SIGNED FOR THE FLEET TO DO IN THEIR NAME (delegations.js):
+    // listed for their app, kept, and withdrawn. Withdrawing here stops this
+    // coordinator carrying it; a box stops taking it when the minter lists it
+    // as revoked, which the phone asks for itself.
+    if (url.pathname === '/api/delegations' && request.method === 'GET') {
+      return json({ ok: true, delegations: this.core.delegationsFor(requesterFor(client)) });
+    }
+    if (url.pathname === '/api/delegations' && request.method === 'POST') {
+      const email = requesterFor(client)?.email;
+      if (!email) return json({ ok: false, error: { code: 'not_signed_in' }, text: 'A delegation is a person’s, so this needs a signed-in identity.' }, 400);
+      const body = await readJson(request);
+      const r = this.core.keepDelegation(String(email), body?.delegation);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (url.pathname.startsWith('/api/delegations/') && request.method === 'DELETE') {
+      const r = this.core.dropDelegation(requesterFor(client), decodeURIComponent(url.pathname.slice('/api/delegations/'.length)));
+      return json(r, r.ok ? 200 : 404);
     }
 
     if (url.pathname === '/api/hosts' && request.method === 'GET') {
@@ -1432,6 +1459,10 @@ export class Fleet {
           // Beside the params like `host`, because the box that dispatches the
           // run never sees it — the coordinator holds it with the ticket.
           startAfter: body.start && typeof body.start === 'object' && !Array.isArray(body.start) ? body.start : null,
+          // What the phone signed for a request it cannot sign itself: one the
+          // fleet places, or that start held for a runner (delegations.js).
+          // Only from a signed-in person, whose own it must be.
+          ...(client?.email && body.delegation && typeof body.delegation === 'object' ? { delegation: body.delegation } : {}),
         });
       // A `connect` reply carries the host's catalogue, which offers the paste
       // route because a host knows nothing about an OAuth client — correctly,
