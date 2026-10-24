@@ -2131,6 +2131,11 @@ export class Sidecar {
     const label = provider === 'github' ? 'GitHub' : 'Cloudflare';
     const who = intent.actor ? emailFromActor(`fleet:${intent.actor}`) : null;
     const actor = intent.actor ? `fleet:${intent.actor}` : '';
+    // A PERSON'S SIGN-IN IS THEIR VAULT'S, finished by the minter for the
+    // phone that started it (src/fleet/minter/vault.js, `connect`). Finishing
+    // one here stored it on this box alone, as a second copy, so it is refused
+    // before the code is spent or anything is asked of ${label}.
+    if (who) return { ok: false, text: VAULT_ONLY };
 
     const verifier = this.verifiers.spend(provider, who);
     if (!verifier) {
@@ -2292,6 +2297,15 @@ export class Sidecar {
     }
   }
 }
+
+/**
+ * What a person is told who asks a box to keep a credential of theirs: every
+ * credential a fleet person's session uses comes from their vault (vault-store.js).
+ */
+const VAULT_ONLY =
+  'Your credentials are kept in your vault now, not on a machine: keep them under You › Credentials in the app, ' +
+  'and approve this machine from its page. A sign-in made on a machine for that machine held a second copy that ' +
+  'renewed on its own clock.';
 
 /**
  * Build the fleetwright command line for a validated intent.
@@ -2477,10 +2491,17 @@ export function toCommandLine({ verb, params, actor }) {
             + 'their account. See docs/one-account-per-person.md',
           );
         }
-        if (!mine) throw new Error('connect me needs a signed-in identity — this caller has no email');
-        return `/login for ${mine}`;
+        // A PERSON'S CLAUDE LOGIN IS THEIR VAULT'S, and is not made on a box
+        // for that box any more: a box that held its own refresh token renewed
+        // it on its own clock, which is the race the vault ends. The vault's
+        // sign-in is made on a machine with `setuptoken` and `kind: login`,
+        // and kept by the phone that asked (docs/vault.md).
+        throw new Error(VAULT_ONLY);
       }
-      return `/connect ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
+      // THE SAME FOR A TOKEN, unless it is the box's own (`scope: host`, an
+      // administrator's, for the box's command line).
+      if (p.scope !== 'host') throw new Error(VAULT_ONLY);
+      return `/connect ${p.provider} --host`;
     case 'link':
       // The secret is protocol-constrained to printable ASCII with no
       // whitespace, quote or backslash, and cannot begin with a dash, so it is
@@ -2488,7 +2509,7 @@ export function toCommandLine({ verb, params, actor }) {
       // flag by the registry's parser. It is masked in every log between here
       // and the pane by src/core/redact.js — which is the reason `/code` and
       // `/link` are the two command words in that table.
-      if (p.provider === 'claude') return `/code ${p.secret}`;
+      if (p.provider === 'claude' || p.scope !== 'host') throw new Error(VAULT_ONLY);
       // SCOPE HAS TO REACH THE HOST. It did not, and that made the
       // coordinator's admin gate a no-op for token providers: `scope: host`
       // and no scope at all produced the identical line, so the gate could be
@@ -2503,9 +2524,11 @@ export function toCommandLine({ verb, params, actor }) {
       // key is held to SEAL_KEY_RE, and an uncompressed P-256 point always
       // starts with byte 0x04, so its base64url always starts with `B`: never a
       // flag either. A finish without a key is refused here, not sent.
-      if (!p.code) return '/setuptoken';
+      // `kind: login` makes the whole sign-in Remote Control needs, for the
+      // vault, in place of a setup-token (login.js, startVaultSignIn).
+      if (!p.code) return p.kind === 'login' ? '/setuptoken --login' : '/setuptoken';
       if (!p.reply) throw new Error('setuptoken with a code needs `reply`, the key to seal the token to');
-      return `/setuptoken ${p.code} ${p.reply}`;
+      return `/setuptoken${p.kind === 'login' ? ' --login' : ''} ${p.code} ${p.reply}`;
     case 'unlink':
       if (p.provider === 'claude') {
         // Same as `connect` above: there is no machine account to log out of.

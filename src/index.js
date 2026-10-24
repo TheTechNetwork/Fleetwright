@@ -122,37 +122,35 @@ export async function main() {
           // cannot tell, which is the case that used to resolve to the box's
           // shared row.
           //
-          // THE VAULT UNDERNEATH (vault-store.js): what the person's vault gave
-          // this box first, then what they linked on this box, which wins.
+          // A PERSON THE FLEET STARTED IT FOR GETS THEIR VAULT AND NOTHING
+          // ELSE (vault-store.js). What they linked on this box used to win,
+          // and the vault was read only when a link file also existed, so a
+          // person who kept GitHub in their vault and linked nothing here had
+          // no token at all: the box's second copy was the one that counted.
+          // Somebody operating the box itself, with no fleet identity, gets
+          // the box's own row, as before.
           secretsFor: (name) => {
             const who = registry.get(name)?.createdBy ?? null;
+            const email = emailFromActor(who);
+            if (email) return vaultEnvFor(cfg, email);
             const file = pickSecretsFile(cfg, who);
             if (!file) return null;
             /** @type {Record<string, string>} */
-            const env = vaultEnvFor(cfg, emailFromActor(who));
+            const env = {};
             loadEnvFile(file, env);
             return env;
           },
           // WHEN THAT CREDENTIAL DIES. The broker used to serve whatever was
           // stored, so a GitHub token that keepalive could not renew went on
           // being handed out until GitHub answered 401 — which a beta tester
-          // then had to diagnose from a token prefix. This is the same row
-          // lookup, asking the renewal metadata instead of the secrets.
+          // then had to diagnose from a token prefix. The same split as the
+          // secrets: a person's vault says when its token runs out, and the
+          // box's own row is asked of its renewal metadata.
           expiryFor: (name, provider) => {
             const who = registry.get(name)?.createdBy ?? null;
-            // rowForActor, the same mapping the secrets lookup uses — an actor
-            // with no fleet identity gets the host row, which is what
-            // pickSecretsFile does one line above.
-            const local = new Connections(cfg.stateDir).renewalDueAt(rowForActor(who), provider);
-            if (local !== null) return local;
-            // A token from the vault says when it runs out, unless one linked
-            // on this box is the one being served, which says nothing here.
-            const file = pickSecretsFile(cfg, who);
-            /** @type {Record<string, string>} */
-            const linked = {};
-            if (file) loadEnvFile(file, linked);
-            const keys = Object.hasOwn(PROVIDERS, provider) ? PROVIDERS[/** @type {keyof typeof PROVIDERS} */ (provider)].env : [];
-            return keys.some((k) => linked[k]) ? null : vaultExpiryFor(cfg, emailFromActor(who), provider);
+            const email = emailFromActor(who);
+            if (email) return vaultExpiryFor(cfg, email, provider);
+            return new Connections(cfg.stateDir).renewalDueAt(rowForActor(who), provider);
           },
           // The named-secret resolver. The GRANT is on the record — the name
           // `start --secret` put there — and the VALUE is read from the store

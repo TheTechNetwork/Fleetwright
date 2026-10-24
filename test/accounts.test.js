@@ -16,6 +16,7 @@ import { createRequire } from 'node:module';
 
 import { Accounts, normaliseEmail, emailFromActor, extractOauthAccount, adoptBoxAccount } from '../src/core/accounts.js';
 import { pickCredentialSource, sharedAccountMetaFile } from '../src/core/podman.js';
+import { applyVault } from '../src/core/vault-store.js';
 import { log } from '../src/log.js';
 import { androidSources } from './helpers/android-sources.js';
 import { iosSources } from './helpers/ios-sources.js';
@@ -58,26 +59,34 @@ test('garbage is refused before it becomes a credential file', () => {
   assert.deepEqual(a.list(), []);
 });
 
-test('a linked person gets their account, and nobody gets the box\'s', () => {
+test('a fleet person gets their vault’s Claude login, never one linked on the box, and nobody gets the box\'s', () => {
   // THE BOX HAS NO CLAUDE ACCOUNT ANY MORE — docs/one-account-per-person.md.
   // This used to fall back to the machine's own credential for anyone who had
   // not linked, which quietly shared one person's Claude subscription with
   // everybody who could reach the fleet. True of an org and false of a guest,
   // and the standing rule for guests is that they bring their own everything.
+  //
+  // AND A FLEET PERSON'S IS THEIR VAULT'S (vault-store.js): a Claude account
+  // linked on the box was a second copy renewed on the box's own clock, and
+  // is the box operator's now, for the box's own command line.
   const stateDir = dir();
   const a = new Accounts(stateDir);
   a.save('client@example.com', JSON.stringify({ token: 'theirs' }));
   const cfg = { stateDir, sandboxCredentialsFile: '/shared/.credentials.json' };
 
-  const linked = pickCredentialSource(cfg, 'fleet:client@example.com');
-  assert.equal(linked.account, 'client@example.com');
-  assert.match(linked.source, /client@example\.com\.json$/);
+  assert.equal(pickCredentialSource(cfg, 'fleet:client@example.com').source, null, 'linked on the box is not theirs');
+  applyVault(cfg, { accounts: [{ email: 'client@example.com', items: [{ name: 'claude', value: 'sk-ant-oat01-theirs', expiresAt: Date.now() + 3_600_000, login: { scopes: ['user:inference'] }, account: { emailAddress: 'client@example.com' } }] }] });
+  const fromVault = pickCredentialSource(cfg, 'fleet:client@example.com');
+  assert.equal(fromVault.account, 'client@example.com');
+  assert.match(String(fromVault.source), /vault\/client@example\.com\.claude-credentials\.json$/);
+  assert.match(String(fromVault.accountMeta), /vault\/client@example\.com\.claude-account\.json$/);
+  assert.equal(JSON.parse(readFileSync(String(fromVault.source), 'utf8')).claudeAiOauth.refreshToken, undefined, 'no refresh token on the box');
 
-  // Somebody who has NOT linked gets a refusal with their name in it, rather
-  // than somebody else's subscription.
+  // Somebody whose vault gives this box nothing gets a refusal with their
+  // name in it, rather than somebody else's subscription.
   const stranger = pickCredentialSource(cfg, 'fleet:owner@example.com');
   assert.equal(stranger.source, null);
-  assert.match(String(stranger.why), /has not linked/);
+  assert.match(String(stranger.why), /owner@example\.com keeps no Claude login in their vault/);
 
   // A local surface runs as THE OPERATOR — here unambiguous, because exactly
   // one person has linked an account on this box.
@@ -116,8 +125,9 @@ test('the identity travels with the credential', () => {
   a.save('client@example.com', JSON.stringify({ token: 'x' }), JSON.stringify({ emailAddress: 'client@example.com' }));
   assert.ok(a.accountMetaPathFor('client@example.com'), 'the account fragment is stored beside the credential');
 
-  const picked = pickCredentialSource({ stateDir, sandboxCredentialsFile: '/shared/.credentials.json' }, 'fleet:client@example.com');
-  assert.match(picked.accountMeta, /client@example\.com\.account\.json$/);
+  // The box's own command line runs as the one linked person, with the account beside it.
+  const picked = pickCredentialSource({ stateDir, sandboxCredentialsFile: '/shared/.credentials.json' }, 'web');
+  assert.match(String(picked.accountMeta), /client@example\.com\.account\.json$/);
 
   a.remove('client@example.com');
   assert.equal(a.accountMetaPathFor('client@example.com'), null, 'unlink removes both files');

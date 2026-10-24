@@ -20,7 +20,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimes
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 
-import { Accounts } from '../src/core/accounts.js';
+import { applyVault } from '../src/core/vault-store.js';
 import { ensureDirectConfig, directConfigDir, removeDirectConfig } from '../src/core/direct-config.js';
 import { buildCommand } from '../src/core/claude.js';
 
@@ -30,9 +30,7 @@ function box({ link = true } = {}) {
   const home = join(root, 'home');
   mkdirSync(join(home, '.claude'), { recursive: true });
   writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: '/opt/fleetwright/current/bin/fleetwright hook' }] }] } }));
-  if (link) {
-    new Accounts(stateDir).save('person@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'tok-1' } }), JSON.stringify({ emailAddress: 'person@example.com', organizationUuid: 'org' }));
-  }
+  if (link) signIn(stateDir, 'tok-1');
   const cfg = /** @type {any} */ ({
     stateDir,
     hostname: 'box-1',
@@ -47,6 +45,23 @@ function box({ link = true } = {}) {
 
 const read = (/** @type {string} */ f) => JSON.parse(readFileSync(f, 'utf8'));
 
+/**
+ * The person's Claude sign-in as their vault gives it to this box: an access
+ * token and its account, never a refresh token (vault-store.js).
+ * @param {string} stateDir @param {string|null} token  null: the vault gives this box nothing for them now
+ */
+function signIn(stateDir, token) {
+  const items = token ? [{ name: 'claude', value: token, expiresAt: Date.now() + 3_600_000, login: { scopes: ['user:inference'] }, account: { emailAddress: 'person@example.com', organizationUuid: 'org' } }] : [];
+  applyVault({ stateDir }, { accounts: [{ email: 'person@example.com', items }] });
+}
+
+/** The access token a staged credentials file carries, and that it carries no refresh token. @param {string} f */
+const tokenIn = (f) => {
+  const oauth = read(f).claudeAiOauth;
+  assert.equal(oauth.refreshToken, undefined, 'no refresh token on the box');
+  return oauth.accessToken;
+};
+
 test('a fresh direct session is staged with the person\'s credential, identity, trust and hook', () => {
   const { cfg, cwd } = box();
   const r = ensureDirectConfig(cfg, 'one', 'fleet:person@example.com', { cwd });
@@ -56,7 +71,7 @@ test('a fresh direct session is staged with the person\'s credential, identity, 
   assert.equal(r.account, 'person@example.com');
   assert.equal(r.dir, directConfigDir(cfg, 'one'));
 
-  assert.deepEqual(read(join(r.dir, '.credentials.json')), { claudeAiOauth: { accessToken: 'tok-1' } });
+  assert.equal(tokenIn(join(r.dir, '.credentials.json')), 'tok-1');
   assert.equal(read(join(r.dir, '.oauth-account.json')).emailAddress, 'person@example.com');
   const state = read(join(r.dir, '.claude.json'));
   assert.equal(state.oauthAccount.emailAddress, 'person@example.com', 'the identity rides with the credential');
@@ -68,13 +83,14 @@ test('a fresh direct session is staged with the person\'s credential, identity, 
   assert.equal(existsSync(cfg.sandboxCredentialsFile), false);
 });
 
-test('nobody linked is a refusal that names the box, not a login prompt', () => {
+test('nothing in their vault for this box is a refusal that names the box, not a login prompt', () => {
   const { cfg, cwd } = box({ link: false });
   const r = ensureDirectConfig(cfg, 'one', 'fleet:person@example.com', { cwd });
   assert.equal(r.ok, false);
   if (r.ok) return;
   assert.match(r.message, /No Claude account to give this session on box-1/);
-  assert.match(r.message, /person@example\.com has not linked/);
+  assert.match(r.message, /person@example\.com keeps no Claude login in their vault that this box was given/);
+  assert.match(r.message, /approve box-1 from its page/);
   assert.equal(existsSync(directConfigDir(cfg, 'one')), false, 'nothing is staged for a session that will not start');
 });
 
@@ -86,7 +102,7 @@ test('a resume keeps its account and takes today\'s credential, and keeps what t
   // The CLI wrote its own state, and the person renewed their login.
   const stateFile = join(first.dir, '.claude.json');
   writeFileSync(stateFile, JSON.stringify({ ...read(stateFile), numStartups: 3 }));
-  new Accounts(stateDir).save('person@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'tok-2' } }));
+  signIn(stateDir, 'tok-2');
 
   // Resumed by somebody else: the record's account wins over the actor.
   const again = ensureDirectConfig(cfg, 'one', 'fleet:colleague@example.com', { account: 'person@example.com', cwd });
@@ -94,19 +110,19 @@ test('a resume keeps its account and takes today\'s credential, and keeps what t
   if (!again.ok) return;
   assert.equal(again.fresh, false);
   assert.equal(again.account, 'person@example.com');
-  assert.deepEqual(read(join(again.dir, '.credentials.json')), { claudeAiOauth: { accessToken: 'tok-2' } }, 'same person, current token');
+  assert.equal(tokenIn(join(again.dir, '.credentials.json')), 'tok-2', 'same person, current token');
   assert.equal(read(stateFile).numStartups, 3, 'the CLI\'s own state survives a refresh');
 
   // Record silent: the directory says whose it is.
   const silent = ensureDirectConfig(cfg, 'one', null, { cwd });
   assert.equal(silent.ok && silent.account, 'person@example.com');
 
-  // The account was unlinked since: the session keeps the credential it has
-  // rather than refusing to resume or taking somebody else's.
-  new Accounts(stateDir).remove('person@example.com');
+  // Their vault stopped giving this box their login since: the session keeps
+  // the credential it has rather than refusing to resume or taking somebody else's.
+  signIn(stateDir, null);
   const gone = ensureDirectConfig(cfg, 'one', 'fleet:colleague@example.com', { account: 'person@example.com', cwd });
   assert.equal(gone.ok, true);
-  assert.deepEqual(read(join(first.dir, '.credentials.json')), { claudeAiOauth: { accessToken: 'tok-2' } });
+  assert.equal(tokenIn(join(first.dir, '.credentials.json')), 'tok-2');
 });
 
 test('the hook template reaches the next start when it changes, and a session\'s own edits are kept until then', () => {

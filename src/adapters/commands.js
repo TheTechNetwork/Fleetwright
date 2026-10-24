@@ -121,7 +121,7 @@ import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
-import { heldFor } from '../core/vault-store.js';
+import { heldFor, vaultToken } from '../core/vault-store.js';
 import { runnerAuthKind, runnerAuthFor } from '../core/runner-login.js';
 import { checkClaudeAuth, describeTokenCheck } from '../core/claude-token-check.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
@@ -585,9 +585,9 @@ async function verifyClaude(ctx) {
     // from fixed and the step differs, so the reason has to travel.
     lines.push('');
     lines.push(`A session you start on ${ctx.cfg.hostname} would not get a Claude account: ${picked.why ?? 'none is linked here'}.`);
-    // The MACHINE, not a screen. Claude is linked per machine, so a remedy that
-    // does not say which one is one somebody can follow and still be stuck.
-    lines.push(`Connect a Claude account for ${ctx.cfg.hostname} from the app, or run \`fleetwright login\` on it.`);
+    // THE MACHINE NAMED: kept once in the vault, and on this machine once
+    // they approve it, so saying which one is the second half of the remedy.
+    lines.push(`Keep your Claude login under You › Credentials in the app, and approve ${ctx.cfg.hostname} from its page.`);
     return lines.join('\n');
   }
   const state = readCredentialState(picked.source);
@@ -1706,13 +1706,14 @@ export const COMMANDS = {
       if (row === null || row === HOST_ROW) {
         return { ok: false, text: 'Could not tell whose GitHub connection to check with.' };
       }
-      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      // FROM THEIR VAULT, as everything of a fleet person's is (vault-store.js).
+      const token = vaultToken(ctx.cfg, row, 'github');
       if (!token) {
         return {
           ok: false,
           text:
-            'GitHub is not connected for you on this box, and the check is made with your own connection. '
-            + 'Connect it in the app and check again.',
+            'Your vault gives this box no GitHub sign-in, and the check is made with your own. '
+            + 'Keep GitHub in your vault under You › Credentials, approve this box, and check again.',
           // AS DATA as well as prose: a coordinator with several boxes asks
           // the next one when this is the only reason, rather than reading it
           // out of the sentence.
@@ -1744,13 +1745,14 @@ export const COMMANDS = {
       if (row === null || row === HOST_ROW) {
         return { ok: false, text: 'Could not tell whose GitHub connection to check with.' };
       }
-      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      // FROM THEIR VAULT, as everything of a fleet person's is (vault-store.js).
+      const token = vaultToken(ctx.cfg, row, 'github');
       if (!token) {
         return {
           ok: false,
           text:
-            'GitHub is not connected for you on this box, and the check is made with your own connection. '
-            + 'Connect it in the app and check again.',
+            'Your vault gives this box no GitHub sign-in, and the check is made with your own. '
+            + 'Keep GitHub in your vault under You › Credentials, approve this box, and check again.',
           // As data, so a coordinator with several boxes asks the next one.
           needsConnection: 'github',
         };
@@ -1795,11 +1797,12 @@ export const COMMANDS = {
       if (row === null || row === HOST_ROW) {
         return { ok: false, text: 'Could not tell whose GitHub connection to check with.' };
       }
-      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      // FROM THEIR VAULT, as everything of a fleet person's is (vault-store.js).
+      const token = vaultToken(ctx.cfg, row, 'github');
       if (!token) {
         return {
           ok: false,
-          text: 'GitHub is not connected for you on this box, and a runner\u2019s token is checked against your own connection.',
+          text: 'Your vault gives this box no GitHub sign-in, and a runner\u2019s token is checked against your own.',
           needsConnection: 'github',
         };
       }
@@ -1886,13 +1889,14 @@ export const COMMANDS = {
           text: 'Could not tell whose GitHub connection to dispatch with, so nothing was started.',
         };
       }
-      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      // FROM THEIR VAULT, as everything of a fleet person's is (vault-store.js).
+      const token = vaultToken(ctx.cfg, row, 'github');
       if (!token) {
         return {
           ok: false,
           text:
-            'GitHub is not connected for you on this box, and a runner is dispatched with your own connection. '
-            + 'Connect it in the app and ask again \u2014 nothing needs restarting.',
+            'Your vault gives this box no GitHub sign-in, and a runner is dispatched with your own. '
+            + 'Keep GitHub in your vault under You › Credentials, approve this box, and ask again \u2014 nothing needs restarting.',
           // As data, for the same reason as `runnerrepo`'s: nothing was
           // dispatched, so a coordinator may safely ask the next box.
           needsConnection: 'github',
@@ -1941,13 +1945,32 @@ export const COMMANDS = {
   },
 
   setuptoken: {
-    usage: '/setuptoken [<code> <reply-key>]',
-    short: 'Make a long-lived Claude token for your runners on this box',
+    usage: '/setuptoken [--login] [<code> <reply-key>]',
+    short: 'Make a Claude login for somebody\'s vault on this box',
     help:
-      'Runs `claude setup-token` here for somebody without a computer to run it on. With no arguments it starts '
-      + 'and answers with the sign-in page. With the code that page shows and a P-256 public key, it answers with '
-      + 'the token sealed to that key, so only whoever holds the private half can read it. Nothing is kept here.',
-    run: async (ctx, args) => {
+      'Runs `claude setup-token` here for somebody without a computer to run it on, or with --login the whole '
+      + '`claude auth login` sign-in, which Remote Control needs. With no arguments it starts and answers with the '
+      + 'sign-in page. With the code that page shows and a P-256 public key, it answers with what it made sealed to '
+      + 'that key, so only whoever holds the private half can read it. Nothing is kept here.',
+    run: async (ctx, args, flags) => {
+      // A WHOLE SIGN-IN for the vault (login.js, startVaultSignIn): sealed the
+      // same way, under the same purpose, as `signIn` where a token is `token`.
+      if (flags.has('login')) {
+        if (!args.length) {
+          const r = await ctx.login.startVaultSignIn({ actor: ctx.actor });
+          return { ok: r.ok, text: r.message, ...(r.url ? { url: r.url } : {}) };
+        }
+        const [code, reply] = args;
+        if (!code || !SEAL_KEY_RE.test(String(reply || ''))) return { ok: false, text: 'Usage: /setuptoken --login <code> <reply-key>' };
+        const r = await ctx.login.finishVaultSignIn(code, ctx.actor);
+        if (!r.ok || !r.signIn) return { ok: false, text: r.message };
+        const sealed = await seal({ to: reply, aad: SETUP_TOKEN_AAD, payload: { v: 1, signIn: r.signIn } });
+        return {
+          ok: true,
+          text: `Signed in to Claude on ${ctx.cfg.hostname || 'this box'}. It went back sealed to whoever asked, and this box kept no copy.`,
+          sealed,
+        };
+      }
       if (!args.length) {
         const r = await ctx.login.startSetupToken({ actor: ctx.actor });
         return { ok: r.ok, text: r.message, ...(r.url ? { url: r.url } : {}) };

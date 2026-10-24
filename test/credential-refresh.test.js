@@ -27,6 +27,7 @@ import path from 'node:path';
 
 import { ensureSandboxVolumes, refreshSeededCredentials, credentialSourceForAccount } from '../src/core/podman.js';
 import { applyVault } from '../src/core/vault-store.js';
+import { refreshVaultSessions } from '../src/core/vault-sessions.js';
 
 const HOUR = 3_600_000;
 
@@ -91,6 +92,8 @@ exit 0
     return file;
   };
   const shared = credential(path.join(home, '.credentials.json'), Date.now() + 5 * HOUR);
+  /** Who the vault gives this box a Claude login for. @type {Map<string, any>} */
+  const people = new Map();
 
   return {
     dir,
@@ -111,12 +114,22 @@ exit 0
         .map((f) => readFileSync(path.join(dir, f), 'utf8'))
         .flatMap((script) => [...script.matchAll(/printf '%s' '([A-Za-z0-9+/=]+)'/g)].map((m) => Buffer.from(m[1], 'base64').toString()))
         .join('\n'),
-    /** Link a Claude account for `email` and return its credential path. */
-    /** @param {string} email @param {number} [expiresAt] */
-    link: (email, expiresAt = Date.now() + 5 * HOUR) => {
+    /**
+     * Give `email` a Claude sign-in from their vault, as the sidecar writes
+     * one when the vault answers (vault-store.js), and return its credentials
+     * file. A fleet person's login comes from there and nowhere else.
+     * @param {string} email @param {number} [expiresAt]
+     */
+    signIn: (email, expiresAt = Date.now() + 5 * HOUR) => {
+      people.set(email, { name: 'claude', value: `a-${email}`, expiresAt, login: { scopes: ['user:inference'] }, account: { emailAddress: email } });
+      applyVault(/** @type {any} */ ({ stateDir: state }), { accounts: [...people].map(([e, item]) => ({ email: e, items: [item] })) });
+      return path.join(state, 'vault', `${email}.claude-credentials.json`);
+    },
+    /** Link a Claude account on the box itself, for its own command line (operatorAccount). @param {string} email */
+    linkOnBox: (email) => {
       const accounts = path.join(state, 'accounts');
       mkdirSync(accounts, { recursive: true });
-      return credential(path.join(accounts, `${email}.json`), expiresAt, email);
+      return credential(path.join(accounts, `${email}.json`), Date.now() + 5 * HOUR, email);
     },
     /** @param {Partial<any>} patch @returns {any} */
     cfg: (patch = {}) => ({
@@ -139,7 +152,7 @@ test('resuming a session re-seeds the credential it already had', async (t) => {
   // 'shared' is what volumes made before docs/one-account-per-person.md
   // recorded. It resolves through the operator now — the same person the box
   // credential was adopted as — so an old volume keeps the account it began on.
-  s.link('operator@example.com');
+  s.linkOnBox('operator@example.com');
   const r = await ensureSandboxVolumes(s.cfg(), 'old', 'fleet:someone@example.com', { account: 'shared' });
 
   assert.equal(r.ok, true);
@@ -154,7 +167,7 @@ test('a fresh start still seeds exactly once and does not then refresh it', asyn
   // The refresh is for volumes that already existed. Running it after a create
   // would copy the same file twice and add a container run to every start.
   const s = stubPodman(t, { volumes: [] });
-  s.link('operator@example.com');
+  s.linkOnBox('operator@example.com');
 
   const r = await ensureSandboxVolumes(s.cfg(), 'brandnew', null);
 
@@ -169,8 +182,8 @@ test('a resume keeps the account it began with, not the account resuming it', as
   // subscription. The account comes off the record; the actor is only used for
   // the provider tokens, which key on the person by design.
   const s = stubPodman(t, { volumes: ['claude-alices', 'work-alices'] });
-  const alice = s.link('alice@example.com');
-  s.link('bob@example.com');
+  const alice = s.signIn('alice@example.com');
+  s.signIn('bob@example.com');
 
   const r = await ensureSandboxVolumes(s.cfg(), 'alices', 'fleet:bob@example.com', { account: 'alice@example.com' });
 
@@ -189,7 +202,7 @@ test('a session whose account is not on the record asks the volume', async (t) =
     volumes: ['claude-older', 'work-older'],
     oauthAccount: { emailAddress: 'alice@example.com' },
   });
-  s.link('alice@example.com');
+  s.signIn('alice@example.com');
 
   const r = await ensureSandboxVolumes(s.cfg(), 'older', null, { account: null });
 
@@ -204,8 +217,8 @@ test('a member\'s volume naming somebody else does not get their credential', as
     volumes: ['claude-legacy', 'work-legacy'],
     oauthAccount: { emailAddress: 'bob@example.com' },
   });
-  s.link('alice@example.com');
-  s.link('bob@example.com');
+  s.signIn('alice@example.com');
+  s.signIn('bob@example.com');
 
   const r = refreshSeededCredentials(s.cfg(), 'legacy', { account: null, actor: 'fleet:alice@example.com' });
 
@@ -241,7 +254,7 @@ test('a host credential that is itself expired is not copied over a live one', a
   // it with a dead one would turn a session that could have recovered into one
   // that cannot — a refresh has to be able to decline.
   const s = stubPodman(t, { volumes: ['claude-stale', 'work-stale'] });
-  const operator = s.link('operator@example.com', Date.now() - HOUR);
+  const operator = s.signIn('operator@example.com', Date.now() - HOUR);
   s.credential(operator, Date.now() - HOUR);
 
   const r = refreshSeededCredentials(s.cfg(), 'stale', { account: 'operator@example.com' });
@@ -257,7 +270,7 @@ test('a refresh that fails is not fatal to the resume', async (t) => {
   // one this fixes — it would lose work rather than delay it.
   const s = stubPodman(t, { volumes: ['claude-x', 'work-x'] });
 
-  s.link('operator@example.com');
+  s.signIn('operator@example.com');
   const r = await ensureSandboxVolumes(s.cfg({ sandboxCredentialsFile: '/nowhere/.credentials.json' }), 'x', null, {
     account: 'gone@example.com',
   });
@@ -269,11 +282,15 @@ test('a refresh that fails is not fatal to the resume', async (t) => {
 
 test('an account resolves to its own file, or to nothing at all', async (t) => {
   const s = stubPodman(t);
-  const alice = s.link('alice@example.com');
+  const alice = s.signIn('alice@example.com');
 
   assert.equal(credentialSourceForAccount(s.cfg(), 'alice@example.com')?.source, alice);
-  // 'shared' resolves through the operator, which is what adoption produced.
-  assert.equal(credentialSourceForAccount(s.cfg(), 'shared')?.source, alice);
+  // 'shared' resolves through the box's operator, which is what adoption
+  // produced: the box's own login, never a fleet person's vault.
+  assert.equal(credentialSourceForAccount(s.cfg(), 'shared'), null);
+  const operator = s.linkOnBox('operator@example.com');
+  assert.equal(credentialSourceForAccount(s.cfg(), 'shared')?.source, operator);
+  assert.equal(credentialSourceForAccount(s.cfg(), 'operator@example.com'), null, 'linked on the box is the box’s, not the person’s');
   // Not "fall back to shared": a linked account that has gone away is a
   // different situation from never having had one, and the caller has to be
   // able to tell them apart to say something true about it.
@@ -302,4 +319,46 @@ test('a person with nothing linked here is seeded the Claude login from their va
   applyVault(/** @type {any} */ ({ stateDir: s.state }), { accounts: [] });
   const refused = await ensureSandboxVolumes(s.cfg(), 'later', 'fleet:vera@example.com');
   assert.equal(refused.ok, false);
+});
+
+test('a person’s volume is never read as the box’s own, so it is never given the operator’s login', async (t) => {
+  // A VOLUME NAMING SOMEBODY THIS BOX HOLDS NOTHING FOR was "shared", and
+  // "shared" resolves to the box operator's login: with a person's login
+  // coming from their vault alone, a person whose vault stopped giving this
+  // box theirs would have resumed on the operator's subscription.
+  const s = stubPodman(t, { volumes: ['claude-alices', 'work-alices'], oauthAccount: { emailAddress: 'alice@example.com' } });
+  s.linkOnBox('operator@example.com');
+
+  const r = refreshSeededCredentials(s.cfg(), 'alices', { account: null, actor: null });
+
+  assert.equal(r.refreshed, false);
+  assert.equal(r.account, 'alice@example.com');
+  assert.equal(s.seeds().length, 0, 'nothing reached her volume, the operator’s login least of all');
+});
+
+test('a sign-in the vault renews reaches the sessions already running on it, and only theirs', async (t) => {
+  // A box is given a sign-in's access token and never its refresh token, so a
+  // session that started on Tuesday's would stop when it ran out. The file it
+  // reads is what changes (vault-sessions.js).
+  const s = stubPodman(t, { volumes: ['claude-alices', 'work-alices', 'claude-bobs', 'work-bobs'] });
+  const first = s.signIn('alice@example.com');
+  s.signIn('bob@example.com');
+  assert.match(readFileSync(first, 'utf8'), /a-alice@example\.com/);
+
+  // The vault renewed Alice's: applyVault says whose changed.
+  const changed = applyVault(/** @type {any} */ ({ stateDir: s.state }), {
+    accounts: [
+      { email: 'alice@example.com', items: [{ name: 'claude', value: 'renewed-alice', expiresAt: Date.now() + 8 * HOUR, login: { scopes: ['user:inference'] }, account: { emailAddress: 'alice@example.com' } }] },
+      { email: 'bob@example.com', items: [{ name: 'claude', value: 'a-bob@example.com', expiresAt: Date.now() + 5 * HOUR, login: { scopes: ['user:inference'] }, account: { emailAddress: 'bob@example.com' } }] },
+    ],
+  });
+  assert.deepEqual(changed.claudeChanged, ['alice@example.com']);
+
+  const sessions = { running: () => [{ name: 'alices', account: 'alice@example.com', createdBy: 'fleet:alice@example.com' }, { name: 'bobs', account: 'bob@example.com' }] };
+  const done = refreshVaultSessions(s.cfg(), sessions, /** @type {string[]} */ (changed.claudeChanged));
+  assert.deepEqual(done, [{ name: 'alices', refreshed: true }]);
+  assert.equal(s.seeds().length, 1);
+  assert.match(s.seeds()[0], /claude-alices:\/dest/);
+  assert.match(s.seeded(), /renewed-alice/);
+  assert.ok(!s.seeded().includes('refreshToken'), 'no refresh token reaches a session');
 });

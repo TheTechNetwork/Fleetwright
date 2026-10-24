@@ -456,7 +456,7 @@ export class LoginFlow {
     // A TOKEN BEING MADE IS NOT A LOGIN. Typing this code into that pane and
     // then waiting for `auth status` to say signed in would wait for something
     // `setup-token` never does; it belongs to finishSetupToken.
-    if (this.pending?.mode === 'setup-token') return nothingWaiting;
+    if (this.pending?.mode === 'setup-token' || this.pending?.mode === 'vault-signin') return nothingWaiting;
     if (!sameActor(actor, this.pending?.startedBy)) {
       log.warn('login: a code arrived from somebody who did not start this login — refused');
       return nothingWaiting;
@@ -669,6 +669,122 @@ export class LoginFlow {
     }
     this.cancel();
     return { ok: false, message: 'Sent the code, but no token appeared within a minute. Start again from the app.' };
+  }
+
+  /**
+   * Begin a whole Claude sign-in for somebody's vault, and return the page to
+   * hand them.
+   *
+   * WHY, BESIDE setup-token: a setup-token runs sessions and cannot open
+   * Remote Control, which needs the sign-in `claude auth login` makes. That
+   * sign-in used to be made on a box for that box, which then held its own
+   * refresh token (docs/vault.md). This makes the same sign-in and keeps
+   * nothing of it here: it goes back sealed to the phone that asked, the
+   * phone keeps it in the person's vault, and the minter alone renews it.
+   *
+   * In a directory of its own under CLAUDE_CONFIG_DIR, so the box's own login
+   * is neither read nor touched, and removed whichever way this ends.
+   *
+   * @param {{ actor?: string|null }} [opts]
+   * @returns {Promise<{ ok: boolean, message: string, url?: string }>}
+   */
+  async startVaultSignIn({ actor = null } = {}) {
+    if (!this.cfg.loginEnabled) {
+      return { ok: false, message: 'Signing in from fleetwright is disabled on this box (FLEETWRIGHT_LOGIN=0).' };
+    }
+    if (this.isPending()) {
+      return { ok: false, message: 'A sign-in is already in progress on this box. Wait a few minutes for it to finish, or pick another machine.' };
+    }
+    const name = this.cfg.loginSessionName;
+    if (this.io.hasSession(name)) this.io.killSession(name);
+    const dir = path.join(this.cfg.stateDir, 'accounts', `pending-signin-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const q = (/** @type {string} */ a) => `'${String(a).replace(/'/g, `'\\''`)}'`;
+    // A PAUSE AFTER, as setup-token has: the CLI exits the moment it has
+    // written the credential, and the pane closing is what tells this it is
+    // done, so there is nothing to lose by keeping the pane a little longer.
+    const command = `env CLAUDE_CONFIG_DIR=${q(dir)} ${q(this.cfg.claudeBin)} auth login --claudeai; sleep 120`;
+    const spawned = this.io.newSession({ name, cwd: this.cfg.workdir, command });
+    if (spawned.status !== 0) {
+      rmSync(dir, { recursive: true, force: true });
+      return { ok: false, message: `Could not start claude auth login: ${(spawned.stderr || 'tmux failed').trim().slice(0, 200)}` };
+    }
+    this.pending = { startedAt: Date.now(), startedBy: actor, url: null, mode: 'vault-signin', linkFor: null, linkDir: dir };
+    const url = await this.#waitForUrl();
+    if (!url) {
+      const pane = this.io.capturePane(name, 60).trim().split('\n').slice(-6).join('\n');
+      this.cancel();
+      return { ok: false, message: `claude auth login did not show a sign-in page.\nLast output:\n${pane || '(nothing)'}` };
+    }
+    this.pending.url = url;
+    log.info(`login: a sign-in for a vault was started${actor ? ` by ${actor}` : ''}`);
+    return {
+      ok: true,
+      url,
+      message: `Open the sign-in page, sign in to Claude, and send back the code it shows. It expires in ${Math.round(this.cfg.loginTimeoutMs / 60000)} minutes.`,
+    };
+  }
+
+  /**
+   * Type the code into the waiting sign-in and return what it wrote: the
+   * credential and the account it belongs to. The caller seals it; nothing
+   * here logs it, and the pane and its directory are gone before this returns.
+   *
+   * READ FROM ITS OWN DIRECTORY AND NOWHERE ELSE. The linking flow also looks
+   * in the box's own ~/.claude and the macOS keychain (readLinkedCredential),
+   * which for a sign-in sealed to somebody's phone would be the box's own
+   * login handed to whoever asked. A CLI that did not write it here fails.
+   *
+   * Only whoever started it may finish it, with the same refusal as
+   * submitCode, for the same reason.
+   *
+   * @param {string} code
+   * @param {string|null} [actor]
+   * @returns {Promise<{ ok: boolean, message: string, signIn?: { oauth: any, account: any } }>}
+   */
+  async finishVaultSignIn(code, actor = null) {
+    const nothingWaiting = { ok: false, message: 'No sign-in is waiting on this box. Start again from the app.' };
+    if (!this.isPending() || this.pending?.mode !== 'vault-signin') return nothingWaiting;
+    if (!sameActor(actor, this.pending?.startedBy)) {
+      log.warn('login: a vault sign-in code arrived from somebody who did not start it — refused');
+      return nothingWaiting;
+    }
+    const trimmed = String(code || '').trim();
+    if (!trimmed || /\s/.test(trimmed) || trimmed.length > 512) {
+      return { ok: false, message: 'That does not look like the code from the sign-in page. Paste just the code itself.' };
+    }
+    const name = this.cfg.loginSessionName;
+    const dir = /** @type {string} */ (this.pending.linkDir);
+    this.io.sendKeys(name, ['-l', trimmed]);
+    this.io.sendKeys(name, ['Enter']);
+    try {
+      for (let waited = 0; waited < 60_000; waited += 2000) {
+        await this.io.sleep(2000);
+        const raw = tryRead(path.join(dir, '.credentials.json'));
+        if (raw) {
+          /** @type {any} */
+          let oauth = null;
+          try {
+            oauth = JSON.parse(raw)?.claudeAiOauth ?? null;
+          } catch { /* half-written; read again */ }
+          if (oauth?.accessToken && oauth?.refreshToken) {
+            const meta = extractOauthAccount(tryRead(path.join(dir, '.claude.json')) ?? '');
+            log.info('login: a vault sign-in was made');
+            return { ok: true, message: 'Signed in to Claude.', signIn: { oauth, account: meta ? JSON.parse(meta) : {} } };
+          }
+        }
+        const text = this.io.hasSession(name) ? this.io.capturePane(name, 200) : '';
+        if (FAILURE_RE.test(text)) {
+          const why = failureLine(text);
+          return { ok: false, message: `Claude refused the sign-in.${why ? `\n\n${why}` : ''}` };
+        }
+      }
+      return { ok: false, message: 'Sent the code, but no sign-in appeared within a minute. Start again from the app.' };
+    } finally {
+      // WHICHEVER WAY IT ENDED: the pane and the directory holding the only
+      // copy on this box.
+      this.cancel();
+    }
   }
 
   /**

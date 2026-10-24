@@ -28,6 +28,7 @@ import { saveRunnerLogin, runnerTokenFile, runnerAuthKind } from '../src/core/ru
 import { ensureDirectConfig } from '../src/core/direct-config.js';
 import { buildCommand } from '../src/core/claude.js';
 import { Accounts } from '../src/core/accounts.js';
+import { applyVault } from '../src/core/vault-store.js';
 import minterWorker, { ClaudeLogins } from '../worker/src/minter.js';
 import { actionsIssuer } from './helpers/actions-issuer.js';
 import { standInClaude, claudeSignInFor, claudeRenewals } from './helpers/stand-in-claude.js';
@@ -399,15 +400,20 @@ test('on a runner the owner’s sessions run on their login and everybody else�
   saveRunnerLogin(cfg, { email: OWNER, login: null, token: null });
   assert.equal(run(`fleet:${OWNER}`).said, `key=${KEY} token=none`);
 
-  // SOMEBODY WHO LINKED AN ACCOUNT, on a runner: their staged login is the
-  // credential, and the repository's key is unset so the CLI cannot rank it
-  // above that login and bill the repository instead.
+  // A CLAUDE ACCOUNT LINKED ON THE BOX IS NOT A FLEET PERSON'S: theirs is
+  // their vault's (vault-store.js), so a link here is passed over and the
+  // repository's key is what runs.
   new Accounts(cfg.stateDir).save('carol@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'sk-ant-oat01-carol' } }));
+  assert.equal(run('fleet:carol@example.com').said, `key=${KEY} token=none`);
+  // SOMEBODY WHOSE VAULT GIVES THIS BOX A SIGN-IN, on a runner: it is the
+  // staged credential, and the repository's key is unset so the CLI cannot
+  // rank it above that login and bill the repository instead.
+  applyVault(cfg, { accounts: [{ email: 'carol@example.com', login: 'carol', items: [{ name: 'claude', value: 'sk-ant-oat01-carol-vault', expiresAt: Date.now() + 3_600_000, login: { scopes: ['user:inference'] }, account: { emailAddress: 'carol@example.com' } }] }] });
   const carol = run('fleet:carol@example.com');
   assert.equal(carol.said, 'key=none token=none');
-  assert.ok(existsSync(join(String(carol.dir), '.credentials.json')), 'her login is the staged file');
-  // …and on a permanent box the same linked account is left alone: an
-  // operator who set ANTHROPIC_API_KEY there meant it.
+  assert.match(readFileSync(join(String(carol.dir), '.credentials.json'), 'utf8'), /sk-ant-oat01-carol-vault/, 'her vault sign-in is the staged file');
+  // …and on a permanent box the same sign-in is left alone: an operator who
+  // set ANTHROPIC_API_KEY there meant it.
   rmSync(join(cfg.stateDir, 'runner-login.json'));
   const boxCfg = { ...cfg };
   const staged = ensureDirectConfig(boxCfg, 'carolbox', 'fleet:carol@example.com', { cwd: join(dir, 'work') });

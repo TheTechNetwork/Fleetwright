@@ -551,10 +551,10 @@ test('with no GitHub connected it says so and nothing is started', async () => {
     ['linux'],
   );
   assert.equal(r.ok, false);
-  assert.match(r.text, /GitHub is not connected for you/);
+  assert.match(r.text, /Your vault gives this box no GitHub sign-in/);
 });
 
-test('a stored token is what dispatches, and the reply says the machine is not here yet', async (t) => {
+test('the token their vault gave this box is what dispatches, and the reply says the machine is not here yet', async (t) => {
   // The reply comes back long before the runner does — GitHub has to find
   // hardware, boot it and install tmux and the CLI — so a reply that said
   // "started" would be read as "ready" by the agent that asked.
@@ -562,9 +562,9 @@ test('a stored token is what dispatches, and the reply says the machine is not h
   t.after(() => { globalThis.fetch = real; });
 
   const { COMMANDS } = await import('../src/adapters/commands.js');
-  const { Connections } = await import('../src/core/connectors.js');
+  const { applyVault } = await import('../src/core/vault-store.js');
   const stateDir = mkdtempSync(join(tmpdir(), 'provision-'));
-  new Connections(stateDir).save('eli@example.com', 'github', 'ghu_stored');
+  applyVault({ stateDir }, { accounts: [{ email: 'eli@example.com', items: [{ name: 'github', value: 'ghu_stored', expiresAt: Date.now() + 3_600_000 }] }] });
 
   /** @type {string[]} */
   const seen = [];
