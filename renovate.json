@@ -217,6 +217,15 @@
       "extractVersion": "^v?(?<version>\\d+)\\.",
       "versioning": "regex:^(?<major>\\d+)$",
       "allowedVersions": "/^\\d*[02468]$/"
+    },
+    {
+      "description": "hinge runs inside the simulator CI pictures the app on, so its pull request says what to read before merging.",
+      "matchPackageNames": [
+        "artemnovichkov/hinge"
+      ],
+      "prBodyNotes": [
+        "**Read the diff of `skills/hinge/scripts/hinge` and `hinge_helper.m` between the two commits before merging.** ios.yml compiles the helper with the runner's Xcode and runs it inside the iPhone Duo simulator for the pictures. It had no network access when it was adopted; a release that adds any is a reason to stop."
+      ]
     }
   ],
   "vulnerabilityAlerts": {
@@ -474,6 +483,16 @@
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG NODE_MAJOR=(?<currentValue>\\d+)"
       ],
       "packageNameTemplate": "node"
+    },
+    {
+      "description": "The hinge tool ios.yml fetches to open the iPhone Duo simulator for its pictures. A git commit in a workflow env, which no manager reads: the tag beside it is annotated and both are matched here, so Renovate moves the tag and the commit it names in one change. Not automerged, because no rule automerges a custom manager: it compiles and runs code inside the simulator, so a person reads the diff.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ios\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+HINGE_VERSION: (?<currentValue>\\S+)\\s+HINGE_COMMIT: (?<currentDigest>[0-9a-f]{40})"
+      ]
     }
   ]
 }
