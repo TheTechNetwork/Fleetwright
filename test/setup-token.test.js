@@ -40,8 +40,9 @@ function fakePane() {
       if (!io.alive) return '';
       const page = `Browser didn't open? Use the url below to sign in:\n\n${URL_}\n\nPaste code here if prompted >`;
       if (!io.typed.includes('Enter')) return page;
-      // Wrapped at 80 columns, the way a terminal shows it.
-      const wrapped = TOKEN.match(/.{1,80}/g)?.join('\n') ?? TOKEN;
+      // Drawn the way Claude Code 2.1.306 draws it in an 80-column pane: one
+      // column in, wrapped at 79, the next line behind the same space.
+      const wrapped = drawn(TOKEN);
       return `${page}\n\nLong-lived authentication token created successfully!\n\nYour OAuth token (valid for 1 year):\n\n${wrapped}\n\nStore this token securely.`;
     },
     sendKeys: (/** @type {string} */ _n, /** @type {string[]} */ keys) => { io.typed.push(...keys); return { status: 0 }; },
@@ -49,6 +50,9 @@ function fakePane() {
   };
   return io;
 }
+
+/** A token as 2.1.306 draws it at 80 columns: one column in, 79 to a line. @param {string} token */
+const drawn = (token) => (token.match(/.{1,79}/g) ?? [token]).map((l) => ` ${l}`).join('\n');
 
 function flow() {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), 'setup-token-'));
@@ -61,6 +65,30 @@ test('the token is read whole off a pane that wrapped it', () => {
   const pane = `Your OAuth token (valid for 1 year):\n\n${TOKEN.slice(0, 80)}\n${TOKEN.slice(80)}\n\nStore this token securely.`;
   assert.equal(setupTokenFrom(pane), TOKEN);
   assert.equal(setupTokenFrom('Paste code here if prompted >'), null);
+});
+
+test('the token is read whole the way Claude Code draws it: one column in, wrapped behind the same space', () => {
+  // THE PANE AS 2.1.306 LEFT IT, captured in the lab from the real binary in
+  // an 80-column tmux pane, with a token of a real one's length (108). Read
+  // off it before, the token stopped at 79 characters, and Claude refused it
+  // with "OAuth access token is invalid" when a phone kept it.
+  const token = `sk-ant-oat01-${'LWdCrvytjFpbouEIlsu18p4fg9M9BYC9StTK2Ia-WZ18LAR75LQyv8NaY-AphmCVZ7sidSTDzFCUcntVznTyNMis69-lHq2'}`;
+  assert.equal(token.length, 108);
+  const pane = [
+    ' ✓ Long-lived authentication token created successfully!', '',
+    ' Your OAuth token (valid for 1 year):', '',
+    ` ${token.slice(0, 79)}`,
+    ` ${token.slice(79)}`, '',
+    " Store this token securely. You won't be able to see it again.", '',
+    ' Use this token by setting: export CLAUDE_CODE_OAUTH_TOKEN=<token>',
+  ].join('\n');
+  assert.equal(setupTokenFrom(pane), token);
+  // Three lines of it, and one that ends exactly at the edge with the
+  // sentence after it: neither loses a character or gains a word.
+  const long = `sk-ant-oat01-${'x'.repeat(200)}`;
+  assert.equal(setupTokenFrom(`${drawn(long)}\n\n Store this token securely.`), long);
+  const edge = `sk-ant-oat01-${'y'.repeat(79 - 13)}`;
+  assert.equal(setupTokenFrom(` ${edge}\n Store this token securely.`), edge);
 });
 
 test('a machine runs claude setup-token in its own directory, and hands back the page and then the token', async () => {
