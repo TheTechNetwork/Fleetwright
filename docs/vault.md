@@ -26,6 +26,44 @@ minter's single Durable Object, under a lock per person, so however many boxes
 ask at once a refresh token is rotated once (`test/vault.test.js` asks from two
 boxes at the same moment and counts one renewal).
 
+## Whether it still works
+
+A vault used to say what it held and never whether any of it worked. A Claude
+token that Claude had revoked, or one pasted with a character missing, sat
+under *Kept* until a runner given it stopped at its first message, and that was
+the first anyone heard of it.
+
+**Test**, beside each kept Claude, GitHub and Cloudflare under You ›
+Credentials, sends the op `test`. The minter opens the item and asks the
+service it is for, and nobody else: the token goes only to whoever issued it.
+
+| item | asked how | the answer |
+|---|---|---|
+| Claude | the one-token request a session makes, the same one `fleetwright verify claude` makes (`src/core/claude-token-probe.js`) | a 401 is rejected; an answer, a 429 or a 529 is accepted; anything else is cannot tell |
+| GitHub | who the token belongs to, renewed first if it is due, as a box would be handed it | the login it answered as, or rejected on a 401 |
+| Cloudflare | renewed, because a refresh is the one thing a sign-in of any scope can be asked; the new tokens are kept, as a box's ask would have kept them | renewed, or rejected when Cloudflare refuses the refresh |
+
+A named secret and a hypervisor's record have no service the minter could ask
+(a pool is on its owner's own network), so the minter refuses them as
+`not_testable` and neither phone draws the button for them (C-2). The answer is
+accepted, rejected or cannot tell, never the value, and a phone draws only
+accepted as working: cannot tell is not evidence that it works (C-5).
+
+**A Claude token is asked before it is kept**, by the vault's `put` and by a
+deposit alike (`checkBeforeKeeping` in `src/fleet/minter/claude.js`). A 401
+keeps nothing and says `rejected_token`. An answer that cannot tell keeps it
+and says so, rather than refusing a good token because the API was busy. The
+tests answer for `api.anthropic.com` with a stand-in
+(`test/helpers/stand-in-claude.js`), so no made-up token is sent to it.
+
+**Forget asks first.** It was one tap, beside the buttons a person comes to
+this screen for, and the Claude row's took the login out from under every
+runner with nothing but a line of text afterwards. Both phones now open a
+dialog that says what forgetting costs. The Claude rows on that screen are
+Set up Claude's, so a machine can make the token there too
+([runner-central.md](./runner-central.md), "Depositing one"), and the second
+Forget button they had is gone.
+
 ## Who may ask, and how each one is checked
 
 None of it is the coordinator's word. The coordinator relays ciphertext both
