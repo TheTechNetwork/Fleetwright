@@ -3391,7 +3391,8 @@ export class CoordinatorCore {
     // can refuse first is a request with nobody named, which such a box always
     // refuses because it would run it as itself.
     const enforcing = host?.health?.signatures?.enforcing;
-    if ((enforcing === true || (enforcing === 'signers' && !actorEmail(intent.actor))) && !intent.sig && !intent.delegation && needsSignature(intent.verb)) {
+    const bare = !intent.sig && !intent.delegation && needsSignature(intent.verb);
+    if ((enforcing === true || (enforcing === 'signers' && !actorEmail(intent.actor))) && bare) {
       return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed), intent));
     }
 
@@ -3403,7 +3404,7 @@ export class CoordinatorCore {
     if (this.pending.has(intent.id)) {
       return Promise.reject(new Error(`an intent with id ${intent.id} is already in flight`));
     }
-    return new Promise((resolve, reject) => {
+    const answer = new Promise((resolve, reject) => {
       const timer = this.setTimer(() => {
         this.pending.delete(intent.id);
         reject(new Error(`${host.hostId} did not answer ${intent.verb} within ${timeoutMs}ms`));
@@ -3419,6 +3420,13 @@ export class CoordinatorCore {
         reject(e);
       }
     });
+    // AND WHEN THE BOX REFUSES IT FOR WANT OF ONE, what would have carried it.
+    // A box that enforces only for people it has seen a key for (`signers`)
+    // is sent an unsigned request with a person named, because only the box
+    // knows its list; its refusal says the request was not signed and nothing
+    // about what to do, which from an MCP client reads as a dead end. This
+    // side knows the answer: nothing that person signed covered it.
+    return bare ? answer.then((r) => withDelegationRemedy(r)) : answer;
   }
 
   /**
@@ -8267,7 +8275,27 @@ function signatureRequired(hostId, wasSigned, intent) {
       ? `${hostId} takes only requests a person signed, and this one was changed on its way through the fleet ` +
         '(a value was tidied, or a setting this box is too old for was left out), so your signature no longer holds. Nothing was sent.'
       : `${hostId} takes only requests a person signed, and nothing ${intent?.actor || 'anybody'} signed covers this ${intent?.verb ?? 'request'}. ` +
-        'The app signs what you do in it. For what the fleet does in your name later, it signs a delegation: when you set machines to keep ready, ' +
-        'when you finish a sign-in, and when you allow an MCP client under You. Nothing was sent.',
+        `${DELEGATION_REMEDY} Nothing was sent.`,
   };
+}
+
+/**
+ * How a person comes to have signed for what the fleet sends without them,
+ * which is the one thing to do about either refusal. Named where it is on both
+ * phones (DelegationsView.swift, YouScreen.kt).
+ */
+const DELEGATION_REMEDY =
+  'The app signs what you do in it. For what the fleet does in your name later, it signs a delegation: when you set machines to keep ready, ' +
+  'when you finish a sign-in, and when you allow an MCP client under Delegations on the You tab.';
+
+/**
+ * A box's refusal of a request that reached it with neither a signature nor a
+ * delegation, with what would have carried it (CoordinatorCore#send). Any other
+ * reply, as it came.
+ *
+ * @param {any} reply
+ */
+function withDelegationRemedy(reply) {
+  if (reply?.ok !== false || reply.error?.code !== 'signature_required' || typeof reply.text !== 'string') return reply;
+  return { ...reply, text: `${reply.text} ${DELEGATION_REMEDY}` };
 }

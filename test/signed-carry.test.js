@@ -31,17 +31,28 @@ const health = (hostId, protocol = PROTOCOL_VERSION) => ({
   loadavg: [0, 0, 0], loggedIn: true, claudeAccounts: 1, hub: { reachable: true }, sandboxed: true,
   // box-strict runs with FLEETWRIGHT_REQUIRE_SIGNED=1, as its health says.
   ...(hostId === 'box-strict' ? { signatures: { keys: 1, keysAt: Date.now(), checked: {}, enforcing: true } } : {}),
+  // box-signers enforces for the people it has seen a key for, which only it
+  // knows, and refuses what reaches it unsigned as the sidecar does.
+  ...(hostId === 'box-signers' ? { signatures: { keys: 1, keysAt: Date.now(), checked: {}, enforcing: 'signers' } } : {}),
 });
+
+/** What box-signers answers, the sidecar's words for each. @param {any} msg */
+const signersAnswer = (msg) => (msg.sig || msg.delegation
+  ? { ok: true, text: 'done' }
+  : { ok: false, error: { code: 'signature_required' }, text: `box-signers takes only requests a person signed, and this ${msg.verb} from ${msg.actor} was not signed. Nothing was done.` });
 
 async function fleet() {
   const core = new CoordinatorCore({ intentTimeoutMs: 2_000, logger: QUIET });
   /** @type {Record<string, any[]>} */
-  const sent = { 'box-a': [], 'box-b': [], 'box-old': [], 'box-strict': [] };
+  const sent = { 'box-a': [], 'box-b': [], 'box-old': [], 'box-strict': [], 'box-signers': [] };
   for (const id of Object.keys(sent)) {
     core.hostConnected(id, (/** @type {any} */ msg) => {
       sent[id].push(msg);
       // Every intent answered, so each dispatch settles.
-      if (msg.kind === 'intent') queueMicrotask(() => void core.onHostMessage(id, { v: PROTOCOL_VERSION, kind: 'reply', id: msg.id, ok: true, text: 'done' }));
+      if (msg.kind === 'intent') {
+        const answer = id === 'box-signers' ? signersAnswer(msg) : { ok: true, text: 'done' };
+        queueMicrotask(() => void core.onHostMessage(id, { v: PROTOCOL_VERSION, kind: 'reply', id: msg.id, ...answer }));
+      }
     });
     await core.onHostMessage(id, { v: PROTOCOL_VERSION, kind: 'health', hostId: id, health: health(id, id === 'box-old' ? 2 : PROTOCOL_VERSION) });
   }
@@ -200,6 +211,28 @@ test('an unsigned request goes to a box that enforces with a delegation that cov
   const r = await core.dispatch({ verb: 'start', params: { name: 'placed' }, actor: NINA, requester: { email: NINA, admin: true }, preferHost: 'box-strict', delegation: inline });
   assert.equal(r.ok, true, r.text);
   assert.deepEqual(core.delegationsFor({ email: NINA }).map((g) => g.id), [inline.grant.id]);
+});
+
+test('a box that enforces for the people it knows says what would have carried a request it refused unsigned', async () => {
+  const { ask, core, privateJwk, kid } = await fleet();
+
+  // Sent, because only the box knows whether it has seen Nina's key, and
+  // refused there. The box says it was not signed; the fleet says what Nina
+  // can do about it, which is the MCP client's whole way out.
+  const bare = await ask('start', { name: 'from-mcp' }, 'box-signers', { unsigned: true });
+  assert.equal(bare.frames.length, 1, 'sent to the box, which decides');
+  assert.equal(bare.r.error?.code, 'signature_required');
+  assert.match(bare.r.text, /^box-signers takes only requests a person signed, and this start from nina@example\.test was not signed\. Nothing was done\. /);
+  assert.match(bare.r.text, /allow an MCP client under Delegations on the You tab/);
+
+  // With the phone's MCP delegation kept, the same request carries it and is
+  // taken.
+  const now = Date.now();
+  const grant = { v: 1, id: 'mcp-client-0123456789', actor: NINA, verbs: ['start', 'stop', 'resume'], hosts: ['*'], match: {}, issuedAt: now, expires: now + 86_400_000 };
+  assert.equal(core.keepDelegation(NINA, { grant, sig: await sign(privateJwk, delegationSigningInput(grant)), kid }).ok, true);
+  const carried = await ask('start', { name: 'from-mcp' }, 'box-signers', { unsigned: true });
+  assert.equal(carried.r.ok, true, carried.r.text);
+  assert.equal(carried.frames[0].delegation.grant.id, grant.id);
 });
 
 test('a renewal replaces what it renews, and a person’s short delegations give way to new ones', async () => {
