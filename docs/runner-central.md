@@ -513,11 +513,18 @@ fleetwright-claude-login            # paste it when asked
 fleetwright-claude-login forget     # take it back
 ```
 
-**Or from a phone.** Under *Runners from this phone*, once the phone is signed
-in to GitHub, paste the token from `claude
-setup-token` and choose *Keep for my runners*. The phone seals the same deposit
-with its own GitHub token inside, so it needs nothing from a computer but the
-token itself. *Forget my Claude login* takes it back.
+**Or from a phone.** Under You › Credentials, once the phone is signed in to
+GitHub, paste the token from `claude setup-token` and choose *Keep my Claude
+login*. The phone seals the same deposit with its own GitHub token inside, so
+it needs nothing from a computer but the token itself. *Forget Claude*, under
+what the vault has kept, takes it back once you confirm it, and *Test Claude*
+beside it asks Claude whether the kept token still works
+([vault.md](./vault.md), "Whether it still works").
+
+**Asked before it is kept.** Every route above lands in the minter, which sends
+the token one one-token request before keeping it. A token Claude refuses is
+not kept, and the answer says so; before this it was kept without a word and a
+runner found out at its first message.
 
 **Or made by one of your machines.** With a machine connected, Claude setup
 on either phone offers *Make it on <machine>*. That machine runs `claude

@@ -31,6 +31,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
+import { standInClaude, revokeClaude } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -66,6 +67,8 @@ async function minter(extra = {}) {
   const calls = { refresh: 0, dana: 0 };
   const real = globalThis.fetch;
   globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init = {}) => {
+    const claude = standInClaude(url, init);
+    if (claude) return claude;
     const u = new URL(String(url));
     if (u.href === 'https://api.github.com/user') {
       const who = users[String(init.headers?.authorization || '').replace(/^Bearer /, '')];
@@ -102,6 +105,9 @@ async function minter(extra = {}) {
     }
     if (u.href === 'https://dash.cloudflare.com/oauth2/token') {
       const f = Object.fromEntries(new URLSearchParams(String(init.body)).entries());
+      if (f.client_secret === 'cf-secret' && f.grant_type === 'refresh_token' && f.refresh_token === 'cf_refresh') {
+        return json(200, { access_token: 'cf_access2', expires_in: 3600, refresh_token: 'cf_refresh2' });
+      }
       return f.client_secret === 'cf-secret' && f.code === 'cfcode1234'
         ? json(200, { access_token: 'cf_access', expires_in: 3600, refresh_token: 'cf_refresh' })
         : json(400, { error: 'invalid_grant' });
@@ -1135,4 +1141,61 @@ test('FLEETWRIGHT_REQUIRE_SIGNED is off, signers or all, and anything else is re
   const typo = read('singers');
   assert.equal(typo.requireSigned, null);
   assert.ok(validateSidecarConfig(typo).errors.some((e) => /FLEETWRIGHT_REQUIRE_SIGNED is not one of off, signers or all/.test(e)));
+});
+
+test('a Claude token Claude refuses is not kept, by the vault or by a deposit, and nothing it replaced is lost', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  const good = `sk-ant-oat01-${'g'.repeat(40)}`;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', value: good })).ok, true);
+  const kept = await m.phone({ op: 'put', name: 'claude', value: `sk-ant-oat01-revoked-${'r'.repeat(30)}` });
+  assert.equal(kept.ok, false);
+  assert.equal(kept.error?.code, 'rejected_token');
+  assert.match(kept.text, /Claude refused that token just now \(401: Invalid bearer token\)\. Nothing was kept/);
+  const deposited = await m.deposit(await m.signIn(), `sk-ant-oat01-revoked-${'d'.repeat(30)}`);
+  assert.equal(deposited.error?.code, 'rejected_token');
+  // The good one is still what runners and boxes are given.
+  const tested = await m.phone({ op: 'test', name: 'claude' });
+  assert.equal(tested.answer.state, 'accepted', tested.text);
+  assert.match(tested.text, /Your Claude login works/);
+});
+
+test('a vault tests what it keeps with the service each is for, and says when there is nothing to ask', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  // NOTHING KEPT: nothing to test, and it says so rather than "works".
+  const none = await m.phone({ op: 'test', name: 'claude' });
+  assert.equal(none.error?.code, 'not_kept');
+
+  // GITHUB: renewed first, as a box would be handed it, then asked whose it is.
+  assert.equal((await m.phone({ op: 'connect', provider: 'github', code: 'goodcode123', verifier: 'v'.repeat(64), redirectUri: 'https://fleet.test/oauth/github/callback' })).ok, true);
+  const github = await m.phone({ op: 'test', name: 'github' });
+  assert.equal(github.answer.state, 'accepted', github.text);
+  assert.equal(github.text, 'GitHub works: it answered as eli just now.');
+
+  // CLOUDFLARE: a renewal Cloudflare accepts, stored, so the next ask uses the new one.
+  assert.equal((await m.phone({ op: 'connect', provider: 'cloudflare', code: 'cfcode1234', verifier: 'w'.repeat(64), redirectUri: 'https://fleet.test/oauth/cloudflare/callback' })).ok, true);
+  const cf = await m.phone({ op: 'test', name: 'cloudflare' });
+  assert.equal(cf.answer.state, 'accepted', cf.text);
+  // Renewed again, the stored refresh token is the rotated one, which the
+  // stand-in refuses: what is kept is what was handed back, and a refusal is
+  // said as one.
+  const again = await m.phone({ op: 'test', name: 'cloudflare' });
+  assert.equal(again.answer.state, 'rejected', again.text);
+  assert.match(again.text, /Cloudflare would not renew your sign-in just now/);
+
+  // CLAUDE, revoked after it was kept: the test says so, which is the one
+  // thing that would have told a person before their runner did.
+  const token = `sk-ant-oat01-${'k'.repeat(40)}`;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', value: token })).ok, true);
+  assert.equal((await m.phone({ op: 'test', name: 'claude' })).answer.state, 'accepted');
+  revokeClaude(token);
+  const gone = await m.phone({ op: 'test', name: 'claude' });
+  assert.equal(gone.answer.state, 'rejected');
+  assert.match(gone.text, /^Claude refused your login just now \(401: Invalid bearer token\)\. Runners and boxes given it stop at their first message/);
+
+  // A NAMED SECRET has no service to ask.
+  assert.equal((await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' })).ok, true);
+  assert.equal((await m.phone({ op: 'test', name: 'secret:NPM_TOKEN' })).error?.code, 'not_testable');
+
 });
