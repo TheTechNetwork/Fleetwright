@@ -105,6 +105,7 @@ fun YouScreen(
         "temporary" -> TemporaryMachinesSheet(settings, onDismiss = { open = null })
         "linked" -> LinkedReposSheet(settings, onDismiss = { open = null })
         "devices" -> DevicesSheet(settings, if (viewAsMember) false else admin, onDismiss = { open = null })
+        "delegations" -> DelegationsSheet(settings, onDismiss = { open = null })
         "kinds" -> KindsSheet(settings = settings, onDismiss = { open = null })
         "people" -> PeopleSheet(settings = settings, onDismiss = { open = null })
     }
@@ -203,6 +204,7 @@ fun YouScreen(
             SectionHead("Account")
             Text("Signed in as ${identity.ifBlank { "this device" }}", style = Design.Style.body, color = Design.Palette.ink.now)
             OpenRow("Devices") { open = "devices" }
+            OpenRow("Delegations") { open = "delegations" }
             TextButton(onClick = { signOut() }) { Text("Sign out", color = Design.Palette.bad.now) }
 
             // THE OTHER ACCOUNT THIS PHONE HOLDS. It starts your temporary
@@ -516,6 +518,113 @@ private fun DevicesSheet(settings: Settings, admin: Boolean?, onDismiss: () -> U
         }
         if (result.isNotBlank()) Hint(result)
     }
+}
+
+/**
+ * What this person has let the fleet send in their name while they are away
+ * (docs/signed-intents.md, "Delegations"), and the one they grant by hand: an
+ * MCP client acting for them. DelegationsView.swift is the same screen on iOS.
+ *
+ * The others are signed without asking, because each is the person doing
+ * something they already chose: keeping machines ready, finishing a sign-in, a
+ * request the fleet places. They are listed because a standing permission
+ * nobody can see is one nobody can take back. Taking one back goes to the
+ * minter first: only the minter's list, which boxes check, makes a box refuse it.
+ */
+@Composable
+private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var delegations by remember { mutableStateOf<List<Fleet.Delegation>>(emptyList()) }
+    var loaded by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+    var confirmRevoke by remember { mutableStateOf<Fleet.Delegation?>(null) }
+
+    suspend fun load() {
+        Fleet(settings).delegations()
+            .onSuccess { delegations = it }
+            .onFailure { if (delegations.isEmpty()) result = it.message ?: "could not reach the coordinator" }
+        loaded = true
+    }
+    LaunchedEffect(Unit) { load() }
+
+    confirmRevoke?.let { d ->
+        AlertDialog(
+            onDismissRequest = { confirmRevoke = null },
+            title = { Text("Revoke this delegation?") },
+            text = { Text("Boxes refuse it from the next key list they take, within ten minutes. What it was for asks you to sign again.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = d
+                    confirmRevoke = null
+                    scope.launch {
+                        // Not revoked at the minter means boxes still take it: said, not swallowed.
+                        result = Fleet(settings).revokeDelegation(target).text
+                        load()
+                    }
+                }) { Text("Revoke") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRevoke = null }) { Text("Cancel") } },
+        )
+    }
+
+    FullScreen(title = "Delegations", onDismiss = onDismiss) {
+        Hint("A box that takes only what you signed takes these in your name until they run out.")
+        if (delegations.isEmpty()) {
+            Hint(if (loaded) "Nothing is delegated. What the app sends now, it signs as it sends it." else "Asking the fleet…")
+        }
+        for (d in delegations) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(describeDelegation(d), style = Design.Style.body, color = Design.Palette.ink.now)
+                    Hint(delegationScope(d))
+                }
+                TextButton(onClick = { confirmRevoke = d }) { Text("Revoke") }
+            }
+        }
+        if (result.isNotBlank()) Hint(result)
+
+        Text("An MCP client", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.padding(top = 16.dp))
+        Hint(
+            "Lets an MCP client signed in as you start, read, stop and resume sessions and make machines, on any box, until it runs out. " +
+                "It cannot reboot or upgrade a box, or move your credentials.",
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((label, days) in listOf("Allow for a day" to 1, "Allow for a week" to 7)) {
+                OutlinedButton(
+                    enabled = !busy,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            result = Fleet(settings).allowMcp(days).text
+                            load()
+                            busy = false
+                        }
+                    },
+                ) { Text(label) }
+            }
+        }
+    }
+}
+
+/** What a delegation is for, from what it covers. The same words as DelegationsView.swift. */
+internal fun describeDelegation(d: Fleet.Delegation): String = when {
+    "exchange" in d.verbs -> "Finishing a sign-in"
+    d.verbs == listOf("vmctl") -> "Ending machines kept ready"
+    d.verbs == listOf("provision") && d.expires - d.issuedAt > 24L * 3600 * 1000 -> "Making machines kept ready"
+    d.verbs.size > 8 -> "An MCP client"
+    else -> "A request the fleet places: ${d.verbs.joinToString(", ")}"
+}
+
+/** Where, and until when. */
+private fun delegationScope(d: Fleet.Delegation): String {
+    val until = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(d.expires))
+    val boxes = if (d.hosts == listOf("*")) "any box" else d.hosts.joinToString(", ")
+    return "$boxes · until $until"
 }
 
 /**

@@ -107,14 +107,19 @@ export function loadSidecarConfig(env = process.env) {
     // host clock is not reliably synchronised.
     maxSkewMs: Math.max(0, int(env, 'FLEETWRIGHT_MAX_SKEW_MS', 300_000)),
 
-    // Take only what a person signed on their phone (docs/signed-intents.md,
-    // phase 3). Off by default: the coordinator still sends work of its own
-    // with nobody's signature on it (finishing a sign-in, a held start, keeping
-    // machines ready), and a box that enforces refuses all of it until the
-    // delegations that phase describes exist. Set 1 on a box whose people use
-    // the app, and whose operator wants a coordinator that was broken into to
-    // be unable to act on it as them.
-    requireSigned: str(env, 'FLEETWRIGHT_REQUIRE_SIGNED', '0') === '1',
+    // Take only what a person signed (docs/signed-intents.md, phase 3), in one
+    // of three ways:
+    //   0, off      take everything, and count what would be refused
+    //   signers     refuse what is not signed or delegated by a person this box
+    //               has been shown a key for, and anything with nobody named
+    //   1, all      refuse what is not signed or delegated, from anybody
+    // Anything else is not guessed at: validateSidecarConfig refuses it.
+    //
+    // `signers` BY DEFAULT: a person who signs is protected on every box
+    // that runs this, and a person who does not is taken at their word as
+    // before. What it costs is the unsigned work a signer still does, which
+    // docs/signed-intents.md lists and the box's health counts.
+    requireSigned: signedMode(str(env, 'FLEETWRIGHT_REQUIRE_SIGNED', 'signers')),
 
     // May a notification quote the session — a path, a command line — or only
     // the question this fleet wrote? Off by default: the fuller form reaches a
@@ -175,6 +180,9 @@ export function validateSidecarConfig(cfg) {
         'refuses to start without one; use a placeholder like "stdio:local" for the stdio transport.',
     );
   }
+  if (cfg.requireSigned === null) {
+    errors.push('FLEETWRIGHT_REQUIRE_SIGNED is not one of off, signers or all. It is not read as off: see docs/sidecar.md.');
+  }
   if (cfg.maxSkewMs >= REPLAY_TTL_MS) {
     errors.push(
       `FLEETWRIGHT_MAX_SKEW_MS (${cfg.maxSkewMs}) must be below the replay cache TTL (${REPLAY_TTL_MS}), ` +
@@ -231,4 +239,20 @@ export function validateSidecarConfig(cfg) {
   }
 
   return { errors, warnings };
+}
+
+/**
+ * FLEETWRIGHT_REQUIRE_SIGNED, read. Null for a value this does not know, which
+ * validateSidecarConfig refuses rather than reading as off: a typo in a setting
+ * that exists to refuse things should not quietly take everything.
+ *
+ * @param {string} raw
+ * @returns {'off'|'signers'|'all'|null}
+ */
+export function signedMode(raw) {
+  const v = String(raw).trim().toLowerCase();
+  if (['0', 'off', 'no', 'false', ''].includes(v)) return 'off';
+  if (['1', 'all', 'yes', 'true', 'on'].includes(v)) return 'all';
+  if (v === 'signers') return 'signers';
+  return null;
 }

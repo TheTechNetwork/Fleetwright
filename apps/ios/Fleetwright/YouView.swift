@@ -175,6 +175,7 @@ struct YouView: View {
                 Text(settings.signedInAs.isEmpty ? "this device" : settings.signedInAs)
             }
             NavigationLink("Devices") { DevicesView(settings: settings) }
+            NavigationLink("Delegations") { DelegationsView(settings: settings) }
             Button("Sign out", role: .destructive) { settings.signOut() }
         } header: {
             sectionHead("Account")

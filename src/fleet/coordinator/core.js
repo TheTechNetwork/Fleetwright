@@ -21,12 +21,13 @@ import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
 import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
-import { intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
+import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
+import { Delegations } from './delegations.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
-import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, handBack } from './oauth.js';
+import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, SIGNER_STATE_RE, signerReturnUrl, handBack, normaliseOrigin } from './oauth.js';
 import { checkPublicKey, openWith } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
@@ -357,6 +358,7 @@ export class CoordinatorCore {
    *     github?: (ask: { sealed: unknown, boxCodes?: string[] }) => Promise<any>,
    *     vault?: (route: 'device'|'box'|'keys', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
+   *   signingOrigin?: string|null,
    * }} [opts]
    */
   constructor({
@@ -404,6 +406,11 @@ export class CoordinatorCore {
     // the secret makes the exchange itself, and one with neither keeps the
     // paste route.
     oauthRelay = null,
+    // THE BROWSER'S SIGNING PAGE, on the minting Worker's own hostname
+    // (src/fleet/minter/sign-page.js): where a GitHub sign-in that page
+    // started is sent back to. Configured, never taken from a request.
+    // Absent is a fleet whose browser page does not sign.
+    signingOrigin = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -422,6 +429,7 @@ export class CoordinatorCore {
     this.runnerRepo = runnerRepo;
     this.minter = minter;
     this.oauthRelay = oauthRelay?.url && oauthRelay?.fleet && oauthRelay?.privateJwk && oauthRelay?.publicKey ? oauthRelay : null;
+    this.signingOrigin = typeof signingOrigin === 'string' && signingOrigin.startsWith('https://') ? normaliseOrigin(signingOrigin) : null;
     // Single-use, minutes-long, and minted only when this coordinator itself
     // dispatches a run — so a runner's owner is decided before the job exists
     // rather than by a reusable secret sitting in a repository. Separate store
@@ -480,6 +488,10 @@ export class CoordinatorCore {
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
     // runner-repos.js for why a member may, and what bounds it.
     this.runnerRepos = new RunnerRepos({ now });
+    // What people signed on their phones to let the fleet send things in their
+    // name while they are not there (delegations.js), carried by `send` with
+    // the intents each one covers.
+    this.delegations = new Delegations({ now });
     // AND THE OTHER TWO ROLES a person can link a repository for — the
     // private archive a session is pushed to, and templates. See
     // linked-repos.js for why `runners` stays in the store above.
@@ -2696,6 +2708,9 @@ export class CoordinatorCore {
         changed = true;
       }
     }
+    // What they signed for the fleet to do in their name: it is not theirs to
+    // ask any more, so it is not carried.
+    if (this.delegations.forget(address)) changed = true;
     for (const [code, p] of this.enrollment.pending) {
       if (emailOf(p.actor) === address) {
         this.enrollment.pending.delete(code);
@@ -3361,8 +3376,21 @@ export class CoordinatorCore {
     // a person signed it and the fleet changed it, or nobody signed it at all.
     // The box still refuses it itself if one reaches it; this only says why
     // first, and sends nothing.
-    if (host?.health?.signatures?.enforcing === true && !intent.sig && needsSignature(intent.verb)) {
-      return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed)));
+    // A DELEGATION, for an intent that reaches the box unsigned: what the
+    // person signed earlier to let the fleet send exactly this kind of thing in
+    // their name (delegations.js). The box checks it; carrying one that does not
+    // cover the intent would only be refused there.
+    if (!intent.sig && needsSignature(intent.verb)) {
+      const covering = this.delegations.cover(intent, String(host?.hostId ?? ''));
+      if (covering) intent = { ...intent, delegation: covering };
+    }
+    // `signers` (the box enforces for people it has seen a key for) is the
+    // box's own to apply, from a list this side does not keep; what this side
+    // can refuse first is a request with nobody named, which such a box always
+    // refuses because it would run it as itself.
+    const enforcing = host?.health?.signatures?.enforcing;
+    if ((enforcing === true || (enforcing === 'signers' && !actorEmail(intent.actor))) && !intent.sig && !intent.delegation && needsSignature(intent.verb)) {
+      return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed), intent));
     }
 
     // A waiter already holds this id: refuse loudly rather than clobber it.
@@ -3394,7 +3422,10 @@ export class CoordinatorCore {
   /**
    * Route one intent and return the reply.
    * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean, device?: string|null,
-   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> } }} spec
+   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> }, delegation?: unknown }} spec
+   *   `delegation`, what the asking person signed for a request that will reach
+   *   a box unsigned (a placed one, or a start held for a runner): kept, and
+   *   carried by `send` with whatever it covers
    *   `internal`, for `mint` only: set by the coordinator itself, never by a route
    *   `setupRouted`, for `xosetup` only: set by #setup once it has placed the job, never by a route
    *   `device`, the credential id of the phone asking, set by a route from the
@@ -3434,6 +3465,20 @@ export class CoordinatorCore {
     // the box is still that.
     if (typeof spec.sig === 'string' && !spec.signedOver) {
       spec = { ...spec, signedOver: { id: spec.id, actor: String(spec.actor ?? ''), host: String(spec.preferHost ?? ''), params: { ...(spec.params || {}) } } };
+    }
+    // WHAT A DEVICE SIGNED FOR A REQUEST IT CANNOT SIGN ITSELF: one the fleet
+    // places, so the phone does not know the box, or a start held until a
+    // machine joins. Kept for the person asking and carried by `send` with
+    // whatever it covers, which a box then checks. Refused here when it is not
+    // the asking person's own, so a mistake is said now and not as a box's
+    // refusal minutes later.
+    if (spec.delegation !== undefined && spec.delegation !== null) {
+      // One, or two: a placed `provision` and the start held for the machine it
+      // makes are different verbs with nothing in their parameters in common.
+      for (const d of (Array.isArray(spec.delegation) ? spec.delegation : [spec.delegation]).slice(0, 2)) {
+        const kept = this.keepDelegation(String(spec.actor ?? ''), d);
+        if (kept.ok === false) return kept;
+      }
     }
 
     // A MINT IS THE COORDINATOR'S OWN, sent for a runner that asked on its
@@ -4282,6 +4327,15 @@ export class CoordinatorCore {
         ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to GitHub.' }
         : { ok: false, text: 'GitHub did not send back a code to finish signing in with. Try again from the app.' };
     }
+    // THE SAME FOR THE BROWSER'S SIGNING PAGE, which goes back to the one
+    // signing origin this coordinator was given. The code is worth nothing
+    // here: the verifier never left that page.
+    if (SIGNER_STATE_RE.test(String(state ?? ''))) {
+      const back = signerReturnUrl({ code, state, signingOrigin: this.signingOrigin });
+      return back
+        ? { ok: true, device: back, text: 'Back to the signing page to finish listing this browser.' }
+        : { ok: false, text: this.signingOrigin ? 'GitHub did not send back a code to finish signing in with. Try again from the signing page.' : 'This fleet has no signing page for a browser.' };
+    }
     // TWO FLOWS ARRIVE AT THIS ONE URL, and only one of them was ours.
     //
     //   AUTHORIZATION — somebody tapped Connect in the app. We minted a
@@ -4383,9 +4437,18 @@ export class CoordinatorCore {
    * decide which of the three a body means.
    *
    * @param {{ provider?: unknown, code?: unknown, state?: unknown, sealed?: unknown, origin: string,
-   *   requester: { email?: string|null, admin?: boolean }|null }} args
+   *   requester: { email?: string|null, admin?: boolean }|null, delegation?: unknown }} args
+   *   `delegation`, what the phone signed for this finish: `exchange`, `link`
+   *   and `renew` of this provider, to the box the sign-in was for, for ten
+   *   minutes. Carried with them, so a box that takes only signed requests
+   *   takes the sign-in the person just made.
    */
-  finishAuthorization({ provider, code, state, sealed, origin, requester }) {
+  finishAuthorization({ provider, code, state, sealed, origin, requester, delegation }) {
+    if (delegation !== undefined && delegation !== null) {
+      if (!requester?.email) return Promise.resolve({ ok: false, error: { code: 'not_signed_in' }, text: 'A delegation is a person’s, and this sign-in has nobody signed in behind it.' });
+      const kept = this.keepDelegation(String(requester.email), delegation);
+      if (kept.ok === false) return Promise.resolve(kept);
+    }
     if (provider === 'cloudflare') return this.finishCloudflareAuthorization({ code, state, origin, requester });
     if (provider === 'github') {
       return sealed !== undefined && sealed !== null
@@ -6947,6 +7010,46 @@ export class CoordinatorCore {
   }
 
   /**
+   * Keep a delegation a person signed (delegations.js), and say so in the
+   * fleet's events: it is a standing permission, which is worth a line.
+   *
+   * @param {string} email  who is asking, as their credential says
+   * @param {unknown} raw
+   */
+  keepDelegation(email, raw) {
+    const kept = this.delegations.put(email, raw);
+    if (kept.ok === false) return kept;
+    this.onStateChanged?.();
+    const g = /** @type {any} */ (raw).grant;
+    const until = new Date(Number(g.expires)).toISOString().slice(0, 16).replace('T', ' ');
+    this.record({
+      event: 'delegation.kept', actor: email.toLowerCase(),
+      text: `${email.toLowerCase()} let the fleet send ${g.verbs.join(', ')} to ${g.hosts[0] === '*' ? 'any box' : g.hosts.join(', ')} in their name until ${until} UTC`,
+    });
+    return { ok: true, id: kept.id, text: 'Kept. The fleet carries it with what it covers.' };
+  }
+
+  /**
+   * Stop carrying one. What makes a box refuse it is the minter listing it as
+   * revoked, which the phone asks for itself.
+   *
+   * @param {{ email?: string|null }|null} requester @param {string} id
+   */
+  dropDelegation(requester, id) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return { ok: false, error: { code: 'not_signed_in' }, text: 'A delegation is a person’s, so this needs a signed-in identity.' };
+    if (!this.delegations.remove(email, String(id))) return { ok: false, error: { code: 'not_found' }, text: 'You keep no delegation with that id.' };
+    this.onStateChanged?.();
+    this.record({ event: 'delegation.dropped', actor: email, text: `${email} withdrew a delegation` });
+    return { ok: true, text: 'The fleet no longer carries it.' };
+  }
+
+  /** @param {{ email?: string|null }|null} requester */
+  delegationsFor(requester) {
+    return this.delegations.listFor(String(requester?.email || ''));
+  }
+
+  /**
    * Keep machines ready, or stop: `{ template, count: 0..3, network? }`. The
    * image has to be one this person can start a machine from now; machines
    * kept beyond the new count are ended.
@@ -6956,6 +7059,14 @@ export class CoordinatorCore {
   async setVmStandby(requester, body) {
     const owner = String(requester?.email || '').toLowerCase();
     if (!owner) return { ok: false, error: { code: 'not_signed_in' }, text: 'Machines are kept ready for a person, so this needs a signed-in identity.' };
+    // WHAT THE PHONE SIGNED FOR IT: one delegation to make machines from this
+    // image and one to end them, without which a box that takes only signed
+    // requests refuses both (delegations.js). Kept before anything changes, so
+    // a delegation in the wrong shape changes nothing.
+    for (const d of Array.isArray(body?.delegations) ? body.delegations.slice(0, 2) : []) {
+      const kept = this.keepDelegation(owner, d);
+      if (kept.ok === false) return kept;
+    }
     const count = Number(body?.count);
     const template = String(body?.template || '');
     const network = body?.network === undefined || body?.network === null || body?.network === '' ? null : String(body.network);
@@ -8117,17 +8228,17 @@ export function deviceText(r) {
  * app before its key is listed, the MCP tools, the browser page, or the
  * fleet's own work.
  *
- * @param {string} hostId @param {boolean} wasSigned
+ * @param {string} hostId @param {boolean} wasSigned @param {{ actor?: string, verb?: string }} [intent]
  */
-function signatureRequired(hostId, wasSigned) {
+function signatureRequired(hostId, wasSigned, intent) {
   return {
     ok: false,
     error: { code: 'signature_required' },
     text: wasSigned
       ? `${hostId} takes only requests a person signed, and this one was changed on its way through the fleet ` +
         '(a value was tidied, or a setting this box is too old for was left out), so your signature no longer holds. Nothing was sent.'
-      : `${hostId} takes only requests a person signed on their phone, and this one was not signed. ` +
-        'The app signs once your phone’s key is listed, which it does after you sign in to GitHub under Runners. ' +
-        'The MCP tools, the browser page and the fleet’s own work sign nothing yet. Nothing was sent.',
+      : `${hostId} takes only requests a person signed, and nothing ${intent?.actor || 'anybody'} signed covers this ${intent?.verb ?? 'request'}. ` +
+        'The app signs what you do in it. For what the fleet does in your name later, it signs a delegation: when you set machines to keep ready, ' +
+        'when you finish a sign-in, and when you allow an MCP client under You. Nothing was sent.',
   };
 }
