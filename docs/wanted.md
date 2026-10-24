@@ -365,9 +365,10 @@ is also the only form a voice assistant can offer reliably.
 ### A browser control surface, and a PWA
 
 > **The credentials half is built**, and it was not a nice-to-have in the end.
-> `/me` signs a member in and adds their Claude, GitHub and Cloudflare
-> accounts, as an installable page served by both coordinators
-> (`src/fleet/coordinator/member-page.js`). It exists because the invitation
+> `/me` signs a member in and opens their vault, where their Claude, GitHub
+> and Cloudflare accounts are kept, as an installable page served by both
+> coordinators (`src/fleet/coordinator/member-page.js`); the vault itself is
+> on the minter's signing page (`docs/vault.md`, "From a browser"). It exists because the invitation
 > was a dead end for anybody without a phone: `connect` and `link` are withheld
 > from agents by default, so the MCP endpoint could not link an account either,
 > and a session whose actor has no Claude account is refused. Signed in, with a
