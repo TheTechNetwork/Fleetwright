@@ -73,7 +73,8 @@ import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestA
 import { verify, sign, signingInput } from '../crypto.js';
 import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
-import { DEPOSIT_MAX_AGE_MS } from './claude.js';
+import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
+import { probeClaude } from '../../core/claude-token-probe.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
@@ -433,7 +434,7 @@ async function runDeviceOp(inside, config, key, who, email, at) {
 
   if (inside.op === 'put' || inside.op === 'forget') {
     const kind = itemKind(name);
-    if (kind === 'claude') return putClaude(store, key, who, email, at, inside.op === 'forget' ? null : String(inside.value ?? ''));
+    if (kind === 'claude') return putClaude(store, key, who, email, at, inside.op === 'forget' ? null : String(inside.value ?? ''), config.fetchImpl);
     if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
     }
@@ -461,6 +462,8 @@ async function runDeviceOp(inside, config, key, who, email, at) {
         : `Kept ${label(name)}. Sessions you start on a box you approved can be given it by name.`,
     };
   }
+
+  if (inside.op === 'test') return testItem(name, row, config, key, who, save);
 
   if (inside.op === 'connect') {
     const provider = String(inside.provider || '');
@@ -551,6 +554,120 @@ async function runDeviceOp(inside, config, key, who, email, at) {
   return refuse('bad_params', `A vault does not do “${String(inside.op).slice(0, 40)}”.`);
 }
 
+/**
+ * Renew one OAuth item with its refresh token, and the item to store in its
+ * place. ROTATED: the old refresh token is dead the moment the provider
+ * answers, so the caller stores the new one before anything else can fail.
+ *
+ * @param {string} userId @param {string} name @param {{ at: number }} item @param {any} inside
+ * @param {{ privateKey: CryptoKey, publicKey: string }} key
+ * @param {VaultConfig & { fetchImpl: typeof fetch, now: () => number }} config
+ * @returns {Promise<{ ok: true, inside: any, item: { at: number, sealed: any } } | { ok: false, message: string }>}
+ */
+async function renewItem(userId, name, item, inside, key, config) {
+  const p = OAUTH_PROVIDERS[/** @type {keyof typeof OAUTH_PROVIDERS} */ (name)];
+  const client = config.clients?.[name];
+  const renewed = client?.clientId && client?.secret
+    ? await p.refresh({ refresh: String(inside.refreshToken), client: client.secret, clientId: client.clientId, fetchImpl: config.fetchImpl })
+    : { ok: false, message: `the minter holds no ${p.label} client to renew with` };
+  if (!renewed.ok) return { ok: false, message: String(renewed.message) };
+  const next = {
+    ...inside,
+    accessToken: renewed.accessToken,
+    refreshToken: renewed.refreshToken ?? inside.refreshToken,
+    expiresAt: renewed.expiresIn ? config.now() + renewed.expiresIn * 1000 : null,
+  };
+  return { ok: true, inside: next, item: { at: item.at, sealed: await seal({ to: key.publicKey, aad: vaultAtRestAad(userId, name), payload: next }) } };
+}
+
+/**
+ * WHETHER A KEPT CREDENTIAL STILL WORKS, asked of the service it is for, by
+ * this Worker, which is the one place that can open it. Before this a vault
+ * said what it held and never whether any of it worked, so a revoked Claude
+ * token or a GitHub sign-in that had lapsed was found by the runner or box
+ * that was given it, as a session stopping at its first message.
+ *
+ *  - Claude: the one-token request a session makes (claude-token-probe.js).
+ *  - GitHub: who the token belongs to, renewed first if it is due, as a box
+ *    would be handed it.
+ *  - Cloudflare: renewed, because a refresh Cloudflare accepts is the one
+ *    answer a sign-in of any scope can get, and a vault renews it anyway.
+ *
+ * A named secret and a hypervisor's token have no service this Worker could
+ * ask (a pool is on someone's own network), so they are not tested, and the
+ * phones offer the button only for the three that are.
+ *
+ * Said as accepted, rejected, or cannot tell, never the value.
+ *
+ * @param {string} name @param {ReturnType<typeof emptyRow>} row
+ * @param {VaultConfig & { fetchImpl: typeof fetch, now: () => number }} config
+ * @param {{ privateKey: CryptoKey, publicKey: string }} key @param {{ userId: string, login: string }} who
+ * @param {() => Promise<void>} save
+ * @returns {Promise<{ ok: true, answer: { name: string, state: 'accepted'|'rejected'|'unknown' }, text: string } | ReturnType<typeof refuse>>}
+ */
+async function testItem(name, row, config, key, who, save) {
+  const store = /** @type {VaultStore} */ (config.store);
+  /** @param {'accepted'|'rejected'|'unknown'} state @param {string} text */
+  const said = (state, text) => /** @type {const} */ ({ ok: true, answer: { name, state }, text });
+  if (name === 'claude') {
+    const held = await store.get(`gh:${who.userId}`);
+    if (!held?.sealed || held.forgotten) return refuse('not_kept', 'Your vault holds no Claude login to test. Keep one first.');
+    let token;
+    try {
+      token = String((await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad(who.userId), sealed: held.sealed })).token || '');
+    } catch {
+      return said('rejected', 'Your Claude login does not open with this minter’s key, so nothing could be given it. Keep it again.');
+    }
+    const r = await probeClaude({ token }, { fetchImpl: config.fetchImpl });
+    if (r.state === 'accepted') {
+      return said('accepted', r.status === 429 || r.status === 529
+        ? `Your Claude login was accepted just now, though Claude said it is busy (${r.status}).`
+        : 'Your Claude login works: Claude answered a one-token request with it just now.');
+    }
+    if (r.state === 'rejected') {
+      return said('rejected', `Claude refused your login just now (401${r.why ? `: ${r.why}` : ''}). Runners and boxes given it stop at their first message. Keep a new one from claude setup-token.`);
+    }
+    return said('unknown', `Whether your Claude login works could not be told just now: ${r.why ?? `the API answered ${r.status}`}.`);
+  }
+  if (itemKind(name) !== 'oauth') {
+    return refuse('not_testable', `${label(name)} is handed over as it is, and there is no service this Worker could ask about it.`);
+  }
+  const item = row.items[name];
+  if (!item?.sealed || item.forgotten) return refuse('not_kept', `Your vault holds no ${label(name)} sign-in to test. Keep one first.`);
+  /** @type {any} */
+  let inside;
+  try {
+    inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: vaultAtRestAad(who.userId, name), sealed: item.sealed });
+  } catch {
+    return said('rejected', `${label(name)} does not open with this minter’s key, so nothing could be given it. Sign in again from your phone.`);
+  }
+  const due = inside.expiresAt !== null && Number(inside.expiresAt) - config.now() < REFRESH_AHEAD_MS;
+  if (inside.refreshToken && (due || name === 'cloudflare')) {
+    const r = await renewItem(who.userId, name, item, inside, key, config);
+    if (!r.ok) {
+      const refused = /refused|rejected|invalid|expired/i.test(r.message);
+      return said(refused ? 'rejected' : 'unknown', refused
+        ? `${label(name)} would not renew your sign-in just now (${r.message}). Boxes stop being given it once it runs out. Sign in again from your phone.`
+        : `Whether your ${label(name)} sign-in works could not be told just now: ${r.message}.`);
+    }
+    row.items[name] = r.item;
+    await save();
+    inside = r.inside;
+    if (name === 'cloudflare') return said('accepted', 'Cloudflare renewed your sign-in just now, so it works.');
+  }
+  if (inside.expiresAt !== null && Number(inside.expiresAt) <= config.now()) {
+    return said('rejected', `Your ${label(name)} sign-in has run out and has nothing to renew it with. Sign in again from your phone.`);
+  }
+  if (name === 'cloudflare') {
+    return said('unknown', 'Your Cloudflare sign-in has not run out, and has no renewal to ask Cloudflare with, so whether it still works cannot be told from here.');
+  }
+  const whose = await githubUser({ token: String(inside.accessToken), fetchImpl: config.fetchImpl });
+  if (whose.ok) return said('accepted', `GitHub works: it answered as ${whose.login} just now.`);
+  return /\(401\)/.test(whose.message)
+    ? said('rejected', `GitHub refused your sign-in just now. Boxes given it cannot reach your repositories. Sign in again from your phone.`)
+    : said('unknown', `Whether your GitHub sign-in works could not be told just now: ${whose.message}.`);
+}
+
 /** @param {string} name */
 function label(name) {
   if (name === 'claude') return 'your Claude login';
@@ -567,9 +684,9 @@ function label(name) {
  *
  * @param {VaultStore} store @param {{ publicKey: string }} key
  * @param {{ userId: string, login: string }} who @param {string} email
- * @param {number} at @param {string|null} token
+ * @param {number} at @param {string|null} token @param {typeof fetch} fetchImpl
  */
-async function putClaude(store, key, who, email, at, token) {
+async function putClaude(store, key, who, email, at, token, fetchImpl) {
   if (token !== null && !CLAUDE_RE.test(token)) {
     return refuse('bad_token', 'That is not a Claude token. Paste the one line `claude setup-token` printed.');
   }
@@ -579,8 +696,11 @@ async function putClaude(store, key, who, email, at, token) {
     await store.put(`gh:${who.userId}`, { at, login: who.login, forgotten: true });
     return /** @type {const} */ ({ ok: true, text: 'Forgot your Claude login. Boxes and runners stop being given it.' });
   }
+  // ASKED FIRST, as a deposit asks (claude.js, checkBeforeKeeping).
+  const checked = await checkBeforeKeeping(token, fetchImpl);
+  if ('refusal' in checked) return checked.refusal;
   await store.put(`gh:${who.userId}`, { at, login: who.login, email, sealed: await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: { token } }) });
-  return /** @type {const} */ ({ ok: true, text: 'Kept your Claude login for your runners and the boxes you approve.' });
+  return /** @type {const} */ ({ ok: true, text: `Kept your Claude login for your runners and the boxes you approve.${checked.said}` });
 }
 
 /**
@@ -713,24 +833,13 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
     if (kind !== 'oauth') continue;
     const due = inside.expiresAt !== null && Number(inside.expiresAt) - config.now() < REFRESH_AHEAD_MS;
     if (due && inside.refreshToken) {
-      const p = OAUTH_PROVIDERS[/** @type {keyof typeof OAUTH_PROVIDERS} */ (name)];
-      const client = config.clients?.[name];
-      const renewed = client?.clientId && client?.secret
-        ? await p.refresh({ refresh: String(inside.refreshToken), client: client.secret, clientId: client.clientId, fetchImpl: config.fetchImpl })
-        : { ok: false, message: `the minter holds no ${p.label} client to renew with` };
-      if (renewed.ok) {
-        // ROTATED: the old refresh token is dead the moment this returns, so
-        // the new one is stored before anything else can fail.
-        inside = {
-          ...inside,
-          accessToken: renewed.accessToken,
-          refreshToken: renewed.refreshToken ?? inside.refreshToken,
-          expiresAt: renewed.expiresIn ? config.now() + renewed.expiresIn * 1000 : null,
-        };
-        row.items[name] = { at: item.at, sealed: await seal({ to: key.publicKey, aad: vaultAtRestAad(userId, name), payload: inside }) };
+      const r = await renewItem(userId, name, item, inside, key, config);
+      if (r.ok) {
+        inside = r.inside;
+        row.items[name] = r.item;
         changed = true;
       } else {
-        problems.push(`${p.label} could not be renewed: ${renewed.message}. Sign in again from your phone.`);
+        problems.push(`${label(name)} could not be renewed: ${r.message}. Sign in again from your phone.`);
       }
     }
     if (inside.expiresAt === null || Number(inside.expiresAt) > config.now()) {

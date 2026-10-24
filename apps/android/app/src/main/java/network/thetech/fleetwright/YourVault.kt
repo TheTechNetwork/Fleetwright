@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -19,7 +20,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlinx.coroutines.launch
 
@@ -46,15 +46,15 @@ internal fun YourVault(settings: Settings) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val vault = remember { PhoneVault(settings) }
-    val phone = remember { PhoneGitHub(settings) }
     var contents by remember { mutableStateOf<PhoneVault.Contents?>(null) }
     var boxes by remember { mutableStateOf<List<Fleet.Host>>(emptyList()) }
-    var claudeDraft by remember { mutableStateOf("") }
     var secretName by remember { mutableStateOf("") }
     var secretValue by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
+    // The item a Forget is waiting on, until the dialog is answered.
+    var forgetting by remember { mutableStateOf<String?>(null) }
 
     suspend fun reload() {
         val fleet = Fleet(settings)
@@ -82,6 +82,21 @@ internal fun YourVault(settings: Settings) {
 
     LaunchedEffect(Unit) { reload() }
 
+    forgetting?.let { name ->
+        AlertDialog(
+            onDismissRequest = { forgetting = null },
+            title = { Text("Forget ${PhoneVault.label(name)}?") },
+            text = { Text(PhoneVault.forgetting(name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    forgetting = null
+                    act { vault.forget(Fleet(settings), name) }
+                }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
+        )
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         Hint(
             "Keep each credential here once. A box you approve gets them when a session needs them, " +
@@ -98,45 +113,33 @@ internal fun YourVault(settings: Settings) {
                 style = Design.Style.bodySmall,
                 color = Design.Palette.ink.now,
             )
+            // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
+            // revoked sat here as "Kept" until a runner stopped at its first
+            // message. Offered only where there is a service to ask (C-2).
+            //
+            // FORGET ASKS FIRST. It was one tap, beside the button people come
+            // here to press, and it took the Claude login out from under every
+            // runner without a word.
             kept.items.forEach { item ->
-                TextButton(enabled = !busy, onClick = { act { vault.forget(Fleet(settings), item.name) } }) {
-                    Text("Forget ${PhoneVault.label(item.name)}")
+                Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                    if (PhoneVault.isTestable(item.name)) {
+                        OutlinedButton(enabled = !busy, onClick = { act { vault.test(Fleet(settings), item.name) } }) {
+                            Text("Test ${PhoneVault.label(item.name)}")
+                        }
+                    }
+                    TextButton(enabled = !busy, onClick = { forgetting = item.name }) {
+                        Text("Forget ${PhoneVault.label(item.name)}")
+                    }
                 }
             }
         }
 
         // CLAUDE, kept the same way: this is the vault's Claude row, which
-        // runners and approved boxes both use.
-        Hint(
-            "Runners you start can use your Claude subscription instead of the runner repository's API key. " +
-                "Make the token on a computer with claude setup-token, and paste it here.",
-        )
-        OutlinedTextField(
-            value = claudeDraft,
-            onValueChange = { claudeDraft = it.trim() },
-            label = { Text("Token from claude setup-token") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Password,
-            ),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-            OutlinedButton(
-                enabled = !busy && claudeDraft.isNotBlank(),
-                onClick = {
-                    act { phone.depositClaudeLogin(Fleet(settings), claudeDraft).onSuccess { claudeDraft = "" } }
-                },
-            ) { Text("Keep for my runners") }
-            if (kept?.items?.any { it.name == "claude" } == true) {
-                TextButton(
-                    enabled = !busy,
-                    onClick = { act { phone.depositClaudeLogin(Fleet(settings), null) } },
-                ) { Text("Forget my Claude login") }
-            }
-        }
+        // runners and approved boxes both use. The same rows as Set up Claude,
+        // so a machine can make the token here too, rather than a paste field
+        // that wanted a computer from somebody holding a phone. Its own Forget
+        // went: it was a second button doing what Forget Claude above does.
+        ClaudeSetup(settings) { scope.launch { reload() } }
 
         OutlinedButton(enabled = !busy, onClick = { act { vault.connect(context, Fleet(settings), "github") } }) {
             Text("Keep GitHub for my boxes")
