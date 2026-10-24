@@ -881,18 +881,14 @@ async function signingFleet(t, { requireSigned = false } = {}) {
   t.after(() => stub.close());
   const dir = mkdtempSync(join(tmpdir(), 'fw-intent-keys-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  // NOT TOLD, AS THE DOC ABOVE SAYS, rather than not told yet: the box
-  // volunteers its health after any start that changes something, and a
-  // coordinator that read `enforcing` there refuses an unsigned start itself
-  // before the box sees it. Whether that landed first was a race, lost once
-  // in CI, so it is taken out of every health report on its way here.
-  /** @param {any} f */
-  const toCoordinator = (f) => (f?.kind === 'health' && f.health?.signatures
-    ? { ...f, health: { ...f.health, signatures: { ...f.health.signatures, enforcing: undefined } } }
-    : f);
   const sidecarOn = () => new Sidecar({
     hub: new HubClient({ baseUrl: stub.baseUrl, token: null }),
-    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { void core.onHostMessage('ops-box', toCoordinator(f)); return true; } }),
+    // NOT ITS HEALTH: the coordinator is not told whether this box enforces, so
+    // what the box does with an unsigned intent is the box's own to decide. A
+    // box pushes health after a verb that changes it, and under load that push
+    // landed before the next request, so the coordinator refused it first and
+    // the test read the coordinator's sentence instead of the box's.
+    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { if (f?.kind !== 'health') void core.onHostMessage('ops-box', f); return true; } }),
     hostId: 'ops-box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, xoStateDir: dir, logger: quiet, requireSigned,
     vaultKey: { publicJwk: boxKeys.publicJwk, sign: (/** @type {string} */ msg) => sign(boxKeys.privateJwk, msg) },
   });
