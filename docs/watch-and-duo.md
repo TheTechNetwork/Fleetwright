@@ -6,81 +6,102 @@ device is out on 23 October 2026, running iOS 27.1. **Apple Watch is a new
 surface, and most of what it would be for is already on the wrist** without a
 line of watch code, so the first job there is to find out how much.
 
-Nothing below is built. This is the survey, what it found in the code, and the
-order it argues for. Like the rest of `apps/ios`, it is written without a Mac:
+The Duo's first round is built (below); the watch is still a survey, what it
+found in the code, and the order it argues for. Like the rest of `apps/ios`, it is written without a Mac:
 every "verify on a device" below is meant literally.
 
 ## iPhone Duo
 
 ### What the device does to an app
 
-Apple's own pages confirm the hardware: a 7.6-inch inner display and a 5.4-inch
-outer one. The developer detail so far comes from secondary write-ups rather
-than Apple's documentation, so treat these as claims to check against the iOS
-27 SDK before building on them:
+The first version of this section was written before the device shipped, from
+secondary write-ups, and two of its claims were wrong in ways that changed the
+work. This version is from Apple's tech talk "Prepare your app for iPhone Duo",
+the Apple Developer Forums summary thread, and the App Store Connect screenshot
+specification. Still not checked on hardware: every "verify on a device" below
+is meant literally.
 
-- **The inner display reports regular width and regular height**, like an iPad,
-  at about 626 × 890 points. The outer display is a phone, about 466 × 678.
-- **Closed and in landscape it reports compact and compact**, which no iPhone
-  has done before.
-- **The inner display ignores the app's supported orientations.**
-- **An app built with an SDK older than iOS 27 is letterboxed** on the inner
-  display. The iOS 27 SDK gets it beside the status bar; the 27.1 SDK gets it
-  edge to edge.
-- **App Store Connect treats folded and unfolded as two screenshot classes.**
+- **The inner display is regular by regular in every pose**, like an iPad. It is
+  669 by 951 points (the screenshot specification's 2007 by 2853 pixels at 3x);
+  the 626 by 890 the survey quoted was wrong, and nothing here should depend on
+  either number.
+- **The outer display is a phone**, 466 by 678 points: compact by regular in
+  portrait, and **compact by compact in landscape**, which no iPhone did before.
+- **The inner display ignores supported orientations.** Layout is decided by
+  size class, never by orientation or `userInterfaceIdiom`.
+- **The SDK decides the shape, not the deployment target.** Built with the iOS 26
+  SDK the app runs at a familiar iPhone aspect ratio, centred; with 27.0 it
+  reaches beside the status bar; with **27.1 (Xcode 27.1, 27A9275)** it goes edge
+  to edge and gets the vertical bars.
+- **Bars go vertical.** In landscape the tab bar and toolbars move to a side
+  edge. A tab needs both an icon and a title to be drawn there; a custom bottom
+  bar does not move at all.
+- **`NavigationSplitView` is fully adaptive.** It collapses to one stack when
+  closed, tiles when open, and keeps its columns clear of the fold. The survey's
+  "keyed on `horizontalSizeClass`" was unnecessary.
+- **Custom UI over the camera loses touches** unless it asks for the reserved
+  regions (`GeometryProxy.reservedRegions(kind:)`, iOS 27.1).
+- **It is the first iPhone with multiple windows** of one app, on the inner
+  display only, following iPadOS's scene model.
+- **Folding is a trait change, not a scene disconnect.** The process, `@State`,
+  text being typed and scroll position all survive it.
+- **New in iOS 27.1, all `@available(iOS 27.1, *)`:** `ArrangementView`,
+  reserved regions, `onHingeChange`, `toolbarVerticalBehavior` and
+  `toolbarVerticalEdge`. Apple's guidance is that standard containers come first
+  and these are for custom layouts.
+- **Apple Pencil (USB-C) works on both displays** from iOS 27.2.
+- **App Store Connect has four Duo screenshot sizes**, folded and unfolded in
+  each orientation. They are optional until April 2027, and uploads were not yet
+  accepted when the device shipped.
 
-### Where Fleetwright stands
+### What is built
 
-Better than it might have, because the code never asked the question the Duo
-breaks:
+1. **The 27.1 SDK, pinned.** `scripts/select-xcode.sh` selects Xcode 27.1 in
+   every macOS job (`ios.yml`'s build, TestFlight and screenshots, and CodeQL's
+   Swift build) and fails if the image does not carry it, rather than building
+   the letterboxed app. The deployment target stays iOS 26 for the reason
+   `project.yml` gives.
+2. **Sessions and Machines are list beside page.** `ListBesideDetail` wraps each
+   in a `NavigationSplitView`: unfolded, the list stays on screen beside the
+   session or machine it opened; closed, it is the stack it always was. The rows'
+   own links and `navigationDestination`s were left alone, because in the
+   sidebar column they open in the detail column. The sidebar is 300 points so
+   the page keeps a small iPhone's width in unfolded portrait; the balanced style
+   keeps the list from being slid away.
+
+### What was checked and needed nothing
 
 - **Nothing reads orientation or the screen.** No `UIScreen.main`, no
-  `UIDevice.orientation`, no branch on `userInterfaceIdiom`. The one
-  `GeometryReader` is the traffic chart in `VMMachineView.swift`, which sizes to
-  its own frame. Unfolding is a scene resize, `@State` survives it, and there is
-  nothing to re-plumb.
-- **The app is already iPhone and iPad.** `project.yml` sets no device family,
-  so XcodeGen's iOS preset applies, and the `UISupportedInterfaceOrientations~ipad`
-  key is there because App Store Connect demanded iPad multitasking support.
-  Check the generated project says `1,2` before relying on it.
-- **It is built with whatever SDK `macos-latest` carries.** `ios.yml` does not
-  pin Xcode. If that image is still on the iOS 26 SDK when the Duo ships, our
-  build is the letterboxed one. **This is the first thing to fix, and it is not
-  the deployment target**: `project.yml`'s rule keeps the target at iOS 26 until
-  28 is announced, and that rule still holds. Building with a newer SDK and
-  running on an older OS are separate settings.
+  `UIDevice.orientation`, no branch on `userInterfaceIdiom`; the one
+  `GeometryReader` sizes the traffic chart to its own frame.
+- **The tabs have an icon and a title each**, so the tab bar can go vertical.
+- **The console's Keyboard and Ctrl-Alt-Del are toolbar items**, not a custom
+  bar, so they move with the other bars.
+- **The Live Activity implements every presentation** (compact leading and
+  trailing, minimal, expanded, Lock Screen), which the closed display's side
+  Dynamic Island needs.
 
-### What it looks like unfolded today
+### Decided against, for now
 
-`FleetApp` (in `FleetView.swift`) is a three-tab `TabView` with a `NavigationStack` in each tab. On a
-regular-width screen that is a phone layout stretched to 626 points: every row
-spans the width (`.frame(maxWidth: .infinity)` in several places), and opening a
-session or a machine replaces the list instead of sitting beside it.
+- **The tab sidebar** (`.defaultTabBarPlacement(.sidebar)`). Beside a split
+  list and page it would be a third column on a 669-point screen. The tab bar
+  stays.
+- **The iOS 27.1 APIs.** Every one needs an `if #available` beside the iOS 26
+  path, which is the two-designs cost `project.yml` refuses, and the standard
+  containers already avoid the fold. Revisit when the deployment target moves.
 
-That is usable. It is not what somebody unfolding a phone to read a fleet
-expects, and the design system's own line, calm recedes and trouble comes
-forward, is easier to keep when the list of sessions stays on screen while one
-of them is open.
+### Still to do
 
-### What to change, in order
-
-1. **Pin the SDK in CI.** Name the Xcode version in `ios.yml` that carries the
-   iOS 27.1 SDK rather than taking the image's default, so the build that ships
-   is not letterboxed and the next image change is a commit rather than a
-   surprise.
-2. **Sessions and Machines as list and detail when the width is regular.** A
-   `NavigationSplitView` keyed on `horizontalSizeClass`: the list on the left,
-   `SessionView` or `HostView` on the right. Compact width keeps today's stack
-   exactly, so the outer display and every other iPhone do not change. One
-   design with two arrangements, not two designs, which is the same reasoning
-   `project.yml` gives for refusing `if #available` forks.
-3. **`.tabViewStyle(.sidebarAdaptable)`** on the root, so regular width gets the
-   sidebar iPadOS already offers and compact keeps the tab bar.
-4. **Check every sheet at compact by compact.** The start sheet and the
-   hypervisor flows are the long ones; closed and in landscape is the new
-   shortest screen.
-5. **Screenshots for both classes.** `Screenshots.swift` already drives the
-   store shots; it needs a folded and an unfolded run.
+1. **Run it.** CI compiles every line; nobody has opened the split view in the
+   iPhone Duo simulator or on a device. Fold, unfold, rotate, and open a session
+   from a notification in each pose.
+2. **Sheets at compact by compact.** The start sheet and the hypervisor flows are
+   the long ones, and closed in landscape is the new shortest screen.
+3. **Two windows.** `UIApplicationSupportsMultipleScenes` would let two sessions
+   sit side by side on the inner display. It needs every notification and
+   handoff path checked against more than one scene first.
+4. **Screenshots for the Duo classes**, in `ios-screenshots.sh`, once App Store
+   Connect accepts them and `simctl` can set the fold.
 
 ### Android foldables are out of scope, and why
 
@@ -165,14 +186,18 @@ forget are not decisions to make from a glance.
 
 - **Watch scope:** stop after mirroring and the Smart Stack, or build the app?
   The app is where the credential and push questions above become real work.
-- **Duo layout:** list and detail side by side in regular width (recommended),
-  or the current single column with a readable width cap.
 
 ## Sources
 
-Apple's pages are primary for the hardware. The developer behaviour (size
-classes, letterboxing by SDK, screenshot classes) is from the secondary
-write-ups and is listed so it can be checked, not because it has been.
+Apple's tech talk and the forums thread are primary for the developer
+behaviour. The secondary write-ups are kept because the first version of this
+document leaned on them, and two of their claims did not survive.
+
+- [Prepare your app for iPhone Duo](https://developer.apple.com/videos/play/tech-talks/111461/), Apple Developer tech talk
+- [A summary of the iPhone Duo group lab](https://developer.apple.com/forums/thread/847644), Apple Developer Forums
+- [iPhone Duo by Examples](https://github.com/artemnovichkov/iPhone-Duo-by-Examples), runnable SwiftUI for the iOS 27.1 APIs
+- [iPhone Duo for developers: the 1.42 problem and the SDK gap](https://blakecrosley.com/blog/iphone-duo-for-developers)
+- [Apple Pencil support arrives on iPhone Duo with iOS 27.2](https://appleinsider.com/articles/26/10/21/apple-pencil-support-arrives-on-iphone-duo-with-ios-272), AppleInsider
 
 - [Apple unveils iPhone Duo](https://www.apple.com/newsroom/2026/09/apple-unveils-iphone-duo/), Apple Newsroom
 - [iPhone Duo technical specifications](https://www.apple.com/iphone-duo/specs/), Apple
