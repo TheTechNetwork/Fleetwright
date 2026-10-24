@@ -110,7 +110,15 @@ test('provision names a platform, and a repository only as a repository', () => 
   //
   // And a NETWORK since v9, the same shape: an id the box looks up among the
   // networks it reported for that pool.
-  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['group', 'minutes', 'network', 'platform', 'repo', 'template', 'ticket']);
+  //
+  // And an IMAGE since v16: one of the GitHub images a runner workflow lists,
+  // never a label of the caller's choosing, because it becomes `runs-on` and
+  // `self-hosted` there would be somebody's own machine.
+  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['group', 'image', 'minutes', 'network', 'platform', 'repo', 'template', 'ticket']);
+  assert.equal(checkParams('provision', { platform: 'macos', image: 'xcode-27' }).ok, true);
+  for (const label of ['self-hosted', 'macos-latest', 'xcode-27 self-hosted']) {
+    assert.equal(checkParams('provision', { platform: 'macos', image: label }).ok, false, label);
+  }
   assert.equal(checkParams('provision', { platform: 'vm', template: '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c' }).ok, true);
   for (const image of ['Debian 13', '../x', '0b1e8c2a-3f4d-4e5a-9b6c-7d8e9f0a1b2c; rm']) {
     assert.equal(checkParams('provision', { platform: 'vm', template: image }).ok, false, image);
@@ -335,6 +343,53 @@ test('the ticket never reaches the event ring', async () => {
 // --- the dispatch ----------------------------------------------------------
 
 /** A fetch that answers the two calls dispatchRunner makes, and records them. */
+test('a chosen image is spelt as a flag, after the minutes, and only when chosen', () => {
+  assert.equal(toCommandLine({ verb: 'provision', params: { platform: 'macos', image: 'xcode-27' } }), '/provision macos --image xcode-27');
+  assert.equal(toCommandLine({ verb: 'provision', params: { platform: 'linux', minutes: 30, image: 'ubuntu-24.04' } }), '/provision linux 30 --image ubuntu-24.04');
+});
+
+test('a chosen image goes to a host that can carry it, or the request is refused, never dropped', async () => {
+  // Dropped by buildIntent for a host older than 16, the image would become
+  // the workflow's default: a Mac without Xcode 27, reported as started.
+  for (const [protocol, sends] of /** @type {const} */ ([[15, false], [16, true]])) {
+    const core = coreWith();
+    core.registry.recordHealth('deb14', { hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, labels: [], protocol });
+    /** @type {any} */
+    let sent = null;
+    core.send = async (_host, spec) => {
+      sent = spec;
+      return { ok: true, text: 'dispatched' };
+    };
+    const r = await core.dispatch({
+      verb: 'provision',
+      params: { platform: 'macos', image: 'xcode-27' },
+      requester: { email: 'eli@example.com', admin: false },
+      actor: 'eli@example.com',
+    });
+    if (sends) {
+      assert.equal(r.ok, true, r.text);
+      assert.equal(sent.params.image, 'xcode-27');
+    } else {
+      assert.equal(r.error?.code, 'host_outdated');
+      assert.match(r.text, /xcode-27.*needs 16/);
+      assert.equal(sent, null);
+    }
+  }
+});
+
+test('an image from another platform is refused before a ticket is minted', async () => {
+  const core = coreWith();
+  core.send = async () => assert.fail('nothing is sent');
+  const r = await core.dispatch({
+    verb: 'provision',
+    params: { platform: 'macos', image: 'ubuntu-26.04' },
+    requester: { email: 'eli@example.com', admin: false },
+    actor: 'eli@example.com',
+  });
+  assert.equal(r.error?.code, 'bad_params');
+  assert.match(r.text, /xcode-27, macos-26, macos-15; the first is the default/);
+});
+
 function githubStub({ repoStatus = 200, dispatchStatus = 204, defaultBranch = 'trunk' } = {}) {
   /** @type {any[]} */
   const calls = [];
@@ -375,6 +430,24 @@ test('a dispatch names the file the platform means, on the default branch', asyn
   // Every input is a string: GitHub types workflow_dispatch inputs as strings,
   // and a number is a 422 that reads as the workflow being wrong.
   for (const v of Object.values(body.inputs)) assert.equal(typeof v, 'string');
+});
+
+test('a chosen image is sent as the workflow input, and a pair that does not go together is not sent at all', async () => {
+  const chosen = githubStub();
+  const r = await dispatchRunner({
+    repo: 'me/runners', platform: 'macos', image: 'xcode-27', ticket: 'fwt_a_b', coordinator: 'https://fleet.example', token: 't', fetchImpl: chosen.impl,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(JSON.parse(chosen.calls[1].init.body).inputs.image, 'xcode-27');
+
+  // The last check before the value is `runs-on`, for any caller of this
+  // module and not only the coordinator.
+  const refused = githubStub();
+  const bad = await dispatchRunner({
+    repo: 'me/runners', platform: 'windows', image: 'xcode-27', ticket: 'fwt_a_b', coordinator: 'https://fleet.example', token: 't', fetchImpl: refused.impl,
+  });
+  assert.equal(bad.ok, false);
+  assert.equal(refused.calls.length, 0);
 });
 
 test('the token authenticates the call and is not handed to the workflow', async () => {
@@ -568,9 +641,14 @@ test('the token their vault gave this box is what dispatches, and the reply says
 
   /** @type {string[]} */
   const seen = [];
+  /** @type {any[]} */
+  const dispatched = [];
   globalThis.fetch = /** @type {any} */ (async (url, init = {}) => {
     seen.push(`${String(url)} ${String(init.headers?.authorization || '')}`);
-    if (String(url).endsWith('/dispatches')) return new Response(null, { status: 204 });
+    if (String(url).endsWith('/dispatches')) {
+      dispatched.push(JSON.parse(String(init.body)).inputs);
+      return new Response(null, { status: 204 });
+    }
     return new Response(JSON.stringify({ default_branch: 'main' }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -591,6 +669,18 @@ test('the token their vault gave this box is what dispatches, and the reply says
   assert.ok(seen.every((s) => s.includes('Bearer ghu_stored')), seen.join('\n'));
   assert.match(r.text, /runner-macos\.yml/);
   assert.match(r.text, /not here yet/);
+  assert.equal(dispatched[0].image, undefined, 'no image chosen, none sent: the workflow runs its newest');
+
+  // The line the sidecar writes for a chosen image, as the box runs it.
+  const ctx = { cfg: { stateDir }, actor: 'fleet:eli@example.com', runnerRepo: 'me/runners', ticket: 'fwt_a_b', coordinator: 'https://fleet.example' };
+  const chosen = await COMMANDS.provision.run(ctx, ['macos', '90', '--image', 'xcode-27']);
+  assert.equal(chosen.ok, true, chosen.text);
+  assert.equal(dispatched[1].image, 'xcode-27');
+  assert.equal(dispatched[1].minutes, '90');
+  assert.match(chosen.text, /macos runner on xcode-27/);
+  const mismatched = await COMMANDS.provision.run(ctx, ['linux', '--image', 'windows-2025']);
+  assert.equal(mismatched.ok, false);
+  assert.equal(dispatched.length, 2, 'nothing dispatched for it');
 });
 
 // --- what admits the machine -----------------------------------------------

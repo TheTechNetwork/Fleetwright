@@ -59,7 +59,7 @@ const BASELINE = Object.freeze({
   forgetperson: {},
   renew: { provider: 1, clientId: 1, refresh: 1, client: 1 },
   exchange: { provider: 5, code: 5, clientId: 5, origin: 5 },
-  provision: { platform: 1, minutes: 1, ticket: 1, repo: 6, template: 8, network: 9, group: 10 },
+  provision: { platform: 1, minutes: 1, ticket: 1, repo: 6, template: 8, network: 9, group: 10, image: 16 },
   vmctl: { name: 1, action: 1, minutes: 1, cpus: 1, memory: 1 },
   runnerrepo: { repo: 6 },
   linkrepo: { role: 11, repo: 11 },

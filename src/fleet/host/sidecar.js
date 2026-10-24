@@ -2567,7 +2567,10 @@ export function toCommandLine({ verb, params, actor }) {
       // between here and the pane has to remember to mask it. Nor is the
       // repository: the coordinator named it on the config frame, and a value
       // this process holds is not a value a caller typed.
-      return ['/provision', p.platform, p.minutes].filter((x) => x !== undefined && x !== null).join(' ');
+      // The image is a word from the protocol's fixed list, none of which
+      // starts with a dash, so it too is one token that cannot become a flag.
+      return ['/provision', p.platform, p.minutes, ...(p.image ? ['--image', p.image] : [])]
+        .filter((x) => x !== undefined && x !== null).join(' ');
     case 'runnerrepo':
       // `owner/repo`, held to that shape by the protocol's pattern before this
       // is reached — so it is one token with no space, quote or leading dash,

@@ -23,7 +23,7 @@ import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -3648,6 +3648,8 @@ export class CoordinatorCore {
     if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
     if (spec.verb === 'xolook' || spec.verb === 'xoact') return this.#poolPage(spec, shaped.params);
     if (spec.verb === 'provision') {
+      const imageProblem = runnerImageProblem(shaped.params.platform, shaped.params.image);
+      if (imageProblem) return { ok: false, error: { code: 'bad_params' }, text: imageProblem };
       const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null);
       if (minted.ok === false) return minted;
       /** @type {Record<string, any>} */
@@ -5234,15 +5236,19 @@ export class CoordinatorCore {
           `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${needs}. Update it and ask again.`,
       };
     }
-    if (spec.verb !== 'provision' || !spec.params?.repo) return null;
+    if (spec.verb !== 'provision' || (!spec.params?.repo && !spec.params?.image)) return null;
     const speaks = Number(host?.health?.protocol);
-    if (Number.isInteger(speaks) && speaks >= 6) return null;
+    // A CHOSEN IMAGE IS NOT DROPPED. buildIntent would leave `image` out for
+    // a host older than 16, and that host would start the workflow's default:
+    // a machine on an image the person did not choose, reported as started.
+    const needs = spec.params?.image ? 16 : 6;
+    if (Number.isInteger(speaks) && speaks >= needs) return null;
     return {
       ok: false,
       error: { code: 'host_outdated' },
       text:
-        `${host?.hostId} is too old to start a machine from your own runner repository — it speaks protocol ` +
-        `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs 6. Update it and ask again.`,
+        `${host?.hostId} is too old to start a machine ${spec.params?.image ? `on the image you chose (${spec.params.image})` : 'from your own runner repository'} — it speaks protocol ` +
+        `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${needs}. Update it and ask again.`,
     };
   }
 
@@ -5419,7 +5425,7 @@ export class CoordinatorCore {
    * chose. Nothing here is a GitHub credential.
    *
    * @param {{ email?: string|null }|null} requester
-   * @param {{ platform?: unknown, minutes?: unknown, start?: unknown }|null} body
+   * @param {{ platform?: unknown, minutes?: unknown, image?: unknown, start?: unknown }|null} body
    * @param {string} origin  this coordinator's own, which the runner enrols with
    * @returns {Promise<Record<string, any>>}
    */
@@ -5427,8 +5433,11 @@ export class CoordinatorCore {
     /** @type {Record<string, unknown>} */
     const wanted = { platform: body?.platform };
     if (body?.minutes !== undefined && body?.minutes !== null) wanted.minutes = body.minutes;
+    if (body?.image !== undefined && body?.image !== null && body?.image !== '') wanted.image = body.image;
     const shaped = checkParams('provision', wanted);
     if (shaped.ok === false) return { ok: false, error: { code: 'bad_params' }, text: shaped.error };
+    const imageProblem = runnerImageProblem(shaped.params.platform, shaped.params.image);
+    if (imageProblem) return { ok: false, error: { code: 'bad_params' }, text: imageProblem };
     if (!Object.hasOwn(RUNNER_WORKFLOWS, String(shaped.params.platform))) {
       return {
         ok: false,
@@ -5444,7 +5453,7 @@ export class CoordinatorCore {
       ok: true,
       repo: minted.repository,
       workflow: RUNNER_WORKFLOWS[platform],
-      inputs: { minutes, ticket: minted.ticket, coordinator: origin },
+      inputs: { minutes, ticket: minted.ticket, coordinator: origin, ...(shaped.params.image ? { image: String(shaped.params.image) } : {}) },
       text:
         `Start it by dispatching ${RUNNER_WORKFLOWS[platform]} in ${minted.repository} with your own GitHub sign-in. ` +
         'The ticket is good once, for forty-five minutes.',

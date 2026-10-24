@@ -32,7 +32,7 @@
 // one costs, which is the calculation that makes it safe to put in a workflow
 // input that anybody able to read the run can read.
 
-import { REPO_RE } from '../fleet/protocol/intents.js';
+import { REPO_RE, runnerImageProblem } from '../fleet/protocol/intents.js';
 
 /** Long enough for two API calls on a bad day, short enough that a hung
  * provider does not hold a session's request open. Same value and the same
@@ -106,18 +106,20 @@ function refusal(res, what) {
  *   repo: string,
  *   platform: string,
  *   minutes?: number,
+ *   image?: string|null,
  *   ticket: string,
  *   coordinator: string,
  *   token: string,
  *   fetchImpl?: typeof globalThis.fetch,
  * }} args
- * @returns {Promise<{ ok: true, workflow: string, ref: string, minutes: number }
+ * @returns {Promise<{ ok: true, workflow: string, ref: string, minutes: number, image: string|null }
  *   | { ok: false, message: string }>}
  */
 export async function dispatchRunner({
   repo,
   platform,
   minutes = DEFAULT_MINUTES,
+  image = null,
   ticket,
   coordinator,
   token,
@@ -137,6 +139,10 @@ export async function dispatchRunner({
     return { ok: false, message: 'The runner repository is not a valid owner/repo.' };
   }
   const wanted = Math.min(MAX_MINUTES, Math.max(5, Math.round(Number(minutes) || DEFAULT_MINUTES)));
+  // The pair, checked here for the reason the repository is: this is the
+  // last thing before the value becomes the job's `runs-on`.
+  const imageProblem = runnerImageProblem(platform, image);
+  if (imageProblem) return { ok: false, message: imageProblem };
 
   const headers = {
     authorization: `Bearer ${token}`,
@@ -181,12 +187,17 @@ export async function dispatchRunner({
             // a runner repository needs no edit to serve a different fleet, and
             // a fork of it works as it is.
             coordinator: String(coordinator),
+            // ONLY WHEN SOMEBODY CHOSE ONE. Absent, the workflow runs on its
+            // own default, the newest image, and a runner repository made
+            // before images could be chosen, whose workflow would refuse an
+            // input it does not declare, keeps working.
+            ...(image ? { image: String(image) } : {}),
           },
         }),
         signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
       },
     );
-    if (res.status === 204) return { ok: true, workflow, ref, minutes: wanted };
+    if (res.status === 204) return { ok: true, workflow, ref, minutes: wanted, image: image ? String(image) : null };
     if (res.status === 422) {
       // The one status GitHub uses for "your request was understood and is
       // wrong", which here is almost always a runner repository whose workflow
@@ -195,7 +206,9 @@ export async function dispatchRunner({
         ok: false,
         message:
           `GitHub refused the dispatch (422). ${repo} has ${workflow}, but it does not accept the inputs this ` +
-          'fleet sends — it needs `minutes`, `ticket` and `coordinator`, and a `workflow_dispatch` trigger. ' +
+          'fleet sends — it needs `minutes`, `ticket` and `coordinator`' +
+          (image ? `, and \`image\` offering ${String(image)}` : '') +
+          ', and a `workflow_dispatch` trigger. ' +
           'Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.',
       };
     }
