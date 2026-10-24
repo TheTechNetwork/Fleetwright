@@ -111,7 +111,7 @@ struct ShortcutSetupView: View {
             .navigationTitle("Say it your way")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button { dismiss() } label: { Label("Done", systemImage: "checkmark") } }
             }
         }
     }

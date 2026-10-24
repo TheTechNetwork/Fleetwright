@@ -34,6 +34,12 @@ struct ListBesideDetail<Rows: View>: View {
                 // about 368, a small iPhone's width, which every page behind a
                 // row was already laid out for. A wider list made the page
                 // narrower than any phone. In landscape the page gets the rest.
+                //
+                // THE TAB SIDEBAR TAKES ITS SHARE FIRST (FleetApp), and three
+                // columns do not fit 669 points: in portrait it is meant to be
+                // the one that gives way, collapsed by its own button. Unrun on
+                // a Duo; docs/watch-and-duo.md lists it as the first thing to
+                // look at in the simulator.
                 .navigationSplitViewColumnWidth(min: 280, ideal: 300, max: 360)
         } detail: {
             NavigationStack {
