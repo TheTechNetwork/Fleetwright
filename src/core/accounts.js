@@ -111,15 +111,19 @@ export function adoptBoxAccount(cfg) {
  * attributed to them and revocable by them, which is every property the box
  * account did not have.
  *
- * ON A VAULT BOX THE OPERATOR IS A VAULT'S PERSON (vault-store.js, "A VAULT
- * BOX"): somebody who approved this box, so that their vault gives it
- * something, and never somebody who only linked an account here. The same
- * three answers, asked of the people in the vault's last answer instead of the
- * accounts linked here: FLEETWRIGHT_OPERATOR when it names one of them, the
- * only one when there is one, and otherwise a sentence that says which step is
- * missing. A box the fleet's vault has spoken to does not fall back to a link
- * made on it, because that link is the second copy of a login the vault exists
- * to end, renewed on this box's clock and seen by nobody.
+ * ON A VAULT BOX THE OPERATOR IS NAMED, AND IS A VAULT'S PERSON (vault-store.js,
+ * "A VAULT BOX"): FLEETWRIGHT_OPERATOR, and only when that person approved
+ * this box, so that their vault gives it something. Never somebody who only
+ * linked an account here, and NEVER INFERRED: any member may approve any box
+ * to run their own sessions on it, so "the only person who approved this box"
+ * says nothing about whose box it is. Taken as the operator, a guest who
+ * approved somebody else's box would have that box's own command line run on
+ * the guest's Claude account and push with the guest's GitHub token, which
+ * neither of them asked for. The box does not know who owns it; the person
+ * who set it up does, and writes it down once. A box the fleet's vault has
+ * spoken to does not fall back to a link made on it either, because that link
+ * is the second copy of a login the vault exists to end, renewed on this
+ * box's clock and seen by nobody.
  *
  * @param {import('../config.js').Config} cfg
  * @returns {{ email: string|null, why: string }}
@@ -133,16 +137,17 @@ export function operatorAccount(cfg) {
         ? { email: configured, why: `FLEETWRIGHT_OPERATOR is ${configured}` }
         : { email: null, why: `FLEETWRIGHT_OPERATOR names ${configured}, whose vault gives this box nothing — approve this box from the app or from the vault page in a browser` };
     }
-    if (people.length === 1) return { email: people[0], why: `${people[0]} is the only person whose vault gives this box anything` };
     if (people.length === 0) {
       return {
         email: null,
-        why: 'nobody’s vault gives this box anything yet — approve this box from the app or from the vault page in a browser',
+        why: 'nobody’s vault gives this box anything yet — approve this box from the app or from the vault page in a browser, and set FLEETWRIGHT_OPERATOR to your fleet address',
       };
     }
     return {
       email: null,
-      why: `${people.length} people’s vaults give this box something, so set FLEETWRIGHT_OPERATOR to say which of them local sessions run as`,
+      why: people.length === 1
+        ? `FLEETWRIGHT_OPERATOR is not set, and local sessions on a box the vault serves run only as the person it names. Approving a box does not make it yours, so set it to your fleet address in the box's environment`
+        : `${people.length} people’s vaults give this box something, so set FLEETWRIGHT_OPERATOR to say which of them local sessions run as`,
     };
   }
   const linked = new Accounts(cfg.stateDir).list();

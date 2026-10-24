@@ -349,9 +349,10 @@ export function loadConfig(env = process.env) {
     // typed on the box. (It named the Telegram bot first, which has been
     // archived since docs/telegram.md; the comment outlived the surface.) Needed only when more than one person
     // has linked an account here; with exactly one, that one is the answer.
-    // On a box the fleet's vault has spoken to, the same question is asked of
-    // the people whose vaults give it something, and links made here are not
-    // the answer. See operatorAccount().
+    // On a box the fleet's vault has spoken to it is required, and must name
+    // somebody whose vault gives the box something: approving a box does not
+    // make it yours, so nobody is inferred, and links made here are not the
+    // answer. See operatorAccount().
     operator: str('FLEETWRIGHT_OPERATOR'),
     // How often a session start may re-pull the registry for a newer sandbox
     // image. OFF BY DEFAULT, and that default is the deliberate one.

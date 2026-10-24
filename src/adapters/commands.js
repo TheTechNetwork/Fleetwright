@@ -401,8 +401,9 @@ function parseResumeChoice(word) {
  * The refusal a link made on this box gets, or null where one may be made.
  *
  * NOTHING IS LINKED ON A VAULT BOX (vault-store.js, "A VAULT BOX"). Its own
- * command line, local web page and chat run as a person who approved it, on
- * what that person keeps in their vault (accounts.js, operatorAccount), so a
+ * command line, local web page and chat run as the approver
+ * FLEETWRIGHT_OPERATOR names, on what that person keeps in their vault
+ * (accounts.js, operatorAccount), or as nobody when it names nobody, so a
  * token or a Claude login linked here would be used by nobody, and would be
  * the second copy of somebody's credential that the vault exists to end. Said
  * where the link would have been made, with where it is made instead.

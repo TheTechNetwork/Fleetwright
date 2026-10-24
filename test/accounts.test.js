@@ -88,11 +88,11 @@ test('a fleet person gets their vault’s Claude login, never one linked on the 
   assert.equal(stranger.source, null);
   assert.match(String(stranger.why), /owner@example\.com keeps no Claude login in their vault/);
 
-  // A local surface runs as THE OPERATOR — here unambiguous, because exactly
-  // one person's vault gives this box anything, and on their vault's login,
-  // not the one linked here (vault-box.test.js has the rest of that rule).
+  // A local surface runs as THE OPERATOR, named in FLEETWRIGHT_OPERATOR, and
+  // on their vault's login, not the one linked here (vault-box.test.js has the
+  // rest of that rule, including that one approver is not inferred to be it).
   for (const actor of ['telegram:12345', 'web', null]) {
-    const picked = pickCredentialSource(cfg, actor);
+    const picked = pickCredentialSource({ ...cfg, operator: 'client@example.com' }, actor);
     assert.equal(picked.account, 'client@example.com', String(actor));
     assert.equal(picked.source, fromVault.source, String(actor));
   }

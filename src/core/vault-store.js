@@ -39,8 +39,9 @@
 // an empty list again when the minter says this is not the key the box
 // enrolled with. It hands over nothing when the minter is silent, so a box in
 // a fleet with no minter, or in no fleet, never becomes one. From the first
-// answer the box's own command line runs as a person whose vault gives it
-// something (accounts.js, operatorAccount) and links nothing of its own
+// answer the box's own command line runs as the person FLEETWRIGHT_OPERATOR
+// names, who must be one whose vault gives it something and is never guessed
+// (accounts.js, operatorAccount), and it links nothing of its own
 // (commands.js, vaultLinkRefusal): a link made on the box is the second copy
 // of somebody's login the vault exists to end, and a box that has been told
 // what its people keep does not go back to keeping its own when one answer

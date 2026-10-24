@@ -8,7 +8,8 @@
 // holds there:
 //
 //   - it became one on an answer, empty or not, and not on a refusal;
-//   - its operator is a person whose vault gives it something, never somebody
+//   - its operator is the person FLEETWRIGHT_OPERATOR names, whose vault
+//     gives it something, never one approver by inference and never somebody
 //     who only linked an account on it (accounts.js, operatorAccount);
 //   - a session started on it runs on that person's vault (podman.js);
 //   - a link made on it is refused, with where it is made instead, and one
@@ -70,13 +71,18 @@ test('a box becomes a vault box on its first answer, an empty one too, and not o
   assert.equal(pickCredentialSource(cfg, 'cli').source, null, 'the linked account is not the fallback');
 });
 
-test('the operator is a person whose vault gives the box something, never one who only linked here', (t) => {
+test('the operator is the person FLEETWRIGHT_OPERATOR names, whose vault gives the box something, never one who only linked here', (t) => {
   const cfg = box(t);
   linkOnBox(cfg, 'ops@example.com');
   answer(cfg, { 'ann@example.com': [{ name: 'github', value: 'ghu_ann', expiresAt: Date.now() + HOUR }] });
 
-  // The only one, with no configuration: the same rule as one linked account.
-  assert.deepEqual(operatorAccount(cfg), { email: 'ann@example.com', why: 'ann@example.com is the only person whose vault gives this box anything' });
+  // NEVER INFERRED, not even from one approver: any member may approve any
+  // box for their own sessions, and the one who did is not thereby its owner.
+  const one = operatorAccount(cfg);
+  assert.equal(one.email, null);
+  assert.match(one.why, /FLEETWRIGHT_OPERATOR is not set.*Approving a box does not make it yours/);
+  assert.equal(pickCredentialSource(cfg, 'cli').source, null, 'a guest who approved the box is not the box\u2019s command line');
+  assert.equal(operatorAccount({ ...cfg, operator: 'ann@example.com' }).email, 'ann@example.com');
 
   // FLEETWRIGHT_OPERATOR settles who, among them, and only among them.
   const linkedOnly = operatorAccount({ ...cfg, operator: 'ops@example.com' });
@@ -91,7 +97,7 @@ test('the operator is a person whose vault gives the box something, never one wh
 });
 
 test('a session started on a vault box runs on its operator’s vault login, and refuses rather than take a linked one', (t) => {
-  const cfg = box(t);
+  const cfg = box(t, { operator: 'ann@example.com' });
   linkOnBox(cfg, 'ann@example.com');
   answer(cfg, { 'ann@example.com': [claude('ann@example.com')] });
 
@@ -113,12 +119,14 @@ test('a session started on a vault box runs on its operator’s vault login, and
 test('a local session’s GitHub is its operator’s vault on a vault box, and the box’s own row on a box that stands alone', (t) => {
   // What the broker serves a session (src/index.js, secretsFor) is read from
   // the holder this answers.
-  const cfg = box(t);
+  const cfg = box(t, { operator: 'ann@example.com' });
   new Connections(cfg.stateDir).save(HOST_ROW, 'github', 'ghu_box_row');
   assert.equal(vaultHolder(cfg, 'cli'), null, 'standing alone, the box’s own row');
 
   answer(cfg, { 'ann@example.com': [{ name: 'github', value: 'ghu_ann', expiresAt: Date.now() + HOUR }] });
   assert.deepEqual(vaultHolder(cfg, 'cli'), { email: 'ann@example.com' });
+  // Unnamed, the vault still applies and nobody's is read: never the box's row.
+  assert.deepEqual(vaultHolder({ ...cfg, operator: undefined }, 'cli'), { email: null });
   assert.equal(vaultEnvFor(cfg, vaultHolder(cfg, 'web')?.email ?? null).GH_TOKEN, 'ghu_ann');
   // A fleet person is their own holder; an actor that does not parse is nobody's.
   assert.deepEqual(vaultHolder(cfg, 'fleet:bo@example.com'), { email: 'bo@example.com' });
@@ -200,8 +208,12 @@ test('status and the account list on a vault box count vault logins, not links n
   linkOnBox(cfg, 'ops@example.com');
   linkOnBox(cfg, 'old@example.com');
   answer(cfg, { 'ann@example.com': [claude('ann@example.com')] });
-  const { run } = surface(cfg);
 
+  // One approver, and nobody named: the command line runs as nobody, and says why.
+  const unnamed = await surface(cfg).run('cli', '/status');
+  assert.match(unnamed.text, /this box’s own command line runs as nobody: FLEETWRIGHT_OPERATOR is not set/);
+
+  const { run } = surface({ ...cfg, operator: 'ann@example.com' });
   const status = await run('cli', '/status');
   assert.match(status.text, /claude: 1 person’s vault gives this box a Claude login — a session runs as whoever starts it; this box’s own command line runs as ann@example\.com/);
   assert.doesNotMatch(status.text, /accounts? linked/);
