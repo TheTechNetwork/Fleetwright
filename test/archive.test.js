@@ -248,7 +248,12 @@ test('on a vault box a session started on the box itself is pushed as its operat
   /** @type {string[]} */
   const auth = [];
   const seen = /** @type {any} */ (async (/** @type {string} */ u, /** @type {any} */ init) => { auth.push(init?.headers?.authorization); return gh.impl(u, init); });
-  const done = await archiveSession({ cfg, registry, name: 'boxjob', reason: 'stop', fetchImpl: seen, broker: '' });
+  // One approver is not the operator until FLEETWRIGHT_OPERATOR names them.
+  const unnamed = await archiveSession({ cfg, registry, name: 'boxjob', reason: 'stop', fetchImpl: seen, broker: '' });
+  assert.equal(unnamed.ok, false);
+  assert.match(unnamed.text, /FLEETWRIGHT_OPERATOR is not set/);
+  assert.equal(auth.length, 0, 'nothing asked of GitHub');
+  const done = await archiveSession({ cfg: { ...cfg, operator: 'eli@example.com' }, registry, name: 'boxjob', reason: 'stop', fetchImpl: seen, broker: '' });
   assert.equal(done.ok, true, done.text);
   assert.ok(auth.length && auth.every((a) => a === 'Bearer ghu_eli'), 'pushed with something other than the operator’s vault');
 

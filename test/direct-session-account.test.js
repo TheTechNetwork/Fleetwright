@@ -96,10 +96,11 @@ test('nothing in their vault for this box is a refusal that names the box, not a
 });
 
 test('a direct session started on a vault box runs on its operator’s vault, a sign-in or a token, and never on a link', () => {
-  // The operator of a vault box is a person who approved it (accounts.js,
-  // operatorAccount); here the one person, who has also linked an account on
-  // the box that nothing should read.
-  const { cfg, cwd, stateDir } = box();
+  // The operator of a vault box is the approver FLEETWRIGHT_OPERATOR names
+  // (accounts.js, operatorAccount), who has also linked an account on the box
+  // that nothing should read.
+  const { cfg: unnamed, cwd, stateDir } = box();
+  const cfg = { ...unnamed, operator: 'person@example.com' };
   new Accounts(stateDir).save('person@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'linked-here', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 } }));
   const signedIn = ensureDirectConfig(cfg, 'mine', 'cli', { cwd });
   assert.equal(signedIn.ok, true, signedIn.ok ? '' : signedIn.message);

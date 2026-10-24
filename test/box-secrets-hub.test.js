@@ -30,8 +30,9 @@ const UUID = '22222222-2222-2222-2222-222222222222';
  * DEPLOY_KEY in its store, and bob's DEPLOY_KEY in what his vault gave it.
  *
  * @param {import('node:test').TestContext} t
+ * @param {Record<string, string>} [env]  more of the box's environment
  */
-function box(t) {
+function box(t, env = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'box-secrets-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'bin');
@@ -66,6 +67,7 @@ function box(t) {
     FLEETWRIGHT_SANDBOX_USERNS: 'host',
     FLEETWRIGHT_RC_TIMEOUT_MS: '200',
     FLEETWRIGHT_REMOTE_CONTROL: '0',
+    ...env,
   });
   mkdirSync(cfg.secretsDir, { recursive: true });
   writeFileSync(path.join(cfg.secretsDir, 'DEPLOY_KEY'), 'operators-deploy-key\n');
@@ -136,8 +138,8 @@ test('a session somebody started on the box itself is answered from the box, the
   // On a vault box the box's own command line runs as a person who approved
   // it (accounts.js, operatorAccount), so their vault is the one after the
   // box's store, as a member's own vault is after it for an admin's session.
-  // Bob is the one person here.
-  const { cfg, run, fetched } = box(t);
+  // Bob is the operator, named in FLEETWRIGHT_OPERATOR.
+  const { cfg, run, fetched } = box(t, { FLEETWRIGHT_OPERATOR: 'bob@example.com' });
   applyVault(cfg, { accounts: [{ email: 'bob@example.com', items: [{ name: 'secret:DEPLOY_KEY', value: 'bobs-deploy-key' }, { name: 'secret:BOB_NPM', value: 'bobs-npm' }] }] });
   await run('cli', '/new local --secret=BOB_NPM');
   assert.equal(fetched('local', 'BOB_NPM'), 'bobs-npm');

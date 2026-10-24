@@ -204,7 +204,8 @@ test('a session whose account is not on the record asks the volume', async (t) =
   });
   s.signIn('alice@example.com');
 
-  const r = await ensureSandboxVolumes(s.cfg(), 'older', null, { account: null });
+  // Started on the box itself, so held to its operator, who is named.
+  const r = await ensureSandboxVolumes(s.cfg({ operator: 'alice@example.com' }), 'older', null, { account: null });
 
   assert.equal(r.account, 'alice@example.com');
 });
@@ -304,9 +305,10 @@ test('an account resolves to its own file, or to nothing at all', async (t) => {
   const alice = s.signIn('alice@example.com');
   assert.equal(credentialSourceForAccount(s.cfg(), 'alice@example.com')?.source, alice);
   assert.equal(credentialSourceForAccount(s.cfg(), 'operator@example.com'), null, 'linked on the box is not the person’s');
-  // `shared` is the operator, who on a vault box is the one person whose vault
-  // gives it something.
-  assert.equal(credentialSourceForAccount(s.cfg(), 'shared')?.source, alice);
+  // `shared` is the operator, who on a vault box is the approver
+  // FLEETWRIGHT_OPERATOR names, and never the one approver by inference.
+  assert.equal(credentialSourceForAccount(s.cfg(), 'shared'), null, 'a lone approver is not the operator');
+  assert.equal(credentialSourceForAccount(s.cfg({ operator: 'alice@example.com' }), 'shared')?.source, alice);
 });
 
 test('a person with nothing linked here is seeded the Claude login from their vault, at start and on resume', async (t) => {
