@@ -244,19 +244,36 @@ struct PhoneGitHub {
         return answer.text ?? ""
     }
 
-    /// Finish a token one of your machines is making, and keep it: send the
-    /// code with a key made for this one answer, open what comes back, and
-    /// deposit it exactly as a pasted token is deposited. The token exists in
-    /// the clear only in this function's memory, between the two seals.
-    func keepTokenFromMachine(_ fleet: Fleet, host: String, code: String) async throws -> String {
+    /// Keep a whole Claude sign-in one of your machines made, the kind Remote
+    /// Control needs: sealed to the minter as a token is, with `signIn` where
+    /// a token is `claude`. The minter keeps it and alone renews it.
+    func depositClaudeSignIn(_ fleet: Fleet, signIn: [String: Any]) async throws -> String {
+        let pin = try await minterKey(fleet)
+        let github = try await accessToken(fleet)
+        let payload: [String: Any] = ["v": 1, "github": github, "signIn": signIn, "at": Int(Date().timeIntervalSince1970 * 1000)]
+        let answer = try await fleet.depositClaudeLogin(sealed: try Seal.seal(to: pin, aad: Seal.depositAAD, payload: payload))
+        guard answer.ok == true else { throw FleetError.message(answer.text ?? "The minter refused it.") }
+        return answer.text ?? ""
+    }
+
+    /// Finish what one of your machines is making, and keep it: send the code
+    /// with a key made for this one answer, open what comes back, and deposit
+    /// it. It exists in the clear only in this function's memory, between the
+    /// two seals. A machine from before protocol 15 makes a setup-token where
+    /// a sign-in was asked for, and that is kept too, and said.
+    func keepFromMachine(_ fleet: Fleet, host: String, code: String) async throws -> String {
         let key = Seal.newKey()
-        let reply = try await fleet.setupToken(host: host, code: code, reply: key.publicKey)
+        let reply = try await fleet.setupToken(host: host, code: code, reply: key.publicKey, kind: "login")
         guard reply.ok != false, let sealed = reply.sealed else {
-            throw FleetError.message(reply.text ?? "\(host) did not make a token.")
+            throw FleetError.message(reply.text ?? "\(host) did not sign you in.")
         }
         let inside = try Seal.open(key, aad: Seal.setupTokenAAD, sealed: sealed)
+        if let signIn = inside["signIn"] as? [String: Any] {
+            return try await depositClaudeSignIn(fleet, signIn: signIn)
+        }
         guard let token = inside["token"] as? String, !token.isEmpty else { throw Seal.Failure.notSealed }
-        return try await depositClaudeLogin(fleet, claudeToken: token)
+        let kept = try await depositClaudeLogin(fleet, claudeToken: token)
+        return "\(kept) \(host) is older and made a setup-token, which runs sessions but cannot open Remote Control. Update it and make your login again for Remote Control."
     }
 
     private func github(_ method: String, _ url: String, token: String, body: [String: Any]?) async throws -> (status: Int, data: Data) {

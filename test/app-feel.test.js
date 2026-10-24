@@ -73,19 +73,13 @@ test('a request that failed does not empty the screen', () => {
 });
 
 test('"we have not asked" and "asked, and nobody" stay different', () => {
-  // THE ONE THAT DECIDES WHAT SCREEN SOMEBODY SEES. `myClaudeHosts` is optional
-  // precisely so those two are distinguishable — needsSetup says so in as many
-  // words — and `?? []` on a FAILED ask collapsed them, so the app told a
-  // person whose fleet is fine that nothing is set up yet, because one request
-  // did not come back.
-  const refresh = VIEW.slice(VIEW.indexOf('private func refresh(keepStatus'), VIEW.indexOf('private func act('));
-  assert.match(refresh, /if let reply = try\? await fleet\.connections\(\) \{/);
-  // The inner `?? []` is correct and stays: the fleet ANSWERED, and nobody
-  // linked is a real answer.
-  assert.match(refresh, /myClaudeHosts = reply\.connections\?\.linked\("claude"\)\?\.hosts \?\? \[\]/);
-
-  // And the distinction it protects is still written down where it is read.
-  assert.match(VIEW, /guard !fleetHosts\.isEmpty, let mine = myClaudeHosts else \{ return false \}/);
+  // THE ONE THAT DECIDES WHAT SCREEN SOMEBODY SEES. `?? []` on a FAILED ask
+  // once collapsed them, so the app told a person whose fleet is fine that
+  // nothing is set up yet, because one request did not come back. The answer
+  // is their vault's now (ClaudeKept), where a vault that did not answer is
+  // `cannotTell` and draws nothing (claude-setup-in-apps.test.js holds that).
+  // Nil is not asked yet, and needsSetup says nothing on it either.
+  assert.match(VIEW, /guard !fleetHosts\.isEmpty, let claude else \{ return false \}\s*return claude == \.missing \|\| claude == \.needsGitHub/);
 });
 
 test('a fact is not printed twice on one row', () => {

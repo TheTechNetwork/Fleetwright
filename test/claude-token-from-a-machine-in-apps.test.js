@@ -22,18 +22,24 @@ const ANDROID = androidSources();
 test('iOS: a connected machine is offered, and its page opens by itself', () => {
   assert.match(IOS, /machines = hosts\.filter \{ \(\$0\.state \?\? ""\) != "offline" \}\.map\(\\\.hostId\)\.sorted\(\)/);
   assert.match(IOS, /Button\(busy \? "Starting…" : "Make it on \\\(machine\)"\)/);
-  assert.match(IOS, /let reply = try await Fleet\(settings: settings\)\.setupToken\(host: machine\)[\s\S]{0,400}?openURL\(url\)/);
+  // THE WHOLE SIGN-IN, which Remote Control needs, not a setup-token (protocol 15).
+  assert.match(IOS, /let reply = try await Fleet\(settings: settings\)\.setupToken\(host: machine, kind: "login"\)[\s\S]{0,400}?openURL\(url\)/);
   // The paste field stays, for a fleet with no machine connected.
   assert.ok(IOS.includes('Token from claude setup-token'));
 });
 
-test('iOS: the token comes back sealed to a key made for that one answer, and is kept like a pasted one', () => {
+test('iOS: the sign-in comes back sealed to a key made for that one answer, and is kept in the vault', () => {
   assert.match(IOS, /static let setupTokenAAD = "fleetwright-setup-token\/v1"/);
-  const keep = IOS.slice(IOS.indexOf('func keepTokenFromMachine('), IOS.indexOf('private func github('));
+  const keep = IOS.slice(IOS.indexOf('func keepFromMachine('), IOS.indexOf('private func github('));
   assert.match(keep, /let key = Seal\.newKey\(\)/);
-  assert.match(keep, /setupToken\(host: host, code: code, reply: key\.publicKey\)/);
+  assert.match(keep, /setupToken\(host: host, code: code, reply: key\.publicKey, kind: "login"\)/);
   assert.match(keep, /Seal\.open\(key, aad: Seal\.setupTokenAAD, sealed: sealed\)/);
-  assert.match(keep, /return try await depositClaudeLogin\(fleet, claudeToken: token\)/);
+  assert.match(keep, /if let signIn = inside\["signIn"\] as\? \[String: Any\] \{\s*return try await depositClaudeSignIn\(fleet, signIn: signIn\)/);
+  // A machine from before protocol 15 makes a setup-token: kept, and said.
+  assert.match(keep, /let kept = try await depositClaudeLogin\(fleet, claudeToken: token\)/);
+  assert.ok(keep.includes('is older and made a setup-token, which runs sessions but cannot open Remote Control.'));
+  // Sealed to the minter as a token is, with `signIn` where a token is `claude`.
+  assert.match(IOS, /let payload: \[String: Any\] = \["v": 1, "github": github, "signIn": signIn, "at":/);
 });
 
 test('iOS: a code is never held in the outbox', () => {
@@ -61,7 +67,6 @@ test('Android: the token comes back sealed to a key made for that one answer, an
 
 test('both phones say the same things', () => {
   for (const words of [
-    'runs claude setup-token for you. The token comes back sealed to this phone, ',
     'and the machine keeps no copy.',
     '1. Open the sign-in page',
     '2. Sign in to Claude, copy the code the page shows, and paste it here.',

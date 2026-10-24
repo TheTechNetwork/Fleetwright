@@ -197,6 +197,15 @@ struct YourVault: View {
                 } message: {
                     Text(PhoneVault.forgetting(forgetting ?? ""))
                 }
+            // A SETUP-TOKEN IS NOT A SIGN-IN, and "Kept: Claude" let a person
+            // think Remote Control would work. Said only when the minter said
+            // which (C-5): nil is a minter from before it did.
+            if kept.items.first(where: { $0.name == "claude" })?.kind == "token" {
+                Text("Your Claude login is a setup-token: it runs sessions but cannot open Remote Control. "
+                     + "Make it on a machine below to have Remote Control.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
             // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
             // revoked sat here as "Kept" until a runner stopped at its first
             // message. Offered only where there is a service to ask (C-2).
