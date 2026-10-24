@@ -17,8 +17,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const IOS = iosSources();
+const ANDROID = androidSources();
 const HOST_VIEW = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
 
 // The sentences a person reads, the same on both phones.
@@ -43,4 +45,15 @@ test('iOS: the words about a sign-in and a setup-token', () => {
   }
   // Said only when the minter said which kind it keeps (C-5).
   assert.match(IOS, /if kept\.items\.first\(where: \{ \$0\.name == "claude" \}\)\?\.kind == "token" \{/);
+});
+
+test('Android: no machine’s page signs anybody in, with the same words about a sign-in and a setup-token', () => {
+  assert.doesNotMatch(ANDROID, /Text\("Sign in to Claude"\)/);
+  assert.doesNotMatch(ANDROID, /onlyClaude = true\)/);
+  assert.doesNotMatch(ANDROID, /Connect Claude on \$host/);
+  for (const words of SAID) assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
+  assert.match(ANDROID, /if \(kept\.items\.firstOrNull \{ it\.name == "claude" \}\?\.kind == "token"\) \{/);
+  // The empty list asks the vault, as iOS does.
+  assert.match(ANDROID, /needsSetup = binHosts\.isNotEmpty\(\) && \(claude == ClaudeKept\.Missing \|\| claude == ClaudeKept\.NeedsGitHub\)/);
+  assert.match(ANDROID, /OutlinedButton\(onClick = onSetUp\) \{ Text\("Set up Claude"\) \}/);
 });

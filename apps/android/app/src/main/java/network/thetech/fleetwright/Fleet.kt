@@ -1759,10 +1759,15 @@ class Fleet(
      * code is a live credential for the minutes it lasts. Passing an id is what
      * keeps a send that could not reach the fleet out of the outbox.
      */
-    suspend fun setupToken(host: String, code: String? = null, reply: String? = null): Reply =
+    /** `kind = "login"` asks for the whole sign-in Remote Control needs, in place of a setup-token (protocol 15). */
+    suspend fun setupToken(host: String, code: String? = null, reply: String? = null, kind: String? = null): Reply =
         intent(
             "setuptoken",
-            buildMap { if (code != null) put("code", code); if (reply != null) put("reply", reply) },
+            buildMap {
+                if (kind != null) put("kind", kind)
+                if (code != null) put("code", code)
+                if (reply != null) put("reply", reply)
+            },
             host = host,
             idempotencyKey = "app-" + java.util.UUID.randomUUID().toString(),
         )

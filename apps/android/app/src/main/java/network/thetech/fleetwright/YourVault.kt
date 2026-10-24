@@ -113,6 +113,15 @@ internal fun YourVault(settings: Settings) {
                 style = Design.Style.bodySmall,
                 color = Design.Palette.ink.now,
             )
+            // A SETUP-TOKEN IS NOT A SIGN-IN, and "Kept: Claude" let a person
+            // think Remote Control would work. Said only when the minter said
+            // which (C-5): null is a minter from before it did.
+            if (kept.items.firstOrNull { it.name == "claude" }?.kind == "token") {
+                Hint(
+                    "Your Claude login is a setup-token: it runs sessions but cannot open Remote Control. " +
+                        "Make it on a machine below to have Remote Control.",
+                )
+            }
             // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
             // revoked sat here as "Kept" until a runner stopped at its first
             // message. Offered only where there is a service to ask (C-2).

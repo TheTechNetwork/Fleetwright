@@ -127,9 +127,9 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                                 busy = true
                                 val sending = code
                                 code = ""
-                                val r = phone.keepTokenFromMachine(Fleet(settings), pageHost, sending)
+                                val r = phone.keepFromMachine(Fleet(settings), pageHost, sending)
                                 failed = r.isFailure
-                                result = r.getOrElse { it.message ?: "$pageHost did not make a token." }
+                                result = r.getOrElse { it.message ?: "$pageHost did not sign you in." }
                                 if (r.isSuccess) {
                                     page = null
                                     onKept()
@@ -162,7 +162,7 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                             scope.launch {
                                 busy = true
                                 result = ""
-                                val reply = Fleet(settings).setupToken(machine)
+                                val reply = Fleet(settings).setupToken(machine, kind = "login")
                                 val url = reply.url
                                 if (reply.ok && url != null) {
                                     page = url
@@ -179,15 +179,15 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                         modifier = Modifier.heightIn(min = 48.dp),
                     ) { Text(if (busy) "Starting…" else "Make it on $machine") }
                     Hint(
-                        "$machine runs claude setup-token for you. The token comes back sealed to this phone, " +
-                            "and the machine keeps no copy.",
+                        "$machine signs you in to Claude, the kind of login Remote Control needs. It comes back " +
+                            "sealed to this phone, and the machine keeps no copy.",
                     )
                 }
                 Hint(
                     if (machines.isEmpty()) {
-                        "On a computer, run claude setup-token, sign in, and paste the line it prints here."
+                        "On a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control."
                     } else {
-                        "Or, on a computer, run claude setup-token, sign in, and paste the line it prints here."
+                        "Or, on a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control."
                     },
                 )
                 OutlinedTextField(

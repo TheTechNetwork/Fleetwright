@@ -51,22 +51,26 @@ test('iOS: a code is never held in the outbox', () => {
 test('Android: a connected machine is offered, and its page opens by itself', () => {
   assert.match(ANDROID, /machines = Fleet\(settings\)\.fleetHosts\(\)\.filter \{ it\.state != "offline" \}\.map \{ it\.hostId \}\.sorted\(\)/);
   assert.match(ANDROID, /Text\(if \(busy\) "Starting…" else "Make it on \$machine"\)/);
-  assert.match(ANDROID, /val reply = Fleet\(settings\)\.setupToken\(machine\)[\s\S]{0,500}?uri\.openUri\(url\)/);
+  assert.match(ANDROID, /val reply = Fleet\(settings\)\.setupToken\(machine, kind = "login"\)[\s\S]{0,500}?uri\.openUri\(url\)/);
   assert.ok(ANDROID.includes('Token from claude setup-token'));
 });
 
-test('Android: the token comes back sealed to a key made for that one answer, and is kept like a pasted one', () => {
+test('Android: the sign-in comes back sealed to a key made for that one answer, and is kept in the vault', () => {
   assert.match(ANDROID, /const val SETUP_TOKEN_AAD = "fleetwright-setup-token\/v1"/);
-  const keep = ANDROID.slice(ANDROID.indexOf('suspend fun keepTokenFromMachine('), ANDROID.indexOf('private fun github('));
+  const keep = ANDROID.slice(ANDROID.indexOf('suspend fun keepFromMachine('), ANDROID.indexOf('private fun github('));
   assert.match(keep, /val key = Seal\.newKey\(\)/);
-  assert.match(keep, /fleet\.setupToken\(host, code = code, reply = key\.publicKey\)/);
+  assert.match(keep, /fleet\.setupToken\(host, code = code, reply = key\.publicKey, kind = "login"\)/);
   assert.match(keep, /Seal\.open\(key, Seal\.SETUP_TOKEN_AAD, sealed\)/);
-  assert.match(keep, /depositClaudeLogin\(fleet, token\)/);
-  assert.match(ANDROID, /"setuptoken",[\s\S]{0,200}?idempotencyKey = "app-"/);
+  assert.match(keep, /if \(signIn != null\) return@runCatching depositClaudeSignIn\(fleet, signIn\)\.getOrThrow\(\)/);
+  assert.match(keep, /val kept = depositClaudeLogin\(fleet, token\)\.getOrThrow\(\)/);
+  assert.ok(keep.includes('is older and made a setup-token, which runs sessions but cannot open Remote Control.'));
+  assert.match(ANDROID, /JSONObject\(\)\.put\("v", 1\)\.put\("github", github\)\.put\("signIn", signIn\)/);
+  assert.match(ANDROID, /"setuptoken",[\s\S]{0,300}?idempotencyKey = "app-"/);
 });
 
 test('both phones say the same things', () => {
   for (const words of [
+    'signs you in to Claude, the kind of login Remote Control needs. It comes back ',
     'and the machine keeps no copy.',
     '1. Open the sign-in page',
     '2. Sign in to Claude, copy the code the page shows, and paste it here.',

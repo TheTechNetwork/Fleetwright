@@ -387,12 +387,6 @@ fun FleetScreen(
     var claude by remember { mutableStateOf<ClaudeKept?>(null) }
     var claudePutOff by remember { mutableStateOf(settings.claudeSetupPutOff) }
     var settingUpClaude by remember { mutableStateOf(false) }
-    // A Claude sign-in asked for from the empty list, on the machine picked.
-    var connectingOn by remember { mutableStateOf<String?>(null) }
-    // Whether THIS PERSON has Claude anywhere. Null until asked, and asked only
-    // when there is nothing to show: "we have not asked" and "asked, and
-    // nobody" stay different, and only the second is a setup step.
-    var haveClaude by remember { mutableStateOf<Boolean?>(null) }
 
     /**
      * @param keepStatus keep whatever is already on screen if the list call
@@ -413,11 +407,6 @@ fun FleetScreen(
         // THE BIN'S CONTENTS, which `list` does not carry. Falls back to what
         // we already had: a fleet call that fails must not blank the list.
         binHosts = runCatching { fleet.fleetHosts() }.getOrDefault(binHosts)
-        if (sessions.isEmpty() && binHosts.isNotEmpty()) {
-            runCatching { fleet.connections() }.getOrNull()?.connections?.let { c ->
-                haveClaude = c.linked("claude") != null
-            }
-        }
         pending = outbox.held.size
         busy = false
     }
@@ -643,9 +632,6 @@ fun FleetScreen(
         RecycleBinSheet(settings = settings, hosts = binHosts, onDismiss = { showBin = false }, onChanged = { refresh(keepStatus = true) })
     }
     if (showActivity) ActivitySheet(settings, onDismiss = { showActivity = false })
-    connectingOn?.let { host ->
-        CredentialsSheet(settings, host, onDismiss = { connectingOn = null; refresh() }, onlyClaude = true)
-    }
 
     Scaffold(
         topBar = {
@@ -843,10 +829,12 @@ fun FleetScreen(
                                     configured = settings.configured,
                                     // TWO DIFFERENT EMPTY SCREENS, as on iOS. A
                                     // person with nowhere to run anything is
-                                    // looking at a setup step, not an empty list.
-                                    needsSetup = binHosts.isNotEmpty() && haveClaude == false,
-                                    hosts = binHosts.map { it.hostId },
-                                    onConnect = { connectingOn = it },
+                                    // looking at a setup step, not an empty list,
+                                    // and whether they are is their vault's
+                                    // answer (ClaudeKept): null and CannotTell
+                                    // say nothing.
+                                    needsSetup = binHosts.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub),
+                                    onSetUp = { settingUpClaude = true },
                                     onSignIn = { tab = "you" },
                                 )
                             }
@@ -892,8 +880,7 @@ fun FleetScreen(
 private fun EmptySessions(
     configured: Boolean,
     needsSetup: Boolean,
-    hosts: List<String>,
-    onConnect: (String) -> Unit,
+    onSetUp: () -> Unit,
     onSignIn: () -> Unit,
 ) {
     Column(
@@ -908,11 +895,10 @@ private fun EmptySessions(
             }
             needsSetup -> {
                 Text("Nothing set up yet", style = Design.Style.section, color = Design.Palette.ink.now)
-                Hint("A session runs on YOUR Claude account. Sign in to Claude on one of these machines and you can start work here.")
-                // THE SAME SIGN-IN A MACHINE'S PAGE OFFERS, on the machine picked.
-                hosts.forEach { host ->
-                    OutlinedButton(onClick = { onConnect(host) }) { Text("Connect Claude on $host") }
-                }
+                Hint("A session runs on YOUR Claude account. Keep your login in your vault once, and every machine you approve uses it.")
+                // THE VAULT'S CLAUDE ROWS, the same as Set up Claude everywhere
+                // else: one login a person, not one a machine.
+                OutlinedButton(onClick = onSetUp) { Text("Set up Claude") }
             }
             else -> {
                 Text("No sessions", style = Design.Style.section, color = Design.Palette.ink.now)
