@@ -344,6 +344,10 @@ jobs:
             # sign-ins are renewed by the same client. Public, like the App's.
             cf_client_id=$(sed -n 's/^FLEETWRIGHT_CLOUDFLARE_CLIENT_ID *= *"\(.*\)"/\1/p' "$config" | head -1)
             [ -n "$cf_client_id" ] && minter_vars+=(--var "FLEETWRIGHT_CLOUDFLARE_CLIENT_ID:$cf_client_id")
+            # And its registered scopes, for the browser's signing page, which
+            # starts the sign-in itself (src/fleet/minter/sign-page.js). Public.
+            cf_scopes=$(sed -n 's/^FLEETWRIGHT_CLOUDFLARE_SCOPES *= *"\(.*\)"/\1/p' "$config" | head -1)
+            [ -n "$cf_scopes" ] && minter_vars+=(--var "FLEETWRIGHT_CLOUDFLARE_SCOPES:$cf_scopes")
             # ITS ONE PUBLIC PATH, on the fleet's own hostname: the deposit
             # key's public half, which phones and fleetwright-claude-login look
             # up there instead of anyone pasting a pin (worker/src/minter.js,

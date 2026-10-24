@@ -390,6 +390,13 @@ async function signingHost(request, url, env) {
     clientId: String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || ''),
     fleet: String(env.FLEETWRIGHT_NAME || ''),
     fleetParams: SIGNER_FLEET_PARAMS,
+    // A CLOUDFLARE SIGN-IN IS OFFERED ONLY WHERE ONE CAN BE KEPT: the client
+    // this Worker renews with, its secret (the vault refuses without one) and
+    // the client's registered scopes, which an authorize without asks for
+    // nothing usable. The secret is looked at, never sent.
+    cloudflare: env.FLEETWRIGHT_CLOUDFLARE_CLIENT_ID && env.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET && env.FLEETWRIGHT_CLOUDFLARE_SCOPES
+      ? { clientId: String(env.FLEETWRIGHT_CLOUDFLARE_CLIENT_ID), scopes: String(env.FLEETWRIGHT_CLOUDFLARE_SCOPES) }
+      : null,
   });
   if (page) return new Response(request.method === 'HEAD' ? null : page.body, { status: page.status, headers: page.headers });
   if (url.pathname === KEY_PATH && (request.method === 'GET' || request.method === 'HEAD')) return publicKey(env);
