@@ -16,9 +16,10 @@
 // one (src/core/vault-store.js).
 //
 // RENEWED THE WAY CLAUDE CODE RENEWS IT, against the same address with the
-// same public client: read off Claude Code 2.1.42's own constants, not
-// guessed, because a renewal that is wrong signs the person out everywhere at
-// once. If Anthropic moves it, renewing fails with a sentence, and the boxes
+// same public client and the scopes the sign-in was granted: read off Claude
+// Code's own code (2.1.42, and again on 2.1.306, the version the session
+// image pins), not guessed, because a renewal that is wrong signs the person
+// out everywhere at once. If Anthropic moves it, renewing fails with a sentence, and the boxes
 // keep the access token they have until it runs out.
 //
 // The row it lives in is the one a runner reads (claude.js), sealed at rest to
@@ -28,6 +29,14 @@ import { atRestAad, seal, open } from '../seal.js';
 
 export const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 export const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+/**
+ * Asked for only when a sign-in names no scopes of its own. A renewal asks
+ * for the scopes the sign-in was granted, which is what Claude Code falls back
+ * to when its own wider ask is refused (2.1.306): asking for one it was never
+ * granted is `invalid_scope`, a 400 that would read here as Claude refusing
+ * the sign-in, and asking for fewer would hand boxes a narrower token than
+ * the person signed in for.
+ */
 export const CLAUDE_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers'];
 
 /** Renewed when less than this is left, as the vault's other sign-ins are. */
@@ -98,7 +107,7 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
     res = await fetchImpl(CLAUDE_TOKEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: oauth.refreshToken, client_id: CLAUDE_CLIENT_ID, scope: CLAUDE_SCOPES.join(' ') }),
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: oauth.refreshToken, client_id: CLAUDE_CLIENT_ID, scope: (oauth.scopes?.length ? oauth.scopes : CLAUDE_SCOPES).join(' ') }),
     });
   } catch (e) {
     return { ok: false, refused: false, message: `Claude could not be reached to renew it (${/** @type {Error} */ (e).message})` };

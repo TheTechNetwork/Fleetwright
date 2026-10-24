@@ -1068,8 +1068,11 @@ test('a whole Claude sign-in is kept once, renewed by the minter alone, and no b
   t.after(m.restore);
   const a = await generateKeyPair();
   const b = await generateKeyPair();
-  // TEN MINUTES LEFT, so the first box to ask renews it.
-  const made = claudeSignInFor('eli', 10 * 60_000);
+  // TEN MINUTES LEFT, so the first box to ask renews it. Granted the scopes
+  // Claude Code 2.1.306 signs in for, which a renewal keeps: asking for fewer
+  // would hand every box a narrower token than the person signed in for.
+  const signedInFor = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload'];
+  const made = claudeSignInFor('eli', 10 * 60_000, signedInFor);
   const kept = await m.phone({ op: 'put', name: 'claude', signIn: made });
   assert.equal(kept.ok, true, kept.text);
   assert.match(kept.text, /Kept your Claude sign-in .* with Remote Control\. It is renewed here and nowhere else\. Claude accepted it just now\./);
@@ -1087,7 +1090,7 @@ test('a whole Claude sign-in is kept once, renewed by the minter alone, and no b
     assert.match(claude.value, /^sk-ant-oat01-renewed/);
     assert.ok(claude.expiresAt > Date.now() + 7 * 3_600_000);
     assert.equal(claude.login.subscriptionType, 'max');
-    assert.deepEqual(claude.login.scopes, ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers']);
+    assert.deepEqual(claude.login.scopes, signedInFor);
     assert.equal(claude.account.emailAddress, 'eli@example.com');
     assert.equal(claude.account.notAField, undefined, 'only the account fields Claude Code reads are kept');
     assert.ok(!JSON.stringify(r.answer).includes('sk-ant-ort01'), 'a box is never given a refresh token');
