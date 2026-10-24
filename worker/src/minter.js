@@ -61,6 +61,8 @@ import { answerVaultDevice, answerVaultBox, answerVaultKeys } from '../../src/fl
 import { generateKeyPair } from '../../src/fleet/crypto.js';
 import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
+import { signerRoutes, SIGNER_VERBS } from '../../src/fleet/minter/sign-page.js';
+import { VERBS } from '../../src/fleet/protocol/intents.js';
 
 /** A request is a repository or a login, a job token and a public key. Anything bigger is not one. */
 const MAX_BODY = 16 * 1024;
@@ -362,6 +364,35 @@ async function signingPublic(env) {
   }
 }
 
+/**
+ * Per verb the signing page signs, the parameters the fleet sets after the
+ * person asked, which a signature leaves out (intent-signature.js). From the
+ * protocol's own table, so the page and a box agree on the bytes.
+ */
+const SIGNER_FLEET_PARAMS = Object.fromEntries(
+  SIGNER_VERBS.map((verb) => [verb, Object.entries(/** @type {any} */ (VERBS)[verb]?.params ?? {}).filter(([, p]) => p?.setBy === 'fleet').map(([k]) => k)]),
+);
+
+/**
+ * The signing host, and only what it serves.
+ *
+ * @param {Request} request @param {URL} url @param {Record<string, any>} env
+ */
+async function signingHost(request, url, env) {
+  const page = await signerRoutes({ method: request.method, path: url.pathname }, {
+    fleetOrigin: String(env.FLEETWRIGHT_FLEET_ORIGIN || ''),
+    clientId: String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || ''),
+    fleet: String(env.FLEETWRIGHT_NAME || ''),
+    fleetParams: SIGNER_FLEET_PARAMS,
+  });
+  if (page) return new Response(request.method === 'HEAD' ? null : page.body, { status: page.status, headers: page.headers });
+  if (url.pathname === KEY_PATH && (request.method === 'GET' || request.method === 'HEAD')) return publicKey(env);
+  return new Response('Not here. This address serves the signing page and nothing else.', {
+    status: 404,
+    headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+  });
+}
+
 export default {
   /**
    * @param {Request} request
@@ -369,6 +400,8 @@ export default {
    */
   async fetch(request, env) {
     const url = new URL(request.url);
+    const signHost = String(env.FLEETWRIGHT_SIGNING_HOST || '').trim().toLowerCase();
+    if (signHost && url.hostname.toLowerCase() === signHost) return signingHost(request, url, env);
     if (url.pathname === KEY_PATH && (request.method === 'GET' || request.method === 'HEAD')) {
       return publicKey(env);
     }
