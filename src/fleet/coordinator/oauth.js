@@ -511,19 +511,20 @@ export function deviceReturnUrl({ code, state, provider = 'github' }) {
 export const SIGNER_STATE_RE = /^s\.[A-Za-z0-9_-]{22,128}$/;
 
 /**
- * Where a signing page's sign-in goes back to: that page's callback on the
- * configured signing origin, with the code and the state, each checked
- * against its shape and percent-encoded.
+ * Where a signing page's sign-in goes back to: that page's callback for the
+ * provider on the configured signing origin, with the code and the state, each
+ * checked against its shape and percent-encoded. GitHub to list the browser
+ * and open the vault, and either provider to keep a sign-in in it.
  *
- * @param {{ code: unknown, state: unknown, signingOrigin: string|null }} q
+ * @param {{ code: unknown, state: unknown, signingOrigin: string|null, provider?: 'github'|'cloudflare' }} q
  * @returns {string|null}  null when either does not look like one, or there is no signing page
  */
-export function signerReturnUrl({ code, state, signingOrigin }) {
+export function signerReturnUrl({ code, state, signingOrigin, provider = 'github' }) {
   const c = String(code ?? '');
   const st = String(state ?? '');
   const base = normaliseOrigin(signingOrigin);
   if (!base || !base.startsWith('https://') || !CODE_RE.test(c) || !SIGNER_STATE_RE.test(st)) return null;
-  return `${base}/oauth/github/callback?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
+  return `${base}/oauth/${provider === 'cloudflare' ? 'cloudflare' : 'github'}/callback?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
 }
 
 /** What a state this coordinator minted looks like (a uuid), as far as a page will carry one. */

@@ -4333,7 +4333,7 @@ export class CoordinatorCore {
     if (SIGNER_STATE_RE.test(String(state ?? ''))) {
       const back = signerReturnUrl({ code, state, signingOrigin: this.signingOrigin });
       return back
-        ? { ok: true, device: back, text: 'Back to the signing page to finish listing this browser.' }
+        ? { ok: true, device: back, text: 'Back to the signing page to finish signing in to GitHub.' }
         : { ok: false, text: this.signingOrigin ? 'GitHub did not send back a code to finish signing in with. Try again from the signing page.' : 'This fleet has no signing page for a browser.' };
     }
     // TWO FLOWS ARRIVE AT THIS ONE URL, and only one of them was ours.
@@ -4417,6 +4417,14 @@ export class CoordinatorCore {
       return back
         ? { ok: true, device: back, text: 'Back to Fleetwright to finish signing in to Cloudflare.' }
         : { ok: false, text: 'Cloudflare did not send back a code to finish signing in with. Try again from the app.' };
+    }
+    // AND THE BROWSER'S SIGNING PAGE, keeping a Cloudflare sign-in in the
+    // person's vault: GitHub's branch, to the same one configured origin.
+    if (SIGNER_STATE_RE.test(String(state ?? ''))) {
+      const back = signerReturnUrl({ code, state, signingOrigin: this.signingOrigin, provider: 'cloudflare' });
+      return back
+        ? { ok: true, device: back, text: 'Back to the signing page to keep this Cloudflare sign-in in your vault.' }
+        : { ok: false, text: this.signingOrigin ? 'Cloudflare did not send back a code to finish signing in with. Try again from the signing page.' : 'This fleet has no signing page for a browser.' };
     }
     // A person who pressed Deny arrives here with `error=access_denied` and no
     // code. The query's own words are NOT echoed — this page is reached by

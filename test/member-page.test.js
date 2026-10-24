@@ -17,7 +17,7 @@
 //      parse and a service worker the browser refuses to register both fail
 //      silently, in a console nobody has open.
 //
-// The behaviour of the page in a browser — sign-in, the connect flows, the
+// The behaviour of the page in a browser — sign-in, opening the vault, the
 // keyboard, contrast, the phone width — was verified by driving a real
 // Chromium against a real coordinator, which is what R-35 asks for and what no
 // assertion in this file can replace.
@@ -65,11 +65,11 @@ test('a page served before the token gate gives away nothing', () => {
   const body = get(MEMBER_PATH).body;
   assert.equal(/fwk_/.test(body), false, 'a fleet credential is on the page');
   assert.equal(/FLEETWRIGHT_API_TOKEN|FLEETWRIGHT_HOST_TOKEN/.test(body), false, 'a break-glass token is named');
-  // The two routes it posts to, and no third — both relative, so the page
-  // cannot be made to send a credential anywhere but the coordinator that
-  // served it.
+  // The one route it posts to itself, relative, so the page cannot be made to
+  // send a credential anywhere but the coordinator that served it. What it
+  // carries for the signing page is the next test's.
   const posts = [...body.matchAll(/fetch\('([^']+)'/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(posts)].sort(), ['/api/intent', '/api/session']);
+  assert.deepEqual([...new Set(posts)].sort(), ['/api/session']);
   // No absolute address of ours anywhere: an internal hostname baked into a
   // public page is a map of the fleet handed to whoever asks for the page.
   const absolute = [...body.matchAll(/https?:\/\/[^\s"'`)]+/g)].map((m) => m[1] ?? m[0]);
@@ -80,6 +80,27 @@ test('a page served before the token gate gives away nothing', () => {
       `${url} is an address this page should not be publishing`,
     );
   }
+});
+
+test('it opens the vault where the fleet has a signing page, carries only what that page needs, and says so where it has none', () => {
+  // EVERY MACHINE REFUSES TO KEEP A PERSON'S CREDENTIAL NOW (sidecar.js,
+  // VAULT_ONLY), so a Connect button that asked one to was a button that led
+  // to a refusal. With a signing page the vault opens there; without one
+  // there is no button at all, and a sentence says where to go instead.
+  const signer = 'https://sign.fleet.example';
+  const withSigner = get(MEMBER_PATH, { ...DEPS, signer }).body;
+  assert.match(withSigner, /id="signing-open">Open your vault</);
+  assert.equal(/id="providers"|Connect/.test(withSigner), false, 'a per-machine Connect is still on the page');
+  // WHAT IT CARRIES FOR THE SIGNING PAGE, and the one verb an intent it
+  // carries may be: that page could otherwise have this browser's credential
+  // start or stop sessions, which nobody reviewed it as a door for.
+  const relays = [...String(/var RELAYS = \{([^}]*)\};/.exec(withSigner)?.[1]).matchAll(/'([A-Z]+ [^']+)': true/g)].map((m) => m[1]);
+  assert.deepEqual(relays.sort(), ['GET /api/hosts/enrolled', 'POST /api/github/device', 'POST /api/intent', 'POST /api/vault']);
+  assert.match(withSigner, /var RELAYED_VERBS = \['setuptoken'\];/);
+
+  const without = get(MEMBER_PATH).body;
+  assert.equal(/id="signing-open"/.test(without), false, 'a button to a signing page the fleet does not have');
+  assert.match(without, /This fleet has no signing page, so a browser cannot reach your vault/);
 });
 
 test('the only scripts on it belong to the sign-in it runs', () => {
