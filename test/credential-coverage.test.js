@@ -197,6 +197,32 @@ test('a Claude token is made on the machine somebody picked, busy or not', async
   assert.match(String(unnamed.text), /rpi-7550/);
 });
 
+test('a whole Claude sign-in is refused, by name, on a machine too old to make one', async () => {
+  // Reported from a phone: Make it on a machine on an older box came back as
+  // "Claude refused that token (401)". The box was not handed `kind`, made a
+  // setup-token instead, and took it off its pane cut short. Refused before
+  // the box is asked, so no sign-in page is opened for a token nobody wanted.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  for (const [id, protocol] of [['old-box', 14], ['new-box', 15]]) {
+    core.registry.hosts.set(id, { hostId: id, state: 'healthy', connected: true, healthAt: Date.now(), health: { protocol, capacity: { running: 0, max: 4 } } });
+  }
+  /** @type {any[]} */
+  const sent = [];
+  core.send = async (host, spec) => {
+    sent.push({ host: host.hostId, params: spec.params });
+    return { ok: true, hostId: host.hostId, text: 'started', url: 'https://claude.com/cai/oauth/authorize?x=1' };
+  };
+  const old = await core.dispatch({ verb: 'setuptoken', params: { kind: 'login' }, preferHost: 'old-box' });
+  assert.equal(old.error?.code, 'host_outdated');
+  assert.match(String(old.text), /old-box is too old to make a whole Claude sign-in.*protocol 14, and this needs 15\. Update it, or make the sign-in on another machine/);
+  assert.deepEqual(sent, [], 'the old box was not asked');
+  // A setup-token asked for as one still goes, and a box that speaks 15 is handed the kind.
+  assert.equal((await core.dispatch({ verb: 'setuptoken', params: {}, preferHost: 'old-box' })).ok, true);
+  assert.equal((await core.dispatch({ verb: 'setuptoken', params: { kind: 'login' }, preferHost: 'new-box' })).ok, true);
+  assert.deepEqual(sent.map((x) => [x.host, x.params.kind ?? null]), [['old-box', null], ['new-box', 'login']]);
+});
+
 test('a pasted token reaches the fleet’s boxes and the person’s own, never a box or runner another member controls', async () => {
   // FOUND BY AN AUDIT: any member can mint a host pin, so bob enrolled a box of
   // his own and a runner, and alice's pasted GitHub token arrived on both —
