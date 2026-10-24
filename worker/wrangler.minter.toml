@@ -11,7 +11,8 @@
 #
 # Read this file as the security boundary: no routes, no workers.dev address,
 # no preview URLs, and one binding, to a Durable Object of its own. The one
-# thing on the internet is a public key: the deploy adds a single route,
+# thing on the internet is a public key, and, where a fleet names a signing
+# host, the browser's signing page on that host alone: the deploy adds a single route,
 # <the fleet's hostname>/.well-known/fleetwright-minter, with --route, because
 # the hostname is the coordinator config's and not this file's. Every other
 # path answers only the coordinator's service binding. It cannot reach the fleet, a session or a host; it
@@ -63,6 +64,17 @@ preview_urls = false
 #                                     and renew a person's Cloudflare sign-in.
 #                                     Synced by the same manual job. Unset →
 #                                     vaults keep no Cloudflare sign-in
+#   FLEETWRIGHT_SIGNING_HOST          OPTIONAL. The browser's signing page's
+#                                     own hostname (src/fleet/minter/sign-page.js),
+#                                     a Custom Domain the deploy adds from the
+#                                     repository variable of the same name. On
+#                                     it this Worker answers the page and the
+#                                     public key and nothing else
+#   FLEETWRIGHT_FLEET_ORIGIN          with it: the coordinator's origin, which
+#                                     is who may ask the page to sign and where
+#                                     its GitHub sign-in comes back. The deploy
+#                                     passes it with --var
+#   FLEETWRIGHT_NAME                  the fleet's name, for the page's heading
 #   FLEETWRIGHT_MINTER_DEPOSIT_KEY    SECRET, OPTIONAL. The P-256 key people
 #                                     seal their logins and vaults to, as the
 #                                     JWK `node scripts/minter-deposit-key.mjs`

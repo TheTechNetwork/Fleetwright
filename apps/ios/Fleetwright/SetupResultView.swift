@@ -70,11 +70,13 @@ struct SetupResultView: View {
             .background(Design.Palette.bg)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Close", systemImage: "xmark") } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(copied ? "Copied" : "Copy") {
+                    Button {
                         UIPasteboard.general.string = "\(result.title)\n\(result.text)"
                         copied = true
+                    } label: {
+                        Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
                     }
                 }
             }

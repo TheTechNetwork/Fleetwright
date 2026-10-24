@@ -844,17 +844,33 @@ built: a box checks every intent's signature against that list and counts what
 it found in its health (`intent-keys.js`), and refuses nothing for it. Phase 2
 is built for the phones: they sign each intent that names its box, with a key
 the minter lists, and the coordinator carries a signature only with what it was
-made over. Phase 3's switch is built and off by default: a box run with
-`FLEETWRIGHT_REQUIRE_SIGNED=1` refuses whatever a person did not sign, so on
-that box the bound narrows to denial of service plus the three verbs the
-coordinator says alone (`forgetperson`, `vmlogin`, `mint`), each checked or
-harmless as `signed-intents.md` argues. On every other box the bound above still
-holds whole, and the switch costs the features `signed-intents.md` lists, which
-sign nothing yet.
-*Falsify:* on a box with the switch set, send it an unsigned `start` or one signed
-by a key the minter does not list; `sidecar.js` must refuse it with
-`signature_required` (`test/vault.test.js` does). On a box without it, nothing
-is refused for a signature.
+made over. Phase 3's switch is built, and `signers` is its default: a box run with
+`FLEETWRIGHT_REQUIRE_SIGNED=all` refuses whatever a person did not sign or
+delegate, so on that box the bound narrows to denial of service, plus what the
+people on it delegated (each delegation names its verbs, boxes, parameters and
+a window of at most a month, and is revocable at the minter), plus the three
+verbs the coordinator says alone (`forgetperson`, `vmlogin`, `mint`), each
+checked or harmless as `signed-intents.md` argues. `signers` gives the same
+bound for every person who has listed a key and for anything with nobody named,
+and leaves a person with no key where they were: a coordinator can act as them
+on that box, which it can only because they sign nothing. So on a box left at
+the default, the bound above still holds whole for people with no key and for a
+box whose operator set `off`. A member with no phone lists a key from a browser
+through the minter's signing page, on a hostname the coordinator does not serve
+(`sign-page.js`); the coordinator still serves `/me`, which asks that page, so
+it can ask it to sign any of the five credential verbs, and the person reading
+each request there is the check. A key from either is listed by whoever
+finishes a GitHub sign-in as the person, so a coordinator that phishes that
+authorization gets a key listed, phone or browser alike.
+*Falsify:* on a box with the switch set, send it an unsigned `start`, one signed
+by a key the minter does not list, one carrying a delegation that covers another
+session, or one carrying a delegation its maker revoked; `sidecar.js` must refuse
+each with `signature_required` (`test/vault.test.js` does). With `signers`, an
+unsigned `start` naming nobody must be refused, and one naming a person whose key
+the box has seen must stay refused after a restart and after a key list that
+leaves them out. On a box without the switch, nothing is refused for a
+signature. On the signing host, every POST route of the minter must 404 and the
+page must sign no verb outside the five (`test/sign-page.test.js`).
 
 ### 4.2 Compromised host (root on the box)
 

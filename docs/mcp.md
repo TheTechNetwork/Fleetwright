@@ -54,6 +54,17 @@ them laid out as another host's, with an instruction an admin's agent took for
 the fleet's (eighth audit). Whatever else a box says in a fan-out reply is
 quoted under its name on one line.
 
+## On a box that takes only what a person signed
+
+An MCP client holds a fleet credential, not a phone's key, so nothing it asks
+for carries a person's signature. A box run with `FLEETWRIGHT_REQUIRE_SIGNED`
+(`docs/signed-intents.md`) takes its calls only under a **delegation** the
+person signed on their phone: under You → Delegations, *Allow for a day* or
+*Allow for a week*. It covers the verbs the tools offer below that a box would
+want signed, less `exchange` and `update`, on any box, and the phone can revoke
+it there. Without one, a call to such a box is refused with a sentence saying
+where to allow it.
+
 ## What is not exposed, and why that is a policy rather than a lock
 
 ```
