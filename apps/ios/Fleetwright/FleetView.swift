@@ -70,7 +70,10 @@ struct FleetApp: View {
                 })
             }
             Tab("Machines", systemImage: "server.rack", value: Tabs.machines) {
-                NavigationStack { MachinesView(settings: settings, opening: $openHost, openingPool: $openPool) }
+                ListBesideDetail(nothingOpen: "No machine open", systemImage: "server.rack",
+                                 hint: "Pick a machine and its page opens here, beside the list.") {
+                    MachinesView(settings: settings, opening: $openHost, openingPool: $openPool)
+                }
             }
             Tab("You", systemImage: "person.crop.circle", value: Tabs.you) {
                 NavigationStack { YouView(settings: settings) }
@@ -100,6 +103,14 @@ struct FleetApp: View {
                 tab = .machines
             })
         }
+        // THE TABS BECOME A SIDEBAR WHERE THERE IS ROOM. Unfolded, an iPhone
+        // Duo is regular width and Sessions, Machines and You sit down the
+        // leading edge, collapsible, instead of floating over the list; closed,
+        // and on every other iPhone, adaptable means the tab bar it always was,
+        // which the Duo's outer display then stands on its side. Same three
+        // destinations either way. docs/watch-and-duo.md.
+        .tabViewStyle(.sidebarAdaptable)
+        .defaultAdaptableTabBarPlacement(.sidebar)
         // The content is the point; the chrome is not. On the way down the
         // tab bar shrinks to a pill and gives the list its height back.
         .tabBarMinimizeBehavior(.onScrollDown)
@@ -172,7 +183,9 @@ struct FleetView: View {
     @AppStorage("claudeSetupPutOff") private var claudePutOff = false
 
     var body: some View {
-        NavigationStack {
+        // Beside its page where there is room: ListBesideDetail says why.
+        ListBesideDetail(nothingOpen: "No session open", systemImage: "square.stack.3d.up",
+                         hint: "Pick a session and its pane opens here, beside the list.") {
             List {
                 // FIRST, ALWAYS, ABOVE THE LIST. docs/psychology.md names
                 // "nothing needs you" as the most important state in the
@@ -377,8 +390,12 @@ struct FleetView: View {
                             Task { await refresh(keepStatus: true) }
                         }
                     } label: {
-                        Label(binCount > 0 ? "Bin (\(binCount))" : "Bin", systemImage: "trash")
+                        Label("Bin", systemImage: "trash")
                     }
+                    // A BADGE, NOT "Bin (3)". On the Duo's side bar an item is its
+                    // symbol, and a count written into the title would vanish
+                    // there; a badge stays on the symbol in every arrangement.
+                    .badge(binCount)
                 }
                 // WHAT HAPPENED WHILE THE APP WAS CLOSED, beside the bin. It
                 // was a section of Settings, which is the last place anybody
@@ -396,7 +413,11 @@ struct FleetView: View {
                     // one-tap start is still there — leaving the sheet blank
                     // and pressing Start is the same thing — but a session
                     // nobody described is one nobody recognises in a week.
-                    Button("New") { showingStart = true }
+                    // A symbol as well as the word, so it can stand in the
+                    // Duo's vertical bar: a text-only item cannot.
+                    Button { showingStart = true } label: {
+                        Label("New session", systemImage: "plus")
+                    }
                         .disabled(busy || !settings.configured)
                 }
             }
