@@ -189,12 +189,12 @@ export async function freshClaude(store, key, userId, io) {
     } else {
       refused = r.refused;
       problem = r.refused
-        ? `${r.message}. Sign in to Claude again from your phone; until then nothing can be given your login once it runs out.`
+        ? `${r.message}. Sign in to Claude again from your phone or the signing page; until then nothing can be given your login once it runs out.`
         : `${r.message}; the login held is good until it runs out.`;
     }
   }
   if (Number(oauth.expiresAt) <= io.now()) {
-    return { held: null, problem: problem ?? 'Your Claude sign-in has run out. Sign in to Claude again from your phone.', refused: true };
+    return { held: null, problem: problem ?? 'Your Claude sign-in has run out. Sign in to Claude again from your phone or the signing page.', refused: true };
   }
   return { held: { kind: 'login', bearer: oauth.accessToken, expiresAt: Number(oauth.expiresAt), oauth, account }, problem, refused };
 }

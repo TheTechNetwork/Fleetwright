@@ -667,7 +667,7 @@ async function testItem(name, row, config, key, who, save) {
   try {
     inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: vaultAtRestAad(who.userId, name), sealed: item.sealed });
   } catch {
-    return said('rejected', `${label(name)} does not open with this minter’s key, so nothing could be given it. Sign in again from your phone.`);
+    return said('rejected', `${label(name)} does not open with this minter’s key, so nothing could be given it. Sign in again from your phone or the signing page.`);
   }
   const due = inside.expiresAt !== null && Number(inside.expiresAt) - config.now() < REFRESH_AHEAD_MS;
   if (inside.refreshToken && (due || name === 'cloudflare')) {
@@ -675,7 +675,7 @@ async function testItem(name, row, config, key, who, save) {
     if (!r.ok) {
       const refused = /refused|rejected|invalid|expired/i.test(r.message);
       return said(refused ? 'rejected' : 'unknown', refused
-        ? `${label(name)} would not renew your sign-in just now (${r.message}). Boxes stop being given it once it runs out. Sign in again from your phone.`
+        ? `${label(name)} would not renew your sign-in just now (${r.message}). Boxes stop being given it once it runs out. Sign in again from your phone or the signing page.`
         : `Whether your ${label(name)} sign-in works could not be told just now: ${r.message}.`);
     }
     row.items[name] = r.item;
@@ -684,7 +684,7 @@ async function testItem(name, row, config, key, who, save) {
     if (name === 'cloudflare') return said('accepted', 'Cloudflare renewed your sign-in just now, so it works.');
   }
   if (inside.expiresAt !== null && Number(inside.expiresAt) <= config.now()) {
-    return said('rejected', `Your ${label(name)} sign-in has run out and has nothing to renew it with. Sign in again from your phone.`);
+    return said('rejected', `Your ${label(name)} sign-in has run out and has nothing to renew it with. Sign in again from your phone or the signing page.`);
   }
   if (name === 'cloudflare') {
     return said('unknown', 'Your Cloudflare sign-in has not run out, and has no renewal to ask Cloudflare with, so whether it still works cannot be told from here.');
@@ -692,7 +692,7 @@ async function testItem(name, row, config, key, who, save) {
   const whose = await githubUser({ token: String(inside.accessToken), fetchImpl: config.fetchImpl });
   if (whose.ok) return said('accepted', `GitHub works: it answered as ${whose.login} just now.`);
   return /\(401\)/.test(whose.message)
-    ? said('rejected', `GitHub refused your sign-in just now. Boxes given it cannot reach your repositories. Sign in again from your phone.`)
+    ? said('rejected', `GitHub refused your sign-in just now. Boxes given it cannot reach your repositories. Sign in again from your phone or the signing page.`)
     : said('unknown', `Whether your GitHub sign-in works could not be told just now: ${whose.message}.`);
 }
 
@@ -883,7 +883,7 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
         row.items[name] = r.item;
         changed = true;
       } else {
-        problems.push(`${label(name)} could not be renewed: ${r.message}. Sign in again from your phone.`);
+        problems.push(`${label(name)} could not be renewed: ${r.message}. Sign in again from your phone or the signing page.`);
       }
     }
     if (inside.expiresAt === null || Number(inside.expiresAt) > config.now()) {

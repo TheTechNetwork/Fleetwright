@@ -64,6 +64,12 @@ preview_urls = false
 #                                     and renew a person's Cloudflare sign-in.
 #                                     Synced by the same manual job. Unset →
 #                                     vaults keep no Cloudflare sign-in
+#   FLEETWRIGHT_CLOUDFLARE_SCOPES     that client's registered scope list, read
+#                                     from the coordinator's config and passed
+#                                     with --var like its id, so the browser's
+#                                     signing page can start a Cloudflare
+#                                     sign-in for the vault. Unset → the page
+#                                     offers none, and phones still can
 #   FLEETWRIGHT_SIGNING_HOST          OPTIONAL. The browser's signing page's
 #                                     own hostname (src/fleet/minter/sign-page.js),
 #                                     a Custom Domain the deploy adds from the
