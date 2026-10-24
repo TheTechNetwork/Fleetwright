@@ -376,8 +376,9 @@ The phones list every delegation under You → Delegations, with Revoke.
 **What an enforcing box still refuses**, because nothing a person signs covers it
 yet:
 
-- the browser page's `connect` and `link` from a browser that has not listed
-  a key with the signing page below, or on a fleet that has no signing page;
+- a browser's Claude sign-in on a machine (`setuptoken`) from a browser that
+  has not listed a key with the signing page below; the page lists one before
+  it offers to make the sign-in;
 - linked repositories and the runner repository when the minter cannot answer
   and the coordinator asks a box instead (`linkrepo`, `runnerrepo`), unless an
   MCP delegation covers them;
@@ -397,9 +398,9 @@ Custom Domain, tells it the fleet's origin (`FLEETWRIGHT_FLEET_ORIGIN`), and
 tells the coordinator the page's (`FLEETWRIGHT_SIGNING_ORIGIN`). A Custom
 Domain sends every path to the minter, and its POST routes trust that only the
 coordinator's binding reaches them, so on the signing host the minter answers
-three GETs, the page, GitHub's way back to it and the public key, and every
-other path is a 404. Unset, there is no signing page and `/me` signs nothing,
-as before.
+four GETs, the page, GitHub's and Cloudflare's ways back to it and the public
+key, and every other path is a 404. Unset, there is no signing page, and a
+browser cannot reach the vault: `/me` says so and sends its members to the app.
 
 **Listing the browser's key** is a phone's listing, done by the page:
 
@@ -420,28 +421,35 @@ as before.
    credential, to `/api/github/device` and `/api/vault` and nowhere else; `/me`
    carries bytes it cannot open.
 
-**Signing.** `/me` sends the page each change to an account, and the page shows
-it and signs only what the person approves there, one request at a time. A
-request for one machine (a Claude sign-in) is signed for that machine. One the
-fleet places or sends everywhere (reading what is connected, a pasted token, a
-provider's sign-in finished on the coordinator's page) is a delegation: that
-verb, those exact values, any machine, ten minutes, the same as the phones
-make. A secret is shown by its length. The page signs `connect`, `link`,
-`unlink`, `exchange` and `renew` and nothing else, so a tricked click still
-cannot sign a start or a provision, and only in the name of the address its
-key is listed for.
+**The vault, and what it signs.** With the same GitHub sign-in, held in the
+window's memory and nowhere else, the page opens the person's vault and does
+what the phone's Credentials screen does ([vault.md](./vault.md), "From a
+browser"). Every vault request is sealed to the minter and every answer sealed
+back to a key made for it. It signs one verb, `setuptoken`, in intents it
+builds itself when the person makes a Claude sign-in on a machine: both halves
+signed for that machine, the second carrying a key the page made, so the
+sign-in comes back sealed to the page. Nothing `/me` sends is signed any more.
+It used to send the page each change to an account, to link on machines, and
+every machine now refuses a person's link (the vault holds it), so that went,
+and a `/me` from before is told so rather than left waiting. `/me` carries four
+requests for the page and no others: `/api/github/device`, `/api/vault`,
+`GET /api/hosts/enrolled`, and `/api/intent` for `setuptoken` alone.
 
-**What it does not stop.** The coordinator serves `/me`, so it can ask the page
-to sign anything on that list, and the person reading the request on the page
-is the whole of the check. It can also serve a page of its own that looks like
-this one and phish a GitHub authorization, which is the same bound a phone's
-key has: a key is listed by whoever finishes a GitHub sign-in as the person
-(`docs/security.md`, SEC-COORD-2). A browser that clears its site data loses
+**What it does not stop.** The coordinator serves `/me`, which carries
+everything the page sends, so it can drop or delay it, and it answers the list
+of machines, so it could offer a key of its own to approve: which is why each
+machine shows the fingerprint the page works out from its key, to compare with
+what `fleetwright-sidecar identity` prints. It can also serve a page of its own
+that looks like this one and phish a GitHub authorization, which is the same
+bound a phone's key has: a key is listed, and a vault opened, by whoever
+finishes a GitHub sign-in as the person (`docs/security.md`, SEC-COORD-2). A browser that clears its site data loses
 its key, and lists a new one the same way; the old one stays on the minter's
 list, unusable, until it is removed from the app under You, Devices.
 
 `test/sign-page.test.js` runs all of it in Chromium against the real minter,
-the coordinator's callback and `/me`.
+the coordinator's callbacks and `/me`: listing, approving a machine, a named
+secret, a Claude sign-in made on a machine, GitHub and Cloudflare, and that
+nothing `/me` carried held a secret in the clear.
 
 `docs/security.md` changes in step: SEC-COORD-2 moves from aspirational to
 observed after phase 1, and to enforced only after phase 3 is the default.

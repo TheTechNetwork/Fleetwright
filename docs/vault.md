@@ -16,7 +16,7 @@ person removes the box.
 |---|---|---|
 | GitHub | the sign-in's access and refresh tokens | the access token, eight hours; renewed in the minter |
 | Cloudflare | the sign-in's access and refresh tokens | the access token; renewed in the minter |
-| Claude | the sign-in `claude auth login` makes, access and refresh token and the account, made on a machine and kept by the phone; or a `claude setup-token` | a sign-in's access token, its expiry and account, as the credentials file Claude Code reads; renewed in the minter. A setup-token as it is |
+| Claude | the sign-in `claude auth login` makes, access and refresh token and the account, made on a machine and kept by the phone or the browser's signing page; or a `claude setup-token` | a sign-in's access token, its expiry and account, as the credentials file Claude Code reads; renewed in the minter. A setup-token as it is |
 | named secrets | `secret:NAME`, any value up to 8 KiB | the value, by name |
 | SSH keys | `secret:SSH_AUTHORIZED_KEYS`, public keys one a line, from You › Credentials › SSH keys | the value, as any named secret is; a machine made on the person's pool takes them on its `fleetwright` account ([hypervisors.md](./hypervisors.md), "Working a machine") |
 | hypervisors | `hypervisor:ADDRESS`, the record a pool's setup handed the phone | the record, held in the sidecar's memory and never given to the hub or a session ([hypervisors.md](./hypervisors.md), "Machines from your pool") |
@@ -32,6 +32,30 @@ A box never holds a refresh token. Renewing happens in one place, inside the
 minter's single Durable Object, under a lock per person, so however many boxes
 ask at once a refresh token is rotated once (`test/vault.test.js` asks from two
 boxes at the same moment and counts one renewal).
+
+## From a browser
+
+A member with no phone keeps their credentials from `/me`, which opens the
+**signing page** the minter serves on a hostname of its own
+([signed-intents.md](./signed-intents.md), "The browser"). Everything the
+phone's Credentials screen does is there: what is kept and whether it works,
+Forget, a named secret typed on that page, GitHub and Cloudflare kept by a
+sign-in the page starts with a PKCE verifier only it holds, and the machines,
+each with the fingerprint the page works out from the machine's key, to
+approve or remove. A Claude sign-in is made on a machine the person picks:
+the page signs both halves of `setuptoken` for that one machine, holds the key
+the sign-in comes back sealed to, and keeps it here, so `/me` and the
+coordinator carry ciphertext and a code a machine types, never the sign-in.
+
+The page opens the vault with the GitHub sign-in it listed its key with, held
+in that window's memory only; a window opened again signs in to GitHub again.
+It offers Cloudflare only where the minter holds the client, its secret and
+its registered scopes (`FLEETWRIGHT_CLOUDFLARE_SCOPES`, which the deploy
+passes from the coordinator's config). `/me` used to link accounts on each
+machine, which every machine now refuses; it carries the page's requests and
+nothing else (`member-page.js`, `RELAYS`). A fleet with no signing page says
+a browser cannot reach the vault, and its members keep credentials from the
+app.
 
 ## Whether it still works
 
@@ -77,7 +101,9 @@ None of it is the coordinator's word. The coordinator relays ciphertext both
 ways and adds one fact the minter checks against something else, and one it
 can only take away with: who is still in the fleet ([below](#when-somebody-leaves-the-fleet)).
 
-**A person**, from their phone, under *Runners from this phone*, *Your vault*.
+**A person**, from their phone, under *Runners from this phone*, *Your vault*,
+or from a browser on the signing page (below, "From a browser"), which asks
+exactly as a phone does.
 Every request is sealed on the phone to the minter's key, which the phone asks
 the minter for itself (see [The minter's key](#the-minters-key) below), with
 the phone's own GitHub token inside. The

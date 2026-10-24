@@ -857,9 +857,11 @@ on that box, which it can only because they sign nothing. So on a box left at
 the default, the bound above still holds whole for people with no key and for a
 box whose operator set `off`. A member with no phone lists a key from a browser
 through the minter's signing page, on a hostname the coordinator does not serve
-(`sign-page.js`); the coordinator still serves `/me`, which asks that page, so
-it can ask it to sign any of the five credential verbs, and the person reading
-each request there is the check. A key from either is listed by whoever
+(`sign-page.js`), which signs only a Claude sign-in made on one machine
+(`setuptoken`), in intents it builds from what the person did on it; the
+coordinator still serves `/me`, which carries what that page sends, so it can
+drop it, or offer a machine's key of its own to approve, which the page shows
+by a fingerprint to compare with what the machine prints. A key from either is listed by whoever
 finishes a GitHub sign-in as the person, so a coordinator that phishes that
 authorization gets a key listed, phone or browser alike.
 *Falsify:* on a box with the switch set, send it an unsigned `start`, one signed
