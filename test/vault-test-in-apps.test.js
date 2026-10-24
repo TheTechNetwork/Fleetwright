@@ -16,8 +16,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const IOS = iosSources();
+const ANDROID = androidSources();
 
 // The sentences a person reads, the same on both phones.
 const SAID = [
@@ -47,4 +49,18 @@ test('iOS: the vault makes a Claude token on a machine, as Set up Claude does', 
   // holding a phone; Set up Claude already offered a machine to run it.
   assert.match(IOS, /ClaudeSetup\(settings: settings\) \{ Task \{ await reload\(\) \} \}/);
   assert.doesNotMatch(IOS, /Forget my Claude login/);
+});
+
+test('Android: Test for the same three, the same Forget dialog, the same Claude rows', () => {
+  assert.ok(ANDROID.includes('ask(fleet, "test",'), 'Android never asks the vault to test');
+  assert.match(ANDROID, /fun isTestable\(name: String\): Boolean = name in setOf\("claude", "github", "cloudflare"\)/);
+  assert.match(ANDROID, /if \(PhoneVault\.isTestable\(item\.name\)\) \{[\s\S]{0,200}Text\("Test \$\{PhoneVault\.label\(item\.name\)\}"\)/);
+  assert.match(ANDROID, /if \(answer\.optString\("state"\) != "accepted"\) error\(text\)/);
+
+  for (const words of SAID) assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
+  assert.match(ANDROID, /title = \{ Text\("Forget \$\{PhoneVault\.label\(name\)\}\?"\) \}/);
+  assert.match(ANDROID, /TextButton\(enabled = !busy, onClick = \{ forgetting = item\.name \}\) \{\s*Text\("Forget \$\{PhoneVault\.label\(item\.name\)\}"\)/);
+
+  assert.match(ANDROID, /ClaudeSetup\(settings\) \{ scope\.launch \{ reload\(\) \} \}/);
+  assert.doesNotMatch(ANDROID, /Forget my Claude login/);
 });
