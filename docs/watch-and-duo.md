@@ -68,6 +68,19 @@ is meant literally.
    sidebar column they open in the detail column. The sidebar is 300 points so
    the page keeps a small iPhone's width in unfolded portrait; the balanced style
    keeps the list from being slid away.
+3. **The tabs are a sidebar where there is room.** The root `TabView` is
+   `.sidebarAdaptable` with `.defaultAdaptableTabBarPlacement(.sidebar)`, both
+   iOS 18, so no availability fork: unfolded, Sessions, Machines and You run down
+   the leading edge, collapsible; closed and on every other iPhone it is the tab
+   bar it was, which the outer display stands on its side.
+4. **Every bar item can stand in the vertical bar.** The closed display puts
+   every system bar at its side, in portrait as well as landscape, and only an
+   item with a symbol can go there. New session, the sheets' Close, Cancel,
+   Done, Save, Copy and Start, the files page's New file and the console's
+   Keyboard each have a symbol and a title now; the bin's count is a badge
+   instead of "Bin (3)", which would have lost the number on its side.
+   Ctrl-Alt-Del stays words, because the words are the information. Android
+   still writes "Bin (3)": a presentation difference, not a rule one.
 
 ### What was checked and needed nothing
 
@@ -83,18 +96,18 @@ is meant literally.
 
 ### Decided against, for now
 
-- **The tab sidebar** (`.defaultTabBarPlacement(.sidebar)`). Beside a split
-  list and page it would be a third column on a 669-point screen. The tab bar
-  stays.
 - **The iOS 27.1 APIs.** Every one needs an `if #available` beside the iOS 26
   path, which is the two-designs cost `project.yml` refuses, and the standard
   containers already avoid the fold. Revisit when the deployment target moves.
 
 ### Still to do
 
-1. **Run it.** CI compiles every line; nobody has opened the split view in the
+1. **Run it.** CI compiles every line; nobody has opened any of this in the
    iPhone Duo simulator or on a device. Fold, unfold, rotate, and open a session
-   from a notification in each pose.
+   from a notification in each pose. **Look first at unfolded portrait**: the tab
+   sidebar, the 300-point list and the page are three columns on 669 points, and
+   the tab sidebar is meant to be the one that collapses. If it does not, the
+   list's width or the split's style is what changes.
 2. **Sheets at compact by compact.** The start sheet and the hypervisor flows are
    the long ones, and closed in landscape is the new shortest screen.
 3. **Two windows.** `UIApplicationSupportsMultipleScenes` would let two sessions
