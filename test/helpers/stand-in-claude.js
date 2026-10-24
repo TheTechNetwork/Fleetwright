@@ -7,7 +7,10 @@
 // And Claude's token address, for the minter renewing a whole sign-in
 // (src/fleet/minter/claude-login.js): a refresh token is answered once with a
 // new pair, slowly so two renewals at once overlap, and refused after that, as
-// a rotated refresh token is. Counted, so a renewal made twice is seen.
+// a rotated refresh token is. Counted, so a renewal made twice is seen. A
+// renewal may ask for the scopes the sign-in was granted or fewer, and one
+// asking for a scope it was never granted is refused with `invalid_scope`, as
+// an OAuth server refuses it.
 
 import { MESSAGES_URL } from '../../src/core/claude-token-probe.js';
 import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID } from '../../src/fleet/minter/claude-login.js';
@@ -15,14 +18,19 @@ import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID } from '../../src/fleet/minter/claud
 /** Renewals asked for, and refresh tokens already used. */
 export const claudeRenewals = { count: 0, used: new Set() };
 
+/** The scopes each refresh token was granted, carried to the one it is rotated to. @type {Map<string, string[]>} */
+const granted = new Map();
+
 /** A sign-in as `claude auth login` writes one, `expiresIn` ms from now. @param {string} name @param {number} [expiresIn] */
-export function claudeSignInFor(name, expiresIn = 8 * 3_600_000) {
+export function claudeSignInFor(name, expiresIn = 8 * 3_600_000, scopes = ['user:inference', 'user:profile', 'user:sessions:claude_code']) {
+  const refreshToken = `sk-ant-ort01-${name}-${'r'.repeat(40)}`;
+  granted.set(refreshToken, scopes);
   return {
     oauth: {
       accessToken: `sk-ant-oat01-${name}-${'a'.repeat(40)}`,
-      refreshToken: `sk-ant-ort01-${name}-${'r'.repeat(40)}`,
+      refreshToken,
       expiresAt: Date.now() + expiresIn,
-      scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+      scopes,
       subscriptionType: 'max',
       rateLimitTier: 'default_claude_max_20x',
     },
@@ -48,9 +56,14 @@ function standInClaudeToken(url, init) {
     if (!old.startsWith('sk-ant-ort01-') || old.includes('revoked') || claudeRenewals.used.has(old)) {
       return reply(400, { error: 'invalid_grant', error_description: 'Refresh token not found or invalid' });
     }
+    const asked = String(f.scope || '').split(' ').filter(Boolean);
+    const allowed = granted.get(old) ?? [];
+    if (asked.some((x) => !allowed.includes(x))) return reply(400, { error: 'invalid_scope', error_description: 'The requested scope is invalid, unknown, or malformed.' });
     claudeRenewals.used.add(old);
     const n = claudeRenewals.count;
-    return reply(200, { access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}`, expires_in: 28800, scope: String(f.scope || '') });
+    const rotated = `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}`;
+    granted.set(rotated, allowed);
+    return reply(200, { access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: 28800, scope: (asked.length ? asked : allowed).join(' ') });
   })();
 }
 
