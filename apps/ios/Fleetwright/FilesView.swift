@@ -77,8 +77,7 @@ struct FilesView: View {
         .task { await load() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { creating = true } label: { Image(systemName: "doc.badge.plus") }
-                    .accessibilityLabel("New file")
+                Button { creating = true } label: { Label("New file", systemImage: "doc.badge.plus") }
             }
         }
         .sheet(item: Binding(get: { reading.map { ReadFile(name: $0.name, body: $0.body) } },
@@ -313,13 +312,15 @@ private struct FileEditor: View {
                 .navigationTitle(file.name)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Close", systemImage: "xmark") } }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
+                        Button {
                             Task {
                                 await onSave(body_)
                                 dismiss()
                             }
+                        } label: {
+                            Label("Save", systemImage: "checkmark")
                         }
                         .disabled(saving || body_ == original)
                     }

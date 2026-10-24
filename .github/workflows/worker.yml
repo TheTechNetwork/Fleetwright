@@ -314,6 +314,9 @@ jobs:
           # minting Worker may mint into. Repository VARIABLES, not secrets.
           MINT_CLIENT_ID: ${{ vars.FLEETWRIGHT_GITHUB_CLIENT_ID }}
           MINT_OWNERS: ${{ vars.FLEETWRIGHT_GITHUB_MINT_OWNERS }}
+          # The browser's signing page's own hostname, a repository VARIABLE:
+          # see "THE BROWSER'S SIGNING PAGE" below. Unset is no signing page.
+          SIGNING_HOST: ${{ vars.FLEETWRIGHT_SIGNING_HOST }}
         run: |
           # Root first: the Worker bundles ../../src, which imports `jose` from
           # the repository root's node_modules. See the check job.
@@ -376,14 +379,43 @@ jobs:
             if [ -n "$minter_host" ] && [ -z "$minter_zone" ]; then
               minter_zone=$(printf '%s' "$minter_host" | awk -F. 'NF>=2 {print $(NF-1)"."$NF}')
             fi
+            # THE BROWSER'S SIGNING PAGE (src/fleet/minter/sign-page.js), on a
+            # hostname of its own, when the repository variable
+            # FLEETWRIGHT_SIGNING_HOST names one: a Custom Domain, for which
+            # Cloudflare makes the DNS record and the certificate, in a zone
+            # this account holds. Its own name rather than a path on the
+            # fleet's, because the point is an ORIGIN the coordinator does not
+            # serve. The minter answers only the page there, and is told the
+            # fleet's origin, which is who may ask it to sign; the coordinator
+            # is told the page's, which is where a sign-in it started goes back
+            # to. Both only once the domain is in place.
+            signing_host=$(printf '%s' "${SIGNING_HOST:-}" | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+            if [ -n "$signing_host" ] && ! printf '%s' "$signing_host" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+              echo "::warning::FLEETWRIGHT_SIGNING_HOST is not a hostname ($signing_host), so there is no signing page."
+              signing_host=""
+            fi
+            [ "$signing_host" = "$minter_host" ] && signing_host=""
+            fleet_name=$(sed -n 's/^FLEETWRIGHT_NAME *= *"\(.*\)"/\1/p' "$config" | head -1)
+            [ -n "$fleet_name" ] && minter_vars+=(--var "FLEETWRIGHT_NAME:$fleet_name")
+            routes=""
+            [ -n "$minter_route" ] && [ -n "$minter_zone" ] && routes="{ pattern = \"$minter_route\", zone_name = \"$minter_zone\" }"
+            if [ -n "$routes" ] && [ -n "$signing_host" ]; then
+              routes="$routes, { pattern = \"$signing_host\", custom_domain = true }"
+              minter_vars+=(--var "FLEETWRIGHT_SIGNING_HOST:$signing_host" --var "FLEETWRIGHT_FLEET_ORIGIN:https://$minter_host")
+            fi
             routed=""
-            if [ -n "$minter_route" ] && [ -n "$minter_zone" ]; then
+            if [ -n "$routes" ]; then
               routed=.wrangler.minter.routed.toml
-              sed "/^preview_urls = false\$/a routes = [ { pattern = \"$minter_route\", zone_name = \"$minter_zone\" } ]" wrangler.minter.toml > "$routed"
+              sed "/^preview_urls = false\$/a routes = [ $routes ]" wrangler.minter.toml > "$routed"
               grep -q "^routes = " "$routed" || routed=""
             fi
+            signing_origin=""
             if [ -n "$routed" ] && npx wrangler deploy --config "$routed" ${minter_vars[@]+"${minter_vars[@]}"}; then
               echo "The minting Worker answers https://$minter_route"
+              if [ -n "$signing_host" ] && [ -n "$minter_host" ]; then
+                signing_origin="https://$signing_host"
+                echo "The browser's signing page is $signing_origin"
+              fi
             else
               [ -n "$minter_route" ] && echo "::warning::The minting Worker could not be given $minter_route${minter_zone:+ in zone $minter_zone}, so phones on this fleet need the pin pasted. Check that CLOUDFLARE_API_TOKEN can read that zone and edit its Workers Routes."
               npx wrangler deploy --config wrangler.minter.toml ${minter_vars[@]+"${minter_vars[@]}"}
@@ -405,7 +437,9 @@ jobs:
           # A repository VARIABLE rather than a secret: it is a filename, and a
           # secret would be unreadable in the log at the moment somebody is
           # trying to work out which config a deploy used.
-          npx wrangler deploy --config "${WRANGLER_CONFIG:-wrangler.toml}"
+          coordinator_vars=()
+          [ -n "${signing_origin:-}" ] && coordinator_vars+=(--var "FLEETWRIGHT_SIGNING_ORIGIN:$signing_origin")
+          npx wrangler deploy --config "${WRANGLER_CONFIG:-wrangler.toml}" ${coordinator_vars[@]+"${coordinator_vars[@]}"}
 
           # The demo and the product page, on their own script. Deployed after
           # the coordinator and in the same step on purpose: they are one

@@ -1683,10 +1683,19 @@ class Fleet(
      * credential that proves who is finishing. Somebody else's sign-in is
      * refused, in words that say so.
      */
-    suspend fun finishSignIn(provider: String, state: String, code: String?, sealed: String?): Reply =
+    //
+    // AND SIGNED FOR, so a box that takes only signed requests takes it: the
+    // fleet finishes it by sending `exchange`, `link` and `renew` in this
+    // person's name, and this phone delegates exactly those, for this provider,
+    // to the box it was for ([host], or any when it was fleet-wide), for ten
+    // minutes.
+    suspend fun finishSignIn(provider: String, state: String, code: String?, sealed: String?, host: String? = null): Reply =
         withContext(Dispatchers.IO) {
             val body = JSONObject().put("provider", provider).put("state", state)
             if (sealed != null) body.put("sealed", sealed) else if (code != null) body.put("code", code)
+            DeviceSigning(settings).delegation(
+                listOf("exchange", "link", "renew"), listOf(host?.takeIf { it.isNotBlank() } ?: "*"), mapOf("provider" to provider), 600_000L,
+            )?.let { body.put("delegation", it) }
             runCatching {
                 val json = post("/api/oauth/finish", body)
                 Reply(ok = json.optBoolean("ok", false), text = json.optString("text"), sessions = emptyList())
@@ -2210,19 +2219,52 @@ class Fleet(
      */
     suspend fun vmStandby(): Result<VmStandby?> = withContext(Dispatchers.IO) {
         runCatching {
-            val o = get("/api/hosts").optJSONObject("vmStandby") ?: return@runCatching null
-            VmStandby(
-                template = o.optString("template"),
-                count = o.optInt("count", 0),
-                network = o.optString("network").takeIf { o.has("network") && !o.isNull("network") && it.isNotBlank() },
-                ready = o.optInt("ready", 0),
-                starting = o.optInt("starting", 0),
-                since = o.optLong("since", 0L).takeIf { it > 0 },
-                failed = o.optJSONObject("failed")?.let { f ->
-                    f.optString("text").takeIf { it.isNotBlank() }?.let { VmStandby.Failure(at = f.optLong("at", 0L), text = it) }
-                },
-            )
+            readVmStandby()
+        }.onSuccess { renewKeepReady(it) }
+    }
+
+    /**
+     * What keeping machines ready needs this phone to have signed: ending
+     * machines, always, and making them from [template] when there is one.
+     */
+    fun keepReadyDelegations(template: String?): List<JSONObject> {
+        val signing = DeviceSigning(settings)
+        val month = 30L * 24 * 3600 * 1000
+        return listOfNotNull(
+            signing.delegation(listOf("vmctl"), listOf("*"), mapOf("action" to "stop"), month),
+            template?.let { signing.delegation(listOf("provision"), listOf("*"), mapOf("platform" to "vm", "template" to it), month) },
+        )
+    }
+
+    /**
+     * Signed again once a day while machines are kept ready, so the month a
+     * delegation runs never ends under somebody who still wants them. The
+     * coordinator keeps the newest of two that cover the same thing.
+     */
+    private fun renewKeepReady(standby: VmStandby?) {
+        if (standby == null || standby.count <= 0 || standby.template.isBlank()) return
+        val now = System.currentTimeMillis()
+        if (now - settings.keepReadyRenewedAt < 24 * 3600 * 1000L) return
+        var sent = false
+        for (d in keepReadyDelegations(standby.template)) {
+            if (runCatching { post("/api/delegations", JSONObject().put("delegation", d)) }.isSuccess) sent = true
         }
+        if (sent) settings.keepReadyRenewedAt = now
+    }
+
+    private fun readVmStandby(): VmStandby? {
+        val o = get("/api/hosts").optJSONObject("vmStandby") ?: return null
+        return VmStandby(
+            template = o.optString("template"),
+            count = o.optInt("count", 0),
+            network = o.optString("network").takeIf { o.has("network") && !o.isNull("network") && it.isNotBlank() },
+            ready = o.optInt("ready", 0),
+            starting = o.optInt("starting", 0),
+            since = o.optLong("since", 0L).takeIf { it > 0 },
+            failed = o.optJSONObject("failed")?.let { f ->
+                f.optString("text").takeIf { it.isNotBlank() }?.let { VmStandby.Failure(at = f.optLong("at", 0L), text = it) }
+            },
+        )
     }
 
     /**
@@ -2233,6 +2275,10 @@ class Fleet(
         runCatching {
             val body = JSONObject().put("count", count).put("network", network ?: JSONObject.NULL)
             if (template != null) body.put("template", template)
+            // The fleet makes and ends those machines with nobody holding the
+            // phone, so this phone delegates that, for a month (keepReadyDelegations).
+            val delegations = keepReadyDelegations(if (count > 0) template else null)
+            if (delegations.isNotEmpty()) body.put("delegations", JSONArray(delegations))
             val json = send("PUT", "/api/vm-standby", body)
             Reply(ok = json.optBoolean("ok", false), text = json.optString("text", ""), sessions = emptyList())
         }
@@ -2491,6 +2537,44 @@ class Fleet(
         }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
     }
 
+    /** What this person signed for the fleet to send in their name later (docs/signed-intents.md, "Delegations"). */
+    data class Delegation(val id: String, val verbs: List<String>, val hosts: List<String>, val issuedAt: Long, val expires: Long)
+
+    suspend fun delegations(): Result<List<Delegation>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val arr = get("/api/delegations").optJSONArray("delegations") ?: return@runCatching emptyList<Delegation>()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val strings = { key: String -> o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList() }
+                Delegation(o.optString("id"), strings("verbs"), strings("hosts"), o.optLong("issuedAt"), o.optLong("expires"))
+            }
+        }
+    }
+
+    /** Let an MCP client act as you, on any box, for [days]. */
+    suspend fun allowMcp(days: Int): Reply = withContext(Dispatchers.IO) {
+        val d = DeviceSigning(settings).delegation(MCP_DELEGATED_VERBS, listOf("*"), emptyMap(), days * 24L * 3600 * 1000)
+            ?: return@withContext Reply(false, "This phone signs once its key is listed, which happens after you sign in to GitHub under Runners.", emptyList())
+        runCatching {
+            val json = post("/api/delegations", JSONObject().put("delegation", d))
+            Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
+        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+    }
+
+    /**
+     * Take one back: at the minter first, which is what makes boxes refuse it,
+     * and then here, which stops the coordinator carrying it.
+     */
+    suspend fun revokeDelegation(d: Delegation): Reply = withContext(Dispatchers.IO) {
+        PhoneVault(settings).revokeDelegation(this@Fleet, d.id, d.expires).fold(
+            onSuccess = { said ->
+                runCatching { send("DELETE", "/api/delegations/" + d.id, null) }
+                Reply(true, said, emptyList())
+            },
+            onFailure = { Reply(false, it.message ?: "the minter could not be reached, so boxes still take it", emptyList()) },
+        )
+    }
+
     suspend fun revokeClient(id: String): Reply = withContext(Dispatchers.IO) {
         runCatching {
             val json = send("DELETE", "/api/clients/" + id, null)
@@ -2633,6 +2717,24 @@ class Fleet(
                 } else {
                     CoroutineScope(Dispatchers.IO).launch { signing.listIfNeeded(this@Fleet) }
                 }
+            } else if (verb !in IntentSigning.unsignedVerbs) {
+                // PLACED BY THE FLEET, so no box to sign for: a delegation
+                // instead, for exactly this verb with exactly these parameters,
+                // to whichever box it lands on, for ten minutes. A start held
+                // until the machine a provision makes has joined gets its own,
+                // for an hour, over the fields the coordinator keeps of it
+                // (docs/signed-intents.md).
+                val signing = DeviceSigning(settings)
+                val delegations = JSONArray()
+                signing.delegation(listOf(verb), listOf("*"), buildMap<String, Any> { putAll(params); putAll(numeric) }, 600_000L)
+                    ?.let { delegations.put(it) }
+                val start = extra["start"] as? JSONObject
+                if (verb == "provision" && start != null) {
+                    val kept = listOf("title", "brief", "mode", "task")
+                        .mapNotNull { k -> start.optString(k).takeIf { it.isNotEmpty() && start.has(k) }?.let { k to it } }.toMap()
+                    signing.delegation(listOf("start"), listOf("*"), kept, 3_600_000L)?.let { delegations.put(it) }
+                }
+                if (delegations.length() > 0) body.put("delegation", delegations)
             }
             extra.forEach { (k, v) -> body.put(k, v) }
             try {
@@ -3427,6 +3529,11 @@ class Settings(context: Context) {
         get() = prefs.getLong("deviceKeyListTriedAt", 0L)
         set(value) = prefs.edit().putLong("deviceKeyListTriedAt", value).apply()
 
+    /** When the delegations for keeping machines ready were last signed again (Fleet.renewKeepReady). */
+    var keepReadyRenewedAt: Long
+        get() = prefs.getLong("keepReadyRenewedAt", 0L)
+        set(value) = prefs.edit().putLong("keepReadyRenewedAt", value).apply()
+
     /**
      * Reachable AND allowed in. Both matter: a URL with no credential gets a
      * 401 on every call, which reads as a broken fleet rather than as a phone
@@ -3564,3 +3671,14 @@ fun describeUntil(epochMs: Long, now: Long = System.currentTimeMillis()): String
         else -> "${seconds / 86_400}d"
     }
 }
+
+/**
+ * The verbs an MCP client offers that a box would want signed: what
+ * src/mcp/tools.js offers by default, less `exchange` (finishing a sign-in,
+ * which an MCP client never does) and `update` (restarting a box somebody else
+ * is working on). Fleet.swift `mcpVerbs` is the same list.
+ */
+internal val MCP_DELEGATED_VERBS = listOf(
+    "peek", "start", "channel", "sandbox", "secrets", "resume", "stop", "logs", "files", "readfile",
+    "forget", "verify", "provision", "vmctl", "runnerrepo", "linkrepo", "xoprobe",
+)

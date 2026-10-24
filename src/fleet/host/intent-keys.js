@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { signingInput, verify } from '../crypto.js';
-import { checkIntentSignature, keyId } from '../protocol/intent-signature.js';
+import { actorEmail, checkDelegation, checkIntentSignature, keyId } from '../protocol/intent-signature.js';
 
 /** The path the minter answers on, on the fleet's own address. */
 export const MINTER_KEY_PATH = '/.well-known/fleetwright-minter';
@@ -32,6 +32,15 @@ export const MINTER_KEY_PATH = '/.well-known/fleetwright-minter';
 export const MINTER_KEY_FILE = 'minter-signing.json';
 /** A key list older than this is not taken: a coordinator could hold on to an old one. */
 export const KEY_LIST_MAX_AGE_MS = 10 * 60_000;
+/**
+ * The people this box has been shown a key for, kept across restarts: a box
+ * that enforces for people with keys (the default) goes on enforcing for them
+ * when a later list leaves them out, which is all a coordinator that drops
+ * somebody from the members list can make it do.
+ */
+export const SIGNERS_FILE = 'signers.json';
+/** How many people that file keeps: a fleet's members list is capped at 512 (vault.js). */
+export const MAX_SIGNERS = 512;
 
 const B64_COORD_RE = /^[A-Za-z0-9_-]{43}$/;
 
@@ -48,7 +57,10 @@ function p256(k) {
  *
  * @param {{ payload: any, signature: unknown, pinned: { kty: string, crv: string, x: string, y: string }, host: string, now: number }} args
  *   `host` is this box key's id (keyId)
- * @returns {Promise<{ ok: true, directory: Map<string, Array<{ kid: string, key: any, label: string }>>, at: number } | { ok: false, text: string }>}
+ * @returns {Promise<{ ok: true, directory: Map<string, Array<{ kid: string, key: any, label: string }>>, at: number,
+ *   revoked: Map<string, Set<string>>, cleared: Set<string> } | { ok: false, text: string }>}
+ *   `revoked` the delegations each person took back; `cleared` the people the
+ *   minter says keep no key now, having had one
  */
 export async function keyListFrom({ payload, signature, pinned, host, now }) {
   if (!payload || typeof payload !== 'object' || typeof signature !== 'string') return { ok: false, text: 'the answer is not a key list' };
@@ -59,9 +71,15 @@ export async function keyListFrom({ payload, signature, pinned, host, now }) {
   if (!Number.isFinite(payload.at) || Math.abs(now - payload.at) > KEY_LIST_MAX_AGE_MS) return { ok: false, text: 'the key list is more than ten minutes old' };
   /** @type {Map<string, Array<{ kid: string, key: any, label: string }>>} */
   const directory = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const revoked = new Map();
+  /** @type {Set<string>} */
+  const cleared = new Set();
   for (const person of Array.isArray(payload.people) ? payload.people : []) {
     const email = String(person?.email || '').trim().toLowerCase();
     if (!email) continue;
+    const ids = (Array.isArray(person.revoked) ? person.revoked : []).map(String).filter((/** @type {string} */ id) => /^[A-Za-z0-9_-]{16,64}$/.test(id));
+    if (ids.length) revoked.set(email, new Set(ids.slice(0, 64)));
     const keys = [];
     for (const k of Array.isArray(person.keys) ? person.keys : []) {
       const key = p256(k?.key);
@@ -70,8 +88,9 @@ export async function keyListFrom({ payload, signature, pinned, host, now }) {
       if (key && String(k.kid) === (await keyId(key))) keys.push({ kid: String(k.kid), key, label: String(k.label || '').slice(0, 60) });
     }
     if (keys.length) directory.set(email, keys);
+    else cleared.add(email);
   }
-  return { ok: true, directory, at: payload.at };
+  return { ok: true, directory, at: payload.at, revoked, cleared };
 }
 
 /**
@@ -86,6 +105,7 @@ export class IntentKeys {
   constructor({ origin, dir, hostKey, ask, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), log = { info() {}, warn() {} } }) {
     this.origin = new URL(origin).origin;
     this.file = dir ? path.join(dir, MINTER_KEY_FILE) : null;
+    this.signersFile = dir ? path.join(dir, SIGNERS_FILE) : null;
     this.hostKey = hostKey;
     this.ask = ask;
     this.fetchImpl = fetchImpl;
@@ -99,8 +119,55 @@ export class IntentKeys {
     this.directory = null;
     /** @type {number|null} */
     this.listAt = null;
+    /** @type {Map<string, Set<string>>} the delegations each person revoked, from the same list */
+    this.revoked = new Map();
+    /** @type {Set<string>} everybody this box has been shown a key for, until the minter says they keep none */
+    this.signers = new Set();
+    if (this.signersFile) {
+      try {
+        const kept = JSON.parse(readFileSync(this.signersFile, 'utf8'));
+        for (const e of Array.isArray(kept) ? kept.slice(0, MAX_SIGNERS) : []) if (actorEmail(e)) this.signers.add(String(e).toLowerCase());
+      } catch { /* none kept yet */ }
+    }
     /** What every intent checked so far was found to be. */
-    this.counts = { signed: 0, 'not-needed': 0, unsigned: 0, 'unknown-key': 0, 'bad-signature': 0, 'no-directory': 0 };
+    this.counts = {
+      signed: 0, delegated: 0, 'not-needed': 0, unsigned: 0, 'unknown-key': 0, 'bad-signature': 0, 'no-directory': 0, 'not-covered': 0, revoked: 0,
+    };
+  }
+
+  /**
+   * Whether this box has been shown a key for this person: the people a box
+   * that enforces by default enforces for.
+   *
+   * @param {unknown} actor
+   */
+  isSigner(actor) {
+    const person = actorEmail(actor);
+    return Boolean(person && (this.signers.has(person) || this.directory?.has(person)));
+  }
+
+  /** @param {Map<string, unknown>} directory @param {Set<string>} cleared */
+  #noteSigners(directory, cleared) {
+    let changed = false;
+    for (const person of directory.keys()) {
+      if (this.signers.has(person)) continue;
+      if (this.signers.size >= MAX_SIGNERS) {
+        this.log.warn(`sidecar: this box already remembers ${MAX_SIGNERS} people with signing keys; ${person} is checked from the key list only`);
+        break;
+      }
+      this.signers.add(person);
+      changed = true;
+    }
+    for (const person of cleared) if (this.signers.delete(person)) changed = true;
+    if (changed && this.signersFile) {
+      try {
+        mkdirSync(path.dirname(this.signersFile), { recursive: true });
+        writeFileSync(`${this.signersFile}.part`, `${JSON.stringify([...this.signers].sort())}\n`, { mode: 0o644 });
+        renameSync(`${this.signersFile}.part`, this.signersFile);
+      } catch (e) {
+        this.log.warn(`sidecar: could not keep who has signing keys: ${/** @type {Error} */ (e).message}`);
+      }
+    }
   }
 
   /** The kept key, or the one the minter's address gives, kept now. */
@@ -166,6 +233,8 @@ export class IntentKeys {
       }
       this.directory = list.directory;
       this.listAt = list.at;
+      this.revoked = list.revoked;
+      this.#noteSigners(list.directory, list.cleared);
       this.problem = null;
       return true;
     } catch (e) {
@@ -176,13 +245,18 @@ export class IntentKeys {
 
   /**
    * What one intent was found to be, counted. A list past its age is not used.
+   * A signature is checked when there is one; a delegation only when there is
+   * not, because what the person signed for this request is the stronger word.
    *
-   * @param {{ actor?: string, id: string, issuedAt: number, params?: Record<string, unknown>, verb: string, sig?: string, kid?: string }} intent
+   * @param {{ actor?: string, id: string, issuedAt: number, params?: Record<string, unknown>, verb: string, sig?: string, kid?: string, delegation?: unknown }} intent
    * @param {string} host  this box's id
+   * @returns {Promise<{ verdict: import('../protocol/intent-signature.js').Verdict | import('../protocol/intent-signature.js').DelegationVerdict, label?: string, gap?: string }>}
    */
   async check(intent, host) {
     const fresh = this.directory && this.listAt !== null && this.now() - this.listAt <= 2 * KEY_LIST_MAX_AGE_MS ? this.directory : null;
-    const r = await checkIntentSignature({ intent, sig: intent.sig, kid: intent.kid, host, directory: fresh });
+    const r = !intent.sig && intent.delegation
+      ? await checkDelegation({ intent, delegation: intent.delegation, host, directory: fresh, revoked: this.revoked, now: this.now() })
+      : await checkIntentSignature({ intent, sig: intent.sig, kid: intent.kid, host, directory: fresh });
     this.counts[r.verdict] += 1;
     return r;
   }

@@ -491,7 +491,7 @@ struct StartSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button { dismiss() } label: { Label("Cancel", systemImage: "xmark") }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     // Never disabled on account of an empty title or brief.
@@ -500,7 +500,7 @@ struct StartSheet: View {
                     //
                     // No busy state, because there is nothing to be busy for:
                     // this closes on tap and the work happens behind it.
-                    Button("Start") { start() }
+                    Button { start() } label: { Label("Start", systemImage: "play.fill") }
                     // THE ONE PRIMARY ACTION IN THE APP, and the only place a
                     // prominent glass button earns its weight. Used sparingly
                     // on purpose: a screen where everything is prominent has

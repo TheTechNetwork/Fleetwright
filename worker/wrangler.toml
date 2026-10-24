@@ -148,6 +148,14 @@ compatibility_flags = ["nodejs_als"]
 #                                 Worker, the key those logins are sealed
 #                                 to. Unset there → it keeps none, and every
 #                                 runner uses its repository's API key
+#   FLEETWRIGHT_SIGNING_ORIGIN    the browser's signing page, which the
+#                                 minting Worker serves on a hostname of its
+#                                 own; the deploy sets it from the repository
+#                                 variable FLEETWRIGHT_SIGNING_HOST. Unset →
+#                                 /me signs nothing (docs/signed-intents.md)
+#   FLEETWRIGHT_SIGNING_HOST      NOT READ HERE: the minting Worker's, the
+#   FLEETWRIGHT_FLEET_ORIGIN      hostname it serves the browser's signing
+#                                 page on and the origin it serves it for
 #   FLEETWRIGHT_NAME              unset → invitations are not sent, and the
 #   FLEETWRIGHT_INVITE_FROM       reply says which happened
 #   FLEETWRIGHT_APP_IOS/_ANDROID  unset → an invitation with no app links

@@ -127,7 +127,7 @@ fun CredentialsSheet(
                 pending = null
                 secret = ""
                 busy = true
-                val reply = Fleet(settings).finishSignIn(it.host!!, state, code, sealed)
+                val reply = Fleet(settings).finishSignIn(it.host!!, state, code, sealed, host = host)
                 Fleet(settings).connections(host, offeringSignIn = true).connections?.let { c -> connections = c }
                 busy = false
                 result = reply.text.ifBlank { if (reply.ok) "Connected with ${came?.label ?: "the provider"}." else "Nothing was connected." }

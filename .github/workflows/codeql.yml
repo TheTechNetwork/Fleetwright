@@ -297,13 +297,19 @@ jobs:
     name: analyze (swift)
     needs: changes
     if: github.event_name != 'pull_request' && needs.changes.outputs.swift == 'true'
-    runs-on: macos-latest
+    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
+    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    runs-on: xcode-27
     permissions:
       security-events: write
       actions: read
       contents: read
     steps:
       - uses: actions/checkout@v7.0.1
+
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh
 
       - name: Install XcodeGen
         # Without this, brew refreshes its entire formula index before

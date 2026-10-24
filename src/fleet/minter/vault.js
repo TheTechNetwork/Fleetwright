@@ -101,6 +101,14 @@ export const DEVICE_KEYS_PREFIX = 'dk:';
 export const MAX_DEVICE_KEYS = 8;
 /** Removed keys remembered, so a replayed older add cannot bring one back. */
 const MAX_DEVICE_TOMBSTONES = 24;
+/**
+ * Delegations a person has revoked and that have not yet run out, kept in the
+ * same row as their keys: a box refuses one of these from the next key list.
+ */
+export const MAX_REVOKED_DELEGATIONS = 64;
+const DELEGATION_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+/** The longest a delegation runs (intent-signature.js, DELEGATION_MAX_MS), so a revocation kept past it guards nothing. */
+const DELEGATION_LIFE_MS = 31 * 24 * 60 * 60_000;
 
 /** The prefix a named secret's item carries, so it cannot be mistaken for a provider. */
 export const SECRET_PREFIX = 'secret:';
@@ -407,7 +415,10 @@ async function runDeviceOp(inside, config, key, who, email, at) {
       const next = [...others, remove ? { kid, key: jwk, label: prior?.label ?? deviceLabel, at, removed: true } : { kid, key: jwk, label: deviceLabel, at }];
       const tombstones = next.filter((k) => k.removed).sort((x, y) => x.at - y.at);
       const dropped = new Set(tombstones.slice(0, Math.max(0, tombstones.length - MAX_DEVICE_TOMBSTONES)).map((k) => k.kid));
-      await store.put(`${DEVICE_KEYS_PREFIX}${email}`, { github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)) });
+      await store.put(`${DEVICE_KEYS_PREFIX}${email}`, {
+        github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)),
+        ...(kept?.github === who.userId && Array.isArray(kept.revoked) ? { revoked: kept.revoked } : {}),
+      });
       return {
         ok: true,
         answer: { kid },
@@ -415,6 +426,33 @@ async function runDeviceOp(inside, config, key, who, email, at) {
           ? `Removed the signing key ${kid.slice(0, 16)}. Boxes stop taking it when they next ask.`
           : `Listed ${deviceLabel || 'this device'}’s signing key (${kid.slice(0, 16)}) for ${email}.`,
       };
+    });
+  }
+
+  // A DELEGATION THE PERSON TAKES BACK (docs/signed-intents.md, "Delegations").
+  // The coordinator carries delegations, so it cannot be the one told: a
+  // dishonest one would go on carrying it. The minter lists the id beside the
+  // person's keys, signed, and a box refuses it from the next list it takes.
+  // Kept in the keys' own row, under the same GitHub account, until the
+  // delegation would have run out anyway.
+  if (inside.op === 'revokedelegation') {
+    const id = String(inside.id ?? '');
+    const until = Number(inside.until);
+    if (!DELEGATION_ID_RE.test(id) || !Number.isSafeInteger(until)) return refuse('bad_params', 'That is not a delegation to revoke: it needs its id and when it runs out.');
+    return withLock(`${DEVICE_KEYS_PREFIX}${email}`, async () => {
+      const kept = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
+      if (!kept || kept.github !== who.userId) {
+        return refuse('address_taken', `No signing key for ${email} is filed by ${who.login}, so no delegation of theirs could be signed by it. Nothing was changed.`);
+      }
+      const t = config.now();
+      const end = Math.min(until, t + DELEGATION_LIFE_MS);
+      const live = (Array.isArray(kept.revoked) ? kept.revoked : []).filter((/** @type {any} */ r) => Number(r?.until) >= t && r.id !== id);
+      if (end >= t) live.push({ id, until: end });
+      if (live.length > MAX_REVOKED_DELEGATIONS) {
+        return refuse('too_many', `${MAX_REVOKED_DELEGATIONS} revoked delegations are still inside their time. Remove the device that signed them instead, which ends every one.`);
+      }
+      await store.put(`${DEVICE_KEYS_PREFIX}${email}`, { ...kept, revoked: live });
+      return { ok: true, answer: { id }, text: 'Revoked. Boxes refuse it from the next key list they take, within ten minutes.' };
     });
   }
 
@@ -927,17 +965,26 @@ export async function answerVaultKeys(ask, config) {
     return refuse('bad_signing_key', `The signing key does not load: ${/** @type {Error} */ (e).message}.`);
   }
   const store = /** @type {VaultStore} */ (config.store);
-  /** @type {Array<{ email: string, keys: Array<{ kid: string, key: any, label: string }> }>} */
+  // EVERYBODY WHO EVER FILED A KEY, with none when they removed them all:
+  // a box that has taken a person's signature before refuses their unsigned
+  // requests until the minter says, signed, that they keep no key now. A
+  // person left out of this list says nothing either way, which is all a
+  // coordinator that leaves somebody off the members list can make it say.
+  /** @type {Array<{ email: string, keys: Array<{ kid: string, key: any, label: string }>, revoked?: string[] }>} */
   const people = [];
+  const t = now();
   for (const email of [...new Set(listed.map(normaliseEmail).filter(Boolean))].sort()) {
-    const keys = liveKeys(await store.get(`${DEVICE_KEYS_PREFIX}${email}`)).map(({ kid, key, label: l }) => ({ kid, key, label: l }));
-    if (keys.length) people.push({ email, keys });
+    const row = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
+    if (!row) continue;
+    const keys = liveKeys(row).map(({ kid, key, label: l }) => ({ kid, key, label: l }));
+    const revoked = (Array.isArray(row.revoked) ? row.revoked : []).filter((/** @type {any} */ r) => Number(r?.until) >= t).map((/** @type {any} */ r) => String(r.id));
+    people.push({ email, keys, ...(revoked.length ? { revoked } : {}) });
   }
   const payload = { v: 1, at: now(), host: await boxKeyHash(jwk), people };
   return {
     ok: true,
     payload,
     signature: await sign(signing.privateJwk, signingInput('vault-keys-answer', payload)),
-    text: people.length ? `Signing keys for ${people.length} ${people.length === 1 ? 'person' : 'people'}.` : 'Nobody in the fleet has listed a signing key.',
+    text: people.some((p) => p.keys.length) ? `Signing keys for ${people.filter((p) => p.keys.length).length} ${people.filter((p) => p.keys.length).length === 1 ? 'person' : 'people'}.` : 'Nobody in the fleet has listed a signing key.',
   };
 }

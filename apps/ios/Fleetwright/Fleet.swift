@@ -1110,9 +1110,19 @@ struct Fleet {
     /// the page hands the code to this app, and this request carries the
     /// credential that proves who is finishing. Somebody else's sign-in is
     /// refused, in words that say so.
-    func finishSignIn(provider: String, state: String, code: String?, sealed: String?) async throws -> Reply {
+    ///
+    /// AND SIGNED FOR, so a box that takes only signed requests takes it: the
+    /// fleet finishes it by sending `exchange`, `link` and `renew` in this
+    /// person's name, and this phone delegates exactly those, for this
+    /// provider, to the box it was for (`host`, or any when it was fleet-wide),
+    /// for ten minutes.
+    func finishSignIn(provider: String, state: String, code: String?, sealed: String?, host: String? = nil) async throws -> Reply {
         var body: [String: Any] = ["provider": provider, "state": state]
         if let sealed { body["sealed"] = sealed } else if let code { body["code"] = code }
+        let hosts = host.map { $0.isEmpty ? ["*"] : [$0] } ?? ["*"]
+        if let d = DeviceSigning(settings: settings).delegation(
+            verbs: ["exchange", "link", "renew"], hosts: hosts, match: ["provider": provider], lifetime: 600,
+        ) { body["delegation"] = d }
         return try JSONDecoder().decode(Reply.self, from: try await post("/api/oauth/finish", body: body))
     }
 
@@ -1950,16 +1960,54 @@ struct Fleet {
     func vmStandby() async throws -> VMStandby? {
         let data = try await get("/api/hosts")
         struct Reply: Codable { let vmStandby: VMStandby? }
-        return try JSONDecoder().decode(Reply.self, from: data).vmStandby
+        let standby = try JSONDecoder().decode(Reply.self, from: data).vmStandby
+        await renewKeepReady(standby)
+        return standby
+    }
+
+    /// What keeping machines ready needs this phone to have signed: ending
+    /// machines, always, and making them from `template` when there is one.
+    func keepReadyDelegations(template: String?) -> [[String: Any]] {
+        let signing = DeviceSigning(settings: settings)
+        let month: TimeInterval = 30 * 24 * 3600
+        var out: [[String: Any]] = []
+        if let d = signing.delegation(verbs: ["vmctl"], hosts: ["*"], match: ["action": "stop"], lifetime: month) { out.append(d) }
+        if let template, let d = signing.delegation(verbs: ["provision"], hosts: ["*"], match: ["platform": "vm", "template": template], lifetime: month) {
+            out.append(d)
+        }
+        return out
+    }
+
+    /// Signed again once a day while machines are kept ready, so the month a
+    /// delegation runs never ends under somebody who still wants them. The
+    /// coordinator keeps the newest of two that cover the same thing.
+    private func renewKeepReady(_ standby: VMStandby?) async {
+        guard let standby, standby.count > 0, !standby.template.isEmpty else { return }
+        let template = standby.template
+        let key = "keepReadyRenewedAt"
+        let now = Date().timeIntervalSince1970
+        guard now - UserDefaults.standard.double(forKey: key) > 24 * 3600 else { return }
+        var sent = false
+        for d in keepReadyDelegations(template: template) {
+            if (try? await post("/api/delegations", body: ["delegation": d])) != nil { sent = true }
+        }
+        if sent { UserDefaults.standard.set(now, forKey: key) }
     }
 
     /// Keep `count` machines from `template` ready on `network` (nil is
     /// behind the edge router), or none with 0. The fleet ends the ones no
     /// longer wanted.
+    ///
+    /// The fleet makes and ends those machines with nobody holding the phone,
+    /// so this phone delegates that, for a month: making machines from this
+    /// image, and ending machines. `keepReadyDelegations` signs them, and
+    /// `vmStandby` renews them once a day while machines are kept ready.
     func setVMStandby(template: String?, count: Int, network: String?) async throws -> Reply {
         var body: [String: Any] = ["count": count]
         if let template { body["template"] = template }
         body["network"] = network.map { $0 as Any } ?? NSNull()
+        let delegations = keepReadyDelegations(template: count > 0 ? template : nil)
+        if !delegations.isEmpty { body["delegations"] = delegations }
         return try JSONDecoder().decode(Reply.self, from: try await send("PUT", "/api/vm-standby", body: body))
     }
 
@@ -2007,6 +2055,50 @@ struct Fleet {
     func xoact(_ address: String, method: String, args: String) async throws -> Reply {
         try await intent("xoact", params: ["address": address, "method": method, "args": args],
                          idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// What this person signed for the fleet to send in their name later
+    /// (docs/signed-intents.md, "Delegations"), as the coordinator keeps them.
+    struct Delegation: Codable, Hashable, Identifiable {
+        let id: String
+        let verbs: [String]
+        let hosts: [String]
+        let issuedAt: Double
+        let expires: Double
+    }
+
+    func delegations() async throws -> [Delegation] {
+        let data = try await get("/api/delegations")
+        struct Reply: Codable { let delegations: [Delegation]? }
+        return try JSONDecoder().decode(Reply.self, from: data).delegations ?? []
+    }
+
+    /// The verbs an MCP client offers that a box would want signed: what
+    /// src/mcp/tools.js offers by default, less `exchange` (finishing a
+    /// sign-in, which an MCP client never does) and `update` (restarting a box
+    /// somebody else is working on).
+    static let mcpVerbs = [
+        "peek", "start", "channel", "sandbox", "secrets", "resume", "stop", "logs", "files", "readfile",
+        "forget", "verify", "provision", "vmctl", "runnerrepo", "linkrepo", "xoprobe",
+    ]
+
+    /// Let an MCP client act as you, on any box, for `days`.
+    func allowMCP(days: Int) async throws -> Reply {
+        guard let d = DeviceSigning(settings: settings).delegation(
+            verbs: Self.mcpVerbs, hosts: ["*"], match: [:], lifetime: TimeInterval(days) * 24 * 3600,
+        ) else {
+            return Reply(ok: false, text: "This phone signs once its key is listed, which happens after you sign in to GitHub under Runners.", sessions: nil)
+        }
+        return try JSONDecoder().decode(Reply.self, from: try await post("/api/delegations", body: ["delegation": d]))
+    }
+
+    /// Take one back: at the minter first, which is what makes boxes refuse
+    /// it, and then here, which stops the coordinator carrying it.
+    func revokeDelegation(_ d: Delegation) async throws -> Reply {
+        let said = try await PhoneVault(settings: settings).revokeDelegation(self, id: d.id, until: d.expires)
+        let path = "/api/delegations/\(d.id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? d.id)"
+        _ = try? await send("DELETE", path, body: nil)
+        return Reply(ok: true, text: said, sessions: nil)
     }
 
     func revokeClient(_ id: String) async throws -> Reply {
@@ -2594,6 +2686,20 @@ struct Fleet {
                 let fleet = self
                 Task { await signing.listIfNeeded(fleet) }
             }
+        } else if !IntentSigning.unsignedVerbs.contains(verb) {
+            // PLACED BY THE FLEET, so no box to sign for: a delegation instead,
+            // for exactly this verb with exactly these parameters, to whichever
+            // box it lands on, for ten minutes. A start held until the machine
+            // a provision makes has joined gets its own, for an hour, over the
+            // fields the coordinator keeps of it (docs/signed-intents.md).
+            let signing = DeviceSigning(settings: settings)
+            var delegations: [[String: Any]] = []
+            if let d = signing.delegation(verbs: [verb], hosts: ["*"], match: typed, lifetime: 600) { delegations.append(d) }
+            if verb == "provision", let start = extra["start"] as? [String: String] {
+                let kept = start.filter { ["title", "brief", "mode", "task"].contains($0.key) && !$0.value.isEmpty }
+                if let d = signing.delegation(verbs: ["start"], hosts: ["*"], match: kept, lifetime: 3600) { delegations.append(d) }
+            }
+            if !delegations.isEmpty { body["delegation"] = delegations }
         }
         for (key, value) in extra { body[key] = value }
         do {
