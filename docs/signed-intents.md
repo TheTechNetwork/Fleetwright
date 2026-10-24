@@ -324,6 +324,12 @@ coordinator refuses what would arrive unsigned and undelegated, sends nothing,
 and says which of two things happened: nobody signed or delegated it, or a
 person signed it and the fleet changed it on the way.
 
+A named person's request to a `signers` box is sent, because only the box knows
+whether it has seen that person's key. When the box refuses it for having
+neither a signature nor a delegation, the coordinator adds to the box's words
+what would have carried it, so an MCP client told "was not signed" also hears
+where its person allows one: Delegations, on the You tab.
+
 ## Delegations
 
 A delegation is what a person signs on their phone to let the coordinator send
