@@ -58,18 +58,22 @@ the Hosts section of [coordinator-deploy.md](./coordinator-deploy.md).
 
 The pin is single-use and short-lived. Mint it when the box is ready for it.
 
-## Link a Claude account — **this is the step people miss**
+## Keep your Claude login, and approve this machine — **this is the step people miss**
 
 A machine has no Claude account of its own. A session runs on the account of
-whoever starts it, so **until somebody links one, the coordinator will refuse
-to place any work here** and say so.
+whoever starts it, and that account comes from their vault and nowhere else
+([vault.md](./vault.md)), so **until somebody's vault gives this machine their
+Claude login, the coordinator will refuse to place any work here** and say so.
 
-```sh
-fleetwright login for you@example.com     # opens a device flow; paste the code back
-fleetwright accounts                      # should now list you
-```
+In the app, under You › Credentials, keep your Claude login: *Make it on
+<machine>* signs you in on one of your machines, the kind of login Remote
+Control needs, and the phone keeps it. Then approve this machine from its page
+under Machines, comparing the fingerprint with what
+`fleetwright-sidecar identity` prints here.
 
-The app and Telegram do the same thing. Any one of the three is enough.
+`fleetwright login for <email>` still links an account on the box, for the
+box's own command line; sessions somebody starts through the fleet do not use
+it.
 
 ## Check it
 

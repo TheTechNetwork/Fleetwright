@@ -7,6 +7,11 @@
 > chose to share" — is exactly what was removed, because it was true of an org
 > and false of a guest. Everything here about SEEDING, refresh and custody still
 > holds; only the choosing changed.
+>
+> **And then by [vault.md](./vault.md).** A fleet person's Claude login is their
+> vault's: a sign-in renewed by the minter alone and given to a box without its
+> refresh token, or a setup-token. An account linked on a box is that box's,
+> for its own command line.
 
 Asked for: a **shared org account at the coordinator**, **per-user accounts**
 for people who bring their own, and a **fleet admin** who can see everything and

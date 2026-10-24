@@ -1,5 +1,14 @@
 # Connecting credentials: Claude, GitHub, Cloudflare
 
+> **Superseded for the fleet's people by [vault.md](./vault.md).** A person's
+> Claude login, GitHub and Cloudflare are kept once in their vault and given
+> to the machines they approve; a session somebody starts through the fleet
+> uses those and nothing linked on a box. `connect` and `link` for oneself are
+> refused with where credentials are kept now, a GitHub sign-in is not finished
+> on a box, and no machine's page signs anybody in to Claude. What is below
+> still describes the box's own row (`scope: host`, an administrator's, for the
+> box's command line), `unlink`, and why the verbs are shaped as they are.
+
 What a session needs to do its work, connected from a phone, by the person who
 owns it. Four verbs — `connect`, `link`, `verify`, `unlink` — and a table of
 providers. (`renew` is this family's fifth member, coordinator-to-host only —
