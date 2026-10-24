@@ -238,6 +238,28 @@ a sandboxed session's conversation volume, written the way a start writes it,
 and a direct session's staged copy. A session that started yesterday keeps
 running past the token it started with.
 
+That is measured, not read off the code. Claude Code 2.1.306, the version the
+session image pins, was run with only the files a box writes, against a
+loopback stand-in for Anthropic's hosts (a lab certificate authority, a proxy
+that answers for `anthropic.com`, `claude.ai` and `claude.com` and refuses
+everything else, dummy tokens):
+
+| What the box does | What Claude Code did |
+|---|---|
+| writes the sign-in, no refresh token | `claude auth status`: logged in, `claude.ai`, the account and its plan |
+| — | `claude remote-control`: every eligibility check passed, registered with the access token, came up Ready and polled for work |
+| rewrites the file between two turns of one running session | the next turn carried the new token |
+| rewrites it while the old one has two minutes left | used the old one, then the new; no attempt to renew |
+| rewrites it after Anthropic starts refusing the old one | the next turn carried the new token |
+| could not reach the minter, so the file stays expired | that turn failed with "Failed to authenticate. API Error: 401 OAuth token has expired.", and nothing hung |
+
+Not once did it try to renew. One thing the lab found: a turn that read the
+file while a reseed had emptied it answered "Not logged in", so a volume's
+login is now written beside the file and renamed in (`seedScript`,
+`src/core/podman.js`). What the lab cannot show is Anthropic's side, that a
+renewed access token opens Remote Control on its real servers; it is the same
+kind of token `claude auth login` writes, sent the same way.
+
 **Asking a box to keep a person's credential is refused.** `connect` and `link`
 for oneself, and a GitHub sign-in finished on a box, answer that credentials
 are kept in the vault now. `unlink` still works, so a link made before this can
@@ -265,10 +287,10 @@ vault's, read from the same row.
 **Remote Control on a setup-token.** A setup-token can only make model
 requests. Remote Control needs the whole sign-in, which a machine makes for the
 vault (*Make it on <machine>* in the app, `setuptoken` with `kind: login`), and
-the vault says which of the two it keeps. That a sign-in handed to a box
-without its refresh token opens Remote Control is read off Claude Code 2.1.42's
-own code (it requires only the access token and its scopes) and not yet seen
-on a box: say so if a session on one comes up without a link.
+the vault says which of the two it keeps. A sign-in handed to a box without
+its refresh token opens Remote Control in Claude Code 2.1.306 against a
+stand-in (above); against Anthropic itself it has not been seen yet, so say so
+if a session on a box comes up without a link.
 
 **Renewing if Anthropic changes how.** The minter renews a sign-in the way
 Claude Code 2.1.42 does, at `platform.claude.com/v1/oauth/token` with Claude
