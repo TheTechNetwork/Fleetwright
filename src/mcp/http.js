@@ -49,6 +49,15 @@ import { McpServer } from './server.js';
  * A conversation over HTTP is a credential, so that is the key. Hashed rather
  * than stored raw: this map outlives a request and there is no reason for a
  * long-lived object to hold live tokens. Swept on write, so it needs no timer.
+ *
+ * A CACHE, NOT THE RECORD. This map lives in one isolate and dies with it: a
+ * deploy emptied it, and `stop` refused two sessions the same agent had
+ * started an hour earlier on a runner billed by the minute. What survives is
+ * the coordinator's own record of who started each session, and the server
+ * asks for that when this map does not hold the name (McpServer
+ * #createdByMe). This map is still worth keeping: it answers without a round
+ * trip, and it is the only evidence on a coordinator too old to say who is
+ * asking.
  */
 const STARTED = new Map();
 const STARTED_TTL_MS = 12 * 60 * 60_000;

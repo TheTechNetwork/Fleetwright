@@ -409,9 +409,10 @@ an MCP capability, not a defect.
 | **`fleet_await`** | a tool that blocks until the session needs an answer, ends or errors | always works, in every client. The guaranteed path |
 | **`notifications/message`** | the logging capability, emitted when a watched session changes state | reaches a client that is **not** currently in a tool call — an agent that has moved on and would otherwise never look again |
 
-Only sessions started in this conversation are watched — the same scope `stop`
-is held to. Watching the fleet would mean narrating somebody else's work to an
-agent with no business in it. The watcher stops when the last one ends: a timer
+Only sessions started in this conversation are watched — narrower than `stop`,
+which also reaches the person's own sessions from other devices. Watching the
+fleet would mean narrating somebody else's work to an agent with no business in
+it. The watcher stops when the last one ends: a timer
 alive after that is a stdio server that will not exit, which a client reads as a
 hung process.
 
@@ -584,8 +585,18 @@ its own**: an agent told to clean up after itself and given no way to do it
 leaves a paid-for runner idling, and the instruction becomes a lie the moment it
 is read.
 
-So the verb is exposed and **scoped in the server**: it refuses to stop a
-session it did not start in this conversation, remembers only successful starts,
-and forgets one as soon as it is stopped. A refused start does not make its name
-stoppable — on a fleet where people choose names, that name is probably
-somebody's.
+So the verb is exposed and **scoped in the server** to the caller's own
+sessions. Two things make a session theirs: this conversation started it (the
+server remembers successful starts, and forgets one as soon as it is stopped),
+or the fleet records it as started by the person the credential belongs to,
+from any of their devices. The second is what survives: the first is memory, and
+over HTTP it is one Worker isolate's memory, which a deploy empties. When that
+happened, `stop` refused two sessions the same agent had started an hour
+earlier, on a runner billed by the minute, as "somebody else's". Now a name the
+memory does not hold is asked about before it is refused: `GET /api/me` for who
+is asking, `status` for who started it, and the stop goes ahead when they
+agree. The comparison is the person's identity and not their role, so an
+admin's agent is still refused the org's other work; and a coordinator too old
+to serve `/api/me` leaves the memory as the only evidence, which is where this
+started. A refused start does not make its name stoppable — on a fleet where
+people choose names, that name is probably somebody's.
