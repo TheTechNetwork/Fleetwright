@@ -29,6 +29,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { log } from '../log.js';
 import { pickCredentialSource, credentialSourceForAccount, noAccountRefusal } from './podman.js';
 import { emailFromActor } from './accounts.js';
@@ -243,7 +244,10 @@ function trust(dir, cwd, meta, apiKey = null) {
 function stageSettings(cfg, dir) {
   if (!cfg.sandboxCredentialsFile) return;
   const template = path.join(path.dirname(cfg.sandboxCredentialsFile), 'settings.json');
-  if (!existsSync(template)) return;
+  if (!existsSync(template)) {
+    hookOnly(dir);
+    return;
+  }
   const dest = path.join(dir, 'settings.json');
   try {
     if (existsSync(dest) && statSync(dest).mtimeMs >= statSync(template).mtimeMs) return;
@@ -251,6 +255,40 @@ function stageSettings(cfg, dir) {
     copyFileSync(template, dest);
   } catch (e) {
     log.warn(`direct: could not stage settings.json into ${dir}: ${/** @type {Error} */ (e).message}`);
+  }
+}
+
+/**
+ * The hook, and nothing else, for a box nothing installed.
+ *
+ * A GITHUB RUNNER NEVER RUNS install.sh: its workflow starts the two services
+ * from a checkout, so there was no template, nothing was staged, and no session
+ * there ever reported its conversation. Its record said "none recorded (cannot
+ * be resumed)", and `read_log` — which reads the transcript the hook names —
+ * fell back to the last screenful, which is how a report came back with its
+ * top cut off. So with no template the hook is written here, naming this
+ * process's own node and this checkout's CLI, as install.sh would have.
+ *
+ * Only when the session has no settings.json of its own yet, so its own edits
+ * stand. And only the two keys a session started by fleetwright needs.
+ *
+ * @param {string} dir
+ */
+function hookOnly(dir) {
+  const dest = path.join(dir, 'settings.json');
+  if (existsSync(dest)) return;
+  const cli = fileURLToPath(new URL('../../bin/fleetwright', import.meta.url));
+  const settings = {
+    hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `${process.execPath} ${cli} hook` }] }] },
+    // Sessions are launched with --dangerously-skip-permissions, and without
+    // this the first one stops at a confirmation nobody is there to answer.
+    skipDangerousModePermissionPrompt: true,
+  };
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(dest, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  } catch (e) {
+    log.warn(`direct: could not write the SessionStart hook into ${dir}: ${/** @type {Error} */ (e).message}`);
   }
 }
 

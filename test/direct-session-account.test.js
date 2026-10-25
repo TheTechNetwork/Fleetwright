@@ -207,3 +207,27 @@ test('the command points the CLI at the session\'s directory, for a direct sessi
   }, { name: 'one', configDir: '/x' });
   assert.doesNotMatch(sandboxed, /CLAUDE_CONFIG_DIR/, 'a sandboxed session has its volume; the variable would only reach podman');
 });
+
+test('on a box nothing installed, a direct session still gets the hook, naming a node and CLI that exist', () => {
+  // A GitHub runner starts the services from a checkout and never runs
+  // install.sh, so there is no settings.json to copy. Its sessions reported no
+  // conversation: "none recorded (cannot be resumed)", and read_log had no
+  // transcript to read.
+  const { cfg, cwd } = box();
+  const bare = { ...cfg, sandboxCredentialsFile: join(mkdtempSync(join(tmpdir(), 'nohome-')), '.claude', '.credentials.json') };
+  const r = ensureDirectConfig(bare, 'one', 'fleet:person@example.com', { cwd });
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  const settings = read(join(r.dir, 'settings.json'));
+  const cmd = settings.hooks.SessionStart[0].hooks[0].command;
+  const [node, cli, verb] = cmd.split(' ');
+  assert.equal(verb, 'hook');
+  assert.equal(node, process.execPath);
+  assert.equal(existsSync(cli), true, `${cli} is the CLI the hook runs`);
+  assert.equal(settings.skipDangerousModePermissionPrompt, true);
+
+  // A session's own settings stand: it is written once, not over their edits.
+  writeFileSync(join(r.dir, 'settings.json'), '{"theme":"mine"}');
+  ensureDirectConfig(bare, 'one', 'fleet:person@example.com', { cwd });
+  assert.equal(readFileSync(join(r.dir, 'settings.json'), 'utf8'), '{"theme":"mine"}');
+});
