@@ -106,6 +106,7 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
       if (auth) return stageForRunner(cfg, dir, cwd, owner, auth, false);
       log.warn(`direct: ${name} ${owner ? `belongs to ${owner}, who has no credential on this box any more` : 'does not say whose account it holds'}; keeping the one it has`);
       stageSettings(cfg, dir);
+      fleetSessionSettings(dir);
       trust(dir, cwd, null);
       return { ok: true, dir, account: owner, fresh: false };
     }
@@ -125,6 +126,7 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
   }
   trust(dir, cwd, meta);
   stageSettings(cfg, dir);
+  fleetSessionSettings(dir);
   log.info(`direct: ${fresh ? 'staged' : 'refreshed'} ${picked.account}'s credential for ${name}`);
   // A LINKED ACCOUNT ON A RUNNER. The runner repository's ANTHROPIC_API_KEY is
   // in this host's environment, and the CLI ranks an API key above the login
@@ -135,7 +137,6 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
   // box is not in what stageSettings copied, and the session would wait at
   // "No, exit" with a credential that works.
   if (onRunner(cfg)) {
-    acceptDangerousMode(dir);
     return { ok: true, dir, account: picked.account, fresh, auth: { kind: 'linked' } };
   }
   return { ok: true, dir, account: picked.account, fresh };
@@ -154,35 +155,47 @@ function stageForRunner(cfg, dir, cwd, account, auth, fresh) {
   writeFileSync(path.join(dir, RUNNER_MARK), `${account ?? ''}\n`, { mode: 0o600 });
   trust(dir, cwd, null, auth.kind === 'key' ? auth.key : null);
   stageSettings(cfg, dir);
-  acceptDangerousMode(dir);
+  fleetSessionSettings(dir);
   log.info(`direct: ${path.basename(dir)} runs on ${auth.kind === 'token' ? `${auth.login ?? account}'s deposited Claude login` : 'the runner repository\'s API key'}`);
   return { ok: true, dir, account, fresh, auth };
 }
 
 /**
- * The CLI's "running in Bypass Permissions mode" warning, answered for a
- * runner session.
+ * What every session fleetwright starts has set, whatever else its settings
+ * say. The same two keys sandbox/Containerfile bakes into a container's.
  *
- * FOUND BY RUNNING ONE: a session started with --dangerously-skip-permissions
- * first draws that warning with "No, exit" focused, and waits. A permanent box
- * never shows it, because install.sh puts `skipDangerousModePermissionPrompt`
- * in the settings.json stageSettings copies in. A runner never runs
- * install.sh, so every runner session sat at the warning, whatever credential
- * it had. A runner is the case the setting is for: a machine destroyed when
- * its job ends, given to the one person who asked for it. Merged into the
- * session's own settings, so anything else there stays.
+ * `skipDangerousModePermissionPrompt` — FOUND BY RUNNING ONE: a session
+ * started with --dangerously-skip-permissions first draws the "running in
+ * Bypass Permissions mode" warning with "No, exit" focused, and waits. A
+ * permanent box got past it because install.sh puts the key in the
+ * settings.json stageSettings copies in; a runner never runs install.sh, so
+ * every runner session sat at the warning, whatever credential it had.
  *
- * @param {string} dir
+ * `promptSuggestionEnabled: false` — ALSO FOUND BY RUNNING ONE. When a
+ * session comes back to its prompt, the CLI (2.1.284 and on) drafts a
+ * follow-up into the input box for the person to accept. There is no person:
+ * the fleet reads the pane, and "❯ fix the divider so it aligns with the
+ * hinge" sitting unsent in a finished session was taken for something a
+ * person had typed, twice in one afternoon, and nobody could say who. The
+ * draft is also a model call per turn on a credential somebody is paying
+ * for, to produce text nothing will ever send.
+ *
+ * Merged into the session's own settings, so anything else there stays, and
+ * written only when something changes, so the staged copy's mtime still says
+ * when it was copied (stageSettings).
  */
-function acceptDangerousMode(dir) {
+const SESSION_SETTINGS = Object.freeze({ skipDangerousModePermissionPrompt: true, promptSuggestionEnabled: false });
+
+/** @param {string} dir */
+function fleetSessionSettings(dir) {
   const file = path.join(dir, 'settings.json');
   /** @type {any} */
   let settings = {};
   try {
     settings = JSON.parse(readFileSync(file, 'utf8'));
   } catch { /* none yet: a runner has no template to copy */ }
-  if (settings.skipDangerousModePermissionPrompt === true) return;
-  settings.skipDangerousModePermissionPrompt = true;
+  if (Object.entries(SESSION_SETTINGS).every(([k, v]) => settings[k] === v)) return;
+  Object.assign(settings, SESSION_SETTINGS);
   writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
 }
 
@@ -277,7 +290,7 @@ function stageSettings(cfg, dir) {
  * process's own node and this checkout's CLI, as install.sh would have.
  *
  * Only when the session has no settings.json of its own yet, so its own edits
- * stand. And only the two keys a session started by fleetwright needs.
+ * stand. And only the hook and what every fleet session has set.
  *
  * @param {string} dir
  */
@@ -287,9 +300,7 @@ function hookOnly(dir) {
   const cli = fileURLToPath(new URL('../../bin/fleetwright', import.meta.url));
   const settings = {
     hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `${process.execPath} ${cli} hook` }] }] },
-    // Sessions are launched with --dangerously-skip-permissions, and without
-    // this the first one stops at a confirmation nobody is there to answer.
-    skipDangerousModePermissionPrompt: true,
+    ...SESSION_SETTINGS,
   };
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });

@@ -452,6 +452,8 @@ test('on a runner the owner’s sessions run on their login and everybody else�
   for (const staged of [owner, other]) {
     const settings = JSON.parse(readFileSync(join(String(staged.dir), 'settings.json'), 'utf8'));
     assert.equal(settings.skipDangerousModePermissionPrompt, true);
+    // …and no drafted prompts in a session nobody is at.
+    assert.equal(settings.promptSuggestionEnabled, false);
   }
 
   // A RUNNER WHOSE OWNER HAS NONE: the key, for them too.
