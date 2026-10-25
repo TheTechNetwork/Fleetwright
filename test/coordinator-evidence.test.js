@@ -107,12 +107,28 @@ test('an error that is not the hub being away is reported as itself, once', asyn
 });
 
 test('the real sleep does not keep the process alive', async () => {
-  // Without a fake sleep: one short real wait, and the timer is unref'd, which
-  // is the difference between a sidecar that stops when told and one that
-  // waits fifteen seconds for a hub it was told to forget about.
-  const log = capture();
-  const r = await recordCoordinatorReached(hubDownFor(1), { log, retryMs: 5 });
-  assert.equal(r.attempts, 2);
+  // Without a fake sleep, and in a process of its own: the only thing that
+  // proves a timer is unref'd is a process that exits while the timer is
+  // pending. That is the difference between a sidecar that stops when told
+  // and one that waits fifteen seconds for a hub it was told to forget about.
+  //
+  // Awaiting the wait in here proved only that it resolves — the assertion
+  // that stood here passed with the `unref` deleted — and on a Node below the
+  // floor it let the runner's own loop drain mid-test, which cancelled this
+  // test and the one after it. A hub that is never reachable and a retry far
+  // longer than the test: the child exits at once, or the timer is holding it.
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const script = [
+    `import { recordCoordinatorReached } from ${JSON.stringify(new URL('../src/fleet/host/evidence.js', import.meta.url).href)};`,
+    `import { HubError } from ${JSON.stringify(new URL('../src/fleet/host/hub-client.js', import.meta.url).href)};`,
+    "const hub = { noteCoordinatorReached: async () => { throw new HubError('hub_unreachable', 'down'); } };",
+    'void recordCoordinatorReached(hub, { log: { info() {}, warn() {} }, retryMs: 60_000 });',
+  ].join('\n');
+  await assert.doesNotReject(
+    promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], { timeout: 10_000 }),
+    'the process was still alive after ten seconds: the retry timer is keeping it',
+  );
 });
 
 test('the entrypoint uses it from the connect hook, and nothing else asks directly', async () => {
