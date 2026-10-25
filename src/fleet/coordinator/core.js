@@ -4325,9 +4325,32 @@ export class CoordinatorCore {
     );
     // WHAT CHANGED, in the minter's own words, which never carry a value.
     this.record({ event: r.ok ? 'vault.changed' : 'vault.refused', actor: email, text: `${email}: ${String(r.text || '').slice(0, 200)}` });
+    if (r.ok && r.changed === true) this.#vaultChanged();
     return r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
+  }
+
+  /**
+   * Tell every permanent box to ask the vault now, because somebody's vault
+   * just changed. A box asked every ten minutes and heard nothing in between:
+   * a Claude login forgotten and kept again at 18:19 reached vnic-runner-oci
+   * at 18:29, and no session could start there in the meantime.
+   *
+   * WHO AND WHAT ARE NOT SAID, and need not be: the vault answers each box
+   * only for the people who approved it, so a box nobody's change touched
+   * asks and is given what it already holds. A runner is skipped; it asks
+   * for its owner's login on its own clock (runner-login.js). A box from
+   * before this frame refuses it as a malformed intent and asks at its own
+   * ten minutes, as before.
+   */
+  #vaultChanged() {
+    for (const host of this.registry.hosts.values()) {
+      if (host?.ephemeral) continue;
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'vault-changed' });
+      } catch { /* the socket is going; that box asks when it is back */ }
+    }
   }
 
   /**
@@ -6375,6 +6398,7 @@ export class CoordinatorCore {
       return { ok: false, error: { code: 'bad_params' }, text: 'That is not a sealed Claude login.' };
     }
     const r = await this.#askMinterClaude('deposit', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email: requester?.email ?? null });
+    if (r.ok) this.#vaultChanged();
     this.record({
       event: r.ok ? (r.forgotten ? 'claude.forgotten' : 'claude.deposited') : 'claude.deposit-refused',
       actor: requester?.email ?? null,
