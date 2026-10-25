@@ -135,7 +135,7 @@ and "dead host" is the one it retries.
 | `forgetperson` | — (the person is the actor) | ✅ | sidecar-local — `POST /api/forget-person` on the hub's loopback: every session the person started here stopped and binned, and their Claude account, sign-ins, renewal material and vault copies deleted. Coordinator only |
 | `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
 | `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — refused for a person before the code is spent: their GitHub is finished by the minter for their phone ([vault.md](./vault.md)) |
-| `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket`, `repo?` (v6) | ✅ | `/provision <platform> [minutes]` |
+| `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket`, `repo?` (v6), `image?` (one of `RUNNER_IMAGES` for that platform, v16) | ✅ | `/provision <platform> [minutes] [--image <image>]` |
 | `runnerrepo` | `repo` (`owner/repo`, v6) | | `/runnerrepo <owner/repo>` |
 | `linkrepo` | `role` (`archive`\|`runners`\|`templates`, v11), `repo` (`owner/repo`, v11) | | `/linkrepo <role> <owner/repo>` |
 | `setuptoken` | `code?` (secret), `reply?` (a P-256 public key), `kind?` (`token`\|`login`, v15) | ✅ | `/setuptoken` starts `claude setup-token` in a pane and returns the sign-in page; `/setuptoken <code> <reply>` finishes it and returns the token sealed to `reply`. `--login` (`kind: login`) makes the whole `claude auth login` sign-in instead, which Remote Control needs, read from its own directory only and sealed to `reply` as `signIn` |

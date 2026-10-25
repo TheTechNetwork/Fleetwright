@@ -281,10 +281,11 @@ dispatch into the fleet's repository while saying it worked.
 ## What `provision` may express, and what it may not
 
 ```
-provision { platform: macos|windows|linux|android, minutes?: 5..350, repo?: owner/repo }
+provision { platform: macos|windows|linux|android, minutes?: 5..350, image?: one listed below, repo?: owner/repo }
 ```
 
-No workflow file. No ref. No inputs. **A compromised coordinator can ask for a
+No workflow file. No ref. No inputs beyond the image, which is one word from a
+fixed list. **A compromised coordinator can ask for a
 Mac; it cannot ask somebody's GitHub token to run something of its choosing.**
 That is `start` naming a profile rather than carrying one, applied to a second
 verb.
@@ -307,12 +308,43 @@ all. Adding `provision` itself cost nothing: an old host answers
 
 ## The four platforms
 
-| platform | runner | for |
+| platform | images, newest (the default) first | for |
 |---|---|---|
-| `linux` | `ubuntu-26.04` | the default. Cheapest, fastest to boot, and most work does not care |
-| `macos` | `macos-26` | the one nobody has hardware for — an iOS or macOS build, Xcode |
-| `android` | `ubuntu-26.04` + SDK + KVM | *looking at* an app rather than only building it |
-| `windows` | `windows-2025` | **not proven** — see below |
+| `linux` | `ubuntu-26.04`, `ubuntu-24.04` | the default. Cheapest, fastest to boot, and most work does not care |
+| `macos` | `xcode-27`, `macos-26`, `macos-15` | the one nobody has hardware for — an iOS or macOS build, Xcode |
+| `android` | `ubuntu-26.04`, `ubuntu-24.04`, + SDK + KVM | *looking at* an app rather than only building it |
+| `windows` | `windows-2025`, `windows-2022` | **not proven** — see below |
+
+### Choosing the image
+
+A person picks the image when they ask for the machine: the Image choice under
+New session on either phone, `image` on `fleet_provision`, or
+`/provision macos --image xcode-27` on a box. Nobody choosing gets the newest,
+and the newest is always the default. `xcode-27` is macOS 26 with Xcode 27, and
+it is the only image with the iPhone Duo simulator; `macos-26` carries Xcode 26
+alone.
+
+**The list is written in three places, deliberately.** `RUNNER_IMAGES` in
+`src/fleet/protocol/intents.js`, the `image` choice in each workflow of
+[Fleetwright-Runners-Template](https://github.com/TheTechNetwork/Fleetwright-Runners-Template),
+and each phone's start sheet (held to the first by
+`test/runner-image-in-apps.test.js`). The value becomes the job's `runs-on`,
+and `runs-on` with an open string could name `self-hosted`: somebody's own
+machine, running whatever the workflow does. So the protocol refuses an image
+it does not list, `runnerImageProblem` refuses one from another platform, and
+GitHub refuses a dispatch whose value is not among the workflow's choices,
+before any job exists. When GitHub ships a newer image, it goes first in all
+three.
+
+**Sent only when chosen.** The newest is sent as nothing and the workflow's own
+default applies, so a runner repository made before images could be chosen,
+whose workflow declares no `image` input, keeps working until somebody picks
+another. Then its dispatch is refused with a 422 that says to update from the
+template.
+
+**`image` cost protocol 16**, and is refused rather than dropped for an older
+host, as `repo` is: dropped, the host would start the default and report a
+machine on an image nobody chose.
 
 The Android runner installs a system image and makes `/dev/kvm` writable, and
 **starts no emulator**. Which API level and which device is the session's
