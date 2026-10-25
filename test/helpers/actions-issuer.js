@@ -6,13 +6,28 @@ import { ACTIONS_ISSUER } from '../../src/fleet/coordinator/oidc.js';
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
+/**
+ * ONE KEY PER PROCESS, under the one `kid`. The verifier (oidc.js keysFor)
+ * keeps a remote key set per issuer for the life of the process, cached for
+ * an hour with a thirty-second cooldown on refetching, exactly as it should
+ * for GitHub. This helper minted a fresh pair on every call under the same
+ * `kid`, so the second fleet a test stood up within thirty seconds of the
+ * first verified its tokens against the first fleet's key: "the issuer has
+ * no such signing key" about one case in three of a table that stands up a
+ * fleet per row, and the same once on CI. The key is not what any of those
+ * tests is about; the claims are.
+ * @type {Promise<CryptoKeyPair>|null}
+ */
+let signing = null;
+
 /** GitHub's Actions issuer: a key set for jose, and a signer for job tokens. */
 export async function actionsIssuer() {
-  const pair = await crypto.subtle.generateKey(
+  signing ??= crypto.subtle.generateKey(
     { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
     true,
     ['sign', 'verify'],
   );
+  const pair = await signing;
   const keys = [{ ...(await crypto.subtle.exportKey('jwk', pair.publicKey)), kid: 'gha', alg: 'RS256', use: 'sig' }];
   const real = globalThis.fetch;
   globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init) => {
