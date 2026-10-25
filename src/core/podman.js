@@ -24,7 +24,7 @@
 // answering while it runs.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 import { readHouseRules } from './rules.js';
@@ -1244,12 +1244,82 @@ export function removeSandboxVolumes(cfg, name) {
   return { removed, failed };
 }
 
+/** At most this much of what a dead session printed is kept, from the end. */
+const LAST_OUTPUT_MAX = 64 * 1024;
+
+/**
+ * Where what a sandboxed session printed is kept once its container is gone.
+ *
+ * @param {{ stateDir: string }} cfg @param {string} name
+ */
+export function lastOutputPath(cfg, name) {
+  return path.join(cfg.stateDir, 'session-output', `${name}.log`);
+}
+
+/**
+ * Take a session's container away and keep what it printed.
+ *
+ * A session's container used to run with `--rm`, so a session that died at
+ * startup took its output with it: the pane closed, the container was gone,
+ * and "session exited during startup" was all anyone could be told. That was
+ * cc-trusty-egret on vnic-runner-oci, resumed a dozen times with no reason
+ * given. So the container now outlives its exit until this runs: the startup
+ * check reads `podman logs` while it is there, and this keeps the end of it,
+ * with the exit status, before removing the container.
+ *
+ * @param {import('../config.js').Config} cfg @param {string} name
+ * @returns {boolean} whether there was a container to take away
+ */
+export function retireSandboxContainer(cfg, name) {
+  const { container } = sandboxNames(name);
+  if (!exists(cfg, 'container', container)) return false;
+  const printed = podman(cfg, ['logs', '--tail', '400', container]);
+  const status = podman(cfg, ['inspect', '-f', '{{.State.ExitCode}}', container]).stdout.trim();
+  // A TTY's line endings, as `-it` makes every line: kept as plain lines.
+  const text = `${printed.stdout}${printed.stderr}`.replace(/\r/g, '').slice(-LAST_OUTPUT_MAX).trim();
+  if (printed.status === 0 && text) {
+    try {
+      const file = lastOutputPath(cfg, name);
+      mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      writeFileSync(file, `${/^\d+$/.test(status) ? `It exited with status ${status}.\n` : ''}${text}\n`, { mode: 0o600 });
+    } catch (e) {
+      log.warn(`sandbox: could not keep what ${name} printed: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+  podman(cfg, ['rm', '-f', container]);
+  return true;
+}
+
+/**
+ * What a session printed before its container was taken away, or null.
+ *
+ * @param {{ stateDir: string }} cfg @param {string} name
+ */
+export function readLastOutput(cfg, name) {
+  try {
+    return readFileSync(lastOutputPath(cfg, name), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Forget what a session printed last: its next life prints its own, and a
+ * purged session leaves nothing behind.
+ *
+ * @param {{ stateDir: string }} cfg @param {string} name
+ */
+export function forgetLastOutput(cfg, name) {
+  rmSync(lastOutputPath(cfg, name), { force: true });
+}
+
 /**
  * Stop a session's container directly.
  *
- * Normally unnecessary — killing the tmux session kills the pane process, which
- * is podman, and `--rm` cleans up. This is the belt-and-braces path for a
- * container that outlived its pane.
+ * Killing the tmux session kills the pane process, which is podman, and the
+ * container exits; it is removed here, because it runs without `--rm` so a
+ * session that dies on its own keeps its output (retireSandboxContainer).
+ * Also the path for a container that outlived its pane.
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} name

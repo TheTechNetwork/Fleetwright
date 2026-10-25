@@ -28,6 +28,7 @@
 import { readFileSync } from 'node:fs';
 import { Accounts } from './accounts.js';
 import { readCredentialState } from './claude-credential.js';
+import { vaultBox, vaultPeople, vaultClaudeSource } from './vault-store.js';
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -210,10 +211,34 @@ export class UsageMonitor {
     } catch (e) {
       this.log.warn(`usage: could not list linked accounts: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // ON A VAULT BOX, THE VAULT'S LOGINS AND NOTHING LINKED HERE, as every
+    // session's (podman.js, pickCredentialSource). This read only the links,
+    // so vnic-runner-oci reported a stale link from before the vault as "the
+    // credential has expired and has not renewed yet" every ten minutes while
+    // its sessions ran on a sign-in the vault had just given it, and nobody
+    // whose login came only from the vault was asked about at all.
+    const onVault = vaultBox(this.cfg);
+    if (onVault) emails = vaultPeople(this.cfg).filter((e) => vaultClaudeSource(this.cfg, e));
     /** @type {UsageSnapshot['accounts']} */
     const rows = [];
     for (const email of emails) {
-      const file = this.accounts.credentialPathFor(email);
+      const fromVault = onVault ? vaultClaudeSource(this.cfg, email) : null;
+      // A SETUP-TOKEN has no expiry to read; it is asked with as it is, and
+      // the endpoint's answer, or its refusal, is the reading.
+      if (fromVault && 'tokenFile' in fromVault) {
+        let token = '';
+        try {
+          token = readFileSync(fromVault.tokenFile, 'utf8').trim();
+        } catch { /* gone since it was listed: said below */ }
+        if (!token) {
+          rows.push({ account: email, usage: null, why: 'the vault’s token could not be read' });
+          continue;
+        }
+        const r = await this.read(token, { fetch: this.fetch });
+        rows.push(r.ok ? { account: email, usage: r.usage, why: null } : { account: email, usage: null, why: r.why });
+        continue;
+      }
+      const file = fromVault ? fromVault.source : this.accounts.credentialPathFor(email);
       const state = file ? this.readState(file, this.now()) : null;
       if (!file || !state) {
         rows.push({ account: email, usage: null, why: 'no credential file' });

@@ -94,8 +94,8 @@ The container is not even told its own name — it posts `{uuid, cwd}` to
 
 ### Two things that were not obvious before writing it
 
-**Reclaiming a stale socket is a hijack primitive if done naively.** `--rm` plus
-a container that died hard leaves the socket file behind with nothing listening,
+**Reclaiming a stale socket is a hijack primitive if done naively.** A
+container that died hard leaves the socket file behind with nothing listening,
 so `listen()` fails `EADDRINUSE` and the session can never restart. The fix is to
 unlink it — but unlinking *unconditionally* means anything that can ask the hub
 to open a session can drop a live session's socket, listen on the same path, and

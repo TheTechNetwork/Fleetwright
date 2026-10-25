@@ -1291,7 +1291,10 @@ turned up).
 
 **SEC-SESSION-2** — State is split by lifetime: conversation and workspace
 survive a stop in named volumes; everything root did to the container filesystem
-is destroyed on every stop (`--rm`). `forget` deletes the volumes; nothing else
+is destroyed on every stop: a stop removes the container, reconcile removes one
+that ended on its own once the end of what it printed is kept, and every start
+removes any left over first (`--rm` did this until a session that died at
+startup needed its output kept). `forget` deletes the volumes; nothing else
 does.
 *Falsify:* `podman.js` / `sandboxArgv`; a test that a stopped-and-resumed session
 keeps `/work` and loses `/etc` changes.

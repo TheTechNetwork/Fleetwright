@@ -20,7 +20,7 @@ import path from 'node:path';
 
 import { isValidName } from './names.js';
 import { hasSession, capturePane } from './tmux.js';
-import { podman, sandboxNames } from './podman.js';
+import { podman, sandboxNames, readLastOutput } from './podman.js';
 import { unitName } from '../fleet/legacy-paths.js';
 import { repairCommand } from './upgrades.js';
 
@@ -252,6 +252,16 @@ export function readSessionLogs(cfg, name, lines = 60, session = null) {
   // not have.
   if (hasSession(name)) {
     return { ok: true, text: `${name} has a window open and nothing on it — it has printed nothing yet.` };
+  }
+  // WHAT IT PRINTED BEFORE IT ENDED, kept when its container was taken away
+  // (podman.js, retireSandboxContainer). A session that died at startup has
+  // no pane and no container, and this is the only place the reason is.
+  const kept = cfg.sandbox ? readLastOutput(cfg, name) : null;
+  if (kept) {
+    const said = kept.split('\n');
+    const status = said[0].startsWith('It exited with status') ? [said[0]] : [];
+    const tail = said.slice(status.length).slice(-lines);
+    return { ok: true, text: `What ${name} printed before it ended:\n${[...status, ...tail].join('\n')}` };
   }
   return {
     ok: false,
