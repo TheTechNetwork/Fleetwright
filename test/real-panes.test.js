@@ -27,7 +27,7 @@ import { readPrompt } from '../src/fleet/host/prompt.js';
 // EXPORTED SO THIS TEST BINDS TO THE REAL ONES. Re-declaring them here, or
 // scraping them out of the source, would let the matchers drift from the thing
 // asserting they work — which is the failure this whole file exists about.
-import { AWAITING_RE, DRAWING_RE, READY_RE } from '../src/fleet/host/watcher.js';
+import { AWAITING_RE, DRAWING_RE, READY_RE, isReady } from '../src/fleet/host/watcher.js';
 
 const pane = (/** @type {string} */ name) =>
   readFileSync(new URL(`./fixtures/claude-2.1.234-${name}.txt`, import.meta.url), 'utf8');
@@ -35,6 +35,7 @@ const pane = (/** @type {string} */ name) =>
 const READY = pane('ready');
 const WORKING = pane('working');
 const TRUST = pane('trust');
+const WORKING_BYPASS = readFileSync(new URL('./fixtures/claude-2.1.284-working-bypass.txt', import.meta.url), 'utf8');
 
 test('a working session is not mistaken for a resting one', () => {
   // THE BUG THESE CAPTURES FOUND. The first version keyed on the permission
@@ -55,6 +56,20 @@ test('a working session is not mistaken for a resting one', () => {
   // mode name is present in both, so it discriminates nothing.
   assert.match(READY, /mode on/);
   assert.match(WORKING, /mode on/);
+});
+
+test('on the current CLI the parenthetical is drawn while working too, and the interrupt hint tells them apart', () => {
+  // Captured on 2026-10-25 from a GitHub macOS runner forty seconds into
+  // `xcodebuild`, through fleet_read_log. Claude Code 2.1.284 draws
+  // `(shift+tab to cycle)` in both states and adds `esc to interrupt` while
+  // it works — so READY_RE, right for 2.1.234, now matched a session mid-build,
+  // and fleet_await answered "sitting at a ready prompt — which usually means
+  // it finished" about a job that had only just begun.
+  assert.equal(READY_RE.test(WORKING_BYPASS), true, 'the old test alone would call this ready');
+  assert.equal(isReady(WORKING_BYPASS), false, 'a session mid-build is NOT ready');
+  assert.equal(isReady(READY), true, 'and the resting session still is');
+  assert.equal(isReady(WORKING), false, 'as is the 2.1.234 working footer, which lacks the parenthetical');
+  assert.equal(DRAWING_RE.test(WORKING_BYPASS), true, 'it is drawing, so the restart gate leaves it alone');
 });
 
 test('both a working and a resting session count as "the CLI is drawing"', () => {
@@ -89,5 +104,7 @@ test('the fixtures are the real thing, not a paraphrase of it', () => {
   assert.match(READY, /⏵⏵/, 'the mode marker');
   assert.match(READY, /shift\+tab to cycle/);
   assert.match(WORKING, /Bash\(/, 'a real tool call');
+  assert.match(WORKING_BYPASS, /shift\+tab to cycle/, 'the parenthetical, drawn while working');
+  assert.match(WORKING_BYPASS, /esc to interrupt/, 'and the hint that says so');
   assert.match(TRUST, /Quick safety check/);
 });
