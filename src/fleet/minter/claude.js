@@ -97,8 +97,10 @@ const CLI_TOKEN_RE = /^(?:gho_|ghp_|github_pat_)/;
  * @typedef {object} LoginStore  one row per GitHub account id
  * @property {(id: string) => Promise<any>} get
  * @property {(id: string, row: any) => Promise<void>} put
- * @property {(id: string) => Promise<{ ok: boolean, token?: string, expiresAt?: number|null, text?: string }>} [fresh]
- *   a sign-in renewed if it is due, by the vault's object, which is the one writer
+ * @property {(id: string) => Promise<{ ok: boolean, token?: string, expiresAt?: number|null, text?: string,
+ *   login?: { scopes?: unknown, subscriptionType?: unknown, rateLimitTier?: unknown }, account?: unknown }>} [fresh]
+ *   a sign-in renewed if it is due, by the vault's object, which is the one writer, with
+ *   what its credentials file is written from
  */
 
 /**
@@ -318,6 +320,8 @@ export async function answerLogin(ask, config) {
     );
   }
   let token;
+  /** @type {{ expiresAt: number, scopes?: unknown, subscriptionType?: unknown, rateLimitTier?: unknown, account?: unknown }|null} */
+  let signIn = null;
   if (held.kind === 'login') {
     // A SIGN-IN IS RENEWED BEFORE IT IS HANDED OUT, and only in the vault's
     // object, under the person's lock: renewing rotates the refresh token,
@@ -328,6 +332,20 @@ export async function answerLogin(ask, config) {
       return refuse('no_claude_login', `${claims.actor}’s Claude sign-in could not be given out: ${fresh?.text ?? 'the vault did not answer'} This runner falls back to its repository’s ANTHROPIC_API_KEY if it has one.`);
     }
     token = String(fresh.token);
+    // WHEN IT RUNS OUT, AND WHAT ITS CREDENTIALS FILE SAYS, so the runner
+    // writes the file its sessions read and asks again when the vault renews
+    // it: renewing revokes the token every holder has, a runner's included.
+    // A vault from before these were given leaves them out, and the runner
+    // goes on as it did.
+    if (Number.isSafeInteger(fresh.expiresAt)) {
+      signIn = {
+        expiresAt: Number(fresh.expiresAt),
+        scopes: fresh.login?.scopes,
+        subscriptionType: fresh.login?.subscriptionType,
+        rateLimitTier: fresh.login?.rateLimitTier,
+        account: fresh.account,
+      };
+    }
   } else {
     try {
       const key = await /** @type {() => Promise<{ privateKey: CryptoKey, publicKey: string }>} */ (config.depositKey)();
@@ -340,6 +358,6 @@ export async function answerLogin(ask, config) {
     }
   }
   const login = String(held.login || claims.actor);
-  const sealed = await seal({ to: runnerKey, aad: audience, payload: { token, login } });
+  const sealed = await seal({ to: runnerKey, aad: audience, payload: { token, login, ...(signIn ? { signIn } : {}) } });
   return { ok: true, login, sealed, text: `${login}’s Claude login, sealed to the runner ${login} started.` };
 }

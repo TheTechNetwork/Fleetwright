@@ -1284,6 +1284,13 @@ test('a whole Claude sign-in is kept once, renewed by the minter alone, and no b
   assert.equal(forRunner.ok, true, forRunner.text);
   assert.match(forRunner.token, /^sk-ant-oat01-renewed/);
   assert.equal(Object.keys(forRunner).includes('refreshToken'), false);
+  // With what a credentials file is written from, as a box is given it, so a
+  // runner's sessions read the next token as a box's do; still not the
+  // refresh token, anywhere in the answer.
+  assert.ok(forRunner.expiresAt > Date.now() + 7 * 3_600_000);
+  assert.deepEqual(forRunner.login, { scopes: signedInFor, subscriptionType: 'max', rateLimitTier: forRunner.login.rateLimitTier });
+  assert.equal(forRunner.account.emailAddress, 'eli@example.com');
+  assert.ok(!JSON.stringify(forRunner).includes('sk-ant-ort01'));
 
   const tested = await m.phone({ op: 'test', name: 'claude' });
   assert.equal(tested.answer.state, 'accepted', tested.text);

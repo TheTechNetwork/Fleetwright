@@ -284,7 +284,14 @@ export async function answerClaudeFresh(ask, config) {
   const store = /** @type {VaultStore} */ (config.store);
   const { held, problem } = await withLock(`row:${id}`, () => freshClaude(store, /** @type {any} */ (loaded).key, id, { fetchImpl, now }));
   if (!held) return refuse('no_claude_login', problem ?? 'No Claude login is kept for that account.');
-  return { ok: true, token: held.bearer, expiresAt: held.expiresAt, text: problem ?? '' };
+  // AND WHAT A CREDENTIALS FILE IS WRITTEN FROM, for a sign-in, as a box is
+  // given it (itemsFor): the runner writes the file its sessions read again
+  // when the token is refused, so a renewal does not stop them. Still never
+  // the refresh token.
+  const signIn = held.kind === 'login' && held.oauth
+    ? { login: { scopes: held.oauth.scopes, subscriptionType: held.oauth.subscriptionType, rateLimitTier: held.oauth.rateLimitTier }, account: held.account ?? {} }
+    : {};
+  return { ok: true, token: held.bearer, expiresAt: held.expiresAt, ...signIn, text: problem ?? '' };
 }
 
 /** @param {VaultConfig} config */
