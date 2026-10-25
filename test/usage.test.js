@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { normaliseUsage, accessTokenFrom, readUsage, UsageMonitor, USAGE_URL } from '../src/core/usage.js';
 import { Accounts } from '../src/core/accounts.js';
+import { applyVault } from '../src/core/vault-store.js';
 
 const ANSWER = {
   five_hour: { utilization: 42, resets_at: '2026-09-30T05:00:00.000Z' },
@@ -180,4 +181,27 @@ test('nobody linked is an empty list with a time, which is an answer', async (t)
   const snap = await mon.refresh();
   assert.deepEqual(snap.accounts, []);
   assert.equal(typeof snap.checkedAt, 'number');
+});
+
+test('on a vault box, usage is read from the logins the vault gave it, not a link from before', async (t) => {
+  // SEEN ON vnic-runner-oci: "the credential has expired and has not renewed
+  // yet" every ten minutes, from a link that predated the vault, while its
+  // sessions ran on the sign-in the vault had just handed it.
+  const { stateDir, now } = linked(t);
+  const r = applyVault(/** @type {any} */ ({ stateDir }), {
+    accounts: [
+      { email: 'eli@example.com', items: [{ name: 'claude', value: 'tok-vault', expiresAt: now + 3_600_000, login: { scopes: ['user:inference', 'user:profile'], subscriptionType: 'max', rateLimitTier: null }, account: {} }], problems: [] },
+      { email: 'dana@example.com', items: [{ name: 'secret:NPM_TOKEN', value: 'npm_x' }], problems: [] },
+    ],
+  });
+  assert.equal(r.ok, true, r.text);
+  const calls = /** @type {any[]} */ ([]);
+  const mon = new UsageMonitor(/** @type {any} */ ({ stateDir }), { fetch: answering(200, ANSWER, calls), now: () => now, log: { info() {}, warn() {} } });
+
+  const snap = await mon.refresh();
+  // Eli, whose vault gives this box a Claude login; not Dana, whose gives it
+  // none; and none of the links (fresh, stale, bare) made before the vault.
+  assert.deepEqual(snap.accounts.map((a) => a.account), ['eli@example.com']);
+  assert.equal(snap.accounts[0].usage?.fiveHour?.used, 42);
+  assert.deepEqual(calls.map((c) => c.init.headers.authorization), ['Bearer tok-vault']);
 });
