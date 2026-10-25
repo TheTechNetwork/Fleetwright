@@ -1679,6 +1679,11 @@ export class Fleet {
       if (age > ALARM_MS) void this.core.send(host, { verb: 'health' }, 10_000).catch(() => {});
     }
     await this.state.storage.setAlarm(Date.now() + ALARM_MS);
+    // EACH KEPT CLAUDE SIGN-IN asked after, and its person told when
+    // Anthropic has ended it (core.js, checkClaudeSignIns): every fifteen
+    // minutes of these thirty-second passes, after the next is armed so a slow
+    // minter cannot stop the health pings.
+    await this.core.checkClaudeSignIns().catch(() => {});
   }
 
   async #saveHosts() {

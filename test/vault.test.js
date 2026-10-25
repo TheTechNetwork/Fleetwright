@@ -15,7 +15,8 @@ import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_A
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
-import { describeRenewals } from '../src/fleet/minter/claude-login.js';
+import { describeRenewals, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
+import { USAGE_URL } from '../src/core/usage.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,7 +33,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
-import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns } from './helpers/stand-in-claude.js';
+import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -59,7 +60,12 @@ async function minter(extra = {}) {
     FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: 'cf-secret',
     ...extra,
   };
-  const storage = { get: async (/** @type {string} */ k) => rows.get(k), put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); } };
+  const storage = {
+    get: async (/** @type {string} */ k) => rows.get(k),
+    put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); },
+    // As a Durable Object's storage lists, in key order.
+    list: async (/** @type {{ prefix: string }} */ o) => new Map([...rows.entries()].filter(([k]) => k.startsWith(o.prefix)).sort(([a], [b]) => (a < b ? -1 : 1))),
+  };
   let instance = new ClaudeLogins({ storage }, env);
   env.LOGINS = { idFromName: () => 'logins', get: () => ({ fetch: (/** @type {string} */ u, /** @type {any} */ i) => instance.fetch(new Request(u, i)) }) };
 
@@ -177,7 +183,7 @@ async function minter(extra = {}) {
     call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now(), ...extra } }), email: ELI });
 
   /** The coordinator's minter binding, as fleet-do.js makes it. */
-  const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask) };
+  const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask), claude: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/claude/${route}`, ask) };
   /** The key, as a phone looks it up at the fleet's address. */
   const lookup = async () => /** @type {any} */ (await (await minterWorker.fetch(new Request(`https://fleet.test${KEY_PATH}`), env)).json());
   /** The object starting again on the storage it had, as after an eviction. */
@@ -1445,4 +1451,81 @@ test('a renewal this fleet lost is not blamed on anything outside it', () => {
   assert.equal(describeRenewals([], kept, now), 'It has not been renewed since it was kept at 10:00 UTC.');
   // An earlier day is dated.
   assert.match(describeRenewals([good, refused], kept, Date.parse('2026-10-26T09:00:00Z')), /between the last good renewal at 2026-10-25 10:19 UTC and then/);
+});
+
+test('a sign-in Anthropic ended is found by the minter and its person told on their phone, once', async (t) => {
+  // SEEN ON vnic-runner-oci: a sign-in ended outside the fleet at 18:19 was
+  // found out when a session would not start, and nobody was told.
+  assert.equal(CLAUDE_USAGE_URL, USAGE_URL, 'the check asks the address /usage reads');
+  const m = await minter();
+  t.after(m.restore);
+  /** @type {any[]} */
+  const sends = [];
+  const clock = { now: Date.now() };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ (m.binding),
+    push: /** @type {any} */ ({ async send(/** @type {any[]} */ devices, /** @type {any} */ message) { sends.push({ to: devices.map((d) => d.actor), message }); return { sent: devices.length, dead: [] }; } }),
+    now: () => clock.now,
+  });
+  for (const [email, admin] of [[ELI, false], ['ops@example.com', true]]) {
+    const { client } = /** @type {any} */ (await core.clients.issue(`phone (${email})`, { admin, email }));
+    await core.registerDevice({ platform: 'ios', token: (admin ? 'b' : 'a').repeat(64), clientId: client.id, actor: `fleet:${email}` });
+  }
+  /** The minter's own floor, stepped past as ten minutes passing would. */
+  const later = () => { m.rows.delete('claude-checked'); clock.now += 16 * 60_000; };
+
+  // WORKING, and not due: its access token is asked after and nothing is renewed.
+  const made = claudeSignInFor('checked');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  const renewed = claudeRenewals.count;
+  const asked = claudeUsageAsks.count;
+  assert.equal(await core.checkClaudeSignIns(), 0);
+  assert.equal(claudeUsageAsks.count - asked, 1);
+  assert.equal(claudeRenewals.count, renewed, 'a sign-in that works is not renewed early');
+  assert.equal(sends.length, 0);
+  // Asked again within fifteen minutes, the coordinator does not ask; asked
+  // past it within the minter's ten, the minter does not either.
+  assert.equal(await core.checkClaudeSignIns(), 0);
+  assert.equal(claudeUsageAsks.count - asked, 1);
+  clock.now += 16 * 60_000;
+  assert.deepEqual((await m.binding.claude('check', {})).ended, []);
+  assert.equal(claudeUsageAsks.count - asked, 1, 'the minter answers at most every ten minutes, whoever asks');
+
+  // ENDED ON claude.ai, access token and refresh token both: the access token
+  // is refused, so it is renewed at once, and that renewal being refused is
+  // what says it is over.
+  revokeClaude(made.oauth.accessToken);
+  cancelClaudeSignIns();
+  later();
+  assert.equal(await core.checkClaudeSignIns(), 1);
+  assert.equal(claudeRenewals.count - renewed, 1, 'renewed at once when its access token was refused');
+  const mine = sends.find((s) => s.to.includes(`fleet:${ELI}`));
+  assert.equal(mine.message.title, 'Your Claude sign-in was ended');
+  assert.match(mine.message.body, /^It was ended outside the fleet at \d\d:\d\d UTC, so sessions cannot start with it\. Sign in to Claude again from your phone or the signing page\.$/);
+  assert.equal(mine.message.data.kind, 'claude-ended');
+  assert.equal(mine.message.drawnByApp, undefined, 'drawn by the system tray');
+  const admin = sends.find((s) => s.to.includes('fleet:ops@example.com'));
+  assert.equal(admin.message.title, `${ELI}’s Claude sign-in was ended`);
+  assert.match(admin.message.body, /from their phone/);
+  assert.ok(core.events.some((e) => e.event === 'claude.ended' && e.actor === ELI && /Refresh token not found or invalid/.test(e.text)));
+  assert.ok(!JSON.stringify(sends).includes('sk-ant-'), 'no token reaches a phone');
+
+  // ONCE: asked again, nothing more is said about the same sign-in.
+  later();
+  assert.equal(await core.checkClaudeSignIns(), 0);
+  assert.equal(sends.length, 2);
+
+  // A RENEWAL A BOX ASKED FOR, refused, is the answer without asking again;
+  // and a new sign-in kept is told about afresh.
+  const office = await generateKeyPair();
+  const next = claudeSignInFor('next', 5 * 60_000);
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: next })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  cancelClaudeSignIns();
+  await m.box(office);
+  later();
+  const before = claudeUsageAsks.count;
+  assert.equal(await core.checkClaudeSignIns(), 1);
+  assert.equal(claudeUsageAsks.count, before, 'a refusal already noted is not asked about again');
+  assert.equal(sends.length, 4);
 });

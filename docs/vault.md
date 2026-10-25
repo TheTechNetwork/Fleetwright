@@ -93,6 +93,31 @@ Anthropic. That is the question a sign-in on vnic-runner-oci raised with
 "Refresh token not found or invalid", when nothing kept said when it had last
 been renewed or by whom.
 
+**A sign-in Anthropic has ended is told to its person, on their phone.**
+Nothing told them before: the sign-in on vnic-runner-oci was found out when a
+session would not start. Every fifteen minutes the coordinator's alarm asks
+the minter (`POST /claude/check`), and the minter asks after every kept
+sign-in itself (`checkClaude` in `src/fleet/minter/claude-login.js`):
+
+- a renewal already refused, by a box, a runner or a test, is the answer;
+- otherwise its access token is tried at the usage address, which costs
+  nothing, and a token refused there is renewed at once instead of when due;
+- a sign-in that is due is renewed, as a box asking would renew it.
+
+Only Anthropic refusing the refresh token counts as ended. An access token can
+be refused for reasons the refresh token survives, and the refresh token is
+the one thing only signing in again mends. Anything else is cannot tell and
+says nothing. Each ended sign-in is named once (`claude-ended:<id>`, keyed by
+when it was kept), so the next sign-in kept is told about afresh. The
+coordinator records `claude.ended` and pushes "Your Claude sign-in was ended"
+to the person's phones and the sign-in's name to an admin's.
+
+The minter answers at most every ten minutes, whoever asks. A compromised
+coordinator can ask more often and be told nothing new. It cannot make a
+sign-in look ended, because the asking is done here against Anthropic. A
+setup-token is not asked: it has no refresh token to end, and its scope does
+not reach the usage address.
+
 **A Claude token is asked before it is kept**, by the vault's `put` and by a
 deposit alike (`checkBeforeKeeping` in `src/fleet/minter/claude.js`). A 401
 keeps nothing and says `rejected_token`. An answer that cannot tell keeps it
