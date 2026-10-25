@@ -631,6 +631,60 @@ test('over HTTP, an agent can stop what it started one request earlier', async (
   assert.match(String(other.body.result.content[0].text), /not yours to stop/);
 });
 
+test('a stop survives the memory being lost, when the fleet records the session as the caller\'s', async () => {
+  // The map above is one Worker isolate's memory. A deploy emptied it, and
+  // `stop` refused two sessions the same agent had started an hour earlier on
+  // a runner billed by the minute — "not started in this conversation", about
+  // the sessions this conversation started. The coordinator had recorded who
+  // started them all along, so that record is what the server now asks for.
+  const { handleMcpRequest } = await import('../src/mcp/http.js');
+  /** @type {string[]} */
+  const stops = [];
+  /** @param {{ me: any, creators: Record<string, string|null> }} fleet */
+  const fleetWith = ({ me, creators }) => async (/** @type {any} */ url, /** @type {any} */ init) => {
+    if (String(url).endsWith('/api/me')) {
+      return me === null ? { status: 404, json: async () => ({}) } : { status: 200, json: async () => ({ ok: true, ...me }) };
+    }
+    const body = JSON.parse(String(init?.body || '{}'));
+    const name = String(body.params?.name || '');
+    if (body.verb === 'stop') stops.push(name);
+    return { status: 200, json: async () => ({ ok: true, text: `${body.verb} ok`, sessions: [{ name, status: 'running', createdBy: creators[name] ?? null }] }) };
+  };
+  /** @param {any} fleet @param {string} name */
+  const stop = async (fleet, name) => {
+    const r = await handleMcpRequest({
+      body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fleet_stop', arguments: { name } } },
+      // A credential nothing was started under: the memory holds nothing,
+      // exactly as after a deploy.
+      credential: `fwk_${Math.random().toString(16).slice(2)}_fresh`,
+      coordinator: 'https://fleet.example',
+      fetch: fleet,
+    });
+    return { refused: r.body.result.isError === true, text: String(r.body.result.content[0].text) };
+  };
+  const creators = { 'cc-glad-walrus': 'fleet:pat@example.com', theirs: 'fleet:sam@example.com', nobodys: null };
+
+  // Recorded as the caller's: allowed, and the stop reaches the fleet. The
+  // address is cased differently on purpose; identities compare as emails do.
+  const pat = fleetWith({ me: { email: 'Pat@Example.com', admin: true }, creators });
+  const mine = await stop(pat, 'cc-glad-walrus');
+  assert.equal(mine.refused, false, mine.text);
+  assert.deepEqual(stops, ['cc-glad-walrus']);
+
+  // Somebody else's, even to an admin: the coordinator would let an admin
+  // stop it, and this server still does not stop the org's other work from
+  // an agent.
+  const theirs = await stop(pat, 'theirs');
+  assert.equal(theirs.refused, true);
+  assert.match(theirs.text, /not yours to stop/);
+  // Unattributed is the fleet's, not the caller's.
+  assert.equal((await stop(pat, 'nobodys')).refused, true);
+  // A coordinator too old to say who is asking leaves the memory as the only
+  // evidence, and here it holds nothing.
+  assert.equal((await stop(fleetWith({ me: null, creators }), 'cc-glad-walrus')).refused, true);
+  assert.deepEqual(stops, ['cc-glad-walrus'], 'a refused stop must not reach the fleet');
+});
+
 test('a batch over stdio is answered, not silently dropped', async () => {
   // handleLine handed the ARRAY to handleMessage, where `array.id` is
   // undefined — so it was treated as a notification, answered with nothing, and

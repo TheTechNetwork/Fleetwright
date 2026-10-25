@@ -380,6 +380,9 @@ export class McpServer {
     // (src/mcp/http.js) or `stop` refuses what this caller just started.
     /** @type {Set<string>} */
     this.started = started || new Set();
+    // Who the credential is, once asked (#whoAmI). undefined: not asked yet.
+    /** @type {{ email: string }|null|undefined} */
+    this.me = undefined;
     // WRAPPED, NEVER STORED BARE. `this.fetch = fetch` then `this.fetch(...)`
     // calls the global with an McpServer as its receiver, and Cloudflare's
     // runtime refuses that:
@@ -670,8 +673,9 @@ export class McpServer {
       '     the container output. A resumed session brings its transcript back; a stopped one does not.',
       '  4. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed',
       '',
-      'You may only stop sessions you started in this conversation. Anything else belongs to a person',
-      'who is probably still using it.',
+      'You may stop only your own sessions: one started in this conversation, or one the fleet records',
+      'as started by the person you act for, from any of their devices. Anything else belongs to',
+      'somebody else, who is probably still using it.',
       '',
       'TEMPORARY HOSTS COST MONEY WHILE THEY LIVE. A host named gha-… is a CI runner: it exists for',
       'one job, belongs to whoever started it, and is destroyed when its job ends — taking any session',
@@ -884,12 +888,27 @@ export class McpServer {
     // an agent that could forget anything would eventually forget somebody's
     // work because a name looked familiar. Clearing up after itself is tidy;
     // clearing up after other people is not its call.
-    if ((tool.verb === 'stop' || tool.verb === 'forget') && !this.started.has(String(params.name || ''))) {
-      return this.#text(
-        `${params.name || 'that session'} was not started in this conversation, so it is not yours to ${tool.verb}. ` +
-          'It belongs to somebody who is probably still using it.',
-        true,
-      );
+    //
+    // AND WHAT THE FLEET SAYS IS THIS PERSON'S. The set above is memory, and
+    // over HTTP it is the Worker's memory (src/mcp/http.js): a deploy, or a
+    // request landing in another isolate, empties it — and `stop` then
+    // refused two sessions the same agent had started an hour earlier, as
+    // "somebody else's", on a runner billed by the minute. The fleet never
+    // forgot: the coordinator records who started every session (`createdBy`),
+    // and that record is the durable form of "you started it". So a name the
+    // memory does not hold is asked about before it is refused — whose is it,
+    // and who am I — and allowed when the two agree. The person's own
+    // identity, not their role: an admin's agent is not thereby allowed to
+    // stop the org's other work, which is the whole worry this check is for.
+    if (tool.verb === 'stop' || tool.verb === 'forget') {
+      const named = String(params.name || '');
+      if (!this.started.has(named) && !(await this.#createdByMe(named))) {
+        return this.#text(
+          `${named || 'that session'} was not started in this conversation, and the fleet does not record it ` +
+            `as yours, so it is not yours to ${tool.verb}. It belongs to somebody who is probably still using it.`,
+          true,
+        );
+      }
     }
 
     // A MACHINE FROM THIS COMPUTER, with no permanent box, when the person's
@@ -1085,6 +1104,57 @@ export class McpServer {
       throw new Error('this credential was refused — it may have been revoked from the app');
     }
     return await res.json();
+  }
+
+  /**
+   * Who this credential is, as the coordinator says — its email — or null
+   * when it cannot say: an older coordinator without the route, the
+   * shared token (which is nobody in particular), or a fleet out of reach.
+   * Asked once per server; over HTTP that is once per request that needs it.
+   */
+  async #whoAmI() {
+    if (this.me !== undefined) return this.me;
+    this.me = null;
+    try {
+      const res = await this.fetch(`${this.coordinator}/api/me`, { headers: { authorization: `Bearer ${this.credential}` } });
+      if (res?.status === 200) {
+        const body = /** @type {any} */ (await res.json());
+        if (body?.email) this.me = { email: String(body.email).toLowerCase() };
+      }
+    } catch {
+      // Not knowing who is asking refuses nothing by itself: it leaves the
+      // conversation's own memory as the only evidence, which is where this
+      // began.
+    }
+    return this.me;
+  }
+
+  /**
+   * Whether the fleet records a session as started by this caller's person.
+   *
+   * `createdBy` is `fleet:<email>` for a session a verified person started,
+   * from whichever device (hosts.js believedCreator), and the coordinator's
+   * own ownership check compares it in that form (scheduler.js sessionsOf).
+   * The same comparison here, with one difference on purpose: an admin is
+   * not everybody. The coordinator lets an admin act on any session; this
+   * server lets an agent act on the person's own.
+   *
+   * @param {string} name
+   */
+  async #createdByMe(name) {
+    if (!name) return false;
+    const me = await this.#whoAmI();
+    if (!me?.email) return false;
+    /** @type {any} */
+    let reply;
+    try {
+      reply = await this.#intent('status', { name }, null);
+    } catch {
+      return false;
+    }
+    if (!reply || reply.ok === false) return false;
+    const creator = String(sessionFrom(reply, name)?.createdBy ?? '').toLowerCase();
+    return creator === `fleet:${me.email}` || creator === me.email;
   }
 
   /**
