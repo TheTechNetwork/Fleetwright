@@ -171,6 +171,31 @@ const CAPABILITY_VERBS = new Set([
  * @property {() => Promise<unknown>} stop
  */
 
+/**
+ * How long until a holder of the vault's tokens asks again, given the soonest
+ * of them to run out: at the minute the minter renews it, which is a minute
+ * inside its half hour, so every box and runner holding the same token asks
+ * within the same minute (renewing revokes the token every holder has, and
+ * Claude Code reads its credentials file again on that 401 and carries on).
+ * Just past that minute, once a minute for a few minutes, for a clock that
+ * disagrees with the minter's or a holder that renewed first; after that, ten
+ * minutes before it runs out. Never later than `intervalMs`, and never
+ * sooner than a minute, or than `intervalMs` when that is shorter.
+ *
+ * @param {number} soonest  ms since the epoch, Infinity for nothing that runs out
+ * @param {number} intervalMs @param {number} [now]
+ */
+export function askAgainIn(soonest, intervalMs, now = Date.now()) {
+  const left = soonest - now;
+  const atRenewal = left - (CLAUDE_REFRESH_AHEAD_MS - 60_000);
+  const due = !Number.isFinite(soonest) ? Infinity
+    : atRenewal > 0 ? atRenewal
+      : atRenewal > -5 * 60_000 ? 60_000
+        : left - 10 * 60_000;
+  const floor = intervalMs > 0 ? Math.min(60_000, intervalMs) : 60_000;
+  return Math.max(floor, Math.min(intervalMs, due));
+}
+
 export class Sidecar {
   /**
    * @param {{
@@ -399,6 +424,8 @@ export class Sidecar {
      * @type {Promise<void>|null}
      */
     this.claudeLoginReady = null;
+    /** The next ask for this runner's owner's sign-in, when it is one that is renewed. @type {ReturnType<typeof setTimeout>|null} */
+    this.claudeLoginTimer = null;
     this.vaultKey = vaultKey;
     this.xoStateDir = xoStateDir;
     /**
@@ -453,7 +480,11 @@ export class Sidecar {
     if (this.jobToken) this.claudeLoginReady = this.#takeClaudeLogin();
     else if (this.vmLogin) this.claudeLoginReady = this.#handVmLogin();
     // THE VAULT, a few seconds in so the socket is up, then on its own clock.
-    if (this.vaultKey && this.vaultIntervalMs > 0) this.#scheduleVault(5_000);
+    // NOT ON A RUNNER: nobody approves a runner's key, which is new every run,
+    // so its answer is always empty, and an empty answer clears what is held,
+    // which on a runner is its owner's sign-in (#takeClaudeLogin). A runner's
+    // credentials come from its own asks.
+    if (this.vaultKey && this.vaultIntervalMs > 0 && !this.jobToken) this.#scheduleVault(5_000);
 
     // Health is PUSHED rather than waited for. A coordinator that has to ask
     // needs a timer per host, and in a Worker that means a Durable Object alarm
@@ -500,6 +531,8 @@ export class Sidecar {
     this.edgeWatch?.stop();
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.vaultTimer = null;
+    if (this.claudeLoginTimer) clearTimeout(this.claudeLoginTimer);
+    this.claudeLoginTimer = null;
     this.watcher?.stop();
     await this.transport.stop();
   }
@@ -1275,10 +1308,61 @@ export class Sidecar {
     } catch (e) {
       this.log.warn(`sidecar: could not tell the hub about this runner's Claude login: ${/** @type {Error} */ (e).message}`);
     }
+    if (said.ok && said.signIn) await this.#holdSignIn(said, said.signIn);
     // SAID EITHER WAY, in the runner's log, because the person paying is
     // decided here and "why did this bill to the API key" deserves an answer.
     if (said.ok) this.log.info(`sidecar: sessions ${said.owner} starts here run on ${said.login}'s Claude login`);
     else this.log.info(`sidecar: no Claude login for this runner's owner, so sessions use ANTHROPIC_API_KEY: ${said.text}`);
+  }
+
+  /**
+   * A runner's owner's sign-in, kept as a box keeps one from the vault: the
+   * credentials file every session of theirs here is staged with, which
+   * Claude Code reads again when its token is refused, and which the hub
+   * rewrites in every running session when it changes (vault-sessions.js).
+   * A token in a session's environment, as the runner was given before,
+   * cannot be changed once the session starts, so the renewal that revokes it
+   * stopped every session on the runner.
+   *
+   * THEN ASKED AGAIN at the minute the vault renews it, as boxes ask
+   * (askAgainIn), and a renewed one replaces it. An ask that fails keeps what
+   * is held: a runner keeps working on the token it has until that runs out.
+   *
+   * @param {{ owner: string, login: string, token: string }} said
+   * @param {{ expiresAt: number, scopes?: unknown, subscriptionType?: unknown, rateLimitTier?: unknown, account?: unknown }} signIn
+   */
+  async #holdSignIn(said, signIn) {
+    const item = {
+      name: 'claude',
+      value: said.token,
+      expiresAt: signIn.expiresAt,
+      login: { scopes: signIn.scopes, subscriptionType: signIn.subscriptionType, rateLimitTier: signIn.rateLimitTier },
+      account: signIn.account && typeof signIn.account === 'object' ? signIn.account : {},
+    };
+    const r = await this.hub.vault({ accounts: [{ email: said.owner, login: said.login, items: [item], problems: [] }] })
+      .catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
+    if (!r.ok) this.log.warn(`sidecar: the hub did not take ${said.owner}'s sign-in for this runner's sessions: ${r.text}`);
+    if (this.claudeLoginTimer) clearTimeout(this.claudeLoginTimer);
+    this.claudeLoginTimer = setTimeout(() => void this.#askAgainForSignIn(), askAgainIn(signIn.expiresAt, this.#askInterval()));
+    this.claudeLoginTimer.unref?.();
+  }
+
+  /** The vault's interval, which a runner keeps for its own asks; ten minutes where it is switched off. */
+  #askInterval() {
+    return this.vaultIntervalMs > 0 ? this.vaultIntervalMs : 10 * 60_000;
+  }
+
+  async #askAgainForSignIn() {
+    this.claudeLoginTimer = null;
+    const said = await this.#askForClaudeLogin();
+    if (said.ok && said.signIn) {
+      await this.hub.runnerLogin({ email: said.owner, login: said.login, token: said.token }).catch(() => {});
+      await this.#holdSignIn(said, said.signIn);
+      return;
+    }
+    this.log.warn(`sidecar: asking again for this runner's owner's Claude sign-in did not work, so it keeps the one it has: ${said.ok ? 'the answer carried no sign-in' : said.text}`);
+    this.claudeLoginTimer = setTimeout(() => void this.#askAgainForSignIn(), Math.min(60_000, this.#askInterval()));
+    this.claudeLoginTimer.unref?.();
   }
 
   /**
@@ -1461,21 +1545,9 @@ export class Sidecar {
       // the minter renews on the first ask inside its window, and each other
       // box went on sending the old token until its own ten minutes came
       // round, which a session there met as "OAuth access token has been
-      // revoked · Please run /login". Every box holding a token holds the same
-      // expiry, so each asks a minute inside the window and they change over
-      // within the same minute; Claude Code reads the file again on that 401
-      // and carries on (docs/vault.md). Just past that moment, once a minute
-      // for a few minutes, for a clock that disagrees with the minter's or a
-      // box that renewed first; after that, ten minutes before it runs out,
-      // as before.
+      // revoked · Please run /login" (askAgainIn, docs/vault.md).
       const soonest = Math.min(...said.accounts.flatMap((a) => (a.items || []).map((i) => (i.expiresAt === null ? Infinity : Number(i.expiresAt)))));
-      const left = soonest - Date.now();
-      const atRenewal = left - (CLAUDE_REFRESH_AHEAD_MS - 60_000);
-      const due = !Number.isFinite(soonest) ? Infinity
-        : atRenewal > 0 ? atRenewal
-          : atRenewal > -5 * 60_000 ? 60_000
-            : left - 10 * 60_000;
-      return Math.max(60_000, Math.min(this.vaultIntervalMs, due));
+      return askAgainIn(soonest, this.vaultIntervalMs);
     }
     if (said.forget) {
       this.pools?.adopt([]);
@@ -1612,7 +1684,9 @@ export class Sidecar {
   }
 
   /**
-   * @returns {Promise<{ ok: true, token: string, login: string, owner: string } | { ok: false, owner?: string|null, text: string }>}
+   * @returns {Promise<{ ok: true, token: string, login: string, owner: string,
+   *   signIn?: { expiresAt: number, scopes?: unknown, subscriptionType?: unknown, rateLimitTier?: unknown, account?: unknown } }
+   *   | { ok: false, owner?: string|null, text: string }>}
    */
   async #askForClaudeLogin() {
     const { privateKey, publicKey } = await newSealKey();
@@ -1656,7 +1730,14 @@ export class Sidecar {
       const inside = await open({ privateKey, publicKey, aad: audience, sealed: answer.sealed });
       const token = typeof inside?.token === 'string' ? inside.token : '';
       if (!token || !owner) return { ok: false, owner, text: 'the answer carried no login, so none was used' };
-      return { ok: true, token, login: String(inside.login || answer.login || ''), owner };
+      // A SIGN-IN THE VAULT RENEWS comes with its expiry and what its
+      // credentials file says (claude.js); a setup-token, or a minter from
+      // before, without.
+      const s = inside?.signIn;
+      const signIn = s && typeof s === 'object' && Number.isSafeInteger(s.expiresAt)
+        ? { expiresAt: Number(s.expiresAt), scopes: s.scopes, subscriptionType: s.subscriptionType, rateLimitTier: s.rateLimitTier, account: s.account }
+        : null;
+      return { ok: true, token, login: String(inside.login || answer.login || ''), owner, ...(signIn ? { signIn } : {}) };
     } catch {
       return { ok: false, owner, text: 'the answer did not open with this request’s key, so it was not used' };
     }

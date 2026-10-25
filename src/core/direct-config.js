@@ -130,7 +130,14 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
   // in this host's environment, and the CLI ranks an API key above the login
   // just staged, so without this the session would bill the repository while
   // looking signed in as the person. See buildCommand.
-  if (onRunner(cfg)) return { ok: true, dir, account: picked.account, fresh, auth: { kind: 'linked' } };
+  // And the bypass-permissions warning answered, as stageForRunner answers
+  // it: a runner never ran install.sh, so the setting that answers it on a
+  // box is not in what stageSettings copied, and the session would wait at
+  // "No, exit" with a credential that works.
+  if (onRunner(cfg)) {
+    acceptDangerousMode(dir);
+    return { ok: true, dir, account: picked.account, fresh, auth: { kind: 'linked' } };
+  }
   return { ok: true, dir, account: picked.account, fresh };
 }
 

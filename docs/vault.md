@@ -317,10 +317,17 @@ out of the answer before fleetwright sees it, holds it in memory, and uses it
 to make machines on the pool (`src/fleet/host/xo-pools.js`). Nothing on the
 box writes it down.
 
-A runner is not a box anyone approves: its key is new every run. It goes on
-getting its owner's Claude login and its repository tokens the way it did
+A runner is not a box anyone approves: its key is new every run, so it does not
+ask the vault, whose answer would always be empty. It goes on getting its
+owner's Claude login and its repository tokens the way it did
 ([runner-central.md](./runner-central.md)), and the Claude login it gets is the
-vault's, read from the same row.
+vault's, read from the same row. A sign-in comes with its expiry, scopes and
+account, never its refresh token, and the runner keeps it as a box does: the
+credentials file its owner's sessions are staged with, which Claude Code reads
+again when the token is refused. It asks again at the minute the vault renews
+it (`askAgainIn` in `src/fleet/host/sidecar.js`), so a renewal during a job no
+longer stops every session on the runner, as a token fixed in each session's
+environment did. A setup-token is still that token, which does not renew.
 
 ## What it cannot do, said plainly
 
