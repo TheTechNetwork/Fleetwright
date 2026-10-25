@@ -38,7 +38,14 @@ import { REPO_RE } from '../protocol/intents.js';
  * storage key, and is refused with a sentence rather than failing to save. */
 export const MAX_RUNNER_REPOS = 250;
 
-/** @typedef {{ repo: string, setAt: number }} RunnerRepo */
+/**
+ * `large`: whether this person lets their runners boot GitHub's larger
+ * machines, which are billed to the repository's owner by the minute. Theirs
+ * to say because it is their repository, off until they say, and off again
+ * when they name another repository, whose owner has not said.
+ *
+ * @typedef {{ repo: string, setAt: number, large?: boolean }} RunnerRepo
+ */
 
 export class RunnerRepos {
   /** @param {{ now?: () => number }} [opts] */
@@ -67,8 +74,32 @@ export class RunnerRepos {
     if (!this.byEmail.has(key) && this.byEmail.size >= MAX_RUNNER_REPOS) {
       return { ok: false, text: 'This fleet holds as many runner repositories as it can.' };
     }
-    this.byEmail.set(key, { repo: String(repo), setAt: this.now() });
+    const prior = this.byEmail.get(key);
+    this.byEmail.set(key, {
+      repo: String(repo),
+      setAt: this.now(),
+      ...(prior?.large && prior.repo.toLowerCase() === String(repo).toLowerCase() ? { large: true } : {}),
+    });
     return { ok: true };
+  }
+
+  /** @param {string|null|undefined} email @returns {boolean} */
+  allowsLarge(email) {
+    const key = String(email || '').toLowerCase();
+    return Boolean(key && this.byEmail.get(key)?.large);
+  }
+
+  /**
+   * @param {string|null|undefined} email @param {boolean} allow
+   * @returns {boolean} whether this person has a repository to say it of
+   */
+  setLarge(email, allow) {
+    const key = String(email || '').toLowerCase();
+    const row = key ? this.byEmail.get(key) : undefined;
+    if (!row) return false;
+    if (allow) row.large = true;
+    else delete row.large;
+    return true;
   }
 
   /** @param {string|null|undefined} email @returns {boolean} whether there was one */
@@ -88,7 +119,7 @@ export class RunnerRepos {
     for (const e of entries) {
       if (!Array.isArray(e) || typeof e[0] !== 'string' || !REPO_RE.test(String(e[1]?.repo || ''))) continue;
       if (this.byEmail.size >= MAX_RUNNER_REPOS) break;
-      this.byEmail.set(e[0].toLowerCase(), { repo: String(e[1].repo), setAt: Number(e[1].setAt) || 0 });
+      this.byEmail.set(e[0].toLowerCase(), { repo: String(e[1].repo), setAt: Number(e[1].setAt) || 0, ...(e[1].large === true ? { large: true } : {}) });
     }
   }
 }

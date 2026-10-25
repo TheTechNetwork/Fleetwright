@@ -111,6 +111,7 @@ export class Coordinator {
       // sent to every host on the config frame rather than placed on each of
       // them — see docs/runner-central.md.
       runnerRepo: process.env.FLEETWRIGHT_RUNNER_REPO || null,
+      runnerLarge: process.env.FLEETWRIGHT_RUNNER_LARGE === '1',
       // THE SAME VARIABLES THE WORKER READS, and until now this coordinator
       // read neither. docs/coordinator-deploy.md has said "set
       // FLEETWRIGHT_GITHUB_CLIENT_ID plus the secret" since the App shipped,

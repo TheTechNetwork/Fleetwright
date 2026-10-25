@@ -329,6 +329,18 @@ on. A standard runner building an app once and booting a simulator reached a
 load of 633 and a gigabyte of swap, and the fleet lost sight of it for six
 minutes; an iOS simulator job belongs on the larger one.
 
+**A larger machine only where whoever pays said so.** GitHub bills its larger
+runners by the minute to the repository's owner on every plan, public
+repositories included, so an agent choosing one, or a slip on a start sheet,
+is money. They are refused, before a ticket is minted, until it is allowed for
+the repository the machine would start from: a person's own runner repository
+by that person (Allow larger machines under You → Temporary machines, or
+`PUT /api/runner-repo/large` with `{ "allow": true }`), and the fleet's by its
+operator (`FLEETWRIGHT_RUNNER_LARGE=1`). Naming another repository of your own
+turns it off again, since its owner has not said. The refusal names the
+standard image to choose instead. The snapshot's `runners.large` says whether
+a larger machine would be taken now, so a start sheet offers them only then.
+
 **The list is written in three places, deliberately.** `RUNNER_IMAGES` in
 `src/fleet/protocol/intents.js`, the `image` choice in each workflow of
 [Fleetwright-Runners-Template](https://github.com/TheTechNetwork/Fleetwright-Runners-Template),

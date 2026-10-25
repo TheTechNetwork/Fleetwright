@@ -181,7 +181,8 @@ test('a full credential store still fits in one Durable Object value', async () 
 
 test('a full runner repository store still fits in one Durable Object value', async () => {
   // A MEMBER can add a row here, which is what makes it worth measuring: the
-  // widest email a sign-in can carry and the longest name the shape admits.
+  // widest email a sign-in can carry, the longest name the shape admits, and
+  // larger machines allowed, which a member can also say.
   const { RunnerRepos } = await import('../src/fleet/coordinator/runner-repos.js');
   const repos = new RunnerRepos();
   let refused = false;
@@ -189,6 +190,7 @@ test('a full runner repository store still fits in one Durable Object value', as
     const email = `${String(i).padStart(5, '0')}${'e'.repeat(59)}@${'d'.repeat(63)}.${'d'.repeat(63)}.${'d'.repeat(57)}.com`;
     const r = repos.set(email, `${'o'.repeat(39)}/${'r'.repeat(100)}`);
     if (r.ok === false) { refused = true; break; }
+    repos.setLarge(email, true);
   }
   assert.ok(refused, `the runner repository store did not refuse within ${FILL_CAP} rows`);
   const bytes = new TextEncoder().encode(JSON.stringify(repos.serialise())).length;

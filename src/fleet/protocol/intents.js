@@ -466,6 +466,18 @@ export const RUNNER_IMAGES = Object.freeze({
 });
 
 /**
+ * Whether an image is one of GitHub's larger runners, which are billed per
+ * minute to the repository's owner on every plan, public repositories
+ * included. GitHub names them by their suffix, and RUNNER_IMAGES lists only
+ * those it names that way.
+ *
+ * @param {unknown} image
+ */
+export function isLargerRunnerImage(image) {
+  return /-x?large$/.test(String(image ?? ''));
+}
+
+/**
  * Why `image` cannot go with `platform`, or null when it can (or is absent).
  * The protocol checks each value alone; this is the pair.
  *
@@ -1562,7 +1574,9 @@ export const VERBS = Object.freeze({
         since: 16,
         describe:
           'Which GitHub image the runner boots, for macos, linux, android and windows. Absent is the newest. ' +
-          'macos: xcode-27 (macOS 26 with Xcode 27 and the iPhone Duo simulator), macos-26, macos-15. ' +
+          'macos: xcode-27 (macOS 26 with Xcode 27 and the iPhone Duo simulator), macos-26, macos-15; ' +
+          'xcode-27-xlarge and macos-26-xlarge are those on GitHub\u2019s larger machine, billed by the minute, ' +
+          'and refused unless whoever pays for the runner repository allowed them. ' +
           'linux and android: ubuntu-26.04, ubuntu-24.04. windows: windows-2025, windows-2022.',
       },
       // MINTED BY THE COORDINATOR, NEVER BY THE CALLER — and declared here

@@ -23,7 +23,7 @@ import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -353,6 +353,7 @@ export class CoordinatorCore {
    *   githubApp?: { clientId?: string, clientSecret?: string, slug?: string }|null,
    *   cloudflareOauth?: { clientId?: string, clientSecret?: string, scopes?: string }|null,
    *   runnerRepo?: string|null,
+   *   runnerLarge?: boolean,
    *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any>,
    *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any>,
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
@@ -392,6 +393,12 @@ export class CoordinatorCore {
     // rather than pretending it can start machines it has nowhere to start.
     // See docs/runner-central.md.
     runnerRepo = null,
+    // WHETHER THE FLEET'S RUNNER REPOSITORY MAY BOOT GITHUB'S LARGER
+    // MACHINES, which are billed to its owner by the minute on every plan.
+    // The operator's to say, since they pay, and off until they say
+    // (FLEETWRIGHT_RUNNER_LARGE). A person's own repository is theirs to say
+    // (runner-repos.js).
+    runnerLarge = false,
     // THE MINTING WORKER, when the deployment binds one: a separate Worker that
     // holds the GitHub App key and mints runners their repository tokens. The
     // coordinator only relays to it and never holds the key — see
@@ -429,6 +436,7 @@ export class CoordinatorCore {
     this.githubApp = githubApp;
     this.cloudflareOauth = cloudflareOauth;
     this.runnerRepo = runnerRepo;
+    this.runnerLarge = runnerLarge === true;
     this.minter = minter;
     this.oauthRelay = oauthRelay?.url && oauthRelay?.fleet && oauthRelay?.privateJwk && oauthRelay?.publicKey ? oauthRelay : null;
     this.signingOrigin = typeof signingOrigin === 'string' && signingOrigin.startsWith('https://') ? normaliseOrigin(signingOrigin) : null;
@@ -3650,7 +3658,7 @@ export class CoordinatorCore {
     if (spec.verb === 'provision') {
       const imageProblem = runnerImageProblem(shaped.params.platform, shaped.params.image);
       if (imageProblem) return { ok: false, error: { code: 'bad_params' }, text: imageProblem };
-      const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null);
+      const minted = await this.#mintRunnerTicket(spec.requester, String(shaped.params.platform || ''), spec.startAfter, spec.actor ?? null, shaped.params.image ?? null);
       if (minted.ok === false) return minted;
       /** @type {Record<string, any>} */
       const params = { ...shaped.params, ticket: minted.ticket };
@@ -4758,12 +4766,14 @@ export class CoordinatorCore {
   /**
    * What the snapshot says about starting machines, for one person.
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {{ repo: string, own: boolean }|null}
+   * `large`: whether a machine started now may be one of GitHub's larger
+   * ones, so a start sheet offers those only when it would be taken.
+   * @returns {{ repo: string, own: boolean, large: boolean }|null}
    */
   #runnersFor(requester) {
     const own = this.runnerRepos.get(requester?.email);
-    if (own) return { repo: own, own: true };
-    return this.runnerRepo ? { repo: this.runnerRepo, own: false } : null;
+    if (own) return { repo: own, own: true, large: this.runnerRepos.allowsLarge(requester?.email) };
+    return this.runnerRepo ? { repo: this.runnerRepo, own: false, large: this.runnerLarge } : null;
   }
 
   /**
@@ -4773,7 +4783,46 @@ export class CoordinatorCore {
    * @param {{ email?: string|null }|null} requester
    */
   runnerRepoFor(requester) {
-    return { ok: true, repo: this.runnerRepos.get(requester?.email), fleet: this.runnerRepo || null };
+    return {
+      ok: true,
+      repo: this.runnerRepos.get(requester?.email),
+      fleet: this.runnerRepo || null,
+      // Larger machines: this person's word for their own repository, and the
+      // operator's for the fleet's.
+      large: this.runnerRepos.allowsLarge(requester?.email),
+      fleetLarge: this.runnerLarge,
+    };
+  }
+
+  /**
+   * Let this person's runners boot GitHub's larger machines, or stop. Their
+   * own repository only: its owner is who GitHub bills, and the fleet's is
+   * the operator's to say.
+   *
+   * @param {{ email?: string|null }|null} requester
+   * @param {unknown} allow
+   */
+  setRunnerLarge(requester, allow) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return { ok: false, error: { code: 'not_signed_in' }, text: 'A runner repository belongs to a person, so this needs a signed-in identity.' };
+    if (typeof allow !== 'boolean') return { ok: false, error: { code: 'bad_params' }, text: 'Say `allow`: true or false.' };
+    if (!this.runnerRepos.setLarge(email, allow)) {
+      return {
+        ok: false,
+        error: { code: 'no_runner_repo' },
+        text: 'Larger machines are billed to the repository they start from. You have none of your own, so yours start from the fleet\u2019s, and its operator decides (FLEETWRIGHT_RUNNER_LARGE).',
+      };
+    }
+    this.onStateChanged?.();
+    const repo = this.runnerRepos.get(email);
+    this.record({ event: 'runner.large', actor: email, text: `${email} ${allow ? 'allowed' : 'stopped'} larger machines from ${repo}` });
+    return {
+      ok: true,
+      large: allow,
+      text: allow
+        ? `Your machines may now be GitHub\u2019s larger ones when you choose one, billed by the minute to ${repo}\u2019s owner.`
+        : 'Your machines will be standard ones. A larger one is refused until you allow them again.',
+    };
   }
 
   /**
@@ -5335,10 +5384,11 @@ export class CoordinatorCore {
    * @param {string} platform
    * @param {any} startAfter  a session to start when it joins, `start`'s rules
    * @param {string|null} actor
+   * @param {unknown} [image]  the GitHub image asked for, already checked against the platform
    * @returns {Promise<{ ok: true, ticket: string, repository: string, own: string|null }
    *   | { ok: false, error: { code: string }, text: string }>}
    */
-  async #mintRunnerTicket(requester, platform, startAfter, actor) {
+  async #mintRunnerTicket(requester, platform, startAfter, actor, image = null) {
     const owner = String(requester?.email || '').toLowerCase();
     if (!owner) {
       return {
@@ -5362,6 +5412,22 @@ export class CoordinatorCore {
           'There is nowhere to start a machine from yet. Set your own runner repository in the app — a ' +
           'public repository with the Fleetwright GitHub App installed and the runner workflows in it — or ' +
           'an operator sets FLEETWRIGHT_RUNNER_REPO for the whole fleet. See docs/runner-central.md.',
+      };
+    }
+    // A LARGER MACHINE ONLY WHERE WHOEVER PAYS FOR IT SAID SO. GitHub bills
+    // its larger runners by the minute to the repository's owner whatever the
+    // plan, so an agent choosing one, or a slip on a start sheet, is money:
+    // refused here, before a ticket exists, for both ways a runner starts.
+    if (isLargerRunnerImage(image) && !(own ? this.runnerRepos.allowsLarge(owner) : this.runnerLarge)) {
+      const standard = String(image).replace(/-x?large$/, '');
+      return {
+        ok: false,
+        error: { code: 'larger_off' },
+        text: own
+          ? `${image} is one of GitHub\u2019s larger machines, billed by the minute to ${repository}\u2019s owner, and you have not allowed those. ` +
+            `Turn on Allow larger machines under You \u2192 Temporary machines, or choose ${standard}. Nothing was started.`
+          : `${image} is one of GitHub\u2019s larger machines, billed by the minute to ${repository}\u2019s owner, which is this fleet, and its operator has not allowed those (FLEETWRIGHT_RUNNER_LARGE). ` +
+            `Choose ${standard}, or start machines from a runner repository of your own and allow them there. Nothing was started.`,
       };
     }
     // A SESSION TO START WHEN IT JOINS, if the caller asked for one. Beside
@@ -5446,7 +5512,7 @@ export class CoordinatorCore {
       };
     }
     const platform = /** @type {keyof typeof RUNNER_WORKFLOWS} */ (String(shaped.params.platform));
-    const minted = await this.#mintRunnerTicket(requester, platform, body?.start, requester?.email ? `app:${requester.email}` : null);
+    const minted = await this.#mintRunnerTicket(requester, platform, body?.start, requester?.email ? `app:${requester.email}` : null, shaped.params.image ?? null);
     if (minted.ok === false) return minted;
     const minutes = String(shaped.params.minutes ?? DEFAULT_RUNNER_MINUTES);
     return {

@@ -303,8 +303,8 @@ test('a runner repository is saved only once it passes, as GitHub spells it', as
   assert.equal(passing.core.runnerRepos.get(eli.email), 'Eli/Runners');
   assert.equal(passing.sent[0].spec.verb, 'runnerrepo');
   // The snapshot says which is in effect, and whose.
-  assert.deepEqual(passing.core.snapshot(eli).runners, { repo: 'Eli/Runners', own: true });
-  assert.deepEqual(passing.core.snapshot(sam).runners, { repo: 'fleet/runners', own: false });
+  assert.deepEqual(passing.core.snapshot(eli).runners, { repo: 'Eli/Runners', own: true, large: false });
+  assert.deepEqual(passing.core.snapshot(sam).runners, { repo: 'fleet/runners', own: false, large: false });
 
   const failing = fleet([['deb14', 6]], () => ({ ok: false, text: 'eli/runners is private.', runnerRepo: { ...check, public: false, ok: false } }));
   const refused = await failing.core.setRunnerRepo(eli, 'eli/runners');
