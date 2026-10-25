@@ -28,7 +28,7 @@ import { saveRunnerLogin, runnerTokenFile, runnerAuthKind } from '../src/core/ru
 import { ensureDirectConfig } from '../src/core/direct-config.js';
 import { buildCommand } from '../src/core/claude.js';
 import { Accounts } from '../src/core/accounts.js';
-import { applyVault } from '../src/core/vault-store.js';
+import { applyVault, vaultClaudeSource } from '../src/core/vault-store.js';
 import minterWorker, { ClaudeLogins } from '../worker/src/minter.js';
 import { actionsIssuer } from './helpers/actions-issuer.js';
 import { standInClaude, claudeSignInFor, claudeRenewals } from './helpers/stand-in-claude.js';
@@ -139,12 +139,15 @@ async function fleet(opts = {}) {
    * A runner joining, started by whoever `job` says; resolves with what its
    * sidecar told the hub, and every frame it was sent.
    * @param {Record<string, unknown>} [job]
-   * @param {{ jobToken?: (aud: string) => Promise<string>, send?: (frame: any) => any, mintTimeoutMs?: number }} [how]
-   *   what goes wrong on the runner's side, when something does
+   * @param {{ jobToken?: (aud: string) => Promise<string>, send?: (frame: any) => any, mintTimeoutMs?: number, vaultIntervalMs?: number,
+   *   then?: (r: { runner: Sidecar, held: () => any }) => Promise<void> }} [how]
+   *   what goes wrong on the runner's side, when something does; `then`, what happens next while it is up
    */
   const runnerJoins = async (job = {}, how = {}) => {
     /** @type {any[]} */
     const down = [];
+    /** Every frame the runner sent. @type {any[]} */
+    const up = [];
     // The runner's own fleetwright, over its real loopback API.
     const stateDir = mkdtempSync(join(tmpdir(), 'fw-claude-hub-'));
     const cfg = /** @type {any} */ ({ stateDir, bind: '127.0.0.1', port: 0, token: '', hostname: 'gha', workdir: join(stateDir, 'work'), maxSessions: 1, sandbox: false });
@@ -161,6 +164,7 @@ async function fleet(opts = {}) {
         start: async () => true,
         stop: async () => {},
         send: how.send ?? ((/** @type {any} */ frame) => {
+          up.push(frame);
           void core.onHostMessage(hostId, opts.tamper?.up ? opts.tamper.up(frame) : frame);
           return true;
         }),
@@ -171,6 +175,7 @@ async function fleet(opts = {}) {
       renewIntervalMs: 0,
       jobToken: how.jobToken ?? (async (audience) => issuer.sign({ ...RUNNER_JOB, ...job, aud: audience })),
       ...(how.mintTimeoutMs ? { mintTimeoutMs: how.mintTimeoutMs } : {}),
+      ...(how.vaultIntervalMs ? { vaultIntervalMs: how.vaultIntervalMs } : {}),
     });
     core.registry.connect(
       hostId,
@@ -183,13 +188,24 @@ async function fleet(opts = {}) {
     );
     await runner.start();
     await runner.claudeLoginReady;
-    await runner.stop();
-    adapter.server?.close();
+    // The sign-in its owner's sessions are staged with, as a box holds one
+    // from the vault, or null.
+    const held = () => {
+      const picked = vaultClaudeSource(cfg, OWNER);
+      return picked?.source ? JSON.parse(readFileSync(picked.source, 'utf8')).claudeAiOauth : null;
+    };
+    const credentials = held();
+    try {
+      if (how.then) await how.then({ runner, held });
+    } finally {
+      await runner.stop();
+      adapter.server?.close();
+    }
     // What the hub now holds: whose runner, which account's login, and the token.
     const record = JSON.parse(readFileSync(join(stateDir, 'runner-login.json'), 'utf8'));
     const told = { email: record.email, login: record.login, token: record.token ? readFileSync(runnerTokenFile(cfg), 'utf8') : null };
     rmSync(stateDir, { recursive: true, force: true });
-    return { told, down };
+    return { told, down, up, credentials };
   };
 
   const restore = () => {
@@ -238,6 +254,49 @@ test('a runner is given a kept sign-in’s access token, renewed first by the va
   assert.equal(told.email, OWNER);
   assert.match(String(told.token), /^sk-ant-oat01-renewed/);
   assert.ok(!JSON.stringify([down, [...f.rows.values()]]).includes('sk-ant-ort01'), 'no refresh token leaves the vault, nor rests readable');
+});
+
+test('a runner holds its owner’s sign-in as the file its sessions read again, and takes the renewed one when the vault renews it', async (t) => {
+  // RENEWING REVOKES THE TOKEN EVERY HOLDER HAS, and a runner took its
+  // owner's once, into each session's environment, where nothing can change
+  // it: a renewal during a job stopped every session on the runner. Now it
+  // holds the credentials file a box holds, which Claude Code reads again on
+  // that 401, and asks again at the minute the vault renews it.
+  const f = await fleet();
+  t.after(f.restore);
+  // Sign-ins of this test's own: the stand-in renews a refresh token once, as
+  // Claude does, and another test here renews the plain one.
+  assert.equal((await f.depositSignIn(claudeSignInFor('eli-runner', 60_000))).ok, true);
+  /** @type {any} */
+  let renewed = null;
+  // Its asks every 50ms rather than every ten minutes, so the next one comes
+  // while the test waits.
+  const { told, credentials, up } = await f.runnerJoins({}, {
+    vaultIntervalMs: 50,
+    then: async ({ runner, held }) => {
+      assert.ok(runner.claudeLoginTimer, 'the next ask is set');
+      const first = held()?.accessToken;
+      // A sign-in signed in again and due, so the next ask renews it.
+      assert.equal((await f.depositSignIn(claudeSignInFor('eli-runner-again', 60_000))).ok, true);
+      for (let i = 0; i < 100 && held()?.accessToken === first; i++) await new Promise((r) => setTimeout(r, 20));
+      renewed = held();
+    },
+  });
+  // THE FILE: the renewed access token, its expiry and scopes, and no
+  // refresh token, so Claude Code reads it again rather than renewing.
+  assert.match(String(credentials?.accessToken), /^sk-ant-oat01-renewed/);
+  assert.ok(credentials.expiresAt > Date.now() + 7 * 3_600_000);
+  assert.ok(Array.isArray(credentials.scopes) && credentials.scopes.includes('user:inference'));
+  assert.equal(credentials.refreshToken, undefined);
+  // ASKED AGAIN, and the renewed one replaced it, in the file and in the
+  // token record health reads.
+  assert.ok(renewed, 'the next ask gave the runner a sign-in');
+  assert.match(String(renewed.accessToken), /^sk-ant-oat01-renewed/);
+  assert.notEqual(renewed.accessToken, credentials.accessToken);
+  assert.equal(told.token, renewed.accessToken);
+  // AND NEVER THE VAULT: nobody approves a runner's key, and the empty answer
+  // it would get clears what it holds.
+  assert.deepEqual(up.filter((frame) => frame.kind === 'vault'), []);
 });
 
 test('a runner is told to use its API key whenever the login is not its owner’s to have', async (t) => {
@@ -359,9 +418,8 @@ test('on a runner the owner’s sessions run on their login and everybody else�
   const KEY = 'sk-ant-api03-runner-repository-key-000000000000';
   const cfg = /** @type {any} */ ({ stateDir: join(dir, 'state'), hostname: 'gha-1', sandbox: false, claudeBin: bin, remoteControl: false, skipPermissions: false });
   const env = { ...process.env, ANTHROPIC_API_KEY: KEY };
-  /** @param {string} actor */
-  const run = (actor) => {
-    const name = actor.replace(/\W/g, '');
+  /** @param {string} actor @param {string} [name] */
+  const run = (actor, name = actor.replace(/\W/g, '')) => {
     const staged = ensureDirectConfig(cfg, name, actor, { cwd: join(dir, 'work') });
     if (!staged.ok) return { refused: staged.message };
     const command = buildCommand(cfg, { name, configDir: staged.dir, runnerAuth: staged.auth });
@@ -409,9 +467,13 @@ test('on a runner the owner’s sessions run on their login and everybody else�
   // staged credential, and the repository's key is unset so the CLI cannot
   // rank it above that login and bill the repository instead.
   applyVault(cfg, { accounts: [{ email: 'carol@example.com', login: 'carol', items: [{ name: 'claude', value: 'sk-ant-oat01-carol-vault', expiresAt: Date.now() + 3_600_000, login: { scopes: ['user:inference'] }, account: { emailAddress: 'carol@example.com' } }] }] });
-  const carol = run('fleet:carol@example.com');
+  const carol = run('fleet:carol@example.com', 'carolvault');
   assert.equal(carol.said, 'key=none token=none');
   assert.match(readFileSync(join(String(carol.dir), '.credentials.json'), 'utf8'), /sk-ant-oat01-carol-vault/, 'her vault sign-in is the staged file');
+  // …with the bypass-permissions warning answered as a token's session has
+  // it, which is how a runner's owner's sign-in is staged now: without it the
+  // session waited at "No, exit" with a credential that worked.
+  assert.equal(JSON.parse(readFileSync(join(String(carol.dir), 'settings.json'), 'utf8')).skipDangerousModePermissionPrompt, true);
   // …and on a permanent box the same sign-in is left alone: an operator who
   // set ANTHROPIC_API_KEY there meant it.
   rmSync(join(cfg.stateDir, 'runner-login.json'));
