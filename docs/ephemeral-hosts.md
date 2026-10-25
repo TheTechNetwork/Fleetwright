@@ -39,12 +39,27 @@ same kind of host, admitted by a VM ticket rather than a GitHub job
 arrive before it can take work, so a session held for it waits for the next
 frame instead of being dropped.
 
-**A disconnect retires it.** For a real box, `disconnect` keeps the entry: it may
-come back, and its last known sessions are the best guess about where a `resume`
-would land. A runner will not come back — the job ended and the machine was
-destroyed — so the entry is deleted and its key revoked. Retired at the moment
-of disconnect rather than swept later, because the disconnect *is* the event;
-there is nothing to wait for.
+**A disconnect takes it off the list, and a goodbye retires it.** For a real
+box, `disconnect` keeps the entry: it may come back, and its last known sessions
+are the best guess about where a `resume` would land. A runner's row goes at
+once, because one corpse per build is not a fleet — but its key stays, because
+a dropped socket is not a finished job. A runner closes with code 1000 only as
+it shuts down, and that retires it on the spot (`core.js`,
+`ephemeralHostRetired`); any other close is a drop, and the runner dials back
+on the key it enrolled with. One that never does is retired by
+`retireStranded` ten minutes later.
+
+**A drop is remembered for those ten minutes.** A macOS runner mid-build,
+starved by `xcodebuild`, dropped its socket and dialled back two minutes
+later. In between the fleet answered "not a host this fleet knows" about it
+and "No host reports a session named duo-sim" about the session it was
+running — both false. The registry now keeps a dropped runner, with what it
+last reported, for `DROPPED_TTL_MS` (`registry.js`): it is not listed, but a
+verb on one of its sessions is told the box *dropped its connection 93s ago
+and has not dialled back; a temporary host keeps its key and usually
+returns*, naming it for new work says the same, and the event ring records
+`host.dropped` and, when it comes back, `host.returned`. A goodbye or a
+retirement removes it from that memory as well.
 
 **The key goes with it.** Otherwise the registry stays clean and the enrolled
 list fills up instead: one dead key per job, for ever, each of them a credential

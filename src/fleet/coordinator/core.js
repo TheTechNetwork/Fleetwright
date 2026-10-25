@@ -621,6 +621,10 @@ export class CoordinatorCore {
     // not: every credential and errand went to any permanent box, a box a
     // member enrolled for themselves included. See actsFor in hosts.js.
     const person = actsFor(enrolled, (email) => this.#isOperator(email));
+    // A TEMPORARY HOST DIALLING BACK is news, because its drop was: the ring
+    // otherwise showed a runner enrol once and then nothing, across a gap in
+    // which the fleet had answered "not a host this fleet knows" about it.
+    const dropped = this.registry.recentlyDropped?.(hostId);
     this.registry.connect(hostId, send, {
       ephemeral: Boolean(enrolled?.ephemeral),
       owner: enrolled?.owner ?? null,
@@ -630,6 +634,7 @@ export class CoordinatorCore {
     // again from its first report on this connection (#askForget).
     this.#forgetNotBefore.delete(hostId);
     this.log.info(`coordinator: ${hostId} connected`);
+    if (dropped) this.record({ event: 'host.returned', hostId, text: `temporary host dialled back ${Math.round(dropped.ageMs / 1000)}s after dropping its connection` });
     // WHAT THIS HOST NEEDS AND MUST NOT KEEP. One frame, a fixed set of named
     // values, sent on every connect — so a host enrolled tomorrow gets it by
     // connecting, nothing is at rest on any box, and rotating a value here is a
@@ -698,6 +703,10 @@ export class CoordinatorCore {
     // close is a dropped connection, which a runner dials back from on the
     // key it enrolled with.
     if (ephemeral && /^socket closed: 1000\b/.test(reason)) this.ephemeralHostRetired(hostId, reason);
+    // A DROP IS RECORDED, as a goodbye is. Without this the ring had no word
+    // of a runner leaving mid-job, and a person reading it after the fact saw
+    // a session simply stop being mentioned.
+    else if (ephemeral) this.record({ event: 'host.dropped', hostId, text: `temporary host dropped its connection (${reason}); it keeps its key and may dial back` });
   }
 
   /**
@@ -713,6 +722,9 @@ export class CoordinatorCore {
   ephemeralHostRetired(hostId, reason) {
     this.hostIds.revoke(hostId);
     this.missingSince.delete(hostId);
+    // Gone for good is gone from the dropped list too: a retired runner's
+    // sessions are not somewhere it might dial back to.
+    this.registry.remove(hostId);
     this.record({ event: 'host.retired', hostId, text: `temporary host went away (${reason})` });
     this.log.info(`coordinator: retired temporary host ${hostId} (${reason})`);
     // WRITTEN NOW, not at the next host's connect, which is when the key store

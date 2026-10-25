@@ -1146,3 +1146,33 @@ test('a reply is taken only from the host the intent was sent to', async () => {
   const peek = await core.dispatch({ verb: 'peek', params: { name: 'bjob' }, actor: a.email, requester: a });
   assert.equal(peek.error?.code, 'unknown_session');
 });
+
+test('a temporary host that drops and dials back is recorded both times, and its session stays findable between', async () => {
+  // A macOS runner starved by its own xcodebuild dropped its socket and was
+  // back two minutes later. The ring showed it enrol and then nothing, and
+  // in the gap the fleet said "No host reports a session named duo-sim".
+  const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+  let clock = 1_700_000_000_000;
+  const c = new CoordinatorCore({ now: () => clock, logger: quiet });
+  await admit(c, 'gha-1', { ephemeral: true, owner: 'eli@example.test', enrolledBy: 'eli@example.test' });
+  await c.onHostMessage('gha-1', { kind: 'health', health: health({ sessions: [{ name: 'duo-sim', status: 'running', createdBy: 'fleet:eli@example.test' }] }) });
+
+  clock += 60_000;
+  c.hostDisconnected('gha-1', 'socket closed: 1006');
+  assert.equal(c.events.filter((e) => e.event === 'host.dropped').length, 1, 'the drop is in the ring');
+  assert.equal(c.events.filter((e) => e.event === 'host.retired').length, 0, 'and it is not retired: its key is still good');
+  const [claim] = c.registry.findSessions('duo-sim');
+  assert.equal(claim?.host.connected, false);
+  assert.match(String(claim?.host.reason), /dropped its connection 0s ago \(socket closed: 1006\)/);
+
+  clock += 30_000;
+  c.hostConnected('gha-1', () => {});
+  assert.match(String(c.events.find((e) => e.event === 'host.returned')?.text), /dialled back 30s after dropping/);
+  assert.equal(c.registry.findSessions('duo-sim')[0]?.host.connected, true);
+
+  // A goodbye retires it, and takes the memory with it.
+  c.hostDisconnected('gha-1', 'socket closed: 1000 shutting down');
+  assert.equal(c.events.filter((e) => e.event === 'host.retired').length, 1);
+  assert.deepEqual(c.registry.findSessions('duo-sim'), []);
+  assert.equal(c.registry.recentlyDropped('gha-1'), null);
+});

@@ -144,12 +144,31 @@ const LABELS_MAX = 128;
 /** How stale a health report may be before the host becomes `unknown`. */
 export const HEALTH_STALE_MS = 45_000;
 
+/**
+ * How long a temporary host that dropped its socket is still remembered.
+ *
+ * The same ten minutes core.js retireStranded gives it to dial back: while
+ * its key would still be accepted, the fleet should be able to say "it
+ * dropped, and may return" about it and its sessions, rather than "not a host
+ * this fleet knows" — which is what it said about a macOS runner that was
+ * mid-build, starved, and back two minutes later.
+ */
+export const DROPPED_TTL_MS = 10 * 60_000;
+
 export class HostRegistry {
   /** @param {{ now?: () => number }} [opts] */
   constructor({ now = () => Date.now() } = {}) {
     this.now = now;
     /** @type {Map<string, HostEntry & { send: (msg: object) => void }>} */
     this.hosts = new Map();
+    /**
+     * Temporary hosts that dropped their socket without saying goodbye, with
+     * what was known of them, for DROPPED_TTL_MS. Not in `list()`: a screen
+     * must not show a runner that is not there. Scanned by findSessions, so a
+     * session on one is "on a box that dropped" and not unknown.
+     * @type {Map<string, { host: HostEntry & { send: (msg: object) => void }, at: number, reason: string }>}
+     */
+    this.dropped = new Map();
     /** Round-robin cursor, used only to break ties between equally free hosts. */
     this.cursor = 0;
   }
@@ -161,7 +180,10 @@ export class HostRegistry {
    * @param {{ ephemeral?: boolean, owner?: string|null, actsFor?: string|null }} [opts]
    */
   connect(hostId, send, { ephemeral = false, owner = null, actsFor = undefined } = {}) {
-    const existing = this.hosts.get(hostId);
+    // A temporary host dialling back after a drop picks up what it had: its
+    // health and its last session list, so a resume lands where it did.
+    const existing = this.hosts.get(hostId) ?? this.dropped.get(hostId)?.host;
+    this.dropped.delete(hostId);
     const person = actsFor === undefined ? existing?.actsFor ?? null : actsFor;
     // A reconnect from a host we already have replaces the old socket. The box
     // is the authority on itself, so the newest connection from it wins.
@@ -225,7 +247,32 @@ export class HostRegistry {
    * @param {string} hostId
    */
   remove(hostId) {
-    return this.hosts.delete(hostId);
+    const had = this.hosts.delete(hostId);
+    return this.dropped.delete(hostId) || had;
+  }
+
+  /**
+   * A temporary host that dropped its socket within DROPPED_TTL_MS and has
+   * not dialled back, or null. For the refusals that would otherwise say the
+   * host is unknown.
+   * @param {string} hostId
+   * @returns {{ at: number, reason: string, ageMs: number }|null}
+   */
+  recentlyDropped(hostId) {
+    this.sweep();
+    const d = this.dropped.get(hostId);
+    return d ? { at: d.at, reason: d.reason, ageMs: this.now() - d.at } : null;
+  }
+
+  /**
+   * What a dropped temporary host's entry says for itself when it is found
+   * holding a session: a sentence that says it may come back, with the age
+   * current as of now rather than as of the drop.
+   * @param {{ at: number, reason: string }} d
+   */
+  #droppedReason(d) {
+    return `dropped its connection ${Math.round((this.now() - d.at) / 1000)}s ago (${d.reason}) and has not dialled back. ` +
+      'A temporary host keeps its key and usually returns; ask again in a minute.';
   }
 
   /** @param {string} hostId @param {string} reason */
@@ -255,6 +302,11 @@ export class HostRegistry {
     // was shutting down is retired at once by core.js hostDisconnected, and
     // one that just vanished by retireStranded, ten minutes after.
     if (host.ephemeral) {
+      // REMEMBERED, NOT LISTED. For a while the fleet can still say where its
+      // sessions were and that it may come back (recentlyDropped,
+      // findSessions); a 1000 close is a goodbye, and core.js retires it at
+      // once, which removes it from here too.
+      this.dropped.set(hostId, { host, at: this.now(), reason });
       this.hosts.delete(hostId);
       return;
     }
@@ -485,6 +537,7 @@ export class HostRegistry {
    */
   sweep() {
     const now = this.now();
+    for (const [id, d] of this.dropped) if (now - d.at > DROPPED_TTL_MS) this.dropped.delete(id);
     for (const host of this.hosts.values()) {
       if (!host.connected) continue;
       if (host.healthAt === null) {
@@ -610,7 +663,11 @@ export class HostRegistry {
   findSessions(name) {
     this.sweep();
     const out = [];
-    for (const host of this.hosts.values()) {
+    // A dropped temporary host still holds its claims, as an offline box with
+    // a reason that says it dropped and may return — so a stop or an await on
+    // its session is told that, and not that no host reports the session.
+    const dropped = [...this.dropped.values()].map((d) => ({ ...d.host, connected: false, state: /** @type {const} */ ('offline'), reason: this.#droppedReason(d) }));
+    for (const host of [...this.hosts.values(), ...dropped]) {
       // The live list, or — while the box's session manager is not answering
       // — the last one it gave, aged from when it gave it (recordHealth).
       const live = Array.isArray(host.health?.sessions);

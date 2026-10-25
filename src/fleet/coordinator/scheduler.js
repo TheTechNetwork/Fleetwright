@@ -779,12 +779,20 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     const chosen = candidates.find((h) => h.hostId === preferHost);
     if (!chosen) {
       const known = registry.list().find((h) => h.hostId === preferHost);
+      // A TEMPORARY HOST THAT DROPPED is not unknown: it was here a minute
+      // ago, its key is still good, and a runner starved by its own build
+      // dials back. "Not a host this fleet knows" sent the caller to look for
+      // a typo in a name they had just used.
+      const dropped = known ? null : registry.recentlyDropped?.(preferHost);
       return {
         kind: 'refused',
         code: 'host_unavailable',
         reason: known
           ? `${preferHost} is ${known.state}: ${known.reason}`
-          : `${preferHost} is not a host this fleet knows.`,
+          : dropped
+            ? `${preferHost} dropped its connection ${Math.round(dropped.ageMs / 1000)}s ago (${dropped.reason}) and has not dialled back. ` +
+              'A temporary host keeps its key and usually returns; ask again in a minute.'
+            : `${preferHost} is not a host this fleet knows.`,
       };
     }
     // SOMEBODY ELSE'S TEMPORARY MACHINE IS NOT YOURS BY NAMING IT. The rule
