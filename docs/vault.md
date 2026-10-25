@@ -239,6 +239,18 @@ it with `$(cat …)` and never carries it. Written whole on every answer, so a
 person who removed the box, or emptied their vault, is gone from it on the
 next pass.
 
+**A change reaches the boxes in a moment, not at their next ten minutes.**
+When somebody keeps, forgets, approves or tests something, the minter's answer
+says `changed` outside the seal, and so does a deposited Claude login. The
+coordinator then sends every permanent box `vault-changed`, a frame with no
+reply that says neither who nor what. Each box asks the vault two seconds
+later. The vault answers each box only for the people who approved it, so a
+box nobody's change touched is given what it already holds. Runners are not
+sent it: they ask for their owner's login on their own clock. This came from
+vnic-runner-oci, where a Claude login forgotten and kept again at 18:19 did
+not reach the box until its next ask at 18:29, and no session could start
+there in between.
+
 Every reader there reads it, and **for a person the fleet started a session
 for, it is the only source**. A link on the box used to win, so a box held a
 second copy of a person's login, renewed on its own clock, and the vault was
