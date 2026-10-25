@@ -79,7 +79,9 @@ struct RunnerImageChoice: Hashable {
 let runnerImageChoices: [String: [RunnerImageChoice]] = [
     "macos": [
         RunnerImageChoice(image: "xcode-27", label: "macOS 26 with Xcode 27"),
+        RunnerImageChoice(image: "xcode-27-xlarge", label: "macOS 26 with Xcode 27, larger machine (billed)"),
         RunnerImageChoice(image: "macos-26", label: "macOS 26 with Xcode 26"),
+        RunnerImageChoice(image: "macos-26-xlarge", label: "macOS 26 with Xcode 26, larger machine (billed)"),
         RunnerImageChoice(image: "macos-15", label: "macOS 15"),
     ],
     "linux": [

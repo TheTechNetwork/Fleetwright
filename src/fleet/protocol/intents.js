@@ -455,7 +455,11 @@ export const PROTOCOL_VERSION = 16;
  * a self-hosted machine. The newest goes first when GitHub ships one.
  */
 export const RUNNER_IMAGES = Object.freeze({
-  macos: Object.freeze(['xcode-27', 'macos-26', 'macos-15']),
+  // The -xlarge pair is the same image on GitHub's larger arm64 runner, 5
+  // cores and 14 GB against 3 and 7, billed per minute: a standard runner
+  // building once and booting a simulator reached a load of 633 and a
+  // gigabyte of swap, and the fleet lost sight of it for six minutes.
+  macos: Object.freeze(['xcode-27', 'xcode-27-xlarge', 'macos-26', 'macos-26-xlarge', 'macos-15']),
   linux: Object.freeze(['ubuntu-26.04', 'ubuntu-24.04']),
   android: Object.freeze(['ubuntu-26.04', 'ubuntu-24.04']),
   windows: Object.freeze(['windows-2025', 'windows-2022']),

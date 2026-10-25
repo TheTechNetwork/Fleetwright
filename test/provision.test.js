@@ -387,7 +387,7 @@ test('an image from another platform is refused before a ticket is minted', asyn
     actor: 'eli@example.com',
   });
   assert.equal(r.error?.code, 'bad_params');
-  assert.match(r.text, /xcode-27, macos-26, macos-15; the first is the default/);
+  assert.match(r.text, /xcode-27, xcode-27-xlarge, macos-26, macos-26-xlarge, macos-15; the first is the default/);
 });
 
 function githubStub({ repoStatus = 200, dispatchStatus = 204, defaultBranch = 'trunk' } = {}) {
