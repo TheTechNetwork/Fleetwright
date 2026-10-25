@@ -206,3 +206,22 @@ test('a plist in LaunchDaemons counts as an installed unit, so a Mac offers its 
   assert.equal(unitInstalled(cfg, 'fleetwright'), true);
   assert.equal(unitInstalled(cfg, 'fleetwright-sidecar'), false, 'one plist does not vouch for the other daemon');
 });
+
+test('a runner’s log directory is read before a journal that never ran the service, and offers its buttons', async (t) => {
+  // A Linux runner has journalctl, and it answers "-- No entries --" about a
+  // hub the workflow started by hand. The file is where the output went.
+  const { unitInstalled } = await import('../src/core/logs.js');
+  const j = stubJournal(t, { stdout: '-- No entries --' });
+  const logDir = mkdtempSync(path.join(os.tmpdir(), 'runner-logs-'));
+  t.after(() => rmSync(logDir, { recursive: true, force: true }));
+  writeFileSync(path.join(logDir, 'fleetwright-sidecar.log'), 'enrolled\nhub unreachable: timed out\n');
+
+  const cfg = { ...j.cfg(), logDir, systemctlBin: path.join(logDir, 'no-systemctl') };
+  const r = readLogs(cfg, { source: 'sidecar' });
+  assert.equal(r.ok, true);
+  assert.match(r.text, /fleetwright-sidecar — last 2 lines\n\nenrolled\nhub unreachable: timed out$/);
+
+  assert.equal(unitInstalled(cfg, 'fleetwright-sidecar'), true);
+  assert.equal(unitInstalled(cfg, 'fleetwright'), false, 'a hub that has written nothing offers no button that would say nothing');
+  assert.match(readLogs(cfg, {}).text, /has written nothing to .*fleetwright\.log yet/);
+});

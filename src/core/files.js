@@ -36,6 +36,7 @@ import { isValidName } from './names.js';
 import { podman, sandboxNames, podmanAvailable, workspaceExists } from './podman.js';
 import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
+import { listDirect, readDirect, writeDirect, copyDirect, deleteDirect } from './files-direct.js';
 
 /** Bytes of a file this will return. Generous for source, refuses a blob. */
 export const MAX_READ_BYTES = 256 * 1024;
@@ -173,10 +174,13 @@ function run(cfg, name, script, args, { write = false, stdin } = {}) {
  * @param {string} name
  * @param {string} dir
  * @returns {{ ok: boolean, text: string, entries?: Array<{ name: string, kind: string, size: number }> }}
+ * @param {{ cwd?: string|null }|null} [session]  the session's record, whose cwd holds a direct session's files
  */
-export function listFiles(cfg, name, dir = '.') {
-  const guard = precheck(cfg, name, dir);
+export function listFiles(cfg, name, dir = '.', session = null) {
+  const root = direct(cfg, session);
+  const guard = precheck(cfg, name, dir, root);
   if (guard) return guard;
+  if (root) return listDirect(cfg, root, cleaned(dir), BOUNDS);
 
   // -printf is GNU find, which debian:13-slim has. The separator is a tab
   // because a filename may contain almost anything else, including a newline —
@@ -228,10 +232,13 @@ find . -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null | sort -t"$
  * @param {import('../config.js').Config} cfg
  * @param {string} name
  * @param {string} file
+ * @param {{ cwd?: string|null }|null} [session]  the session's record, whose cwd holds a direct session's files
  */
-export function readFile(cfg, name, file) {
-  const guard = precheck(cfg, name, file);
+export function readFile(cfg, name, file, session = null) {
+  const root = direct(cfg, session);
+  const guard = precheck(cfg, name, file, root);
   if (guard) return guard;
+  if (root) return readDirect(cfg, root, cleaned(file), BOUNDS);
 
   const script = `
 [ -f "$t" ] || { echo "not a file" >&2; exit 4; }
@@ -270,14 +277,17 @@ cat "$t"
  * @param {string} name
  * @param {string} file
  * @param {string} content
+ * @param {{ cwd?: string|null }|null} [session]  the session's record, whose cwd holds a direct session's files
  */
-export function writeFile(cfg, name, file, content) {
-  const guard = precheck(cfg, name, file);
+export function writeFile(cfg, name, file, content, session = null) {
+  const root = direct(cfg, session);
+  const guard = precheck(cfg, name, file, root);
   if (guard) return guard;
   const body = String(content ?? '');
   if (Buffer.byteLength(body) > MAX_WRITE_BYTES) {
     return { ok: false, text: `That is larger than ${human(MAX_WRITE_BYTES)}, which is the most this will write.` };
   }
+  if (root) return writeDirect(cfg, root, cleaned(file), body, BOUNDS);
 
   const script = `
 case "$t" in /work) echo "refused: that is the workspace itself" >&2; exit 3 ;; esac
@@ -301,12 +311,15 @@ cat > "$t"
  * @param {string} name
  * @param {string} from
  * @param {string} to
+ * @param {{ cwd?: string|null }|null} [session]  the session's record, whose cwd holds a direct session's files
  */
-export function copyFile(cfg, name, from, to) {
-  const guard = precheck(cfg, name, from);
+export function copyFile(cfg, name, from, to, session = null) {
+  const root = direct(cfg, session);
+  const guard = precheck(cfg, name, from, root);
   if (guard) return guard;
   const dest = checkPath(to);
   if (!dest.ok) return { ok: false, text: dest.text };
+  if (root) return copyDirect(cfg, root, cleaned(from), dest.path);
 
   const script = `
 src="$t"
@@ -336,10 +349,13 @@ cp -R "$src" "$dt"
  * @param {import('../config.js').Config} cfg
  * @param {string} name
  * @param {string} target
+ * @param {{ cwd?: string|null }|null} [session]  the session's record, whose cwd holds a direct session's files
  */
-export function deleteFile(cfg, name, target) {
-  const guard = precheck(cfg, name, target);
+export function deleteFile(cfg, name, target, session = null) {
+  const root = direct(cfg, session);
+  const guard = precheck(cfg, name, target, root);
   if (guard) return guard;
+  if (root) return deleteDirect(cfg, root, cleaned(target));
 
   const script = `
 case "$t" in /work) echo "refused: root" >&2; exit 3 ;; esac
@@ -360,13 +376,50 @@ rm -rf "$t"
 // --- shared -----------------------------------------------------------------
 
 /**
+ * Where a session that runs directly on this box keeps its files, or null
+ * when its workspace is a podman volume (files-direct.js says why both).
+ *
+ * Direct when the box does not sandbox, or has no podman to sandbox with: a
+ * Mac, where every session runs in its working directory. The directory is
+ * the session's own record of where it ran, never a path from the caller.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ cwd?: string|null }|null} [session]
+ * @returns {string|null}
+ */
+function direct(cfg, session) {
+  if (!session?.cwd) return null;
+  if (cfg.sandbox && podmanAvailable(cfg)) return null;
+  return session.cwd;
+}
+
+/**
+ * A path precheck has already accepted, in the form it was accepted in.
+ * @param {string} p
+ */
+function cleaned(p) {
+  const c = checkPath(p);
+  return c.ok ? c.path : '.';
+}
+
+/** The bounds files-direct.js keeps, the same numbers as the container's. */
+const BOUNDS = {
+  maxRead: MAX_READ_BYTES,
+  maxWrite: MAX_WRITE_BYTES,
+  maxEntries: MAX_ENTRIES,
+  human: (/** @type {number} */ n) => human(n),
+};
+
+/**
  * The checks every operation makes before it is worth starting a container.
  * @param {import('../config.js').Config} cfg @param {string} name @param {string} p
+ * @param {string|null} [root] a direct session's directory, which has no podman to need
  */
-function precheck(cfg, name, p) {
+function precheck(cfg, name, p, root = null) {
   if (!isValidName(name)) return { ok: false, text: `"${name}" is not a valid session name.` };
   const checked = checkPath(p);
   if (!checked.ok) return { ok: false, text: checked.text };
+  if (root) return null;
   if (!podmanAvailable(cfg)) {
     // A session that never ran sandboxed has no volume to browse, and saying
     // "no such directory" would send somebody looking for a path.
