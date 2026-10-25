@@ -98,6 +98,13 @@ let runnerImageChoices: [String: [RunnerImageChoice]] = [
     ],
 ]
 
+/// One of GitHub's larger runners, billed by the minute to the runner
+/// repository's owner. The same rule as isLargerRunnerImage in
+/// src/fleet/protocol/intents.js: GitHub names them by their suffix.
+func isLargerRunnerImage(_ image: String) -> Bool {
+    image.hasSuffix("-xlarge") || image.hasSuffix("-large")
+}
+
 let newMachineChoices: [NewMachineChoice] = [
     NewMachineChoice(platform: "linux", label: "New Linux machine"),
     NewMachineChoice(platform: "macos", label: "New macOS machine"),
@@ -140,6 +147,10 @@ struct StartSheet: View {
     /// snapshot. The new-machine choices are drawn from this and only this, so
     /// a fleet with no runner repository offers none (C-2).
     @State private var canStartMachine = false
+    /// Whether a machine started now may be a larger one: allowed by whoever
+    /// pays for the repository it starts from. The larger images are offered
+    /// only then, since the fleet refuses them otherwise (C-2).
+    @State private var largeRunners = false
     /// Whether this person has a Claude login kept for runners. A new machine
     /// started without one, and with no API key in the runner repository,
     /// refuses the session it was started for, so New session says so here.
@@ -370,7 +381,9 @@ struct StartSheet: View {
                         // WHICH IMAGE, for a runner. The newest first and
                         // preselected; only it has Xcode 27 and the iPhone
                         // Duo simulator on macOS.
-                        if let platform = chosenPlatform, let choices = runnerImageChoices[platform], choices.count > 1 {
+                        if let platform = chosenPlatform,
+                           let choices = runnerImageChoices[platform]?.filter({ largeRunners || !isLargerRunnerImage($0.image) }),
+                           choices.count > 1 {
                             Picker("Image", selection: $runnerImage) {
                                 ForEach(Array(choices.enumerated()), id: \.element) { index, choice in
                                     Text(index == 0 ? "\(choice.label) (newest)" : choice.label)
@@ -530,7 +543,9 @@ struct StartSheet: View {
                 // Whether a new machine can be offered: the snapshot names a
                 // runner repository for this person. A failure offers none,
                 // which is the safe way round for a control that spends money.
-                canStartMachine = (try? await fleet.runners()) != nil
+                let runnersNow = try? await fleet.runnersNow()
+                canStartMachine = runnersNow != nil
+                largeRunners = runnersNow?.large == true
                 images = (try? await fleet.vmImages()) ?? []
                 standby = try? await fleet.vmStandby()
                 if canStartMachine || !images.isEmpty { claude = await claudeKept(settings) }

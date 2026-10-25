@@ -16,6 +16,12 @@ import SwiftUI
 ///
 /// WHO STARTS THEM is this phone, when it is signed in to GitHub (under You ›
 /// Account); otherwise a permanent box with your GitHub connection does.
+///
+/// LARGER MACHINES are GitHub's, billed by the minute to the repository's
+/// owner on every plan. Whoever pays says: you, for your own repository, with
+/// the toggle; the operator, for the fleet's, which this only reports. The
+/// toggle is drawn only for a repository of your own and a coordinator that
+/// keeps the setting, since anywhere else it could not do anything (C-2).
 struct TemporaryMachinesView: View {
     let settings: Settings
 
@@ -29,6 +35,10 @@ struct TemporaryMachinesView: View {
     @State private var busy = false
     @State private var message = ""
     @State private var check: Fleet.RunnerRepoCheck?
+    /// Nil until the coordinator has said, and from one older than the setting.
+    @State private var large: Bool?
+    @State private var fleetLarge: Bool?
+    @State private var largeMessage = ""
 
     private var phone: PhoneGitHub { PhoneGitHub(settings: settings) }
 
@@ -77,6 +87,32 @@ struct TemporaryMachinesView: View {
                 sectionHead("Where they come from")
             }
 
+            if runnerRepoAnswered, let saved, let large {
+                Section {
+                    Toggle("Allow larger machines", isOn: Binding(get: { large }, set: { now in Task { await setLarge(now) } }))
+                        .disabled(busy)
+                    if !largeMessage.isBlank {
+                        Text(largeMessage)
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                    }
+                } header: {
+                    sectionHead("Larger machines")
+                } footer: {
+                    Text("GitHub's larger macOS machines, 5 cores and 14 GB instead of 3 and 7, are billed by the minute to \(saved)'s owner on every plan. Off, New session does not offer them and the fleet refuses one.")
+                }
+            } else if runnerRepoAnswered, saved == nil, let fleetRepo, let fleetLarge {
+                Section {
+                    Text(fleetLarge
+                         ? "Machines from \(fleetRepo) may be GitHub's larger ones, which its operator allowed."
+                         : "Machines from \(fleetRepo) are standard ones. Its operator decides about larger ones, since the fleet pays for them.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                } header: {
+                    sectionHead("Larger machines")
+                }
+            }
+
             Section {
                 Text(whoStarts)
                     .fleetType(.label)
@@ -102,7 +138,22 @@ struct TemporaryMachinesView: View {
             runnerRepoAnswered = true
             saved = got.repo
             fleetRepo = got.fleet
+            large = got.large
+            fleetLarge = got.fleetLarge
             if draft.isEmpty { draft = got.repo ?? "" }
+        }
+    }
+
+    @MainActor
+    private func setLarge(_ allow: Bool) async {
+        busy = true
+        defer { busy = false }
+        do {
+            let r = try await Fleet(settings: settings).setRunnerLarge(allow)
+            largeMessage = r.text ?? ""
+            if r.ok == true { large = allow }
+        } catch {
+            largeMessage = error.localizedDescription
         }
     }
 
@@ -116,6 +167,9 @@ struct TemporaryMachinesView: View {
             check = r.runnerRepo
             message = r.text ?? ""
             if r.ok == true, let repo = r.repo {
+                // Another repository's owner has not said, so the fleet turns
+                // larger machines off for it; the same one keeps its setting.
+                if large != nil, saved?.lowercased() != repo.lowercased() { large = false }
                 saved = repo
                 draft = repo
             }
@@ -134,6 +188,8 @@ struct TemporaryMachinesView: View {
             saved = nil
             check = nil
             draft = ""
+            // The setting went with the repository it was said of.
+            if large != nil { large = false }
         } catch {
             message = error.localizedDescription
         }

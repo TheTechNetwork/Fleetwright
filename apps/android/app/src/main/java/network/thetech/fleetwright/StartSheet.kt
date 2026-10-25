@@ -105,6 +105,13 @@ val runnerImageChoices = mapOf(
     "windows" to listOf(RunnerImageChoice("windows-2025", "Windows Server 2025"), RunnerImageChoice("windows-2022", "Windows Server 2022")),
 )
 
+/**
+ * One of GitHub's larger runners, billed by the minute to the runner
+ * repository's owner. The same rule as isLargerRunnerImage in
+ * src/fleet/protocol/intents.js: GitHub names them by their suffix.
+ */
+fun isLargerRunnerImage(image: String): Boolean = image.endsWith("-xlarge") || image.endsWith("-large")
+
 val newMachineChoices = listOf(
     NewMachineChoice("linux", "New Linux machine"),
     NewMachineChoice("macos", "New macOS machine"),
@@ -162,6 +169,10 @@ fun StartSheet(
     // snapshot. The new-machine choices are drawn from this and only this, so
     // a fleet with no runner repository offers none (C-2).
     var canStartMachine by remember { mutableStateOf(false) }
+    // Whether a machine started now may be a larger one: allowed by whoever
+    // pays for the repository it starts from. The larger images are offered
+    // only then, since the fleet refuses them otherwise (C-2).
+    var largeRunners by remember { mutableStateOf(false) }
     /**
      * Whether a Claude login is kept for this person's runners. A new machine
      * started without one, and with no API key in the runner repository,
@@ -228,7 +239,9 @@ fun StartSheet(
         secrets = Fleet(settings).secrets()
         // Whether a new machine can be offered. A failure offers none, which
         // is the safe way round for a control that spends money.
-        canStartMachine = Fleet(settings).runners().getOrNull() != null
+        val runnersNow = Fleet(settings).runnersNow().getOrNull()
+        canStartMachine = runnersNow != null
+        largeRunners = runnersNow?.large == true
         images = Fleet(settings).vmImages().getOrDefault(emptyList())
         standby = Fleet(settings).vmStandby().getOrNull()
         if (canStartMachine || images.isNotEmpty()) claude = claudeKept(settings)
@@ -514,7 +527,7 @@ fun StartSheet(
                         // WHICH IMAGE, for a runner. The newest first and
                         // preselected; only it has Xcode 27 and the iPhone
                         // Duo simulator on macOS.
-                        val imageChoices = runnerImageChoices[platform].orEmpty()
+                        val imageChoices = runnerImageChoices[platform].orEmpty().filter { largeRunners || !isLargerRunnerImage(it.image) }
                         if (imageChoices.size > 1) {
                             Text("Image", style = MaterialTheme.typography.labelMedium)
                             imageChoices.forEachIndexed { index, choice ->
