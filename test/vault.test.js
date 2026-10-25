@@ -656,6 +656,34 @@ test('removing somebody from the fleet ends what their vault gives the fleet’s
   assert.deepEqual(await held(), [DANA, ELI]);
 });
 
+test('a vault change tells every permanent box to ask the vault now, and a list tells none', () => {
+  // SEEN ON vnic-runner-oci: a Claude login forgotten and kept again at 18:19
+  // reached the box at its next ten-minute ask, 18:29.
+  const minterSays = { changed: true };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ ({
+      vault: async () => ({ ok: true, sealed: { epk: 'e', iv: 'i', ct: 'c' }, text: 'done', ...minterSays }),
+      claude: async () => ({ ok: true, login: 'eli', text: 'kept' }),
+    }),
+  });
+  /** @type {Record<string, any[]>} */
+  const sent = { office: [], runner: [] };
+  core.registry.connect('office', (/** @type {any} */ f) => sent.office.push(f), {});
+  core.registry.connect('runner', (/** @type {any} */ f) => sent.runner.push(f), { ephemeral: true, owner: ELI });
+  const asked = (/** @type {any[]} */ frames) => frames.filter((f) => f.kind === 'vault-changed').length;
+  return (async () => {
+    await core.vaultDevice({ email: ELI }, { sealed: { epk: 'a', iv: 'b', ct: 'c' } });
+    assert.equal(asked(sent.office), 1);
+    assert.equal(asked(sent.runner), 0, 'a runner asks for its owner’s login on its own clock');
+    delete minterSays.changed;
+    await core.vaultDevice({ email: ELI }, { sealed: { epk: 'a', iv: 'b', ct: 'c' } });
+    assert.equal(asked(sent.office), 1, 'a list changed nothing');
+    // A CLAUDE LOGIN DEPOSITED, the phones' other route to the same row.
+    await core.depositClaudeLogin({ email: ELI }, { sealed: { epk: 'a', iv: 'b', ct: 'c' } });
+    assert.equal(asked(sent.office), 2);
+  })();
+});
+
 test('the coordinator refuses what it should before the minter is asked, and says why', async () => {
   // A DEVICE: not signed in, not sealed, no minter, too many, and a minter that is down.
   const none = new CoordinatorCore({});
