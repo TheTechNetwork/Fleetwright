@@ -68,7 +68,7 @@ The apparent conflict with resume dissolves once you split state by lifetime:
 Do **not** replace tmux. Make the pane's process `podman run -it`:
 
 ```
-IS_SANDBOX=1 exec podman run --rm -it \
+IS_SANDBOX=1 exec podman run -it \
   --name agent-<name> \
   -v claude-<name>:/root/.claude \
   -v work-<name>:/work -w /work \
@@ -84,8 +84,13 @@ Why this works:
 - **`src/core/tmux.js` does not change.** `capture-pane` still reads the TUI podman is drawing;
   `send-keys` still types into it. Resume-dialog detection, RC retry, and `peek` keep working.
 - **`reconcile`, the cap, adoption and boot restore keep working** — still one tmux session per
-  agent. `--rm` plus pane-process-is-podman means a dead container ends the tmux session, which
+  agent. `exec` plus pane-process-is-podman means a dead container ends the tmux session, which
   reconcile already handles as `ended → resumeOnBoot: true`.
+- **No `--rm`.** It had one, and a session that died at startup took what it printed with it:
+  cc-trusty-egret on vnic-runner-oci was resumed a dozen times and could only be told "exited
+  during startup". The container now waits until reconcile keeps the end of its output and removes
+  it (`retireSandboxContainer`), so `logs` can say why. A stop removes it at once, and every start
+  removes any left over first, so nothing a container did to its filesystem reaches the next one.
 - **Run podman rootless.** Container-root maps through a user namespace to the unprivileged hub
   user on the host: full root inside, nobody outside. `IS_SANDBOX=1` stops being a lie told to
   bypass a safety check.
@@ -409,7 +414,7 @@ claude 2.1.233. Every result below was directly observed, not inferred.
 | podman gets a real TvY inside a tmux pane | ✅ `TvY=/dev/pts/0` |
 | `capture-pane` reads what the container drew | ✅ line-oriented and full-screen TUI both |
 | `send-keys` reaches the container's stdin | ✅ drove a shell `read` and the trust dialog |
-| Container exit ends the tmux session (`exec` + `--rm`) | ✅ — this is what lets reconcile see "ended" |
+| Container exit ends the tmux session (`exec`; tried again without `--rm`, which never decided it) | ✅ — this is what lets reconcile see "ended" |
 | `claude` runs on bare `debian:13-slim` | ✅ no missing libs; Containerfile can be minimal |
 | Mounted credentials work | ✅ `~/.claude` + `~/.claude.json` bind-mounted from copies |
 | `--dangerously-skip-permissions` inside the container | ✅ `⏵⏵ bypass permissions on` |

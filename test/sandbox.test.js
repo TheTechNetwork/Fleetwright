@@ -40,10 +40,14 @@ test('with the sandbox off, the command is unchanged', () => {
 test('with the sandbox on, the pane process becomes podman run', () => {
   const line = buildCommand(cfg({ sandbox: true }), { name: 'api' });
 
-  // `exec` + `--rm` + pane-process-is-podman is what makes a dead container end
-  // the tmux session, which reconcile already handles as "ended". Losing any of
-  // the three silently breaks restore.
-  assert.match(line, /^IS_SANDBOX=1 exec 'podman' 'run' '--rm' '-it'/);
+  // `exec` + pane-process-is-podman is what makes a dead container end the
+  // tmux session, which reconcile already handles as "ended". Losing either
+  // silently breaks restore.
+  assert.match(line, /^IS_SANDBOX=1 exec 'podman' 'run' '-it'/);
+  // AND NOT `--rm`: a container removed as it exits takes what it printed with
+  // it, and a session that died at startup could not say why (podman.js,
+  // retireSandboxContainer, which removes it once that is kept).
+  assert.ok(!line.includes("'--rm'"));
   // -it is what gives the container the pane's TTY. Without it claude renders
   // nothing and the resume dialog can never be detected.
   assert.match(line, /'-it'/);

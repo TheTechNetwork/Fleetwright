@@ -93,7 +93,7 @@ than a fork.
 - `src/config.js` — the `FLEETWRIGHT_SANDBOX*` block.
 
 Nothing in `tmux.js`, `registry.js` or the reconcile logic changed, which is the
-point: it is still one tmux session per agent, and `--rm` plus
+point: it is still one tmux session per agent, and `exec` plus
 pane-process-is-podman means a dead container ends the tmux session that
 reconcile already knows how to handle.
 
