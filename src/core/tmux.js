@@ -62,10 +62,13 @@ export function listSessions() {
  * Start a detached session running `command` under `bash -lc` in `cwd`.
  * bash -lc (login shell) so PATH and the claude credential helper resolve the
  * same way they do for an interactive operator — a plain exec finds neither.
- * @param {{ name: string, cwd: string, command: string }} opts
+ * @param {{ name: string, cwd: string, command: string, nice?: number }} opts
  */
-export function newSession({ name, cwd, command }) {
-  return tmux(['new-session', '-d', '-s', name, '-c', cwd, 'bash', '-lc', command]);
+export function newSession({ name, cwd, command, nice = 0 }) {
+  // Under `nice` when asked (config.js sessionNice): everything the session
+  // starts inherits it, so its builds yield to the services watching it.
+  const lower = Number.isInteger(nice) && nice > 0 ? ['nice', '-n', String(Math.min(19, nice))] : [];
+  return tmux(['new-session', '-d', '-s', name, '-c', cwd, ...lower, 'bash', '-lc', command]);
 }
 
 /** @param {string} name */

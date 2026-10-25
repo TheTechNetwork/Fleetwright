@@ -647,7 +647,7 @@ export class SessionManager {
       // A new life of the container: whatever the CLI last said belongs to the
       // old one, and the pane is the only witness until it speaks again.
       this.#newLife(name);
-      const spawned = newSession({ name, cwd, command });
+      const spawned = newSession({ name, cwd, command, nice: this.cfg.sessionNice });
       if (spawned.status !== 0) {
         const detail = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 300);
         this.registry.upsert(name, { status: 'error', detail, cwd, ...creator });
@@ -1425,7 +1425,7 @@ export class SessionManager {
           remoteControl: onRunner(this.cfg) || this.noRemoteControl.has(rec.name) ? false : null,
         });
         this.#newLife(rec.name);
-        const spawned = newSession({ name: rec.name, cwd: rec.cwd || this.cfg.workdir, command });
+        const spawned = newSession({ name: rec.name, cwd: rec.cwd || this.cfg.workdir, command, nice: this.cfg.sessionNice });
         if (spawned.status !== 0 || !hasSession(rec.name)) {
           const why = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 200);
           this.registry.upsert(rec.name, { status: 'error', resumeOnBoot: false, detail: `restore failed: ${why}` });
