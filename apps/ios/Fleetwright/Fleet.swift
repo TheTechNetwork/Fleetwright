@@ -734,7 +734,7 @@ struct Fleet {
     /// box that dispatches the run never sees it.
     func provision(platform: String, minutes: Int? = nil, host: String? = nil,
                    start: [String: String]? = nil, template: String? = nil, network: String? = nil,
-                   group: String? = nil) async throws -> Reply {
+                   group: String? = nil, image: String? = nil) async throws -> Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
         // Otherwise a box with your GitHub connection does, as it always did.
@@ -744,13 +744,15 @@ struct Fleet {
         // NOR IS A LAB, which is a machine from your hypervisor in a lab.
         if platform != "vm", platform != "lab", phone.signedIn {
             do {
-                return try await phone.startRunner(self, platform: platform, minutes: minutes, start: start)
+                return try await phone.startRunner(self, platform: platform, minutes: minutes, image: image, start: start)
             } catch {
                 return Reply(ok: false, text: error.localizedDescription, sessions: nil)
             }
         }
         var params: [String: String] = ["platform": platform]
         if let minutes { params["minutes"] = String(minutes) }
+        // THE GITHUB IMAGE, only when chosen (protocol 16): absent is the newest.
+        if let image { params["image"] = image }
         if let template { params["template"] = template }
         // A NETWORK OF YOUR POOL instead of behind the edge router (protocol 9).
         if let network { params["network"] = network }
@@ -873,9 +875,10 @@ struct Fleet {
     }
 
     /// Where to start a runner from this phone, and the ticket to start it with.
-    func prepareRunnerDispatch(platform: String, minutes: Int?, start: [String: String]?) async throws -> [String: Any] {
+    func prepareRunnerDispatch(platform: String, minutes: Int?, image: String?, start: [String: String]?) async throws -> [String: Any] {
         var body: [String: Any] = ["platform": platform]
         if let minutes { body["minutes"] = minutes }
+        if let image { body["image"] = image }
         if let start { body["start"] = start }
         return try Self.object(try await post("/api/runners/dispatch", body: body))
     }

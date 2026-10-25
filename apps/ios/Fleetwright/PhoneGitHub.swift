@@ -190,8 +190,8 @@ struct PhoneGitHub {
 
     /// Start a runner from this phone: the coordinator mints the ticket and
     /// says where, and this phone asks GitHub with its own sign-in. No box.
-    func startRunner(_ fleet: Fleet, platform: String, minutes: Int?, start: [String: String]?) async throws -> Fleet.Reply {
-        let plan = try await fleet.prepareRunnerDispatch(platform: platform, minutes: minutes, start: start)
+    func startRunner(_ fleet: Fleet, platform: String, minutes: Int?, image: String? = nil, start: [String: String]?) async throws -> Fleet.Reply {
+        let plan = try await fleet.prepareRunnerDispatch(platform: platform, minutes: minutes, image: image, start: start)
         guard plan["ok"] as? Bool == true,
               let repo = plan["repo"] as? String,
               let workflow = plan["workflow"] as? String,
