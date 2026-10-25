@@ -85,6 +85,9 @@ export function runsNoSessions(hostId) {
  * @property {string} reason            why it is in that state, always populated
  * @property {HostHealth|null} health   last report, or null if we never got one
  * @property {number|null} healthAt     when that report arrived
+ * @property {{ sessions: any[], at: number|null }|null} [lastSessions]  the sessions the last report
+ *   that could list them listed, and when — kept while the box's session manager is not answering,
+ *   so a busy box's sessions are still found where they are (findSessions)
  * @property {number} connectedAt
  * @property {boolean} connected
  * @property {boolean} [ephemeral]  expected to vanish
@@ -173,6 +176,10 @@ export class HostRegistry {
       // sessions under their creators, on a machine that member now controls.
       health: existing?.health ? attributed({ actsFor: person }, existing.health) : null,
       healthAt: existing?.healthAt ?? null,
+      // Attributed again for the same reason as the report above it.
+      lastSessions: existing?.lastSessions
+        ? { at: existing.lastSessions.at, sessions: /** @type {any[]} */ (attributed({ actsFor: person }, /** @type {any} */ ({ sessions: existing.lastSessions.sessions })).sessions) }
+        : null,
       connectedAt: this.now(),
       connected: true,
       // Sticky across reconnects: a runner that drops and comes back is still
@@ -275,6 +282,25 @@ export class HostRegistry {
     // the creator of its sessions and its bin, and every reader below believed
     // it: their listing, their pinned verbs and their stop on a real session
     // of the same name elsewhere.
+    // A BUSY BOX IS NOT AN EMPTY ONE. A sidecar whose session manager did not
+    // answer in time sends `sessions: null` — cannot tell — and storing that
+    // as the box's list made every session on it unfindable: a macOS runner
+    // building and booting a simulator at a load of 167 was answered "No host
+    // reports a session named …" about a session that was running there the
+    // whole time. What the last report that COULD list them said is kept
+    // beside the frame, never in it: the frame still says cannot tell, so no
+    // screen shows the old list as now, and only placement reads this
+    // (findSessions), with its age, so a claim too old to act on is refused
+    // as the box being busy rather than the session being gone.
+    if (Array.isArray(health.sessions)) {
+      host.lastSessions = null;
+    } else if (Array.isArray(host.health?.sessions)) {
+      // Merged by name over what was already kept, so a session noted from a
+      // start reply between two silent frames does not erase the others.
+      const kept = new Map((host.lastSessions?.sessions ?? []).map((/** @type {any} */ k) => [k?.name, k]));
+      for (const k of host.health.sessions) kept.set(k?.name, k);
+      host.lastSessions = { sessions: [...kept.values()], at: host.lastSessions?.at ?? host.healthAt };
+    }
     host.health = attributed(host, health);
     host.healthAt = this.now();
     // A host whose own fleetwright is unreachable is NOT healthy, even though its
@@ -481,7 +507,9 @@ export class HostRegistry {
     this.sweep();
     // Not `actsFor` either: it is for placement, and a screen that wants who
     // enrolled a box reads the enrolled list, which says so in its own words.
-    return [...this.hosts.values()].map(({ send, actsFor, ...entry }) => entry);
+    // Nor `lastSessions`: it is the list a busy box last gave, for placement
+    // alone, and a screen showing it would show an old list as the box's now.
+    return [...this.hosts.values()].map(({ send, actsFor, lastSessions, ...entry }) => entry);
   }
 
   /** @param {string} hostId */
@@ -577,13 +605,18 @@ export class HostRegistry {
    * lands on the wrong box is not recoverable by retrying.
    *
    * @param {string} name
+   * @returns {Array<{ host: HostEntry & { send: (msg: object) => void }, status: string, createdBy?: string|null, ageMs: number, busy?: boolean }>}
    */
   findSessions(name) {
     this.sweep();
     const out = [];
     for (const host of this.hosts.values()) {
-      const sessions = host.health?.sessions;
-      const found = sessions?.find((s) => s.name === name);
+      // The live list, or — while the box's session manager is not answering
+      // — the last one it gave, aged from when it gave it (recordHealth).
+      const live = Array.isArray(host.health?.sessions);
+      const sessions = live ? host.health?.sessions : host.lastSessions?.sessions;
+      const asOf = live ? host.healthAt : (host.lastSessions?.at ?? null);
+      const found = sessions?.find((/** @type {any} */ s) => s?.name === name);
       if (found) {
         out.push({
           host,
@@ -591,7 +624,8 @@ export class HostRegistry {
           // For ownership checks. Older sidecars report no createdBy; null
           // means "unattributed", which the scheduler treats as fleet-owned.
           createdBy: found.createdBy ?? null,
-          ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt,
+          ageMs: asOf === null ? Infinity : this.now() - asOf,
+          ...(live ? {} : { busy: true }),
         });
         continue;
       }

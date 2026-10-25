@@ -667,6 +667,20 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // owner still reaches it with stop, forget and the rest, which run
     // nothing of theirs there (G8).
     if (verb === 'resume' && !runsSessionsFor(host, requester)) return unsandboxed([host], verb);
+    if (found.ageMs > maxPinAgeMs && found.busy) {
+      // BUSY, NOT GONE. The box is connected and says its session manager is
+      // not answering; the session was there when it last could say. Sending
+      // the verb would only wait out the box's silence, and "No host reports"
+      // — what this said before — was not true.
+      return {
+        kind: 'refused',
+        code: 'host_busy',
+        reason:
+          `"${name}" is on ${found.host.hostId}, which is connected but too busy to answer — ` +
+          `${found.host.reason}. It last listed its sessions ${Math.round(found.ageMs / 1000)}s ago. ` +
+          'The session is most likely still working; ask again in a minute.',
+      };
+    }
     if (found.ageMs > maxPinAgeMs) {
       // We know where it WAS. Acting on a claim this old is guessing.
       return {
