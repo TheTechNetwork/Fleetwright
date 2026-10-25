@@ -502,6 +502,13 @@ export function loadConfig(env = process.env) {
     // is on GitHub, where nobody in the fleet can read it. Set, `/logs` reads
     // <dir>/<unit>.log here before it asks a journal (core/logs.js).
     logDir: str('FLEETWRIGHT_LOG_DIR') ? path.resolve(str('FLEETWRIGHT_LOG_DIR')) : null,
+    // HOW MUCH LOWER A SESSION RUNS than fleetwright itself, as `nice` takes it
+    // (0 to 19). A session's builds and simulators can load a small machine
+    // until nothing answers: a macOS runner reached a load of 167, its session
+    // manager missed the sidecar's reads, and the fleet lost sight of the
+    // session. At 0, as it always was, sessions and the services share the
+    // CPU evenly; a runner sets it so the services are answered first.
+    sessionNice: Math.min(19, Math.max(0, int('FLEETWRIGHT_SESSION_NICE', 0))),
 
     logLevel: str('FLEETWRIGHT_LOG_LEVEL', 'info'),
     hostname: os.hostname(),
