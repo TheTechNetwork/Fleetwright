@@ -75,7 +75,7 @@ import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
 import { probeClaude } from '../../core/claude-token-probe.js';
-import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude } from './claude-login.js';
+import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaude } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
@@ -154,7 +154,18 @@ const SIGNATURE_RE = /^[A-Za-z0-9_-]{40,200}$/;
  * @typedef {object} VaultStore  this Worker's Durable Object storage, or a Map in a test
  * @property {(key: string) => Promise<any>} get
  * @property {(key: string, value: any) => Promise<void>} put
+ * @property {(o: { prefix: string }) => Promise<Map<string, any>>} [list]  every row under a prefix, for the check of each sign-in
  */
+
+/** When every kept sign-in was last asked after, so asking again sooner is answered with nothing. */
+const CHECKED_ROW = 'claude-checked';
+
+/**
+ * How often the sign-ins are asked after, at most, whoever asks. The
+ * coordinator asks every fifteen minutes (core.js); this is the floor that
+ * holds if it asked every second, which a compromised one could.
+ */
+export const CLAUDE_CHECK_MIN_MS = 10 * 60_000;
 
 /**
  * @typedef {object} VaultConfig
@@ -292,6 +303,44 @@ export async function answerClaudeFresh(ask, config) {
     ? { login: { scopes: held.oauth.scopes, subscriptionType: held.oauth.subscriptionType, rateLimitTier: held.oauth.rateLimitTier }, account: held.account ?? {} }
     : {};
   return { ok: true, token: held.bearer, expiresAt: held.expiresAt, ...signIn, text: problem ?? '' };
+}
+
+/**
+ * Every kept Claude sign-in asked after (claude-login.js, checkClaude), for
+ * the coordinator to tell the people whose sign-in Anthropic has ended.
+ *
+ * WHAT THE COORDINATOR CAN DO WITH IT is ask, and be answered at most every
+ * ten minutes: the asking is done here, against Anthropic, so it cannot make
+ * a sign-in look ended, and the answer is a fleet account, a GitHub login and
+ * a time, which it already knows, and what Anthropic said, which holds no
+ * token. Each ended sign-in is in one answer only.
+ *
+ * @param {unknown} _ask  nothing is read from it
+ * @param {VaultConfig} config
+ */
+export async function answerClaudeCheck(_ask, config) {
+  const missing = notConfigured(config);
+  if (missing) return missing;
+  const store = /** @type {VaultStore} */ (config.store);
+  if (!store.list) return refuse('no_store', 'This storage cannot list the sign-ins it keeps.');
+  const { fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = config;
+  const last = Number(await store.get(CHECKED_ROW)) || 0;
+  if (now() - last < CLAUDE_CHECK_MIN_MS) return { ok: true, ended: [], text: 'The sign-ins were asked after less than ten minutes ago.' };
+  await store.put(CHECKED_ROW, now());
+  const loaded = await loadKey(config);
+  if (!loaded.ok) return /** @type {any} */ (loaded).refusal;
+  const key = /** @type {any} */ (loaded).key;
+  /** @type {import('./claude-login.js').ClaudeEnded[]} */
+  const ended = [];
+  for (const k of (await store.list({ prefix: 'gh:' })).keys()) {
+    const userId = k.slice(3);
+    if (!/^[0-9]{1,20}$/.test(userId)) continue;
+    // ONE AT A TIME, each under its person's lock: a check renewing alongside
+    // a box renewing the same sign-in would rotate one refresh token twice.
+    const one = await withLock(`row:${userId}`, () => checkClaude(store, key, userId, { fetchImpl, now })).catch(() => null);
+    if (one) ended.push(one);
+  }
+  return { ok: true, ended, text: '' };
 }
 
 /** @param {VaultConfig} config */

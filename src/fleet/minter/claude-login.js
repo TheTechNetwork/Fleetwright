@@ -54,6 +54,22 @@ export const RENEWALS_PREFIX = 'claude-renewed:';
 /** A day of renewals at one every few hours, and the one before a refusal. */
 const RENEWALS_KEPT = 12;
 
+/**
+ * WHERE A SIGN-IN ENDED OUTSIDE THE FLEET IS NOTED as told, by the time it
+ * was kept, so the person is told once per sign-in and told again only about
+ * the next one they keep.
+ */
+export const ENDED_PREFIX = 'claude-ended:';
+
+/**
+ * What a sign-in's access token is asked with to see whether it still works:
+ * the address `/usage` reads (src/core/usage.js, USAGE_URL, which a test holds
+ * this equal to). It costs nothing, unlike a message, and answers 401 to a
+ * token Anthropic has ended. Not imported, because usage.js reads files and
+ * this runs in a Worker.
+ */
+export const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+
 /** One printable word of a sane length: the format is Anthropic's and undocumented. */
 const TOKEN_WORD_RE = /^[A-Za-z0-9._~+/=-]{20,4096}$/;
 
@@ -168,7 +184,8 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
  * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
  * @param {{ privateKey: CryptoKey, publicKey: string }} key
  * @param {string} userId
- * @param {{ fetchImpl: typeof fetch, now: () => number, by?: string }} io  `by`: who asked, for the note a renewal leaves
+ * @param {{ fetchImpl: typeof fetch, now: () => number, by?: string, force?: boolean }} io  `by`: who asked, for the
+ *   note a renewal leaves; `force`: renew even if it is not due, when its access token was just refused
  * @returns {Promise<{ held: HeldClaude|null, problem: string|null, refused?: boolean }>}
  */
 export async function freshClaude(store, key, userId, io) {
@@ -190,7 +207,7 @@ export async function freshClaude(store, key, userId, io) {
   /** @type {string|null} */
   let problem = null;
   let refused = false;
-  if (Number(oauth.expiresAt) - io.now() < CLAUDE_REFRESH_AHEAD_MS) {
+  if (io.force || Number(oauth.expiresAt) - io.now() < CLAUDE_REFRESH_AHEAD_MS) {
     // NOTED BEFORE IT IS ASKED FOR, and settled after. Anthropic rotates the
     // refresh token the moment it answers; a renewal cut off before the new
     // one is written back (a deploy restarting this object, say) loses it,
@@ -310,4 +327,81 @@ export function describeRenewals(list, keptAt, now) {
   if (dropped) return `${said} The renewal at ${when(dropped.at)} was not kept, because a new sign-in was being kept at the same moment.`;
   const since = goodAt >= 0 ? `the last good renewal at ${when(list[goodAt].at)}` : `its keeping at ${when(keptAt)}`;
   return `${said} Nothing in the fleet renewed it between ${since} and then, so it was ended outside the fleet: on claude.ai, or by Anthropic.`;
+}
+
+/**
+ * @typedef {object} ClaudeEnded  a sign-in Anthropic will no longer renew, for the person to be told
+ * @property {string} userId
+ * @property {string|null} email  the fleet account it was kept from, when the row says
+ * @property {string} login       the GitHub login it is kept under
+ * @property {number} at          when the renewal was refused, epoch ms
+ * @property {string} why         what Anthropic said
+ */
+
+/**
+ * Whether a person's kept sign-in still works, and if Anthropic has ended it,
+ * who to tell. Under the person's lock, as a renewal is (vault.js, withLock).
+ *
+ * WHY THIS ASKS AT ALL. A sign-in ended on claude.ai, or by a new sign-in
+ * somewhere else, was found out only when a session failed to start, hours
+ * later on vnic-runner-oci, and nothing told its person. So every kept
+ * sign-in is asked after on a clock the coordinator keeps
+ * (core.js, checkClaudeSignIns):
+ *
+ *  - A RENEWAL ALREADY REFUSED, by whoever asked for it, is the answer.
+ *  - OTHERWISE ITS ACCESS TOKEN IS TRIED at the usage address, which costs
+ *    nothing. Refused there, it is renewed at once rather than when due, and
+ *    only that renewal being refused says the sign-in is over: an access
+ *    token can be refused for reasons a refresh token survives, and Anthropic
+ *    refusing the refresh token is the one thing only signing in again mends.
+ *  - ONE THAT IS DUE is renewed, as a box asking would renew it, so a person
+ *    with no box asking still has an answer.
+ *
+ * Anything that is not Anthropic saying no to the refresh token is cannot
+ * tell, and says nothing. A setup-token is not asked: it has no refresh token
+ * to end, and its scope does not reach the usage address.
+ *
+ * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
+ * @param {{ privateKey: CryptoKey, publicKey: string }} key
+ * @param {string} userId
+ * @param {{ fetchImpl: typeof fetch, now: () => number }} io
+ * @returns {Promise<ClaudeEnded|null>}  null when it works, cannot tell, or was told already
+ */
+export async function checkClaude(store, key, userId, io) {
+  const row = await store.get(`gh:${userId}`);
+  if (!row?.sealed || row.forgotten || row.kind !== 'login') return null;
+  const told = await store.get(`${ENDED_PREFIX}${userId}`).catch(() => null);
+  if (told && Number(told.keptAt) === Number(row.at)) return null;
+  const refusedLast = async () => (await claudeRenewals(store, userId, row.at)).at(-1)?.refused === true;
+  if (!(await refusedLast())) {
+    const asked = { ...io, by: 'a check' };
+    const { held } = await freshClaude(store, key, userId, asked);
+    if (held?.kind === 'login' && (await accessRefused(held.bearer, io.fetchImpl))) {
+      await freshClaude(store, key, userId, { ...asked, force: true });
+    }
+    if (!(await refusedLast())) return null;
+  }
+  const last = /** @type {ClaudeRenewal} */ ((await claudeRenewals(store, userId, row.at)).at(-1));
+  await store.put(`${ENDED_PREFIX}${userId}`, { keptAt: Number(row.at), at: io.now() });
+  return { userId, email: typeof row.email === 'string' && row.email ? row.email : null, login: String(row.login || ''), at: Number(last.at), why: String(last.why || '') };
+}
+
+/**
+ * Whether Anthropic refuses this access token, asked at the usage address.
+ * False for anything but a refusal: unreachable, or any other answer, is not
+ * a reason to renew.
+ *
+ * @param {string} token @param {typeof fetch} fetchImpl
+ */
+async function accessRefused(token, fetchImpl) {
+  try {
+    const res = await fetchImpl(CLAUDE_USAGE_URL, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json', 'anthropic-beta': 'oauth-2025-04-20' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    await res.body?.cancel?.().catch(() => {});
+    return res.status === 401 || res.status === 403;
+  } catch {
+    return false;
+  }
 }

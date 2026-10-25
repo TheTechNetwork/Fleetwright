@@ -136,6 +136,13 @@ const MAX_MINTS_PER_WINDOW = 30;
 const MINT_WINDOW_MS = 10 * 60_000;
 
 /**
+ * How often the kept Claude sign-ins are asked after (checkClaudeSignIns). A
+ * sign-in ended at 18:19 is told by 18:35, against the hours it took a failed
+ * session to say so; the minter refuses to ask more often than ten minutes.
+ */
+const CLAUDE_CHECK_MS = 15 * 60_000;
+
+/**
  * How many times one runner may ask for its owner's Claude login in
  * MINT_WINDOW_MS. It asks once, when it joins; a few more is a reconnect or
  * two. Past that it is asking for something other than a login.
@@ -355,7 +362,7 @@ export class CoordinatorCore {
    *   runnerRepo?: string|null,
    *   runnerLarge?: boolean,
    *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any>,
-   *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any>,
+   *     claude?: (route: 'key'|'deposit'|'login'|'check', ask: Record<string, unknown>) => Promise<any>,
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
    *     linkedRepo?: (ask: { role: string, repo: string }) => Promise<any>,
    *     github?: (ask: { sealed: unknown, boxCodes?: string[] }) => Promise<any>,
@@ -4351,6 +4358,55 @@ export class CoordinatorCore {
         host?.send?.({ v: PROTOCOL_VERSION, kind: 'vault-changed' });
       } catch { /* the socket is going; that box asks when it is back */ }
     }
+  }
+
+  /** When the minter was last asked after the kept Claude sign-ins (checkClaudeSignIns). */
+  #claudeCheckedAt = 0;
+
+  /**
+   * Ask the minter after every kept Claude sign-in, and tell each person whose
+   * sign-in Anthropic has ended, on their phones. Called from the alarm
+   * (fleet-do.js), at most every CLAUDE_CHECK_MS.
+   *
+   * A SIGN-IN ENDED ON claude.ai, or by a new sign-in somewhere else, was
+   * found out on vnic-runner-oci when a session would not start, and by
+   * nobody before that. The minter does the asking, against Anthropic, and
+   * names each ended sign-in once (src/fleet/minter/claude-login.js,
+   * checkClaude); this tells the person and records it.
+   *
+   * THEIR OWN PHONES are told "your", and an admin's phone is told whose,
+   * as a pool's news is split (#pushPool). Drawn by the system tray, not
+   * the app: the app has nothing to show for it but the setup it already has.
+   *
+   * @returns {Promise<number>} how many people were told
+   */
+  async checkClaudeSignIns() {
+    const now = this.now();
+    if (!this.minter?.claude || now - this.#claudeCheckedAt < CLAUDE_CHECK_MS) return 0;
+    this.#claudeCheckedAt = now;
+    /** @type {any} */
+    const r = await this.minter.claude('check', {}).catch(() => null);
+    if (!r?.ok || !Array.isArray(r.ended)) return 0;
+    let told = 0;
+    for (const e of r.ended.slice(0, 100)) {
+      const email = String(e?.email || '').trim().toLowerCase();
+      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      const at = Number(e.at);
+      const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
+      this.record({ event: 'claude.ended', actor: email, text: `${email}: Claude refused to renew the kept sign-in${when} (${String(e.why || '').slice(0, 160)})` });
+      told += 1;
+      if (!this.push) continue;
+      const devices = this.#devicesOf(email);
+      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
+      const admins = devices.filter((d) => !own.includes(d));
+      const body = `It was ended outside the fleet${when}, so sessions cannot start with it. Sign in to Claude again from your phone or the signing page.`;
+      const data = { event: 'claude.ended', kind: 'claude-ended', name: '', hostId: '', url: '' };
+      try {
+        if (own.length) await this.push.send(own, { title: 'Your Claude sign-in was ended', body, data });
+        if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in was ended`, body: body.replace('from your phone', 'from their phone'), data });
+      } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
+    }
+    return told;
   }
 
   /**
