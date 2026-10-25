@@ -225,9 +225,48 @@ test('on a box nothing installed, a direct session still gets the hook, naming a
   assert.equal(node, process.execPath);
   assert.equal(existsSync(cli), true, `${cli} is the CLI the hook runs`);
   assert.equal(settings.skipDangerousModePermissionPrompt, true);
+  // AND NO DRAFTED PROMPTS. The CLI drafts a follow-up into the input box when
+  // a session comes back to its prompt; nobody is here to accept it, and one
+  // sitting there read, through the fleet, as something a person had typed.
+  assert.equal(settings.promptSuggestionEnabled, false);
 
-  // A session's own settings stand: it is written once, not over their edits.
+  // A session's own settings stand: the hook is written once, not over their
+  // edits, and what they set stays. The fleet's two keys are kept on it, as
+  // on every start, because they are the fleet's, not the session's.
   writeFileSync(join(r.dir, 'settings.json'), '{"theme":"mine"}');
   ensureDirectConfig(bare, 'one', 'fleet:person@example.com', { cwd });
-  assert.equal(readFileSync(join(r.dir, 'settings.json'), 'utf8'), '{"theme":"mine"}');
+  const again = read(join(r.dir, 'settings.json'));
+  assert.equal(again.theme, 'mine');
+  assert.equal(again.hooks, undefined, 'the hook is not written over their file');
+  assert.equal(again.promptSuggestionEnabled, false);
+  assert.equal(again.skipDangerousModePermissionPrompt, true);
+});
+
+test('a session staged from a box\'s template gets the fleet\'s two settings too, and the template is left alone', () => {
+  // A permanent box's sessions copy the operator's settings.json. The operator
+  // did not turn prompt drafting off, and should not have to: it is the fleet
+  // that has nobody at the keyboard, and the draft in a finished session's
+  // input box ("fix the divider so it aligns with the hinge") was taken for a
+  // person's words. The staged copy gets the keys; their file does not.
+  const { cfg, cwd } = box();
+  const template = join(path.dirname(cfg.sandboxCredentialsFile), 'settings.json');
+  writeFileSync(template, '{"theme":"theirs","promptSuggestionEnabled":true}');
+  const r = ensureDirectConfig(cfg, 'templated', 'fleet:person@example.com', { cwd });
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  const staged = read(join(r.dir, 'settings.json'));
+  assert.equal(staged.theme, 'theirs', 'the operator\'s own settings travel');
+  assert.equal(staged.promptSuggestionEnabled, false);
+  assert.equal(staged.skipDangerousModePermissionPrompt, true);
+  assert.deepEqual(JSON.parse(readFileSync(template, 'utf8')), { theme: 'theirs', promptSuggestionEnabled: true }, 'their file is theirs');
+});
+
+test('the container image bakes the same two settings a direct session gets', () => {
+  // The two paths a session takes agree on what nobody-at-the-keyboard means,
+  // or a sandboxed session would draft prompts a direct one does not. Read as
+  // text because the image is only built in CI; the keys are the contract.
+  const image = readFileSync(new URL('../sandbox/Containerfile', import.meta.url), 'utf8');
+  const baked = image.slice(image.indexOf('/etc/fleetwright-session/settings.json') - 400, image.indexOf('/etc/fleetwright-session/settings.json'));
+  assert.match(baked, /"skipDangerousModePermissionPrompt": true/);
+  assert.match(baked, /"promptSuggestionEnabled": false/);
 });

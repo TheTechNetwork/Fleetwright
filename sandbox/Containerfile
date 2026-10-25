@@ -92,9 +92,13 @@ RUN printf '%s\n' '{' \
 # settings.json lives inside the per-session volume, which is empty on first
 # run, so this copy in the image is what a fresh session picks up. The volume
 # mount shadows it — see sandbox/README.md for why the seeding step exists.
+# promptSuggestionEnabled off for the reason src/core/direct-config.js gives
+# (SESSION_SETTINGS): nobody is at this keyboard to accept a drafted prompt,
+# and one sitting in the input box reads, through the fleet, as typed.
 RUN mkdir -p /etc/fleetwright-session
 RUN printf '%s\n' '{' \
     '  "skipDangerousModePermissionPrompt": true,' \
+    '  "promptSuggestionEnabled": false,' \
     '  "remoteControlAtStartup": true' \
     '}' > /etc/fleetwright-session/settings.json
 
