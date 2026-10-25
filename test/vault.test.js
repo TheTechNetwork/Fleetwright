@@ -702,6 +702,45 @@ test('the coordinator refuses what it should before the minter is asked, and say
   assert.equal(answer?.error?.code, 'too_many');
 });
 
+test('every box holding a Claude token asks for the next one at the minute the minter renews it', async () => {
+  // RENEWING REVOKES THE TOKEN EVERY HOLDER HAS, so a box that asked only on
+  // its own ten-minute clock went on sending a revoked one after another box
+  // had renewed it, and a session there stopped with "Please run /login".
+  // Every holder has the same expiry, so the ask is timed from it.
+  const keys = await generateKeyPair();
+  /** @param {number} left  how long the token the vault gives has */
+  const nextAsk = async (left) => {
+    /** @type {Sidecar} */
+    let box;
+    box = new Sidecar({
+      hub: /** @type {any} */ ({ vault: async () => ({ ok: true, text: 'held' }) }),
+      transport: /** @type {any} */ ({
+        origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {},
+        send: (/** @type {any} */ f) => {
+          const payload = { accounts: [{ email: ELI, items: [{ name: 'claude', value: 'sk-ant-oat01-held', expiresAt: Date.now() + left }], problems: [] }] };
+          void seal({ to: f.request.reply, aad: VAULT_BOX_AAD, payload }).then((sealed) => box.handle({ kind: 'minted', id: f.id, ok: true, sealed }));
+          return true;
+        },
+      }),
+      hostId: 'box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, mintTimeoutMs: 2_000,
+      vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ m) => sign(keys.privateJwk, m) },
+    });
+    return box.syncVault();
+  };
+  const near = (/** @type {number} */ got, /** @type {number} */ want) => assert.ok(Math.abs(got - want) < 5_000, `asked in ${got}ms, not ${want}ms`);
+  // Hours left: the usual ten minutes.
+  assert.equal(await nextAsk(8 * 3_600_000), 600_000);
+  // Thirty-five minutes left: a minute inside the half hour the minter renews
+  // in, which is when every other box holding it asks too.
+  near(await nextAsk(35 * 60_000), 6 * 60_000);
+  // Just past that minute and not renewed (a clock that disagrees, a box that
+  // renewed first): again in a minute.
+  assert.equal(await nextAsk(28 * 60_000), 60_000);
+  // Well inside it, renewing has failed: ten minutes before it runs out, as before.
+  near(await nextAsk(22 * 60_000), 600_000);
+  near(await nextAsk(15 * 60_000), 5 * 60_000);
+});
+
 test('a box keeps what it holds through a blip, and forgets it on an answer that says to', async () => {
   const keys = await generateKeyPair();
   /** @type {any[]} */
