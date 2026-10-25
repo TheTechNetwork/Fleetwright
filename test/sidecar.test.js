@@ -475,6 +475,44 @@ test('an unreachable hub reports capacity as null, never zero', async (t) => {
   assert.notEqual(h.free, 0);
 });
 
+test('a box that cannot answer because it is overloaded says so in numbers, and a Mac says what that usually is', async () => {
+  // A 3-core macOS runner booting the iPhone Duo reported "session manager
+  // unreachable: GET /api/state: The operation was aborted due to timeout"
+  // for six minutes at a load of 519, and the reader went looking for a
+  // broken service. The load was the whole story and the sidecar had it.
+  const stub = await startStubHub();
+  const baseUrl = stub.baseUrl;
+  await stub.close();
+  /** @param {{ load: number, platform: string }} box */
+  const frameOn = async ({ load, platform }) => {
+    const sidecar = new Sidecar({
+      hub: new HubClient({ baseUrl, readTimeoutMs: 500 }),
+      transport: /** @type {any} */ (fakeTransport()),
+      machine: { loadavg: () => [load, load / 2, load / 4], cpus: () => 3, platform },
+    });
+    const r = await sidecar.handle(intent({ verb: 'health' }));
+    return r.health;
+  };
+
+  const mac = await frameOn({ load: 519.2, platform: 'darwin' });
+  assert.equal(mac.hub.reachable, false);
+  assert.equal(mac.cpus, 3, 'the frame says how many cores the load is on');
+  assert.deepEqual(mac.loadavg, [519.2, 259.6, 129.8]);
+  assert.match(mac.hub.reason, /^GET \/api\/state: .* — overloaded: 1-minute load 519 on 3 cores/);
+  assert.match(mac.hub.reason, /on a Mac that is what a simulator boot looks like, four to six minutes/);
+
+  // A Linux box at the same load is overloaded and says so, and says nothing
+  // about simulators, because that is not what it usually is there.
+  const linux = await frameOn({ load: 519.2, platform: 'linux' });
+  assert.match(linux.hub.reason, /overloaded: 1-minute load 519 on 3 cores$/);
+
+  // Below four per core the hub's own words stand alone: a busy box that
+  // answers is not the fault this sentence is for.
+  const fine = await frameOn({ load: 11.9, platform: 'darwin' });
+  assert.doesNotMatch(fine.hub.reason, /overloaded/);
+  assert.equal(fine.cpus, 3);
+});
+
 test('an unreachable hub is a retryable failure code on ordinary verbs', async (t) => {
   const stub = await startStubHub();
   const baseUrl = stub.baseUrl;

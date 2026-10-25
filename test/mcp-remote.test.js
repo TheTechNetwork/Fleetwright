@@ -377,6 +377,7 @@ test('fleet_health answers with capacity, not the word ok', async () => {
           maxSessions: 5,
           free: 3,
           loadavg: [0.1, 0.2, 0.3],
+          cpus: 3,
           labels: ['linux'],
           // THE ORDINARY STATE OF EVERY BOX under one-account-per-person: no
           // Claude account of its own, and two people who have linked theirs.
@@ -405,6 +406,9 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   assert.match(text, /^deb13-staging/m);
   assert.match(text, /2\/5 sessions running/);
   assert.match(text, /tags: linux/);
+  // ON HOW MANY CORES: 20 is a quiet eight-core box or a three-core runner at
+  // the start of a simulator boot, and the line said only the 20.
+  assert.match(text, /load 0\.1 0\.2 0\.3 on 3 cores/);
   // AND IT DOES NOT CALL A HEALTHY HOST BROKEN. This asserted `/NOT LOGGED IN/`
   // and so pinned the bug in place: `loggedIn: false` is the ordinary state of
   // every box now, and two beta testers read that banner and concluded the

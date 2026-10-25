@@ -147,6 +147,25 @@ and is then asked to stop, so it closes its socket and the coordinator retires
 the entry and revokes the key. There is no cleanup step to remember, because
 exiting normally IS the cleanup.
 
+**A simulator boot is the heavy phase, and the fleet says so.** Measured three
+times on GitHub's standard `xcode-27` runner (3 cores, 7 GB): building a small
+SwiftUI app takes 40 s; booting the iPhone Duo simulator takes four to six
+minutes with the 1-minute load average between 500 and 700, whether or not the
+device was erased first and whether or not crash sampling is running —
+`diagnosticd`, in the host and inside the simulator, is the top consumer, and
+nothing reaches it. Opening the Duo in DeviceHub adds another four minutes at
+a load of 700. Idle afterwards the box settles to a load of 13 to 37, the
+session manager answers, memory is fine, and one app launch takes it back to
+50. During a boot the session manager cannot answer the sidecar, so the
+health frame says `session manager unreachable: … — overloaded: 1-minute load
+519 on 3 cores; on a Mac that is what a simulator boot looks like, four to
+six minutes, and it answers again after`, and the coordinator carries that
+sentence into its "busy" refusal, so an agent waiting on a session there reads
+what is happening rather than a timeout. The frame also carries `cpus`, so a
+load means something. The cure is a larger runner (`-xlarge`, where whoever
+pays allowed it) or a permanent Mac; priority, erase and crash-sampling
+settings do not move it.
+
 ## Enrolling with no pin: the job proves what it is
 
 `fleetwright-sidecar enrol-actions`, and the workflow needs one line:

@@ -196,13 +196,21 @@ export function askAgainIn(soonest, intervalMs, now = Date.now()) {
   return Math.max(floor, Math.min(intervalMs, due));
 }
 
+/**
+ * A 1-minute load this many times the core count is "overloaded" in a health
+ * frame's reason. Four, not two: a box building something is often at two
+ * per core and answering fine; the fleet's own measurements of a box that
+ * had stopped answering were a hundred and more.
+ */
+const OVERLOAD_LOAD_PER_CORE = 4;
+
 export class Sidecar {
   /**
    * @param {{
    *   hub: import('./hub-client.js').HubClient,
    *   transport: Transport,
    *   hostId?: string,
-   *   labels?: string[],
+   *   labels?: string[], machine?: { loadavg?: () => number[], cpus?: () => number, platform?: string }|null,
    *   maxSkewMs?: number,
    *   requireSigned?: boolean|'off'|'signers'|'all',
    *   logger?: Logger,
@@ -232,7 +240,7 @@ export class Sidecar {
    *   onVmLoginHanded?: (() => void)|null,
    * }} opts
    */
-  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, requireSigned = false, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
+  constructor({ hub, transport, hostId, labels = [], machine = null, maxSkewMs = 300_000, requireSigned = false, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
     adoptUpdates = null,
     version = null,
     promptText = false,
@@ -311,6 +319,17 @@ export class Sidecar {
     // needs the difference — a label it stores is removable and a fact the
     // machine derives is not, and one flat list cannot say which is which.
     this.givenLabels = labels;
+    // WHAT THE MACHINE IS, as functions, so a test can be a box at load 519
+    // on three cores without being one: that is the only way to prove the
+    // sentence below is written, and it is written exactly when the box
+    // cannot be asked anything else.
+    /** @type {{ loadavg: () => number[], cpus: () => number, platform: string }} */
+    this.machine = {
+      loadavg: () => os.loadavg(),
+      cpus: () => os.availableParallelism?.() ?? os.cpus().length,
+      platform: process.platform,
+      ...(machine ?? {}),
+    };
     // Injected rather than read here: the sidecar knows about a coordinator
     // and an fleetwright, and nothing about git checkouts or package managers.
     /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any })|null} */
@@ -1856,7 +1875,8 @@ export class Sidecar {
   }
 
   async health() {
-    const [load1, load5, load15] = os.loadavg();
+    const [load1, load5, load15] = this.machine.loadavg();
+    const cpus = this.machine.cpus();
 
     // ASK FIRST, so the facts below are this frame's. The fields that used to
     // be read out of fleetwright's state directory here — labels, channel,
@@ -1958,6 +1978,10 @@ export class Sidecar {
       // nothing.
       houseRules: this.facts?.houseRules ?? null,
       loadavg: [load1, load5, load15],
+      // HOW MANY CORES THE LOAD IS ON. A load of 20 is a quiet eight-core box
+      // or a three-core runner at the start of a simulator boot, and the frame
+      // said only the 20. Null never: every Node can count its cores.
+      cpus,
       freeMemBytes: os.freemem(),
       totalMemBytes: os.totalmem(),
       uptimeSec: Math.round(os.uptime()),
@@ -2151,9 +2175,22 @@ export class Sidecar {
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);
     this.log.warn(`sidecar: health could not reach fleetwright: ${err.message}`);
+    // WHY, WHEN THE BOX ITSELF IS THE REASON. "GET /api/state: The operation
+    // was aborted due to timeout" is what a fleet saw for six minutes while a
+    // 3-core macOS runner booted the iPhone Duo at a load of 519, and it sent
+    // the reader to look for a broken service. The load is the whole story,
+    // and this process has it. Said in numbers, and on a Mac said for what it
+    // usually is: measured three times on GitHub's runners, a simulator boot
+    // is four to six minutes at a load of 500 to 700, and the box answers
+    // again after. The coordinator carries this sentence into its "busy"
+    // refusal (registry.js), so an agent waiting on a session there reads it.
+    const overloaded = load1 >= OVERLOAD_LOAD_PER_CORE * cpus
+      ? ` — overloaded: 1-minute load ${Math.round(load1)} on ${cpus} core${cpus === 1 ? '' : 's'}` +
+        (this.machine.platform === 'darwin' ? '; on a Mac that is what a simulator boot looks like, four to six minutes, and it answers again after' : '')
+      : '';
     return {
       ...base,
-      hub: { reachable: false, reason: err.message, code: err.code || 'hub_unreachable' },
+      hub: { reachable: false, reason: `${err.message}${overloaded}`, code: err.code || 'hub_unreachable' },
       maxSessions: null,
       running: null,
       free: null,

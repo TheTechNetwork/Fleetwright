@@ -194,7 +194,11 @@ function describeHealth(h) {
   if (typeof h.running === 'number' && typeof h.maxSessions === 'number') {
     lines.push(`${h.running}/${h.maxSessions} sessions running, ${h.free ?? '?'} free`);
   }
-  if (Array.isArray(h.loadavg) && h.loadavg.length) lines.push(`load ${h.loadavg.map(Number).join(' ')}`);
+  // ON HOW MANY CORES, when the box says: 20 is quiet on eight and the start
+  // of a simulator boot on three.
+  if (Array.isArray(h.loadavg) && h.loadavg.length) {
+    lines.push(`load ${h.loadavg.map(Number).join(' ')}${typeof h.cpus === 'number' ? ` on ${h.cpus} core${h.cpus === 1 ? '' : 's'}` : ''}`);
+  }
   if (Array.isArray(h.labels)) {
     const tags = h.labels.filter((/** @type {unknown} */ l) => typeof l === 'string' && LABEL_RE.test(l));
     lines.push(`tags: ${tags.length ? tags.join(', ') : 'none'}`);
@@ -676,6 +680,12 @@ export class McpServer {
       'You may stop only your own sessions: one started in this conversation, or one the fleet records',
       'as started by the person you act for, from any of their devices. Anything else belongs to',
       'somebody else, who is probably still using it.',
+      '',
+      'A MAC BOOTING A SIMULATOR IS OVERLOADED FOR FOUR TO SIX MINUTES — the iPhone Duo on a 3-core',
+      'runner takes a load of 500 and more. While it lasts the box answers "too busy" or times out, and',
+      'fleet_health says so in numbers. That is expected, not a fault: wait and ask again, and do not stop',
+      'or restart anything. Have a session build first with no simulator booted, boot once, and give the',
+      'whole job twenty minutes. A larger runner (an -xlarge image, where allowed) is the only real cure.',
       '',
       'TEMPORARY HOSTS COST MONEY WHILE THEY LIVE. A host named gha-… is a CI runner: it exists for',
       'one job, belongs to whoever started it, and is destroyed when its job ends — taking any session',
