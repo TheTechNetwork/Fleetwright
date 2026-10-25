@@ -87,6 +87,33 @@ export const DRAWING_RE = /⏵⏵|shift\+tab to cycle|to manage\b|esc to interru
 export const READY_RE = /shift\+tab to cycle/i;
 
 /**
+ * The CLI is WORKING, said in its own words.
+ *
+ * From Claude Code 2.1.284 the parenthetical above is drawn in both states:
+ * a session running a tool in bypass mode shows
+ *
+ *   ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents
+ *
+ * so READY_RE alone matched a session forty seconds into a build, and
+ * fleet_await told its caller the pane was "sitting at a ready prompt — which
+ * usually means it finished". What the working footer adds that the resting
+ * one lacks is the interrupt hint, which is also what a person reads to know
+ * the CLI is busy. (test/fixtures/claude-2.1.284-working-bypass.txt, captured
+ * from a GitHub macOS runner through fleet_read_log.)
+ */
+export const WORKING_RE = /esc to interrupt/i;
+
+/**
+ * Whether a pane shows the CLI ready for input: the prompt's own chrome, and
+ * not the hint it draws only while it works. One function rather than two
+ * regexes at the call site, so the next CLI change is one edit.
+ * @param {string} pane
+ */
+export function isReady(pane) {
+  return READY_RE.test(pane) && !WORKING_RE.test(pane);
+}
+
+/**
  * How long we go on suppressing "finished" after starting a restart.
  *
  * The restart's own `/stop` is a status change like any other, and the watcher
@@ -279,7 +306,7 @@ export class SessionWatcher {
           this.#noteIdle(name, pane);
           awaiting = AWAITING_RE.test(pane) || activity?.phase === 'awaiting';
           atRest = DRAWING_RE.test(pane);
-          ready = activity ? activity.phase === 'ready' : READY_RE.test(pane);
+          ready = activity ? activity.phase === 'ready' : isReady(pane);
           // Kept beside the clock so health can report WHY a pane is still
           // without reading it a second time. "Still" is not one fact: a
           // finished session and a wedged one look identical on a timer and
