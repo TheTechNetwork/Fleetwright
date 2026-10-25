@@ -370,6 +370,40 @@ test('a placement claim too old to trust is refused rather than guessed', () => 
   assert.equal(p.code, 'stale_placement');
 });
 
+test('a box too busy to list its sessions keeps them findable, and says busy rather than gone', () => {
+  // A macOS runner compiling and booting a simulator at a load of 167: its
+  // session manager missed the sidecar's read, the frame said sessions: null,
+  // and the fleet answered "No host reports a session" about one still working.
+  let now = 1000;
+  const reg = new HostRegistry({ now: () => now });
+  reg.connect('runner', () => {});
+  reg.recordHealth('runner', health({ hostId: 'runner', sessions: [{ name: 'cc-eager-kestrel', status: 'running' }] }));
+  // The frame a sidecar sends when the hub does not answer (sidecar.js health).
+  const silent = () => health({ hostId: 'runner', hub: { reachable: false, reason: 'timed out after 10000ms' }, sessions: null, resumable: null, running: null, free: null });
+
+  now += 15_000;
+  reg.recordHealth('runner', silent());
+  const soon = place(reg, { verb: 'status', params: { name: 'cc-eager-kestrel' } });
+  assert.equal(soon.kind, 'host', 'still pinned to the box it is on');
+  assert.equal(soon.host?.hostId, 'runner');
+  assert.equal(reg.get('runner')?.health?.sessions, null, 'the stored frame still says cannot tell');
+
+  for (let i = 0; i < 12; i++) {
+    now += 15_000;
+    reg.recordHealth('runner', silent());
+  }
+  const late = place(reg, { verb: 'status', params: { name: 'cc-eager-kestrel' } }, { maxPinAgeMs: 120_000 });
+  assert.equal(late.kind, 'refused');
+  assert.equal(late.code, 'host_busy');
+  assert.match(late.reason || '', /too busy to answer.*timed out after 10000ms.*195s ago/s);
+  assert.doesNotMatch(late.reason || '', /No host reports/);
+
+  // Once it can list again, its word is the list: a session it no longer has is gone.
+  now += 15_000;
+  reg.recordHealth('runner', health({ hostId: 'runner', sessions: [] }));
+  assert.equal(place(reg, { verb: 'status', params: { name: 'cc-eager-kestrel' } }).code, 'unknown_session');
+});
+
 test('with no hosts at all the refusal says why, per host', () => {
   const reg = registryWith([['a', { hub: { reachable: false, reason: 'ECONNREFUSED' } }]]);
   const p = place(reg, { verb: 'start', params: {} });
