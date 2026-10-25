@@ -317,6 +317,12 @@ jobs:
           # The browser's signing page's own hostname, a repository VARIABLE:
           # see "THE BROWSER'S SIGNING PAGE" below. Unset is no signing page.
           SIGNING_HOST: ${{ vars.FLEETWRIGHT_SIGNING_HOST }}
+          # Where the minter keeps its copies and its keys a second time
+          # (src/fleet/minter/backup.js), both repository VARIABLES: the R2
+          # bucket's name, `fleetwright-minter-backup` when unset, and the id
+          # of the account's Secrets Store holding the keys, none when unset.
+          BACKUP_BUCKET: ${{ vars.FLEETWRIGHT_MINTER_BACKUP_BUCKET }}
+          SECRETS_STORE: ${{ vars.FLEETWRIGHT_MINTER_SECRETS_STORE }}
         run: |
           # Root first: the Worker bundles ../../src, which imports `jose` from
           # the repository root's node_modules. See the check job.
@@ -407,10 +413,45 @@ jobs:
               routes="$routes, { pattern = \"$signing_host\", custom_domain = true }"
               minter_vars+=(--var "FLEETWRIGHT_SIGNING_HOST:$signing_host" --var "FLEETWRIGHT_FLEET_ORIGIN:https://$minter_host")
             fi
+            # ITS SECOND COPY (src/fleet/minter/backup.js), added to a copy of
+            # its config that both deploys below use, so the committed file
+            # stays one a fork deploys as it is.
+            #
+            # THE ROWS, in an R2 bucket made here the first time, private as
+            # every bucket is until somebody makes it otherwise. An account
+            # without R2, or a token that cannot make a bucket, costs the copy
+            # and not the deploy.
+            minter_config=.wrangler.minter.base.toml
+            cp wrangler.minter.toml "$minter_config"
+            bucket=$(printf '%s' "${BACKUP_BUCKET:-fleetwright-minter-backup}" | tr -d '[:space:]')
+            if npx wrangler r2 bucket info "$bucket" >/dev/null 2>&1 || npx wrangler r2 bucket create "$bucket"; then
+              printf '\n[[r2_buckets]]\nbinding = "BACKUP"\nbucket_name = "%s"\n' "$bucket" >> "$minter_config"
+              echo "The minting Worker copies what it keeps to the R2 bucket $bucket."
+            else
+              echo "::warning::The R2 bucket $bucket could not be found or made, so the minting Worker keeps no copy of what it holds. Check that R2 is on for the account and CLOUDFLARE_API_TOKEN can edit R2."
+            fi
+            # THE KEYS, from the account's Secrets Store, bound only by the
+            # names that are there: a binding to a secret that is not would
+            # fail the deploy, and one the object cannot read stops it making
+            # a key. They get there by hand, once (scripts/minter-key-export.mjs).
+            secrets_store=$(printf '%s' "${SECRETS_STORE:-}" | tr -d '[:space:]')
+            if [ -n "$secrets_store" ]; then
+              held=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/secrets_store/stores/$secrets_store/secrets?per_page=100" \
+                | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{for(const x of JSON.parse(s).result??[])console.log(x.name)})' || true)
+              for pair in DEPOSIT_KEY_STORED:fleetwright-minter-deposit-key SIGNING_KEY_STORED:fleetwright-minter-signing-key; do
+                if printf '%s\n' "$held" | grep -qx "${pair#*:}"; then
+                  printf '\n[[secrets_store_secrets]]\nbinding = "%s"\nstore_id = "%s"\nsecret_name = "%s"\n' "${pair%%:*}" "$secrets_store" "${pair#*:}" >> "$minter_config"
+                  echo "The minting Worker reads ${pair#*:} from Secrets Store."
+                else
+                  echo "::warning::Secrets Store $secrets_store holds no ${pair#*:} that this token can see, so the minting Worker keeps that key only in its own storage. See docs/vault.md."
+                fi
+              done
+            fi
             routed=""
             if [ -n "$routes" ]; then
               routed=.wrangler.minter.routed.toml
-              sed "/^preview_urls = false\$/a routes = [ $routes ]" wrangler.minter.toml > "$routed"
+              sed "/^preview_urls = false\$/a routes = [ $routes ]" "$minter_config" > "$routed"
               grep -q "^routes = " "$routed" || routed=""
             fi
             signing_origin=""
@@ -422,9 +463,9 @@ jobs:
               fi
             else
               [ -n "$minter_route" ] && echo "::warning::The minting Worker could not be given $minter_route${minter_zone:+ in zone $minter_zone}, so phones on this fleet need the pin pasted. Check that CLOUDFLARE_API_TOKEN can read that zone and edit its Workers Routes."
-              npx wrangler deploy --config wrangler.minter.toml ${minter_vars[@]+"${minter_vars[@]}"}
+              npx wrangler deploy --config "$minter_config" ${minter_vars[@]+"${minter_vars[@]}"}
             fi
-            rm -f .wrangler.minter.routed.toml
+            rm -f .wrangler.minter.routed.toml "$minter_config"
             if [ -z "${MINT_OWNERS:-}" ]; then
               echo "::notice::The minting Worker is deployed with no FLEETWRIGHT_GITHUB_MINT_OWNERS variable, so it mints for nobody."
             fi

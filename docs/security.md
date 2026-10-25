@@ -809,6 +809,16 @@ sealing to the old one; `fleetwright-claude-login` takes `FLEETWRIGHT_MINTER_KEY
 over the lookup, for a person who wants a check outside that bound and sets it
 for the one run.
 
+**The minter's copies outside it** (`docs/vault.md`, "Kept a second time,
+outside the minter") add two places within the same account bound. The R2
+copy is sealed to the deposit key, so read access to the bucket gives
+ciphertext and the fingerprint of the key it is sealed to. The keys in Secrets
+Store can be read only by a Worker the account binds them to, which is the
+deploy access the bound already names. The one-time export is answered at the
+public address only while the operator has set `FLEETWRIGHT_MINTER_EXPORT_TO`,
+and only sealed to that key. Setting it takes the same deploy access. Left
+set, it hands out only ciphertext for the holder of that key.
+
 **The minting Worker's own bound, which is a different compromise.** Whoever
 can deploy to the Cloudflare account can replace the minter's code and capture
 every token it signs from then on — for every repository of every account on
