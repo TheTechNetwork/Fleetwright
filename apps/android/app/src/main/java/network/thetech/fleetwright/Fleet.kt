@@ -1259,6 +1259,7 @@ class Fleet(
         template: String? = null,
         network: String? = null,
         group: String? = null,
+        image: String? = null,
     ): Reply {
         // FROM THIS PHONE WHEN IT CAN, with no permanent box: signed in to
         // GitHub here, it makes the dispatch itself (PhoneGitHub.startRunner).
@@ -1268,7 +1269,7 @@ class Fleet(
         val phone = PhoneGitHub(settings)
         // NOR IS A LAB, which is a machine from your hypervisor in a lab.
         if (platform != "vm" && platform != "lab" && phone.signedIn) {
-            return runCatching { phone.startRunner(this, platform, minutes, start) }
+            return runCatching { phone.startRunner(this, platform, minutes, start, image) }
                 .getOrElse { Reply(false, it.message ?: "that did not work", emptyList()) }
         }
         return intent(
@@ -1277,7 +1278,9 @@ class Fleet(
                 // A NETWORK OF YOUR POOL instead of behind the edge router (protocol 9).
                 (if (network == null) emptyMap() else mapOf("network" to network)) +
                 // AND A GROUP NETWORK beside it, to reach the others in that group (protocol 10).
-                (if (group == null) emptyMap() else mapOf("group" to group)),
+                (if (group == null) emptyMap() else mapOf("group" to group)) +
+                // THE GITHUB IMAGE, only when chosen (protocol 16): absent is the newest.
+                (if (image == null) emptyMap() else mapOf("image" to image)),
             host,
             numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
             extra = if (start == null) emptyMap() else mapOf("start" to JSONObject(start.toMap())),
@@ -1285,10 +1288,11 @@ class Fleet(
     }
 
     /** Where to start a runner from this phone, and the ticket to start it with. */
-    suspend fun prepareRunnerDispatch(platform: String, minutes: Int?, start: Map<String, String>?): JSONObject =
+    suspend fun prepareRunnerDispatch(platform: String, minutes: Int?, start: Map<String, String>?, image: String? = null): JSONObject =
         withContext(Dispatchers.IO) {
             val body = JSONObject().put("platform", platform)
             if (minutes != null) body.put("minutes", minutes)
+            if (image != null) body.put("image", image)
             if (start != null) body.put("start", JSONObject(start.toMap()))
             post("/api/runners/dispatch", body)
         }

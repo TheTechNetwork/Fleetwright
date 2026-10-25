@@ -189,8 +189,8 @@ internal class PhoneGitHub(private val settings: Settings) {
      * Start a runner from this phone: the coordinator mints the ticket and
      * says where, and this phone asks GitHub with its own sign-in. No box.
      */
-    suspend fun startRunner(fleet: Fleet, platform: String, minutes: Int?, start: Map<String, String>?): Fleet.Reply {
-        val plan = fleet.prepareRunnerDispatch(platform, minutes, start)
+    suspend fun startRunner(fleet: Fleet, platform: String, minutes: Int?, start: Map<String, String>?, image: String? = null): Fleet.Reply {
+        val plan = fleet.prepareRunnerDispatch(platform, minutes, start, image)
         if (plan.optBoolean("ok") != true) return Fleet.Reply(false, plan.optString("text").ifBlank { "The fleet would not start a machine." }, emptyList())
         val repo = plan.getString("repo")
         val workflow = plan.getString("workflow")

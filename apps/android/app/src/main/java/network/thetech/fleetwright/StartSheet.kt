@@ -60,6 +60,8 @@ data class StartRequest(
     val platform: String? = null,
     /** How long that machine stays, in minutes. Only with `platform`. */
     val minutes: Int? = null,
+    /** Which GitHub image a runner boots (protocol 16), or null for the newest, which the workflow uses when nobody says. */
+    val runnerImage: String? = null,
     /**
      * For platform "vm": the machine image on your hypervisor it is cloned
      * from, and what to call it in a sentence.
@@ -81,6 +83,25 @@ data class StartRequest(
  * temporary-machine control in settings, and on iOS.
  */
 data class NewMachineChoice(val platform: String, val label: String)
+
+/**
+ * The GitHub images a runner may boot, per operating system, newest first.
+ * The first is what the workflow uses when nobody chooses, so it is offered
+ * as the default rather than sent. The same lists as RUNNER_IMAGES in
+ * src/fleet/protocol/intents.js, and the same words on iOS.
+ */
+data class RunnerImageChoice(val image: String, val label: String)
+
+val runnerImageChoices = mapOf(
+    "macos" to listOf(
+        RunnerImageChoice("xcode-27", "macOS 26 with Xcode 27"),
+        RunnerImageChoice("macos-26", "macOS 26 with Xcode 26"),
+        RunnerImageChoice("macos-15", "macOS 15"),
+    ),
+    "linux" to listOf(RunnerImageChoice("ubuntu-26.04", "Ubuntu 26.04"), RunnerImageChoice("ubuntu-24.04", "Ubuntu 24.04")),
+    "android" to listOf(RunnerImageChoice("ubuntu-26.04", "Ubuntu 26.04"), RunnerImageChoice("ubuntu-24.04", "Ubuntu 24.04")),
+    "windows" to listOf(RunnerImageChoice("windows-2025", "Windows Server 2025"), RunnerImageChoice("windows-2022", "Windows Server 2022")),
+)
 
 val newMachineChoices = listOf(
     NewMachineChoice("linux", "New Linux machine"),
@@ -161,6 +182,8 @@ fun StartSheet(
     // What is kept ready, so the image with one says so.
     var standby by remember { mutableStateOf<Fleet.VmStandby?>(null) }
     var machineMinutes by remember { mutableIntStateOf(60) }
+    // The image a new runner boots; empty is the newest, sent as nothing.
+    var runnerImage by remember { mutableStateOf("") }
 
     // Suggest once the typing stops, not on every keystroke. A suggestion that
     // changes under the cursor while somebody is still writing makes them stop
@@ -408,6 +431,7 @@ fun StartSheet(
                                 AssistChip(
                                     onClick = {
                                         template = ""
+                                        runnerImage = ""
                                         platform = if (platform == choice.platform) "" else choice.platform
                                         // A machine that does not exist yet has
                                         // nothing to do a host, a profile or a
@@ -483,6 +507,21 @@ fun StartSheet(
                                 }
                             } else {
                                 Text("Every lab on this pool is in use. One is free again when its machine ends.", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        // WHICH IMAGE, for a runner. The newest first and
+                        // preselected; only it has Xcode 27 and the iPhone
+                        // Duo simulator on macOS.
+                        val imageChoices = runnerImageChoices[platform].orEmpty()
+                        if (imageChoices.size > 1) {
+                            Text("Image", style = MaterialTheme.typography.labelMedium)
+                            imageChoices.forEachIndexed { index, choice ->
+                                val value = if (index == 0) "" else choice.image
+                                val name = if (index == 0) "${choice.label} (newest)" else choice.label
+                                AssistChip(
+                                    onClick = { runnerImage = value },
+                                    label = { Text(if (runnerImage == value) "$name \u2713" else name) },
+                                )
                             }
                         }
                         if (platform.isNotEmpty()) {
@@ -586,6 +625,7 @@ fun StartSheet(
                             // A LAB is the same machine in a lab: platform `lab`.
                             platform = (if (platform == "vm" && vmLab.isNotEmpty()) "lab" else platform).ifBlank { null },
                             minutes = machineMinutes.takeIf { platform.isNotEmpty() },
+                            runnerImage = runnerImage.ifBlank { null }.takeIf { runnerImageChoices.containsKey(platform) },
                             template = template.ifBlank { null }.takeIf { platform == "vm" },
                             imageLabel = images.firstOrNull { it.template == template }?.label.takeIf { platform == "vm" },
                             // A LAB rides in `network`: the first free one of the kind asked.

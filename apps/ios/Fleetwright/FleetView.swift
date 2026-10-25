@@ -530,7 +530,7 @@ struct FleetView: View {
                 do {
                     let reply = try await Fleet(settings: settings)
                         .provision(platform: platform, minutes: request.minutes, start: start, template: request.template,
-                                   network: request.network, group: request.group)
+                                   network: request.network, group: request.group, image: request.runnerImage)
                     let text = reply.text ?? "Asked for it."
                     await MainActor.run { status = text }
                     LocalNotice.post(title: reply.ok == false ? "Could not ask for a machine" : "Machine on its way", body: text)

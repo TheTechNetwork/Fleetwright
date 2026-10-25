@@ -458,7 +458,7 @@ fun FleetScreen(
                 request.task?.let { put("task", it) }
             }
             scope.launch {
-                val reply = fleet.provision(platform, minutes = request.minutes, start = start, template = request.template, network = request.network, group = request.group)
+                val reply = fleet.provision(platform, minutes = request.minutes, start = start, template = request.template, network = request.network, group = request.group, image = request.runnerImage)
                 val text = reply.text.ifBlank { "Asked for it." }
                 LocalNotice.post(context, if (reply.ok) "Machine on its way" else "Could not ask for a machine", text)
                 status = text

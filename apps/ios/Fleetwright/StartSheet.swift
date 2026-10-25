@@ -44,6 +44,9 @@ struct StartRequest {
     var platform: String? = nil
     /// How long that machine stays, in minutes. Only with `platform`.
     var minutes: Int? = nil
+    /// Which GitHub image a runner boots (protocol 16), or nil for the
+    /// newest, which is what the runner workflow does when nobody says.
+    var runnerImage: String? = nil
     /// For platform "vm": the machine image on your hypervisor it is cloned
     /// from, and what to call it in a sentence.
     var template: String? = nil
@@ -63,6 +66,35 @@ struct NewMachineChoice: Hashable {
     let platform: String
     let label: String
 }
+
+/// The GitHub images a runner may boot, per operating system, newest first.
+/// The first is what the workflow uses when nobody chooses, so it is offered
+/// as the default rather than sent. The same lists as RUNNER_IMAGES in
+/// src/fleet/protocol/intents.js, and the same words on Android.
+struct RunnerImageChoice: Hashable {
+    let image: String
+    let label: String
+}
+
+let runnerImageChoices: [String: [RunnerImageChoice]] = [
+    "macos": [
+        RunnerImageChoice(image: "xcode-27", label: "macOS 26 with Xcode 27"),
+        RunnerImageChoice(image: "macos-26", label: "macOS 26 with Xcode 26"),
+        RunnerImageChoice(image: "macos-15", label: "macOS 15"),
+    ],
+    "linux": [
+        RunnerImageChoice(image: "ubuntu-26.04", label: "Ubuntu 26.04"),
+        RunnerImageChoice(image: "ubuntu-24.04", label: "Ubuntu 24.04"),
+    ],
+    "android": [
+        RunnerImageChoice(image: "ubuntu-26.04", label: "Ubuntu 26.04"),
+        RunnerImageChoice(image: "ubuntu-24.04", label: "Ubuntu 24.04"),
+    ],
+    "windows": [
+        RunnerImageChoice(image: "windows-2025", label: "Windows Server 2025"),
+        RunnerImageChoice(image: "windows-2022", label: "Windows Server 2022"),
+    ],
+]
 
 let newMachineChoices: [NewMachineChoice] = [
     NewMachineChoice(platform: "linux", label: "New Linux machine"),
@@ -111,6 +143,8 @@ struct StartSheet: View {
     /// refuses the session it was started for, so New session says so here.
     @State private var claude: ClaudeKept?
     @State private var machineMinutes = 60
+    /// The image a new runner boots; empty is the newest, sent as nothing.
+    @State private var runnerImage = ""
     /// The machine images on your own pools a new machine can come from, from
     /// the snapshot. Drawn from this and only this (C-2).
     @State private var images: [Fleet.VMImage] = []
@@ -329,6 +363,18 @@ struct StartSheet: View {
                             vmNetwork = ""
                             vmGroup = ""
                             vmLab = ""
+                            runnerImage = ""
+                        }
+                        // WHICH IMAGE, for a runner. The newest first and
+                        // preselected; only it has Xcode 27 and the iPhone
+                        // Duo simulator on macOS.
+                        if let platform = chosenPlatform, let choices = runnerImageChoices[platform], choices.count > 1 {
+                            Picker("Image", selection: $runnerImage) {
+                                ForEach(Array(choices.enumerated()), id: \.element) { index, choice in
+                                    Text(index == 0 ? "\(choice.label) (newest)" : choice.label)
+                                        .tag(index == 0 ? "" : choice.image)
+                                }
+                            }
                         }
                         // WHERE IT GOES ON YOUR POOL, offered only when the
                         // pool has a network besides the uplink. Behind the
@@ -580,6 +626,7 @@ struct StartSheet: View {
             secret: secret.isEmpty || platform != nil ? nil : secret,
             platform: platform,
             minutes: platform == nil ? nil : machineMinutes,
+            runnerImage: platform == nil || runnerImage.isEmpty ? nil : runnerImage,
             template: chosenImage?.template,
             imageLabel: chosenImage?.label,
             // A LAB rides in `network`: the first free one of the kind asked.
