@@ -151,6 +151,9 @@ export class Fleet {
       // means this fleet cannot start machines and says so — see
       // docs/runner-central.md.
       runnerRepo: env.FLEETWRIGHT_RUNNER_REPO || null,
+      // Exactly "1": anything else, a "true" or a "yes" included, leaves the
+      // fleet's repository on standard machines rather than guessing at money.
+      runnerLarge: env.FLEETWRIGHT_RUNNER_LARGE === '1',
       // The browser's signing page, on the minting Worker's own hostname: where
       // a GitHub sign-in it started is sent back to (oauth.js, SIGNER_STATE_RE).
       signingOrigin: env.FLEETWRIGHT_SIGNING_ORIGIN || null,
@@ -995,6 +998,17 @@ export class Fleet {
         const r = this.core.clearLinkedRepo(requesterFor(client), role);
         return json(r, r.ok ? 200 : 400);
       }
+    }
+
+    // WHETHER THIS PERSON'S RUNNERS MAY BOOT GITHUB'S LARGER MACHINES, said
+    // of their own runner repository (CoordinatorCore#setRunnerLarge).
+    if (url.pathname === '/api/runner-repo/large' && request.method === 'PUT') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a runner repository belongs to a person.' }, 403);
+      }
+      const body = await readJson(request);
+      const r = this.core.setRunnerLarge(requesterFor(client), body?.allow);
+      return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
     }
 
     if (url.pathname === '/api/runner-repo') {

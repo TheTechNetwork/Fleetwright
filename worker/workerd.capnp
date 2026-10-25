@@ -66,6 +66,7 @@ const fleet :Workerd.Worker = (
     (name = "FLEETWRIGHT_NAME", fromEnvironment = "FLEETWRIGHT_NAME"),
     (name = "FLEETWRIGHT_PUBLIC_ORIGIN", fromEnvironment = "FLEETWRIGHT_PUBLIC_ORIGIN"),
     (name = "FLEETWRIGHT_PUSH", fromEnvironment = "FLEETWRIGHT_PUSH"),
+    (name = "FLEETWRIGHT_RUNNER_LARGE", fromEnvironment = "FLEETWRIGHT_RUNNER_LARGE"),
     (name = "FLEETWRIGHT_RUNNER_REPO", fromEnvironment = "FLEETWRIGHT_RUNNER_REPO"),
     (name = "SENTRY_DSN", fromEnvironment = "SENTRY_DSN"),
     (name = "SENTRY_ENVIRONMENT", fromEnvironment = "SENTRY_ENVIRONMENT"),

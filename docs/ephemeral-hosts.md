@@ -163,6 +163,7 @@ FLEETWRIGHT_ACTIONS_REPOS     owner/repo,owner/other   (empty means nobody)
 FLEETWRIGHT_ACTIONS_WORKFLOW  owner/repo/.github/workflows/runner-macos.yml@,
                               owner/repo/.github/workflows/runner-linux.yml@
 FLEETWRIGHT_RUNNER_REPO       owner/repo               where `provision` dispatches
+FLEETWRIGHT_RUNNER_LARGE      1                        larger machines from it (unset: refused)
 ```
 
 **The workflow pin is a LIST**, and became one when a runner repository grew

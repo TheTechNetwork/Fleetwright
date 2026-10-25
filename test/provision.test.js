@@ -267,7 +267,7 @@ test('the fleet snapshot says whether a machine can be started here', () => {
   // only from this: the refusal `provision` gives a fleet with no runner
   // repository is the right sentence for an agent that asked, and a dead
   // button on every fleet that has not configured one.
-  assert.deepEqual(coreWith().snapshot().runners, { repo: 'me/runners', own: false });
+  assert.deepEqual(coreWith().snapshot().runners, { repo: 'me/runners', own: false, large: false });
   // NULL IS AN ANSWER: this coordinator knows it has nowhere to start one.
   assert.equal(coreWith({ runnerRepo: null }).snapshot().runners, null);
 });
@@ -388,6 +388,57 @@ test('an image from another platform is refused before a ticket is minted', asyn
   });
   assert.equal(r.error?.code, 'bad_params');
   assert.match(r.text, /xcode-27, xcode-27-xlarge, macos-26, macos-26-xlarge, macos-15; the first is the default/);
+});
+
+test('a larger machine starts only where whoever pays for it said so', async () => {
+  // GitHub bills its larger runners by the minute to the repository's owner,
+  // public repositories included. Off until that owner says otherwise: the
+  // operator for the fleet's repository, a person for their own.
+  const ELI = { email: 'eli@example.com', admin: false };
+  const ask = (/** @type {CoordinatorCore} */ core, /** @type {string} */ image) =>
+    core.dispatch({ verb: 'provision', params: { platform: 'macos', image }, requester: ELI, actor: ELI.email });
+
+  // THE FLEET'S REPOSITORY, not allowed: refused before a ticket exists, by
+  // both ways a runner starts, with the standard image named.
+  const fleet = coreWith();
+  fleet.send = async () => assert.fail('nothing is sent');
+  const refused = await ask(fleet, 'xcode-27-xlarge');
+  assert.equal(refused.error?.code, 'larger_off');
+  assert.match(refused.text, /xcode-27-xlarge is one of GitHub’s larger machines, billed by the minute to me\/runners’s owner, which is this fleet, and its operator has not allowed those \(FLEETWRIGHT_RUNNER_LARGE\)\. Choose xcode-27,/);
+  assert.equal((await fleet.prepareRunnerDispatch(ELI, { platform: 'macos', image: 'macos-26-xlarge' }, 'https://fleet.test')).error?.code, 'larger_off');
+  assert.equal(fleet.runnerTickets.serialise().length, 0, 'no ticket was minted');
+  // A person cannot say it for the fleet's.
+  assert.equal(fleet.setRunnerLarge(ELI, true).error?.code, 'no_runner_repo');
+
+  // Allowed by the operator: carried.
+  const allowed = new CoordinatorCore({ runnerRepo: 'me/runners', runnerLarge: true });
+  assert.equal(allowed.snapshot().runners.large, true);
+  const ok = await allowed.prepareRunnerDispatch(ELI, { platform: 'macos', image: 'xcode-27-xlarge' }, 'https://fleet.test');
+  assert.equal(ok.ok, true, ok.text);
+  assert.equal(ok.inputs.image, 'xcode-27-xlarge');
+
+  // A PERSON'S OWN REPOSITORY is theirs to say, whatever the fleet's is.
+  const own = coreWith();
+  own.runnerRepos.set(ELI.email, 'eli/runners');
+  const mine = await own.prepareRunnerDispatch(ELI, { platform: 'macos', image: 'xcode-27-xlarge' }, 'https://fleet.test');
+  assert.equal(mine.error?.code, 'larger_off');
+  assert.match(mine.text, /Turn on Allow larger machines under You → Temporary machines, or choose xcode-27\./);
+  assert.equal(own.setRunnerLarge(ELI, 'yes').error?.code, 'bad_params');
+  assert.equal(own.setRunnerLarge(ELI, true).ok, true);
+  assert.deepEqual([own.snapshot({ email: ELI.email }).runners?.large, own.runnerRepoFor(ELI).large, own.runnerRepoFor(ELI).fleetLarge], [true, true, false]);
+  assert.equal((await own.prepareRunnerDispatch(ELI, { platform: 'macos', image: 'xcode-27-xlarge' }, 'https://fleet.test')).ok, true);
+  // Kept across a restart, and kept when the same repository is checked
+  // again; another repository's owner has not said, so it is off for that.
+  const back = new CoordinatorCore({});
+  back.runnerRepos.restore(own.runnerRepos.serialise());
+  assert.equal(back.runnerRepos.allowsLarge(ELI.email), true);
+  own.runnerRepos.set(ELI.email, 'Eli/Runners');
+  assert.equal(own.runnerRepos.allowsLarge(ELI.email), true);
+  own.runnerRepos.set(ELI.email, 'eli/other-runners');
+  assert.equal(own.runnerRepos.allowsLarge(ELI.email), false);
+
+  // A standard machine never asks.
+  assert.equal((await fleet.prepareRunnerDispatch(ELI, { platform: 'macos', image: 'xcode-27' }, 'https://fleet.test')).ok, true);
 });
 
 function githubStub({ repoStatus = 200, dispatchStatus = 204, defaultBranch = 'trunk' } = {}) {
