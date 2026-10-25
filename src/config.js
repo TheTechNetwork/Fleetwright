@@ -497,6 +497,11 @@ export function loadConfig(env = process.env) {
     // Overridable so a test can point them at a stub rather than the real ones.
     journalctlBin: str('FLEETWRIGHT_JOURNALCTL_BIN', 'journalctl'),
     systemctlBin: str('FLEETWRIGHT_SYSTEMCTL_BIN', 'systemctl'),
+    // WHERE THE SERVICES WRITE THEIR OUTPUT when nothing like systemd or
+    // launchd runs them: a GitHub runner starts both by hand, and its step log
+    // is on GitHub, where nobody in the fleet can read it. Set, `/logs` reads
+    // <dir>/<unit>.log here before it asks a journal (core/logs.js).
+    logDir: str('FLEETWRIGHT_LOG_DIR') ? path.resolve(str('FLEETWRIGHT_LOG_DIR')) : null,
 
     logLevel: str('FLEETWRIGHT_LOG_LEVEL', 'info'),
     hostname: os.hostname(),

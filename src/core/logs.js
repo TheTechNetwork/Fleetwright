@@ -15,7 +15,7 @@
 // of things is one you can reason about.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
 
 import { isValidName } from './names.js';
@@ -54,8 +54,14 @@ function launchdPlist(cfg, unit) {
   return path.join(/** @type {any} */ (cfg).launchdDir ?? LAUNCHD_DIR, `${LAUNCHD_LABEL_PREFIX}${unit}.plist`);
 }
 
-/** @param {import('../config.js').Config} cfg @param {string} unit */
+/**
+ * The file a service's output goes to, on a box where a file is the log: the
+ * one FLEETWRIGHT_LOG_DIR names (a runner, which starts both by hand), or the
+ * one a launchd plist sends it to.
+ * @param {import('../config.js').Config} cfg @param {string} unit
+ */
 function launchdLog(cfg, unit) {
+  if (cfg.logDir) return path.join(cfg.logDir, `${unit}.log`);
   return path.join(/** @type {any} */ (cfg).launchdLogDir ?? LAUNCHD_LOG_DIR, `${unit}.log`);
 }
 
@@ -87,6 +93,91 @@ export function tidyPane(text) {
   return lines.join('\n');
 }
 
+/** How much of the end of a transcript is read: the tail is what is wanted. */
+const TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024;
+/** Characters of conversation one answer carries, kept from the end. */
+const CONVERSATION_MAX_CHARS = 16_000;
+/** Rows of the live pane shown under it, for what the session is doing now. */
+const PANE_UNDER_CONVERSATION = 12;
+
+/**
+ * What a session SAID, from Claude Code's own transcript, as lines of text.
+ *
+ * WHY THIS AND NOT THE PANE. A session running directly on the box has no
+ * container whose output outlives it, and its pane is Claude Code's screen,
+ * which is redrawn in place: scrollback holds the last screenful and not the
+ * report the session wrote above it. On a macOS runner that was the whole of
+ * what `read_log` returned — the end of a report, cut off at the top — and
+ * getting the rest took three more sessions asked to repeat it in fewer lines.
+ * The transcript has every word, in order.
+ *
+ * What is kept: the person's and the model's words, and one line per tool
+ * call saying what it ran. Not tool output, which is most of a transcript and
+ * already summarised in the words around it.
+ *
+ * @param {string} file
+ * @param {number} lines
+ * @returns {string} empty when there is nothing to say or it cannot be read
+ */
+export function conversationTail(file, lines) {
+  let text;
+  try {
+    const fd = openSync(file, 'r');
+    try {
+      const size = fstatSync(fd).size;
+      const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+      const buf = Buffer.alloc(size - start);
+      readSync(fd, buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+      // A read that starts mid-file starts mid-line; that line is not JSON.
+      if (start > 0) text = text.slice(text.indexOf('\n') + 1);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+  /** @type {string[]} */
+  const out = [];
+  for (const row of text.split('\n')) {
+    if (!row.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(row);
+    } catch {
+      continue;
+    }
+    if (entry?.isMeta || entry?.isSidechain) continue;
+    const content = entry?.message?.content;
+    if (entry?.type === 'user') {
+      // A tool's result rides as a user turn; it is not something a person said.
+      const said = typeof content === 'string' ? content : Array.isArray(content) ? content.filter((c) => c?.type === 'text').map((c) => c.text).join('\n') : '';
+      if (said.trim() && !/^<(command|local-command|system-reminder)/.test(said.trim())) out.push(`❯ ${said.trim()}`, '');
+    } else if (entry?.type === 'assistant' && Array.isArray(content)) {
+      for (const c of content) {
+        if (c?.type === 'text' && String(c.text ?? '').trim()) out.push(`⏺ ${String(c.text).trim()}`, '');
+        else if (c?.type === 'tool_use') out.push(`  ⎿ ${toolLine(c)}`);
+      }
+    }
+  }
+  while (out.length && !out[out.length - 1]) out.pop();
+  let tail = out.join('\n').split('\n').slice(-lines).join('\n');
+  if (tail.length > CONVERSATION_MAX_CHARS) tail = `…trimmed…\n${tail.slice(tail.length - CONVERSATION_MAX_CHARS)}`;
+  return tail;
+}
+
+/**
+ * One line for a tool call: its name and the part of its input that says what
+ * it did — the command, the file, the pattern.
+ * @param {any} c
+ */
+function toolLine(c) {
+  const input = c?.input ?? {};
+  const what = input.command ?? input.file_path ?? input.path ?? input.pattern ?? input.url ?? input.description ?? '';
+  const one = String(what).split('\n')[0];
+  return `${c?.name ?? 'tool'}${one ? `: ${one.length > 160 ? `${one.slice(0, 160)}…` : one}` : ''}`;
+}
+
 /**
  * A SESSION's own logs, which are a different question from a service's.
  *
@@ -99,9 +190,10 @@ export function tidyPane(text) {
  * @param {import('../config.js').Config} cfg
  * @param {string} name
  * @param {number} lines
+ * @param {{ transcriptPath?: string|null }|null} [session]  its record, which names the transcript of a session run on this box
  * @returns {{ ok: boolean, text: string }}
  */
-export function readSessionLogs(cfg, name, lines = 60) {
+export function readSessionLogs(cfg, name, lines = 60, session = null) {
   if (!isValidName(name)) return { ok: false, text: `"${name}" is not a valid session name.` };
 
   // The container first: it outlives the pane. A crashed session's tmux window
@@ -125,6 +217,19 @@ export function readSessionLogs(cfg, name, lines = 60) {
       // The tool the product names for collecting output was the one that
       // failed on the sessions a returning user actually has.
     }
+  }
+
+  // THE TRANSCRIPT, for a session that runs on the box itself — the record
+  // names it only then (sessions.js ownTranscript), because a sandboxed one
+  // keeps its own in its volume. It says everything; the pane under it says
+  // what the session is doing now, which the transcript cannot.
+  const said = session?.transcriptPath ? conversationTail(session.transcriptPath, lines) : '';
+  if (said) {
+    const now = hasSession(name) ? tidyPane(capturePane(name, PANE_UNDER_CONVERSATION)).split('\n').slice(-PANE_UNDER_CONVERSATION).join('\n') : '';
+    return {
+      ok: true,
+      text: `Conversation of ${name}, from its transcript:\n${said}` + (now ? `\n\nOn its screen now:\n${now}` : ''),
+    };
   }
 
   const pane = hasSession(name) ? tidyPane(capturePane(name, lines)) : '';
@@ -190,6 +295,43 @@ const MAX_LINES = 200;
 // what went wrong.
 const MAX_CHARS = 7000;
 
+/**
+ * A service's log when it is a file — the tail, in the same shape the journal
+ * answer takes. Anywhere with no journalctl and no such file (a container, WSL
+ * without systemd) nothing is broken: this just is not where the logs are.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {keyof typeof LOG_SOURCES} key
+ * @param {number} count
+ * @returns {{ ok: boolean, text: string, source?: string }}
+ */
+function readLogFile(cfg, key, count) {
+  const { unit, what } = LOG_SOURCES[key];
+  const file = launchdLog(cfg, unit);
+  if (!existsSync(file)) {
+    return {
+      ok: false,
+      text: cfg.logDir
+        ? `${unit} has written nothing to ${file} yet, so there is no log to read.`
+        : `No journalctl on this box, so I cannot read ${unit}'s logs.\n` + 'Look wherever the service was started from instead.',
+    };
+  }
+  let all;
+  try {
+    all = readFileSync(file, 'utf8');
+  } catch (e) {
+    return { ok: false, text: `Cannot read ${file}: ${/** @type {Error} */ (e).message}` };
+  }
+  const rows = all.split('\n');
+  if (rows.length && rows[rows.length - 1] === '') rows.pop();
+  if (!rows.length) {
+    return { ok: true, source: key, text: `No log entries for ${unit} (${what}). It may never have been started.` };
+  }
+  let text = rows.slice(-count).join('\n');
+  if (text.length > MAX_CHARS) text = `…trimmed…\n${text.slice(text.length - MAX_CHARS)}`;
+  return { ok: true, source: key, text: `${unit} — last ${Math.min(count, rows.length)} lines\n\n${text}` };
+}
+
 /** @param {string} word @returns {keyof typeof LOG_SOURCES | null} */
 export function resolveSource(word) {
   return ALIASES[String(word || '').toLowerCase()] ?? null;
@@ -211,6 +353,11 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
   const { unit, legacy, what } = LOG_SOURCES[key];
   const count = Math.min(MAX_LINES, Math.max(1, Number(lines) || DEFAULT_LINES));
 
+  // A LOG DIRECTORY IS ASKED FIRST. A Linux runner has journalctl, and it
+  // answers "-- No entries --" about a service it never started — true, and
+  // no use to somebody looking for why the sidecar left.
+  if (cfg.logDir) return readLogFile(cfg, key, count);
+
   const r = spawnSync(
     cfg.journalctlBin,
     // BOTH NAMES, interleaved by time: a box renamed this week has its history
@@ -220,36 +367,9 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
     { encoding: 'utf8', timeout: 15_000 },
   );
 
-  if (r.error) {
-    // No journalctl. On a Mac the daemon runs under launchd and the plist
-    // sends its output to a file, so that file is the log — read its tail,
-    // the same shape the journal answer takes. Anywhere else with no
-    // journalctl (a container, WSL without systemd) there is no such file,
-    // and nothing is broken: this just is not where the logs are.
-    const file = launchdLog(cfg, unit);
-    if (existsSync(file)) {
-      let all;
-      try {
-        all = readFileSync(file, 'utf8');
-      } catch (e) {
-        return { ok: false, text: `Cannot read ${file}: ${/** @type {Error} */ (e).message}` };
-      }
-      const rows = all.split('\n');
-      if (rows.length && rows[rows.length - 1] === '') rows.pop();
-      if (!rows.length) {
-        return { ok: true, source: key, text: `No log entries for ${unit} (${what}). It may never have been started.` };
-      }
-      let text = rows.slice(-count).join('\n');
-      if (text.length > MAX_CHARS) text = `…trimmed…\n${text.slice(text.length - MAX_CHARS)}`;
-      return { ok: true, source: key, text: `${unit} — last ${Math.min(count, rows.length)} lines\n\n${text}` };
-    }
-    return {
-      ok: false,
-      text:
-        `No journalctl on this box, so I cannot read ${unit}'s logs.\n` +
-        'Look wherever the service was started from instead.',
-    };
-  }
+  // No journalctl. On a Mac the daemon runs under launchd and the plist sends
+  // its output to a file, so that file is the log.
+  if (r.error) return readLogFile(cfg, key, count);
 
   const out = (r.stdout || '').trim();
   const err = (r.stderr || '').trim();
@@ -298,6 +418,8 @@ export function unitInstalled(cfg, unit) {
   // answers "no" for the wrong reason there — the binary is missing, not the
   // service — which is how a Mac host offered no log buttons at all.
   if (existsSync(launchdPlist(cfg, unit))) return true;
+  // A runner: nothing installed it, and it writes where it was told.
+  if (cfg.logDir) return existsSync(launchdLog(cfg, unit));
   // By whichever name this box has it: a checkout updated by git pull, or a
   // packaged box between the release swap and the installer renaming its
   // units, still has agent-hub.service — and its log buttons went missing.

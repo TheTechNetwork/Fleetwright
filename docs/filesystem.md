@@ -26,6 +26,22 @@ volume cannot read anything else on the machine.
 browser the account. Nothing here takes a volume name as a parameter for that
 reason — a caller names a *session* and the code derives the rest.
 
+### A session that runs directly on the box
+
+A Mac has no podman, and neither does a box set up without the sandbox. Their
+sessions run in a directory on the box (the session's own working directory),
+and the same five operations work there, in `src/core/files-direct.js`. They
+keep the same limits: `realpath` instead of a container for symlinks, and
+nothing written unless the operation is a write.
+
+One more check holds there that a volume never needed. **Fleetwright's own state
+and secrets directories are refused wherever they turn up**, and left out of
+listings. A working directory is the box owner's to choose, and if it were the
+home directory the state would be under it: every person's session credentials
+and the vault. A direct session already has a shell on the box as this user, so
+reaching its files through here adds nothing it could not do. The one
+exception is the fleet's state, which holds other people's logins.
+
 ## Three bounds, deliberately redundant
 
 The interesting failures are the ones where one check was assumed to cover

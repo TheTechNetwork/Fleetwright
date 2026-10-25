@@ -1367,7 +1367,7 @@ export const COMMANDS = {
     help: 'One level of a session workspace. Paths are relative to its root; leave the path off for the root.',
     run: (ctx, args) => {
       if (!args[0]) return { ok: false, text: 'Usage: /files <name> [path]' };
-      const r = listFiles(ctx.cfg, args[0], args[1] || '.');
+      const r = listFiles(ctx.cfg, args[0], args[1] || '.', ctx.sessions.get?.(args[0]) ?? null);
       // ENTRIES TRAVEL AS A FIELD, not only inside the prose. An app that
       // recovered them by parsing the rendered list would break the first time
       // the wording changed — the same argument that put the authorization URL
@@ -1382,7 +1382,7 @@ export const COMMANDS = {
     help: 'Text only, and bounded. A binary file or one over 256KB is refused rather than dumped.',
     run: (ctx, args) => {
       if (!args[0] || !args[1]) return { ok: false, text: 'Usage: /readfile <name> <path>' };
-      const r = readFile(ctx.cfg, args[0], args[1]);
+      const r = readFile(ctx.cfg, args[0], args[1], ctx.sessions.get?.(args[0]) ?? null);
       return { ok: r.ok, text: r.text };
     },
   },
@@ -1398,7 +1398,7 @@ export const COMMANDS = {
       if (typeof ctx.content !== 'string') {
         return { ok: false, text: 'No content was sent. /writefile takes the file body as a field, not an argument.' };
       }
-      const r = writeFile(ctx.cfg, args[0], args[1], ctx.content);
+      const r = writeFile(ctx.cfg, args[0], args[1], ctx.content, ctx.sessions.get?.(args[0]) ?? null);
       return { ok: r.ok, text: r.text };
     },
   },
@@ -1409,7 +1409,7 @@ export const COMMANDS = {
     help: 'Both ends are confined to the workspace: a copy is a write, and a write that lands outside is the same problem as a read that starts outside.',
     run: (ctx, args) => {
       if (!args[0] || !args[1] || !args[2]) return { ok: false, text: 'Usage: /copyfile <name> <path> <to>' };
-      const r = copyFile(ctx.cfg, args[0], args[1], args[2]);
+      const r = copyFile(ctx.cfg, args[0], args[1], args[2], ctx.sessions.get?.(args[0]) ?? null);
       return { ok: r.ok, text: r.text };
     },
   },
@@ -1420,7 +1420,7 @@ export const COMMANDS = {
     help: 'Not recoverable. /forget takes the whole workspace and keeps it for seven days; this takes part of it and keeps nothing.',
     run: (ctx, args) => {
       if (!args[0] || !args[1]) return { ok: false, text: 'Usage: /deletefile <name> <path>' };
-      const r = deleteFile(ctx.cfg, args[0], args[1]);
+      const r = deleteFile(ctx.cfg, args[0], args[1], ctx.sessions.get?.(args[0]) ?? null);
       return { ok: r.ok, text: r.text };
     },
   },
@@ -2107,7 +2107,7 @@ export const COMMANDS = {
       const named = values?.get('session');
       if (named !== undefined) {
         if (!ctx.sessions.get?.(named)) return { ok: false, text: `There is no session called "${named}" on this machine.` };
-        const r = readSessionLogs(ctx.cfg, named, lines ?? 60);
+        const r = readSessionLogs(ctx.cfg, named, lines ?? 60, ctx.sessions.get?.(named) ?? null);
         return { ok: r.ok, text: r.text };
       }
       const source = words.find((w) => resolveSource(w)) ?? null;
@@ -2117,7 +2117,7 @@ export const COMMANDS = {
       // is a session, a service word included.
       const sessionWord = words.find((w) => !Number.isFinite(Number(w)) && ctx.sessions.get?.(w));
       if (sessionWord) {
-        const r = readSessionLogs(ctx.cfg, sessionWord, lines ?? 60);
+        const r = readSessionLogs(ctx.cfg, sessionWord, lines ?? 60, ctx.sessions.get?.(sessionWord) ?? null);
         return { ok: r.ok, text: r.text };
       }
 
