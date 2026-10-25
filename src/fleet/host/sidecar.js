@@ -65,6 +65,7 @@ import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
+import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -1455,10 +1456,25 @@ export class Sidecar {
       if (r.ok) this.log.info(`sidecar: vault: ${r.text}`);
       else this.log.warn(`sidecar: fleetwright did not take the vault's answer: ${r.text}`);
       for (const a of said.accounts) for (const p of a.problems || []) this.log.warn(`sidecar: vault, ${a.email}: ${p}`);
-      // SOONER WHEN SOMETHING RUNS OUT: ten minutes before the first token
-      // held expires, so a session never asks the broker for a dead one.
+      // SOONER WHEN SOMETHING RUNS OUT, and AT THE MOMENT IT IS RENEWED.
+      // Renewing a Claude sign-in revokes the access token every holder has:
+      // the minter renews on the first ask inside its window, and each other
+      // box went on sending the old token until its own ten minutes came
+      // round, which a session there met as "OAuth access token has been
+      // revoked · Please run /login". Every box holding a token holds the same
+      // expiry, so each asks a minute inside the window and they change over
+      // within the same minute; Claude Code reads the file again on that 401
+      // and carries on (docs/vault.md). Just past that moment, once a minute
+      // for a few minutes, for a clock that disagrees with the minter's or a
+      // box that renewed first; after that, ten minutes before it runs out,
+      // as before.
       const soonest = Math.min(...said.accounts.flatMap((a) => (a.items || []).map((i) => (i.expiresAt === null ? Infinity : Number(i.expiresAt)))));
-      const due = Number.isFinite(soonest) ? soonest - Date.now() - 10 * 60_000 : Infinity;
+      const left = soonest - Date.now();
+      const atRenewal = left - (CLAUDE_REFRESH_AHEAD_MS - 60_000);
+      const due = !Number.isFinite(soonest) ? Infinity
+        : atRenewal > 0 ? atRenewal
+          : atRenewal > -5 * 60_000 ? 60_000
+            : left - 10 * 60_000;
       return Math.max(60_000, Math.min(this.vaultIntervalMs, due));
     }
     if (said.forget) {

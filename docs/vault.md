@@ -264,6 +264,18 @@ a sandboxed session's conversation volume, written the way a start writes it,
 and a direct session's staged copy. A session that started yesterday keeps
 running past the token it started with.
 
+**Renewing revokes the token every holder has.** The minter renews on the
+first ask inside its half hour, from whichever box, runner or Test asked, and
+the access token every other box holds stops working then, not when it would
+have run out. A box that asked only every ten minutes went on sending it, and
+a session there stopped with "API Error: 401 OAuth access token has been
+revoked · Please run /login". Every box holding a token holds the same expiry,
+so each now asks a minute inside the minter's half hour, and they change over
+within the same minute (`syncVault` in `src/fleet/host/sidecar.js`). Claude
+Code reads the file again on that 401 and retries, so a session that meets the
+revoked token in that minute carries on once its box has written the new one.
+Running `/login` in it does not help: the box keeps no login of its own.
+
 That is measured, not read off the code. Claude Code 2.1.306, the version the
 session image pins, was run with only the files a box writes, against a
 loopback stand-in for Anthropic's hosts (a lab certificate authority, a proxy
@@ -277,6 +289,8 @@ everything else, dummy tokens):
 | rewrites the file between two turns of one running session | the next turn carried the new token |
 | rewrites it while the old one has two minutes left | used the old one, then the new; no attempt to renew |
 | rewrites it after Anthropic starts refusing the old one | the next turn carried the new token |
+| has the new token in the file when Anthropic answers "OAuth access token has been revoked" | read the file again and retried in the same turn, with the new token |
+| still has the revoked one | "Failed to authenticate: OAuth token revoked"; the next turn reads the file again |
 | could not reach the minter, so the file stays expired | that turn failed with "Failed to authenticate. API Error: 401 OAuth token has expired.", and nothing hung |
 
 Not once did it try to renew. One thing the lab found: a turn that read the
