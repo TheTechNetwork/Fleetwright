@@ -15,8 +15,20 @@
 import { MESSAGES_URL } from '../../src/core/claude-token-probe.js';
 import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID } from '../../src/fleet/minter/claude-login.js';
 
-/** Renewals asked for, and refresh tokens already used. */
-export const claudeRenewals = { count: 0, used: new Set() };
+/**
+ * Renewals asked for, and refresh tokens already used. `expiresIn` is how
+ * long a renewed access token lasts, in seconds: Claude's eight hours unless a
+ * test wants the next renewal due at once.
+ */
+export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800 };
+
+/**
+ * Every sign-in made so far ended, as signing out of Claude Code on claude.ai
+ * ends them: each refresh token issued until now is refused from here on.
+ */
+export function cancelClaudeSignIns() {
+  for (const t of granted.keys()) claudeRenewals.used.add(t);
+}
 
 /** The scopes each refresh token was granted, carried to the one it is rotated to. @type {Map<string, string[]>} */
 const granted = new Map();
@@ -63,7 +75,7 @@ function standInClaudeToken(url, init) {
     const n = claudeRenewals.count;
     const rotated = `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}`;
     granted.set(rotated, allowed);
-    return reply(200, { access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: 28800, scope: (asked.length ? asked : allowed).join(' ') });
+    return reply(200, { access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: claudeRenewals.expiresIn, scope: (asked.length ? asked : allowed).join(' ') });
   })();
 }
 

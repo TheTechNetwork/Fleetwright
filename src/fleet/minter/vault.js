@@ -75,7 +75,7 @@ import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
 import { probeClaude } from '../../core/claude-token-probe.js';
-import { claudeSignIn, freshClaude } from './claude-login.js';
+import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
@@ -282,7 +282,7 @@ export async function answerClaudeFresh(ask, config) {
   if (!loaded.ok) return /** @type {any} */ (loaded).refusal;
   const { fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = config;
   const store = /** @type {VaultStore} */ (config.store);
-  const { held, problem } = await withLock(`row:${id}`, () => freshClaude(store, /** @type {any} */ (loaded).key, id, { fetchImpl, now }));
+  const { held, problem } = await withLock(`row:${id}`, () => freshClaude(store, /** @type {any} */ (loaded).key, id, { fetchImpl, now, by: 'a runner' }));
   if (!held) return refuse('no_claude_login', problem ?? 'No Claude login is kept for that account.');
   // AND WHAT A CREDENTIALS FILE IS WRITTEN FROM, for a sign-in, as a box is
   // given it (itemsFor): the runner writes the file its sessions read again
@@ -653,20 +653,26 @@ async function testItem(name, row, config, key, who, save) {
     // A SIGN-IN IS RENEWED FIRST if it is due, as a box would be handed it,
     // so a refresh token Claude no longer takes is found here and not by a
     // box once the access token runs out.
-    const { held, problem, refused } = await freshClaude(store, key, who.userId, config);
-    if (!held) return said('rejected', problem ?? 'Your Claude login does not open with this minter’s key, so nothing could be given it. Keep it again.');
-    if (problem) return said(refused ? 'rejected' : 'unknown', problem);
+    const { held, problem, refused } = await freshClaude(store, key, who.userId, { ...config, by: 'a test' });
+    // AND HOW IT HAS BEEN RENEWED, for a sign-in: the record is what says
+    // whether a sign-in that stopped was renewed here or ended elsewhere
+    // (claude-login.js, describeRenewals). A setup-token is never renewed.
+    const history = row.kind === 'login' ? ` ${describeRenewals(await claudeRenewals(store, who.userId, Number(row.at)), Number(row.at), config.now())}` : '';
+    /** @param {'accepted'|'rejected'|'unknown'} state @param {string} text */
+    const told = (state, text) => said(state, `${text}${history}`);
+    if (!held) return told('rejected', problem ?? 'Your Claude login does not open with this minter’s key, so nothing could be given it. Keep it again.');
+    if (problem) return told(refused ? 'rejected' : 'unknown', problem);
     const token = held.bearer;
     const r = await probeClaude({ token }, { fetchImpl: config.fetchImpl });
     if (r.state === 'accepted') {
-      return said('accepted', r.status === 429 || r.status === 529
+      return told('accepted', r.status === 429 || r.status === 529
         ? `Your Claude login was accepted just now, though Claude said it is busy (${r.status}).`
         : 'Your Claude login works: Claude answered a one-token request with it just now.');
     }
     if (r.state === 'rejected') {
-      return said('rejected', `Claude refused your login just now (401${r.why ? `: ${r.why}` : ''}). Runners and boxes given it stop at their first message. Keep a new one from claude setup-token.`);
+      return told('rejected', `Claude refused your login just now (401${r.why ? `: ${r.why}` : ''}). Runners and boxes given it stop at their first message. Keep a new one from claude setup-token.`);
     }
-    return said('unknown', `Whether your Claude login works could not be told just now: ${r.why ?? `the API answered ${r.status}`}.`);
+    return told('unknown', `Whether your Claude login works could not be told just now: ${r.why ?? `the API answered ${r.status}`}.`);
   }
   if (itemKind(name) !== 'oauth') {
     return refuse('not_testable', `${label(name)} is handed over as it is, and there is no service this Worker could ask about it.`);
@@ -908,7 +914,7 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
     // either way, so a box from before sign-ins uses it as the token it
     // always took; `login` and `account` are what a newer box writes a
     // credentials file from, which is what Remote Control needs.
-    const { held, problem } = await freshClaude(store, key, userId, config);
+    const { held, problem } = await freshClaude(store, key, userId, { ...config, by: 'a box' });
     if (problem) problems.push(problem);
     if (held?.kind === 'login' && held.oauth) {
       const { scopes, subscriptionType, rateLimitTier } = held.oauth;

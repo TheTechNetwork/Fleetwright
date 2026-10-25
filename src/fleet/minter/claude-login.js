@@ -42,6 +42,18 @@ export const CLAUDE_SCOPES = ['user:profile', 'user:inference', 'user:sessions:c
 /** Renewed when less than this is left, as the vault's other sign-ins are. */
 export const CLAUDE_REFRESH_AHEAD_MS = 30 * 60_000;
 
+/**
+ * WHERE EACH RENEWAL IS NOTED, beside the row it renewed, so a sign-in that
+ * stops working can be told apart: renewed here, or cancelled from outside.
+ * A sign-in on vnic-runner-oci was refused with "Refresh token not found or
+ * invalid" and nothing kept said when it had last been renewed, or by whom,
+ * so whether the fleet had done it was a reading of code rather than a fact.
+ */
+export const RENEWALS_PREFIX = 'claude-renewed:';
+
+/** A day of renewals at one every few hours, and the one before a refusal. */
+const RENEWALS_KEPT = 12;
+
 /** One printable word of a sane length: the format is Anthropic's and undocumented. */
 const TOKEN_WORD_RE = /^[A-Za-z0-9._~+/=-]{20,4096}$/;
 
@@ -156,7 +168,7 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
  * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
  * @param {{ privateKey: CryptoKey, publicKey: string }} key
  * @param {string} userId
- * @param {{ fetchImpl: typeof fetch, now: () => number }} io
+ * @param {{ fetchImpl: typeof fetch, now: () => number, by?: string }} io  `by`: who asked, for the note a renewal leaves
  * @returns {Promise<{ held: HeldClaude|null, problem: string|null, refused?: boolean }>}
  */
 export async function freshClaude(store, key, userId, io) {
@@ -179,22 +191,123 @@ export async function freshClaude(store, key, userId, io) {
   let problem = null;
   let refused = false;
   if (Number(oauth.expiresAt) - io.now() < CLAUDE_REFRESH_AHEAD_MS) {
+    // NOTED BEFORE IT IS ASKED FOR, and settled after. Anthropic rotates the
+    // refresh token the moment it answers; a renewal cut off before the new
+    // one is written back (a deploy restarting this object, say) loses it,
+    // and the note left unsettled is how that is told from a sign-in
+    // cancelled somewhere else.
+    /** @type {ClaudeRenewal} */
+    const note = { at: io.now(), by: io.by ?? null, ok: false, pending: true };
+    await noteRenewal(store, userId, note);
     const r = await renewClaudeSignIn(oauth, io);
+    delete note.pending;
+    note.ok = r.ok;
     if (r.ok) {
       oauth = r.oauth;
+      note.until = Number(oauth.expiresAt);
       const now = await store.get(`gh:${userId}`);
       if (now && Number(now.at) === Number(row.at) && now.sealed === row.sealed) {
         await store.put(`gh:${userId}`, { ...row, sealed: await seal({ to: key.publicKey, aad: atRestAad(userId), payload: { oauth, account } }) });
+      } else {
+        note.dropped = true;
       }
     } else {
       refused = r.refused;
+      note.refused = r.refused;
+      note.why = r.message.slice(0, 200);
       problem = r.refused
         ? `${r.message}. Sign in to Claude again from your phone or the signing page; until then nothing can be given your login once it runs out.`
         : `${r.message}; the login held is good until it runs out.`;
     }
+    await noteRenewal(store, userId, note, { settles: true });
   }
   if (Number(oauth.expiresAt) <= io.now()) {
     return { held: null, problem: problem ?? 'Your Claude sign-in has run out. Sign in to Claude again from your phone or the signing page.', refused: true };
   }
   return { held: { kind: 'login', bearer: oauth.accessToken, expiresAt: Number(oauth.expiresAt), oauth, account }, problem, refused };
+}
+
+/**
+ * @typedef {object} ClaudeRenewal  one renewal of a person's sign-in, as noted
+ * @property {number} at          when it was asked for, epoch ms
+ * @property {string|null} by     who asked: a box, a runner, a test
+ * @property {boolean} ok
+ * @property {number} [until]     the new access token's expiry, when it worked
+ * @property {boolean} [refused]  Anthropic said no, which only signing in again mends
+ * @property {string} [why]       what was said, when it did not work
+ * @property {boolean} [dropped]  renewed while a new sign-in was being kept, so not written back
+ * @property {boolean} [pending]  asked for and never settled: cut off before its answer was kept
+ */
+
+/**
+ * Note one renewal, under the lock the renewal ran under, or settle the note
+ * it began with. Holds no token: when, who asked and what came back, so it
+ * is kept in the clear.
+ *
+ * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
+ * @param {string} userId @param {ClaudeRenewal} note
+ * @param {{ settles?: boolean }} [opts]  replace the unsettled note made at `note.at`
+ */
+async function noteRenewal(store, userId, note, { settles = false } = {}) {
+  try {
+    const before = await store.get(`${RENEWALS_PREFIX}${userId}`);
+    const list = Array.isArray(before) ? before : [];
+    const open = settles ? list.findIndex((n) => n?.pending && Number(n.at) === note.at) : -1;
+    const next = open >= 0 ? list.map((n, i) => (i === open ? { ...note } : n)) : [...list, { ...note }];
+    await store.put(`${RENEWALS_PREFIX}${userId}`, next.slice(-RENEWALS_KEPT));
+  } catch {
+    // A NOTE THAT CANNOT BE KEPT costs only the history. The renewal it
+    // describes has already been written back, and failing here would hand
+    // every box an error for a sign-in that works.
+  }
+}
+
+/**
+ * The renewals of the sign-in kept at `keptAt`, oldest first. Earlier ones
+ * were of a sign-in since replaced, and would say nothing true about this one.
+ *
+ * @param {{ get: (k: string) => Promise<any> }} store
+ * @param {string} userId @param {number} keptAt
+ * @returns {Promise<ClaudeRenewal[]>}
+ */
+export async function claudeRenewals(store, userId, keptAt) {
+  const list = await store.get(`${RENEWALS_PREFIX}${userId}`).catch(() => null);
+  return Array.isArray(list) ? list.filter((n) => Number(n?.at) >= Number(keptAt)) : [];
+}
+
+/**
+ * What a test says about how a sign-in has been renewed: the last renewal, and
+ * when the last one was refused after a good one, that nothing in the fleet
+ * renewed it in between. That is the sentence that tells a sign-in renewed
+ * here from one cancelled outside, and only the record can say it.
+ *
+ * @param {ClaudeRenewal[]} list @param {number} keptAt @param {number} now
+ * @returns {string}
+ */
+export function describeRenewals(list, keptAt, now) {
+  const when = (/** @type {number} */ t) => {
+    const d = new Date(t).toISOString();
+    return `${new Date(now).toISOString().slice(0, 10) === d.slice(0, 10) ? '' : `${d.slice(0, 10)} `}${d.slice(11, 16)} UTC`;
+  };
+  const asked = (/** @type {ClaudeRenewal} */ n) => (n.by ? `, asked for by ${n.by}` : '');
+  const last = list[list.length - 1];
+  if (!last) return `It has not been renewed since it was kept at ${when(keptAt)}.`;
+  const cut = (/** @type {ClaudeRenewal} */ n) => `A renewal at ${when(n.at)}${n.by ? `, asked for by ${n.by},` : ''} was cut off before its answer was kept, which loses the refresh token Claude had just issued.`;
+  if (last.pending) return cut(last);
+  if (last.ok) {
+    return `Last renewed at ${when(last.at)}${asked(last)}; that access token is good until ${when(Number(last.until))}.`;
+  }
+  const said = `The last renewal, at ${when(last.at)}${asked(last)}, ${last.refused ? 'was refused' : 'did not get an answer'}: ${last.why}.`;
+  if (!last.refused) return said;
+  // WHAT CAME BETWEEN the last renewal that worked and the refusal. A note
+  // left unsettled, or a good renewal not written back, is this fleet losing
+  // the refresh token itself; only with neither is the cause somewhere else.
+  const goodAt = list.map((n) => n.ok).lastIndexOf(true);
+  const between = list.slice(Math.max(goodAt, 0), -1);
+  const lost = between.find((n) => n.pending);
+  if (lost) return `${said} ${cut(lost)}`;
+  const dropped = between.find((n) => n.ok && n.dropped);
+  if (dropped) return `${said} The renewal at ${when(dropped.at)} was not kept, because a new sign-in was being kept at the same moment.`;
+  const since = goodAt >= 0 ? `the last good renewal at ${when(list[goodAt].at)}` : `its keeping at ${when(keptAt)}`;
+  return `${said} Nothing in the fleet renewed it between ${since} and then, so it was ended outside the fleet: on claude.ai, or by Anthropic.`;
 }

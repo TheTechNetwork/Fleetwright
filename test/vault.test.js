@@ -15,6 +15,7 @@ import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_A
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
+import { describeRenewals } from '../src/fleet/minter/claude-login.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,7 +32,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
-import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor } from './helpers/stand-in-claude.js';
+import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -1393,4 +1394,55 @@ test('a Claude sign-in Claude will not renew says so, and is given out only unti
   // A sign-in with no refresh token, or a malformed one, is not kept at all.
   const bad = await m.phone({ op: 'put', name: 'claude', signIn: { oauth: { accessToken: made.oauth.accessToken } } });
   assert.equal(bad.error?.code, 'bad_token');
+});
+
+test('a sign-in ended outside the fleet is told from one this fleet renewed, by the record each renewal leaves', async (t) => {
+  // SEEN ON vnic-runner-oci: "Refresh token not found or invalid", and
+  // nothing kept said when the sign-in was last renewed or by whom.
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.expiresIn = 28800; });
+  const office = await generateKeyPair();
+  const kept = await m.phone({ op: 'put', name: 'claude', signIn: claudeSignInFor('ended', 10 * 60_000) });
+  assert.equal(kept.ok, true, kept.text);
+
+  // Renewed by a box, to a token that is due again at once.
+  claudeRenewals.expiresIn = 600;
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  await m.box(office);
+  const renewed = await m.phone({ op: 'test', name: 'claude' });
+  assert.equal(renewed.answer.state, 'accepted', renewed.text);
+  assert.match(renewed.text, /Last renewed at \d\d:\d\d UTC, asked for by a test; that access token is good until \d\d:\d\d UTC\./);
+
+  // Then signed out on claude.ai: the next renewal is refused, and nothing in
+  // the fleet renewed it between the last good one and the refusal.
+  cancelClaudeSignIns();
+  const ended = await m.phone({ op: 'test', name: 'claude' });
+  assert.equal(ended.answer.state, 'rejected');
+  assert.match(ended.text, /The last renewal, at \d\d:\d\d UTC, asked for by a test, was refused: Claude refused to renew it \(Refresh token not found or invalid\)\./);
+  assert.match(ended.text, /Nothing in the fleet renewed it between the last good renewal at \d\d:\d\d UTC and then, so it was ended outside the fleet/);
+  // Holding no token: the record is kept in the clear.
+  const record = [...m.rows.entries()].find(([k]) => k.startsWith('claude-renewed:'));
+  assert.ok(record, 'each renewal is noted');
+  assert.ok(!JSON.stringify(record).includes('sk-ant-'), 'no token in the record');
+  assert.deepEqual(record[1].map((/** @type {any} */ n) => [n.by, n.ok]), [['a box', true], ['a test', true], ['a test', false]]);
+});
+
+test('a renewal this fleet lost is not blamed on anything outside it', () => {
+  const kept = Date.parse('2026-10-25T10:00:00Z');
+  const now = Date.parse('2026-10-25T18:20:00Z');
+  const good = { at: Date.parse('2026-10-25T10:19:00Z'), by: 'a box', ok: true, until: Date.parse('2026-10-25T18:19:00Z') };
+  const refused = { at: Date.parse('2026-10-25T18:19:00Z'), by: 'a test', ok: false, refused: true, why: 'Claude refused to renew it (Refresh token not found or invalid)' };
+  // CUT OFF: asked for and never settled, a deploy restarting the object
+  // between Anthropic's answer and the write-back.
+  const cut = { at: Date.parse('2026-10-25T17:50:00Z'), by: 'a box', ok: false, pending: true };
+  const told = describeRenewals([good, cut, refused], kept, now);
+  assert.match(told, /A renewal at 17:50 UTC, asked for by a box, was cut off before its answer was kept, which loses the refresh token Claude had just issued\./);
+  assert.doesNotMatch(told, /outside the fleet/);
+  // NOT WRITTEN BACK because a new sign-in was being kept at that moment.
+  const dropped = { ...good, at: Date.parse('2026-10-25T17:50:00Z'), dropped: true };
+  assert.match(describeRenewals([good, dropped, refused], kept, now), /The renewal at 17:50 UTC was not kept, because a new sign-in was being kept at the same moment\./);
+  assert.equal(describeRenewals([], kept, now), 'It has not been renewed since it was kept at 10:00 UTC.');
+  // An earlier day is dated.
+  assert.match(describeRenewals([good, refused], kept, Date.parse('2026-10-26T09:00:00Z')), /between the last good renewal at 2026-10-25 10:19 UTC and then/);
 });
