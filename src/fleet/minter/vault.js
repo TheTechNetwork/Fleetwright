@@ -370,7 +370,11 @@ export async function answerVaultDevice(ask, config) {
   const result = await withLock(`row:${who.userId}`, () => runDeviceOp(inside, { ...config, fetchImpl, now }, key, who, email, at));
   if (!result.ok) return result;
   const sealedBack = await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: result.answer ?? {} });
-  return { ok: true, sealed: sealedBack, text: result.text };
+  // WHETHER IT CHANGED ANYTHING A BOX HOLDS, outside the seal, so the
+  // coordinator can tell the boxes to ask now rather than at their next ten
+  // minutes. A list changes nothing; everything else may (a test renews what
+  // is due, and a box's key list rides the same ask). Never what changed.
+  return { ok: true, sealed: sealedBack, text: result.text, ...(inside.op === 'list' ? {} : { changed: true }) };
 }
 
 /**

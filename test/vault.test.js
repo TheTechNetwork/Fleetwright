@@ -214,6 +214,11 @@ test('a person keeps their credentials once, and only a box they approved by its
 
   // THE LIST NAMES, AND NEVER SHOWS A VALUE.
   const list = await m.phone({ op: 'list' });
+  // AND SAYS, OUTSIDE THE SEAL, WHICH ANSWERS CHANGED SOMETHING A BOX HOLDS,
+  // so the coordinator can tell the boxes to ask now: a list changed nothing.
+  assert.equal(list.changed, undefined);
+  assert.equal(granted.changed, true);
+  assert.equal(signedIn.changed, true);
   assert.deepEqual(list.answer.items.map((/** @type {any} */ i) => i.name), ['claude', 'cloudflare', 'github', 'secret:NPM_TOKEN']);
   assert.equal(list.answer.grants.length, 1);
   assert.equal(list.answer.grants[0].label, 'office-box');
