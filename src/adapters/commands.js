@@ -110,7 +110,7 @@ import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf, refreshSandboxImageStep } from '../core/update.js';
 import { applyRelease, currentVersion, versionDrift } from '../core/release-apply.js';
 import { armConfirmation } from '../core/update-confirm.js';
-import { PROTOCOL_VERSION, LINK_ROLES, REPO_RE } from '../fleet/protocol/intents.js';
+import { PROTOCOL_VERSION, LINK_ROLES, REPO_RE, runnerImageProblem } from '../fleet/protocol/intents.js';
 import { listSecretNames } from '../core/secret-store.js';
 import { readChannel, writeChannel, pinnedByEnv, aptSuite, switchAptSuite } from '../core/channel.js';
 import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
@@ -1914,21 +1914,28 @@ export const COMMANDS = {
   },
 
   provision: {
-    usage: '/provision <macos|windows|linux|android> [minutes]',
+    usage: '/provision <macos|windows|linux|android> [minutes] [--image <image>]',
     short: 'Ask for a temporary machine that joins the fleet',
     help:
       'Dispatches a workflow in the fleet\u2019s runner repository, which brings up a GitHub Actions runner that '
       + 'enrols itself as an ephemeral host for the minutes you name and is destroyed when the job ends. It is '
       + 'dispatched with YOUR GitHub connection on this box \u2014 so it can only start a workflow you could have '
       + 'started yourself, and the runner belongs to you. See docs/runner-central.md.',
-    run: async (ctx, args) => {
+    run: async (ctx, all) => {
+      // `--image` anywhere after the platform, so the minutes stay optional
+      // and positional as they always were.
+      const at = all.indexOf('--image');
+      const image = at === -1 ? null : (all[at + 1] ?? '');
+      const args = at === -1 ? all : [...all.slice(0, at), ...all.slice(at + 2)];
       const platform = (args[0] || '').toLowerCase();
       if (!Object.hasOwn(RUNNER_WORKFLOWS, platform)) {
         return {
           ok: false,
-          text: `Usage: /provision <${Object.keys(RUNNER_WORKFLOWS).join('|')}> [minutes]`,
+          text: `Usage: /provision <${Object.keys(RUNNER_WORKFLOWS).join('|')}> [minutes] [--image <image>]`,
         };
       }
+      const imageProblem = image === '' ? 'Name the image after --image.' : runnerImageProblem(platform, image);
+      if (imageProblem) return { ok: false, text: imageProblem };
       const minutes = args[1] === undefined ? DEFAULT_MINUTES : Number(args[1]);
       if (!Number.isFinite(minutes) || minutes < 5 || minutes > MAX_MINUTES) {
         return { ok: false, text: `Minutes must be a number between 5 and ${MAX_MINUTES}.` };
@@ -2001,6 +2008,7 @@ export const COMMANDS = {
         repo: ctx.runnerRepo,
         platform,
         minutes,
+        image,
         ticket: ctx.ticket,
         coordinator: ctx.coordinator,
         token,
@@ -2015,7 +2023,7 @@ export const COMMANDS = {
         // agent that asked, which would then look for a host that is still
         // being built.
         text:
-          `Asked GitHub to start a ${platform} runner from ${ctx.runnerRepo} (${r.workflow} on ${r.ref}) for `
+          `Asked GitHub to start a ${platform} runner${r.image ? ` on ${r.image}` : ''} from ${ctx.runnerRepo} (${r.workflow} on ${r.ref}) for `
           + `${r.minutes} minutes. It is not here yet: runners take a few minutes to boot, and it will appear in `
           + '`status` as a temporary host owned by you. Anything it runs is lost when it goes, so collect what you '
           + 'need before then.',

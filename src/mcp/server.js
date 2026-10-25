@@ -656,6 +656,8 @@ export class McpServer {
       'A MACHINE FOR A JOB. fleet_provision brings up a macOS, Windows, Linux or Android runner; once it',
       'shows on fleet_status, fleet_start on it by name with the task. It runs, comes back to its prompt,',
       'and you collect the result. Nobody needs a Remote Control link for that, and a runner has none.',
+      '`image` picks the GitHub image, newest by default: a macOS runner is xcode-27 unless you name',
+      'macos-26 or macos-15, and only xcode-27 has Xcode 27 and the iPhone Duo simulator.',
       '',
       'Watching one that is actually working:',
       '  1. fleet_start with a `task` (or a `profile`), naming a host or a tag for a kind of machine',
@@ -1030,7 +1032,11 @@ export class McpServer {
       const res = await this.fetch(`${this.coordinator}/api/runners/dispatch`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.credential}` },
-        body: JSON.stringify({ platform: params.platform, ...(params.minutes !== undefined ? { minutes: params.minutes } : {}) }),
+        body: JSON.stringify({
+          platform: params.platform,
+          ...(params.minutes !== undefined ? { minutes: params.minutes } : {}),
+          ...(params.image ? { image: params.image } : {}),
+        }),
       });
       if (res.status === 404) return null;
       if (res.status === 401 || res.status === 403) {
@@ -1045,6 +1051,7 @@ export class McpServer {
       repo: plan.repo,
       platform: String(params.platform),
       minutes: Number(plan.inputs?.minutes),
+      image: typeof plan.inputs?.image === 'string' ? plan.inputs.image : null,
       ticket: plan.inputs?.ticket,
       coordinator: plan.inputs?.coordinator,
       token: String(token),
@@ -1052,7 +1059,7 @@ export class McpServer {
     });
     if (!sent.ok) return this.#text(String(sent.message), true);
     return this.#text(
-      `Asked GitHub for a ${params.platform} machine from ${plan.repo}, as you, from this computer. ` +
+      `Asked GitHub for a ${params.platform} machine${sent.image ? ` on ${sent.image}` : ''} from ${plan.repo}, as you, from this computer. ` +
         'It takes a few minutes to boot and then appears in the fleet as a host of yours; fleet_list shows it ' +
         'when it has joined.',
     );

@@ -78,6 +78,14 @@ test('a device is given everything it needs to start a runner itself, and no box
   // And the refusals say why, as provision's do.
   assert.equal((await core.prepareRunnerDispatch(null, { platform: 'macos' }, ORIGIN)).error?.code, 'not_signed_in');
   assert.equal((await core.prepareRunnerDispatch({ email: OWNER }, { platform: 'amiga' }, ORIGIN)).error?.code, 'bad_params');
+
+  // A CHOSEN IMAGE travels to the device's own dispatch; one the platform's
+  // workflow does not list is refused before a ticket is minted for it.
+  const xcode = await core.prepareRunnerDispatch({ email: OWNER }, { platform: 'macos', image: 'xcode-27' }, ORIGIN);
+  assert.equal(xcode.inputs?.image, 'xcode-27');
+  const wrong = await core.prepareRunnerDispatch({ email: OWNER }, { platform: 'macos', image: 'windows-2025' }, ORIGIN);
+  assert.equal(wrong.error?.code, 'bad_params');
+  assert.match(wrong.text, /xcode-27, macos-26, macos-15/);
   const nowhere = new CoordinatorCore({});
   assert.equal((await nowhere.prepareRunnerDispatch({ email: OWNER }, { platform: 'linux' }, ORIGIN)).error?.code, 'not_configured');
 });

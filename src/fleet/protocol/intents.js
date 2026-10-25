@@ -435,8 +435,48 @@ export const XOWATCHDOG_STEPS = Object.freeze([
 // (src/fleet/minter/claude-login.js). A host from before it is not handed
 // the parameter (`since: 15`) and makes a setup-token, which comes back as a
 // token rather than a sign-in, and the phone says so.
+//
+// v16, 25 Oct 2026: A RUNNER ON THE IMAGE YOU CHOOSE. `provision` gained
+// `image`, one of the GitHub images its platform's workflow lists
+// (RUNNER_IMAGES), so a person can ask for a macOS runner with Xcode 27
+// rather than whichever image the workflow was pinned to. Absent is the
+// workflow's own default, which is the newest. An older host is never handed
+// one: dropped, it would start a machine on an image the person did not
+// choose, so the coordinator refuses rather than send it, as it does for
+// `repo`. docs/runner-central.md, "Choosing the image".
 /** @type {number} */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
+
+/**
+ * The GitHub images each runner platform may run on, newest first, and the
+ * first is the default. The SAME LISTS as the `image` choice in each workflow
+ * of Fleetwright-Runners-Template: the value becomes the job's `runs-on`, so
+ * it is a list here, a choice there, and never an open string that could name
+ * a self-hosted machine. The newest goes first when GitHub ships one.
+ */
+export const RUNNER_IMAGES = Object.freeze({
+  macos: Object.freeze(['xcode-27', 'macos-26', 'macos-15']),
+  linux: Object.freeze(['ubuntu-26.04', 'ubuntu-24.04']),
+  android: Object.freeze(['ubuntu-26.04', 'ubuntu-24.04']),
+  windows: Object.freeze(['windows-2025', 'windows-2022']),
+});
+
+/**
+ * Why `image` cannot go with `platform`, or null when it can (or is absent).
+ * The protocol checks each value alone; this is the pair.
+ *
+ * @param {unknown} platform @param {unknown} image
+ * @returns {string|null}
+ */
+export function runnerImageProblem(platform, image) {
+  if (image === undefined || image === null || image === '') return null;
+  const listed = Object.hasOwn(RUNNER_IMAGES, String(platform))
+    ? RUNNER_IMAGES[/** @type {keyof typeof RUNNER_IMAGES} */ (String(platform))]
+    : null;
+  if (!listed) return `A ${String(platform).slice(0, 20)} machine has no image to choose.`;
+  if (listed.includes(String(image))) return null;
+  return `${String(image).slice(0, 40)} is not an image a ${platform} runner can use. It can use ${listed.join(', ')}; the first is the default.`;
+}
 
 /** For byte bounds: present in every runtime this module loads in, unlike Node's Buffer. */
 const UTF8 = new TextEncoder();
@@ -1505,6 +1545,21 @@ export const VERBS = Object.freeze({
         min: 5,
         max: 350,
         describe: 'How long the runner stays in the fleet before ending itself. Default 60, and GitHub kills any job at 360.',
+      },
+      // WHICH GITHUB IMAGE, from a fixed list for the reason `platform` is
+      // one: it becomes the job's `runs-on`, and an open string would let a
+      // caller name any runner label the repository reaches. One enum of
+      // every platform's images, and runnerImageProblem refuses a pair that
+      // does not go together (a Windows image on a macOS workflow).
+      image: {
+        type: 'enum',
+        required: false,
+        values: [...new Set(Object.values(RUNNER_IMAGES).flat())],
+        since: 16,
+        describe:
+          'Which GitHub image the runner boots, for macos, linux, android and windows. Absent is the newest. ' +
+          'macos: xcode-27 (macOS 26 with Xcode 27 and the iPhone Duo simulator), macos-26, macos-15. ' +
+          'linux and android: ubuntu-26.04, ubuntu-24.04. windows: windows-2025, windows-2022.',
       },
       // MINTED BY THE COORDINATOR, NEVER BY THE CALLER — and declared here
       // anyway, because the host validates every field of what arrives and a
