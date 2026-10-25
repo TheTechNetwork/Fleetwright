@@ -320,7 +320,7 @@ dependencies {
   // machine in the fleet can reach (XoRelay.kt). HttpURLConnection, which
   // every other request here uses, has no WebSocket, and OkHttp is the client
   // Android's own HTTP stack grew out of. Pinned, like everything else here.
-  implementation("com.squareup.okhttp3:okhttp:5.5.0")
+  implementation("com.squareup.okhttp3:okhttp:5.5.1")
 
   // FIREBASE CLOUD MESSAGING IS ABOVE NOW, and this said the opposite until
   // somebody went looking for why an app with no google-services.json crashes
