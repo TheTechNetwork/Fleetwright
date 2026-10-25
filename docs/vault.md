@@ -80,6 +80,19 @@ A named secret and a hypervisor's record have no service the minter could ask
 accepted, rejected or cannot tell, never the value, and a phone draws only
 accepted as working: cannot tell is not evidence that it works (C-5).
 
+**A Claude sign-in's test also says how it has been renewed.** Each renewal
+leaves a note beside the sign-in (`claude-renewed:<id>`, the last twelve):
+when it was asked for, by a box, a runner or a test, and what Anthropic said.
+No token is in it. The note is written before Anthropic is asked and settled
+after, so a renewal cut off in between is shown as cut off. Anthropic will
+already have rotated the refresh token by then, so a cut-off renewal is this
+fleet losing the sign-in itself. The test answer ends with the last renewal.
+When a refusal follows a good renewal with nothing cut off or dropped in
+between, it says the sign-in was ended outside the fleet: on claude.ai, or by
+Anthropic. That is the question a sign-in on vnic-runner-oci raised with
+"Refresh token not found or invalid", when nothing kept said when it had last
+been renewed or by whom.
+
 **A Claude token is asked before it is kept**, by the vault's `put` and by a
 deposit alike (`checkBeforeKeeping` in `src/fleet/minter/claude.js`). A 401
 keeps nothing and says `rejected_token`. An answer that cannot tell keeps it
