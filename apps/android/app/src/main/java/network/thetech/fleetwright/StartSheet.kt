@@ -95,7 +95,9 @@ data class RunnerImageChoice(val image: String, val label: String)
 val runnerImageChoices = mapOf(
     "macos" to listOf(
         RunnerImageChoice("xcode-27", "macOS 26 with Xcode 27"),
+        RunnerImageChoice("xcode-27-xlarge", "macOS 26 with Xcode 27, larger machine (billed)"),
         RunnerImageChoice("macos-26", "macOS 26 with Xcode 26"),
+        RunnerImageChoice("macos-26-xlarge", "macOS 26 with Xcode 26, larger machine (billed)"),
         RunnerImageChoice("macos-15", "macOS 15"),
     ),
     "linux" to listOf(RunnerImageChoice("ubuntu-26.04", "Ubuntu 26.04"), RunnerImageChoice("ubuntu-24.04", "Ubuntu 24.04")),

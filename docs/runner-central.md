@@ -311,7 +311,7 @@ all. Adding `provision` itself cost nothing: an old host answers
 | platform | images, newest (the default) first | for |
 |---|---|---|
 | `linux` | `ubuntu-26.04`, `ubuntu-24.04` | the default. Cheapest, fastest to boot, and most work does not care |
-| `macos` | `xcode-27`, `macos-26`, `macos-15` | the one nobody has hardware for — an iOS or macOS build, Xcode |
+| `macos` | `xcode-27`, `xcode-27-xlarge`, `macos-26`, `macos-26-xlarge`, `macos-15` | the one nobody has hardware for — an iOS or macOS build, Xcode |
 | `android` | `ubuntu-26.04`, `ubuntu-24.04`, + SDK + KVM | *looking at* an app rather than only building it |
 | `windows` | `windows-2025`, `windows-2022` | **not proven** — see below |
 
@@ -322,7 +322,12 @@ New session on either phone, `image` on `fleet_provision`, or
 `/provision macos --image xcode-27` on a box. Nobody choosing gets the newest,
 and the newest is always the default. `xcode-27` is macOS 26 with Xcode 27, and
 it is the only image with the iPhone Duo simulator; `macos-26` carries Xcode 26
-alone.
+alone. `xcode-27-xlarge` and `macos-26-xlarge` are the same two images on
+GitHub's larger arm64 runner, 5 cores and 14 GB against the standard 3 and 7,
+billed per minute and only where the organisation has larger runners turned
+on. A standard runner building an app once and booting a simulator reached a
+load of 633 and a gigabyte of swap, and the fleet lost sight of it for six
+minutes; an iOS simulator job belongs on the larger one.
 
 **The list is written in three places, deliberately.** `RUNNER_IMAGES` in
 `src/fleet/protocol/intents.js`, the `image` choice in each workflow of

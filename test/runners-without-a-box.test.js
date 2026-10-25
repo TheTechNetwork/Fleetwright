@@ -85,7 +85,7 @@ test('a device is given everything it needs to start a runner itself, and no box
   assert.equal(xcode.inputs?.image, 'xcode-27');
   const wrong = await core.prepareRunnerDispatch({ email: OWNER }, { platform: 'macos', image: 'windows-2025' }, ORIGIN);
   assert.equal(wrong.error?.code, 'bad_params');
-  assert.match(wrong.text, /xcode-27, macos-26, macos-15/);
+  assert.match(wrong.text, /xcode-27, xcode-27-xlarge, macos-26, macos-26-xlarge, macos-15/);
   const nowhere = new CoordinatorCore({});
   assert.equal((await nowhere.prepareRunnerDispatch({ email: OWNER }, { platform: 'linux' }, ORIGIN)).error?.code, 'not_configured');
 });
