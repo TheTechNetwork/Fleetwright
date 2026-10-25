@@ -104,12 +104,18 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
 /**
  * The `podman run` prefix for a sandboxed session (design.md §2).
  *
- * The shape matters more than the flags. `exec` plus `--rm` plus
- * pane-process-is-podman means a dead container ENDS THE TMUX SESSION, which
- * reconcile already handles as "ended → resumeOnBoot". Nothing in tmux.js,
- * sessions.js or the reconcile logic has to learn about containers: there is
- * still exactly one tmux session per agent, and capture-pane still reads the
- * TUI that podman is drawing.
+ * The shape matters more than the flags. `exec` plus pane-process-is-podman
+ * means a dead container ENDS THE TMUX SESSION, which reconcile already
+ * handles as "ended → resumeOnBoot": there is still exactly one tmux session
+ * per agent, and capture-pane still reads the TUI that podman is drawing.
+ *
+ * NOT `--rm`, which it was. A container removed the moment it exits takes
+ * what it printed with it, and a session that died at startup could only be
+ * reported as "exited during startup": cc-trusty-egret on vnic-runner-oci was
+ * resumed a dozen times with no reason given. The pane still closes when the
+ * container exits (tried on podman: `--rm` never decided that); the container
+ * waits until reconcile keeps its output and removes it
+ * (podman.js, retireSandboxContainer), and a stop removes it at once.
  *
  * `-it` is what makes that true — the container needs the pane's TTY, or
  * claude renders nothing and the resume dialog can never be detected. Confirmed
@@ -131,7 +137,7 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
  */
 function sandboxArgv(cfg, name, hookSocket, owner = null, egress = null) {
   const argv = [
-    cfg.podmanBin, 'run', '--rm', '-it',
+    cfg.podmanBin, 'run', '-it',
     '--name', `agent-${name}`,
     ...usernsArgs(cfg),
     // Inside the container, not merely on the podman process. Claude refuses

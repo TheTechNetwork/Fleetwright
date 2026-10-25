@@ -25,7 +25,7 @@ import { resolveWorkdir } from './trust.js';
 import { directConfigDir, ensureDirectConfig, removeDirectConfig } from './direct-config.js';
 import { noRemoteControl } from './runner-auth-words.js';
 import { onRunner } from './runner-login.js';
-import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
+import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer, retireSandboxContainer, forgetLastOutput } from './podman.js';
 import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
 import { boxSecretsFor } from './secret-store.js';
@@ -157,6 +157,10 @@ export class SessionManager {
           stoppedAt: Date.now(),
         });
         log.info(`reconcile: ${rec.name} ended`);
+        // ITS CONTAINER GOES, AND WHAT IT PRINTED STAYS: it ran without
+        // `--rm` so that `logs` can still say why it ended (podman.js,
+        // retireSandboxContainer).
+        if (this.cfg.sandbox) retireSandboxContainer(this.cfg, rec.name);
         changed = true;
       } else if (rec.status !== 'running' && alive) {
         // Came back without us — a hand-started tmux session reusing the name.
@@ -263,6 +267,20 @@ export class SessionManager {
       phases: rec.status === 'running' ? (this.phases.get(rec.name) ?? null) : null,
       spent: (rec.transcriptPath ? this.spentReader.for(rec.transcriptPath) : null) ?? rec.spent ?? null,
     };
+  }
+
+  /**
+   * Nothing of a session's last life left before it starts again: a container
+   * that never had its output kept (a hub that was down when it ended), which
+   * would refuse the new one its name, and the output of one that did, which
+   * describes the session before.
+   *
+   * @param {string} name
+   */
+  #clearLastLife(name) {
+    if (!this.cfg.sandbox) return;
+    stopSandboxContainer(this.cfg, name);
+    forgetLastOutput(this.cfg, name);
   }
 
   /**
@@ -647,6 +665,7 @@ export class SessionManager {
       // A new life of the container: whatever the CLI last said belongs to the
       // old one, and the pane is the only witness until it speaks again.
       this.#newLife(name);
+      this.#clearLastLife(name);
       const spawned = newSession({ name, cwd, command, nice: this.cfg.sessionNice });
       if (spawned.status !== 0) {
         const detail = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 300);
@@ -919,6 +938,7 @@ export class SessionManager {
     // SSH/tmux and killing it would destroy usable work.
     if (this.cfg.rcRequired) {
       killSession(name);
+      if (this.cfg.sandbox) retireSandboxContainer(this.cfg, name);
       this.registry.upsert(name, { status: 'error', resumeOnBoot: false, detail: rc.detail, stoppedAt: Date.now() });
       log.warn(`${name}: ${rc.detail}; killed (FLEETWRIGHT_RC_REQUIRED=1)`);
       return { ...rc, killed: true };
@@ -991,6 +1011,9 @@ export class SessionManager {
       return { ok: false, message: `Could not stop "${name}": ${detail}` };
     }
     this.#newLife(name);
+    // ASKED FOR, so nothing of the container is kept: a stop has always
+    // discarded the console output, and says so below.
+    if (this.cfg.sandbox) stopSandboxContainer(this.cfg, name);
     const updated = this.registry.upsert(name, {
       status: 'stopped',
       // Someone asked for this. It must NOT come back by itself at the next
@@ -1143,6 +1166,7 @@ export class SessionManager {
     if (this.cfg.sandbox) {
       void this.hooks?.close(name);
       stopSandboxContainer(this.cfg, name);
+      forgetLastOutput(this.cfg, name);
       const { removed, failed } = removeSandboxVolumes(this.cfg, name);
       removeDirectConfig(this.cfg, name);
       if (removed.length) volumes = `\nDeleted ${removed.join(' and ')}.`;
@@ -1425,6 +1449,7 @@ export class SessionManager {
           remoteControl: onRunner(this.cfg) || this.noRemoteControl.has(rec.name) ? false : null,
         });
         this.#newLife(rec.name);
+        this.#clearLastLife(rec.name);
         const spawned = newSession({ name: rec.name, cwd: rec.cwd || this.cfg.workdir, command, nice: this.cfg.sessionNice });
         if (spawned.status !== 0 || !hasSession(rec.name)) {
           const why = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 200);
