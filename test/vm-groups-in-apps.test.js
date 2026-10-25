@@ -92,7 +92,7 @@ test('Android: a machine is put in a group only where the pool has one, and the 
   assert.match(A_FLEET, /\(if \(group == null\) emptyMap\(\) else mapOf\("group" to group\)\)/);
   // A machine in a lab joins no group: it is on the lab's network alone.
   assert.match(A_SHEET, /group = vmGroup\.ifBlank \{ null \}\.takeIf \{ platform == "vm" && vmLab\.isEmpty\(\) \}/);
-  assert.match(A_MAIN, /network = request\.network, group = request\.group\)/);
+  assert.match(A_MAIN, /network = request\.network, group = request\.group, image = request\.runnerImage\)/);
   assert.match(A_PAGE, /m\.group\?\.let \{ g -> Fact\("Group"/);
 });
 
