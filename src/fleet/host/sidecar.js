@@ -172,6 +172,12 @@ const CAPABILITY_VERBS = new Set([
  */
 
 /**
+ * How soon a box asks the vault after the coordinator says somebody's vault
+ * changed: long enough that keeping several things at once is one ask.
+ */
+export const VAULT_CHANGED_ASK_MS = 2_000;
+
+/**
  * How long until a holder of the vault's tokens asks again, given the soonest
  * of them to run out: at the minute the minter renews it, which is a minute
  * inside its half hour, so every box and runner holding the same token asks
@@ -479,6 +485,9 @@ export class Sidecar {
     this.vaultIntervalMs = vaultIntervalMs;
     /** @type {any} */
     this.vaultTimer = null;
+    /** An ask of the vault is under way, and a change said meanwhile asks again after it. */
+    this.vaultAsking = false;
+    this.vaultAgain = false;
   }
 
   get name() {
@@ -742,6 +751,14 @@ export class Sidecar {
     // the VM was answered when the coordinator took the report.
     if (/** @type {any} */ (msg)?.kind === 'image-report') {
       this.xoSetups?.imageReport(msg);
+      return { kind: 'none' };
+    }
+    // SOMEBODY'S VAULT CHANGED, said by the coordinator after a person kept,
+    // forgot or approved something (core.js, #vaultChanged). Not an intent and
+    // no reply: this box asks the vault now rather than at its next ten
+    // minutes, and the vault decides what that gives it.
+    if (/** @type {any} */ (msg)?.kind === 'vault-changed') {
+      this.#vaultChangedSoon();
       return { kind: 'none' };
     }
     // THE ANSWER TO A MINT THIS RUNNER ASKED FOR. Not an intent either, and it
@@ -1525,9 +1542,31 @@ export class Sidecar {
   #scheduleVault(ms) {
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.vaultTimer = setTimeout(() => {
-      void this.syncVault().then((next) => this.#scheduleVault(next));
+      this.vaultAsking = true;
+      void this.syncVault().then((next) => {
+        this.vaultAsking = false;
+        // A CHANGE SAID WHILE IT WAS ASKING may have reached the vault after
+        // this answer was made, so it is asked once more, soon.
+        this.#scheduleVault(this.vaultAgain ? VAULT_CHANGED_ASK_MS : next);
+        this.vaultAgain = false;
+      });
     }, ms);
     this.vaultTimer.unref?.();
+  }
+
+  /**
+   * Ask the vault in a moment, because the coordinator said somebody's vault
+   * changed. A moment and not at once, so a person keeping three things is
+   * one ask; and only on a box that asks the vault at all, which a runner
+   * does not (it takes its owner's login on its own clock).
+   */
+  #vaultChangedSoon() {
+    if (!this.vaultKey || this.vaultIntervalMs <= 0 || this.jobToken) return;
+    if (this.vaultAsking) {
+      this.vaultAgain = true;
+      return;
+    }
+    this.#scheduleVault(VAULT_CHANGED_ASK_MS);
   }
 
   /**

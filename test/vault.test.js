@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { Fleet } from '../worker/src/fleet-do.js';
-import { Sidecar } from '../src/fleet/host/sidecar.js';
+import { Sidecar, VAULT_CHANGED_ASK_MS } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { HttpAdapter } from '../src/adapters/http.js';
 import { ensureApiToken } from '../src/core/api-token.js';
@@ -654,6 +654,47 @@ test('removing somebody from the fleet ends what their vault gives the fleet’s
   // NOT DELETED: signed in again, she is served again, with nothing to approve twice.
   await core.issueClient({ email: DANA }, 'phone');
   assert.deepEqual(await held(), [DANA, ELI]);
+});
+
+test('a box told somebody’s vault changed asks the vault in a moment, not at its next ten minutes', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  const keys = await generateKeyPair();
+  await m.phone({ op: 'grant', hostKey: keys.publicJwk, label: 'ops-box' });
+  const core = new CoordinatorCore({ minter: /** @type {any} */ (m.binding) });
+  await core.issueClient({ email: ELI }, 'phone');
+  await core.hostIds.enrol({ hostId: 'ops-box', publicJwk: keys.publicJwk, enrolledBy: ELI });
+  /** @param {any} vaultKey @param {any[]} handed */
+  const box = (vaultKey, handed) => new Sidecar({
+    hub: /** @type {any} */ ({ vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; } }),
+    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { void core.onHostMessage('ops-box', f); return true; } }),
+    hostId: 'ops-box',
+    watch: false,
+    healthIntervalMs: 0,
+    renewIntervalMs: 0,
+    vaultIntervalMs: 600_000,
+    vaultKey,
+  });
+  /** @type {any[]} */
+  const handed = [];
+  const sidecar = box({ publicJwk: keys.publicJwk, sign: (/** @type {string} */ msg) => sign(keys.privateJwk, msg) }, handed);
+  core.registry.connect('ops-box', (/** @type {any} */ f) => {
+    void sidecar.handle(f).then((reply) => { if (reply?.kind === 'reply') void core.onHostMessage('ops-box', reply); });
+  }, {});
+  /** @type {any[]} */
+  const unkeyed = [];
+  const noVault = box(undefined, unkeyed);
+  t.after(() => Promise.all([sidecar.stop(), noVault.stop()]));
+
+  await sidecar.syncVault();
+  assert.ok(!JSON.stringify(handed).includes('npm_now'));
+  await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_now' });
+  // THE FRAME AS THE COORDINATOR SENDS IT (core.js, #vaultChanged), with no reply.
+  assert.deepEqual(await sidecar.handle({ v: PROTOCOL_VERSION, kind: 'vault-changed' }), { kind: 'none' });
+  assert.deepEqual(await noVault.handle({ v: PROTOCOL_VERSION, kind: 'vault-changed' }), { kind: 'none' });
+  await new Promise((r) => setTimeout(r, VAULT_CHANGED_ASK_MS + 600));
+  assert.ok(JSON.stringify(handed.at(-1)).includes('npm_now'), 'asked within a moment, not at the next ten minutes');
+  assert.equal(unkeyed.length, 0, 'a box with no vault key asks nothing');
 });
 
 test('a vault change tells every permanent box to ask the vault now, and a list tells none', () => {
