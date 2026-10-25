@@ -1358,6 +1358,10 @@ class Fleet(
         val fleet: String?,
         val text: String?,
         val runnerRepo: RunnerRepoCheck?,
+        /** Whether your own repository's machines may be GitHub's larger ones; null from a coordinator older than the setting. */
+        val large: Boolean? = null,
+        /** Whether the fleet's may, which its operator decides. */
+        val fleetLarge: Boolean? = null,
     )
 
     suspend fun runnerRepoSetting(): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
@@ -1369,6 +1373,13 @@ class Fleet(
      * answer stopped it. */
     suspend fun setRunnerRepo(repo: String): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
         runCatching { parseRunnerRepoSetting(send("PUT", "/api/runner-repo", JSONObject().put("repo", repo))) }
+    }
+
+    /** Let your runners be GitHub's larger machines, billed by the minute to
+     * your runner repository's owner, or stop. Refused with a sentence when
+     * you have no repository of your own. */
+    suspend fun setRunnerLarge(allow: Boolean): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
+        runCatching { parseRunnerRepoSetting(send("PUT", "/api/runner-repo/large", JSONObject().put("allow", allow))) }
     }
 
     suspend fun clearRunnerRepo(): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
@@ -1902,9 +1913,21 @@ class Fleet(
      * rather than a null that would quietly hide the control after one blink
      * of the network.
      */
-    suspend fun runners(): Result<String?> = withContext(Dispatchers.IO) {
+    suspend fun runners(): Result<String?> = runnersNow().map { it?.repo }
+
+    /**
+     * The same field, with whether a machine started now may be one of
+     * GitHub's larger ones. `large` false from a coordinator older than the
+     * setting, which refuses nothing; offering fewer is the safe way round
+     * for a choice that costs money.
+     */
+    data class RunnersNow(val repo: String, val large: Boolean)
+
+    suspend fun runnersNow(): Result<RunnersNow?> = withContext(Dispatchers.IO) {
         runCatching {
-            get("/api/hosts").optJSONObject("runners")?.optString("repo")?.takeIf { it.isNotBlank() && it != "null" }
+            val runners = get("/api/hosts").optJSONObject("runners")
+            val repo = runners?.optString("repo")?.takeIf { it.isNotBlank() && it != "null" }
+            repo?.let { RunnersNow(it, runners?.optBoolean("large", false) == true) }
         }
     }
 
@@ -3232,6 +3255,8 @@ class Fleet(
             fleet = text(json, "fleet"),
             text = text(json, "text"),
             runnerRepo = check,
+            large = maybe(json, "large"),
+            fleetLarge = maybe(json, "fleetLarge"),
         )
     }
 

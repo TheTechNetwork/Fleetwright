@@ -57,9 +57,9 @@ test('a new machine is offered only where the fleet can start one (C-2)', () => 
   // Drawn from the snapshot's `runners` and nothing else: a fleet with no
   // runner repository for this person offers no machine, rather than one that
   // is refused on tap.
-  assert.match(IOS, /canStartMachine = \(try\? await fleet\.runners\(\)\) != nil/);
+  assert.match(IOS, /let runnersNow = try\? await fleet\.runnersNow\(\)\s*canStartMachine = runnersNow != nil/);
   assert.match(IOS, /if canStartMachine \{\s*ForEach\(newMachineChoices/);
-  assert.match(ANDROID, /canStartMachine = Fleet\(settings\)\.runners\(\)\.getOrNull\(\) != null/);
+  assert.match(ANDROID, /val runnersNow = Fleet\(settings\)\.runnersNow\(\)\.getOrNull\(\)\s*canStartMachine = runnersNow != null/);
   assert.match(ANDROID, /if \(canStartMachine\) \{\s*newMachineChoices\.forEach/);
   // And the setting is drawn only for a credential that can have one.
   assert.match(IOS, /if runnerRepoAnswered \{/);

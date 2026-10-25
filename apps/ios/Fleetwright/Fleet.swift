@@ -791,6 +791,11 @@ struct Fleet {
         let fleet: String?
         let text: String?
         let runnerRepo: RunnerRepoCheck?
+        /// Whether your own repository's machines may be GitHub's larger
+        /// ones; nil from a coordinator older than the setting.
+        var large: Bool? = nil
+        /// Whether the fleet's may, which its operator decides.
+        var fleetLarge: Bool? = nil
     }
 
     func runnerRepoSetting() async throws -> RunnerRepoSetting {
@@ -804,6 +809,13 @@ struct Fleet {
     func setRunnerRepo(_ repo: String) async throws -> RunnerRepoSetting {
         let data = try await send("PUT", "/api/runner-repo", body: ["repo": repo])
         return try JSONDecoder().decode(RunnerRepoSetting.self, from: data)
+    }
+
+    /// Let your runners be GitHub's larger machines, billed by the minute to
+    /// your runner repository's owner, or stop. Refused with a sentence when
+    /// you have no repository of your own.
+    func setRunnerLarge(_ allow: Bool) async throws -> RunnerRepoSetting {
+        try JSONDecoder().decode(RunnerRepoSetting.self, from: try await send("PUT", "/api/runner-repo/large", body: ["allow": allow]))
     }
 
     func clearRunnerRepo() async throws -> RunnerRepoSetting {
@@ -1746,10 +1758,23 @@ struct Fleet {
     /// means the same thing. Either way there is nowhere to start one and the
     /// control is not drawn, rather than drawn and refused on tap.
     func runners() async throws -> String? {
+        try await runnersNow()?.repo
+    }
+
+    /// The same field, with whether a machine started now may be one of
+    /// GitHub's larger ones. `large` false from a coordinator older than the
+    /// setting, which refuses nothing and offered them before; offering
+    /// fewer is the safe way round for a choice that costs money.
+    struct RunnersNow: Codable {
+        let repo: String?
+        var large: Bool? = nil
+    }
+
+    func runnersNow() async throws -> RunnersNow? {
         let data = try await get("/api/hosts")
-        struct Runners: Codable { let repo: String? }
-        struct Reply: Codable { let runners: Runners? }
-        return try JSONDecoder().decode(Reply.self, from: data).runners?.repo
+        struct Reply: Codable { let runners: RunnersNow? }
+        guard let got = try JSONDecoder().decode(Reply.self, from: data).runners, got.repo != nil else { return nil }
+        return got
     }
 
     /// A machine image on one of your pools: what a new machine from your own

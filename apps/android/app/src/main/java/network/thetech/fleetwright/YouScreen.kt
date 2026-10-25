@@ -322,6 +322,12 @@ private fun CredentialsScreen(settings: Settings, onDismiss: () -> Unit) {
  * Setting up temporary machines, once: where they come from, and who starts
  * them. Drawn inline in the Hosts section until now, as tall finished as
  * unfinished.
+ *
+ * LARGER MACHINES are GitHub's, billed by the minute to the repository's
+ * owner on every plan. Whoever pays says: you, for your own repository, with
+ * the switch; the operator, for the fleet's, which this only reports. The
+ * switch is drawn only for a repository of your own and a coordinator that
+ * keeps the setting (C-2). TemporaryMachinesView.swift is the same screen.
  */
 @Composable
 internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
@@ -335,6 +341,10 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
     var runnerRepoMessage by remember { mutableStateOf("") }
     var runnerCheck by remember { mutableStateOf<Fleet.RunnerRepoCheck?>(null) }
     var busy by remember { mutableStateOf(false) }
+    // Null until the coordinator has said, and from one older than the setting.
+    var large by remember { mutableStateOf<Boolean?>(null) }
+    var fleetLarge by remember { mutableStateOf<Boolean?>(null) }
+    var largeMessage by remember { mutableStateOf("") }
     val phone = remember { PhoneGitHub(settings) }
 
     LaunchedEffect(Unit) {
@@ -343,6 +353,8 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
                 runnerRepoAnswered = true
                 runnerRepoSaved = got.repo
                 runnerRepoFleet = got.fleet
+                large = got.large
+                fleetLarge = got.fleetLarge
                 if (runnerRepoDraft.isBlank()) runnerRepoDraft = got.repo ?: ""
             }
         }
@@ -378,6 +390,9 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
                                     runnerCheck = r.runnerRepo
                                     runnerRepoMessage = r.text ?: ""
                                     if (r.ok == true && r.repo != null) {
+                                        // Another repository's owner has not said, so the fleet
+                                        // turns larger machines off for it; the same one keeps its setting.
+                                        if (large != null && !r.repo.equals(runnerRepoSaved, ignoreCase = true)) large = false
                                         runnerRepoSaved = r.repo
                                         runnerRepoDraft = r.repo
                                     }
@@ -401,6 +416,8 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
                                         runnerRepoSaved = null
                                         runnerCheck = null
                                         runnerRepoDraft = ""
+                                        // The setting went with the repository it was said of.
+                                        if (large != null) large = false
                                     }
                                     .onFailure { runnerRepoMessage = it.message ?: "that did not work" }
                                 busy = false
@@ -425,6 +442,47 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
             }
         } else {
             Hint("Asking the fleet…")
+        }
+
+        val saved = runnerRepoSaved
+        val allowed = large
+        val fleetRepo = runnerRepoFleet
+        val fleetAllowed = fleetLarge
+        if (runnerRepoAnswered && saved != null && allowed != null) {
+            SectionHead("Larger machines")
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Allow larger machines", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = allowed,
+                    enabled = !busy,
+                    onCheckedChange = { now ->
+                        scope.launch {
+                            busy = true
+                            Fleet(settings).setRunnerLarge(now)
+                                .onSuccess { r ->
+                                    largeMessage = r.text ?: ""
+                                    if (r.ok == true) large = now
+                                }
+                                .onFailure { largeMessage = it.message ?: "that did not work" }
+                            busy = false
+                        }
+                    },
+                )
+            }
+            if (largeMessage.isNotBlank()) Hint(largeMessage)
+            Hint(
+                "GitHub's larger macOS machines, 5 cores and 14 GB instead of 3 and 7, are billed by the minute to $saved's owner on every plan. " +
+                    "Off, New session does not offer them and the fleet refuses one.",
+            )
+        } else if (runnerRepoAnswered && saved == null && fleetRepo != null && fleetAllowed != null) {
+            SectionHead("Larger machines")
+            Hint(
+                if (fleetAllowed) "Machines from $fleetRepo may be GitHub's larger ones, which its operator allowed."
+                else "Machines from $fleetRepo are standard ones. Its operator decides about larger ones, since the fleet pays for them.",
+            )
         }
 
         SectionHead("Who starts them")
