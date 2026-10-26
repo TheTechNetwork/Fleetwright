@@ -24,7 +24,7 @@ import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_USAGE_URL } from '../../src/
  * long a renewed access token lasts, in seconds: Claude's eight hours unless a
  * test wants the next renewal due at once.
  */
-export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800 };
+export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800, /** @type {number|undefined} */ refreshExpiresIn: undefined };
 
 /** How many times the usage address was asked. */
 export const claudeUsageAsks = { count: 0 };
@@ -82,7 +82,10 @@ function standInClaudeToken(url, init) {
     const n = claudeRenewals.count;
     const rotated = `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}`;
     granted.set(rotated, allowed);
-    return reply(200, { access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: claudeRenewals.expiresIn, scope: (asked.length ? asked : allowed).join(' ') });
+    return reply(200, {
+      access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: claudeRenewals.expiresIn, scope: (asked.length ? asked : allowed).join(' '),
+      ...(claudeRenewals.refreshExpiresIn !== undefined ? { refresh_token_expires_in: claudeRenewals.refreshExpiresIn } : {}),
+    });
   })();
 }
 

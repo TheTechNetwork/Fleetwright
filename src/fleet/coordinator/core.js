@@ -4407,7 +4407,9 @@ export class CoordinatorCore {
           ? `A renewal${lost} was cut off before its answer was kept, so this fleet lost it. Claude refused the next one${when}.`
           : kind === 'dropped'
             ? `A renewal${lost} was not kept, because a new sign-in was being kept at the same moment, so this fleet lost it. Claude refused the next one${when}.`
-            : `Claude refused to renew it${when}.`;
+            : kind === 'expired'
+              ? `Its refresh token ran out${lost}, before this fleet renewed it. Claude refused the next renewal${when}.`
+              : `Claude refused to renew it${when}.`;
       this.record({ event: 'claude.ended', actor: email, text: `${email}: ${cause} (${String(e.why || '').slice(0, 160)})` });
       told += 1;
       if (!this.push) continue;

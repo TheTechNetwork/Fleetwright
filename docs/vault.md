@@ -102,7 +102,24 @@ sign-in itself (`checkClaude` in `src/fleet/minter/claude-login.js`):
 - a renewal already refused, by a box, a runner or a test, is the answer;
 - otherwise its access token is tried at the usage address, which costs
   nothing, and a token refused there is renewed at once instead of when due;
-- a sign-in that is due is renewed, as a box asking would renew it.
+- a sign-in that is due is renewed, as a box asking would renew it;
+- a sign-in kept ten minutes ago and never renewed, or not renewed for an
+  hour, is renewed anyway.
+
+**Why renew before it is due.** Two sign-ins in a row were refused at their
+first renewal, about 7.7 hours after keeping. Nothing in the fleet had used
+them, and nobody had signed in anywhere else. Waiting for the access token to
+run out tested the refresh token only at the end of eight hours. Renewing ten
+minutes after keeping says whether a sign-in arrived broken. Renewing hourly
+after that says within the hour when one stopped working.
+
+**A refresh token's own lifetime is kept.** Claude Code writes it beside the
+sign-in as `refreshTokenExpiresAt`, and a renewal's answer may give it as
+`refresh_token_expires_in`. The minter used to drop it. Now a sign-in is due
+when either its access token or its refresh token is within thirty minutes of
+running out. The Test's sentence says how long the refresh token is good for.
+A refusal that comes after the refresh token ran out by its own lifetime is
+called this fleet being late (`expired`), not something outside it.
 
 Only Anthropic refusing the refresh token counts as ended. An access token can
 be refused for reasons the refresh token survives, and the refresh token is
