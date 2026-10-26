@@ -376,14 +376,20 @@ function effectiveSkip(ctx, s) {
 }
 
 /**
- * Mark only the sessions that DIFFER from the global default, so the common
- * case stays quiet and an unusual one stands out.
+ * Name the mode every running session is actually in.
+ *
+ * The common case used to stay quiet, which meant a list of sessions all
+ * running with `--dangerously-skip-permissions` looked like a list that had
+ * not said. The default is the one that has to be labelled: an unusual one
+ * already stood out by being the other sentence.
  * @param {Ctx} ctx
  * @param {import('../core/registry.js').SessionRecord} s
  */
 function modeSuffix(ctx, s) {
-  if (s.skipPermissions === null || s.skipPermissions === ctx.cfg.skipPermissions) return '';
-  return s.skipPermissions ? '  (permissions bypassed)' : '  (safe mode)';
+  const skip = effectiveSkip(ctx, s);
+  const word = skip ? 'permissions bypassed' : 'permission prompts on';
+  const isDefault = s.skipPermissions === null || s.skipPermissions === ctx.cfg.skipPermissions;
+  return `  (${word}${isDefault ? ', fleet default' : ''})`;
 }
 
 /**
@@ -911,9 +917,17 @@ export const COMMANDS = {
       });
       let text = r.message;
       if (r.ok && archive) text += `\nIt is pushed to ${archive}, on a branch of its own, before it stops and every ten minutes while it runs.`;
-      if (r.ok && skipPermissions === false) text += '\nPermission prompts are ON for this session.';
-      if (r.ok && skipPermissions === true && !ctx.cfg.skipPermissions) {
-        text += '\nPermission checks are BYPASSED for this session.';
+      // SAID EITHER WAY, including the fleet default. A start that matches
+      // the box's setting used to say nothing, and the setting is bypassed,
+      // so the session that says the least is the one running commands
+      // without asking.
+      if (r.ok) {
+        const skip = skipPermissions === null ? ctx.cfg.skipPermissions : skipPermissions;
+        const isDefault = skipPermissions === null || skipPermissions === ctx.cfg.skipPermissions;
+        text += skip
+          ? '\nPermission checks are BYPASSED for this session — it runs commands without asking.'
+          : '\nPermission prompts are ON for this session — it stops and asks before it runs a command.';
+        if (isDefault) text += ' This is the fleet default.';
       }
       // SAID EITHER WAY, because the two outcomes need different sentences and
       // the silent one is the one that cost two beta reports. A session with a

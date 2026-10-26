@@ -213,7 +213,11 @@ enum StartSession {
                 name: nil,
                 title: title.isEmpty ? nil : title,
                 brief: about.isEmpty ? nil : about,
-                mode: chosen?.mode,
+                // A kind that never chose still has to say. Omitting the mode
+                // is how a spoken start ran with permission checks off and
+                // the reply never mentioned it. Anything other than safe is
+                // the fleet default, and the host's reply names it.
+                mode: chosen?.mode == "safe" ? "safe" : "dangerous",
                 // A KIND'S HOST AND TASK, WHICH THIS PATH USED TO DROP.
                 //
                 // The sheet honours both; spoken, only `mode` survived — so
