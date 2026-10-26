@@ -293,6 +293,36 @@ export async function claudeRenewals(store, userId, keptAt) {
 }
 
 /**
+ * @typedef {object} RenewalVerdict  what the record says ended a refused sign-in
+ * @property {'cut'|'dropped'|'outside'} kind  `cut` and `dropped` are this fleet losing it
+ * @property {number|null} at  the renewal that lost it, or the last good one before the refusal
+ */
+
+/**
+ * What came between the last renewal that worked and a refusal, read off the
+ * record. A note left unsettled, or a good renewal not written back, is this
+ * fleet losing the refresh token itself; only with neither is the cause
+ * somewhere else. Null when the last renewal was not refused.
+ *
+ * ONE ANSWER for the test's sentence and the phone's notification, which said
+ * "ended outside the fleet" from the refusal alone, whatever the record held.
+ *
+ * @param {ClaudeRenewal[]} list
+ * @returns {RenewalVerdict|null}
+ */
+export function renewalVerdict(list) {
+  const last = list[list.length - 1];
+  if (!last?.refused) return null;
+  const goodAt = list.map((n) => n.ok).lastIndexOf(true);
+  const between = list.slice(Math.max(goodAt, 0), -1);
+  const lost = between.find((n) => n.pending);
+  if (lost) return { kind: 'cut', at: Number(lost.at) };
+  const dropped = between.find((n) => n.ok && n.dropped);
+  if (dropped) return { kind: 'dropped', at: Number(dropped.at) };
+  return { kind: 'outside', at: goodAt >= 0 ? Number(list[goodAt].at) : null };
+}
+
+/**
  * What a test says about how a sign-in has been renewed: the last renewal, and
  * when the last one was refused after a good one, that nothing in the fleet
  * renewed it in between. That is the sentence that tells a sign-in renewed
@@ -315,17 +345,11 @@ export function describeRenewals(list, keptAt, now) {
     return `Last renewed at ${when(last.at)}${asked(last)}; that access token is good until ${when(Number(last.until))}.`;
   }
   const said = `The last renewal, at ${when(last.at)}${asked(last)}, ${last.refused ? 'was refused' : 'did not get an answer'}: ${last.why}.`;
-  if (!last.refused) return said;
-  // WHAT CAME BETWEEN the last renewal that worked and the refusal. A note
-  // left unsettled, or a good renewal not written back, is this fleet losing
-  // the refresh token itself; only with neither is the cause somewhere else.
-  const goodAt = list.map((n) => n.ok).lastIndexOf(true);
-  const between = list.slice(Math.max(goodAt, 0), -1);
-  const lost = between.find((n) => n.pending);
-  if (lost) return `${said} ${cut(lost)}`;
-  const dropped = between.find((n) => n.ok && n.dropped);
-  if (dropped) return `${said} The renewal at ${when(dropped.at)} was not kept, because a new sign-in was being kept at the same moment.`;
-  const since = goodAt >= 0 ? `the last good renewal at ${when(list[goodAt].at)}` : `its keeping at ${when(keptAt)}`;
+  const verdict = renewalVerdict(list);
+  if (!verdict) return said;
+  if (verdict.kind === 'cut') return `${said} ${cut(/** @type {ClaudeRenewal} */ (list.find((n) => n.pending && Number(n.at) === verdict.at)))}`;
+  if (verdict.kind === 'dropped') return `${said} The renewal at ${when(Number(verdict.at))} was not kept, because a new sign-in was being kept at the same moment.`;
+  const since = verdict.at !== null ? `the last good renewal at ${when(verdict.at)}` : `its keeping at ${when(keptAt)}`;
   return `${said} Nothing in the fleet renewed it between ${since} and then, so it was ended outside the fleet: on claude.ai, or by Anthropic.`;
 }
 
@@ -336,6 +360,7 @@ export function describeRenewals(list, keptAt, now) {
  * @property {string} login       the GitHub login it is kept under
  * @property {number} at          when the renewal was refused, epoch ms
  * @property {string} why         what Anthropic said
+ * @property {RenewalVerdict} verdict  what the record says ended it: this fleet, or something outside it
  */
 
 /**
@@ -381,9 +406,17 @@ export async function checkClaude(store, key, userId, io) {
     }
     if (!(await refusedLast())) return null;
   }
-  const last = /** @type {ClaudeRenewal} */ ((await claudeRenewals(store, userId, row.at)).at(-1));
+  const list = await claudeRenewals(store, userId, row.at);
+  const last = /** @type {ClaudeRenewal} */ (list.at(-1));
   await store.put(`${ENDED_PREFIX}${userId}`, { keptAt: Number(row.at), at: io.now() });
-  return { userId, email: typeof row.email === 'string' && row.email ? row.email : null, login: String(row.login || ''), at: Number(last.at), why: String(last.why || '') };
+  return {
+    userId,
+    email: typeof row.email === 'string' && row.email ? row.email : null,
+    login: String(row.login || ''),
+    at: Number(last.at),
+    why: String(last.why || ''),
+    verdict: /** @type {RenewalVerdict} */ (renewalVerdict(list)),
+  };
 }
 
 /**
