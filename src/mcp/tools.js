@@ -60,6 +60,9 @@ export const DEFAULT_DENY = ([
   // two releases behind, refusing verbs, whose named fix required a shell the
   // product does not provide. A dead end rather than a policy.
   'reboot', 'upgrade', 'restore',
+  // Who may reboot the box. An agent does not pin an admin, and a phone that
+  // delegates its verbs must not hand this one to a session.
+  'pinadmin',
   'connect', 'link', 'unlink', 'renew', 'answer',
   // A token that is a person's whole Claude subscription for a year. Made for
   // a phone to keep with the minter; an agent has no key to seal it to and no

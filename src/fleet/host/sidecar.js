@@ -63,6 +63,7 @@ import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
+import { BOX_WIDE, decideBoxWide, decidePin, ownerOf, readPins, writePins } from './pinned-admins.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
@@ -276,10 +277,9 @@ export class Sidecar {
     // process that loaded it (bin/fleetwright-sidecar). Null: no vault here.
     vaultKey = null,
     vaultIntervalMs = 10 * 60_000,
-    // THIS PROCESS'S OWN STATE DIRECTORY, the one beside its key, where the
-    // first version of hypervisor onboarding kept a pool's token. Nothing is
-    // kept there now (src/fleet/host/xo-setup.js, hand-off); it is only where
-    // a setup run again looks for that old file to remove it.
+    // THIS PROCESS'S OWN STATE DIRECTORY, the one beside its key. The pinned
+    // admin record lives here (pinned-admins.js). A setup run also looks here
+    // for an old hypervisor token file to remove it (xo-setup.js).
     xoStateDir = null,
     // THE HYPERVISORS THIS BOX CAN MAKE MACHINES ON, from its people's
     // vaults, in memory only (src/fleet/host/xo-pools.js). Made here for any
@@ -818,7 +818,7 @@ export class Sidecar {
       };
     }
 
-    if (!isMutating(intent.verb)) return this.#run(intent);
+    if (!isMutating(intent.verb)) return this.#run(intent, verdict);
 
     // Idempotency. The PROMISE is cached, not just the result, so a retry that
     // arrives while the first attempt is still in flight — which is exactly
@@ -829,7 +829,7 @@ export class Sidecar {
       this.log.info(`sidecar: ${intent.verb} ${intent.id} already handled — replaying the original reply`);
       return { ...(await cached), replayed: true };
     }
-    const pending = this.#run(intent);
+    const pending = this.#run(intent, verdict);
     this.#remember(intent.id, pending);
     // A VERB THAT CHANGES WHAT THIS HOST IS CAPABLE OF PUSHES HEALTH AT ONCE.
     //
@@ -849,15 +849,75 @@ export class Sidecar {
   }
 
   /**
+   * The pin-file answer for a box-wide verb, or null when the verb may proceed.
+   *
+   * Restore of the asker's own binned session is allowed once the signature
+   * holds, even when they are not pinned. Whose it is comes from the hub's
+   * bin. Missing, unreadable, or with no owner is cannot tell, and that
+   * refuses: a guess would restore somebody else's work.
+   *
    * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} verdict
+   * @returns {Promise<Record<string, unknown>|null>}
+   */
+  async #pinnedAdmin(intent, verdict) {
+    const pins = readPins(this.xoStateDir);
+    if (intent.verb === 'pinadmin') {
+      const decided = decidePin(intent, pins, verdict);
+      if (!decided.ok) return { ok: false, text: decided.text, error: { code: decided.code } };
+      if (decided.admins) writePins(/** @type {string} */ (this.xoStateDir), decided.admins);
+      return { ok: true, text: decided.text };
+    }
+    /** @type {boolean|null} */
+    let owns = null;
+    if (intent.verb === 'restore' && pins.admins.length > 0 && !pins.unreadable) owns = await this.#ownsBinned(intent);
+    const decided = decideBoxWide(intent, pins, verdict, owns);
+    if (!decided.ok) return { ok: false, text: decided.text, error: { code: decided.code } };
+    return null;
+  }
+
+  /**
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @returns {Promise<boolean|null>}
+   */
+  async #ownsBinned(intent) {
+    /** @type {any} */
+    let state;
+    try {
+      state = await this.hub.state();
+    } catch {
+      return null;
+    }
+    const bin = state?.bin;
+    if (!Array.isArray(bin)) return null;
+    const name = String(intent.params?.name ?? '');
+    const row = bin.find((/** @type {any} */ r) => r && r.name === name);
+    if (!row) return null;
+    const owner = ownerOf(row.createdBy);
+    const who = actorEmail(intent.actor);
+    if (!owner || !who) return null;
+    return owner === who;
+  }
+
+  /**
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} [verdict]  what the signature check said, when there was one
    * @returns {Promise<Record<string, any>>}
    */
-  async #run(intent) {
+  async #run(intent, verdict = null) {
     /** @param {Record<string, unknown>} extra */
     const reply = (extra) => ({ v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ...extra });
     const actor = intent.actor ? `fleet:${intent.actor}` : 'fleet';
 
     try {
+      // BOX-WIDE VERBS, against admins this machine pinned itself
+      // (pinned-admins.js). Before the command line: a reboot the pin file
+      // refuses must not reach the hub, and pinadmin never becomes one.
+      if (intent.verb === 'pinadmin' || BOX_WIDE.has(intent.verb)) {
+        const gated = await this.#pinnedAdmin(intent, verdict);
+        if (gated) return reply(gated);
+      }
+
       // Two verbs never reach the command registry, because they read host
       // state rather than acting on a session.
       if (intent.verb === 'health') return reply({ ok: true, text: 'ok', health: await this.health() });
@@ -2519,9 +2579,10 @@ export function toCommandLine({ verb, params, actor }) {
   //
   // `scope: me` means the verified actor, whose email this host derives from
   // the actor string the coordinator resolved against an ID token. There is no
-  // `email` parameter in this protocol and there must not be one: the moment
-  // the caller can name the account row, "link my account" becomes "link an
-  // account", and a compromised coordinator can aim it.
+  // `email` parameter on a credential verb: the moment the caller can name the
+  // account row, "link my account" becomes "link an account", and a compromised
+  // coordinator can aim it. `pinadmin` names who is pinned, and that name is
+  // accepted only from a signature, never as a credential row.
   const mine = emailFromActor(actor ? `fleet:${actor}` : null);
   switch (verb) {
     case 'list':

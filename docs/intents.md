@@ -124,6 +124,7 @@ and "dead host" is the one it retries.
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
+| `pinadmin` | `email`, `op` (`add`\|`remove`) | ✅ | sidecar-local — writes `pinned-admins.json` beside the host key. The first pin must be the signer, naming themselves. Once anybody is pinned, `reboot`, `upgrade`, `update` and a restore of somebody else's work require one of their signatures. Not a shell command |
 | `updates` | — | | `/updates` |
 | `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
 | `sandbox` | `to?` (`minimal`\|`browser`) | ✅ | `/sandbox [minimal\|browser]` |
@@ -419,6 +420,13 @@ A boolean `confirm: true` would be one tap from a phone in a pocket, and a token
 the coordinator minted would let a compromised coordinator mint its own. The pin
 is issued by the **host**, which is the party that would be rebooted.
 
+**`pinadmin` records who may do that, on the box.** `email` and `op` (`add` or
+`remove`) write `pinned-admins.json` beside the host key. The first pin is the
+person who signs it, naming themselves. Until somebody is pinned the box takes
+the coordinator's word for who is an admin; after that, reboot, upgrade, update
+and a restore of somebody else's work need a pinned admin's signature. The last
+pinned admin cannot be removed. See `docs/signed-intents.md`, phase 4.
+
 **`updates` answers both questions at once, and that is the whole point of it.**
 `update` is this software; `upgrade` is the operating system. They are different
 subjects with different answers, and the app's Check button asked only the
@@ -537,9 +545,10 @@ host carrying it, which is what makes "per label" a real answer rather than a
 description of round-robin. `reachable()` and not `schedulable()`: a degraded box
 is exactly the one somebody wants to move off rolling.
 
-`reboot`, `upgrade`, `update` and `logs` deliberately do **not** fan out on a
+`reboot`, `upgrade`, `update`, `pinadmin` and `logs` deliberately do **not** fan out on a
 tag. "Reboot everything labelled prod" is a fleet-wide outage expressible in one
-line, and four apt runs merged into one reply answers nobody.
+line, and four apt runs merged into one reply answers nobody. Pinning an admin
+is one box, said out loud, for the same reason.
 
 `browser` is an **auto label** (`src/fleet/host/auto-labels.js`), derived from
 the image the host actually resolves rather than from the one it was configured
