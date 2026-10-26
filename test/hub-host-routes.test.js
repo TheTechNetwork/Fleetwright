@@ -42,6 +42,9 @@ async function hub(t, over = {}) {
     maxSessions: 5,
     loginEnabled: true,
     sandbox: true,
+    // Contained only under nomap. The cases that expect `sandboxed: true`
+    // say so; a hub that leaves the namespace unset must not.
+    sandboxUserns: 'nomap',
     sandboxCredentialsFile: '',
     // A tag this fleet publishes, so the variant is switchable and not pinned.
     sandboxImage: 'ghcr.io/example/fleetwright-session:latest',
@@ -122,12 +125,17 @@ test('a pin from the environment is reported as one, and no sandbox means no san
 test('/api/state says whether a session here is contained, and says no when it is not', async (t) => {
   // The coordinator lets a member's session onto a box they do not administer
   // only on `sandboxed: true` (docs/security.md G8), so it is said only when it
-  // is so. A sandbox the operator let `--privileged` through is not one.
+  // is so. A sandbox the operator let `--privileged` through is not one, and
+  // neither is `host`: container root is this process's uid, which is what a
+  // root-run hub and a docker engine are downgraded to (config.js
+  // resolveUserns). An unset namespace has not said nomap.
   assert.equal((await (await hub(t)).state()).sandboxed, true);
   assert.equal((await (await hub(t, { sandbox: false })).state()).sandboxed, false);
   const opened = await hub(t, { sandboxExtraArgs: ['--privileged'], sandboxAllowUnsafeArgs: true });
   assert.equal((await opened.state()).sandboxed, false);
   assert.equal((await (await hub(t, { sandboxExtraArgs: ['--device=/dev/kvm'] })).state()).sandboxed, true, 'an extra arg that adjusts the sandbox is still one');
+  assert.equal((await (await hub(t, { sandboxUserns: 'host' })).state()).sandboxed, false, 'host user namespace: container root is the service uid');
+  assert.equal((await (await hub(t, { sandboxUserns: undefined })).state()).sandboxed, false, 'an unset namespace is not nomap');
 });
 
 test('a reader that fails leaves a null, not a default', async (t) => {

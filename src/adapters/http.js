@@ -688,11 +688,16 @@ export class HttpAdapter {
       // only on `true`, because without the sandbox a session is a pane under
       // this account, which holds every person's credentials here and the
       // loopback token (docs/security.md G8). So `true` is said only when it
-      // is so: the sandbox on, and no FLEETWRIGHT_SANDBOX_ARGS the operator
-      // let through that end containment (sandbox-args.js), because a box
-      // whose sandbox is `--privileged` is not one. Read from configuration
-      // that cannot fail, so it is a boolean and never null.
-      sandboxed: Boolean(cfg.sandbox) && !unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length,
+      // is so: the sandbox on, the user namespace `nomap` — container root is
+      // a subordinate uid, not this process — and no FLEETWRIGHT_SANDBOX_ARGS
+      // the operator let through that end containment (sandbox-args.js). A
+      // `--privileged` sandbox is not one. Neither is `host`: config.js
+      // downgrades a root-run hub and a docker engine to it, and under `host`
+      // container root IS the service uid, which owns the credentials and the
+      // loopback token. An unset namespace has not said `nomap`, so it is not
+      // contained either. Read from configuration that cannot fail, so it is
+      // a boolean and never null.
+      sandboxed: Boolean(cfg.sandbox) && cfg.sandboxUserns === 'nomap' && !unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length,
       // How many characters of house rules every session here is given, 0 when
       // the file exists and is refused (too big, not a file), null when there
       // is none — the shape the sidecar always sent, moved here unchanged.
