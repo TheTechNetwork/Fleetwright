@@ -465,7 +465,7 @@ export class Sidecar {
     /** @type {XoPools|null} */
     // ON A POOL'S OWN MACHINE, the Xen Orchestra it was made to hold
     // (xo-holder.js): its health says so, and the coordinator asks it first.
-    this.pools = xoPools ?? (vaultKey ? new XoPools({ log: this.log, holderFor }) : null);
+    this.pools = xoPools ?? (vaultKey ? new XoPools({ log: this.log, holderFor, boxId: this.hostId }) : null);
     /**
      * THE POOLS' EDGE ROUTERS, read with the key the person's vault keeps
      * beside a pool's token (edge-watch.js), for the pools that have one.

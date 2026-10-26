@@ -77,6 +77,7 @@ import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
 import { probeClaude } from '../../core/claude-token-probe.js';
 import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaude } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
+import { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem } from '../protocol/hypervisor-name.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
 export const OAUTH_PROVIDERS = Object.freeze({
@@ -116,16 +117,14 @@ export const SECRET_PREFIX = 'secret:';
 /**
  * The prefix a hypervisor's item carries: `hypervisor:<address>`, the limited
  * Xen Orchestra token onboarding made for that address, as the record the
- * phone was handed (src/fleet/host/xo-setup.js, hand-off). Its own kind and
- * not a named secret, because a named secret is handed to SESSIONS by name
- * (`fleet-secret`), and a pool's token is for the box that makes machines on
- * it and nothing it runs. A box keeps it in memory only
+ * phone was handed (src/fleet/host/xo-setup.js, hand-off), and
+ * `hypervisor:<address>+<box>` for one box's own user (xo-box-users.js).
+ * Its own kind and not a named secret, because a named secret is handed to
+ * SESSIONS by name (`fleet-secret`), and a pool's token is for the box that
+ * makes machines on it and nothing it runs. A box keeps it in memory only
  * (src/fleet/host/xo-pools.js).
  */
-export const HYPERVISOR_PREFIX = 'hypervisor:';
-
-/** A Xen Orchestra address as onboarding takes one: a host name or address, and a port. */
-export const HYPERVISOR_ADDRESS_RE = /^(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9][A-Za-z0-9.-]{0,252})(?::\d{1,5})?$/;
+export { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem };
 
 /** How large a named secret may be. A key file, not a database. */
 const MAX_SECRET = 8192;
@@ -191,7 +190,7 @@ export function itemKind(name) {
   if (name === 'claude') return 'claude';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return 'oauth';
   if (name.startsWith(SECRET_PREFIX) && SECRET_NAME_RE.test(name.slice(SECRET_PREFIX.length))) return 'secret';
-  if (name.startsWith(HYPERVISOR_PREFIX) && HYPERVISOR_ADDRESS_RE.test(name.slice(HYPERVISOR_PREFIX.length))) return 'hypervisor';
+  if (splitHypervisorItem(name)) return 'hypervisor';
   return null;
 }
 
@@ -210,8 +209,14 @@ function isHypervisorRecord(name, value) {
   } catch {
     return false;
   }
-  return Boolean(record) && typeof record === 'object' && typeof record.token === 'string' && record.token.length > 0 &&
-    record.address === name.slice(HYPERVISOR_PREFIX.length);
+  const split = splitHypervisorItem(name);
+  if (!split || !record || typeof record !== 'object' || typeof record.token !== 'string' || !record.token) return false;
+  if (record.address !== split.address) return false;
+  // A per-box token filed under the shared name would be handed to every
+  // approved box. A shared token filed under a box's name would be that
+  // box's alone, and would not be the user the name says.
+  if (split.box === null) return record.box === undefined || record.box === null;
+  return record.box === split.box;
 }
 
 /**
@@ -766,7 +771,8 @@ async function testItem(name, row, config, key, who, save) {
 function label(name) {
   if (name === 'claude') return 'your Claude login';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return OAUTH_PROVIDERS[/** @type {keyof typeof OAUTH_PROVIDERS} */ (name)].label;
-  if (name.startsWith(HYPERVISOR_PREFIX)) return `the hypervisor at ${name.slice(HYPERVISOR_PREFIX.length)}`;
+  const hypervisor = splitHypervisorItem(name);
+  if (hypervisor) return `the hypervisor at ${hypervisor.address}`;
   return name.startsWith(SECRET_PREFIX) ? `the secret ${name.slice(SECRET_PREFIX.length)}` : name;
 }
 

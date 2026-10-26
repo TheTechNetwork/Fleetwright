@@ -648,10 +648,16 @@ What the code rests on, held to it:
   `vm.start` (`operate`), and `vm.set`, `tag.add` and `vm.delete`
   (`administrate`); the maker was given each. `vm.create` with `share: true`
   gives every subject the ACL, which is today's behaviour by another route.
-  Not built: a machine would answer only to the box that made it, so stopping,
-  extending, sweeping on expiry and handing over the login would all wait on
-  that one box, and each box would need a user and a token an admin job
-  minted for it (`docs/security.md`, G14).
+  A policy choice that names the live boxes mints one user per box
+  (`fleetwright-box-<host id>`, `xo-box-users.js`) and hands each token back
+  sealed. A machine of a box that is not on that list is removed when it has
+  stopped or run past its end, and one still in its time is given to the
+  first box on the list before the gone user is deleted, so it is not left
+  with nobody who can reach it. A machine marked busy keeps its user. The
+  shared user is not retired: phones do not send the list yet, and a phone
+  that still keeps the shared token can still reach every machine that user
+  made. The per-box record is `hypervisor:<address>+<box>`, granted to that
+  box alone; until a phone keeps it, no box holds it.
 
 ## What `provision` may express
 

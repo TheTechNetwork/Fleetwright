@@ -92,17 +92,17 @@ export function certificate() {
  *
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string>, servers?: XoServer[] }} [opts]
  */
-export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, watchdog = /** @type {any} */ (null), maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null) } = {}) {
+export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, watchdog = /** @type {any} */ (null), maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null), users: extraUsers = /** @type {any[]} */ ([]) } = {}) {
   const { key, cert, pin } = givenTls ?? certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
-  const users = /** @type {any[]} */ ([{ id: 'u-admin', email: 'admin@admin.net', permission: admin ? 'admin' : 'none' }]);
+  const users = /** @type {any[]} */ ([{ id: 'u-admin', email: 'admin@admin.net', permission: admin ? 'admin' : 'none' }, ...extraUsers]);
   const sets = /** @type {any[]} */ (given);
   /** @type {Map<string, string[]>} the tags each network carries, as tag.add and tag.remove leave them */
   const tags = new Map([['net-mgmt', ['fleetwright-egress']], ['net-lab', []], ['net-dmz', []]]);
   const passwords = new Map([['admin@admin.net', adminPassword]]);
   const methods = Object.fromEntries(
-    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove']
+    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'user.delete', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'resourceSet.addSubject', 'token.create', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove', 'acl.add', 'acl.remove', 'vm.stop', 'vm.delete']
       .concat(servers ? ['server.getAll', 'server.enable', 'server.disable'] : [])
       .concat(more)
       .filter((m) => !drop.includes(m))
@@ -309,10 +309,34 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
           case 'vm.create': answer(`vm-made-${calls.filter((c) => c.method === 'vm.create').length}`); break;
           case 'tag.add': tags.set(p.id, [...(tags.get(p.id) ?? []), p.tag]); answer(true); break;
           case 'tag.remove': tags.set(p.id, (tags.get(p.id) ?? []).filter((x) => x !== p.tag)); answer(true); break;
+          case 'user.delete': {
+            const at = users.findIndex((x) => x.id === p.id);
+            if (at >= 0) users.splice(at, 1);
+            answer(true);
+            break;
+          }
+          case 'resourceSet.addSubject': {
+            const set = sets.find((x) => x.id === p.id);
+            if (set) set.subjects = [...new Set([...(set.subjects ?? []), p.subject])];
+            answer(true);
+            break;
+          }
+          case 'vm.stop': {
+            const vm = Object.hasOwn(vms, p.id) ? vms[p.id] : undefined;
+            if (vm) vm.power_state = 'Halted';
+            answer(true);
+            break;
+          }
+          case 'vm.delete':
+            delete vms[p.id];
+            answer(true);
+            break;
           case 'token.create':
             // Xen Orchestra's own cap, and the words a limited user is given for going over it.
             if (p.expiresIn !== undefined && p.expiresIn > maxTokenMs) refuse('unknown error from the peer');
-            else answer(as === FLEET_USER ? 'tok-limited-123' : 'tok-WRONG-USER');
+            else if (as === FLEET_USER) answer('tok-limited-123');
+            else if (typeof as === 'string' && as.startsWith('fleetwright-box-')) answer(`tok-${as}`);
+            else answer('tok-WRONG-USER');
             break;
           case 'plugin.get': answer([plugin, watchdog].filter(Boolean)); break;
           default: answer(true);
@@ -325,5 +349,5 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => server.close());
   const address = `127.0.0.1:${/** @type {import('node:net').AddressInfo} */ (server.address()).port}`;
-  return { address, pin, calls, users, sets, tags, passwords, connections: () => conns, live: () => live };
+  return { address, pin, calls, users, sets, tags, passwords, vms, connections: () => conns, live: () => live };
 }

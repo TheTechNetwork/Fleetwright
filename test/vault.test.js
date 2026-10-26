@@ -871,6 +871,11 @@ test('a hypervisor’s token is kept as its own kind, checked against its addres
   assert.equal(wrong.error?.code, 'bad_value');
   assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan', value: 'not json' })).error?.code, 'bad_value');
   assert.equal((await m.phone({ op: 'put', name: 'hypervisor:bad name', value: record })).error?.code, 'bad_name');
+  // A per-box token under the shared name would be handed to every approved box.
+  const boxed = JSON.stringify({ ...JSON.parse(record), box: 'deb14', token: 'xo-box-token' });
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan', value: boxed })).error?.code, 'bad_value');
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan+deb14', value: record })).error?.code, 'bad_value');
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan+deb14', value: boxed })).ok, true);
   const kept = await m.phone({ op: 'put', name: 'hypervisor:xo.lan', value: record });
   assert.equal(kept.ok, true, kept.text);
   assert.match(kept.text, /memory only/);
