@@ -237,6 +237,7 @@ says on health which journals a box has so the buttons are only ever live.)
 | **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
 | **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
 | **grant a session a secret** (v4 `secret`) | picker on the start sheet | picker on the start sheet | `/new --secret=<name>` |
+| **permission mode** (`start` `mode`) | New session → Permissions, and on a kind. The usual start is labelled: permissions bypassed. A start always sends `safe` or `dangerous` | the same chips, the same words (`test/permission-mode-in-apps.test.js`) | `/new` names the mode, including the fleet default |
 | **see what secrets a host holds** | fed by `secrets`, fans out (names only) | fed by `secrets`, fans out (names only) | `/secrets` |
 | **readmit a revoked host / replace a host's key** | swipe the host row | button on the host row | curl |
 | **which releases a box takes** (v3 `channel`) | segmented picker in the host row | chips in the host row | `/channel` |
