@@ -10,6 +10,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `ci.yml` | every push and PR — **no paths filter**, see `ci-scope.md` | none |
 | `ci.yml` — `root` | every push and PR — the root-gated tests, under `sudo`, on Node 24 and 26; see [below](#the-tests-only-root-can-run) | none |
 | `ci.yml` — `gate` (`CI passed`) | every push, PR and merge-queue run | none |
+| `ci.yml` — `checks` | the same — and `scripts/claude-dialog-check.mjs`, which installs the Claude Code release pinned in `src/fleet/host/claude-pin.js` (the same pin as `mac-host.yml`) and fails if that binary still asks a trust, permission or resume question the matchers do not know | none |
 | `ios.yml` — `build` | PRs touching `apps/ios` | **none** |
 | `android.yml` — `debug` | PRs touching `apps/android` | none |
 | `worker.yml` — `check` | PRs touching the bundle (`worker/`, `src/fleet/`, `src/core/`) | none |

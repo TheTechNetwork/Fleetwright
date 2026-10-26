@@ -281,6 +281,15 @@ jobs:
       # do less than the checked-in script does. Two implementations of one
       # check is how the weaker one becomes the one that passes.
 
+      # THE PINNED CLAUDE CODE, against the dialog matchers. Once, not on the
+      # Node matrix: the binary does not change with the runtime. It installs
+      # the release mac-host.yml installs and refuses a trust, permission or
+      # resume question that build still contains and prompt.js does not know.
+      # A credential is not involved. The captures in test/fixtures stay; this
+      # is what notices the next wording before a session sits on it.
+      - name: Pinned Claude Code dialogs
+        run: node scripts/claude-dialog-check.mjs
+
   # THE TESTS ONLY ROOT CAN RUN, as root.
   #
   # Twenty-four tests skip unless they run as root: root's doctor reaching
