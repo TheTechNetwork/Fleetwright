@@ -1418,7 +1418,9 @@ test('a sign-in ended outside the fleet is told from one this fleet renewed, by 
   await m.box(office);
   const renewed = await m.phone({ op: 'test', name: 'claude' });
   assert.equal(renewed.answer.state, 'accepted', renewed.text);
-  assert.match(renewed.text, /Last renewed at \d\d:\d\d UTC, asked for by a test; that access token is good until \d\d:\d\d UTC\./);
+  // The expiry is ten minutes out, so in the last ten minutes of a UTC day it
+  // carries tomorrow's date. The renewal itself is always "now".
+  assert.match(renewed.text, /Last renewed at \d\d:\d\d UTC, asked for by a test; that access token is good until (?:\d{4}-\d{2}-\d{2} )?\d\d:\d\d UTC\./);
 
   // Then signed out on claude.ai: the next renewal is refused, and nothing in
   // the fleet renewed it between the last good one and the refusal.
@@ -1576,21 +1578,48 @@ test('a refresh token that runs out before its access token is renewed before it
   // after keeping, with nothing in the fleet using them. A refresh token that
   // lasts fewer than eight hours looks exactly like that, and its lifetime,
   // which Claude Code writes beside it, was dropped when it was kept.
-  const m = await minter();
-  t.after(m.restore);
+  //
+  // THE SENTENCE IS DATED WHEN THE INSTANT IS NOT TODAY. describeRenewals
+  // prints HH:MM for a time on the same UTC day as now, and YYYY-MM-DD HH:MM
+  // otherwise. An eight-hour access token kept at 21:35 UTC runs out at 05:35
+  // the next day, so a matcher that only accepts HH:MM fails from 16:00 UTC
+  // until midnight — which is when this test was red on a wall clock. Both
+  // hours are frozen here, and each expects the sentence that hour produces.
+  const cases = [
+    {
+      name: 'shortlived-morning',
+      now: Date.parse('2026-10-26T10:00:00Z'),
+      until: 'that access token is good until 18:00 UTC, and its refresh token until 16:00 UTC.',
+    },
+    {
+      name: 'shortlived-evening',
+      now: Date.parse('2026-10-26T21:35:00Z'),
+      until: 'that access token is good until 2026-10-27 05:35 UTC, and its refresh token until 2026-10-27 03:35 UTC.',
+    },
+  ];
   t.after(() => { claudeRenewals.refreshExpiresIn = undefined; });
-  const office = await generateKeyPair();
-  const made = /** @type {any} */ (claudeSignInFor('shortlived'));
-  made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
-  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
-  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
-  claudeRenewals.refreshExpiresIn = 6 * 3600;
-  const before = claudeRenewals.count;
-  const given = await m.box(office);
-  assert.equal(claudeRenewals.count - before, 1, 'renewed with seven hours of access left, because the refresh token had twenty minutes');
-  assert.match(given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude').value, /^sk-ant-oat01-renewed/);
-  const tested = await m.phone({ op: 'test', name: 'claude' });
-  assert.match(tested.text, /that access token is good until \d\d:\d\d UTC, and its refresh token until \d\d:\d\d UTC\./);
+  for (const { name, now, until } of cases) {
+    t.mock.timers.enable({ apis: ['Date'], now });
+    const m = await minter();
+    t.after(m.restore);
+    try {
+      const office = await generateKeyPair();
+      const made = /** @type {any} */ (claudeSignInFor(name));
+      made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+      assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true, name);
+      await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+      claudeRenewals.refreshExpiresIn = 6 * 3600;
+      const before = claudeRenewals.count;
+      const given = await m.box(office);
+      assert.equal(claudeRenewals.count - before, 1, `${name}: renewed with seven hours of access left, because the refresh token had twenty minutes`);
+      assert.match(given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude').value, /^sk-ant-oat01-renewed/);
+      const tested = await m.phone({ op: 'test', name: 'claude' });
+      assert.ok(tested.text.includes(until), `${name}: ${tested.text}`);
+    } finally {
+      claudeRenewals.refreshExpiresIn = undefined;
+      t.mock.timers.reset();
+    }
+  }
 });
 
 test('the check renews a kept sign-in soon after keeping and hourly after, so a broken one is found in minutes', async (t) => {
