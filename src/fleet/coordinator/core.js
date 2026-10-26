@@ -4392,18 +4392,34 @@ export class CoordinatorCore {
       const email = String(e?.email || '').trim().toLowerCase();
       if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
       const at = Number(e.at);
-      const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
-      this.record({ event: 'claude.ended', actor: email, text: `${email}: Claude refused to renew the kept sign-in${when} (${String(e.why || '').slice(0, 160)})` });
+      const hhmm = (/** @type {number} */ t) => new Date(t).toISOString().slice(11, 16);
+      const when = Number.isFinite(at) ? ` at ${hhmm(at)} UTC` : '';
+      // WHAT THE MINTER'S RECORD SAYS ENDED IT, and nothing stronger: this
+      // said "ended outside the fleet" from the refusal alone, and a renewal
+      // this fleet cut off or dropped ends a sign-in the same way. A minter
+      // from before the verdict says nothing, and neither does this.
+      const kind = String(e.verdict?.kind || '');
+      const lostAt = Number(e.verdict?.at);
+      const lost = Number.isFinite(lostAt) ? ` at ${hhmm(lostAt)} UTC` : '';
+      const cause = kind === 'outside'
+        ? `It was ended outside the fleet: Claude refused to renew it${when}, and the record shows nothing in the fleet renewing it before that.`
+        : kind === 'cut'
+          ? `A renewal${lost} was cut off before its answer was kept, so this fleet lost it. Claude refused the next one${when}.`
+          : kind === 'dropped'
+            ? `A renewal${lost} was not kept, because a new sign-in was being kept at the same moment, so this fleet lost it. Claude refused the next one${when}.`
+            : `Claude refused to renew it${when}.`;
+      this.record({ event: 'claude.ended', actor: email, text: `${email}: ${cause} (${String(e.why || '').slice(0, 160)})` });
       told += 1;
       if (!this.push) continue;
       const devices = this.#devicesOf(email);
       const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
       const admins = devices.filter((d) => !own.includes(d));
-      const body = `It was ended outside the fleet${when}, so sessions cannot start with it. Sign in to Claude again from your phone or the signing page.`;
+      const body = `${cause} Sessions cannot start with it. Sign in to Claude again from your phone or the signing page.`;
       const data = { event: 'claude.ended', kind: 'claude-ended', name: '', hostId: '', url: '' };
+      const said = kind === 'outside' ? 'was ended' : 'stopped working';
       try {
-        if (own.length) await this.push.send(own, { title: 'Your Claude sign-in was ended', body, data });
-        if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in was ended`, body: body.replace('from your phone', 'from their phone'), data });
+        if (own.length) await this.push.send(own, { title: `Your Claude sign-in ${said}`, body, data });
+        if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in ${said}`, body: body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
     }
     return told;

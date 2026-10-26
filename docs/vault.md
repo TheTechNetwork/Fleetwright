@@ -109,8 +109,16 @@ be refused for reasons the refresh token survives, and the refresh token is
 the one thing only signing in again mends. Anything else is cannot tell and
 says nothing. Each ended sign-in is named once (`claude-ended:<id>`, keyed by
 when it was kept), so the next sign-in kept is told about afresh. The
-coordinator records `claude.ended` and pushes "Your Claude sign-in was ended"
-to the person's phones and the sign-in's name to an admin's.
+coordinator records `claude.ended` and pushes to the person's phones, and to
+an admin's with whose sign-in it was.
+
+**The push says what the record says, and no more** (`renewalVerdict`). "Was
+ended outside the fleet" is said only when nothing in the fleet renewed the
+sign-in between its last good renewal (or its keeping) and the refusal. A
+renewal Anthropic answered and this fleet never kept, because it was cut off
+or dropped, ends a sign-in the same way. Then the push says this fleet lost it,
+and when. The first notification said "outside" from the refusal alone, on
+2026-10-26, with nothing checked.
 
 The minter answers at most every ten minutes, whoever asks. A compromised
 coordinator can ask more often and be told nothing new. It cannot make a

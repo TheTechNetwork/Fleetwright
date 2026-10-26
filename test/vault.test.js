@@ -1501,7 +1501,7 @@ test('a sign-in Anthropic ended is found by the minter and its person told on th
   assert.equal(claudeRenewals.count - renewed, 1, 'renewed at once when its access token was refused');
   const mine = sends.find((s) => s.to.includes(`fleet:${ELI}`));
   assert.equal(mine.message.title, 'Your Claude sign-in was ended');
-  assert.match(mine.message.body, /^It was ended outside the fleet at \d\d:\d\d UTC, so sessions cannot start with it\. Sign in to Claude again from your phone or the signing page\.$/);
+  assert.match(mine.message.body, /^It was ended outside the fleet: Claude refused to renew it at \d\d:\d\d UTC, and the record shows nothing in the fleet renewing it before that\. Sessions cannot start with it\. Sign in to Claude again from your phone or the signing page\.$/);
   assert.equal(mine.message.data.kind, 'claude-ended');
   assert.equal(mine.message.drawnByApp, undefined, 'drawn by the system tray');
   const admin = sends.find((s) => s.to.includes('fleet:ops@example.com'));
@@ -1528,4 +1528,42 @@ test('a sign-in Anthropic ended is found by the minter and its person told on th
   assert.equal(await core.checkClaudeSignIns(), 1);
   assert.equal(claudeUsageAsks.count, before, 'a refusal already noted is not asked about again');
   assert.equal(sends.length, 4);
+});
+
+test('the phone is told what the record says ended a sign-in, and a renewal this fleet lost is not blamed on anything outside it', async () => {
+  // SEEN ON 2026-10-26: "It was ended outside the fleet at 02:00 UTC" was
+  // said from the refusal alone. A renewal Anthropic answered and this fleet
+  // never kept ends a sign-in the same way, and only the record tells them apart.
+  /** @type {any[]} */
+  let ended = [];
+  /** @type {any[]} */
+  const sends = [];
+  const clock = { now: Date.parse('2026-10-26T02:00:55Z') };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ ({ claude: async () => ({ ok: true, ended }) }),
+    push: /** @type {any} */ ({ async send(/** @type {any[]} */ _d, /** @type {any} */ message) { sends.push(message); return { sent: 1, dead: [] }; } }),
+    now: () => clock.now,
+  });
+  const { client } = /** @type {any} */ (await core.clients.issue('phone', { admin: false, email: ELI }));
+  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: client.id, actor: `fleet:${ELI}` });
+  const refused = { email: ELI, login: 'eli', at: Date.parse('2026-10-26T02:00:10Z'), why: 'Claude refused to renew it (Refresh token not found or invalid)' };
+  /** @param {any} verdict */
+  const tell = async (verdict) => {
+    ended = [{ ...refused, ...(verdict ? { verdict } : {}) }];
+    clock.now += 16 * 60_000;
+    await core.checkClaudeSignIns();
+    return sends.at(-1);
+  };
+
+  const cut = await tell({ kind: 'cut', at: Date.parse('2026-10-26T01:49:50Z') });
+  assert.equal(cut.title, 'Your Claude sign-in stopped working');
+  assert.match(cut.body, /^A renewal at 01:49 UTC was cut off before its answer was kept, so this fleet lost it\. Claude refused the next one at 02:00 UTC\./);
+  assert.doesNotMatch(cut.body, /outside/);
+  const dropped = await tell({ kind: 'dropped', at: Date.parse('2026-10-26T01:49:50Z') });
+  assert.match(dropped.body, /^A renewal at 01:49 UTC was not kept, because a new sign-in was being kept at the same moment, so this fleet lost it\./);
+  // A MINTER FROM BEFORE THE VERDICT says only what it knows.
+  const unsaid = await tell(null);
+  assert.equal(unsaid.title, 'Your Claude sign-in stopped working');
+  assert.match(unsaid.body, /^Claude refused to renew it at 02:00 UTC\. Sessions cannot start with it\./);
+  assert.ok(core.events.some((e) => e.event === 'claude.ended' && /cut off before its answer was kept/.test(e.text)), 'the event says the same');
 });
