@@ -159,7 +159,7 @@ the check is an allowlist of `1`, `true`, `yes`, `on`.
 | Encrypting in both senders, with the plaintext fallback | **done**, `src/fleet/push.js` |
 | `pushKey` accepted and validated at registration | **done**, both coordinators |
 | Exercised end to end against the bytes a phone receives | **done**, `test/push-encryption.test.js` and `test/fixtures/parity/push-envelope.json` |
-| Key generation and storage | **done**. iOS Keychain, `AfterFirstUnlockThisDeviceOnly`, account `push-key`. Android Keystore, alias `fleetwright.push`, `PURPOSE_AGREE`, no user authentication |
+| Key generation and storage | **done**. iOS Keychain, `AfterFirstUnlockThisDeviceOnly`, account `push-key`. Android Keystore, alias `fleetwright.push`, `PURPOSE_AGREE_KEY`, no user authentication |
 | Both phones register `pushKey` | **done**, and omit it when the store declines, so the notification stays in the clear |
 | iOS Notification Service Extension | **done**, `network.thetech.fleetwright.Push`. It rewrites the alert and copies the sealed fields into `userInfo`. A seal it cannot open leaves the fallback sentence and clears the category, so a button is not offered for a question that was not read |
 | Android data-message decryption | **done**. `onMessageReceived` opens `e` before it reads `kind`, and posts the notification itself when the tray was not given one |

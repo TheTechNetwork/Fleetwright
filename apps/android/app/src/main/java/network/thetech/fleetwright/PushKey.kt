@@ -11,7 +11,7 @@ import java.security.spec.ECGenParameterSpec
 /**
  * The install's push key, held by the Android Keystore.
  *
- * PURPOSE_AGREE AND NOTHING ELSE. The private half never enters the process:
+ * PURPOSE_AGREE_KEY AND NOTHING ELSE. The private half never enters the process:
  * the agreement runs in the keystore, which is the point of not doing this
  * with a key a test could export. No user authentication. A notification
  * arrives while the phone is locked, and a key that asked for a biometric
@@ -45,7 +45,7 @@ internal object PushKey {
     private fun certificatePublic(): ECPublicKey {
         val ks = keyStore()
         if (!ks.containsAlias(ALIAS)) {
-            val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_AGREE)
+            val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_AGREE_KEY)
                 .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
                 .setUserAuthenticationRequired(false)
                 .build()

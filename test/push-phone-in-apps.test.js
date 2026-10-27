@@ -79,7 +79,7 @@ test('the extension is embedded, and its profile is made rather than pasted', ()
   assert.match(WORKFLOW, /<key>\$\{PUSH_BUNDLE_ID\}<\/key><string>\$\{PUSH_PROFILE_NAME\}<\/string>/);
   assert.doesNotMatch(WORKFLOW, /APPLE_PUSH_PROVISIONING_PROFILE/);
   // The keystore key is for agreement, and it does not ask the person.
-  assert.match(ANDROID_KEY, /PURPOSE_AGREE/);
+  assert.match(ANDROID_KEY, /PURPOSE_AGREE_KEY/);
   assert.match(ANDROID_KEY, /setUserAuthenticationRequired\(false\)/);
   assert.match(ANDROID_KEY, /AndroidKeyStore/);
 });
