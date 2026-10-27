@@ -27,11 +27,19 @@ import { backupPrefix, snapshot, BACKUP_KEPT_DAYS } from '../src/fleet/minter/ba
 function storage() {
   const rows = new Map();
   let alarm = /** @type {number|null} */ (null);
+  /** Puts left before the next one throws, as an object stopped part way would. @type {{ left: number }} */
+  const failAfter = { left: Infinity };
   return {
     rows,
+    failAfter,
     alarmAt: () => alarm,
+    clearAlarm: () => { alarm = null; },
     get: async (/** @type {string} */ k) => rows.get(k),
-    put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); },
+    put: async (/** @type {string} */ k, /** @type {any} */ v) => {
+      if (failAfter.left-- <= 0) throw new Error('storage went away');
+      rows.set(k, structuredClone(v));
+    },
+    delete: async (/** @type {string} */ k) => rows.delete(k),
     list: async (/** @type {{ prefix?: string, limit?: number }} */ o = {}) =>
       new Map([...rows.entries()].filter(([k]) => k.startsWith(o.prefix ?? '')).sort(([a], [b]) => (a < b ? -1 : 1)).slice(0, o.limit ?? Infinity)),
     getAlarm: async () => alarm,
@@ -200,4 +208,37 @@ test('the operator’s script takes the keys out through the public address, sea
   assert.equal(readFileSync(join(dir, 'deposit-key.json'), 'utf8').trim(), deposit);
   assert.equal(JSON.parse(readFileSync(join(dir, 'signing-key.json'), 'utf8')).d, store.rows.get('signing:key').d);
   for (const f of ['deposit-key.json', 'signing-key.json']) assert.equal(statSync(join(dir, f)).mode & 0o777, 0o600);
+});
+
+test('a restore cut off part way is finished at the next ask, not left holding some of the rows', async (t) => {
+  t.mock.method(console, 'log', () => {});
+  const r2 = bucket();
+  const key = await newDepositKey();
+  const rows = new Map([['gh:1', { at: 1 }], ['gh:2', { at: 2 }], ['gh:3', { at: 3 }]]);
+  await snapshot(/** @type {any} */ (r2), rows, [], await importDepositKey(key.secret), Date.now());
+  const store = storage();
+  const m = minter({ BACKUP: r2, DEPOSIT_KEY_STORED: stored(key.secret) }, store);
+  // STOPPED after the marker and one row.
+  store.failAfter.left = 2;
+  assert.equal((await m.op('get', { id: '3' })).error?.code, 'restore_failed');
+  assert.ok(store.rows.size > 0 && store.rows.size < 4, 'part way: not empty, not full');
+  store.failAfter.left = Infinity;
+  assert.deepEqual((await m.op('get', { id: '3' })).row, { at: 3 }, 'the rest came back at the next ask');
+  for (const id of ['1', '2']) assert.deepEqual((await m.op('get', { id })).row, { at: Number(id) });
+  assert.equal(store.rows.has('restore:pending'), false);
+});
+
+test('a copy is asked for after a write, and a read asks for none', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const store = storage();
+  const m = minter({ BACKUP: bucket() }, store);
+  await m.op('signing-key');
+  await m.op('put', { id: '42', row: { at: 1 } });
+  assert.ok(store.alarmAt(), 'a write asks for a copy');
+  await m.instance.alarm();
+  store.clearAlarm();
+  assert.deepEqual((await m.op('get', { id: '42' })).row, { at: 1 });
+  await m.op('signing-key');
+  await m.op('deposit-key');
+  assert.equal(store.alarmAt(), null, 'reads after the copy ask for nothing');
 });

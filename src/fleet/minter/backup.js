@@ -35,6 +35,12 @@ export const BACKUP_KEPT_DAYS = 30;
 export const BACKUP_AFTER_MS = 5 * 60_000;
 
 /**
+ * A copy this size is said in the log as a warning. It is every row held in
+ * memory at once, in a Worker with 128 MiB; a handful of people is kilobytes.
+ */
+export const BACKUP_WARN_BYTES = 16 * 1024 * 1024;
+
+/**
  * A secret from a Secrets Store binding, or null when none is bound.
  *
  * BOUND AND UNREADABLE THROWS, and does not read as absent: absent is what
@@ -74,7 +80,7 @@ export async function backupPrefix(publicKey) {
  * @param {string[]} skip  the rows that are keys, which go to Secrets Store and nowhere else
  * @param {{ publicKey: string }} key
  * @param {number} now
- * @returns {Promise<number>} how many rows the copy holds
+ * @returns {Promise<{ rows: number, bytes: number }>} how many rows the copy holds, and its size
  */
 export async function snapshot(bucket, rows, skip, key, now) {
   /** @type {Record<string, any>} */
@@ -89,7 +95,7 @@ export async function snapshot(bucket, rows, skip, key, now) {
   const listed = await bucket.list({ prefix });
   const old = listed.objects.map((o) => o.key).filter((k) => /\/\d{4}-\d\d-\d\d\.json$/.test(k) && k.slice(prefix.length, prefix.length + 10) < oldest);
   if (old.length) await bucket.delete(old);
-  return Object.keys(kept).length;
+  return { rows: Object.keys(kept).length, bytes: body.length };
 }
 
 /**

@@ -466,6 +466,13 @@ jobs:
               npx wrangler deploy --config "$minter_config" ${minter_vars[@]+"${minter_vars[@]}"}
             fi
             rm -f .wrangler.minter.routed.toml "$minter_config"
+            # THE ONE-TIME EXPORT, said while it is still on: the minter seals its
+            # keys to that key for anyone who asks at the public address, which
+            # is safe, and is meant to be set for minutes, not left
+            # (src/fleet/minter/backup.js). Names only; values cannot be read.
+            if npx wrangler secret list --config wrangler.minter.toml 2>/dev/null | grep -q 'FLEETWRIGHT_MINTER_EXPORT_TO'; then
+              echo "::warning::FLEETWRIGHT_MINTER_EXPORT_TO is still set on the minting Worker, so it hands its keys, sealed to that key, to anyone who asks. Once they are in Secrets Store: npx wrangler secret delete FLEETWRIGHT_MINTER_EXPORT_TO --config wrangler.minter.toml"
+            fi
             if [ -z "${MINT_OWNERS:-}" ]; then
               echo "::notice::The minting Worker is deployed with no FLEETWRIGHT_GITHUB_MINT_OWNERS variable, so it mints for nobody."
             fi

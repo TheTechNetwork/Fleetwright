@@ -479,7 +479,7 @@ each is off until the deploy binds it (`src/fleet/minter/backup.js`):
 - **The rows, in R2.** The deploy makes a private bucket,
   `fleetwright-minter-backup` unless the repository variable
   `FLEETWRIGHT_MINTER_BACKUP_BUCKET` names another, and binds it as `BACKUP`.
-  Five minutes after anything changes, the minter writes every row but its
+  Five minutes after anything is written, the minter writes every row but its
   keys to `latest.json`, and to that day's file, sealed to the deposit key.
   Dated copies are kept thirty days. Copies are filed under the deposit key's
   fingerprint, so a minter that lost its key and made a new one writes beside
@@ -499,6 +499,13 @@ only when the deposit key comes from outside it (Secrets Store, or
 copy that is there and does not open stops the object with `restore_failed`.
 It does not start empty, because the first row written would mean the copy
 was never read again. Unbind `BACKUP` to start empty anyway.
+A restore cut off part way is finished at the next ask. The rows go back one
+at a time with a `restore:pending` marker, which is removed only once the last
+row is in, so an object holding some of the rows still knows to go on.
+
+A copy is asked for only after something was written. Reads ask for none. Each
+copy's row count and size go to the log, and the log warns past 16 MiB. The
+deploy warns while `FLEETWRIGHT_MINTER_EXPORT_TO` is still set.
 
 **Getting the keys into Secrets Store** is done once, by hand, because a
 Worker cannot write there and nobody can read a value back out:

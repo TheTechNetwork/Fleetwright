@@ -68,7 +68,7 @@ import { answerVaultDevice, answerVaultBox, answerVaultKeys, answerClaudeFresh, 
 import { generateKeyPair } from '../../src/fleet/crypto.js';
 import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
-import { storedSecret, snapshot, latestCopy, exportKeys, BACKUP_AFTER_MS } from '../../src/fleet/minter/backup.js';
+import { storedSecret, snapshot, latestCopy, exportKeys, BACKUP_AFTER_MS, BACKUP_WARN_BYTES } from '../../src/fleet/minter/backup.js';
 import { signerRoutes, SIGNER_VERBS } from '../../src/fleet/minter/sign-page.js';
 import { VERBS } from '../../src/fleet/protocol/intents.js';
 
@@ -85,6 +85,11 @@ export const KEY_PATH = '/.well-known/fleetwright-minter';
 const DEPOSIT_ROW = 'deposit:key';
 /** Where the object keeps the key it signs a box's key list with: a P-256 private JWK. */
 const SIGNING_ROW = 'signing:key';
+/**
+ * Set while rows are being put back from a copy, and removed once the last is
+ * in: an object found holding it was cut off part way, and is filled again.
+ */
+const RESTORING_ROW = 'restore:pending';
 
 /**
  * The header that asks the public address for the keys sealed to the
@@ -206,7 +211,23 @@ export class ClaudeLogins {
    * @param {Record<string, any>} [env]
    */
   constructor(state, env = {}) {
-    this.storage = state.storage;
+    // EVERY WRITE NOTED, so a copy is asked for after a change and not after
+    // every read (backupSoon). Everything else passes through as it is.
+    const storage = state.storage;
+    this.dirty = false;
+    this.storage = new Proxy(storage, {
+      get: (target, prop) => {
+        const v = /** @type {any} */ (target)[prop];
+        if (typeof v !== 'function') return v;
+        if (prop === 'put' || prop === 'delete') {
+          return (/** @type {any[]} */ ...a) => {
+            this.dirty = true;
+            return v.apply(target, a);
+          };
+        }
+        return v.bind(target);
+      },
+    });
     this.env = env;
     /** @type {Promise<string>|null} */
     this.made = null;
@@ -227,21 +248,31 @@ export class ClaudeLogins {
    * make it not empty, and the copy would never be read again. Unbinding
    * `BACKUP` is how an operator says to start empty anyway.
    *
+   * CUT OFF PART WAY, it is filled again. The rows go back one at a time, so
+   * an object stopped half way would hold some and look not empty; it holds
+   * RESTORING_ROW too until the last is in, and that is what says to go on.
+   *
    * @returns {Promise<void>}
    */
   restoreIfEmpty() {
     if (!this.ready) {
       this.ready = (async () => {
         if (!this.env.BACKUP || typeof this.storage.list !== 'function') return;
-        if ((await this.storage.list({ limit: 1 })).size) return;
+        const resuming = await this.storage.get(RESTORING_ROW);
+        if (!resuming && (await this.storage.list({ limit: 1 })).size) return;
         const secret = String(this.env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '') || (await storedSecret(this.env.DEPOSIT_KEY_STORED));
         if (!secret) {
           console.warn('The minter is empty, and its deposit key is kept nowhere outside it, so no copy can be opened. Starting empty.');
           return;
         }
         const copy = await latestCopy(this.env.BACKUP, await depositKeyFor(secret));
-        if (!copy) return;
+        if (!copy) {
+          if (resuming) throw new Error('a restore was cut off part way and its copy is no longer there');
+          return;
+        }
+        await this.storage.put(RESTORING_ROW, { from: copy.at });
         for (const [k, v] of Object.entries(copy.rows)) await this.storage.put(k, v);
+        await this.storage.delete(RESTORING_ROW);
         const n = Object.keys(copy.rows).length;
         console.log(`The minter was empty, and was filled from the copy made at ${new Date(copy.at).toISOString()}: ${n} ${n === 1 ? 'row' : 'rows'}.`);
       })();
@@ -269,9 +300,13 @@ export class ClaudeLogins {
     );
   }
 
-  /** The copy written BACKUP_AFTER_MS after a change, when a bucket is bound and no copy is due already. */
+  /**
+   * The copy written BACKUP_AFTER_MS after a change, when a bucket is bound
+   * and no copy is due already. Only after a write: a read asking for one
+   * every five minutes was two R2 writes and a listing for nothing new.
+   */
   async backupSoon() {
-    if (!this.env.BACKUP || typeof this.storage.getAlarm !== 'function' || typeof this.storage.setAlarm !== 'function') return;
+    if (!this.dirty || !this.env.BACKUP || typeof this.storage.getAlarm !== 'function' || typeof this.storage.setAlarm !== 'function') return;
     try {
       if ((await this.storage.getAlarm()) === null) await this.storage.setAlarm(Date.now() + BACKUP_AFTER_MS);
     } catch {
@@ -284,7 +319,13 @@ export class ClaudeLogins {
     if (!this.env.BACKUP || typeof this.storage.list !== 'function') return;
     await this.restoreIfEmpty();
     const secret = String(this.env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '') || (await this.depositSecret());
-    await snapshot(this.env.BACKUP, await this.storage.list(), [DEPOSIT_ROW, SIGNING_ROW], await depositKeyFor(secret), Date.now());
+    // CLEARED BEFORE, so a write while the copy is made asks for the next.
+    this.dirty = false;
+    const made = await snapshot(this.env.BACKUP, await this.storage.list(), [DEPOSIT_ROW, SIGNING_ROW, RESTORING_ROW], await depositKeyFor(secret), Date.now());
+    // ITS SIZE SAID, because the copy is every row in one object held in memory.
+    const said = `The minter copied ${made.rows} rows to R2 (${Math.ceil(made.bytes / 1024)} KiB).`;
+    if (made.bytes > BACKUP_WARN_BYTES) console.warn(`${said} That is large enough to split the copy before it grows much more.`);
+    else console.log(said);
   }
 
   /**
