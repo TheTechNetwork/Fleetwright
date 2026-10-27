@@ -158,12 +158,22 @@ the check is an allowlist of `1`, `true`, `yes`, `on`.
 | Scheme, envelope, key validation | **done**, `src/fleet/push-crypto.js` |
 | Encrypting in both senders, with the plaintext fallback | **done**, `src/fleet/push.js` |
 | `pushKey` accepted and validated at registration | **done**, both coordinators |
-| Exercised end to end against the bytes a phone receives | **done**, `test/push-encryption.test.js` |
-| iOS Notification Service Extension | **not built** |
-| Android data-message decryption | **not built** |
-| Key generation and storage in either app | **not built** |
+| Exercised end to end against the bytes a phone receives | **done**, `test/push-encryption.test.js` and `test/fixtures/parity/push-envelope.json` |
+| Key generation and storage | **done**. iOS Keychain, `AfterFirstUnlockThisDeviceOnly`, account `push-key`. Android Keystore, alias `fleetwright.push`, `PURPOSE_AGREE`, no user authentication |
+| Both phones register `pushKey` | **done**, and omit it when the store declines, so the notification stays in the clear |
+| iOS Notification Service Extension | **done**, `network.thetech.fleetwright.Push`. It rewrites the alert and copies the sealed fields into `userInfo`. A seal it cannot open leaves the fallback sentence and clears the category, so a button is not offered for a question that was not read |
+| Android data-message decryption | **done**. `onMessageReceived` opens `e` before it reads `kind`, and posts the notification itself when the tray was not given one |
 
-Until the last three land, no phone registers a `pushKey`, so every notification
-takes the fallback path and behaves exactly as it does today. That is the point
-of the fallback being a first-class path rather than an error case: the
-coordinator half can ship, and be tested, before either app moves.
+A phone installed before this, which registers no key, still gets the plaintext
+path. That is the point of the fallback being a first-class path rather than an
+error case.
+
+**What is still true, and worth not overstating.** A Live Activity is not
+sealed: ActivityKit is handed `content-state` with nothing of ours run first
+(`docs/push.md`). The key is unavailable before the first unlock after a
+reboot, and the fallback shows. An encrypted notification does not collapse on
+the session name, because the name is inside the envelope; Android replaces by
+that name once it has opened one, and iOS may stack them. The extension reads
+the app's default keychain group. The app's entitlements are unchanged, so the
+existing distribution profile still signs it, and the release job refuses an
+extension profile that does not allow that group.

@@ -394,9 +394,10 @@ on the topic `<bundle id>.push-type.liveactivity` (`apnsPusher().activity` in
 minutes later, and the ordinary notification beside it says how it ended.
 
 **Its content is not sealed, and that decides what is in it.** A notification
-is opened by the app's extension before it is shown; a Live Activity's
-`content-state` is handed straight to the widget, and ActivityKit runs nothing
-of ours first. So the payload is `{ step, of, phase, state }`, where `phase` is
+is opened by the notification service extension (`network.thetech.fleetwright.Push`)
+before it is shown, and on Android by `onMessageReceived` before the app posts
+it (`docs/push-encryption.md`). A Live Activity's `content-state` is handed
+straight to the widget, and ActivityKit runs nothing of ours first. So the payload is `{ step, of, phase, state }`, where `phase` is
 a key from `XOSETUP_STEPS` and the app has the words. While a build runs it
 also carries `fill` (thousandths), `stage` and `stages` (which part of how
 many) and `build`, a key from a fixed list (`edge`, `image`, `holder`), so the

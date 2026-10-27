@@ -2635,7 +2635,14 @@ struct Fleet {
 
     func registerDevice(token: Data) async throws {
         let hex = token.map { String(format: "%02x", $0) }.joined()
-        _ = try await post("/api/devices", body: ["platform": "ios", "token": hex])
+        var body: [String: Any] = ["platform": "ios", "token": hex]
+        // The key this install can open. Absent when the keychain will not
+        // keep one, and a registration without it is a notification in the
+        // clear rather than one sealed to a key nobody stored.
+        if let pushKey = PushKey.publicKey() {
+            body["pushKey"] = pushKey
+        }
+        _ = try await post("/api/devices", body: body)
     }
 
     /// - Parameter numeric: keys the protocol types as `int`. They travel as

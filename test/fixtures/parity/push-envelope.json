@@ -1,0 +1,22 @@
+{
+  "recipient": {
+    "d": "_-gq4Rg6rsTF7jPaBZoEx1qmi4uC47m_lvbjibSyn14",
+    "x": "i9Hk3O57fQcTHoecpAy5KjDXyAIX9qdpt9ltSeqaq5E",
+    "y": "t_hITF0TrbLPJ_4COpyrXNREAZ_Zvaw-0pme_pE_CMM",
+    "pushKey": "BIvR5Nzue30HEx6HnKQMuSow18gCF_anabfZbUnqmquRt_hITF0TrbLPJ_4COpyrXNREAZ_Zvaw-0pme_pE_CMM"
+  },
+  "envelope": "ASHmZRkEhboq1-UmnWCKczAEvVc174bgOmcxOZveQacUMPkoOIJlVrDMdJPpLUG7O7Rm8NHGJ_c4J8tHW3wo8qas9JADCBhEisRO8Ple_9urWB1BXpd1nfSNykoiwNTzYN6yvJM8BujH4j5ZNMm1EPViMAWipHPYT267DXu-3eO3W0hrPxtIR3SrJTyAlaS389Wr8JYbb69nPL9UjHdNChT6SuOhRMvDI5rEEP5hjB8GxtyGLWQsh4qMAbObY43Nsb6z5hZx94Mo3lJKQEyIQOAUV_FMv4mOr-v5Erx7p2gioGP6EXECqviAHyezlm7EBVeqz75wHEkSBYaKRQ3NdwD9aewIBmFaz7fkSDR6GKNSMIaWpf2kyA-lZccVi4GcM4uPWzEtf6rBJAuKRNEfReUlIrNam3sl7leJwXUAEqtyUYUak-v7d3rSnW5oO0XLaKncXbFJvg",
+  "plaintext": {
+    "title": "cc-brave-otter on deb132",
+    "body": "Waiting: overwrite src/index.js, or write to a copy?",
+    "data": {
+      "name": "cc-brave-otter",
+      "hostId": "deb132",
+      "promptId": "p-01J8",
+      "answers": "a:1,b:2",
+      "kind": "xosetup",
+      "job": "job-1",
+      "sentAt": "1700000000000"
+    }
+  }
+}

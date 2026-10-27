@@ -2697,6 +2697,10 @@ class Fleet(
         val body = JSONObject()
             .put("platform", "android")
             .put("token", token)
+        // The key this install can open. Absent when the keystore declines,
+        // and a registration without it is a notification in the clear rather
+        // than one sealed to a key nobody stored.
+        PushKey.publicKey()?.let { body.put("pushKey", it) }
         runCatching { post("/api/devices", body).optBoolean("ok", false) }.getOrDefault(false)
     }
 
