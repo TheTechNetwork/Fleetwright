@@ -35,8 +35,8 @@ test('both phones send the key they can open, and omit it when they have none', 
 });
 
 test('the sentence a failed open shows is the one the coordinator already sends', () => {
-  assert.match(SENDER, new RegExp(SENTENCE.replace(/[.]/g, '\\.')));
-  assert.match(REVEAL, new RegExp(`FALLBACK_BODY = "${SENTENCE.replace(/[.]/g, '\\.')}"`));
+  assert.ok(SENDER.includes(SENTENCE));
+  assert.ok(REVEAL.includes(`FALLBACK_BODY = "${SENTENCE}"`));
   // iOS does not keep a second copy. The alert is already that sentence, and
   // a failed open leaves it.
   assert.doesNotMatch(NSE, /content\.title = "Fleetwright"/);
