@@ -585,4 +585,43 @@ class XoPolicyTest {
         assertEquals("Group networks are made in the way out’s pool: choose the way out. Nothing was changed.", XoPolicy.problem(inv, c))
         assertFalse(XoPolicy.payload(inv, c).has("groups"))
     }
+
+    @Test
+    fun aPoolNamesTheMachinesApprovedForItAndWithdrawsTheSharedTokenOnlyOnceEachHasItsOwn() {
+        val hosts = listOf(
+            XoPolicy.ApprovedBox("deb14", false),
+            XoPolicy.ApprovedBox("gpu-1", false),
+            XoPolicy.ApprovedBox("gone", true),
+            XoPolicy.ApprovedBox("not a box", false),
+            XoPolicy.ApprovedBox("holder", false),
+            XoPolicy.ApprovedBox("other", false),
+        )
+        val grants = listOf(
+            XoPolicy.PoolGrant("deb14", emptyList()),
+            XoPolicy.PoolGrant("gpu-1", listOf("hypervisor:xo.lan")),
+            XoPolicy.PoolGrant("gone", emptyList()),
+            XoPolicy.PoolGrant("not a box", emptyList()),
+            XoPolicy.PoolGrant("holder", listOf("hypervisor:xo.lan+holder")),
+            XoPolicy.PoolGrant("other", listOf("hypervisor:elsewhere")),
+        )
+        val named = XoPolicy.boxes("xo.lan", hosts, grants)
+        assertEquals("a revoked machine, a name that cannot be a user, and a grant for another pool are not this pool's", listOf("deb14", "gpu-1", "holder"), named)
+        assertFalse(XoPolicy.withdrawShared("xo.lan", named, listOf("hypervisor:xo.lan", "hypervisor:xo.lan+deb14")))
+        assertTrue(XoPolicy.withdrawShared("xo.lan", named, listOf("hypervisor:xo.lan", "hypervisor:xo.lan+deb14", "hypervisor:xo.lan+gpu-1", "hypervisor:xo.lan+holder")))
+        assertFalse("naming nobody leaves the shared user", XoPolicy.withdrawShared("xo.lan", emptyList(), listOf("hypervisor:xo.lan")))
+        assertFalse("the shared item already gone is not withdrawn again", XoPolicy.withdrawShared("xo.lan", named, listOf("hypervisor:xo.lan+deb14", "hypervisor:xo.lan+gpu-1", "hypervisor:xo.lan+holder")))
+    }
+
+    @Test
+    fun theChoiceNamesThoseMachinesAndAsksToWithdrawOnlyWithThem() {
+        val inv = inventory()
+        val c = XoPolicy.defaults(inv)
+        assertFalse("a phone that could not read who was approved names nobody", XoPolicy.payload(inv, c).has("boxes"))
+        assertFalse("withdrawing with nobody named is not a choice the machine would take", XoPolicy.payload(inv, c, retireShared = true).has("boxes"))
+        assertFalse(XoPolicy.payload(inv, c, retireShared = true).has("retireShared"))
+        val sent = XoPolicy.payload(inv, c, boxes = listOf("gpu-1", "deb14"), retireShared = true)
+        assertEquals(listOf("deb14", "gpu-1"), (0 until sent.getJSONArray("boxes").length()).map { sent.getJSONArray("boxes").getString(it) })
+        assertTrue(sent.getBoolean("retireShared"))
+        assertFalse("the first apply mints the users and leaves the shared token", XoPolicy.payload(inv, c, boxes = listOf("deb14")).has("retireShared"))
+    }
 }

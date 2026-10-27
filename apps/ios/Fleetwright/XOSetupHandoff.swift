@@ -185,6 +185,66 @@ enum XOSetupHandoff {
         return true
     }
 
+    /// EACH BOX'S TOKEN, sealed back beside the shared hand-off. The record
+    /// this phone already keeps for the pool is copied, with that box's user
+    /// and token, and filed as `hypervisor:<address>+<box>`. The shared
+    /// record stays in the Keychain: this phone still signs in with it.
+    /// `retired` is the machine's word that every named box has its token
+    /// and the machines that were still on the shared user have been handed
+    /// on, so the shared item can leave the vault.
+    static func boxRecords(_ sealed: String, job: String, address: String, key: Seal.OneUseKey) -> (records: [(box: String, record: String)], retired: Bool)? {
+        let parts = sealed.split(separator: ".").map(String.init)
+        guard parts.count == 3,
+              let opened = try? Seal.open(key, aad: Seal.xosetupHandoffAAD(job: job, address: address),
+                                          sealed: ["epk": parts[0], "iv": parts[1], "ct": parts[2]]),
+              (opened["v"] as? NSNumber)?.intValue == 1, opened["address"] as? String == address,
+              let tokens = opened["boxTokens"] as? [[String: Any]],
+              let raw = Keychain.get(tokenAccount(address)), !raw.isEmpty,
+              let base = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+        else { return nil }
+        var records: [(box: String, record: String)] = []
+        for token in tokens {
+            guard let box = token["box"] as? String, XOPolicy.boxes(address: address, hosts: [XOPolicy.ApprovedBox(id: box, revoked: false)], grants: [XOPolicy.PoolGrant(label: box, only: [])]).contains(box),
+                  let user = token["user"] as? String, let value = token["token"] as? String, !value.isEmpty
+            else { continue }
+            var record = base
+            record["user"] = user
+            record["token"] = value
+            record["box"] = box
+            if let expires = token["tokenExpires"] as? String { record["tokenExpires"] = expires }
+            guard let data = try? JSONSerialization.data(withJSONObject: record), let text = String(data: data, encoding: .utf8) else { continue }
+            records.append((box, text))
+        }
+        guard !records.isEmpty else { return nil }
+        let retired = (opened["retiredShared"] as? NSNumber)?.boolValue == true || (opened["retiredShared"] as? Bool) == true
+        return (records, retired)
+    }
+
+    /// Keep each box's token in the vault, and drop the shared item when the
+    /// machine said the hand-over is done. The Keychain copy of the shared
+    /// token stays, so this phone can still open the pool.
+    static func keepBoxUsers(_ sealed: String, job: String, address: String, key: Seal.OneUseKey, settings: Settings) async -> String? {
+        guard let kept = boxRecords(sealed, job: job, address: address, key: key) else { return nil }
+        let vault = PhoneVault(settings: settings)
+        let fleet = Fleet(settings: settings)
+        var said: [String] = []
+        for one in kept.records {
+            do {
+                said.append(try await vault.keepHypervisor(fleet, address: address, record: one.record, box: one.box))
+            } catch {
+                said.append("\(one.box)’s token was not kept in the fleet: \(error.localizedDescription)")
+            }
+        }
+        if kept.retired {
+            do {
+                said.append(try await vault.forget(fleet, name: "hypervisor:\(address)"))
+            } catch {
+                said.append("The shared token was not dropped: \(error.localizedDescription)")
+            }
+        }
+        return said.joined(separator: " ")
+    }
+
     /// WHAT THE POOL'S MACHINES MAY DO FROM THE APP, as this phone last kept
     /// it beside the pool's token, or nil when it never chose. Each machine
     /// made from the record is born with it (src/core/grants.js).

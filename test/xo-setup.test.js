@@ -525,6 +525,50 @@ test('a policy that names the live boxes gives each a user, and does not leave a
   assert.ok(kept.boxTokens.every((/** @type {any} */ x) => x.token.startsWith('tok-fleetwright-box-')));
   assert.ok(!end.text.includes('tok-fleetwright'), 'the tokens are only in the seal');
   assert.equal(end.handoff, undefined, 'this is not the shared token’s hand-off');
+  assert.equal(kept.retiredShared, undefined, 'naming the boxes does not withdraw the shared token');
+});
+
+test('a later choice withdraws the shared token once every box has its own, and hands over what was still on it', { skip }, async (t) => {
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    users: [{ id: 'u-shared', email: 'fleetwright', permission: 'none' }],
+    vms: {
+      loose: { id: 'loose', type: 'VM', power_state: 'Running', tags: ['fleetwright-session'] },
+      busy: { id: 'busy', type: 'VM', power_state: 'Running', tags: ['fleetwright-session', 'fleetwright-busy'] },
+    },
+  });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const { begun, reply } = await choosing(xo, setups, actor);
+  const job = begun.xosetup.job;
+  const blocked = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab', 'net-dmz'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 }, boxes: ['deb14'], retireShared: true };
+  assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, blocked), actor })).ok, true);
+  const held = await finished(setups, job, actor);
+  assert.match(held.text, /shared user was left as it was/);
+  assert.ok(!xo.calls.some((c) => c.method === 'acl.add' && c.params.object === 'loose'), 'a resize in progress holds the withdrawal');
+  const [epk, iv, ct] = String(held.boxHandoff).split('.');
+  const opened = /** @type {any} */ (await open({ ...reply, aad: xosetupHandoffAad(job, xo.address), sealed: { epk, iv, ct } }));
+  assert.equal(opened.retiredShared, undefined);
+
+  // The busy machine is gone; the one still on the shared user can move.
+  delete xo.vms.busy;
+  xo.calls.length = 0;
+  const { begun: again, reply: reply2 } = await choosing(xo, setups, actor);
+  const job2 = again.xosetup.job;
+  const ready = { ...blocked };
+  assert.equal((await setups.policy({ job: job2, sealed: await choose(again, xo.address, ready), actor })).ok, true);
+  const end = await finished(setups, job2, actor);
+  assert.match(end.text, /still on the shared user/);
+  assert.match(end.text, /Boxes stop being given its token/);
+  assert.ok(!end.text.includes('left as it was'));
+  const moved = xo.calls.find((c) => c.method === 'acl.add' && c.params.object === 'loose');
+  assert.equal(moved?.params.subject, xo.users.find((u) => u.email === 'fleetwright-box-deb14')?.id);
+  assert.ok(xo.calls.some((c) => c.method === 'acl.remove' && c.params.object === 'loose' && c.params.subject === 'u-shared'));
+  assert.ok(xo.calls.some((c) => c.method === 'tag.add' && c.params.id === 'loose' && c.params.tag === 'fleetwright-box:deb14'));
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright'), 'the phone still signs in as the shared user');
+  const parts = String(end.boxHandoff).split('.');
+  const kept = /** @type {any} */ (await open({ ...reply2, aad: xosetupHandoffAad(job2, xo.address), sealed: { epk: parts[0], iv: parts[1], ct: parts[2] } }));
+  assert.equal(kept.retiredShared, true);
 });
 
 test('the machine image is built after the policy, on the way out’s pool, behind its router, and said in the end', { skip }, async (t) => {
@@ -833,6 +877,9 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   assert.equal(/** @type {any} */ (checkPolicy(ok, choices)).policy.boxes, undefined, 'a phone that names no boxes keeps the shared user');
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, boxes: [] }, choices)).text, /Name the boxes/);
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['not a box'] }, choices)).text, /Name the boxes/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, retireShared: true }, choices)).text, /withdrawn only once the boxes/);
+  assert.equal(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['deb14'], retireShared: true }, choices)).policy.retireShared, true);
+  assert.equal(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['deb14'] }, choices)).policy.retireShared, undefined, 'naming the boxes does not withdraw the shared token');
 
   // THE MACHINE IMAGE is built behind the edge router, on the way out's pool:
   // with the router asked for, or where that pool already has one.

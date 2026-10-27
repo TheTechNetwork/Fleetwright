@@ -648,16 +648,26 @@ What the code rests on, held to it:
   `vm.start` (`operate`), and `vm.set`, `tag.add` and `vm.delete`
   (`administrate`); the maker was given each. `vm.create` with `share: true`
   gives every subject the ACL, which is today's behaviour by another route.
-  A policy choice that names the live boxes mints one user per box
-  (`fleetwright-box-<host id>`, `xo-box-users.js`) and hands each token back
-  sealed. A machine of a box that is not on that list is removed when it has
-  stopped or run past its end, and one still in its time is given to the
-  first box on the list before the gone user is deleted, so it is not left
-  with nobody who can reach it. A machine marked busy keeps its user. The
-  shared user is not retired: phones do not send the list yet, and a phone
-  that still keeps the shared token can still reach every machine that user
-  made. The per-box record is `hypervisor:<address>+<box>`, granted to that
-  box alone; until a phone keeps it, no box holds it.
+  Both phones send that list on Apply: each machine this person approved
+  for the pool, not a revoked one, and not one whose name cannot be a user.
+  The first apply mints `fleetwright-box-<host id>` (`xo-box-users.js`) and
+  the phone files each token as `hypervisor:<address>+<box>`, which the vault
+  hands only to the box the grant names. A machine of a box that is not on
+  the list is removed when it has stopped or run past its end, and one still
+  in its time is given to the first box on the list before the gone user is
+  deleted, so it is not left with nobody who can reach it. A machine marked
+  busy keeps its user. The next apply, once every named box has its token,
+  asks the machine to withdraw the shared one. A session machine still on
+  that user is given to the first named box — its access added, then the
+  tag, then the shared user's access taken off — unless one of them is
+  marked busy, in which case nothing about the shared user changes. The
+  shared user and its tokens are not deleted: this phone still signs in
+  with the copy setup handed it, and the pool's page still opens with that
+  token, so after the hand-over it lists the machines that user can still
+  reach, which are the ones with no box tag. The others are on the fleet's
+  own list of machines. The vault item is forgotten, and the next vault pass
+  stops handing that token to boxes. A phone that cannot read the vault or
+  the host list sends no list, and the shared user is left as it is.
 
 ## What `provision` may express
 

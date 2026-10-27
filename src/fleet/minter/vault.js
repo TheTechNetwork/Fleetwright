@@ -915,6 +915,28 @@ export async function answerVaultBox(ask, config) {
  * @param {Set<string>|null} members  who is in the fleet, or null from a
  *   coordinator that does not say (answerVaultBox)
  */
+/**
+ * Whether this grant may be handed this item.
+ *
+ * A per-box hypervisor token (`hypervisor:<address>+<box>`) is that box's
+ * alone. A full grant still gets it only when the grant's label is that box,
+ * and an `only` grant for the shared item gets that same box's token, because
+ * the shared name is the approval for the pool. Another box's token is not
+ * handed over either way: a full grant used to mean every item, and that is
+ * how one box was given the user that can export the others' disks.
+ *
+ * @param {string} name
+ * @param {{ label?: string }} grant
+ * @param {Set<string>|null} only
+ */
+function hypervisorItemForGrant(name, grant, only) {
+  const split = splitHypervisorItem(name);
+  if (!split?.box) return !only || only.has(name);
+  if (split.box !== String(grant.label || '')) return false;
+  if (!only) return true;
+  return only.has(name) || only.has(`${HYPERVISOR_PREFIX}${split.address}`);
+}
+
 async function itemsFor(userId, hash, jwk, store, key, config, members) {
   const row = emptyRow(await store.get(`v:${userId}`));
   const grant = row.grants[hash];
@@ -932,7 +954,7 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
   const only = Array.isArray(grant.only) ? new Set(grant.only.map(String)) : null;
   for (const [name, item] of Object.entries(row.items)) {
     if (!item?.sealed || item.forgotten) continue;
-    if (only && !only.has(name)) continue;
+    if (!hypervisorItemForGrant(name, grant, only)) continue;
     const kind = itemKind(name);
     /** @type {any} */
     let inside;

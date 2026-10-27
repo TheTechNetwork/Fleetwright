@@ -150,6 +150,11 @@ this token cannot see" rather than naming none. In practice this lists the
 storage and the VMs in the set, and probably not the hosts, which is the
 decision recorded under "Left from the first slice".
 
+After a policy apply has withdrawn the shared token from the vault, this page
+still signs in with the copy setup handed the phone. It then lists the
+machines that user can still reach, which are the ones with no box tag. A
+machine handed to one box is on the fleet's own list, not on this page.
+
 **The pool's own machine is listed and not worked.** It is made with the admin
 sign-in, outside the resource set ("A machine of its own" in
 [hypervisors.md](./hypervisors.md)), so Xen Orchestra lists every method and

@@ -1306,6 +1306,7 @@ export class XoSetups {
       methods: ctx.methods,
       setId: ctx.setId,
       boxes: p.boxes,
+      retireShared: p.retireShared === true,
       now: this.now(),
       tokenLifetimeMs: TOKEN_LIFETIME_MS,
       signInAs: async (email, password) => {
@@ -2678,7 +2679,8 @@ export function checkPolicy(p, choices) {
   // it, a rebuild keeps what the image was built from and a new one is built
   // from released versions (vm-image.js, ensureImage).
   // THE BOXES THAT MAY USE THIS POOL, each to be given a user of its own.
-  // Absent, from every phone today, and the shared user is what runs.
+  // Absent, from a phone that does not know which machines were approved,
+  // and the shared user is what runs.
   /** @type {string[]|null} */
   let boxes = null;
   if (p.boxes !== undefined && p.boxes !== null) {
@@ -2688,6 +2690,10 @@ export function checkPolicy(p, choices) {
     }
     boxes = ids;
   }
+  // WITHDRAW THE SHARED TOKEN from the vault, only once those boxes are
+  // named. The phone says this when each of them already holds its own item.
+  const retireShared = p.retireShared === true;
+  if (retireShared && !boxes) return { ok: false, text: 'The shared user is withdrawn only once the boxes that replace it are named. Nothing was changed.' };
   const imageChannel = p.imageChannel === undefined || p.imageChannel === null ? null : String(p.imageChannel);
   if (imageChannel !== null && !IMAGE_CHANNELS.includes(imageChannel)) return { ok: false, text: 'A machine image is built from released versions or from the newest build of main. Nothing was changed.' };
   if (holder && remove.includes('debian-13')) return { ok: false, text: 'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for. Nothing was changed.' };
@@ -2705,7 +2711,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, edgeHa, image, images: asked, rebuild, remove, groups, holder, holderSecret, holderAgain, grants, imageChannel, labs, ...(labsEach !== undefined ? { labsEach } : {}), ...(boxes ? { boxes } : {}), limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, edgeHa, image, images: asked, rebuild, remove, groups, holder, holderSecret, holderAgain, grants, imageChannel, labs, ...(labsEach !== undefined ? { labsEach } : {}), ...(boxes ? { boxes } : {}), ...(retireShared ? { retireShared: true } : {}), limits: { cpus, memory, disk } } };
 }
 
 /**

@@ -223,6 +223,54 @@ internal object XoHandoff {
      * for anything that does not open under this job and address, or a pool
      * this phone holds no record for.
      */
+    /**
+     * Each box's token, sealed under the hand-off binding. Copies this
+     * phone's pool record, files `hypervisor:<address>+<box>`, and when the
+     * machine says the hand-over is done, drops the shared item from the
+     * vault. The local copy stays, so this phone can still open the pool.
+     * Null when the seal does not open or this phone holds no pool record.
+     */
+    suspend fun keepBoxUsers(settings: Settings, fleet: Fleet, sealed: String, job: String, address: String, key: Seal.OneUseKey): String? {
+        val parts = sealed.split(".")
+        if (parts.size != 3) return null
+        val opened = runCatching {
+            Seal.open(key, Seal.xosetupHandoffAad(job, address), JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2]))
+        }.getOrNull() ?: return null
+        if (opened.optInt("v") != 1 || opened.optString("address") != address) return null
+        val base = settings.secret(tokenName(address))?.takeIf { it.isNotBlank() } ?: return null
+        val tokens = opened.optJSONArray("boxTokens") ?: return null
+        val vault = PhoneVault(settings)
+        val said = mutableListOf<String>()
+        for (i in 0 until tokens.length()) {
+            val one = tokens.optJSONObject(i) ?: continue
+            val box = one.optString("box")
+            val user = one.optString("user")
+            val token = one.optString("token")
+            // The same acceptance the choice uses: an id the host cannot put in
+            // a user name is not filed, and an empty grant is the whole vault,
+            // which is how a token the machine already sealed is recognised.
+            val accepted = XoPolicy.boxes(address, listOf(XoPolicy.ApprovedBox(box, false)), listOf(XoPolicy.PoolGrant(box, emptyList())))
+            if (box !in accepted || user.isBlank() || token.isBlank()) continue
+            val record = JSONObject(base)
+            record.put("user", user)
+            record.put("token", token)
+            record.put("box", box)
+            if (one.has("tokenExpires") && !one.isNull("tokenExpires")) record.put("tokenExpires", one.optString("tokenExpires"))
+            vault.keepHypervisor(fleet, address, record.toString(), box).fold(
+                onSuccess = { said += it },
+                onFailure = { said += "$box’s token was not kept in the fleet: ${it.message ?: "the vault did not answer"}" },
+            )
+        }
+        if (said.isEmpty()) return null
+        if (opened.optBoolean("retiredShared", false)) {
+            vault.forget(fleet, "hypervisor:$address").fold(
+                onSuccess = { said += it },
+                onFailure = { said += "The shared token was not dropped: ${it.message ?: "the vault did not answer"}" },
+            )
+        }
+        return said.joinToString(" ")
+    }
+
     fun keepEdgeKey(settings: Settings, sealed: String, job: String, address: String, key: Seal.OneUseKey): Boolean = runCatching {
         val parts = sealed.split(".")
         if (parts.size != 3) return@runCatching false
