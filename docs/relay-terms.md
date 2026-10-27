@@ -106,25 +106,26 @@ every push on both platforms, including the ones this project already sends
 from its own coordinator. Nothing here can change that, and pretending
 otherwise would be worse than saying it.
 
-### This is being replaced by something structural, and it is half built
+### The payload is sealed to the phone
 
 Everything above is a promise kept by not writing a log line. The stronger
 version encrypts the payload on the coordinator to a key held by one phone, so
 the relay forwards bytes it cannot read — and neither can Apple or Google, which
 is a bigger change than the relay was ever about.
 
-**The coordinator half is done.** ECDH P-256 → HKDF-SHA256 → AES-256-GCM,
-exercised end to end in this repository against the same bytes a phone will
-receive. See [`push-encryption.md`](./push-encryption.md).
+**Both halves are in the tree.** The coordinator seals with ECDH P-256 →
+HKDF-SHA256 → AES-256-GCM. Each phone keeps one P-256 key, in the Keychain or
+the Android Keystore, and sends it as `pushKey`. iOS opens the envelope in a
+Notification Service Extension and rewrites the alert; Android opens it in
+`onMessageReceived` before it reads a kind, and posts the notification itself
+when the tray was not given one. See [`push-encryption.md`](./push-encryption.md).
 
-**Neither app implements the other half yet** — an iOS Notification Service
-Extension and an Android data-message handler, plus key generation and storage
-in the Keychain and the Keystore. Until they do, no phone registers a key and
-every notification takes the plaintext fallback.
-
-So this document still describes what is true today, and the sections above are
-not softened on the strength of work that is only half finished. When both apps
-land, the promise stops being a promise.
+A phone that has not registered a key, or whose key will not open the seal,
+still receives the plaintext fallback, and that notification is what Apple or
+Google can read. The sections above are unchanged either way: the relay still
+does not log a body, sealed or not. A Live Activity is not sealed. Until a
+given install has registered, what a provider sees of that install is the
+plaintext.
 
 ---
 

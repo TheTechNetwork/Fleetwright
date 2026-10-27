@@ -8,10 +8,9 @@
 //
 // WHAT IS TESTED HERE IS THE WHOLE SCHEME, not the shape of a function call.
 // Both apps implement the other half natively — CryptoKit and the Android
-// Keystore — and nothing in this repository can run either. That is exactly the
-// gap that let push ship unproven for months, so the decrypting half exists in
-// JS purely so the scheme can be exercised end to end HERE, against the same
-// bytes a phone will receive.
+// Keystore. This file cannot run either, which is why the decrypting half also
+// exists in JS: the scheme is exercised here against the same bytes the phones
+// open. PushCryptoTest.kt and PushCryptoTests.swift open the committed envelope.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
