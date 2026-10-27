@@ -399,3 +399,29 @@ test('a link flow in progress does not make the whole box report signed out', as
   assert.equal(flow.isPending(), false);
   assert.equal(flow.pending, null);
 });
+
+test('a credential the vault renews is not refreshed here, and one it does not name is', (t) => {
+  // The box's own hourly keepalive and the vault can hold the same refresh
+  // token. Refreshing it here rotates that token, the vault's next renewal is
+  // refused, and the access token already handed out lives out its eight
+  // hours and stops. Twenty minutes left is inside the window where this
+  // would otherwise run the CLI.
+  const s = stubClaude(t);
+  const vault = path.join(s.dir, 'state', 'vault');
+  mkdirSync(vault, { recursive: true });
+  writeFileSync(path.join(vault, 'eli@example.com.claude-account.json'), JSON.stringify({ emailAddress: 'Eli@Example.com' }));
+  writeFileSync(s.shared, JSON.stringify({
+    claudeAiOauth: { accessToken: 'old', refreshToken: 'r', expiresAt: Date.now() + 20 * 60_000, emailAddress: 'eli@example.com' },
+  }));
+
+  const r = renewClaudeCredential(s.cfg());
+  assert.equal(r.outcome, 'left-to-vault');
+  assert.deepEqual(s.calls(), [], 'the CLI was not run');
+  assert.match(String(r.detail), /vault/);
+
+  // No address in the file is cannot tell, which is not a match: the CLI runs.
+  s.write(s.shared, Date.now() + 20 * 60_000);
+  const unnamed = renewClaudeCredential(s.cfg());
+  assert.notEqual(unnamed.outcome, 'left-to-vault');
+  assert.ok(s.calls().length > 0, 'a credential the vault does not name is still renewed here');
+});

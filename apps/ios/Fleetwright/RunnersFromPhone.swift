@@ -206,6 +206,14 @@ struct YourVault: View {
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
+            // WHEN THE SIGN-IN RUNS OUT, AND WHY THE LAST RENEWAL FAILED.
+            // Said only when the minter said (C-5): the sentence is its record,
+            // and a missing one is not "nothing is wrong".
+            if let note = kept.items.first(where: { $0.name == "claude" })?.note, !note.isEmpty {
+                Text(note)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
             // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
             // revoked sat here as "Kept" until a runner stopped at its first
             // message. Offered only where there is a service to ask (C-2).

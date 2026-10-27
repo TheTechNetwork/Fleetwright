@@ -24,7 +24,14 @@ import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_USAGE_URL } from '../../src/
  * long a renewed access token lasts, in seconds: Claude's eight hours unless a
  * test wants the next renewal due at once.
  */
-export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800, /** @type {number|undefined} */ refreshExpiresIn: undefined };
+export const claudeRenewals = {
+  count: 0,
+  used: new Set(),
+  expiresIn: 28800,
+  /** @type {number|undefined} */ refreshExpiresIn: undefined,
+  /** Set to 'unreachable' to fail the renewal before a token is issued. */
+  /** @type {'unreachable'|null} */ fail: null,
+};
 
 /** How many times the usage address was asked. */
 export const claudeUsageAsks = { count: 0 };
@@ -68,6 +75,7 @@ function standInClaudeToken(url, init) {
   return (async () => {
     const f = JSON.parse(String(init.body || '{}'));
     claudeRenewals.count += 1;
+    if (claudeRenewals.fail === 'unreachable') throw new Error('connect ECONNRESET');
     await new Promise((r) => setTimeout(r, 20));
     const reply = (/** @type {number} */ status, /** @type {any} */ body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
     if (f.grant_type !== 'refresh_token' || f.client_id !== CLAUDE_CLIENT_ID) return reply(400, { error: 'invalid_request' });

@@ -94,6 +94,20 @@ class Messaging : FirebaseMessagingService() {
         }
         val words = NotificationAnswers.titlesFor(message.data["category"])
         if (words == null) {
+            // A CLAUDE SIGN-IN THAT COULD NOT BE RENEWED, OR HAS STOPPED. No
+            // buttons, so the tray draws it while the app is in the background
+            // and used to drop it while the app is open: a log line, and the
+            // person still holding the phone. Posted here, with the title and
+            // body the push already carries.
+            val kind = message.data["kind"]
+            if (kind == "claude-ended" || kind == "claude-renewal") {
+                val title = message.notification?.title ?: message.data["title"]
+                val body = message.notification?.body ?: message.data["body"]
+                if (!title.isNullOrBlank() && !body.isNullOrBlank()) {
+                    postNotice(applicationContext, title, body, message.data)
+                    return
+                }
+            }
             Log.i(TAG, "push while foregrounded: ${message.notification?.title ?: message.data}")
             return
         }
@@ -103,6 +117,7 @@ class Messaging : FirebaseMessagingService() {
     private companion object {
         const val TAG = "Fleetwright"
         const val CHANNEL = "fleetwright.asks"
+        const val NOTICE_CHANNEL = "fleetwright.signin"
 
         /**
          * The notification the tray would have drawn, plus the two buttons it
@@ -114,6 +129,29 @@ class Messaging : FirebaseMessagingService() {
          * Two live questions about one session, only one of them current, is
          * the pile the id was never going to save anybody from.
          */
+        /** A sign-in notice, with no buttons: the words the coordinator sent. */
+        fun postNotice(context: Context, title: String, body: String, data: Map<String, String>) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) return
+            context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+                NotificationChannel(NOTICE_CHANNEL, "Claude sign-in", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "When a Claude sign-in could not be renewed, or has stopped."
+                },
+            )
+            val id = (data["kind"] ?: title).hashCode()
+            val notification = NotificationCompat.Builder(context, NOTICE_CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(openIntent(context, data, id))
+                .build()
+            NotificationManagerCompat.from(context).notify(id, notification)
+        }
+
         fun post(context: Context, data: Map<String, String>, words: NotificationAnswers.Answers) {
             // Silent when permission was never granted, for the reason
             // LocalNotice gives: somebody who declined notifications is not

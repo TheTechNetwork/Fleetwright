@@ -14,6 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Fleet } from '../worker/src/fleet-do.js';
+import { CLAUDE_CHECK_MS } from '../src/fleet/coordinator/core.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../src/fleet/protocol/heartbeat.js';
 import { loadOrCreateKey, keyFingerprint } from '../src/fleet/host/identity.js';
 import { sign, signingInput, generateKeyPair } from '../src/fleet/crypto.js';
@@ -1024,4 +1025,28 @@ test('the MCP sign-in page cannot be framed, and a box’s session text is kept 
   });
   const kept = f.core.events.find((/** @type {any} */ e) => e.hostId === 'member-box');
   assert.doesNotMatch(kept.text, /[\n\r]/, 'a box’s event text kept a line of its own');
+});
+
+test('an alarm with nobody connected still asks after the Claude sign-ins, and logs when that ask throws', async () => {
+  // Returning here used to drop the alarm for good, and a check that threw
+  // was swallowed, so an eight-hour expiry had no line to read.
+  const state = fakeState();
+  /** @type {number[]} */
+  const alarms = [];
+  state.storage.setAlarm = async (/** @type {number} */ at) => { alarms.push(at); };
+  const f = new Fleet(/** @type {any} */ (state), /** @type {any} */ ({
+    MINTER: { fetch: async () => { throw new Error('the minter is down'); } },
+  }));
+  await new Promise((r) => setTimeout(r, 20));
+  /** @type {string[]} */
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (/** @type {any} */ ...a) => { warns.push(a.map(String).join(' ')); };
+  try {
+    await f.alarm();
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(alarms.at(-1), Date.now() + CLAUDE_CHECK_MS, 'the check keeps its own clock with no socket open');
+  assert.ok(warns.some((w) => /could not ask after the Claude sign-ins/.test(w) && /the minter is down/.test(w)));
 });

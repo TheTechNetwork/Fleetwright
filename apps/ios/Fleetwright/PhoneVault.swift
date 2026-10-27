@@ -26,6 +26,11 @@ struct PhoneVault {
         /// needs, or `token`, a setup-token that runs sessions only. Nil for
         /// anything else, and from a minter from before it said.
         var kind: String? = nil
+        /// How this Claude sign-in has been renewed, in the minter's words:
+        /// when it was last renewed, when the access token runs out, and why
+        /// the last renewal failed. Nil when the minter did not say, which is
+        /// a setup-token and a minter from before this.
+        var note: String? = nil
     }
 
     struct Grant: Hashable {
@@ -101,7 +106,7 @@ struct PhoneVault {
     func list(_ fleet: Fleet) async throws -> Contents {
         let answer = try await ask(fleet, op: "list").answer
         let items = (answer["items"] as? [[String: Any]] ?? []).map {
-            Item(name: $0["name"] as? String ?? "", at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, kind: $0["kind"] as? String)
+            Item(name: $0["name"] as? String ?? "", at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, kind: $0["kind"] as? String, note: $0["note"] as? String)
         }
         let grants = (answer["grants"] as? [[String: Any]] ?? []).map {
             Grant(key: $0["key"] as? String ?? "", fingerprint: $0["fingerprint"] as? String ?? "",

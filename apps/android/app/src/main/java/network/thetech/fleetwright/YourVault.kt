@@ -122,6 +122,10 @@ internal fun YourVault(settings: Settings) {
                         "Make it on a machine below to have Remote Control.",
                 )
             }
+            // WHEN THE SIGN-IN RUNS OUT, AND WHY THE LAST RENEWAL FAILED.
+            // Said only when the minter said (C-5): the sentence is its record,
+            // and a missing one is not "nothing is wrong".
+            kept.items.firstOrNull { it.name == "claude" }?.note?.takeIf { it.isNotBlank() }?.let { Hint(it) }
             // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
             // revoked sat here as "Kept" until a runner stopped at its first
             // message. Offered only where there is a service to ask (C-2).

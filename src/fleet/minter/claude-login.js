@@ -74,6 +74,12 @@ const RENEWALS_KEPT = 12;
 export const ENDED_PREFIX = 'claude-ended:';
 
 /**
+ * A renewal that did not get an answer, told once per reason for the sign-in
+ * now kept. Cleared when a later renewal is written back (freshClaude).
+ */
+export const WARNED_PREFIX = 'claude-warned:';
+
+/**
  * What a sign-in's access token is asked with to see whether it still works:
  * the address `/usage` reads (src/core/usage.js, USAGE_URL, which a test holds
  * this equal to). It costs nothing, unlike a message, and answers 401 to a
@@ -179,12 +185,29 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
       refreshToken: typeof body.refresh_token === 'string' && body.refresh_token ? body.refresh_token : oauth.refreshToken,
       expiresAt: now() + Number(body.expires_in) * 1000,
       scopes: typeof body.scope === 'string' ? body.scope.split(' ').filter(Boolean) : oauth.scopes,
-      // AS CLAUDE CODE KEEPS IT: from the answer when it says, else what was known.
-      refreshTokenExpiresAt: Number.isFinite(Number(body.refresh_token_expires_in)) && Number(body.refresh_token_expires_in) > 0
-        ? now() + Number(body.refresh_token_expires_in) * 1000
-        : oauth.refreshTokenExpiresAt ?? null,
+      // A ROTATED TOKEN IS A NEW TOKEN. Anthropic often omits
+      // `refresh_token_expires_in`. Copying the old absolute expiry onto the
+      // new refresh token left it "due" forever: every later ask rotated it
+      // again, revoked every holder's access token, and widened the window
+      // where a cut-off loses the sign-in. Unknown is unknown. The previous
+      // expiry is kept only when the refresh token string itself did not change.
+      refreshTokenExpiresAt: refreshExpiryAfter(oauth, body, now),
     },
   };
+}
+
+/**
+ * When the refresh token from a renewal stops working.
+ *
+ * @param {ClaudeOauth} oauth @param {any} body @param {() => number} now
+ * @returns {number|null}
+ */
+function refreshExpiryAfter(oauth, body, now) {
+  const said = Number(body.refresh_token_expires_in);
+  if (Number.isFinite(said) && said > 0) return now() + said * 1000;
+  const next = typeof body.refresh_token === 'string' && body.refresh_token ? body.refresh_token : oauth.refreshToken;
+  if (next !== oauth.refreshToken) return null;
+  return oauth.refreshTokenExpiresAt ?? null;
 }
 
 /**
@@ -210,7 +233,9 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
  * @param {string} userId
  * @param {{ fetchImpl: typeof fetch, now: () => number, by?: string, force?: boolean }} io  `by`: who asked, for the
  *   note a renewal leaves; `force`: renew even if it is not due, when its access token was just refused
- * @returns {Promise<{ held: HeldClaude|null, problem: string|null, refused?: boolean }>}
+ * @returns {Promise<{ held: HeldClaude|null, problem: string|null, refused?: boolean, renewed?: boolean }>}
+ *   `renewed` when the new access token was written back. Anthropic has
+ *   already revoked the one every holder has.
  */
 export async function freshClaude(store, key, userId, io) {
   const row = await store.get(`gh:${userId}`);
@@ -231,6 +256,7 @@ export async function freshClaude(store, key, userId, io) {
   /** @type {string|null} */
   let problem = null;
   let refused = false;
+  let renewed = false;
   // DUE when the access token is close to running out, or the refresh token
   // is: a refresh token that runs out first is a sign-in lost with hours of
   // access left, which is how both refusals looked.
@@ -251,9 +277,18 @@ export async function freshClaude(store, key, userId, io) {
       oauth = r.oauth;
       note.until = Number(oauth.expiresAt);
       if (oauth.refreshTokenExpiresAt) note.refreshUntil = Number(oauth.refreshTokenExpiresAt);
-      const now = await store.get(`gh:${userId}`);
-      if (now && Number(now.at) === Number(row.at) && now.sealed === row.sealed) {
-        await store.put(`gh:${userId}`, { ...row, sealed: await seal({ to: key.publicKey, aad: atRestAad(userId), payload: { oauth, account } }) });
+      const nowRow = await store.get(`gh:${userId}`);
+      if (nowRow && Number(nowRow.at) === Number(row.at) && nowRow.sealed === row.sealed) {
+        await store.put(`gh:${userId}`, {
+          ...row,
+          accessUntil: Number(oauth.expiresAt),
+          refreshUntil: oauth.refreshTokenExpiresAt ?? null,
+          sealed: await seal({ to: key.publicKey, aad: atRestAad(userId), payload: { oauth, account } }),
+        });
+        renewed = true;
+        // THE FAILURE WE TOLD THEM ABOUT IS OVER. The next one, if it comes, is a new reason.
+        await store.put(`${WARNED_PREFIX}${userId}`, { keptAt: null }).catch(() => {});
+        console.info(`claude: sign-in ${userId} was renewed (${io.by ?? 'an ask'}); the access token it replaces is revoked`);
       } else {
         note.dropped = true;
       }
@@ -264,13 +299,14 @@ export async function freshClaude(store, key, userId, io) {
       problem = r.refused
         ? `${r.message}. Sign in to Claude again from your phone or the signing page; until then nothing can be given your login once it runs out.`
         : `${r.message}; the login held is good until it runs out.`;
+      console.warn(`claude: sign-in ${userId} could not be renewed (${io.by ?? 'an ask'}): ${r.message}`);
     }
     await noteRenewal(store, userId, note, { settles: true });
   }
   if (Number(oauth.expiresAt) <= io.now()) {
-    return { held: null, problem: problem ?? 'Your Claude sign-in has run out. Sign in to Claude again from your phone or the signing page.', refused: true };
+    return { held: null, problem: problem ?? 'Your Claude sign-in has run out. Sign in to Claude again from your phone or the signing page.', refused: true, renewed };
   }
-  return { held: { kind: 'login', bearer: oauth.accessToken, expiresAt: Number(oauth.expiresAt), oauth, account }, problem, refused };
+  return { held: { kind: 'login', bearer: oauth.accessToken, expiresAt: Number(oauth.expiresAt), oauth, account }, problem, refused, renewed };
 }
 
 /**
@@ -362,16 +398,24 @@ export function renewalVerdict(list) {
  * here from one cancelled outside, and only the record can say it.
  *
  * @param {ClaudeRenewal[]} list @param {number} keptAt @param {number} now
+ * @param {{ accessUntil?: unknown, refreshUntil?: unknown }} [lifetimes]  the times kept in the clear, for a sign-in not renewed yet
  * @returns {string}
  */
-export function describeRenewals(list, keptAt, now) {
+export function describeRenewals(list, keptAt, now, lifetimes = {}) {
   const when = (/** @type {number} */ t) => {
     const d = new Date(t).toISOString();
     return `${new Date(now).toISOString().slice(0, 10) === d.slice(0, 10) ? '' : `${d.slice(0, 10)} `}${d.slice(11, 16)} UTC`;
   };
   const asked = (/** @type {ClaudeRenewal} */ n) => (n.by ? `, asked for by ${n.by}` : '');
   const last = list[list.length - 1];
-  if (!last) return `It has not been renewed since it was kept at ${when(keptAt)}.`;
+  if (!last) {
+    const access = Number(lifetimes.accessUntil);
+    const refresh = Number(lifetimes.refreshUntil);
+    const until = Number.isFinite(access) && access > 0
+      ? ` The access token is good until ${when(access)}${Number.isFinite(refresh) && refresh > 0 ? `, and its refresh token until ${when(refresh)}` : ''}.`
+      : '';
+    return `It has not been renewed since it was kept at ${when(keptAt)}.${until}`;
+  }
   const cut = (/** @type {ClaudeRenewal} */ n) => `A renewal at ${when(n.at)}${n.by ? `, asked for by ${n.by},` : ''} was cut off before its answer was kept, which loses the refresh token Claude had just issued.`;
   if (last.pending) return cut(last);
   if (last.ok) {
@@ -421,21 +465,28 @@ export function describeRenewals(list, keptAt, now) {
  *    refresh token that waiting for the access token to run out never made.
  *
  * Anything that is not Anthropic saying no to the refresh token is cannot
- * tell, and says nothing. A setup-token is not asked: it has no refresh token
+ * tell. It is still said, once per reason (warnIfNeeded): a renewal that
+ * fails while the access token has time left used to leave no record the
+ * person could read. A setup-token is not asked: it has no refresh token
  * to end, and its scope does not reach the usage address.
  *
  * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
  * @param {{ privateKey: CryptoKey, publicKey: string }} key
  * @param {string} userId
  * @param {{ fetchImpl: typeof fetch, now: () => number }} io
- * @returns {Promise<ClaudeEnded|null>}  null when it works, cannot tell, or was told already
+ * @returns {Promise<{ ended: ClaudeEnded|null, warning: ClaudeRenewalWarning|null, renewed: boolean, email: string|null }|null>}
+ *   null when there is nothing to say and nothing was renewed
  */
 export async function checkClaude(store, key, userId, io) {
   const row = await store.get(`gh:${userId}`);
   if (!row?.sealed || row.forgotten || row.kind !== 'login') return null;
   const told = await store.get(`${ENDED_PREFIX}${userId}`).catch(() => null);
   if (told && Number(told.keptAt) === Number(row.at)) return null;
+  const email = typeof row.email === 'string' && row.email ? row.email : null;
   const refusedLast = async () => (await claudeRenewals(store, userId, row.at)).at(-1)?.refused === true;
+  /** @type {Awaited<ReturnType<typeof freshClaude>>|null} */
+  let fresh = null;
+  let renewed = false;
   if (!(await refusedLast())) {
     // SOON AFTER KEEPING, then HOURLY (CLAUDE_FIRST_RENEWAL_MS): renewed
     // whether or not it is due, so a broken or short-lived refresh token is
@@ -445,22 +496,67 @@ export async function checkClaude(store, key, userId, io) {
     const since = lastGood ? Number(lastGood.at) : Number(row.at);
     const force = io.now() - since >= (lastGood ? CLAUDE_RENEW_EVERY_MS : CLAUDE_FIRST_RENEWAL_MS);
     const asked = { ...io, by: 'a check', force };
-    const { held } = await freshClaude(store, key, userId, asked);
-    if (!force && held?.kind === 'login' && (await accessRefused(held.bearer, io.fetchImpl))) {
-      await freshClaude(store, key, userId, { ...asked, force: true });
+    fresh = await freshClaude(store, key, userId, asked);
+    renewed = fresh.renewed === true;
+    if (!force && fresh.held?.kind === 'login' && (await accessRefused(fresh.held.bearer, io.fetchImpl))) {
+      fresh = await freshClaude(store, key, userId, { ...asked, force: true });
+      renewed = renewed || fresh.renewed === true;
     }
-    if (!(await refusedLast())) return null;
+    if (!(await refusedLast())) {
+      const warning = await warnIfNeeded(store, userId, row, fresh, io.now());
+      if (!warning && !renewed) return null;
+      return { ended: null, warning, renewed, email };
+    }
   }
   const list = await claudeRenewals(store, userId, row.at);
   const last = /** @type {ClaudeRenewal} */ (list.at(-1));
   await store.put(`${ENDED_PREFIX}${userId}`, { keptAt: Number(row.at), at: io.now() });
   return {
+    ended: {
+      userId,
+      email,
+      login: String(row.login || ''),
+      at: Number(last.at),
+      why: String(last.why || ''),
+      verdict: /** @type {RenewalVerdict} */ (renewalVerdict(list)),
+    },
+    warning: null,
+    renewed,
+    email,
+  };
+}
+
+/**
+ * @typedef {object} ClaudeRenewalWarning  a renewal that failed and was not a refusal, told once per reason
+ * @property {true} warning
+ * @property {string} userId
+ * @property {string|null} email
+ * @property {string} why
+ * @property {number|null} until  when the access token held is still good, when that is known
+ */
+
+/**
+ * The renewal that just failed, if the person has not already been told this
+ * reason for this sign-in. Null when it worked, was refused, or was told.
+ *
+ * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
+ * @param {string} userId @param {any} row
+ * @param {Awaited<ReturnType<typeof freshClaude>>|null} fresh
+ * @param {number} now
+ * @returns {Promise<ClaudeRenewalWarning|null>}
+ */
+async function warnIfNeeded(store, userId, row, fresh, now) {
+  if (!fresh?.problem || fresh.refused) return null;
+  const why = String(fresh.problem).slice(0, 300);
+  const prior = await store.get(`${WARNED_PREFIX}${userId}`).catch(() => null);
+  if (prior && Number(prior.keptAt) === Number(row.at) && prior.why === why) return null;
+  await store.put(`${WARNED_PREFIX}${userId}`, { keptAt: Number(row.at), why, at: now }).catch(() => {});
+  return {
+    warning: true,
     userId,
     email: typeof row.email === 'string' && row.email ? row.email : null,
-    login: String(row.login || ''),
-    at: Number(last.at),
-    why: String(last.why || ''),
-    verdict: /** @type {RenewalVerdict} */ (renewalVerdict(list)),
+    why,
+    until: fresh.held?.expiresAt ?? null,
   };
 }
 

@@ -18,7 +18,7 @@
 // cache with provenance, never the authority" happen to be the same rule, which
 // is a good sign the rule was right.
 
-import { CoordinatorCore, deviceStatus, deviceText, hostReported } from '../../src/fleet/coordinator/core.js';
+import { CoordinatorCore, CLAUDE_CHECK_MS, deviceStatus, deviceText, hostReported } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { relayFromEnv as relayEnv } from '../../src/fleet/relay/client.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal, isAllowed } from '../../src/fleet/coordinator/oidc.js';
@@ -1671,7 +1671,24 @@ export class Fleet {
     // gets the one pass this alarm makes before it stops re-arming.
     this.core.retireStranded();
     const sockets = this.state.getWebSockets();
-    if (!sockets.length) return;
+    if (!sockets.length) {
+      // NO HOST IS NOT "NOTHING TO RENEW". The only thing that refreshes a
+      // kept Claude sign-in before its access token's eight hours is this
+      // check (core.js, checkClaudeSignIns). Returning here used to drop the
+      // alarm entirely, so a quiet fleet — or one whose last socket had just
+      // closed — served that same access token until it expired, and nobody
+      // was told because the renewal was never attempted. The health pings
+      // need a socket. The check does not. It keeps its own, slower clock,
+      // which is also what arms the next one: a fleet that never connected
+      // has no alarm to begin with.
+      await this.state.storage.setAlarm(Date.now() + CLAUDE_CHECK_MS);
+      try {
+        await this.core.checkClaudeSignIns();
+      } catch (e) {
+        console.warn(`fleet: could not ask after the Claude sign-ins: ${/** @type {Error} */ (e).message || e}`);
+      }
+      return;
+    }
     for (const host of this.core.registry.schedulable()) {
       // Only the ones we have not heard from recently; a healthy host is
       // already telling us.
@@ -1682,8 +1699,13 @@ export class Fleet {
     // EACH KEPT CLAUDE SIGN-IN asked after, and its person told when
     // Anthropic has ended it (core.js, checkClaudeSignIns): every fifteen
     // minutes of these thirty-second passes, after the next is armed so a slow
-    // minter cannot stop the health pings.
-    await this.core.checkClaudeSignIns().catch(() => {});
+    // minter cannot stop the health pings. A failure is logged: swallowing it
+    // left an eight-hour expiry with no line to read.
+    try {
+      await this.core.checkClaudeSignIns();
+    } catch (e) {
+      console.warn(`fleet: could not ask after the Claude sign-ins: ${/** @type {Error} */ (e).message || e}`);
+    }
   }
 
   async #saveHosts() {

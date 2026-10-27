@@ -140,7 +140,7 @@ const MINT_WINDOW_MS = 10 * 60_000;
  * sign-in ended at 18:19 is told by 18:35, against the hours it took a failed
  * session to say so; the minter refuses to ask more often than ten minutes.
  */
-const CLAUDE_CHECK_MS = 15 * 60_000;
+export const CLAUDE_CHECK_MS = 15 * 60_000;
 
 /**
  * How many times one runner may ask for its owner's Claude login in
@@ -4346,18 +4346,65 @@ export class CoordinatorCore {
    *
    * WHO AND WHAT ARE NOT SAID, and need not be: the vault answers each box
    * only for the people who approved it, so a box nobody's change touched
-   * asks and is given what it already holds. A runner is skipped; it asks
-   * for its owner's login on its own clock (runner-login.js). A box from
-   * before this frame refuses it as a malformed intent and asks at its own
-   * ten minutes, as before.
+   * asks and is given what it already holds. A runner is skipped unless
+   * `runners` is set: a renewal revokes the access token it is holding, and
+   * its own clock would not have asked again until that token was close to
+   * running out (askAgainIn). A box from before this frame refuses it as a
+   * malformed intent and asks at its own ten minutes, as before.
+   *
+   * @param {{ runners?: boolean }} [opts]
    */
-  #vaultChanged() {
+  #vaultChanged({ runners = false } = {}) {
     for (const host of this.registry.hosts.values()) {
-      if (host?.ephemeral) continue;
+      if (host?.ephemeral && !runners) continue;
       try {
         host?.send?.({ v: PROTOCOL_VERSION, kind: 'vault-changed' });
       } catch { /* the socket is going; that box asks when it is back */ }
     }
+  }
+
+  /**
+   * A Claude sign-in was renewed, so every holder of the access token just
+   * revoked needs the new one. Emails only: the token stays in the seal.
+   *
+   * @param {unknown[]} emails
+   */
+  #tellHoldersRenewed(emails) {
+    const who = [...new Set(emails.map((e) => String(e || '').trim().toLowerCase()).filter((e) => /^[^\s@]{1,64}@[^\s@]{1,190}$/.test(e)))].slice(0, 100);
+    if (!who.length) return;
+    const text = `Claude renewed the sign-in for ${who.join(', ')}; every box and runner holding it is asked for the new access token, because the one they have was revoked.`;
+    this.record({ event: 'claude.renewed', text });
+    this.log.info(`coordinator: ${text}`);
+    this.#vaultChanged({ runners: true });
+  }
+
+  /**
+   * A renewal was attempted and did not get an answer, while the access token
+   * may still be good. Told once per reason by the minter. The phone says how
+   * long is left, so an eight-hour expiry is not the first time anyone hears.
+   *
+   * @param {any} w
+   */
+  async #tellClaudeRenewalFailed(w) {
+    const email = String(w?.email || '').trim().toLowerCase();
+    if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) return;
+    const until = Number(w.until);
+    const hhmm = (/** @type {number} */ t) => new Date(t).toISOString().slice(11, 16);
+    const left = Number.isFinite(until) && until > 0 ? ` The access token is still good until ${hhmm(until)} UTC.` : '';
+    const why = String(w.why || 'The renewal did not get an answer.').slice(0, 300);
+    const cause = `${why}${left}`;
+    this.record({ event: 'claude.renewal-failed', actor: email, text: `${email}: ${cause}` });
+    this.log.warn(`coordinator: ${email}'s Claude sign-in could not be renewed. ${cause}`);
+    if (!this.push) return;
+    const devices = this.#devicesOf(email);
+    const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
+    const admins = devices.filter((d) => !own.includes(d));
+    const body = `${cause} It will be asked again. If Claude keeps refusing, sign in to Claude again from your phone or the signing page.`;
+    const data = { event: 'claude.renewal-failed', kind: 'claude-renewal', name: '', hostId: '', url: '' };
+    try {
+      if (own.length) await this.push.send(own, { title: 'Your Claude sign-in could not be renewed', body, data });
+      if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in could not be renewed`, body, data });
+    } catch { /* recorded above */ }
   }
 
   /** When the minter was last asked after the kept Claude sign-ins (checkClaudeSignIns). */
@@ -4385,8 +4432,19 @@ export class CoordinatorCore {
     if (!this.minter?.claude || now - this.#claudeCheckedAt < CLAUDE_CHECK_MS) return 0;
     this.#claudeCheckedAt = now;
     /** @type {any} */
-    const r = await this.minter.claude('check', {}).catch(() => null);
-    if (!r?.ok || !Array.isArray(r.ended)) return 0;
+    const r = await this.minter.claude('check', {}).catch((e) => {
+      this.log.warn(`coordinator: could not ask after the Claude sign-ins: ${/** @type {Error} */ (e).message}`);
+      return null;
+    });
+    if (!r?.ok) return 0;
+    // A RENEWAL REPLACES THE ACCESS TOKEN EVERY HOLDER HAS. Said here, with
+    // no token, so boxes and runners ask now rather than serving the one that
+    // was just revoked until its eight hours run out.
+    if (Array.isArray(r.renewed)) this.#tellHoldersRenewed(r.renewed);
+    if (Array.isArray(r.warnings)) {
+      for (const w of r.warnings.slice(0, 100)) await this.#tellClaudeRenewalFailed(w);
+    }
+    if (!Array.isArray(r.ended)) return 0;
     let told = 0;
     for (const e of r.ended.slice(0, 100)) {
       const email = String(e?.email || '').trim().toLowerCase();
@@ -4410,7 +4468,9 @@ export class CoordinatorCore {
             : kind === 'expired'
               ? `Its refresh token ran out${lost}, before this fleet renewed it. Claude refused the next renewal${when}.`
               : `Claude refused to renew it${when}.`;
-      this.record({ event: 'claude.ended', actor: email, text: `${email}: ${cause} (${String(e.why || '').slice(0, 160)})` });
+      const line = `${email}: ${cause} (${String(e.why || '').slice(0, 160)})`;
+      this.record({ event: 'claude.ended', actor: email, text: line });
+      this.log.warn(`coordinator: ${line}`);
       told += 1;
       if (!this.push) continue;
       const devices = this.#devicesOf(email);
@@ -5862,6 +5922,7 @@ export class CoordinatorCore {
     this.claudeAsks.set(hostId, recent);
 
     const reply = await this.#askMinterClaude('login', { job, key, owner: host.owner });
+    if (reply.ok && reply.renewed) this.#tellHoldersRenewed([host.owner]);
     this.record({
       hostId,
       event: reply.ok ? 'runner.claude' : 'runner.claude-refused',
@@ -6044,6 +6105,7 @@ export class CoordinatorCore {
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
+    if (r.ok && Array.isArray(r.renewed)) this.#tellHoldersRenewed(r.renewed);
     answer(r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });

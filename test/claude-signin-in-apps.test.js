@@ -45,6 +45,9 @@ test('iOS: the words about a sign-in and a setup-token', () => {
   }
   // Said only when the minter said which kind it keeps (C-5).
   assert.match(IOS, /if kept\.items\.first\(where: \{ \$0\.name == "claude" \}\)\?\.kind == "token" \{/);
+  // The renewal sentence, drawn only when the minter sent one.
+  assert.match(IOS, /if let note = kept\.items\.first\(where: \{ \$0\.name == "claude" \}\)\?\.note, !note\.isEmpty \{/);
+  assert.match(IOS, /Text\(note\)/);
 });
 
 test('Android: no machine’s page signs anybody in, with the same words about a sign-in and a setup-token', () => {
@@ -53,6 +56,10 @@ test('Android: no machine’s page signs anybody in, with the same words about a
   assert.doesNotMatch(ANDROID, /Connect Claude on \$host/);
   for (const words of SAID) assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
   assert.match(ANDROID, /if \(kept\.items\.firstOrNull \{ it\.name == "claude" \}\?\.kind == "token"\) \{/);
+  assert.match(ANDROID, /kept\.items\.firstOrNull \{ it\.name == "claude" \}\?\.note\?\.takeIf \{ it\.isNotBlank\(\) \}\?\.let \{ Hint\(it\) \}/);
+  // A foregrounded app posts the sign-in notice, rather than only logging it.
+  assert.match(ANDROID, /kind == "claude-ended" \|\| kind == "claude-renewal"/);
+  assert.ok(ANDROID.includes('Claude sign-in'));
   // The empty list asks the vault, as iOS does.
   assert.match(ANDROID, /needsSetup = binHosts\.isNotEmpty\(\) && \(claude == ClaudeKept\.Missing \|\| claude == ClaudeKept\.NeedsGitHub\)/);
   assert.match(ANDROID, /OutlinedButton\(onClick = onSetUp\) \{ Text\("Set up Claude"\) \}/);

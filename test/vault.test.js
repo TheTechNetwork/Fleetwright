@@ -20,7 +20,7 @@ import { USAGE_URL } from '../src/core/usage.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { CoordinatorCore, CLAUDE_CHECK_MS } from '../src/fleet/coordinator/core.js';
 import { Fleet } from '../worker/src/fleet-do.js';
 import { Sidecar, VAULT_CHANGED_ASK_MS } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
@@ -1336,7 +1336,9 @@ test('a whole Claude sign-in is kept once, renewed by the minter alone, and no b
   assert.equal(kept.ok, true, kept.text);
   assert.match(kept.text, /Kept your Claude sign-in .* with Remote Control\. It is renewed here and nowhere else\. Claude accepted it just now\./);
   const listed = await m.phone({ op: 'list' });
-  assert.deepEqual(listed.answer.items.find((/** @type {any} */ i) => i.name === 'claude'), { name: 'claude', at: listed.answer.items.find((/** @type {any} */ i) => i.name === 'claude').at, kind: 'login' });
+  const claudeItem = listed.answer.items.find((/** @type {any} */ i) => i.name === 'claude');
+  assert.equal(claudeItem.kind, 'login');
+  assert.match(claudeItem.note, /It has not been renewed since it was kept at \d\d:\d\d UTC\. The access token is good until \d\d:\d\d UTC\./);
   assert.ok(![...m.rows.values()].some((v) => JSON.stringify(v).includes(made.oauth.refreshToken)), 'nothing readable at rest');
 
   await m.phone({ op: 'grant', hostKey: a.publicJwk, label: 'a' });
@@ -1640,4 +1642,196 @@ test('a refusal after the refresh token ran out by its own lifetime is this flee
   assert.doesNotMatch(told, /outside the fleet/);
   // Still good when refused: something else ended it.
   assert.equal(renewalVerdict([{ ...good, refreshUntil: Date.parse('2026-10-27T00:00:00Z') }, refused])?.kind, 'outside');
+});
+
+test('a kept sign-in is renewed before its access token’s eight hours, by the alarm, with no host connected', async (t) => {
+  // THE TIMELINE. An access token lasts about eight hours. A box or a runner
+  // asking is not what refreshes it: with an hour still on it, the ask is not
+  // due, and it is handed the same bearer. The only earlier renewal is the
+  // coordinator's check, and that check runs from the Durable Object's alarm.
+  // The alarm used to return, without re-arming, the moment no socket was
+  // open, so a quiet fleet served that original bearer until it expired and
+  // logged nothing, because the renewal was never attempted.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const office = await generateKeyPair();
+  const made = claudeSignInFor('eight-hours', 8 * 3_600_000);
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+
+  /** @type {number[]} */
+  const alarms = [];
+  const rows = new Map();
+  const state = {
+    storage: {
+      get: async (/** @type {string} */ k) => rows.get(k),
+      put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, JSON.parse(JSON.stringify(v))); },
+      setAlarm: async (/** @type {number} */ at) => { alarms.push(at); },
+    },
+    blockConcurrencyWhile: (/** @type {() => any} */ fn) => fn(),
+    getWebSockets: () => [],
+    setAlarm: () => {},
+  };
+  const fleet = new Fleet(/** @type {any} */ (state), /** @type {any} */ ({ MINTER: m.service }));
+  await new Promise((r) => setTimeout(r, 20));
+
+  const before = claudeRenewals.count;
+  t.mock.timers.enable({ apis: ['Date'], now: start + 7 * 3_600_000 });
+  try {
+    const early = await m.box(office);
+    const held = early.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude');
+    assert.equal(claudeRenewals.count, before, 'an hour left is not due, so a box asking does not renew it');
+    assert.equal(held.value, made.oauth.accessToken, 'the bearer it was kept with, seven hours on');
+    assert.equal(held.expiresAt, made.oauth.expiresAt, 'that bearer still dies at the original eight hours');
+
+    await fleet.alarm();
+    assert.equal(claudeRenewals.count - before, 1, 'the alarm renewed it with no host connected');
+    assert.equal(alarms.at(-1), Date.now() + CLAUDE_CHECK_MS, 'the check re-arms itself, rather than the alarm stopping');
+    assert.ok(fleet.core.events.some((e) => e.event === 'claude.renewed' && !JSON.stringify(e).includes('sk-ant-')), 'holders are told, and the token is not in the record');
+
+    const later = await m.box(office);
+    const next = later.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude');
+    assert.notEqual(next.value, made.oauth.accessToken);
+    assert.ok(next.expiresAt > start + 8 * 3_600_000, 'the new bearer outlives the eight hours the old one died at');
+    assert.equal(claudeRenewals.count - before, 1, 'the box is given the renewal the alarm just made, and does not make another');
+    const listed = await m.phone({ op: 'list' });
+    assert.match(listed.answer.items.find((/** @type {any} */ i) => i.name === 'claude').note, /Last renewed at \d\d:\d\d UTC, asked for by a check/);
+  } finally {
+    t.mock.timers.reset();
+  }
+});
+
+test('a rotated refresh token is not timed by the expiry of the one it replaced', async (t) => {
+  // Anthropic rotates the refresh token and sometimes omits
+  // refresh_token_expires_in. Copying the old absolute expiry onto the new
+  // token left it "due" — the renewal had been asked for because that expiry
+  // was inside half an hour — so every later ask rotated it again and revoked
+  // every holder.
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.refreshExpiresIn = undefined; });
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('inherited'));
+  made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  const before = claudeRenewals.count;
+  const given = await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'due, because the refresh token had twenty minutes');
+  assert.ok(given.renewed?.includes(ELI), 'the account is named, outside the seal');
+  assert.ok(!JSON.stringify(given).includes('sk-ant-ort01'), 'still no refresh token');
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'the new refresh token is not due just because the old one was');
+  const tested = await m.phone({ op: 'test', name: 'claude' });
+  assert.match(tested.text, /Last renewed at/);
+  assert.doesNotMatch(tested.text, /refresh token until/, 'an expiry Anthropic did not give is not the old one');
+});
+
+test('a renewal that cannot reach Claude is told once, with how long the access token still has', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.fail = null; });
+  const start = Date.now();
+  const made = claudeSignInFor('quiet');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** @type {any[]} */
+  const sends = [];
+  /** @type {any[]} */
+  const seen = [];
+  const clock = { now: start };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ ({
+      claude: async (/** @type {string} */ route, /** @type {any} */ ask) => {
+        const r = await m.binding.claude(route, ask);
+        seen.push(r);
+        return r;
+      },
+    }),
+    push: /** @type {any} */ ({ async send(/** @type {any[]} */ devices, /** @type {any} */ message) { sends.push({ to: devices.map((d) => d.actor), message }); return { sent: devices.length, dead: [] }; } }),
+    now: () => clock.now,
+  });
+  const { client } = /** @type {any} */ (await core.clients.issue(`phone (${ELI})`, { admin: false, email: ELI }));
+  await core.registerDevice({ platform: 'ios', token: 'c'.repeat(64), clientId: client.id, actor: `fleet:${ELI}` });
+  /** The check at `minutes` after keeping, past both floors. @param {number} minutes */
+  const checkAt = async (minutes) => {
+    clock.now = start + minutes * 60_000;
+    m.rows.delete('claude-checked');
+    t.mock.timers.enable({ apis: ['Date'], now: clock.now });
+    try {
+      return await core.checkClaudeSignIns();
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+
+  claudeRenewals.fail = 'unreachable';
+  assert.equal(await checkAt(12), 0, 'a renewal that got no answer is not a sign-in that has ended');
+  assert.equal(seen[0].warnings.length, 1);
+  assert.match(seen[0].warnings[0].why, /could not be reached/);
+  assert.ok(seen[0].warnings[0].until > start + 7 * 3_600_000, 'the access token it already holds is still good');
+  const told = sends.at(-1);
+  assert.equal(told.message.title, 'Your Claude sign-in could not be renewed');
+  assert.equal(told.message.data.kind, 'claude-renewal');
+  const hhmm = new Date(made.oauth.expiresAt).toISOString().slice(11, 16);
+  assert.match(told.message.body, new RegExp(`The access token is still good until ${hhmm} UTC`));
+  assert.ok(core.events.some((e) => e.event === 'claude.renewal-failed' && /could not be reached/.test(e.text)));
+  assert.ok(!JSON.stringify(sends).includes('sk-ant-'));
+
+  await checkAt(28);
+  assert.equal(seen[1].warnings.length, 0, 'the same reason for the same sign-in is said once');
+  assert.equal(sends.length, 1);
+
+  claudeRenewals.fail = null;
+  const renewed = claudeRenewals.count;
+  await checkAt(44);
+  assert.ok(seen[2].renewed?.includes(ELI));
+  assert.deepEqual(seen[2].warnings, []);
+  assert.equal(claudeRenewals.count - renewed, 1, 'the next check, once Claude answers, renews it');
+  assert.equal(sends.length, 1, 'a renewal that worked is not a second warning');
+});
+
+test('a box whose ask renewed a Claude sign-in tells every holder, including a runner', async () => {
+  const keys = await generateKeyPair();
+  const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: keys.publicJwk.x, y: keys.publicJwk.y }, at: Date.now(), reply: 'r'.repeat(87) };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ ({ vault: async () => ({ ok: true, sealed: { epk: 'e', iv: 'i', ct: 'c' }, text: '', renewed: [ELI] }) }),
+  });
+  await core.hostIds.enrol({ hostId: 'box', publicJwk: keys.publicJwk });
+  /** @type {Record<string, any[]>} */
+  const sent = { box: [], runner: [] };
+  core.registry.connect('box', (/** @type {any} */ f) => sent.box.push(f), {});
+  core.registry.connect('runner', (/** @type {any} */ f) => sent.runner.push(f), { ephemeral: true, owner: ELI });
+  await core.onHostMessage('box', { v: 6, kind: 'vault', id: 'vault-1234567890', request, signature: 's'.repeat(80) });
+  const changed = (/** @type {any[]} */ frames) => frames.filter((f) => f.kind === 'vault-changed').length;
+  assert.equal(changed(sent.box), 1);
+  assert.equal(changed(sent.runner), 1, 'a runner holding the access token the renewal just revoked is told to ask now');
+  assert.ok(core.events.some((e) => e.event === 'claude.renewed' && e.text.includes(ELI)));
+  assert.ok(!JSON.stringify(core.events).includes('sk-ant-'));
+});
+
+test('a runner holding a sign-in asks again when the vault says it changed', async (t) => {
+  // The timer is the one holding a sign-in schedules (askAgainIn): hours away
+  // while the access token has hours left. Waiting it out is how a runner
+  // kept serving a token a renewal had already revoked.
+  /** @type {any[]} */
+  const sent = [];
+  const sidecar = new Sidecar({
+    hub: /** @type {any} */ ({ vault: async () => ({ ok: true, text: 'held' }), runnerLogin: async () => ({ ok: true, text: 'held' }) }),
+    transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { sent.push(f); return true; } }),
+    hostId: 'runner',
+    watch: false,
+    healthIntervalMs: 0,
+    renewIntervalMs: 0,
+    vaultIntervalMs: 600_000,
+    mintTimeoutMs: 50,
+    jobToken: async () => 'job',
+  });
+  t.after(() => sidecar.stop());
+  const held = setTimeout(() => {}, 60 * 60_000);
+  held.unref?.();
+  sidecar.claudeLoginTimer = held;
+  assert.deepEqual(await sidecar.handle({ v: PROTOCOL_VERSION, kind: 'vault-changed' }), { kind: 'none' });
+  await new Promise((r) => setTimeout(r, VAULT_CHANGED_ASK_MS + 400));
+  assert.ok(sent.some((f) => f.kind === 'claude-login'), 'asked within a moment, not at the eight hours');
 });

@@ -1557,10 +1557,21 @@ export class Sidecar {
   /**
    * Ask the vault in a moment, because the coordinator said somebody's vault
    * changed. A moment and not at once, so a person keeping three things is
-   * one ask; and only on a box that asks the vault at all, which a runner
-   * does not (it takes its owner's login on its own clock).
+   * one ask. A box asks the vault. A runner that is already holding a sign-in
+   * asks for that sign-in again: the renewal revoked the access token in its
+   * hand, and waiting out the token's eight hours is how a session died on it.
    */
   #vaultChangedSoon() {
+    // A RUNNER HOLDS AN ACCESS TOKEN THE RENEWAL JUST REVOKED. Its own timer
+    // waits until that token is close to its eight hours (askAgainIn), which
+    // is how a session kept a token the vault had already replaced. Ask now.
+    if (this.jobToken && this.claudeLoginTimer) {
+      clearTimeout(this.claudeLoginTimer);
+      this.claudeLoginTimer = setTimeout(() => void this.#askAgainForSignIn(), VAULT_CHANGED_ASK_MS);
+      this.claudeLoginTimer.unref?.();
+      this.log.info('sidecar: a Claude sign-in was renewed, so this runner is asking for the new access token');
+      return;
+    }
     if (!this.vaultKey || this.vaultIntervalMs <= 0 || this.jobToken) return;
     if (this.vaultAsking) {
       this.vaultAgain = true;

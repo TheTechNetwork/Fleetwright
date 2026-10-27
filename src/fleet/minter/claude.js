@@ -322,12 +322,14 @@ export async function answerLogin(ask, config) {
   let token;
   /** @type {{ expiresAt: number, scopes?: unknown, subscriptionType?: unknown, rateLimitTier?: unknown, account?: unknown }|null} */
   let signIn = null;
+  /** @type {any} */
+  let fresh = null;
   if (held.kind === 'login') {
     // A SIGN-IN IS RENEWED BEFORE IT IS HANDED OUT, and only in the vault's
     // object, under the person's lock: renewing rotates the refresh token,
     // and this Worker is not the one writer (claude-login.js). The runner is
     // given the access token, never the refresh token.
-    const fresh = config.logins?.fresh ? await config.logins.fresh(claims.actorId) : null;
+    fresh = config.logins?.fresh ? await config.logins.fresh(claims.actorId) : null;
     if (!fresh?.ok || !fresh.token) {
       return refuse('no_claude_login', `${claims.actor}’s Claude sign-in could not be given out: ${fresh?.text ?? 'the vault did not answer'} This runner falls back to its repository’s ANTHROPIC_API_KEY if it has one.`);
     }
@@ -359,5 +361,8 @@ export async function answerLogin(ask, config) {
   }
   const login = String(held.login || claims.actor);
   const sealed = await seal({ to: runnerKey, aad: audience, payload: { token, login, ...(signIn ? { signIn } : {}) } });
-  return { ok: true, login, sealed, text: `${login}’s Claude login, sealed to the runner ${login} started.` };
+  // WHETHER THIS ASK ROTATED THE SIGN-IN, outside the seal and with no token,
+  // so the coordinator can tell every other holder. The runner itself already
+  // has the new access token in the seal.
+  return { ok: true, login, sealed, text: `${login}’s Claude login, sealed to the runner ${login} started.`, ...(fresh?.renewed ? { renewed: true } : {}) };
 }

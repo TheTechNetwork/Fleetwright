@@ -113,6 +113,47 @@ run out tested the refresh token only at the end of eight hours. Renewing ten
 minutes after keeping says whether a sign-in arrived broken. Renewing hourly
 after that says within the hour when one stopped working.
 
+**That check is what refreshes an access token before its eight hours.** A box
+or a runner asking is handed the access token it already holds until thirty
+minutes are left: an ask at seven hours, with an hour still on the token, does
+not renew it. The hourly renewal is the coordinator's alarm
+(`checkClaudeSignIns`). The alarm used to return without re-arming once the
+last host socket closed, and it never called the check on the way out, so a
+quiet fleet served the same access token until that token expired — about
+eight hours after it was kept — and logged nothing, because the renewal had
+not been attempted. The alarm now keeps the fifteen-minute check with no
+sockets. A failure of the check is logged. A fleet that has never connected
+still has no alarm; the next host to connect starts it, and it no longer stops
+when that host leaves.
+
+**A renewal tells every holder, because the old access token is revoked.**
+The minter names the fleet accounts it renewed, with no token in that list.
+The coordinator tells boxes and runners to ask now. A runner that is holding a
+sign-in asks again within a moment, rather than waiting out the eight hours
+on the token the renewal just replaced. A pool machine is still handed its
+login once, when it enrols.
+
+**A rotated refresh token is not timed by the one it replaced.** When the
+answer rotates the refresh token and does not say `refresh_token_expires_in`,
+the new token's expiry is unknown. Copying the old absolute time left every
+later ask still "due", so each one rotated the token again and revoked every
+holder's access token.
+
+**A renewal that does not get an answer is told once**, with how long the
+access token is still good, as `claude-renewal`. A refusal is still
+`claude-ended`. Both are on the vault list as well, in the sentence Test
+already appended, so Credentials shows it without a second tap. Android posts
+them while the app is open; the tray already showed them in the background,
+and iOS banners them either way.
+
+**A box does not refresh a Claude login the vault renews.** The hourly
+keepalive skips `claude auth` when `~/.claude/.credentials.json` is a
+refreshable login for an account the vault holds. Refreshing it there rotates
+the refresh token out from under the vault, the vault's renewal is then
+refused, and the access token already handed out lives out its eight hours.
+The journal says the vault renews that sign-in. An account the credential
+file does not name is not skipped.
+
 **A refresh token's own lifetime is kept.** Claude Code writes it beside the
 sign-in as `refreshTokenExpiresAt`, and a renewal's answer may give it as
 `refresh_token_expires_in`. The minter used to drop it. Now a sign-in is due

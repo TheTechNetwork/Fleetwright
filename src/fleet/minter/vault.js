@@ -293,7 +293,7 @@ export async function answerClaudeFresh(ask, config) {
   if (!loaded.ok) return /** @type {any} */ (loaded).refusal;
   const { fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = config;
   const store = /** @type {VaultStore} */ (config.store);
-  const { held, problem } = await withLock(`row:${id}`, () => freshClaude(store, /** @type {any} */ (loaded).key, id, { fetchImpl, now, by: 'a runner' }));
+  const { held, problem, renewed } = await withLock(`row:${id}`, () => freshClaude(store, /** @type {any} */ (loaded).key, id, { fetchImpl, now, by: 'a runner' }));
   if (!held) return refuse('no_claude_login', problem ?? 'No Claude login is kept for that account.');
   // AND WHAT A CREDENTIALS FILE IS WRITTEN FROM, for a sign-in, as a box is
   // given it (itemsFor): the runner writes the file its sessions read again
@@ -302,7 +302,7 @@ export async function answerClaudeFresh(ask, config) {
   const signIn = held.kind === 'login' && held.oauth
     ? { login: { scopes: held.oauth.scopes, subscriptionType: held.oauth.subscriptionType, rateLimitTier: held.oauth.rateLimitTier }, account: held.account ?? {} }
     : {};
-  return { ok: true, token: held.bearer, expiresAt: held.expiresAt, ...signIn, text: problem ?? '' };
+  return { ok: true, token: held.bearer, expiresAt: held.expiresAt, ...signIn, text: problem ?? '', ...(renewed ? { renewed: true } : {}) };
 }
 
 /**
@@ -332,15 +332,25 @@ export async function answerClaudeCheck(_ask, config) {
   const key = /** @type {any} */ (loaded).key;
   /** @type {import('./claude-login.js').ClaudeEnded[]} */
   const ended = [];
+  /** @type {import('./claude-login.js').ClaudeRenewalWarning[]} */
+  const warnings = [];
+  /** @type {string[]} */
+  const renewed = [];
   for (const k of (await store.list({ prefix: 'gh:' })).keys()) {
     const userId = k.slice(3);
     if (!/^[0-9]{1,20}$/.test(userId)) continue;
     // ONE AT A TIME, each under its person's lock: a check renewing alongside
     // a box renewing the same sign-in would rotate one refresh token twice.
-    const one = await withLock(`row:${userId}`, () => checkClaude(store, key, userId, { fetchImpl, now })).catch(() => null);
-    if (one) ended.push(one);
+    const one = await withLock(`row:${userId}`, () => checkClaude(store, key, userId, { fetchImpl, now })).catch((e) => {
+      console.warn(`claude: could not ask after sign-in ${userId}: ${/** @type {Error} */ (e).message || e}`);
+      return null;
+    });
+    if (!one) continue;
+    if (one.ended) ended.push(one.ended);
+    if (one.warning) warnings.push(one.warning);
+    if (one.renewed && one.email) renewed.push(one.email);
   }
-  return { ok: true, ended, text: '' };
+  return { ok: true, ended, warnings, ...(renewed.length ? { renewed } : {}), text: '' };
 }
 
 /** @param {VaultConfig} config */
@@ -443,7 +453,7 @@ async function runDeviceOp(inside, config, key, who, email, at) {
     const devices = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
     return {
       ok: true,
-      answer: { ...(await describe(row, store, who.userId)), devices: liveKeys(devices).map((k) => ({ ...k, yours: devices?.github === who.userId })) },
+      answer: { ...(await describe(row, store, who.userId, config.now())), devices: liveKeys(devices).map((k) => ({ ...k, yours: devices?.github === who.userId })) },
       text: `${who.login}’s vault.`,
     };
   }
@@ -801,6 +811,9 @@ async function putClaude(store, key, who, email, at, what, fetchImpl) {
   if ('refusal' in checked) return checked.refusal;
   await store.put(`gh:${who.userId}`, {
     at, login: who.login, email, kind: signIn ? 'login' : 'token',
+    // TIMES, NOT TOKENS, so the vault list can say when this runs out before
+    // the first renewal has a note to quote. A setup-token has neither.
+    ...(signIn ? { accessUntil: signIn.oauth.expiresAt, refreshUntil: signIn.oauth.refreshTokenExpiresAt } : {}),
     sealed: await seal({ to: key.publicKey, aad: atRestAad(who.userId), payload: signIn ?? { token } }),
   });
   return /** @type {const} */ ({
@@ -816,17 +829,27 @@ async function putClaude(store, key, who, email, at, what, fetchImpl) {
  * hold it.
  *
  * @param {{ login: string, items: Record<string, any>, grants: Record<string, any> }} row
- * @param {VaultStore} store @param {string} userId
+ * @param {VaultStore} store @param {string} userId @param {number} [now]
  */
-async function describe(row, store, userId) {
+async function describe(row, store, userId, now = Date.now()) {
   const claude = await store.get(`gh:${userId}`);
-  /** @type {Array<{ name: string, at: number, kind?: string }>} */
+  /** @type {Array<{ name: string, at: number, kind?: string, note?: string }>} */
   const items = Object.entries(row.items)
     .filter(([, v]) => v && !v.forgotten && v.sealed)
     .map(([n, v]) => ({ name: n, at: Number(v.at) }));
   // WHICH KIND, because only a sign-in opens Remote Control, and a phone that
   // said "Kept" over a setup-token let a person think it did.
-  if (claude?.sealed && !claude.forgotten) items.push({ name: 'claude', at: Number(claude.at), kind: claude.kind === 'login' ? 'login' : 'token' });
+  // AND HOW THAT SIGN-IN STANDS: the same sentence Test appends, on the list,
+  // so Credentials says when it runs out and why the last renewal failed
+  // without a second tap. Absent for a setup-token, which is never renewed.
+  if (claude?.sealed && !claude.forgotten) {
+    /** @type {{ name: string, at: number, kind: string, note?: string }} */
+    const item = { name: 'claude', at: Number(claude.at), kind: claude.kind === 'login' ? 'login' : 'token' };
+    if (item.kind === 'login') {
+      item.note = describeRenewals(await claudeRenewals(store, userId, Number(claude.at)), Number(claude.at), now, { accessUntil: claude.accessUntil, refreshUntil: claude.refreshUntil });
+    }
+    items.push(item);
+  }
   items.sort((x, y) => (x.name < y.name ? -1 : 1));
   const grants = Object.entries(row.grants)
     .filter(([, g]) => g && !g.revoked && g.jwk)
@@ -889,13 +912,25 @@ export async function answerVaultBox(ask, config) {
 
   /** @type {Array<{ email: string, login: string, items: Array<{ name: string, value: string, expiresAt: number|null }>, problems: string[] }>} */
   const accounts = [];
+  /** @type {string[]} */
+  const renewed = [];
   for (const userId of Object.keys(index.accounts || {})) {
     if (!/^[0-9]{1,20}$/.test(userId)) continue;
     const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now }, members));
-    if (one) accounts.push(one);
+    if (!one) continue;
+    if (one.renewed && one.email) renewed.push(one.email);
+    accounts.push({ email: one.email, login: one.login, items: one.items, problems: one.problems });
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
-  return { ok: true, sealed, text: accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.' };
+  // WHICH ACCOUNTS WERE RENEWED, outside the seal and with no token: the
+  // coordinator tells every other holder, because the access token they have
+  // was just revoked. A box from before this field ignores it.
+  return {
+    ok: true,
+    sealed,
+    text: accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.',
+    ...(renewed.length ? { renewed } : {}),
+  };
 }
 
 /**
@@ -923,6 +958,7 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
   /** @type {string[]} */
   const problems = [];
   let changed = false;
+  let rotated = false;
   const only = Array.isArray(grant.only) ? new Set(grant.only.map(String)) : null;
   for (const [name, item] of Object.entries(row.items)) {
     if (!item?.sealed || item.forgotten) continue;
@@ -963,8 +999,9 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
     // either way, so a box from before sign-ins uses it as the token it
     // always took; `login` and `account` are what a newer box writes a
     // credentials file from, which is what Remote Control needs.
-    const { held, problem } = await freshClaude(store, key, userId, { ...config, by: 'a box' });
+    const { held, problem, renewed } = await freshClaude(store, key, userId, { ...config, by: 'a box' });
     if (problem) problems.push(problem);
+    if (renewed) rotated = true;
     if (held?.kind === 'login' && held.oauth) {
       const { scopes, subscriptionType, rateLimitTier } = held.oauth;
       items.push({ name: 'claude', value: held.bearer, expiresAt: held.expiresAt, login: { scopes, subscriptionType, rateLimitTier }, account: held.account ?? {} });
@@ -972,7 +1009,7 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
       items.push({ name: 'claude', value: held.bearer, expiresAt: null });
     }
   }
-  return { email: String(grant.email || ''), login: row.login, items, problems };
+  return { email: String(grant.email || ''), login: row.login, items, problems, renewed: rotated };
 }
 
 /**
