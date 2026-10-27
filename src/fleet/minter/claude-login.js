@@ -15,6 +15,12 @@
 // renew: it reads the file again, which is where the box has written a fresh
 // one (src/core/vault-store.js).
 //
+// A login somebody makes on the box with `claude auth login` is the same
+// kind of sign-in, and Anthropic invalidates the refresh token this was
+// holding the moment it is issued. The box seals the new one to the minter
+// and it replaces the row here when it is the same account (vault.js,
+// answerClaudeAdopt); the box then deletes its copy. One refresher, still.
+//
 // RENEWED THE WAY CLAUDE CODE RENEWS IT, against the same address with the
 // same public client and the scopes the sign-in was granted: read off Claude
 // Code's own code (2.1.42, and again on 2.1.306, the version the session
@@ -62,6 +68,14 @@ export const CLAUDE_RENEW_EVERY_MS = 60 * 60_000;
  * so whether the fleet had done it was a reading of code rather than a fact.
  */
 export const RENEWALS_PREFIX = 'claude-renewed:';
+
+/**
+ * Hashes of refresh tokens this sign-in has already rotated away from, so a
+ * box that sends the login again after the vault has renewed it does not
+ * put the spent token back. The token itself is not kept.
+ */
+const PREVIOUS_REFRESH_PREFIX = 'claude-refresh-prev:';
+const PREVIOUS_REFRESH_KEPT = 8;
 
 /** A day of renewals at one every few hours, and the one before a refusal. */
 const RENEWALS_KEPT = 12;
@@ -274,6 +288,7 @@ export async function freshClaude(store, key, userId, io) {
     delete note.pending;
     note.ok = r.ok;
     if (r.ok) {
+      const previousRefresh = oauth.refreshToken;
       oauth = r.oauth;
       note.until = Number(oauth.expiresAt);
       if (oauth.refreshTokenExpiresAt) note.refreshUntil = Number(oauth.refreshTokenExpiresAt);
@@ -285,6 +300,7 @@ export async function freshClaude(store, key, userId, io) {
           refreshUntil: oauth.refreshTokenExpiresAt ?? null,
           sealed: await seal({ to: key.publicKey, aad: atRestAad(userId), payload: { oauth, account } }),
         });
+        if (oauth.refreshToken !== previousRefresh) await rememberRefreshToken(store, userId, previousRefresh);
         renewed = true;
         // THE FAILURE WE TOLD THEM ABOUT IS OVER. The next one, if it comes, is a new reason.
         await store.put(`${WARNED_PREFIX}${userId}`, { keptAt: null }).catch(() => {});
@@ -307,6 +323,106 @@ export async function freshClaude(store, key, userId, io) {
     return { held: null, problem: problem ?? 'Your Claude sign-in has run out. Sign in to Claude again from your phone or the signing page.', refused: true, renewed };
   }
   return { held: { kind: 'login', bearer: oauth.accessToken, expiresAt: Number(oauth.expiresAt), oauth, account }, problem, refused, renewed };
+}
+
+/**
+ * Replace the kept sign-in with one a box just made, when it is the same
+ * Claude account. The caller holds the person's lock and has already asked
+ * Claude whether the new access token is accepted.
+ *
+ * The same refresh token is already kept: nothing is written, and the box
+ * drops its copy. A refresh token this vault has already rotated away from
+ * is the login being sent again after a renewal, and putting it back would
+ * replace the live token with a spent one. Anything else is a new login,
+ * which is what Anthropic is honouring now, so it becomes the one kept.
+ *
+ * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
+ * @param {{ privateKey: CryptoKey, publicKey: string }} key
+ * @param {string} userId
+ * @param {{ oauth: ClaudeOauth, account: Record<string, unknown> }} signIn
+ * @param {number} at
+ * @returns {Promise<{ ok: true, unchanged?: true, superseded?: true, replaced?: true, text: string } | { ok: false, error: { code: string }, text: string }>}
+ */
+export async function adoptKeptSignIn(store, key, userId, signIn, at) {
+  const row = await store.get(`gh:${userId}`);
+  if (!row?.sealed || row.forgotten || row.kind !== 'login') {
+    return { ok: false, error: { code: 'not_this_account' }, text: 'This box holds no Claude sign-in for that account, so the login was left on the box.' };
+  }
+  if (Number(row.at) >= at) {
+    return { ok: false, error: { code: 'stale' }, text: 'That login is older than the sign-in the vault already keeps. Nothing was changed.' };
+  }
+  /** @type {any} */
+  let opened;
+  try {
+    opened = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad(userId), sealed: row.sealed });
+  } catch {
+    return { ok: false, error: { code: 'bad_seal' }, text: 'The sign-in kept for this account does not open with this minter’s key.' };
+  }
+  const keptEmail = String(opened?.account?.emailAddress || '').trim().toLowerCase();
+  const nextEmail = String(signIn.account?.emailAddress || '').trim().toLowerCase();
+  if (!keptEmail || keptEmail !== nextEmail) {
+    return { ok: false, error: { code: 'not_this_account' }, text: 'That login is a different Claude account from the one this vault keeps, so it was left on the box.' };
+  }
+  const current = typeof opened?.oauth?.refreshToken === 'string' ? opened.oauth.refreshToken : '';
+  const incoming = signIn.oauth.refreshToken;
+  if (current && current === incoming) {
+    return { ok: true, unchanged: true, text: 'The vault already keeps that sign-in, and it is the only copy that refreshes it.' };
+  }
+  if (await refreshTokenGeneration(store, userId, incoming) === 'previous') {
+    return { ok: true, superseded: true, text: 'The vault already kept a newer sign-in than that login, and it is the only copy that refreshes it.' };
+  }
+  if (current) await rememberRefreshToken(store, userId, current);
+  await store.put(`gh:${userId}`, {
+    ...row,
+    at,
+    kind: 'login',
+    accessUntil: signIn.oauth.expiresAt,
+    refreshUntil: signIn.oauth.refreshTokenExpiresAt ?? null,
+    sealed: await seal({ to: key.publicKey, aad: atRestAad(userId), payload: { oauth: signIn.oauth, account: signIn.account } }),
+  });
+  await store.put(`${WARNED_PREFIX}${userId}`, { keptAt: null }).catch(() => {});
+  await noteRenewal(store, userId, { at, by: 'a login on a box', ok: true, until: Number(signIn.oauth.expiresAt) });
+  console.info(`claude: sign-in ${userId} was replaced by a login on a box; the refresh token it replaces is no longer used`);
+  return { ok: true, replaced: true, text: 'Kept the Claude sign-in made on a box. It is renewed here and nowhere else.' };
+}
+
+/**
+ * Whether `refreshToken` is one this vault has already rotated away from.
+ *
+ * @param {{ get: (k: string) => Promise<any> }} store
+ * @param {string} userId @param {string} refreshToken
+ * @returns {Promise<'previous'|'new'>}
+ */
+async function refreshTokenGeneration(store, userId, refreshToken) {
+  const digest = await refreshHash(refreshToken);
+  const prev = await store.get(`${PREVIOUS_REFRESH_PREFIX}${userId}`).catch(() => null);
+  return Array.isArray(prev) && prev.includes(digest) ? 'previous' : 'new';
+}
+
+/**
+ * Remember a refresh token that has been rotated away from. The hash only.
+ *
+ * @param {{ get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> }} store
+ * @param {string} userId @param {string} refreshToken
+ */
+async function rememberRefreshToken(store, userId, refreshToken) {
+  if (!refreshToken) return;
+  try {
+    const digest = await refreshHash(refreshToken);
+    const prev = await store.get(`${PREVIOUS_REFRESH_PREFIX}${userId}`);
+    const list = Array.isArray(prev) ? prev.map(String) : [];
+    if (!list.includes(digest)) list.push(digest);
+    await store.put(`${PREVIOUS_REFRESH_PREFIX}${userId}`, list.slice(-PREVIOUS_REFRESH_KEPT));
+  } catch {
+    // Losing the memory costs a repeated login its refusal. The sign-in
+    // just written is the one that renews, and the box has dropped its copy.
+  }
+}
+
+/** @param {string} token */
+async function refreshHash(token) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**

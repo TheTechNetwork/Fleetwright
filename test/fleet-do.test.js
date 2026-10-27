@@ -1042,11 +1042,17 @@ test('an alarm with nobody connected still asks after the Claude sign-ins, and l
   const warns = [];
   const orig = console.warn;
   console.warn = (/** @type {any} */ ...a) => { warns.push(a.map(String).join(' ')); };
+  const before = Date.now();
   try {
     await f.alarm();
   } finally {
     console.warn = orig;
   }
-  assert.equal(alarms.at(-1), Date.now() + CLAUDE_CHECK_MS, 'the check keeps its own clock with no socket open');
+  const after = Date.now();
+  const armed = alarms.at(-1);
+  assert.ok(
+    typeof armed === 'number' && armed >= before + CLAUDE_CHECK_MS && armed <= after + CLAUDE_CHECK_MS,
+    'the check keeps its own clock with no socket open',
+  );
   assert.ok(warns.some((w) => /could not ask after the Claude sign-ins/.test(w) && /the minter is down/.test(w)));
 });

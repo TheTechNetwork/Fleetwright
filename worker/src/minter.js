@@ -33,6 +33,9 @@
 //   POST /vault/box       a box asks for what its people approved it to hold,
 //                         signed with the box's own key, beside the
 //                         coordinator's list of who is still in the fleet
+//   POST /vault/adopt     a box hands over a Claude login it just made, sealed
+//                         to this minter, which keeps it when it is the same
+//                         account (src/fleet/minter/vault.js, answerClaudeAdopt)
 //   POST /vault/keys      a box asks for the signing keys people listed, to
 //                         check the intents it is sent against; the answer is
 //                         signed with this Worker's signing key
@@ -60,7 +63,7 @@
 import { answerMintRequest } from '../../src/fleet/minter/answer.js';
 import { answerDeposit, answerLogin, depositKeyAnswer } from '../../src/fleet/minter/claude.js';
 import { answerGithubToken, SIGNIN_PREFIX } from '../../src/fleet/minter/github.js';
-import { answerVaultDevice, answerVaultBox, answerVaultKeys, answerClaudeFresh, answerClaudeCheck } from '../../src/fleet/minter/vault.js';
+import { answerVaultDevice, answerVaultBox, answerVaultKeys, answerClaudeAdopt, answerClaudeFresh, answerClaudeCheck } from '../../src/fleet/minter/vault.js';
 import { generateKeyPair } from '../../src/fleet/crypto.js';
 import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
@@ -71,7 +74,7 @@ import { VERBS } from '../../src/fleet/protocol/intents.js';
 const MAX_BODY = 16 * 1024;
 
 /** Everything this Worker answers. */
-const ROUTES = ['/mint', '/runner-repo', '/linked-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login', '/claude/check', '/vault/device', '/vault/box', '/vault/keys'];
+const ROUTES = ['/mint', '/runner-repo', '/linked-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login', '/claude/check', '/vault/device', '/vault/box', '/vault/adopt', '/vault/keys'];
 
 /** The one public path: the deposit key's public half, and nothing else. */
 export const KEY_PATH = '/.well-known/fleetwright-minter';
@@ -281,9 +284,10 @@ export class ClaudeLogins {
     if (op === 'claude/check') {
       return json(200, await answerClaudeCheck(body, vaultConfig(this.env, this.storage, () => this.depositSecret())));
     }
-    if (op === 'vault/device' || op === 'vault/box' || op === 'vault/keys') {
+    if (op === 'vault/device' || op === 'vault/box' || op === 'vault/adopt' || op === 'vault/keys') {
       const config = vaultConfig(this.env, this.storage, () => this.depositSecret(), () => this.signingKey());
       if (op === 'vault/keys') return json(200, await answerVaultKeys(body, config));
+      if (op === 'vault/adopt') return json(200, await answerClaudeAdopt(body, config));
       return json(200, op === 'vault/device' ? await answerVaultDevice(body, config) : await answerVaultBox(body, config));
     }
     // A DEVICE'S GITHUB SIGN-IN finishes here too, beside the vault, because
@@ -498,7 +502,7 @@ export default {
     // THE VAULT, AND A DEVICE'S SIGN-IN when there is storage to record it
     // in. Without, a sign-in still finishes here and opens no vault, which a
     // minter with no storage does not keep anyway.
-    if (url.pathname === '/vault/device' || url.pathname === '/vault/box' || url.pathname === '/vault/keys' || url.pathname === '/claude/check' || (url.pathname === '/github/token' && env.LOGINS)) {
+    if (url.pathname === '/vault/device' || url.pathname === '/vault/box' || url.pathname === '/vault/adopt' || url.pathname === '/vault/keys' || url.pathname === '/claude/check' || (url.pathname === '/github/token' && env.LOGINS)) {
       if (!env.LOGINS) return json(200, { ok: false, error: { code: 'no_store' }, text: 'The minting Worker has no storage bound, so it keeps no vault.' });
       const stub = env.LOGINS.get(env.LOGINS.idFromName('logins'));
       const res = await stub.fetch(`https://logins.internal${url.pathname}`, { method: 'POST', body: JSON.stringify(ask) });

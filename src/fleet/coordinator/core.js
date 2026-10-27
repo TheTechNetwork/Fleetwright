@@ -174,6 +174,9 @@ const MAX_VAULT_PER_WINDOW = 30;
 // A box asks for its vault every ten minutes and when a token is about to run
 // out; twelve in ten minutes is that with room for reconnects.
 const MAX_BOX_VAULT_PER_WINDOW = 12;
+// A box adopts a login made on it, and retries until the minter takes it.
+// Thirty seconds apart is twenty in ten minutes; twenty-four leaves a gap.
+const MAX_BOX_ADOPT_PER_WINDOW = 24;
 /** A frame id worth correlating on — the same shape a reply id is held to. */
 const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
@@ -366,7 +369,7 @@ export class CoordinatorCore {
    *     runnerRepo?: (ask: { repo: string }) => Promise<any>,
    *     linkedRepo?: (ask: { role: string, repo: string }) => Promise<any>,
    *     github?: (ask: { sealed: unknown, boxCodes?: string[] }) => Promise<any>,
-   *     vault?: (route: 'device'|'box'|'keys', ask: Record<string, unknown>) => Promise<any> }|null,
+   *     vault?: (route: 'device'|'box'|'keys'|'adopt', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
    *   signingOrigin?: string|null,
    * }} [opts]
@@ -871,6 +874,8 @@ export class CoordinatorCore {
     if (msg.kind === 'claude-login') return this.#onRunnerClaude(hostId, msg);
     // ANY BOX ASKING FOR WHAT ITS PEOPLE APPROVED IT TO HOLD, the same way.
     if (msg.kind === 'vault') return this.#onHostVault(hostId, msg);
+    // A LOGIN MADE ON THE BOX, sealed so this relay cannot read it.
+    if (msg.kind === 'claude-adopt') return this.#onHostClaudeAdopt(hostId, msg);
     if (msg.kind === 'keys') return this.#onHostKeys(hostId, msg);
     // AND THE BOX RUNNING A POLICY JOB, for the pin its pool's own machine
     // enrols with.
@@ -6108,6 +6113,63 @@ export class CoordinatorCore {
     if (r.ok && Array.isArray(r.renewed)) this.#tellHoldersRenewed(r.renewed);
     answer(r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });
+  }
+
+  /**
+   * A box made a Claude login and is handing it to the minter. Relayed unread,
+   * the way a deposit is: the seal is to the minter's key, which this Worker
+   * does not hold, and the answer carries no token. When the minter kept it,
+   * every holder is asked to fetch the new access token, because the login
+   * invalidated the one they had.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  async #onHostClaudeAdopt(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} handed over a Claude login without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the box tries again */ }
+    };
+    const request = msg.request;
+    const signature = String(msg.signature || '');
+    const enrolled = this.hostIds?.get(hostId);
+    const k = request?.hostKey;
+    if (!request || typeof request !== 'object' || JSON.stringify(request).length > 14_000 || signature.length > 200) {
+      answer({ ok: false, error: { code: 'bad_params' }, text: 'That Claude login is not in the shape one takes.' });
+      return;
+    }
+    if (!enrolled?.publicJwk || enrolled.revokedAt || k?.x !== enrolled.publicJwk.x || k?.y !== enrolled.publicJwk.y) {
+      answer({ ok: false, error: { code: 'not_this_box' }, text: `That is not the key ${hostId} enrolled with.` });
+      return;
+    }
+    if (!this.minter?.vault) {
+      answer({ ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a Claude login.' });
+      return;
+    }
+    const now = this.now();
+    const key = `box-adopt:${hostId}`;
+    const recent = (this.claudeAsks.get(key) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_BOX_ADOPT_PER_WINDOW) {
+      answer({ ok: false, error: { code: 'too_many' }, text: `${hostId} has handed over a Claude login ${recent.length} times in ten minutes.` });
+      return;
+    }
+    recent.push(now);
+    this.claudeAsks.set(key, recent);
+    const r = await this.minter.vault('adopt', { request, signature, members: this.#members() }).then(
+      (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+    if (r.ok && Array.isArray(r.renewed)) this.#tellHoldersRenewed(r.renewed);
+    answer(r.ok
+      ? { ok: true, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });
   }
 

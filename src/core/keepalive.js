@@ -34,42 +34,15 @@
 // nothing behind to explain.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { log } from '../log.js';
 import { readCredentialState } from './claude-credential.js';
+import { vaultHoldsClaudeAccount } from './claude-adopt.js';
 import { Accounts } from './accounts.js';
 import { Connections, refreshGithubToken, refreshCloudflareToken } from './connectors.js';
-
-/**
- * Whether the vault on this box holds a Claude sign-in for `email`.
- * The account file is the one applyVault writes (`email.claude-account.json`);
- * the address inside it is the Claude account, which is what the credential
- * file names. A file that does not parse is not a match.
- *
- * @param {string} stateDir @param {string} email
- */
-function vaultRenewsAccount(stateDir, email) {
-  const want = email.trim().toLowerCase();
-  if (!want) return false;
-  let names;
-  try {
-    names = readdirSync(path.join(stateDir, 'vault'));
-  } catch {
-    return false;
-  }
-  for (const name of names) {
-    if (!name.endsWith('.claude-account.json')) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(path.join(stateDir, 'vault', name), 'utf8'));
-      const theirs = typeof parsed.emailAddress === 'string' ? parsed.emailAddress.trim().toLowerCase() : '';
-      if (theirs && theirs === want) return true;
-    } catch { /* unreadable is cannot tell */ }
-  }
-  return false;
-}
 
 /** How long a one-shot prompt gets. Generous: a cold CLI start is seconds. */
 const PROMPT_TIMEOUT_MS = 90_000;
@@ -159,19 +132,20 @@ export function renewClaudeCredential(cfg, {
       detail: 'the credential is in a shape this version does not read, so a renewal could not be verified',
     };
   }
-  // THE VAULT HOLDS THIS REFRESH TOKEN AND RENEWS IT. Refreshing here rotates
-  // that token, and the vault's next renewal is refused. The access token the
-  // fleet is handing out then lives out its eight hours and stops, which is
-  // the failure the refusal is blamed on. An account the file does not name
-  // is not skipped: cannot tell is not a match.
-  if (before.refreshable && before.account && vaultRenewsAccount(cfg.stateDir, before.account)) {
+  // THE VAULT HOLDS THIS ACCOUNT'S REFRESH TOKEN. Refreshing here, or letting
+  // the CLI refresh a copy that still has one, rotates that token and the
+  // vault's next renewal is refused. A login made on this box is adopted
+  // into the vault (claude-adopt.js) and the refresh token is then deleted
+  // from this file; this still does not run the CLI against it. An account
+  // the file does not name is not skipped: cannot tell is not a match.
+  if (before.account && vaultHoldsClaudeAccount(cfg.stateDir, before.account)) {
     return {
       outcome: 'left-to-vault',
       account,
       before: before.expiresAt,
       after: before.expiresAt,
       left,
-      detail: 'the vault renews this sign-in, and refreshing it here would invalidate that copy',
+      detail: 'the vault holds this account’s refresh token, and a login made here is kept there',
     };
   }
 
@@ -246,7 +220,7 @@ export function renewAllCredentials(cfg, { within } = {}) {
       if (r.outcome === 'renewed') {
         log.info(`keepalive: renewed ${account}'s credential via ${r.rung}`);
       } else if (r.outcome === 'left-to-vault') {
-        log.warn(`keepalive: ${account}'s Claude sign-in is the one the vault renews (${r.detail}), so this box did not refresh it`);
+        log.info(`keepalive: ${account}'s Claude login is an account the vault renews, so this box left it there`);
       } else if (r.outcome === 'unchanged' && r.pressing) {
         // WARN ONLY WHEN IT MATTERS. This is the case where the mechanism has
         // stopped working and it is invisible from everywhere else — the

@@ -52,6 +52,7 @@ import path from 'node:path';
 
 import { normaliseEmail, emailFromActor, rowForActor, operatorAccount, HOST_ROW } from './accounts.js';
 import { PROVIDERS } from './connectors.js';
+import { mirrorLocalClaudeAccess } from './claude-adopt.js';
 
 /** A named secret's name, as secret-store.js accepts one. */
 const SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
@@ -169,7 +170,7 @@ function writePrivate(file, text) {
 /**
  * Keep what the vault gave this box, and forget whatever it no longer gives.
  *
- * @param {{ stateDir: string }} cfg
+ * @param {{ stateDir: string, sandboxCredentialsFile?: string|null }} cfg
  * @param {unknown} bundle  `{ accounts: [{ email, login, items: [{ name, value, expiresAt, login?, account? }], problems }] }`
  * @returns {{ ok: boolean, text: string, claudeChanged?: string[] }}
  *   `claudeChanged`, the people whose Claude login on this box is not what it
@@ -234,6 +235,10 @@ export function applyVault(cfg, bundle) {
       if (text) writePrivate(file, text);
       else if (existsSync(file)) unlinkSync(file);
     }
+    // THE CLI'S OWN FILE, once it has given its refresh token to the vault.
+    // Claude Code re-reads that file and does not renew it, so the access
+    // token the vault just handed out has to be the one in it.
+    if (c?.signIn && c.expiresAt !== null) mirrorLocalClaudeAccess(cfg, c.account, c.value, /** @type {number} */ (c.expiresAt));
     kept.add(email);
   }
   for (const f of readdirSync(dir)) {

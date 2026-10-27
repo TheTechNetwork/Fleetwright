@@ -225,6 +225,32 @@ export class HubClient {
   }
 
   /**
+   * The Claude login somebody just made on this box, when it is for an
+   * account the vault already renews. Null-shaped when there is none, or
+   * when this hub is from before the route.
+   *
+   * @returns {Promise<{ pending: boolean, signIn?: { oauth: Record<string, unknown>, account: Record<string, unknown> } }>}
+   */
+  async claudeAdopt() {
+    const r = await this.#json('GET', '/api/claude-adopt', null, this.commandTimeoutMs, { allowStatus: [404] });
+    if (r.__status === 404 || r.pending !== true || !r.signIn || typeof r.signIn !== 'object') return { pending: false };
+    return { pending: true, signIn: r.signIn };
+  }
+
+  /**
+   * The vault kept the login. Drop that refresh token from the file on this
+   * box. A newer login in the file is left there.
+   *
+   * @param {string} refreshToken
+   * @returns {Promise<{ ok: boolean, text: string }>}
+   */
+  async claudeAdoptTaken(refreshToken) {
+    const r = await this.#json('POST', '/api/claude-adopt', { refreshToken }, this.commandTimeoutMs, { allowStatus: [400, 404] });
+    if (r.__status === 404) return { ok: false, text: 'fleetwright here is older than adopting a Claude login; update it' };
+    return { ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
+  }
+
+  /**
    * Hand fleetwright what this box's people approved it to hold, as the vault
    * just answered. See src/core/vault-store.js.
    *

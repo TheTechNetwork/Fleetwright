@@ -146,13 +146,22 @@ already appended, so Credentials shows it without a second tap. Android posts
 them while the app is open; the tray already showed them in the background,
 and iOS banners them either way.
 
-**A box does not refresh a Claude login the vault renews.** The hourly
-keepalive skips `claude auth` when `~/.claude/.credentials.json` is a
-refreshable login for an account the vault holds. Refreshing it there rotates
-the refresh token out from under the vault, the vault's renewal is then
-refused, and the access token already handed out lives out its eight hours.
-The journal says the vault renews that sign-in. An account the credential
-file does not name is not skipped.
+**A login made on a box is kept by the vault.** `claude auth login` on a box
+writes a new refresh token, and Anthropic invalidates the one the vault was
+renewing. The box reads that file. When the account is one the vault already
+holds, the box seals the login to the minter — the coordinator that carries
+it cannot read the refresh token — and the minter replaces the kept sign-in.
+The vault is then the only copy that refreshes it. The box deletes the
+refresh token from `~/.claude/.credentials.json` and leaves the access token,
+and each later answer from the vault writes the new access token into that
+same file, which is what Claude Code reads. Sessions are told to ask again,
+so they take the new access token rather than the one the login revoked.
+
+A login for an account the vault does not hold is left on the box and renewed
+here as before. A login the minter will not keep — a different Claude account
+from the one already kept, or a box that was not approved for it — stays in
+the file and is offered again. The hourly keepalive does not refresh either
+copy: two refreshers on one rotating token is the race this exists to end.
 
 **A refresh token's own lifetime is kept.** Claude Code writes it beside the
 sign-in as `refreshTokenExpiresAt`, and a renewal's answer may give it as

@@ -11,13 +11,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
+import { newDepositKey, newSealKey, importDepositKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD, ADOPT_AAD } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
 import { describeRenewals, renewalVerdict, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
 import { USAGE_URL } from '../src/core/usage.js';
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoordinatorCore, CLAUDE_CHECK_MS } from '../src/fleet/coordinator/core.js';
@@ -26,7 +26,8 @@ import { Sidecar, VAULT_CHANGED_ASK_MS } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { HttpAdapter } from '../src/adapters/http.js';
 import { ensureApiToken } from '../src/core/api-token.js';
-import { vaultEnvFor, vaultSecret, vaultClaudeFile, vaultExpiryFor } from '../src/core/vault-store.js';
+import { vaultEnvFor, vaultSecret, vaultClaudeFile, vaultExpiryFor, applyVault } from '../src/core/vault-store.js';
+import { pendingLocalSignIn, takeLocalSignIn } from '../src/core/claude-adopt.js';
 import { runnerAuthFor } from '../src/core/runner-login.js';
 import { pickCredentialSource } from '../src/core/podman.js';
 import { buildCommand } from '../src/core/claude.js';
@@ -182,6 +183,20 @@ async function minter(extra = {}) {
   const deposit_ = async (github, claude, extra = {}) =>
     call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now(), ...extra } }), email: ELI });
 
+  /**
+   * A box handing over a Claude login it just made, sealed to the minter.
+   * @param {{ publicJwk: any, privateJwk: any }} keys
+   * @param {any} signIn
+   * @param {{ at?: number, tamper?: boolean, members?: unknown }} [o]
+   */
+  const adopt = async (keys, signIn, o = {}) => {
+    const at = o.at ?? Date.now();
+    const sealed = await seal({ to: deposit.publicKey, aad: ADOPT_AAD, payload: { v: 1, at, signIn } });
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: keys.publicJwk.x, y: keys.publicJwk.y }, at, sealed };
+    const signature = await sign(keys.privateJwk, signingInput('claude-adopt', o.tamper ? { ...request, at: at + 1 } : request));
+    return call('/vault/adopt', { request, signature, ...(o.members !== undefined ? { members: o.members } : {}) });
+  };
+
   /** The coordinator's minter binding, as fleet-do.js makes it. */
   const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask), claude: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/claude/${route}`, ask) };
   /** The key, as a phone looks it up at the fleet's address. */
@@ -192,7 +207,7 @@ async function minter(extra = {}) {
   const service = { fetch: (/** @type {string} */ u, /** @type {any} */ i) => minterWorker.fetch(new Request(u, i), env) };
   /** The vault's object renewing a sign-in for a runner's hand-out, as claude.js asks it to. @param {string} id */
   const fresh = (id) => instance.fetch(new Request('https://logins.internal/claude/fresh', { method: 'POST', body: JSON.stringify({ id }) })).then((r) => r.json());
-  return { phone, box, keys: keysFor, deposit: deposit_, fresh, signIn: () => signIn(deposit.publicKey), signInAs: (/** @type {string} */ email) => signIn(deposit.publicKey, email), renew, rows, calls, binding, service, lookup, restart, restore: () => { globalThis.fetch = real; } };
+  return { phone, box, adopt, keys: keysFor, deposit: deposit_, fresh, signIn: () => signIn(deposit.publicKey), signInAs: (/** @type {string} */ email) => signIn(deposit.publicKey, email), renew, rows, calls, binding, service, lookup, restart, restore: () => { globalThis.fetch = real; } };
 }
 
 test('a person keeps their credentials once, and only a box they approved by its key is given them', async (t) => {
@@ -1834,4 +1849,194 @@ test('a runner holding a sign-in asks again when the vault says it changed', asy
   assert.deepEqual(await sidecar.handle({ v: PROTOCOL_VERSION, kind: 'vault-changed' }), { kind: 'none' });
   await new Promise((r) => setTimeout(r, VAULT_CHANGED_ASK_MS + 400));
   assert.ok(sent.some((f) => f.kind === 'claude-login'), 'asked within a moment, not at the eight hours');
+});
+
+test('a claude auth login on a box replaces the vault’s sign-in, and sessions keep the new access token', async (t) => {
+  // The login invalidates the refresh token the vault was holding. Adopting
+  // it is what keeps the fleet signed in; leaving it on the box is what used
+  // to make the next renewal a refusal and the access token already handed
+  // out live out its eight hours.
+  const m = await minter();
+  t.after(m.restore);
+  const saved = { expiresIn: claudeRenewals.expiresIn, refreshExpiresIn: claudeRenewals.refreshExpiresIn, fail: claudeRenewals.fail };
+  t.after(() => Object.assign(claudeRenewals, saved));
+  const office = await generateKeyPair();
+  const kept = claudeSignInFor('eli', 8 * 3_600_000);
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: kept })).ok, true);
+  assert.equal((await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office-box' })).ok, true);
+  const before = claudeRenewals.count;
+  const first = await m.box(office);
+  assert.equal(claudeRenewals.count, before, 'eight hours left is not due, so the ask does not rotate the refresh token');
+  const original = first.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude');
+  assert.equal(original.value, kept.oauth.accessToken);
+
+  const dir = mkdtempSync(join(tmpdir(), 'adopt-login-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const local = join(dir, '.credentials.json');
+  const cfg = { stateDir: dir, operator: ELI, sandboxCredentialsFile: local };
+  assert.equal(applyVault(cfg, { accounts: first.answer.accounts }).ok, true);
+
+  // A login for somebody else is not this account, and is not offered.
+  writeFileSync(local, JSON.stringify({ claudeAiOauth: { accessToken: 'sk-ant-oat01-other', refreshToken: 'sk-ant-ort01-other', expiresAt: Date.now() + 3_600_000, account: { email_address: 'other@example.com' } } }));
+  assert.equal(pendingLocalSignIn(cfg), null);
+
+  const login = claudeSignInFor('eli-again', 10 * 60_000);
+  login.account.emailAddress = 'Eli@Example.com';
+  writeFileSync(local, JSON.stringify({
+    claudeAiOauth: { ...login.oauth, account: { email_address: 'Eli@Example.com', uuid: login.account.accountUuid } },
+  }));
+  const pending = pendingLocalSignIn(cfg);
+  assert.equal(pending?.oauth.refreshToken, login.oauth.refreshToken);
+  assert.equal(pending?.account.emailAddress, 'Eli@Example.com');
+
+  const stranger = await generateKeyPair();
+  const limited = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'grant', hostKey: limited.publicJwk, label: 'holder-limited', only: ['secret:NPM_TOKEN'] })).ok, true);
+  assert.equal((await m.adopt(office, login, { tamper: true })).error?.code, 'bad_signature');
+  assert.equal((await m.adopt(office, claudeSignInFor('other'))).error?.code, 'not_this_account');
+  assert.equal((await m.adopt(stranger, login)).error?.code, 'not_this_account');
+  assert.equal((await m.adopt(limited, login)).error?.code, 'not_this_account');
+  assert.equal((await m.adopt(office, login, { members: [DANA] })).error?.code, 'not_this_account');
+  assert.equal((await m.box(office)).answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude').value, kept.oauth.accessToken, 'a refused login leaves the sign-in that was kept');
+
+  // Anthropic has invalidated the refresh token the vault holds, which is
+  // what a new login does. The one just written is the one that still works.
+  claudeRenewals.used.add(kept.oauth.refreshToken);
+  const adopted = await m.adopt(office, login, { members: [ELI] });
+  assert.equal(adopted.ok, true, adopted.text);
+  assert.deepEqual(adopted.renewed, [ELI]);
+  const note = (await m.phone({ op: 'list' })).answer.items.find((/** @type {any} */ i) => i.name === 'claude').note;
+  assert.match(note, /a login on a box/);
+
+  assert.equal(takeLocalSignIn(cfg, login.oauth.refreshToken).ok, true);
+  assert.equal(JSON.parse(readFileSync(local, 'utf8')).claudeAiOauth.refreshToken, undefined);
+  assert.equal(pendingLocalSignIn(cfg), null, 'the refresh token is gone, so there is nothing further to adopt');
+
+  const renewals = claudeRenewals.count;
+  const given = await m.box(office);
+  assert.equal(claudeRenewals.count - renewals, 1, 'the adopted refresh token is the one that gets renewed');
+  assert.deepEqual(given.answer.accounts[0].problems, []);
+  const bearer = given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude').value;
+  assert.match(bearer, /^sk-ant-oat01-renewed/);
+  assert.notEqual(bearer, kept.oauth.accessToken);
+  assert.notEqual(bearer, login.oauth.accessToken);
+  assert.ok(!JSON.stringify(given.answer).includes('sk-ant-ort01'), 'a box is still not given a refresh token');
+
+  assert.equal(applyVault(cfg, { accounts: given.answer.accounts }).ok, true);
+  const onDisk = JSON.parse(readFileSync(local, 'utf8'));
+  assert.equal(onDisk.claudeAiOauth.refreshToken, undefined);
+  assert.equal(onDisk.claudeAiOauth.accessToken, bearer, 'the CLI file is given the access token the vault just issued');
+  const picked = pickCredentialSource(cfg, `fleet:${ELI}`);
+  const session = readFileSync(/** @type {string} */ (picked.source), 'utf8');
+  assert.ok(session.includes(bearer), 'a session reads the new access token');
+  assert.ok(!session.includes(kept.oauth.accessToken), 'a session does not keep the access token the login revoked');
+  assert.ok(!session.includes('refreshToken'));
+
+  // The login is sent again after the vault has rotated past it. That must
+  // not put the spent refresh token back.
+  const again = await m.adopt(office, login, { members: [ELI] });
+  assert.equal(again.ok, true, again.text);
+  assert.equal(again.superseded, true);
+  const after = claudeRenewals.count;
+  const still = await m.box(office);
+  assert.equal(claudeRenewals.count, after, 'a repeated login does not rotate or replace the refresh token');
+  assert.equal(still.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude').value, bearer);
+  assert.deepEqual(still.answer.accounts[0].problems, []);
+});
+
+test('the coordinator relays a box’s Claude login unread and tells holders when it was kept', async () => {
+  const keys = await generateKeyPair();
+  const other = await generateKeyPair();
+  /** @type {any[]} */
+  const seen = [];
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+  const core = new CoordinatorCore({
+    logger: quiet,
+    minter: { vault: async (/** @type {string} */ route, /** @type {any} */ ask) => { seen.push({ route, ask }); return { ok: true, renewed: [ELI], text: 'kept', sealed: 'not-for-the-box' }; } },
+  });
+  assert.equal((await core.hostIds.enrol({ hostId: 'office-box', publicJwk: keys.publicJwk, owner: ELI })).ok, true);
+  /** @type {any[]} */
+  const sent = [];
+  core.hostConnected('office-box', (/** @type {any} */ frame) => sent.push(frame));
+  const request = {
+    v: 1,
+    hostKey: { kty: 'EC', crv: 'P-256', x: keys.publicJwk.x, y: keys.publicJwk.y },
+    at: Date.now(),
+    sealed: { epk: 'a'.repeat(87), iv: 'b'.repeat(16), ct: 'cipher-text-not-opened-here' },
+  };
+  await core.onHostMessage('office-box', { v: PROTOCOL_VERSION, kind: 'claude-adopt', id: 'claude-adopt-1', request, signature: 's'.repeat(80) });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].route, 'adopt');
+  assert.equal(seen[0].ask.request.sealed.ct, 'cipher-text-not-opened-here');
+  assert.ok(Array.isArray(seen[0].ask.members));
+  const minted = sent.find((f) => f.kind === 'minted');
+  assert.equal(minted.ok, true);
+  assert.equal(minted.sealed, undefined, 'the answer carries no sealed login');
+  assert.ok(sent.some((f) => f.kind === 'vault-changed'), 'holders are asked for the access token the login replaced');
+
+  seen.length = 0;
+  await core.onHostMessage('office-box', {
+    v: PROTOCOL_VERSION, kind: 'claude-adopt', id: 'claude-adopt-2',
+    request: { ...request, hostKey: { kty: 'EC', crv: 'P-256', x: other.publicJwk.x, y: other.publicJwk.y } },
+    signature: 's'.repeat(80),
+  });
+  assert.equal(seen.length, 0, 'a key this box did not enrol with is not relayed');
+  assert.equal(sent.at(-1).ok, false);
+  assert.equal(sent.at(-1).error.code, 'not_this_box');
+});
+
+test('a login made on a box is sealed to the minter, and the refresh token is dropped only once the vault keeps it', async (t) => {
+  const keys = await generateKeyPair();
+  const deposit = await newDepositKey();
+  const opening = await importDepositKey(deposit.secret);
+  const signIn = claudeSignInFor('eli');
+  /** @type {string|null} */
+  let taken = null;
+  let pending = true;
+  let accept = false;
+  /** @type {any[]} */
+  const frames = [];
+  /** @type {Sidecar} */
+  let sidecar;
+  sidecar = new Sidecar({
+    hub: /** @type {any} */ ({
+      claudeAdopt: async () => (pending ? { pending: true, signIn } : { pending: false }),
+      claudeAdoptTaken: async (/** @type {string} */ refresh) => { taken = refresh; pending = false; return { ok: true, text: 'dropped' }; },
+      vault: async () => ({ ok: true, text: 'held' }),
+    }),
+    transport: /** @type {any} */ ({
+      origin: 'https://fleet.test',
+      onMessage() {},
+      start: async () => true,
+      stop: async () => {},
+      send: (/** @type {any} */ frame) => {
+        frames.push(frame);
+        queueMicrotask(() => {
+          if (frame.kind === 'claude-adopt') void sidecar.handle({ kind: 'minted', id: frame.id, ok: accept, text: accept ? 'kept' : 'the minter refused' });
+          else if (frame.kind === 'vault') void sidecar.handle({ kind: 'minted', id: frame.id, ok: false, error: { code: 'minter_unreachable' }, text: 'later' });
+        });
+        return true;
+      },
+    }),
+    fetchImpl: async (/** @type {any} */ url) => new Response(JSON.stringify({ ok: true, key: String(url).endsWith('/.well-known/fleetwright-minter') ? deposit.publicKey : '' }), { headers: { 'content-type': 'application/json' } }),
+    hostId: 'box',
+    watch: false,
+    healthIntervalMs: 0,
+    renewIntervalMs: 0,
+    vaultIntervalMs: 600_000,
+    mintTimeoutMs: 500,
+    vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ message) => sign(keys.privateJwk, message) },
+  });
+  t.after(() => sidecar.stop());
+  await sidecar.syncVault();
+  assert.equal(taken, null, 'a refusal leaves the refresh token in the file');
+  assert.equal(frames[0].kind, 'claude-adopt');
+  const inside = await open({ privateKey: opening.privateKey, publicKey: opening.publicKey, aad: ADOPT_AAD, sealed: frames[0].request.sealed });
+  assert.equal(inside.signIn.oauth.refreshToken, signIn.oauth.refreshToken, 'the login is sealed to the minter’s key');
+  assert.equal(await verify(keys.publicJwk, frames[0].signature, signingInput('claude-adopt', frames[0].request)), true);
+
+  accept = true;
+  await sidecar.syncVault();
+  assert.equal(taken, signIn.oauth.refreshToken);
+  assert.equal(pending, false);
 });

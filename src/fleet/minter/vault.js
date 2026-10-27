@@ -69,13 +69,13 @@
 //
 // NEVER THROWS. Every refusal is a code and a sentence.
 
-import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
+import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, ADOPT_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
 import { verify, sign, signingInput } from '../crypto.js';
 import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
 import { probeClaude } from '../../core/claude-token-probe.js';
-import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaude } from './claude-login.js';
+import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaude, adoptKeptSignIn } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
@@ -931,6 +931,101 @@ export async function answerVaultBox(ask, config) {
     text: accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.',
     ...(renewed.length ? { renewed } : {}),
   };
+}
+
+const SEALED_FIELD_RE = /^[A-Za-z0-9_-]{8,12000}$/;
+
+/** @param {any} sealed */
+function sealShape(sealed) {
+  return Boolean(sealed) && typeof sealed === 'object'
+    && SEAL_KEY_RE.test(String(sealed.epk || ''))
+    && SEALED_FIELD_RE.test(String(sealed.iv || ''))
+    && SEALED_FIELD_RE.test(String(sealed.ct || ''));
+}
+
+/**
+ * A box made a Claude login with `claude auth login` and is handing it over,
+ * sealed to this minter so the coordinator never reads the refresh token.
+ *
+ * Kept only when the box's own key is approved for that person's Claude
+ * login, the person is still in the fleet, and the login is the same Claude
+ * account as the sign-in already kept. A different account is left on the
+ * box. The same refresh token, or one this vault has already rotated past,
+ * is already kept: the box is told so, and drops its copy.
+ *
+ * @param {unknown} ask  `{ request: { v: 1, hostKey, at, sealed }, signature, members? }`
+ * @param {VaultConfig} config
+ */
+export async function answerClaudeAdopt(ask, config) {
+  const missing = notConfigured(config);
+  if (missing) return missing;
+  const { fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = config;
+  const req = /** @type {any} */ (ask)?.request;
+  const signature = String(/** @type {any} */ (ask)?.signature || '');
+  const jwk = boxKey(req?.hostKey);
+  const at = Number(req?.at);
+  if (req?.v !== 1 || !jwk || !Number.isFinite(at) || !sealShape(req?.sealed) || !SIGNATURE_RE.test(signature)) {
+    return refuse('bad_params', 'That is not a Claude login from a box.');
+  }
+  const listed = /** @type {any} */ (ask)?.members;
+  /** @type {Set<string>|null} */
+  let members = null;
+  if (listed !== undefined) {
+    if (!Array.isArray(listed) || listed.length > MAX_MEMBERS || listed.some((e) => typeof e !== 'string' || e.length > MEMBER_MAX_LENGTH)) {
+      return refuse('bad_params', 'The fleet’s list of who is in it is not in the shape one takes.');
+    }
+    members = new Set(listed.map(normaliseEmail).filter(Boolean));
+  }
+  if (Math.abs(now() - at) > DEPOSIT_MAX_AGE_MS) return refuse('stale', 'That login is more than ten minutes old. The box’s clock is wrong, or it is a replay.');
+  const payload = { v: 1, hostKey: jwk, at, sealed: { epk: String(req.sealed.epk), iv: String(req.sealed.iv), ct: String(req.sealed.ct) } };
+  if (!(await verify(jwk, signature, signingInput('claude-adopt', payload)))) {
+    return refuse('bad_signature', 'That login is not signed by the key it names.');
+  }
+  const loaded = await loadKey(config);
+  if (!loaded.ok) return /** @type {any} */ (loaded).refusal;
+  const key = /** @type {{ privateKey: CryptoKey, publicKey: string }} */ (loaded.key);
+  /** @type {any} */
+  let inside;
+  try {
+    inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: ADOPT_AAD, sealed: payload.sealed });
+  } catch {
+    return refuse('bad_seal', 'That login does not open with this minter’s key, so it was not kept.');
+  }
+  if (Number(inside?.at) !== at) return refuse('bad_seal', 'That login was sealed for a different request, so it was not kept.');
+  const signIn = claudeSignIn(inside?.signIn);
+  if (!signIn) return refuse('bad_token', 'That is not a Claude sign-in. Make it on a machine again.');
+  if (!normaliseEmail(signIn.account?.emailAddress)) {
+    return refuse('not_this_account', 'That sign-in does not name an account, so it was left on the box.');
+  }
+  const checked = await checkBeforeKeeping(signIn.oauth.accessToken, fetchImpl, 'login');
+  if ('refusal' in checked) return checked.refusal;
+  const store = /** @type {VaultStore} */ (config.store);
+  const hash = await boxKeyHash(jwk);
+  const index = (await store.get(`box:${hash}`)) || { accounts: {} };
+  for (const userId of Object.keys(index.accounts || {})) {
+    if (!/^[0-9]{1,20}$/.test(userId)) continue;
+    const result = await withLock(`row:${userId}`, async () => {
+      const vaultRow = emptyRow(await store.get(`v:${userId}`));
+      const grant = vaultRow.grants[hash];
+      if (!grant || grant.revoked || grant.jwk?.x !== jwk.x || grant.jwk?.y !== jwk.y) return null;
+      if (members && !members.has(normaliseEmail(grant.email))) return null;
+      if (Array.isArray(grant.only) && !grant.only.map(String).includes('claude')) return null;
+      const adopted = await adoptKeptSignIn(store, key, userId, signIn, at);
+      if (!adopted.ok && adopted.error?.code === 'not_this_account') return null;
+      return { adopted, email: String(grant.email || '') };
+    });
+    if (!result) continue;
+    if (!result.adopted.ok) return result.adopted;
+    const renewed = result.adopted.replaced && result.email ? [result.email] : [];
+    return {
+      ok: true,
+      text: `${result.adopted.text}${checked.said}`,
+      ...(result.adopted.unchanged ? { unchanged: true } : {}),
+      ...(result.adopted.superseded ? { superseded: true } : {}),
+      ...(renewed.length ? { renewed } : {}),
+    };
+  }
+  return refuse('not_this_account', 'This box holds no Claude sign-in for that account, so the login was left on the box.');
 }
 
 /**

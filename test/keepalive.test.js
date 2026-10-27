@@ -419,6 +419,15 @@ test('a credential the vault renews is not refreshed here, and one it does not n
   assert.deepEqual(s.calls(), [], 'the CLI was not run');
   assert.match(String(r.detail), /vault/);
 
+  // Adopted: the refresh token is gone and the access token is inside the
+  // window where this would otherwise run the CLI. It still does not.
+  writeFileSync(s.shared, JSON.stringify({
+    claudeAiOauth: { accessToken: 'kept', expiresAt: Date.now() + 20 * 60_000, account: { email_address: 'eli@example.com' } },
+  }));
+  const held = renewClaudeCredential(s.cfg());
+  assert.equal(held.outcome, 'left-to-vault');
+  assert.deepEqual(s.calls(), [], 'a login the vault already took is not refreshed here either');
+
   // No address in the file is cannot tell, which is not a match: the CLI runs.
   s.write(s.shared, Date.now() + 20 * 60_000);
   const unnamed = renewClaudeCredential(s.cfg());

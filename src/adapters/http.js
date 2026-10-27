@@ -41,6 +41,7 @@ import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
 import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
 import { applyVault, vaultClaudePeople, vaultBox } from '../core/vault-store.js';
+import { pendingLocalSignIn, takeLocalSignIn } from '../core/claude-adopt.js';
 import { refreshVaultSessions } from '../core/vault-sessions.js';
 import { forgetPerson } from '../core/forget-person.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
@@ -397,6 +398,20 @@ export class HttpAdapter {
       const body = await readJson(req);
       const r = saveRunnerLogin(this.cfg, { email: body.email, login: body.login, token: body.token });
       if (r.ok) log.info(`http: runner login: ${r.text}`);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    // A CLAUDE LOGIN MADE ON THIS BOX, for the sidecar to seal and hand to the
+    // vault. The refresh token crosses the loopback once, the way a runner's
+    // login does, and is not logged. Absent, there is nothing to hand over.
+    if (p === '/api/claude-adopt' && method === 'GET') {
+      const signIn = pendingLocalSignIn(this.cfg);
+      return json(res, 200, signIn ? { ok: true, pending: true, signIn } : { ok: true, pending: false });
+    }
+    if (p === '/api/claude-adopt' && method === 'POST') {
+      const body = await readJson(req);
+      const r = takeLocalSignIn(this.cfg, body?.refreshToken);
+      if (r.ok) log.info('http: a Claude login made on this box is kept by the vault, which holds its refresh token');
       return json(res, r.ok ? 200 : 400, r);
     }
 

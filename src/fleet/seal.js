@@ -106,6 +106,13 @@ export const GITHUB_REPLY_AAD = 'fleetwright-github-reply/v1';
 export const DEPOSIT_AAD = 'fleetwright-claude-deposit/v1';
 
 /**
+ * A Claude login a box made with `claude auth login`, sealed to the minter
+ * so the coordinator that carries it cannot read the refresh token. Not the
+ * deposit binding: that one carries a GitHub token and is a person's device.
+ */
+export const ADOPT_AAD = 'fleetwright-claude-adopt/v1';
+
+/**
  * A Claude token a machine made with `claude setup-token`, sealed on its way
  * back to the phone that asked for it, which then deposits it like a pasted one.
  */

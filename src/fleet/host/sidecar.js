@@ -56,7 +56,8 @@ import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
-import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } from '../seal.js';
+import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD, ADOPT_AAD } from '../seal.js';
+import { lookUpMinterKey } from '../claude-deposit.js';
 import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
@@ -176,6 +177,12 @@ const CAPABILITY_VERBS = new Set([
  * changed: long enough that keeping several things at once is one ask.
  */
 export const VAULT_CHANGED_ASK_MS = 2_000;
+/**
+ * How often a box looks for a Claude login somebody just made on it. The
+ * vault's own check is fifteen minutes, and a login invalidates the refresh
+ * token that check would use, so this does not wait for the vault's clock.
+ */
+export const CLAUDE_ADOPT_MS = 30_000;
 
 /**
  * How long until a holder of the vault's tokens asks again, given the soonest
@@ -485,6 +492,9 @@ export class Sidecar {
     this.vaultIntervalMs = vaultIntervalMs;
     /** @type {any} */
     this.vaultTimer = null;
+    /** @type {any} */
+    this.adoptTimer = null;
+    this.adoptClosed = false;
     /** An ask of the vault is under way, and a change said meanwhile asks again after it. */
     this.vaultAsking = false;
     this.vaultAgain = false;
@@ -513,6 +523,9 @@ export class Sidecar {
     // which on a runner is its owner's sign-in (#takeClaudeLogin). A runner's
     // credentials come from its own asks.
     if (this.vaultKey && this.vaultIntervalMs > 0 && !this.jobToken) this.#scheduleVault(5_000);
+    // A LOGIN MADE ON THIS BOX, sooner than the vault's own pass: the check
+    // that would refresh the old token runs every fifteen minutes.
+    if (this.vaultKey && !this.jobToken) this.#scheduleAdopt(5_000);
 
     // Health is PUSHED rather than waited for. A coordinator that has to ask
     // needs a timer per host, and in a Worker that means a Durable Object alarm
@@ -559,6 +572,9 @@ export class Sidecar {
     this.edgeWatch?.stop();
     if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.vaultTimer = null;
+    this.adoptClosed = true;
+    if (this.adoptTimer) clearTimeout(this.adoptTimer);
+    this.adoptTimer = null;
     if (this.claudeLoginTimer) clearTimeout(this.claudeLoginTimer);
     this.claudeLoginTimer = null;
     this.watcher?.stop();
@@ -1595,6 +1611,9 @@ export class Sidecar {
    * @returns {Promise<number>} how long until the next ask
    */
   async syncVault() {
+    // A LOGIN MADE HERE, before this ask, so the answer is the new sign-in
+    // and not a renewal of the refresh token that login just invalidated.
+    await this.#adoptLocalLogin();
     // THE KEY LIST rides the vault's clock: the same ten minutes, the same
     // socket, and the minter answers both.
     void this.intentKeys?.refresh();
@@ -1693,6 +1712,100 @@ export class Sidecar {
       let sent;
       try {
         sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'keys', id, hostId: this.hostId, request, signature });
+      } catch {
+        sent = false;
+      }
+      if (sent === false) {
+        this.mintWaiters.delete(id);
+        clearTimeout(timer);
+        resolve({ ok: false, text: 'this box was not connected to the fleet when it asked' });
+      }
+    });
+  }
+
+  /** @param {number} ms */
+  #scheduleAdopt(ms) {
+    if (this.adoptTimer) clearTimeout(this.adoptTimer);
+    this.adoptTimer = setTimeout(() => {
+      void this.#adoptLocalLogin().finally(() => {
+        if (this.adoptClosed || !this.vaultKey || this.jobToken) return;
+        this.#scheduleAdopt(CLAUDE_ADOPT_MS);
+      });
+    }, ms);
+    this.adoptTimer.unref?.();
+  }
+
+  /**
+   * Hand a Claude login made on this box to the vault, when it is for an
+   * account the vault already renews. Sealed to the minter's own key, which
+   * is read from the minter and not from the coordinator. The refresh token
+   * stays in the file until the vault says it kept the login.
+   */
+  async #adoptLocalLogin() {
+    if (!this.vaultKey || this.jobToken || typeof this.hub.claudeAdopt !== 'function') return;
+    /** @type {any} */
+    let pending;
+    try {
+      pending = await this.hub.claudeAdopt();
+    } catch (e) {
+      this.log.warn(`sidecar: could not read the Claude login on this box: ${/** @type {Error} */ (e).message}`);
+      return;
+    }
+    const signIn = pending?.pending === true ? pending.signIn : null;
+    const refreshToken = typeof signIn?.oauth?.refreshToken === 'string' ? signIn.oauth.refreshToken : '';
+    if (!signIn || !refreshToken) return;
+    const minter = await lookUpMinterKey(String(this.transport.origin || ''), this.fetchImpl);
+    if (!minter) {
+      this.log.warn('sidecar: a Claude login on this box is waiting for the vault, and the minter did not answer for its key, so the login was left where it is');
+      return;
+    }
+    const key = this.vaultKey;
+    const at = Date.now();
+    let sealed;
+    try {
+      sealed = await seal({ to: minter, aad: ADOPT_AAD, payload: { v: 1, at, signIn } });
+    } catch (e) {
+      this.log.warn(`sidecar: could not seal the Claude login on this box: ${/** @type {Error} */ (e).message}`);
+      return;
+    }
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at, sealed };
+    let signature;
+    try {
+      signature = await key.sign(signingInput('claude-adopt', request));
+    } catch (e) {
+      this.log.warn(`sidecar: could not sign the Claude login on this box: ${/** @type {Error} */ (e).message}`);
+      return;
+    }
+    const answer = await this.#askMinted('claude-adopt', { request, signature });
+    if (!answer || answer.ok !== true) {
+      this.log.warn(`sidecar: the Claude login made on this box was not kept: ${answer?.text || 'the fleet did not answer'}`);
+      return;
+    }
+    if (typeof this.hub.claudeAdoptTaken !== 'function') return;
+    const taken = await this.hub.claudeAdoptTaken(refreshToken).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
+    if (taken.ok) this.log.info('sidecar: kept the Claude login made on this box in the vault, which is the only copy that refreshes it');
+    else this.log.warn(`sidecar: the vault kept the Claude login, and this box could not drop its copy of the refresh token: ${taken.text}`);
+  }
+
+  /**
+   * A question the coordinator answers with a minted frame. Null when nothing
+   * comes back in time.
+   *
+   * @param {string} kind @param {Record<string, unknown>} fields
+   * @returns {Promise<any>}
+   */
+  async #askMinted(kind, fields) {
+    const id = `${kind}-${crypto.randomUUID()}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.mintWaiters.delete(id);
+        resolve(null);
+      }, this.mintTimeoutMs);
+      timer.unref?.();
+      this.mintWaiters.set(id, { resolve, timer });
+      let sent;
+      try {
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind, id, hostId: this.hostId, ...fields });
       } catch {
         sent = false;
       }
