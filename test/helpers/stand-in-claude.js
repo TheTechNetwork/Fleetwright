@@ -11,16 +11,23 @@
 // renewal may ask for the scopes the sign-in was granted or fewer, and one
 // asking for a scope it was never granted is refused with `invalid_scope`, as
 // an OAuth server refuses it.
+//
+// And the usage address, which the minter asks with a sign-in's access token
+// to see whether it still works (claude-login.js, checkClaude): refused for
+// the same tokens the Messages API refuses, answered for any other, counted.
 
 import { MESSAGES_URL } from '../../src/core/claude-token-probe.js';
-import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID } from '../../src/fleet/minter/claude-login.js';
+import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_USAGE_URL } from '../../src/fleet/minter/claude-login.js';
 
 /**
  * Renewals asked for, and refresh tokens already used. `expiresIn` is how
  * long a renewed access token lasts, in seconds: Claude's eight hours unless a
  * test wants the next renewal due at once.
  */
-export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800 };
+export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800, /** @type {number|undefined} */ refreshExpiresIn: undefined };
+
+/** How many times the usage address was asked. */
+export const claudeUsageAsks = { count: 0 };
 
 /**
  * Every sign-in made so far ended, as signing out of Claude Code on claude.ai
@@ -75,7 +82,10 @@ function standInClaudeToken(url, init) {
     const n = claudeRenewals.count;
     const rotated = `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}`;
     granted.set(rotated, allowed);
-    return reply(200, { access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: claudeRenewals.expiresIn, scope: (asked.length ? asked : allowed).join(' ') });
+    return reply(200, {
+      access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: claudeRenewals.expiresIn, scope: (asked.length ? asked : allowed).join(' '),
+      ...(claudeRenewals.refreshExpiresIn !== undefined ? { refresh_token_expires_in: claudeRenewals.refreshExpiresIn } : {}),
+    });
   })();
 }
 
@@ -96,9 +106,15 @@ export function revokeClaude(token) {
 export function standInClaude(url, init = {}) {
   const token = standInClaudeToken(url, init);
   if (token) return /** @type {any} */ (token);
-  if (String(url) !== MESSAGES_URL) return null;
+  const usage = String(url) === CLAUDE_USAGE_URL;
+  if (!usage && String(url) !== MESSAGES_URL) return null;
   const bearer = String(init.headers?.authorization || '').replace(/^Bearer /, '') || String(init.headers?.['x-api-key'] || '');
   const refused = bearer.includes('revoked') || revoked.has(bearer);
+  if (usage) {
+    claudeUsageAsks.count += 1;
+    const said = refused ? { type: 'error', error: { type: 'authentication_error', message: 'OAuth token has been revoked.' } } : { five_hour: { utilization: 12, resets_at: null } };
+    return new Response(JSON.stringify(said), { status: refused ? 401 : 200, headers: { 'content-type': 'application/json' } });
+  }
   const body = refused
     ? { type: 'error', error: { type: 'authentication_error', message: 'Invalid bearer token' } }
     : { type: 'message', content: [{ type: 'text', text: 'o' }] };

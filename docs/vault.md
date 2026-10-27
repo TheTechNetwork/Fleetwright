@@ -93,6 +93,56 @@ Anthropic. That is the question a sign-in on vnic-runner-oci raised with
 "Refresh token not found or invalid", when nothing kept said when it had last
 been renewed or by whom.
 
+**A sign-in Anthropic has ended is told to its person, on their phone.**
+Nothing told them before: the sign-in on vnic-runner-oci was found out when a
+session would not start. Every fifteen minutes the coordinator's alarm asks
+the minter (`POST /claude/check`), and the minter asks after every kept
+sign-in itself (`checkClaude` in `src/fleet/minter/claude-login.js`):
+
+- a renewal already refused, by a box, a runner or a test, is the answer;
+- otherwise its access token is tried at the usage address, which costs
+  nothing, and a token refused there is renewed at once instead of when due;
+- a sign-in that is due is renewed, as a box asking would renew it;
+- a sign-in kept ten minutes ago and never renewed, or not renewed for an
+  hour, is renewed anyway.
+
+**Why renew before it is due.** Two sign-ins in a row were refused at their
+first renewal, about 7.7 hours after keeping. Nothing in the fleet had used
+them, and nobody had signed in anywhere else. Waiting for the access token to
+run out tested the refresh token only at the end of eight hours. Renewing ten
+minutes after keeping says whether a sign-in arrived broken. Renewing hourly
+after that says within the hour when one stopped working.
+
+**A refresh token's own lifetime is kept.** Claude Code writes it beside the
+sign-in as `refreshTokenExpiresAt`, and a renewal's answer may give it as
+`refresh_token_expires_in`. The minter used to drop it. Now a sign-in is due
+when either its access token or its refresh token is within thirty minutes of
+running out. The Test's sentence says how long the refresh token is good for.
+A refusal that comes after the refresh token ran out by its own lifetime is
+called this fleet being late (`expired`), not something outside it.
+
+Only Anthropic refusing the refresh token counts as ended. An access token can
+be refused for reasons the refresh token survives, and the refresh token is
+the one thing only signing in again mends. Anything else is cannot tell and
+says nothing. Each ended sign-in is named once (`claude-ended:<id>`, keyed by
+when it was kept), so the next sign-in kept is told about afresh. The
+coordinator records `claude.ended` and pushes to the person's phones, and to
+an admin's with whose sign-in it was.
+
+**The push says what the record says, and no more** (`renewalVerdict`). "Was
+ended outside the fleet" is said only when nothing in the fleet renewed the
+sign-in between its last good renewal (or its keeping) and the refusal. A
+renewal Anthropic answered and this fleet never kept, because it was cut off
+or dropped, ends a sign-in the same way. Then the push says this fleet lost it,
+and when. The first notification said "outside" from the refusal alone, on
+2026-10-26, with nothing checked.
+
+The minter answers at most every ten minutes, whoever asks. A compromised
+coordinator can ask more often and be told nothing new. It cannot make a
+sign-in look ended, because the asking is done here against Anthropic. A
+setup-token is not asked: it has no refresh token to end, and its scope does
+not reach the usage address.
+
 **A Claude token is asked before it is kept**, by the vault's `put` and by a
 deposit alike (`checkBeforeKeeping` in `src/fleet/minter/claude.js`). A 401
 keeps nothing and says `rejected_token`. An answer that cannot tell keeps it

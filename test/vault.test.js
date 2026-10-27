@@ -15,7 +15,8 @@ import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_A
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
-import { describeRenewals } from '../src/fleet/minter/claude-login.js';
+import { describeRenewals, renewalVerdict, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
+import { USAGE_URL } from '../src/core/usage.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,7 +33,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
-import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns } from './helpers/stand-in-claude.js';
+import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -59,7 +60,12 @@ async function minter(extra = {}) {
     FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: 'cf-secret',
     ...extra,
   };
-  const storage = { get: async (/** @type {string} */ k) => rows.get(k), put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); } };
+  const storage = {
+    get: async (/** @type {string} */ k) => rows.get(k),
+    put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); },
+    // As a Durable Object's storage lists, in key order.
+    list: async (/** @type {{ prefix: string }} */ o) => new Map([...rows.entries()].filter(([k]) => k.startsWith(o.prefix)).sort(([a], [b]) => (a < b ? -1 : 1))),
+  };
   let instance = new ClaudeLogins({ storage }, env);
   env.LOGINS = { idFromName: () => 'logins', get: () => ({ fetch: (/** @type {string} */ u, /** @type {any} */ i) => instance.fetch(new Request(u, i)) }) };
 
@@ -177,7 +183,7 @@ async function minter(extra = {}) {
     call('/claude/deposit', { sealed: await seal({ to: deposit.publicKey, aad: DEPOSIT_AAD, payload: { v: 1, github, claude, at: Date.now(), ...extra } }), email: ELI });
 
   /** The coordinator's minter binding, as fleet-do.js makes it. */
-  const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask) };
+  const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask), claude: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/claude/${route}`, ask) };
   /** The key, as a phone looks it up at the fleet's address. */
   const lookup = async () => /** @type {any} */ (await (await minterWorker.fetch(new Request(`https://fleet.test${KEY_PATH}`), env)).json());
   /** The object starting again on the storage it had, as after an eviction. */
@@ -1412,7 +1418,9 @@ test('a sign-in ended outside the fleet is told from one this fleet renewed, by 
   await m.box(office);
   const renewed = await m.phone({ op: 'test', name: 'claude' });
   assert.equal(renewed.answer.state, 'accepted', renewed.text);
-  assert.match(renewed.text, /Last renewed at \d\d:\d\d UTC, asked for by a test; that access token is good until \d\d:\d\d UTC\./);
+  // The expiry is ten minutes out, so in the last ten minutes of a UTC day it
+  // carries tomorrow's date. The renewal itself is always "now".
+  assert.match(renewed.text, /Last renewed at \d\d:\d\d UTC, asked for by a test; that access token is good until (?:\d{4}-\d{2}-\d{2} )?\d\d:\d\d UTC\./);
 
   // Then signed out on claude.ai: the next renewal is refused, and nothing in
   // the fleet renewed it between the last good one and the refusal.
@@ -1445,4 +1453,220 @@ test('a renewal this fleet lost is not blamed on anything outside it', () => {
   assert.equal(describeRenewals([], kept, now), 'It has not been renewed since it was kept at 10:00 UTC.');
   // An earlier day is dated.
   assert.match(describeRenewals([good, refused], kept, Date.parse('2026-10-26T09:00:00Z')), /between the last good renewal at 2026-10-25 10:19 UTC and then/);
+});
+
+test('a sign-in Anthropic ended is found by the minter and its person told on their phone, once', async (t) => {
+  // SEEN ON vnic-runner-oci: a sign-in ended outside the fleet at 18:19 was
+  // found out when a session would not start, and nobody was told.
+  assert.equal(CLAUDE_USAGE_URL, USAGE_URL, 'the check asks the address /usage reads');
+  const m = await minter();
+  t.after(m.restore);
+  /** @type {any[]} */
+  const sends = [];
+  const clock = { now: Date.now() };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ (m.binding),
+    push: /** @type {any} */ ({ async send(/** @type {any[]} */ devices, /** @type {any} */ message) { sends.push({ to: devices.map((d) => d.actor), message }); return { sent: devices.length, dead: [] }; } }),
+    now: () => clock.now,
+  });
+  for (const [email, admin] of [[ELI, false], ['ops@example.com', true]]) {
+    const { client } = /** @type {any} */ (await core.clients.issue(`phone (${email})`, { admin, email }));
+    await core.registerDevice({ platform: 'ios', token: (admin ? 'b' : 'a').repeat(64), clientId: client.id, actor: `fleet:${email}` });
+  }
+  /** The minter's own floor, stepped past as ten minutes passing would. */
+  const later = () => { m.rows.delete('claude-checked'); clock.now += 16 * 60_000; };
+
+  // WORKING, and not due: its access token is asked after and nothing is renewed.
+  const made = claudeSignInFor('checked');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  const renewed = claudeRenewals.count;
+  const asked = claudeUsageAsks.count;
+  assert.equal(await core.checkClaudeSignIns(), 0);
+  assert.equal(claudeUsageAsks.count - asked, 1);
+  assert.equal(claudeRenewals.count, renewed, 'a sign-in that works is not renewed early');
+  assert.equal(sends.length, 0);
+  // Asked again within fifteen minutes, the coordinator does not ask; asked
+  // past it within the minter's ten, the minter does not either.
+  assert.equal(await core.checkClaudeSignIns(), 0);
+  assert.equal(claudeUsageAsks.count - asked, 1);
+  clock.now += 16 * 60_000;
+  assert.deepEqual((await m.binding.claude('check', {})).ended, []);
+  assert.equal(claudeUsageAsks.count - asked, 1, 'the minter answers at most every ten minutes, whoever asks');
+
+  // ENDED ON claude.ai, access token and refresh token both: the access token
+  // is refused, so it is renewed at once, and that renewal being refused is
+  // what says it is over.
+  revokeClaude(made.oauth.accessToken);
+  cancelClaudeSignIns();
+  later();
+  assert.equal(await core.checkClaudeSignIns(), 1);
+  assert.equal(claudeRenewals.count - renewed, 1, 'renewed at once when its access token was refused');
+  const mine = sends.find((s) => s.to.includes(`fleet:${ELI}`));
+  assert.equal(mine.message.title, 'Your Claude sign-in was ended');
+  assert.match(mine.message.body, /^It was ended outside the fleet: Claude refused to renew it at \d\d:\d\d UTC, and the record shows nothing in the fleet renewing it before that\. Sessions cannot start with it\. Sign in to Claude again from your phone or the signing page\.$/);
+  assert.equal(mine.message.data.kind, 'claude-ended');
+  assert.equal(mine.message.drawnByApp, undefined, 'drawn by the system tray');
+  const admin = sends.find((s) => s.to.includes('fleet:ops@example.com'));
+  assert.equal(admin.message.title, `${ELI}’s Claude sign-in was ended`);
+  assert.match(admin.message.body, /from their phone/);
+  assert.ok(core.events.some((e) => e.event === 'claude.ended' && e.actor === ELI && /Refresh token not found or invalid/.test(e.text)));
+  assert.ok(!JSON.stringify(sends).includes('sk-ant-'), 'no token reaches a phone');
+
+  // ONCE: asked again, nothing more is said about the same sign-in.
+  later();
+  assert.equal(await core.checkClaudeSignIns(), 0);
+  assert.equal(sends.length, 2);
+
+  // A RENEWAL A BOX ASKED FOR, refused, is the answer without asking again;
+  // and a new sign-in kept is told about afresh.
+  const office = await generateKeyPair();
+  const next = claudeSignInFor('next', 5 * 60_000);
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: next })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  cancelClaudeSignIns();
+  await m.box(office);
+  later();
+  const before = claudeUsageAsks.count;
+  assert.equal(await core.checkClaudeSignIns(), 1);
+  assert.equal(claudeUsageAsks.count, before, 'a refusal already noted is not asked about again');
+  assert.equal(sends.length, 4);
+});
+
+test('the phone is told what the record says ended a sign-in, and a renewal this fleet lost is not blamed on anything outside it', async () => {
+  // SEEN ON 2026-10-26: "It was ended outside the fleet at 02:00 UTC" was
+  // said from the refusal alone. A renewal Anthropic answered and this fleet
+  // never kept ends a sign-in the same way, and only the record tells them apart.
+  /** @type {any[]} */
+  let ended = [];
+  /** @type {any[]} */
+  const sends = [];
+  const clock = { now: Date.parse('2026-10-26T02:00:55Z') };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ ({ claude: async () => ({ ok: true, ended }) }),
+    push: /** @type {any} */ ({ async send(/** @type {any[]} */ _d, /** @type {any} */ message) { sends.push(message); return { sent: 1, dead: [] }; } }),
+    now: () => clock.now,
+  });
+  const { client } = /** @type {any} */ (await core.clients.issue('phone', { admin: false, email: ELI }));
+  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: client.id, actor: `fleet:${ELI}` });
+  const refused = { email: ELI, login: 'eli', at: Date.parse('2026-10-26T02:00:10Z'), why: 'Claude refused to renew it (Refresh token not found or invalid)' };
+  /** @param {any} verdict */
+  const tell = async (verdict) => {
+    ended = [{ ...refused, ...(verdict ? { verdict } : {}) }];
+    clock.now += 16 * 60_000;
+    await core.checkClaudeSignIns();
+    return sends.at(-1);
+  };
+
+  const cut = await tell({ kind: 'cut', at: Date.parse('2026-10-26T01:49:50Z') });
+  assert.equal(cut.title, 'Your Claude sign-in stopped working');
+  assert.match(cut.body, /^A renewal at 01:49 UTC was cut off before its answer was kept, so this fleet lost it\. Claude refused the next one at 02:00 UTC\./);
+  assert.doesNotMatch(cut.body, /outside/);
+  const dropped = await tell({ kind: 'dropped', at: Date.parse('2026-10-26T01:49:50Z') });
+  assert.match(dropped.body, /^A renewal at 01:49 UTC was not kept, because a new sign-in was being kept at the same moment, so this fleet lost it\./);
+  const expired = await tell({ kind: 'expired', at: Date.parse('2026-10-26T01:30:00Z') });
+  assert.equal(expired.title, 'Your Claude sign-in stopped working');
+  assert.match(expired.body, /^Its refresh token ran out at 01:30 UTC, before this fleet renewed it\. Claude refused the next renewal at 02:00 UTC\./);
+  // A MINTER FROM BEFORE THE VERDICT says only what it knows.
+  const unsaid = await tell(null);
+  assert.equal(unsaid.title, 'Your Claude sign-in stopped working');
+  assert.match(unsaid.body, /^Claude refused to renew it at 02:00 UTC\. Sessions cannot start with it\./);
+  assert.ok(core.events.some((e) => e.event === 'claude.ended' && /cut off before its answer was kept/.test(e.text)), 'the event says the same');
+});
+
+test('a refresh token that runs out before its access token is renewed before it does, and its lifetime is kept', async (t) => {
+  // TWO SIGN-INS IN A ROW were refused at their first renewal, 7.7 hours
+  // after keeping, with nothing in the fleet using them. A refresh token that
+  // lasts fewer than eight hours looks exactly like that, and its lifetime,
+  // which Claude Code writes beside it, was dropped when it was kept.
+  //
+  // THE SENTENCE IS DATED WHEN THE INSTANT IS NOT TODAY. describeRenewals
+  // prints HH:MM for a time on the same UTC day as now, and YYYY-MM-DD HH:MM
+  // otherwise. An eight-hour access token kept at 21:35 UTC runs out at 05:35
+  // the next day, so a matcher that only accepts HH:MM fails from 16:00 UTC
+  // until midnight — which is when this test was red on a wall clock. Both
+  // hours are frozen here, and each expects the sentence that hour produces.
+  const cases = [
+    {
+      name: 'shortlived-morning',
+      now: Date.parse('2026-10-26T10:00:00Z'),
+      until: 'that access token is good until 18:00 UTC, and its refresh token until 16:00 UTC.',
+    },
+    {
+      name: 'shortlived-evening',
+      now: Date.parse('2026-10-26T21:35:00Z'),
+      until: 'that access token is good until 2026-10-27 05:35 UTC, and its refresh token until 2026-10-27 03:35 UTC.',
+    },
+  ];
+  t.after(() => { claudeRenewals.refreshExpiresIn = undefined; });
+  for (const { name, now, until } of cases) {
+    t.mock.timers.enable({ apis: ['Date'], now });
+    const m = await minter();
+    t.after(m.restore);
+    try {
+      const office = await generateKeyPair();
+      const made = /** @type {any} */ (claudeSignInFor(name));
+      made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+      assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true, name);
+      await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+      claudeRenewals.refreshExpiresIn = 6 * 3600;
+      const before = claudeRenewals.count;
+      const given = await m.box(office);
+      assert.equal(claudeRenewals.count - before, 1, `${name}: renewed with seven hours of access left, because the refresh token had twenty minutes`);
+      assert.match(given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'claude').value, /^sk-ant-oat01-renewed/);
+      const tested = await m.phone({ op: 'test', name: 'claude' });
+      assert.ok(tested.text.includes(until), `${name}: ${tested.text}`);
+    } finally {
+      claudeRenewals.refreshExpiresIn = undefined;
+      t.mock.timers.reset();
+    }
+  }
+});
+
+test('the check renews a kept sign-in soon after keeping and hourly after, so a broken one is found in minutes', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: claudeSignInFor('early') })).ok, true);
+  /** `fn` at `minutes` after the first keeping. @template T @param {number} minutes @param {() => Promise<T>} fn */
+  const during = async (minutes, fn) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      return await fn();
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  /** The check then, past the minter's own ten-minute floor. @param {number} minutes */
+  const checkAt = (minutes) => during(minutes, () => { m.rows.delete('claude-checked'); return m.binding.claude('check', {}); });
+  const before = claudeRenewals.count;
+  assert.deepEqual((await checkAt(5)).ended, []);
+  assert.equal(claudeRenewals.count, before, 'not in the first ten minutes');
+  assert.deepEqual((await checkAt(11)).ended, []);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed eleven minutes after keeping, with eight hours of access left');
+  await checkAt(40);
+  assert.equal(claudeRenewals.count - before, 1, 'not again within the hour');
+  await checkAt(72);
+  assert.equal(claudeRenewals.count - before, 2, 'and again an hour after the last');
+
+  // ONE THAT ARRIVED BROKEN is told at the first of those, not at the
+  // eight hours' end.
+  const broken = /** @type {any} */ (claudeSignInFor('broken'));
+  broken.oauth.refreshToken = `sk-ant-ort01-revoked-${'z'.repeat(40)}`;
+  assert.equal((await during(80, () => m.phone({ op: 'put', name: 'claude', signIn: broken }))).ok, true);
+  assert.deepEqual((await checkAt(85)).ended, [], 'not in its first ten minutes');
+  const told = await checkAt(91);
+  assert.equal(told.ended.length, 1);
+  assert.equal(told.ended[0].verdict.kind, 'outside');
+});
+
+test('a refusal after the refresh token ran out by its own lifetime is this fleet being late, not anything outside it', () => {
+  const kept = Date.parse('2026-10-25T18:19:00Z');
+  const good = { at: Date.parse('2026-10-25T18:30:00Z'), by: 'a check', ok: true, until: Date.parse('2026-10-26T02:30:00Z'), refreshUntil: Date.parse('2026-10-26T00:30:00Z') };
+  const refused = { at: Date.parse('2026-10-26T02:00:00Z'), by: 'a box', ok: false, refused: true, why: 'Claude refused to renew it (Refresh token not found or invalid)' };
+  assert.deepEqual(renewalVerdict([good, refused]), { kind: 'expired', at: good.refreshUntil });
+  const told = describeRenewals([good, refused], kept, Date.parse('2026-10-26T02:05:00Z'));
+  assert.match(told, /Its refresh token ran out at 00:30 UTC, the lifetime Anthropic gave it, before anything renewed it\./);
+  assert.doesNotMatch(told, /outside the fleet/);
+  // Still good when refused: something else ended it.
+  assert.equal(renewalVerdict([{ ...good, refreshUntil: Date.parse('2026-10-27T00:00:00Z') }, refused])?.kind, 'outside');
 });
