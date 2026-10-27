@@ -905,17 +905,6 @@ export async function answerVaultBox(ask, config) {
 }
 
 /**
- * One person's items for one box, renewing what is close to running out. Null
- * when their approval of this box is gone or is for a different key, or when
- * the fleet account that made it is no longer in the fleet.
- *
- * @param {string} userId @param {string} hash @param {{ x: string, y: string }} jwk
- * @param {VaultStore} store @param {{ privateKey: CryptoKey, publicKey: string }} key
- * @param {VaultConfig & { fetchImpl: typeof fetch, now: () => number }} config
- * @param {Set<string>|null} members  who is in the fleet, or null from a
- *   coordinator that does not say (answerVaultBox)
- */
-/**
  * Whether this grant may be handed this item.
  *
  * A per-box hypervisor token (`hypervisor:<address>+<box>`) is that box's
@@ -937,6 +926,17 @@ function hypervisorItemForGrant(name, grant, only) {
   return only.has(name) || only.has(`${HYPERVISOR_PREFIX}${split.address}`);
 }
 
+/**
+ * One person's items for one box, renewing what is close to running out. Null
+ * when their approval of this box is gone or is for a different key, or when
+ * the fleet account that made it is no longer in the fleet.
+ *
+ * @param {string} userId @param {string} hash @param {{ x: string, y: string }} jwk
+ * @param {VaultStore} store @param {{ privateKey: CryptoKey, publicKey: string }} key
+ * @param {VaultConfig & { fetchImpl: typeof fetch, now: () => number }} config
+ * @param {Set<string>|null} members  who is in the fleet, or null from a
+ *   coordinator that does not say (answerVaultBox)
+ */
 async function itemsFor(userId, hash, jwk, store, key, config, members) {
   const row = emptyRow(await store.get(`v:${userId}`));
   const grant = row.grants[hash];
