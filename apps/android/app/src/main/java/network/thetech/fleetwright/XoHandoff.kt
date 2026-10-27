@@ -234,7 +234,7 @@ internal object XoHandoff {
         val parts = sealed.split(".")
         if (parts.size != 3) return null
         val opened = runCatching {
-            Seal.open(key, Seal.xosetupHandoffAad(job, address), JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2]))
+            Seal.open(key, aad(job, address), JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2]))
         }.getOrNull() ?: return null
         if (opened.optInt("v") != 1 || opened.optString("address") != address) return null
         val base = settings.secret(tokenName(address))?.takeIf { it.isNotBlank() } ?: return null

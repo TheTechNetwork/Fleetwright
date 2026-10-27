@@ -66,7 +66,7 @@ test('a finished job files each box’s token and drops the shared item from the
   assert.ok(filed > 0 && cleared > filed, 'the hand-off is filed in the pass that first sees done, before the key is dropped');
   const kt = A('XoHandoff.kt');
   const body = kt.slice(kt.indexOf('suspend fun keepBoxUsers('), kt.indexOf('fun keepEdgeKey('));
-  assert.ok(body.includes('Seal.xosetupHandoffAad(job, address)'));
+  assert.ok(body.includes('Seal.open(key, aad(job, address)'));
   assert.ok(body.includes('vault.keepHypervisor(fleet, address, record.toString(), box)'));
   assert.ok(body.includes('vault.forget(fleet, "hypervisor:$address")'));
   assert.ok(!body.includes('putSecret') && !body.includes('deleteSecret'), 'the phone’s own record of the pool is not rewritten or removed');
