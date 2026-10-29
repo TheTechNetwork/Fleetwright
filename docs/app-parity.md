@@ -237,6 +237,7 @@ says on health which journals a box has so the buttons are only ever live.)
 | **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
 | **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
 | **grant a session a secret** (v4 `secret`) | picker on the start sheet | picker on the start sheet | `/new --secret=<name>` |
+| **permission mode** (`start` `mode`, health `permissions`) | New session → Permissions, after Where. "Box default" first and selected: it sends no mode, and is labelled "asks before each tool" or "permissions bypassed" only when every machine the start could land on reports the same; otherwise it says nothing about the mode. "Permission prompts on" sends `safe`. "Permissions bypassed" only where no such machine is set to ask, with the reason when it is missing. A kind saves Box default or prompts on | the same choices, the same words (`test/permission-mode-in-apps.test.js`) | `/new --safe` or `--dangerous`; a fleet start asking to bypass on a box set to ask is refused (`test/fleet-permission-ceiling.test.js`) |
 | **see what secrets a host holds** | fed by `secrets`, fans out (names only) | fed by `secrets`, fans out (names only) | `/secrets` |
 | **readmit a revoked host / replace a host's key** | swipe the host row | button on the host row | curl |
 | **which releases a box takes** (v3 `channel`) | segmented picker in the host row | chips in the host row | `/channel` |
