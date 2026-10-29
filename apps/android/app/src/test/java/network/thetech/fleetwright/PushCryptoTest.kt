@@ -141,4 +141,44 @@ class PushCryptoTest {
         // A platform with no such provider cannot either, and says so as false.
         assertFalse(PushCrypto.opensItsOwnSeal(pair.private, pushKey, "NoSuchKeystore"))
     }
+
+    /**
+     * A key that fails its self-test is dropped only when it was made in the
+     * same call. One from an earlier launch is the key the coordinator seals
+     * to, and keystore2 reports a daemon that did not answer as the same
+     * InvalidKeyException a refusal is: that key is kept, and nothing is
+     * registered this time.
+     */
+    @Test
+    fun aKeyAlreadySentIsKeptWhenItsSelfTestFails() {
+        assertEquals(PushKeyRule.SelfTest.TRY_AGAIN, PushKeyRule.afterSelfTest(opened = false, madeThisCall = false))
+        assertEquals(PushKeyRule.SelfTest.DROP, PushKeyRule.afterSelfTest(opened = false, madeThisCall = true))
+        assertEquals(PushKeyRule.SelfTest.SEND, PushKeyRule.afterSelfTest(opened = true, madeThisCall = false))
+    }
+
+    /**
+     * A key the keystore keeps refusing is replaced, so a phone does not stop
+     * registering for good; and only after three failures in a row with the
+     * first a day or more before. The same cases as PushCryptoTests.swift.
+     */
+    @Test
+    fun aKeyIsReplacedOnlyAfterThreeFailuresOverADay() {
+        val t0 = 1_700_000_000_000L
+        val day = PushKeyRule.SPAN_MS
+        val fail = { before: PushKeyRule.Failures?, at: Long -> PushKeyRule.failed(before, at) }
+
+        // Three in two minutes is one bad moment.
+        val quick = fail(fail(fail(null, t0), t0 + 60_000), t0 + 120_000)
+        assertFalse(PushKeyRule.startOver(quick, t0 + 120_000))
+        // The first is kept, so the next one a day on is enough.
+        assertTrue(PushKeyRule.startOver(fail(quick, t0 + day), t0 + day))
+
+        // A day apart, but only two.
+        assertFalse(PushKeyRule.startOver(fail(fail(null, t0), t0 + day), t0 + day))
+        // Three, the last a day after the first.
+        assertTrue(PushKeyRule.startOver(fail(fail(fail(null, t0), t0 + 3_600_000), t0 + day), t0 + day))
+
+        // A clock that went backwards starts the count again.
+        assertEquals(PushKeyRule.Failures(1, t0 - 1), fail(quick, t0 - 1))
+    }
 }
