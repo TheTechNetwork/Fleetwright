@@ -180,8 +180,9 @@ test('a phone that predates encryption still gets its notification', async () =>
 });
 
 test('a reinstall does not inherit the old key', async () => {
-  // A phone that reinstalls loses its private key — Keychain and Keystore both
-  // go with the app. Carrying the public key forward would encrypt every future
+  // An Android phone that reinstalls loses its private key, because a Keystore
+  // entry goes with the app (an iPhone's Keychain item does not, and the app
+  // sends it again). Carrying the public key forward would encrypt every future
   // notification to a key nobody holds, and the failure would be silent and
   // permanent: delivery succeeds, decryption fails, the fallback shows forever.
   const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
