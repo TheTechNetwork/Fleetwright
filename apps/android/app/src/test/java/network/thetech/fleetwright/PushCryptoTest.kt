@@ -146,8 +146,8 @@ class PushCryptoTest {
      * A key that fails its self-test is dropped only when it was made in the
      * same call. One from an earlier launch is the key the coordinator seals
      * to, and keystore2 reports a daemon that did not answer as the same
-     * InvalidKeyException a refusal is: that key is kept, and nothing is
-     * registered this time.
+     * InvalidKeyException a refusal is: that key is kept, and the
+     * registration sends the last key sent.
      */
     @Test
     fun aKeyAlreadySentIsKeptWhenItsSelfTestFails() {
@@ -180,5 +180,62 @@ class PushCryptoTest {
 
         // A clock that went backwards starts the count again.
         assertEquals(PushKeyRule.Failures(1, t0 - 1), fail(quick, t0 - 1))
+    }
+
+    /**
+     * A phone that has sent a key never registers without one: a key error
+     * sends the last key sent, before the threshold and when the replacement
+     * after it fails. Only a phone that has never sent one registers keyless,
+     * and at once. A second failure in the same launch does not count again.
+     * The same cases as PushCryptoTests.swift.
+     */
+    @Test
+    fun aKeyErrorSendsTheLastKeySentAndNeverNone() {
+        val t0 = 1_700_000_000_000L
+        val day = PushKeyRule.SPAN_MS
+        val broken: () -> String? = { throw java.security.KeyStoreException("keystore did not answer") }
+        var replaced = 0
+        val replaceFails: () -> String? = { replaced++; null }
+        fun choose(failures: PushKeyRule.Failures?, sent: String?, now: Long, read: () -> String?, replace: () -> String? = replaceFails, counted: Boolean = false) =
+            PushKeyRule.choose(failures, sent, now, counted, read, replace)
+
+        // An error with a key already sent: that key goes, and the error counts.
+        val first = choose(null, "K1", t0, broken)
+        assertEquals("K1", first.pushKey)
+        assertEquals(PushKeyRule.Failures(1, t0), first.failures)
+        assertFalse(first.replaced)
+
+        // Never sent one: keyless at once, with nothing to lose.
+        val fresh = choose(null, null, t0, broken)
+        assertNull(fresh.pushKey)
+        assertEquals(1, fresh.failures?.count)
+
+        // A key this phone cannot make (a fresh one that failed its self-test
+        // and was dropped) is not a reason to stop sending the one it sent.
+        assertEquals("K1", choose(null, "K1", t0, { null }).pushKey)
+
+        // Past the threshold the key is replaced; when that fails too, the
+        // last key sent still goes, and the count starts again.
+        val due = PushKeyRule.Failures(2, t0)
+        val after = choose(due, "K1", t0 + day, broken)
+        assertEquals(1, replaced)
+        assertTrue(after.replaced)
+        assertEquals("K1", after.pushKey)
+        assertNull(after.failures)
+
+        // A replacement that works sends the new key.
+        assertEquals("K2", choose(due, "K1", t0 + day, broken, { "K2" }).pushKey)
+
+        // A second failure in the same launch is the same bad moment.
+        val again = choose(due, "K1", t0 + day, broken, counted = true)
+        assertEquals(due, again.failures)
+        assertFalse(again.replaced)
+
+        // A key that reads clears the count and is what goes.
+        val fine = choose(due, "K1", t0, { "K2" })
+        assertEquals("K2", fine.pushKey)
+        assertNull(fine.failures)
+        assertNull(fine.failure)
+        assertEquals(1, replaced)
     }
 }

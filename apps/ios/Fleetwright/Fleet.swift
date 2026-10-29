@@ -2637,16 +2637,13 @@ struct Fleet {
         let hex = token.map { String(format: "%02x", $0) }.joined()
         var body: [String: Any] = ["platform": "ios", "token": hex]
         // THE KEY THIS INSTALL OPENS WITH, so its notifications are sealed to
-        // it (docs/push-encryption.md). A keychain error throws here, before
-        // anything is posted: the coordinator keeps a key only when one is
-        // sent, so registering without it over a locked or busy keychain
-        // would put this phone back on plaintext. The next launch registers
-        // again, and an error that lasts a day replaces the key rather than
-        // leaving this phone unregistered for good (PushKey.registrationKey).
-        // Absent only when the key fails its own self-test, where sending it
-        // would buy the fallback sentence on every notification, or when no
-        // key can be kept at all.
-        if let pushKey = try PushKey.registrationKey() {
+        // it (docs/push-encryption.md). A keychain that is locked or busy
+        // does not stop the registration: it goes with the last key this
+        // phone sent, because the coordinator keeps a key only when one is
+        // sent and this phone must never go back to plaintext, nor stop
+        // sending a new APNs token. Absent only on a phone that has never
+        // sent a key and cannot use one now (PushKey.registrationKey).
+        if let pushKey = PushKey.registrationKey() {
             body["pushKey"] = pushKey
         }
         _ = try await post("/api/devices", body: body)
