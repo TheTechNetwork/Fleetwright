@@ -425,7 +425,10 @@ fleet, `unlisted` when none of them is on the minter's list for another
 reason, and `unchecked` when the box holds no key list it may check with: it
 has no key of its own to fetch one, has not fetched one yet, or holds one older
 than the twenty minutes its signature check takes (`IntentKeys.current`), so
-it can check nobody's signature. The phones then draw none of those verbs for
+it can check nobody's signature. `unchecked` wins over `left`: a box whose
+admins all left but which cannot check anybody is said to be the second, and
+it refuses by saying it cannot check rather than that a request was not
+signed. The phones then draw none of those verbs for
 anybody, the box's own pinned admin included, and show one sentence; on
 `unchecked`, which the coordinator passes on beside the sentence, not even a
 person's Restore of their own work, which needs their signature checked too. The
