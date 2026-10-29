@@ -11,7 +11,10 @@
 // Keystore — and nothing in this repository can run either. That is exactly the
 // gap that let push ship unproven for months, so the decrypting half exists in
 // JS purely so the scheme can be exercised end to end HERE, against the same
-// bytes a phone will receive.
+// bytes a phone will receive. The phones' own tests (PushCryptoTest.kt,
+// PushCryptoTests.swift) open one committed envelope,
+// test/fixtures/parity/push-envelope.json, which push-envelope-parity.test.js
+// opens here.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';

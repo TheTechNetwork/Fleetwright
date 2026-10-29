@@ -151,10 +151,11 @@ layouts, and the rules (what a row says, which buttons exist) stay shared.
   hypervisor setup's Live Activity appears on the watch without a watch app,
   drawn from the extension's compact views. Declaring the small supplemental
   family lets `FleetwrightActivity` draw a proper wrist-sized version instead.
-- **When the iOS Notification Service Extension is built** (`docs/push-encryption.md`
-  lists it as not built), it runs on the phone and the watch mirrors what it
-  produced. Encrypted pushes therefore need no watch-side crypto, as long as the
-  watch is not registering for pushes of its own.
+- **The iOS Notification Service Extension runs on the phone**
+  (`docs/push-encryption.md`), and the watch mirrors what it produced.
+  Encrypted pushes therefore need no watch-side crypto, as long as the watch
+  is not registering for pushes of its own. A seal the extension cannot open
+  is the fallback sentence, and that is what the watch would mirror.
 
 ### What a watch app would add
 
