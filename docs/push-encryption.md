@@ -131,11 +131,15 @@ and then the clear one is all there is, as it always was.
 ## The key belongs to the install, not the phone
 
 `registerDevice` keeps `pushKey` **only when it is supplied on that
-registration**, never inherited from the previous row. A reinstall loses the
-private key — Keychain and Keystore both go with the app — so carrying the
+registration**, never inherited from the previous row. A reinstall on Android
+loses the private key — the Keystore goes with the app — so carrying the
 public key forward would encrypt every future notification to a key nobody
 holds. Delivery would succeed, decryption would fail, and the person would see
-the fallback forever with nothing reporting an error.
+the fallback forever with nothing reporting an error. An iOS Keychain item
+outlives the app, so a reinstalled iPhone usually finds its old key and sends
+it again; the coordinator learns that by being sent it, not by assuming it,
+and an iPhone whose item is gone (restored onto a new phone, which a
+`ThisDeviceOnly` item does not follow) sends the new one it makes.
 
 The key is validated at **registration**, not at send time. A key that cannot be
 imported is a registration that fails on every notification forever, and the
@@ -194,13 +198,24 @@ again. That makes the phone's choice worth stating:
 - **No key**, only for a phone that cannot open what would be sealed to it:
   Android 11, where `PURPOSE_AGREE_KEY` does not exist yet; a keystore that
   will not make an agreement key, on a phone that has never registered one;
-  or a key that fails the self-test, which Android then deletes so the next
-  launch starts fresh.
+  or a key made in that same registration that fails the self-test, which
+  Android then deletes so the next launch starts fresh. A key that was sent
+  before is never dropped for failing it: Android's keystore reports a daemon
+  that did not answer the same way it reports a key it will not agree with,
+  so that failure is treated as the next case.
 - **No registration at all** when the Keychain or the Keystore did not answer
   this time: locked before the first unlock, busy, a daemon that timed out.
   The phone keeps the registration it has, the coordinator keeps sealing to
   the key it has, and the next launch registers again. iOS makes a new key
   only when the Keychain says there is none, never because a read failed.
+- **A new key** when that error does not go away. A phone that never
+  registers never sends a new APNs token or FCM address, and push stops with
+  nothing to say so. So each phone counts the registrations its key failed,
+  with the time of the first, and after three in a row spread over at least a
+  day it deletes the key and makes another, which goes through the self-test
+  like any new one. Only a phone that cannot keep or use the new one either
+  registers without a key. Any registration that gets as far as the key
+  clears the count.
 
 ### Android 12 and later, and what data-only costs there
 
@@ -222,9 +237,10 @@ sealed: ActivityKit is handed `content-state` with nothing of ours run first
 reboot, and the fallback shows. An encrypted notification does not collapse on
 the session name, because the name is inside the envelope; Android replaces by
 that name once it has opened one, and iOS may stack them. An iOS extension that
-runs out of time leaves the notification as it arrived: the fallback sentence,
-with the clear category's buttons, and a press on one opens the app rather than
-answering, because the prompt id and the digits were never opened.
+runs out of time leaves the fallback sentence and no buttons, as a seal it
+cannot open does. The clear category would still draw them, but the prompt id
+and the digits were never opened, and an answer button does not bring the app
+forward, so a press on one would do nothing at all.
 
 **The extension can read more of the Keychain than it uses.** It reads the
 app's default keychain group, and a group is the smallest thing iOS grants, so

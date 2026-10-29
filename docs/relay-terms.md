@@ -113,9 +113,9 @@ version encrypts the payload on the coordinator to a key held by one phone, so
 the relay forwards bytes it cannot read — and neither can Apple or Google, which
 is a bigger change than the relay was ever about.
 
-**Both halves are in the tree, as of 29 October 2026.** Until then this
-section said the phones' half was not built and every notification took the
-plaintext fallback; it changes here first, as the rule below asks. The
+**Both halves are in the tree.** Before the phones' half was built this
+section said every notification took the plaintext fallback; it changed here
+first, as the rule below asks. The
 coordinator seals with ECDH P-256 → HKDF-SHA256 → AES-256-GCM. Each phone keeps
 one P-256 key, in the Keychain or the Android Keystore, and sends it as
 `pushKey` once the key has opened a test seal. iOS opens the envelope in a
