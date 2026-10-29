@@ -61,7 +61,7 @@ test('nobody pinned is an answer, a record the box cannot read is cannot tell, a
 
   for (const code of ['left', 'unlisted', 'unchecked']) {
     const stranded = await fleet({ pinned: ['gone@example.test'], stranded: code, left: 'whatever the box wrote' });
-    assert.deepEqual(await seen(stranded, BEA), { count: 1, you: false, left: PIN_SENTENCES[code] }, code);
+    assert.deepEqual(await seen(stranded, BEA), { count: 1, you: false, left: PIN_SENTENCES[code], stranded: code }, code);
   }
   for (const sentence of Object.values(PIN_SENTENCES)) assert.doesNotMatch(sentence, /@/);
 });
@@ -70,9 +70,18 @@ test('what a box writes in its own sentences never reaches the people who see it
   // Every viewer of the box is shown these, members who are not shown the
   // addresses included, so a box could otherwise hand all of them a list.
   const core = await fleet({ pinned: ['ada@example.test'], left: 'Ask ada@example.test or carol@example.test.', stranded: 'carol@example.test' });
-  assert.deepEqual(await seen(core, BEA), { count: 1, you: false, left: PIN_SENTENCES.left });
+  assert.deepEqual(await seen(core, BEA), { count: 1, you: false, left: PIN_SENTENCES.left, stranded: 'left' });
   const broken = await fleet({ pinned: null, problem: 'Ask carol@example.test to fix it.' });
   assert.equal((await seen(broken, BEA)).problem, PIN_SENTENCES.unreadable);
+});
+
+test('a code the coordinator does not name still reads as stranded, so no phone draws what the box refuses', async () => {
+  // A newer box may say why in a way this coordinator has no sentence for,
+  // with no sentence of its own beside it. It still takes those verbs from
+  // nobody; shown as saying nothing, a phone drew Update and Reboot for a
+  // pinned admin the box would refuse.
+  const core = await fleet({ pinned: ['ada@example.test'], stranded: 'keyless' });
+  assert.deepEqual(await seen(core, ADA), { count: 1, you: true, pinned: ['ada@example.test'], left: PIN_SENTENCES.left, stranded: 'left' });
 });
 
 test('a box that says nothing about pins, or says it in another shape, is shown as saying nothing', async () => {

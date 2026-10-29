@@ -7872,9 +7872,14 @@ const MAX_PINNED = 64;
  * address, or anything else, in front of all of them. The box sends a code;
  * one it does not name, or no code beside its own sentence, reads as `left`.
  *
+ * `stranded` goes with `left`, and only ever as one of the three codes this
+ * file names, never as the box sent it. A phone reads it for one thing: on
+ * `unchecked` the box can check nobody's signature, so it refuses even a
+ * person's restore of their own work, and the phone does not draw Restore.
+ *
  * @param {unknown} admins
  * @param {{ email?: string|null, admin?: boolean }|null} requester
- * @returns {{ count: number|null, you: boolean|null, pinned?: string[], left?: string, problem?: string }|undefined}
+ * @returns {{ count: number|null, you: boolean|null, pinned?: string[], left?: string, stranded?: 'left'|'unlisted'|'unchecked', problem?: string }|undefined}
  */
 export function adminsSeenBy(admins, requester) {
   if (!admins || typeof admins !== 'object' || Array.isArray(admins)) return undefined;
@@ -7889,8 +7894,14 @@ export function adminsSeenBy(admins, requester) {
     return undefined;
   }
   const said = (/** @type {unknown} */ v) => typeof v === 'string' && v.length > 0;
-  const code = typeof a.stranded === 'string' && a.stranded !== 'unreadable' && Object.hasOwn(PIN_SENTENCES, a.stranded) ? a.stranded : null;
-  const left = pinned && pinned.length > 0 && (code || said(a.left)) ? PIN_SENTENCES[/** @type {keyof typeof PIN_SENTENCES} */ (code ?? 'left')] : null;
+  // ANY CODE AT ALL IS STRANDED. One this file does not name, from a newer box
+  // or a broken one, still means the box takes those verbs from nobody, and
+  // read as nothing it drew controls the box refuses; it reads as `left`.
+  /** @type {'left'|'unlisted'|'unchecked'|null} */
+  const code = said(a.stranded) || said(a.left)
+    ? (['unlisted', 'unchecked'].includes(/** @type {string} */ (a.stranded)) ? /** @type {'unlisted'|'unchecked'} */ (a.stranded) : 'left')
+    : null;
+  const left = pinned && pinned.length > 0 && code ? PIN_SENTENCES[code] : null;
   const problem = pinned === null ? PIN_SENTENCES.unreadable : null;
   const email = emailOf(requester?.email ?? '');
   const you = pinned ? Boolean(email) && pinned.includes(/** @type {string} */ (email)) : null;
@@ -7899,7 +7910,7 @@ export function adminsSeenBy(admins, requester) {
     count: pinned ? pinned.length : null,
     you,
     ...(sees && pinned ? { pinned } : {}),
-    ...(left ? { left } : {}),
+    ...(left && code ? { left, stranded: code } : {}),
     ...(problem ? { problem } : {}),
   };
 }

@@ -639,9 +639,9 @@ async function identity() {
 // box, by whoever runs it (src/fleet/host/pinned-admins.js, adminCommand).
 // Run as the sidecar's user, beside whose key the record lives:
 // `sudo -u fleetwright-sidecar fleetwright-sidecar pin-admin ...` on Linux.
-// Run as root, a change is refused with that sentence, because root writing
-// inside another account's directory is a link that account can plant
-// (pinned-admins.js rootRefusal). The running sidecar reads the record on
+// Run as root, a change is refused with that sentence wherever another
+// account could change the way to the record, because root writing there is
+// a link that account can plant (pinned-admins.js rootRefusal). The running sidecar reads the record on
 // every request, so nothing needs restarting.
 /** @param {string} sub @param {string[]} args */
 async function admins(sub, args) {
