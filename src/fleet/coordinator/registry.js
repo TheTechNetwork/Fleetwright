@@ -76,6 +76,11 @@ export function runsNoSessions(hostId) {
  *   the sandbox. Absent from an older box, which has not said; only `true`
  *   lets a member's session onto a box they do not administer (hosts.js
  *   runsSessionsFor).
+ * @property {string|null} [sandboxedWhy]  beside `sandboxed: false`, why: `off`,
+ *   `unsafe_args`, `userns_root`, `userns_docker` or `userns_host` (http.js
+ *   #hostFacts). It changes only what a refusal says (scheduler.js
+ *   NOT_CONTAINED), never whether a member's session goes there. Absent from
+ *   an older box, which is read as `off`.
  */
 
 /**
