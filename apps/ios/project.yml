@@ -385,10 +385,22 @@ targets:
   # the key into its default group, which is its own id, and names no group
   # itself — so the app's entitlements are unchanged and the distribution
   # profile that already signs it still does. This target names that group,
-  # plus its own so its default group stays its own. The release job checks
-  # the profile it is given actually allows the app's group (ios.yml); a
-  # profile that does not fails there, before the archive, rather than as a
+  # plus its own first so its default group stays its own. The release job
+  # checks the profile it is given actually allows the app's group (ios.yml);
+  # a profile that does not fails there, before the archive, rather than as a
   # notification that shows the fallback forever.
+  #
+  # WHAT ELSE THAT GROUP HOLDS, said rather than left to be found. A keychain
+  # group is the smallest grant there is, so this extension could read every
+  # item the app keeps there, the coordinator credential (`Keychain` in
+  # Fleet.swift, service network.thetech.fleetwright) among them; its code
+  # reads one item, account `push-key`, and nothing else. Narrowing it means
+  # the app writing the key into a group of its own, which means a
+  # keychain-access-groups entitlement on the APP — and the app's profile is
+  # the hand-made secret ios.yml installs, which this repository cannot read
+  # to know it allows one. An archive that failed on that would stop every
+  # release until somebody remade the profile by hand, so the wide grant to
+  # our own extension is the trade, and docs/push-encryption.md records it.
   FleetwrightPush:
     type: app-extension
     platform: iOS

@@ -12,6 +12,10 @@ import Security
 /// is one envelope the JavaScript sealed; `PushCryptoTests` opens it, and so
 /// does `PushCryptoTest.kt`.
 ///
+/// IT SEALS AS WELL, for one reason: the self-test registration runs before
+/// it sends a key (`PushKey.registrationKey`). Nothing else on the phone
+/// seals a notification, and nothing should.
+///
 /// THE PRIVATE KEY STAYS IN THE KEYCHAIN. It is not in the Secure Enclave,
 /// because an enclave key cannot be agreed with from an extension that has to
 /// run while the phone is locked, and the design's store for it is the
@@ -49,18 +53,7 @@ enum PushCrypto {
 
         let ephemeral = try P256.KeyAgreement.PublicKey(x963Representation: ephemeralRaw)
         let shared = try privateKey.sharedSecretFromKeyAgreement(with: ephemeral)
-        var info = Data()
-        info.append(infoPrefix)
-        info.append(recipientPublic)
-        info.append(ephemeralRaw)
-        // ONE EXPAND, then split. Two derivations would not be the scheme the
-        // coordinator uses, and the nonce only has to be unique per key.
-        let okm = shared
-            .hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: info, outputByteCount: 44)
-            .withUnsafeBytes { Data($0) }
-        guard okm.count == 44 else { throw Failure.envelope }
-        let key = SymmetricKey(data: okm.prefix(32))
-        let nonce = try AES.GCM.Nonce(data: okm.suffix(12))
+        let (key, nonce) = try derive(shared, salt: salt, recipientPublic: recipientPublic, ephemeralRaw: ephemeralRaw)
         let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: sealed.dropLast(16), tag: sealed.suffix(16))
         let clear = try AES.GCM.open(box, using: key)
         guard
@@ -82,13 +75,52 @@ enum PushCrypto {
         return Opened(title: title, body: body, data: data)
     }
 
+    /// Seal one notification to a public key, as `sealTo` in
+    /// `src/fleet/push-crypto.js` does: a fresh ephemeral key and a fresh salt
+    /// every time. Only the self-test calls this.
+    static func seal(to recipientPublic: Data, title: String, body: String) throws -> String {
+        let recipient = try P256.KeyAgreement.PublicKey(x963Representation: recipientPublic)
+        let ephemeral = P256.KeyAgreement.PrivateKey()
+        let ephemeralRaw = ephemeral.publicKey.x963Representation
+        let shared = try ephemeral.sharedSecretFromKeyAgreement(with: recipient)
+        let salt = SymmetricKey(size: SymmetricKeySize(bitCount: 128)).withUnsafeBytes { Data($0) }
+        let (key, nonce) = try derive(shared, salt: salt, recipientPublic: recipientPublic, ephemeralRaw: ephemeralRaw)
+        let object: [String: Any] = ["title": title, "body": body, "data": [String: String]()]
+        let plaintext = try JSONSerialization.data(withJSONObject: object)
+        let box = try AES.GCM.seal(plaintext, using: key, nonce: nonce)
+        var out = Data([version])
+        out.append(salt)
+        out.append(ephemeralRaw)
+        out.append(box.ciphertext)
+        out.append(box.tag)
+        return b64url(out)
+    }
+
+    /// Key and nonce from the shared secret.
+    ///
+    /// ONE EXPAND, then split. Two derivations would not be the scheme the
+    /// coordinator uses, and the nonce only has to be unique per key.
+    private static func derive(
+        _ shared: SharedSecret, salt: Data, recipientPublic: Data, ephemeralRaw: Data
+    ) throws -> (SymmetricKey, AES.GCM.Nonce) {
+        var info = Data()
+        info.append(infoPrefix)
+        info.append(recipientPublic)
+        info.append(ephemeralRaw)
+        let okm = shared
+            .hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: info, outputByteCount: 44)
+            .withUnsafeBytes { Data($0) }
+        guard okm.count == 44 else { throw Failure.envelope }
+        let nonce = try AES.GCM.Nonce(data: okm.suffix(12))
+        return (SymmetricKey(data: okm.prefix(32)), nonce)
+    }
+
     /// What a tap reads, once the envelope is open.
     ///
     /// The ciphertext is dropped. Everything else that arrived in the clear
-    /// stays — the category is how iOS knows which buttons to draw, and it is
-    /// not inside the envelope — and the sealed fields are written over it.
-    /// `sentAt` is one of those fields, which is what lets an answer older
-    /// than an hour be refused by the check that already does that.
+    /// stays, and the sealed fields are written over it. `sentAt` is one of
+    /// those fields, which is what lets an answer older than an hour be
+    /// refused by the check that already does that.
     static func merged(userInfo: [AnyHashable: Any], opened: Opened) -> [String: Any] {
         var info: [String: Any] = [:]
         for (key, value) in userInfo {
@@ -99,6 +131,26 @@ enum PushCrypto {
             info[key] = value
         }
         return info
+    }
+
+    /// Which buttons an opened notification gets: a category, or "" for none.
+    ///
+    /// THE SEALED ONE DECIDES. The category arrives twice: in `aps.category`,
+    /// which iOS reads before anything is opened and which Apple or a relay
+    /// could have changed, and inside the envelope, which nobody could. The
+    /// buttons' words come from the category and the digits they type from
+    /// the envelope, so a changed clear one would label one answer as the
+    /// other. When the clear one is there and disagrees, there are no buttons;
+    /// the notification still opens the app.
+    ///
+    /// `sealed` IS NIL ONLY FROM A COORDINATOR THAT PREDATES SEALING IT, and
+    /// then the clear one is all there is, as it always was. A coordinator
+    /// that seals it always writes it, "" when there is nothing to answer
+    /// (`envelopeFor` in `src/fleet/push.js`).
+    static func category(sealed: String?, clear: String) -> String {
+        guard let sealed else { return clear }
+        if !clear.isEmpty, clear != sealed { return "" }
+        return sealed
     }
 
     static func unb64(_ value: String) -> Data? {
@@ -120,28 +172,59 @@ enum PushCrypto {
 ///
 /// THE EXTENSION DOES NOT MINT ONE. A key it made would live in its own
 /// keychain group, and the app would register a different public key. The app
-/// writes this on registration. The extension reads it from the app's default
-/// group, which is the app's id prefixed by the team — the group an item lands
-/// in when the app names no group, and the app names no group so its
+/// writes this on registration, into its default group: its own id, the group
+/// an item lands in when the app names none. The app names none so its
 /// entitlements stay the ones the existing distribution profile signs.
+///
+/// THE EXTENSION READS IT WITHOUT NAMING A GROUP either. A search that names
+/// no group covers every group the process is entitled to, and the extension
+/// is entitled to the app's (project.yml says why, and what else that lets it
+/// read).
 enum PushKey {
     private static let service = "network.thetech.fleetwright"
     private static let account = "push-key"
-    private static let appBundle = "network.thetech.fleetwright"
 
-    /// base64url of the uncompressed public point, or nil when the keychain
-    /// will not keep one. Registration then sends no `pushKey`, and the
-    /// notification stays in the clear rather than being sealed to a key
-    /// nobody stored.
-    static func publicKey() -> String? {
-        guard let key = load() else { return nil }
+    enum Failure: Error {
+        /// The keychain answered with something other than the item or "no
+        /// such item". Locked before the first unlock, or busy: a reason to
+        /// try again later, never a reason to replace the key.
+        case keychain(OSStatus)
+        /// The extension found no key. It never makes one.
+        case missing
+    }
+
+    /// The key registration sends, or nil when this phone cannot open what
+    /// would be sealed to it.
+    ///
+    /// THREE ANSWERS, AND THE THIRD IS A THROW. A keychain error throws, and
+    /// `Fleet.registerDevice` then registers nothing this time: the
+    /// coordinator keeps a key only when one is sent, so a registration
+    /// without it would put this phone back on plaintext over a hiccup. The
+    /// next launch registers again. Nil is for a phone that cannot: the key
+    /// is made and read back, a test notification is sealed to it in
+    /// software, and if the key does not open that, sending it would only
+    /// buy the fallback sentence on every notification.
+    static func registrationKey() throws -> String? {
+        let key = try load()
+        guard opensItsOwnSeal(key) else { return nil }
         return PushCrypto.b64url(key.publicKey.x963Representation)
+    }
+
+    /// Seal a probe to the key's public half and open it with the key.
+    static func opensItsOwnSeal(_ key: P256.KeyAgreement.PrivateKey) -> Bool {
+        let probe = "fleetwright-push-self-test"
+        let recipient = key.publicKey.x963Representation
+        guard
+            let envelope = try? PushCrypto.seal(to: recipient, title: probe, body: probe),
+            let opened = try? PushCrypto.open(privateKey: key, recipientPublic: recipient, envelope: envelope)
+        else { return false }
+        return opened.title == probe && opened.body == probe
     }
 
     /// The opened notification, or nil when this process cannot read the key
     /// or the envelope is not ours. The caller leaves the fallback alert.
     static func open(_ envelope: String) -> PushCrypto.Opened? {
-        guard let key = load() else { return nil }
+        guard let key = try? load() else { return nil }
         return try? PushCrypto.open(privateKey: key, recipientPublic: key.publicKey.x963Representation, envelope: envelope)
     }
 
@@ -149,80 +232,52 @@ enum PushKey {
         Bundle.main.bundleIdentifier?.hasSuffix(".Push") == true
     }
 
-    private static func load() -> P256.KeyAgreement.PrivateKey? {
-        if let data = read(), let key = try? P256.KeyAgreement.PrivateKey(rawRepresentation: data), data.count == 32 {
-            return key
+    /// The stored key, or a new one when there is none.
+    ///
+    /// A NEW ONE ONLY FOR "NO SUCH ITEM". Any other answer from the keychain
+    /// is thrown, and the key that may well be there is left alone: replacing
+    /// it would orphan every notification already sealed to it. Stored bytes
+    /// that are not a key are replaced, because they cannot open anything
+    /// and nothing could ever make them.
+    private static func load() throws -> P256.KeyAgreement.PrivateKey {
+        var item = query()
+        item[kSecReturnData as String] = true
+        item[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(item as CFDictionary, &out)
+        switch status {
+        case errSecSuccess:
+            if let data = out as? Data, data.count == 32,
+               let key = try? P256.KeyAgreement.PrivateKey(rawRepresentation: data) {
+                return key
+            }
+        case errSecItemNotFound:
+            break
+        default:
+            throw Failure.keychain(status)
         }
-        // A key that does not parse is replaced, so the next registration
-        // publishes the key we can actually open. The extension never does
-        // that replacement: it would write into its own group.
-        guard !isExtension else { return nil }
+        // The extension never writes: it would write into its own group.
+        guard !isExtension else { throw Failure.missing }
         let key = P256.KeyAgreement.PrivateKey()
-        guard write(key.rawRepresentation) else { return nil }
+        try write(key.rawRepresentation)
         return key
     }
 
-    private static func query(group: String?) -> [String: Any] {
-        var item: [String: Any] = [
+    private static func query() -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        if let group {
-            item[kSecAttrAccessGroup as String] = group
-        }
-        return item
     }
 
-    private static func write(_ data: Data) -> Bool {
-        let base = query(group: nil)
+    private static func write(_ data: Data) throws {
+        let base = query()
         SecItemDelete(base as CFDictionary)
         var item = base
         item[kSecValueData as String] = data
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
-    }
-
-    private static func read() -> Data? {
-        var item = query(group: isExtension ? appAccessGroup() : nil)
-        item[kSecReturnData as String] = true
-        item[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(item as CFDictionary, &out) == errSecSuccess else { return nil }
-        return out as? Data
-    }
-
-    /// The app's default keychain group, derived from this process's own.
-    ///
-    /// The team prefix is not a constant: it is whatever signed the build.
-    /// This process's own group is that prefix plus its bundle id, read back
-    /// off a throwaway item, and the app's group is the same prefix plus the
-    /// app's bundle id.
-    private static func appAccessGroup() -> String? {
-        guard let own = ownAccessGroup(), let bundle = Bundle.main.bundleIdentifier, own.hasSuffix(bundle) else { return nil }
-        return String(own.dropLast(bundle.count)) + appBundle
-    }
-
-    private static let ownGroupAccount = "push-group-probe"
-
-    private static func ownAccessGroup() -> String? {
-        let base: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: ownGroupAccount,
-        ]
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = Data("probe".utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { return nil }
-        var read = base
-        read[kSecReturnAttributes as String] = true
-        read[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        let status = SecItemCopyMatching(read as CFDictionary, &out)
-        SecItemDelete(base as CFDictionary)
-        guard status == errSecSuccess, let attrs = out as? [String: Any] else { return nil }
-        return attrs[kSecAttrAccessGroup as String] as? String
+        let status = SecItemAdd(item as CFDictionary, nil)
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
     }
 }

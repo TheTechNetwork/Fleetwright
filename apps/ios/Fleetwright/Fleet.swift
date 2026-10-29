@@ -2636,10 +2636,14 @@ struct Fleet {
     func registerDevice(token: Data) async throws {
         let hex = token.map { String(format: "%02x", $0) }.joined()
         var body: [String: Any] = ["platform": "ios", "token": hex]
-        // The key this install can open. Absent when the keychain will not
-        // keep one, and a registration without it is a notification in the
-        // clear rather than one sealed to a key nobody stored.
-        if let pushKey = PushKey.publicKey() {
+        // THE KEY THIS INSTALL OPENS WITH, so its notifications are sealed to
+        // it (docs/push-encryption.md). A keychain error throws here, before
+        // anything is posted: the coordinator keeps a key only when one is
+        // sent, so registering without it over a locked or busy keychain
+        // would put this phone back on plaintext. The next launch registers
+        // again. Absent only when the key fails its own self-test, and then
+        // sending it would buy the fallback sentence on every notification.
+        if let pushKey = try PushKey.registrationKey() {
             body["pushKey"] = pushKey
         }
         _ = try await post("/api/devices", body: body)
