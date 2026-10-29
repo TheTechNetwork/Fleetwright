@@ -8,19 +8,26 @@
 // box set to ask refuses a fleet start that asks to bypass
 // (test/fleet-permission-ceiling.test.js owns that). So the sheet names the
 // default only from the box's `permissions` health field (C-5), and draws
-// "Permissions bypassed" only behind a condition (C-2). The Swift compiles
-// only in CI, so this reads it as text: the words a person sees, and the
-// guard around the one choice that can be refused.
+// "Permissions bypassed" only behind a condition (C-2), in the same words on
+// both phones. The Swift and the Kotlin compile only in CI, so this reads them
+// as text: the words a person sees, and the guard around the one choice that
+// can be refused.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
-const IOS = iosSources();
+const PHONES = { iOS: iosSources(), Android: androidSources() };
 
-/** Swift's multi-line string continuations joined, so a sentence reads as one. */
-const joined = (/** @type {string} */ src) => src.replace(/\\\n\s*/g, '');
+/**
+ * A sentence written across lines read as one: Swift's multi-line string
+ * continuations, and Kotlin's `"..." + "..."`.
+ *
+ * @param {string} src
+ */
+const joined = (src) => src.replace(/\\\n\s*/g, '').replace(/"\s*\+\s*"/g, '');
 
 const WORDS = [
   'Box default',
@@ -39,17 +46,23 @@ const WORDS = [
     "Bypassing them is chosen on New session, where each machine's setting is shown.",
 ];
 
-test('iOS says the permission mode in these words', () => {
-  for (const words of WORDS) assert.ok(joined(IOS).includes(words), `iOS does not say: ${words}`);
+test('both phones say the permission mode in the same words', () => {
+  for (const [phone, src] of Object.entries(PHONES)) {
+    for (const words of WORDS) assert.ok(joined(src).includes(words), `${phone} does not say: ${words}`);
+  }
 });
 
-test('iOS reads what the box says its default is, and draws bypassing only behind a condition', () => {
-  // The health field and the word that takes the choice away.
-  assert.match(IOS, /permissions == "asks"/);
-  const choices = [...IOS.matchAll(/Text\("Permissions bypassed"\)/g)];
-  assert.ok(choices.length > 0, 'no Permissions bypassed choice at all');
-  for (const m of choices) {
-    const before = IOS.slice(Math.max(0, /** @type {number} */ (m.index) - 120), m.index);
-    assert.match(before, /\bif [^\n{]+\{\s*$/, 'a Permissions bypassed choice is drawn unconditionally');
+test('both phones read what the box says its default is, and draw bypassing only behind a condition', () => {
+  // A Permissions bypassed choice: a picker row on iOS, a chip on Android.
+  const CHOICE = { iOS: /Text\("Permissions bypassed"\)/g, Android: /AssistChip\(\s*onClick = \{[^}\n]*"dangerous"[^}\n]*\}/g };
+  for (const [phone, src] of Object.entries(PHONES)) {
+    // The health field, and the word that takes the choice away.
+    assert.match(src, /permissions == "asks"/, phone);
+    const choices = [...src.matchAll(CHOICE[/** @type {'iOS'|'Android'} */ (phone)])];
+    assert.ok(choices.length > 0, `${phone} has no Permissions bypassed choice at all`);
+    for (const m of choices) {
+      const before = src.slice(Math.max(0, /** @type {number} */ (m.index) - 120), m.index);
+      assert.match(before, /\bif [^\n{]+\{\s*$/, `${phone} draws a Permissions bypassed choice unconditionally`);
+    }
   }
 });
