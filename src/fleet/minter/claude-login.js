@@ -135,7 +135,8 @@ export function claudeSignIn(v) {
  *
  * @param {ClaudeOauth} oauth
  * @param {{ fetchImpl: typeof fetch, now: () => number }} io
- * @returns {Promise<{ ok: true, oauth: ClaudeOauth } | { ok: false, refused: boolean, message: string }>}
+ * @returns {Promise<{ ok: true, oauth: ClaudeOauth, rotated: boolean } | { ok: false, refused: boolean, message: string }>}
+ *   `rotated`: a new refresh token came back
  */
 export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
   let res;
@@ -157,24 +158,28 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
   if (!res.ok || typeof body?.access_token !== 'string' || !Number.isFinite(Number(body?.expires_in))) {
     return { ok: false, refused: false, message: `Claude answered ${res.status} to the renewal` };
   }
+  const given = typeof body.refresh_token === 'string' && body.refresh_token ? body.refresh_token : null;
+  const rotated = given !== null && given !== oauth.refreshToken;
   return {
     ok: true,
+    rotated,
     oauth: {
       ...oauth,
       accessToken: body.access_token,
       // KEPT WHEN NOT GIVEN, as Claude Code does: a renewal may or may not
       // rotate the refresh token.
-      refreshToken: typeof body.refresh_token === 'string' && body.refresh_token ? body.refresh_token : oauth.refreshToken,
+      refreshToken: given ?? oauth.refreshToken,
       expiresAt: now() + Number(body.expires_in) * 1000,
       scopes: typeof body.scope === 'string' ? body.scope.split(' ').filter(Boolean) : oauth.scopes,
-      // FROM THE ANSWER OR NOT AT ALL, as Claude Code keeps it: an answer
-      // that does not say leaves it unknown. Carrying the old one over timed
-      // a rotated refresh token by the expiry of the one it replaced, and
-      // once that was inside CLAUDE_REFRESH_AHEAD_MS every check and every
-      // box's ask renewed again.
+      // FROM THE ANSWER WHEN IT SAYS. When it does not, a refresh token that
+      // was kept keeps its expiry, which is still true, and a new one has
+      // none known. Claude Code carries the old expiry over either way, but
+      // never renews because of it; this does (freshClaude), and timing a
+      // new refresh token by the one it replaced renewed on every ask once
+      // that expiry was inside CLAUDE_REFRESH_AHEAD_MS.
       refreshTokenExpiresAt: Number.isFinite(Number(body.refresh_token_expires_in)) && Number(body.refresh_token_expires_in) > 0
         ? now() + Number(body.refresh_token_expires_in) * 1000
-        : null,
+        : rotated ? null : oauth.refreshTokenExpiresAt ?? null,
     },
   };
 }
@@ -227,7 +232,16 @@ export async function freshClaude(store, key, userId, io) {
   // is: a refresh token that runs out first is a sign-in lost with hours of
   // access left, which is how both refusals looked.
   const due = (/** @type {unknown} */ t) => Number.isFinite(Number(t)) && Number(t) > 0 && Number(t) - io.now() < CLAUDE_REFRESH_AHEAD_MS;
-  if (io.force || due(oauth.expiresAt) || due(oauth.refreshTokenExpiresAt)) {
+  let renew = io.force || due(oauth.expiresAt);
+  if (!renew && due(oauth.refreshTokenExpiresAt)) {
+    // NOT AGAIN FOR A REFRESH TOKEN A RENEWAL ALREADY KEPT. Its expiry is
+    // still true, but renewing cannot move it: the last renewal gave back
+    // the same token. Renewing on every ask until it ran out ended the token
+    // every box holds each time.
+    const last = [...(await claudeRenewals(store, userId, row.at))].reverse().find((n) => n.ok);
+    renew = !(last?.rotated === false && Number(last.refreshUntil) === Number(oauth.refreshTokenExpiresAt));
+  }
+  if (renew) {
     // NOTED BEFORE IT IS ASKED FOR, and settled after. Anthropic rotates the
     // refresh token the moment it answers; a renewal cut off before the new
     // one is written back (a deploy restarting this object, say) loses it,
@@ -242,6 +256,7 @@ export async function freshClaude(store, key, userId, io) {
     if (r.ok) {
       oauth = r.oauth;
       note.until = Number(oauth.expiresAt);
+      note.rotated = r.rotated;
       if (oauth.refreshTokenExpiresAt) note.refreshUntil = Number(oauth.refreshTokenExpiresAt);
       const now = await store.get(`gh:${userId}`);
       if (now && Number(now.at) === Number(row.at) && now.sealed === row.sealed) {
@@ -271,7 +286,8 @@ export async function freshClaude(store, key, userId, io) {
  * @property {string|null} by     who asked: a box, a runner, a test
  * @property {boolean} ok
  * @property {number} [until]     the new access token's expiry, when it worked
- * @property {number} [refreshUntil]  the new refresh token's, when Anthropic said
+ * @property {number} [refreshUntil]  the refresh token's, when Anthropic said
+ * @property {boolean} [rotated]  a new refresh token came back, when it worked
  * @property {boolean} [refused]  Anthropic said no, which only signing in again mends
  * @property {string} [why]       what was said, when it did not work
  * @property {boolean} [dropped]  renewed while a new sign-in was being kept, so not written back

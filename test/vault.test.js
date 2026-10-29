@@ -1622,7 +1622,7 @@ test('a refresh token that runs out before its access token is renewed before it
   }
 });
 
-test('the check renews a kept sign-in only when it is due, so it never cuts off the token every box holds', async (t) => {
+test('the check renews a kept sign-in only when it is due, not ten minutes after keeping and hourly', async (t) => {
   // It renewed ten minutes after keeping and hourly after that, and each of
   // those renewals ended the access token every box held, outside the half
   // hour in which the boxes change over together.
@@ -1666,6 +1666,30 @@ test('a renewal that does not say how long the new refresh token lasts is not ti
   await m.box(office);
   await m.box(office);
   assert.equal(claudeRenewals.count - before, 1, 'the new refresh token is not due just because the old one was');
+});
+
+test('a refresh token a renewal gave back unchanged keeps its expiry, and is not renewed again for it', async (t) => {
+  // Dropping the expiry of a token that was kept called a refusal after it
+  // "ended outside the fleet"; renewing again for it would cut every box off
+  // on every ask, since renewing cannot move it.
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.rotate = true; });
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('kept-refresh'));
+  const refreshUntil = Date.now() + 20 * 60_000;
+  made.oauth.refreshTokenExpiresAt = refreshUntil;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  claudeRenewals.rotate = false;
+  const before = claudeRenewals.count;
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed: its refresh token had twenty minutes');
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'not again for a refresh token renewing cannot move');
+  const notes = await m.rows.get([...m.rows.keys()].find((k) => k.startsWith('claude-renewed:')));
+  assert.equal(notes.at(-1).refreshUntil, refreshUntil, 'the expiry of the refresh token it kept is still known');
 });
 
 test('a refusal after the refresh token ran out by its own lifetime is this fleet being late, not anything outside it', () => {

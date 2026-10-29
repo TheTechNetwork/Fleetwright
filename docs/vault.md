@@ -120,12 +120,15 @@ check, which costs nothing and ends nothing.
 sign-in as `refreshTokenExpiresAt`, and a renewal's answer may give it as
 `refresh_token_expires_in`. The minter used to drop it. Now a sign-in is due
 when either its access token or its refresh token is within thirty minutes of
-running out. A renewal whose answer does not give it leaves it unknown, as
-Claude Code does: carrying the old one over timed a new refresh token by the
-expiry of the one it replaced, and once that was inside the half hour every
-check and every box's ask renewed again. The Test's sentence says how long the refresh token is good for.
-A refusal that comes after the refresh token ran out by its own lifetime is
-called this fleet being late (`expired`), not something outside it.
+running out. A renewal whose answer does not give it keeps it for a refresh
+token that came back unchanged, and leaves it unknown for a new one. Claude
+Code carries the old expiry over either way, but never renews because of it.
+The minter does, and timing a new refresh token by the one it replaced renewed
+again on every check and every box's ask. A refresh token a renewal gave back
+unchanged is not renewed again for its own expiry, since renewing cannot move
+it. The Test's sentence says how long the refresh token is good for. A refusal
+that comes after the refresh token ran out by its own lifetime is called this
+fleet being late (`expired`), not something outside it.
 
 Only Anthropic refusing the refresh token counts as ended. An access token can
 be refused for reasons the refresh token survives, and the refresh token is

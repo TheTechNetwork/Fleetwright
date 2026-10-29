@@ -24,7 +24,7 @@ import { CLAUDE_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_USAGE_URL } from '../../src/
  * long a renewed access token lasts, in seconds: Claude's eight hours unless a
  * test wants the next renewal due at once.
  */
-export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800, /** @type {number|undefined} */ refreshExpiresIn: undefined };
+export const claudeRenewals = { count: 0, used: new Set(), expiresIn: 28800, /** @type {number|undefined} */ refreshExpiresIn: undefined, rotate: true };
 
 /** How many times the usage address was asked. */
 export const claudeUsageAsks = { count: 0 };
@@ -78,9 +78,10 @@ function standInClaudeToken(url, init) {
     const asked = String(f.scope || '').split(' ').filter(Boolean);
     const allowed = granted.get(old) ?? [];
     if (asked.some((x) => !allowed.includes(x))) return reply(400, { error: 'invalid_scope', error_description: 'The requested scope is invalid, unknown, or malformed.' });
-    claudeRenewals.used.add(old);
     const n = claudeRenewals.count;
-    const rotated = `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}`;
+    // ROTATED unless a test says not: Anthropic may give the same one back.
+    const rotated = claudeRenewals.rotate ? `sk-ant-ort01-rotated${n}-${'s'.repeat(40)}` : old;
+    if (rotated !== old) claudeRenewals.used.add(old);
     granted.set(rotated, allowed);
     return reply(200, {
       access_token: `sk-ant-oat01-renewed${n}-${'b'.repeat(40)}`, refresh_token: rotated, expires_in: claudeRenewals.expiresIn, scope: (asked.length ? asked : allowed).join(' '),
