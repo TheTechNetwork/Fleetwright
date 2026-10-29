@@ -232,9 +232,12 @@ function fromFleet(ctx) {
 /**
  * THE OPERATOR'S "ASK FIRST" IS A CEILING FOR THE FLEET.
  *
- * FLEETWRIGHT_SKIP_PERMISSIONS=0 is somebody with a shell on this box deciding
- * that its sessions stop and ask before each tool. `start` has carried `mode`
- * since protocol v1, and nothing held a fleet start to that decision: a phone,
+ * FLEETWRIGHT_SKIP_PERMISSIONS turned off is somebody with a shell on this box
+ * deciding that its sessions stop and ask before each tool. Off is any value
+ * set but 1, true, yes or on (config.js `bool`), so the refusal says "turned
+ * off" rather than quote a value the operator may never have written.
+ *
+ * `start` has carried `mode` since protocol v1, and nothing held a fleet start to that decision: a phone,
  * Siri, an agent over MCP or a held runner start that asked for `dangerous`
  * got `--dangerously-skip-permissions` on a box whose operator had turned it
  * off. Refused rather than quietly downgraded, because a session that asks
@@ -253,7 +256,7 @@ function fromFleet(ctx) {
 function permissionCeiling(ctx, skipPermissions) {
   if (skipPermissions !== true || ctx.cfg.skipPermissions || !fromFleet(ctx)) return null;
   return (
-    "This box asks before each tool — its operator set FLEETWRIGHT_SKIP_PERMISSIONS=0 — and a start from the fleet " +
+    'This box asks before each tool — its operator turned FLEETWRIGHT_SKIP_PERMISSIONS off — and a start from the fleet ' +
     'cannot bypass that. Start it with the box default, or with permission prompts on.'
   );
 }

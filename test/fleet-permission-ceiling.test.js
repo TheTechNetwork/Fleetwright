@@ -1,14 +1,15 @@
-// The operator's FLEETWRIGHT_SKIP_PERMISSIONS=0 holds for every start that
-// arrives from the fleet.
+// The operator's FLEETWRIGHT_SKIP_PERMISSIONS, turned off, holds for every
+// start that arrives from the fleet.
 //
 //   node --test test/fleet-permission-ceiling.test.js
 //
 // `start` has carried `mode` since protocol v1, and nothing on the host held a
 // fleet start to the box's setting: an intent asking `dangerous` became
 // `/new --dangerous`, and on a box whose operator had turned bypass off that
-// ran `claude --dangerously-skip-permissions`. Every phone and Siri start sent
-// `dangerous` once the start sheet named the mode, so on such a box every one
-// of them did. See permissionCeiling in src/adapters/commands.js.
+// ran `claude --dangerously-skip-permissions`. The phones and Siri send a
+// kind's saved mode, so a kind saved as `dangerous` did that, as did any
+// agent over MCP that asked; #1408 would have had every phone start send
+// `dangerous`. See permissionCeiling in src/adapters/commands.js.
 //
 // Driven the whole way an intent goes on a box: the real sidecar translates
 // it, the real hub-client posts it, the real HTTP adapter decides who sent it,
@@ -66,6 +67,13 @@ async function box(t, { skipPermissions, sidecarHolds = 'sidecar' }) {
   const baseUrl = `http://127.0.0.1:${/** @type {any} */ (adapter.server).address().port}`;
   const hub = new HubClient({ baseUrl, token: sidecarHolds === 'operator' ? operator : sidecarToken, readTimeoutMs: 2000 });
   const sidecar = new Sidecar({ hub, transport: /** @type {any} */ ({ send() {}, onMessage() {} }), hostId: 'testbox', healthIntervalMs: 0, watch: false });
+  /** @param {Record<string, unknown>} body */
+  const post = (body) =>
+    fetch(`${baseUrl}/api/command`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${operator}` },
+      body: JSON.stringify(body),
+    });
   let n = 0;
   return {
     started,
@@ -79,14 +87,9 @@ async function box(t, { skipPermissions, sidecarHolds = 'sidecar' }) {
         issuedAt: Date.now(), ...(actor ? { actor } : {}),
       }),
     /** The operator at the box: their token, no actor, as the console and the CLI send. */
-    local: async (/** @type {string} */ line) => {
-      const r = await fetch(`${baseUrl}/api/command`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${operator}` },
-        body: JSON.stringify({ command: line }),
-      });
-      return r.json();
-    },
+    local: async (/** @type {string} */ line) => (await post({ command: line })).json(),
+    /** A raw /api/command with the operator's token, for the shape of `via`. */
+    post,
   };
 }
 
@@ -100,7 +103,7 @@ test('on a box that asks, a fleet start asking to bypass is refused with the set
       const r = /** @type {any} */ (await b.start({ name: 'job', mode: 'dangerous' }, actor));
       const which = `sidecar holds the ${sidecarHolds} token, actor ${actor ?? 'none'}`;
       assert.equal(r.ok, false, which);
-      assert.match(r.text, /FLEETWRIGHT_SKIP_PERMISSIONS=0/, which);
+      assert.match(r.text, /turned FLEETWRIGHT_SKIP_PERMISSIONS off/, which);
       assert.match(r.text, /cannot bypass/, which);
       assert.deepEqual(b.started, [], `nothing may reach the session manager (${which})`);
     }
@@ -137,4 +140,18 @@ test('health says which of the two a start with no mode gets', async (t) => {
   assert.equal((await asks.sidecar.health()).permissions, 'asks');
   const bypassed = await box(t, { skipPermissions: true });
   assert.equal((await bypassed.sidecar.health()).permissions, 'bypassed');
+});
+
+test('via is the one word "fleet" or absent, and any other value is refused rather than read as from this box', async (t) => {
+  // The field only takes something away, so a value that is nearly "fleet" and
+  // treated as absent would hand back the bypass the sidecar meant to give up.
+  const b = await box(t, { skipPermissions: false });
+  for (const via of ['web', 'FLEET', '', 1, true, {}, ['fleet']]) {
+    const r = await b.post({ command: '/list', via });
+    assert.equal(r.status, 400, `via ${JSON.stringify(via)}`);
+  }
+  for (const via of [null, 'fleet']) {
+    const r = await b.post({ command: '/list', via });
+    assert.equal(r.status, 200, `via ${JSON.stringify(via)}`);
+  }
 });
