@@ -340,7 +340,10 @@ export async function answerClaudeCheck(_ask, config) {
     if (!/^[0-9]{1,20}$/.test(userId)) continue;
     // ONE AT A TIME, each under its person's lock: a check renewing alongside
     // a box renewing the same sign-in would rotate one refresh token twice.
-    const one = await withLock(`row:${userId}`, () => checkClaude(store, key, userId, { fetchImpl, now })).catch(() => null);
+    const one = await withLock(`row:${userId}`, () => checkClaude(store, key, userId, { fetchImpl, now })).catch((/** @type {any} */ e) => {
+      console.warn(`minter: could not ask after ${userId}'s Claude sign-in: ${e?.message || e}`);
+      return null;
+    });
     if (one && 'refusedAccess' in one) refused.push(one);
     else if (one) ended.push(one);
   }

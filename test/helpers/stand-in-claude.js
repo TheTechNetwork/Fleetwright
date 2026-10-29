@@ -98,6 +98,14 @@ export function revokeClaude(token) {
   revoked.add(token);
 }
 
+/** Tokens the usage address answers 403: good, but not allowed to do this. */
+const forbidden = new Set();
+
+/** @param {string} token */
+export function forbidClaude(token) {
+  forbidden.add(token);
+}
+
 /**
  * Claude's answer to this request, or null when it is not a request to Claude.
  *
@@ -113,6 +121,9 @@ export function standInClaude(url, init = {}) {
   const refused = bearer.includes('revoked') || revoked.has(bearer);
   if (usage) {
     claudeUsageAsks.count += 1;
+    if (!refused && forbidden.has(bearer)) {
+      return new Response(JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'OAuth token does not meet scope requirement user:profile' } }), { status: 403, headers: { 'content-type': 'application/json' } });
+    }
     const said = refused ? { type: 'error', error: { type: 'authentication_error', message: 'OAuth token has been revoked.' } } : { five_hour: { utilization: 12, resets_at: null } };
     return new Response(JSON.stringify(said), { status: refused ? 401 : 200, headers: { 'content-type': 'application/json' } });
   }

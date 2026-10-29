@@ -101,12 +101,14 @@ sign-in itself (`checkClaude` in `src/fleet/minter/claude-login.js`):
 
 - a renewal already refused, by a box, a runner or a test, is the answer;
 - otherwise its access token is tried at the usage address, which costs
-  nothing, and a token refused there is renewed at once instead of when due;
-- once: when the token that renewal gave is refused too, renewing again will
-  not mend it, and each renewal ends the token every box holds, so it is not
-  renewed again until it is due, and its person is told once that Claude
-  refuses it though renewing works (the check's answer lists it as `refused`,
-  apart from `ended`);
+  nothing. A 401 there is renewed for at once instead of when due, and the
+  token the renewal gave is tried in the same check: refused too, renewing
+  will not mend it, so it is not renewed for again until it is due, and its
+  person is told once. A 403 is never renewed for: it says the sign-in may
+  not do this, not that the token ran out, and each renewal ends the token
+  every box holds. Its person is told once for the sign-in. Both are listed
+  in the check's answer as `refused`, with the status, apart from `ended`,
+  because renewing still works;
 - a sign-in that is due is renewed, as a box asking would renew it;
 - nothing else is renewed.
 
@@ -130,8 +132,8 @@ token that came back unchanged, and leaves it unknown for a new one. Claude
 Code carries the old expiry over either way, but never renews because of it.
 The minter does, and timing a new refresh token by the one it replaced renewed
 again on every check and every box's ask. A refresh token a renewal gave back
-unchanged is not renewed again for its own expiry, since renewing cannot move
-it. The Test's sentence says how long the refresh token is good for. A refusal
+unchanged, or new but ending as soon, is not renewed again for its own
+expiry, since another renewal will not move it either. The Test's sentence says how long the refresh token is good for. A refusal
 that comes after the refresh token ran out by its own lifetime is called this
 fleet being late (`expired`), not something outside it.
 
