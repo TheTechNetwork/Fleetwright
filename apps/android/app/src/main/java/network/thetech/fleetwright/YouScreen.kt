@@ -75,6 +75,9 @@ fun YouScreen(
     var signInResult by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var pushResult by rememberSaveable { mutableStateOf("") }
+    // Whether this phone does not know it can open what is sealed to it
+    // (PushKeyRule.Evidence), read when You appears.
+    var pushInDoubt by remember { mutableStateOf(false) }
     var runnersAnswered by remember { mutableStateOf(false) }
     var runnersSaved by remember { mutableStateOf<String?>(null) }
     var runnersFleet by remember { mutableStateOf<String?>(null) }
@@ -86,6 +89,7 @@ fun YouScreen(
     var buildTaps by remember { mutableIntStateOf(0) }
     val inDemo = signedIn && Demo.isActive(settings.coordinatorUrl)
 
+    LaunchedEffect(Unit) { pushInDoubt = settings.pushKeyEvidence?.doubt != null }
     LaunchedEffect(signedIn) {
         if (!signedIn) return@LaunchedEffect
         Fleet(settings).runnerRepoSetting().onSuccess { got ->
@@ -239,6 +243,23 @@ fun YouScreen(
                 },
             ) { Text("Send a test notification") }
             if (pushResult.isNotBlank()) Hint(pushResult)
+            // A KEY THIS PHONE COULD NOT USE, SAID WHERE NOTIFICATIONS ARE.
+            // Nothing else would say it: the coordinator seals to the key it
+            // was sent, FCM delivers, and the notification is the fallback
+            // sentence with no buttons. "May": the phone knows it could not
+            // use the key the last time it tried, not that the next one will
+            // fail. Gone once a sealed notification opens or a registration
+            // uses a key this phone holds. The same sentence as iOS.
+            AnimatedVisibility(
+                visible = pushInDoubt,
+                enter = fadeIn(Design.Motion.change()),
+                exit = fadeOut(Design.Motion.change()),
+            ) {
+                Hint(
+                    "Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts.",
+                    color = Design.Palette.attention.now,
+                )
+            }
         }
 
         OpenRow("Siri and Assistant") { open = "kinds" }

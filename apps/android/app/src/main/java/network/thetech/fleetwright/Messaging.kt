@@ -81,7 +81,11 @@ class Messaging : FirebaseMessagingService() {
         // is the sealed one, and none at all when the clear one disagrees
         // with it (PushReveal.category).
         val sealed = message.data.containsKey("e")
-        val data = PushReveal.fields(message.data) { PushKey.open(it) }
+        var opened = false
+        val data = PushReveal.fields(message.data) { envelope -> PushKey.open(envelope).also { opened = it != null } }
+        // Whether it opened, for the line on You: nothing else would ever say
+        // that this phone's notifications arrive as the fallback sentence.
+        if (sealed) PushKey.saw(Settings(applicationContext), opened)
         if (data[XoSetupNotice.EXTRA_KIND] == XoSetupNotice.KIND) {
             XoSetupNotice.post(applicationContext, data)
             return

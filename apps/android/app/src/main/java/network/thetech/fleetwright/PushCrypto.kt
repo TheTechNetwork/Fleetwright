@@ -276,7 +276,8 @@ internal object PushReveal {
 /**
  * What registration does when the push key fails, decided without the
  * keystore so the JVM test can hold it to the rule. PushKey does the keystore
- * half. `PushKeyRule` in PushCrypto.swift is the same rule on iOS, with the
+ * half. It also keeps what the phone knows about opening what is sealed to it
+ * ([Evidence]), which You shows. `PushKeyRule` in PushCrypto.swift is the same rule on iOS, with the
  * same numbers; iOS has no [afterSelfTest], because its self-test runs in
  * memory and has no daemon to miss, so any failure of it counts there.
  */
@@ -340,40 +341,107 @@ internal object PushKeyRule {
     class Choice(
         /** The key it sends: null only on a phone that has never sent one. */
         val pushKey: String?,
-        /** The count to store, null once a registration got as far as a key. */
+        /** The count to store, null once a registration got as far as a key this phone holds. */
         val failures: Failures?,
         /** Why the stored key could not be used, when it could not. */
         val failure: Exception?,
-        /** Whether the stored key was replaced this time. */
+        /** Whether this registration tried to replace the stored key. [holds] says whether that worked. */
         val replaced: Boolean,
+        /**
+         * Whether this phone has just shown it holds the private half of the
+         * key it sends: the key opened its own seal in the keystore. True when
+         * it sends none, since nothing is then sealed to it.
+         */
+        val holds: Boolean,
     )
 
     /**
      * The key a registration sends.
      *
-     * [read] is the stored key's public half, null when this phone cannot
-     * make one, and throws when the key cannot be used this time; [replace]
-     * makes a new one, or null when it cannot; [sent] is the last key a
-     * registration sent. A KEY ERROR NEVER MEANS NO KEY once one has been
-     * sent: [sent] goes instead, before the threshold, and after it when the
-     * replacement fails too. [countedThisLaunch] keeps a second failure in
-     * the same launch from counting again.
+     * [read] is the stored key's public half, null when no key is stored and
+     * none could be made, and throws when the key cannot be used this time;
+     * [replace] makes a new one, or null when it cannot; [sent] is the last
+     * key a registration sent. [countedJustNow] keeps a second failure in
+     * the same moment from counting again.
+     *
+     * A KEY ERROR NEVER MEANS NO KEY once one has been sent: [sent] goes
+     * instead, before the threshold, and after it when the replacement fails
+     * too. Sealed and unreadable is the trade for never going back to
+     * plaintext, and the count is what gets this phone out of it.
+     *
+     * NO KEY AT ALL, WITH ONE SENT, IS A FAILURE TOO. [read] answers null only
+     * when the alias was missing and no key could be made, so the private
+     * half of [sent] is known to be gone from this keystore: after a
+     * replacement that deleted it and could not make another, or settings
+     * carried to a phone without the entry. That used to send [sent] and
+     * clear the count, so the phone was never counted again and never
+     * replaced, and every notification was the fallback sentence for good.
+     * It now counts like any other failure, and a replacement that fails
+     * keeps the count rather than clearing it: only a key this phone holds
+     * clears it, and making a fresh one is what heals it.
      */
     fun choose(
         failures: Failures?,
         sent: String?,
         now: Long,
-        countedThisLaunch: Boolean,
+        countedJustNow: Boolean,
         read: () -> String?,
         replace: () -> String?,
     ): Choice {
-        val key = try {
-            read()
+        val failure: Exception = try {
+            val key = read()
+            if (key != null) return Choice(key, null, null, replaced = false, holds = true)
+            // Never sent one: nothing is sealed to this phone, so none is lost.
+            if (sent == null) return Choice(null, null, null, replaced = false, holds = true)
+            KeyStoreException("no push key in the keystore, and none could be made")
         } catch (e: Exception) {
-            val after = if (countedThisLaunch && failures != null) failures else failed(failures, now)
-            if (!startOver(after, now)) return Choice(sent, after, e, replaced = false)
-            return Choice(replace() ?: sent, null, e, replaced = true)
+            e
         }
-        return Choice(key ?: sent, null, null, replaced = false)
+        val after = if (countedJustNow && failures != null) failures else failed(failures, now)
+        if (!startOver(after, now)) return Choice(sent, after, failure, replaced = false, holds = sent == null)
+        replace()?.let { return Choice(it, null, failure, replaced = true, holds = true) }
+        return Choice(sent, after, failure, replaced = true, holds = sent == null)
     }
+
+    /**
+     * What this phone knows about opening what is sealed to it, and when it
+     * learnt it (epoch milliseconds). Null until it has learnt anything.
+     *
+     * THE PHONE KNOWS, AND NOTHING ELSE DOES. A registration that sends a key
+     * it could not use, or a notification it could not open, still reports
+     * success everywhere: the coordinator seals to the key it was sent and
+     * FCM delivers. So this is kept, and the notifications section of You
+     * says so while [doubt] is set. The same rule as `PushKeyRule.Evidence`
+     * in PushCrypto.swift.
+     */
+    data class Evidence(val doubt: Doubt?, val at: Long)
+
+    enum class Doubt {
+        /** The last registration sent a key this phone could not use: the keystore did not answer, the key failed its own seal, or it is gone. */
+        KEY,
+
+        /** The last sealed notification did not open. */
+        SEAL,
+    }
+
+    /**
+     * The evidence after one registration.
+     *
+     * A key this phone could not use is doubt. A key it holds that is not the
+     * one it sent before (a new key), or no key at all, is a clean start. The
+     * same key, read and held, answers a doubt about the key and nothing else.
+     */
+    fun afterRegistration(before: Evidence?, choice: Choice, sent: String?, now: Long): Evidence? = when {
+        !choice.holds -> Evidence(Doubt.KEY, now)
+        choice.pushKey == null || choice.pushKey != sent -> Evidence(null, now)
+        before?.doubt == Doubt.KEY -> Evidence(null, now)
+        else -> before
+    }
+
+    /**
+     * The evidence after one sealed notification at [at], opened or not. One
+     * older than what is known already changes nothing.
+     */
+    fun afterSeal(before: Evidence?, opened: Boolean, at: Long): Evidence? =
+        if (before != null && at < before.at) before else Evidence(if (opened) null else Doubt.SEAL, at)
 }
