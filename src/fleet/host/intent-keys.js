@@ -244,6 +244,17 @@ export class IntentKeys {
   }
 
   /**
+   * The key list while it may still be checked with, or null: twice the age a
+   * list is taken at, so one missed refresh does not refuse everybody. What
+   * check() uses, and so who this box can take a signature from now, which
+   * is also what its pins report (pinned-admins.js pinReport): a box holding
+   * a list too old to use refuses everybody, and must not say otherwise.
+   */
+  get current() {
+    return this.directory && this.listAt !== null && this.now() - this.listAt <= 2 * KEY_LIST_MAX_AGE_MS ? this.directory : null;
+  }
+
+  /**
    * What one intent was found to be, counted. A list past its age is not used.
    * A signature is checked when there is one; a delegation only when there is
    * not, because what the person signed for this request is the stronger word.
@@ -253,7 +264,7 @@ export class IntentKeys {
    * @returns {Promise<{ verdict: import('../protocol/intent-signature.js').Verdict | import('../protocol/intent-signature.js').DelegationVerdict, label?: string, gap?: string }>}
    */
   async check(intent, host) {
-    const fresh = this.directory && this.listAt !== null && this.now() - this.listAt <= 2 * KEY_LIST_MAX_AGE_MS ? this.directory : null;
+    const fresh = this.current;
     const r = !intent.sig && intent.delegation
       ? await checkDelegation({ intent, delegation: intent.delegation, host, directory: fresh, revoked: this.revoked, now: this.now() })
       : await checkIntentSignature({ intent, sig: intent.sig, kid: intent.kid, host, directory: fresh });
