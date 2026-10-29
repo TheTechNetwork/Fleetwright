@@ -102,6 +102,7 @@ test('both phones draw bypassing only when every machine a start could land on s
       assert.match(body, /allSatisfy|\.all \{/, `${phone}: ${g} is not about every machine`);
       assert.match(body, /!\w+\.isEmpty|\.isNotEmpty\(\)/, `${phone}: ${g} allows it with no machine to judge`);
       assert.doesNotMatch(body, /"asks"/, `${phone}: ${g} is "none asks", which lets cannot tell through`);
+      assert.doesNotMatch(body, /\?\?\s*"bypassed"/, `${phone}: ${g} reads a machine that has not said as one that bypasses`);
       // And the send holds to the same condition, so a choice made while it
       // was offered is not sent after it went.
       assert.ok(src.includes(SEND[phone](g)), `${phone} sends a bypass without checking ${g}`);
