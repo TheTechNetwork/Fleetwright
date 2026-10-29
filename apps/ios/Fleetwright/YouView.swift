@@ -23,9 +23,9 @@ struct YouView: View {
     @State private var signInResult = ""
     @State private var signingIn = false
     @State private var pushResult = ""
-    /// Whether this phone does not know it can open what is sealed to it
-    /// (PushKey.inDoubt), read when You appears.
-    @State private var pushInDoubt = false
+    /// Why this phone does not know it can open what is sealed to it, or nil
+    /// when it does (PushKey.doubt), read when You appears.
+    @State private var pushDoubt: PushKeyRule.Doubt?
     /// The temporary machines row's summary, once the fleet has said.
     @State private var runnersAnswered = false
     @State private var runnersSaved: String?
@@ -91,17 +91,15 @@ struct YouView: View {
                     if !pushResult.isBlank {
                         Text(pushResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
-                    // A KEY THIS PHONE COULD NOT USE, SAID WHERE NOTIFICATIONS
-                    // ARE. Nothing else would say it: the coordinator seals to
-                    // the key it was sent, Apple delivers, and the alert is the
-                    // fallback sentence with no buttons. "May": the phone
-                    // knows it could not use the key the last time it tried,
-                    // not that the next one will fail. Gone once a sealed
-                    // notification opens or a registration uses a key this
-                    // phone holds (PushKeyRule.Evidence). The same sentence as
-                    // Android.
-                    if pushInDoubt {
-                        Text("Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts.")
+                    // A KEY THIS PHONE COULD NOT USE, OR A SEAL IT DID NOT
+                    // OPEN, SAID WHERE NOTIFICATIONS ARE. Nothing else would
+                    // say it: the coordinator seals to the key it was sent,
+                    // Apple delivers, and the alert is the fallback sentence
+                    // with no buttons. Gone once a sealed notification opens
+                    // or a registration uses a key this phone holds
+                    // (PushKeyRule.Evidence). The same sentences as Android.
+                    if let pushDoubt {
+                        Text(pushDoubtLine(pushDoubt))
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.attention)
                     }
@@ -135,8 +133,26 @@ struct YouView: View {
         for note in delivered.sorted(by: { $0.date < $1.date }) {
             PushKey.saw(userInfo: note.request.content.userInfo, at: note.date)
         }
-        let doubt = PushKey.inDoubt
-        withAnimation(Design.Motion.change) { pushInDoubt = doubt }
+        let doubt = PushKey.doubt
+        withAnimation(Design.Motion.change) { pushDoubt = doubt }
+    }
+
+    /// One sentence for each kind of doubt, saying only what the phone knows.
+    ///
+    /// A KEY IT COULD NOT USE is "may": the phone knows the last registration
+    /// could not use it, not that the next notification will fail, and a
+    /// launch registers again, which is what clears it. A SEAL IT DID NOT
+    /// OPEN is only that: the extension may have run out of time, or the
+    /// notification was sealed to a key this phone has since replaced, and
+    /// the phone cannot tell which. A launch does not clear it (the same key,
+    /// read again, says nothing about the extension), so its sentence gives
+    /// no cause and no remedy, only what makes it go. The same sentences as
+    /// Android.
+    private func pushDoubtLine(_ doubt: PushKeyRule.Doubt) -> String {
+        switch doubt {
+        case .key: return "Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts."
+        case .seal: return "The last notification sealed for this phone arrived without its words. This goes once one arrives with them."
+        }
     }
 
     // MARK: - the parts
