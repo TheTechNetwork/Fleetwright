@@ -67,42 +67,51 @@ class Messaging : FirebaseMessagingService() {
         // notification per step, but one that is updated in place, with a
         // bar. XoSetupNotice draws it from the step numbers in `data`.
         //
-        // `kind` IS READ IN THE CLEAR, AND THAT RESTS ON ANDROID PUSHES BEING
-        // UNENCRYPTED: this app registers no pushKey, so the coordinator
-        // sends `data` as plain fields and never a sealed envelope. If a
-        // pushKey is ever registered for Android, the coordinator will seal
-        // the payload and this read finds no `kind` at the top level; it
-        // must then open the envelope first and read `kind` from inside it,
-        // or every setup update silently falls through to the session path
-        // below and is logged as noise.
-        if (message.data[XoSetupNotice.EXTRA_KIND] == XoSetupNotice.KIND) {
-            XoSetupNotice.post(applicationContext, message.data)
+        // OPEN FIRST. A phone that has registered a pushKey is sent `e` and
+        // nothing else of the text, so `kind` is not at the top level until
+        // the envelope is open. Reading it before that logged every setup
+        // update as a session this app did not understand. A seal that does
+        // not open is the fallback sentence and no kind, which is the same
+        // sentence iOS leaves on the alert.
+        val sealed = message.data.containsKey("e")
+        val data = PushReveal.fields(message.data) { PushKey.open(it) }
+        if (data[XoSetupNotice.EXTRA_KIND] == XoSetupNotice.KIND) {
+            XoSetupNotice.post(applicationContext, data)
             return
         }
         // A POOL XEN ORCHESTRA STOPPED SHOWING, AND ITS RETURN: one
         // notification per pool, with Reconnect on it for an admin, which
         // the tray could not have drawn (PoolNotice). Read before the
         // answers below, whose categories it is not one of.
-        if (PoolNotice.handles(message.data[PoolNotice.EXTRA_KIND])) {
+        if (PoolNotice.handles(data[PoolNotice.EXTRA_KIND])) {
             PoolNotice.post(
                 applicationContext,
-                message.data,
-                message.data["title"] ?: message.notification?.title,
-                message.data["body"] ?: message.notification?.body,
+                data,
+                data["title"] ?: message.notification?.title,
+                data["body"] ?: message.notification?.body,
             )
             return
         }
-        val words = NotificationAnswers.titlesFor(message.data["category"])
-        if (words == null) {
-            Log.i(TAG, "push while foregrounded: ${message.notification?.title ?: message.data}")
+        val words = NotificationAnswers.titlesFor(data["category"])
+        if (words != null) {
+            post(applicationContext, data, words)
             return
         }
-        post(applicationContext, message.data, words)
+        // ENCRYPTED AND NOT ANSWERABLE. There is no `notification` block —
+        // the tray would have drawn the ciphertext — so nothing is on screen
+        // until this posts it. An unsealed message still belongs to the tray,
+        // which is why this only runs for a seal.
+        if (sealed) {
+            postPlain(applicationContext, data)
+            return
+        }
+        Log.i(TAG, "push while foregrounded: ${message.notification?.title ?: data}")
     }
 
     private companion object {
         const val TAG = "Fleetwright"
         const val CHANNEL = "fleetwright.asks"
+        const val NOTICE = "fleetwright.notices"
 
         /**
          * The notification the tray would have drawn, plus the two buttons it
@@ -218,6 +227,37 @@ class Messaging : FirebaseMessagingService() {
             for (key in AnswerReceiver.KEYS) data[key]?.let { intent.putExtra(key, it) }
             intent.putExtra(AnswerReceiver.EXTRA_NOTIFICATION_ID, id)
             return PendingIntent.getBroadcast(context, id * 31 + action.hashCode(), intent, FLAGS)
+        }
+
+        /**
+         * A notification the tray did not draw, because the message was sealed.
+         *
+         * No buttons. An answerable one went through [post]. This is a session
+         * that changed, or the fallback sentence when the seal did not open.
+         */
+        fun postPlain(context: Context, data: Map<String, String>) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) return
+            context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+                NotificationChannel(NOTICE, "From the fleet", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "A session changed, or a notification that could not be opened."
+                },
+            )
+            val name = data["name"].orEmpty()
+            val id = if (name.isEmpty()) data.hashCode() else name.hashCode()
+            val title = data["title"]?.takeIf { it.isNotBlank() } ?: "Fleetwright"
+            val body = data["body"].orEmpty()
+            val notification = NotificationCompat.Builder(context, NOTICE)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(openIntent(context, data, id))
+                .build()
+            NotificationManagerCompat.from(context).notify(id, notification)
         }
     }
 }

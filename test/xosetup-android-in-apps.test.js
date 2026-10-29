@@ -350,7 +350,12 @@ test('Android: the design’s tokens only, and a change of state moves', () => {
 
 test('Android: kind=xosetup becomes one ongoing notification per job, then one that says how it ended', () => {
   const messaging = file('Messaging.kt');
-  assert.match(messaging, /if \(message\.data\[XoSetupNotice\.EXTRA_KIND\] == XoSetupNotice\.KIND\) \{\s*XoSetupNotice\.post\(applicationContext, message\.data\)\s*return/);
+  // The kind is inside the envelope once this phone has a push key, so the
+  // notice is posted from the opened map. Posting message.data would find
+  // no kind and the bar would never move.
+  const received = messaging.slice(messaging.indexOf('override fun onMessageReceived'), messaging.indexOf('private companion object'));
+  assert.ok(received.indexOf('PushReveal.fields') < received.indexOf('XoSetupNotice.EXTRA_KIND'));
+  assert.match(messaging, /if \(data\[XoSetupNotice\.EXTRA_KIND\] == XoSetupNotice\.KIND\) \{\s*XoSetupNotice\.post\(applicationContext, data\)\s*return/);
   const notice = file('XoSetupNotice.kt');
   // One id per job, so a step replaces the last and the end replaces the bar.
   assert.ok(notice.includes('val id = ("xosetup-$job").hashCode()'));
