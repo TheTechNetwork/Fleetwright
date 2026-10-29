@@ -242,7 +242,11 @@ it carries:
   deletes the key and makes another, which goes through the self-test like
   any new one. When that fails too, the registration sends the last key sent,
   as above, and keeps the count, so the next registration tries again. Only a
-  registration that sends a key the phone holds clears the count.
+  registration that sends a key the phone holds clears the count, or one on a
+  phone with no key sent on record that finds no key stored and cannot make
+  one, which sends none: nothing is sealed to that phone, so there is no key
+  to keep trying for. A Keychain or Keystore error on such a phone still
+  counts, because the key it could not read may be there.
 
 The rule is `PushKeyRule.choose` on both phones, tested without the Keychain
 or the Keystore in `PushCryptoTests.swift` and `PushCryptoTest.kt`.
@@ -254,24 +258,38 @@ cannot open, reports success everywhere: the coordinator seals to the key it
 was sent, Apple or Google delivers, and every notification is the fallback
 sentence with no buttons. So each phone keeps what it knows
 (`PushKeyRule.Evidence`) and You's notifications section shows one line while
-it does not know it can open what is sealed to it:
+it does not know it can open what is sealed to it, a sentence for each reason.
+
+After a registration that sent a key the phone could not use:
 
 > Notifications sent to this phone may arrive without their words: it could
 > not use its key the last time it tried. It tries again each time
 > Fleetwright starts.
 
-"May", because the phone knows the last attempt failed, not that the next will.
-It is set by a registration that sent a key the phone could not use, and by a
-sealed notification that did not open. It goes when a sealed notification
-opens, when a registration sends a new key the phone holds, and, for doubt
-about the key alone, when a registration reads the same key and it passes the
-self-test. A notification older than what the phone already knows changes
-nothing. Android learns of each seal in `onMessageReceived`. The iOS extension
+"May", because the phone knows the last attempt failed, not that the next will,
+and each launch registers again, which is what clears it.
+
+After a sealed notification that did not open:
+
+> The last notification sealed for this phone arrived without its words. This
+> goes once one arrives with them.
+
+That is all the phone knows. The iOS extension may have run out of time, or the
+notification was sealed to a key the phone has since replaced, and a launch
+does not clear it, so the sentence gives no cause and no remedy.
+
+The line goes when a sealed notification opens, when a registration sends a
+new key the phone holds, when a registration sends no key (nothing is then
+sealed to the phone), and, for doubt about the key alone, when a registration
+reads the same key and it passes the self-test. A notification older than what
+the phone already knows changes nothing: Android dates one by when FCM says it
+was sent, so one sealed to a key just replaced that arrives late is older than
+the registration that replaced it; iOS has only the delivery date. Android learns of each seal in `onMessageReceived`. The iOS extension
 runs in a process of its own, so the app learns what it did from the
 notifications it is shown: on screen while the app is open, tapped, or still in
 Notification Center when You opens. One the extension could not open still
 carries `e`, and `mutable-content` marks one that was sealed. Both phones say
-the same sentence (`test/push-in-apps.test.js`).
+the same sentences (`test/push-in-apps.test.js`).
 
 ### Android 12 and later, and what data-only costs there
 
