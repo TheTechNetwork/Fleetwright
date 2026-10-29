@@ -1555,6 +1555,9 @@ struct AddHypervisorView: View {
     private func applySection(_ inv: XOPolicy.Inventory, job: String) -> some View {
         let problem = choice.problem(in: inv)
         return Section {
+            Text(XOPolicy.ownUsers)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
             Text("\(hostId) waits ten minutes for this from when it read the pool, then lets go of the sign-in without changing anything.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
@@ -2289,6 +2292,10 @@ struct AddHypervisorView: View {
         }
         // THE ROUTERS' KEY, kept with the pool's token and in the fleet, so
         // the machines holding the pool read the routers from now on.
+        if state.state == "done", let sealed = state.boxHandoff, let policyJob,
+           let said = await XOSetupHandoff.keepBoxUsers(sealed, job: job, address: policyJob.address, key: policyJob.reply, settings: settings) {
+            result = said
+        }
         if state.state == "done", let sealed = state.watch, let policyJob,
            XOSetupHandoff.keepEdgeKey(sealed, job: job, address: policyJob.address, key: policyJob.reply) {
             _ = await XOSetupHandoff.keepInFleet(settings: settings, address: policyJob.address)
@@ -2321,12 +2328,13 @@ struct AddHypervisorView: View {
         // before it is sent (HolderJoin). Nil when nothing is made, or the
         // Keychain would not keep it, and then the machine joins with its pin.
         let secret = choice.makesHolder(in: inv) ? HolderJoin.newSecret(for: policyJob.address) : nil
+        let plan = await XOPolicy.poolPlan(settings: settings, fleet: fleet, address: policyJob.address)
         let sealed: [String: String]
         do {
             sealed = try Seal.seal(
                 to: policyJob.key,
                 aad: Seal.xosetupPolicyAAD(job: job, address: policyJob.address),
-                payload: choice.payload(in: inv, holderSecret: secret)
+                payload: choice.payload(in: inv, holderSecret: secret, boxes: plan.boxes, retireShared: plan.withdraw)
             )
         } catch {
             refuse(error.localizedDescription)

@@ -48,7 +48,7 @@ test('Android: the pool and the choice are sealed under the machine’s own bind
   assert.ok(policy.includes(`fun policyAad(job: String, address: String): String = "${choice}"`), choice);
   // Opened and sealed with the app's one seal, under those bindings.
   assert.ok(policy.includes('Seal.open(key, inventoryAad(job, address), box)'));
-  assert.ok(policy.includes('Seal.seal(key, policyAad(job, address), payload(inv, c, holderSecret))'));
+  assert.ok(policy.includes('Seal.seal(key, policyAad(job, address), payload(inv, c, holderSecret, boxes, retireShared))'));
   // The sign-in goes under a binding of its own, never setup's: a machine
   // from before policy jobs opens setup's, ignores the purpose and runs a
   // whole setup with the admin's sign-in.
@@ -131,7 +131,7 @@ test('Android: the choice goes to the key `begin` gave and the phone checked, ne
   assert.match(runPolicy, /val key = p\.setup\.key \?: return[\s\S]*?jobKey = key/);
   const apply = fn(sheet, 'fun applyChoice(');
   assert.match(apply, /val key = jobKey \?: return/);
-  assert.ok(apply.includes('XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c, secret)'));
+  assert.ok(apply.includes('XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c, secret, boxes, withdraw)'));
   assert.ok(apply.includes('fleet.xosetup("policy", job = setup.job, sealed = sealed)'));
   assert.ok(!apply.includes('host ='), '`policy` names the job alone');
   // Apply is offered only for a choice the machine would take.

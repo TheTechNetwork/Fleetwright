@@ -24,6 +24,61 @@ import Foundation
 /// gone: the machine waits ten minutes for a choice and then lets go, so a
 /// key kept past the screen would be kept for nothing.
 enum XOPolicy {
+    /// Said above Apply, on both phones, in this one line.
+    static let ownUsers = "Each machine you approved for this pool is given a user of its own. The user they share is withdrawn once each of them has its token, and a machine still on that user is handed to the first of them. If this phone cannot read which machines those are, they keep the shared user."
+
+    /// A machine this fleet lists, reduced to what naming a pool's users needs.
+    struct ApprovedBox: Equatable {
+        let id: String
+        let revoked: Bool
+    }
+
+    /// One vault grant, reduced the same way. An empty `only` is the whole vault.
+    struct PoolGrant: Equatable {
+        let label: String
+        let only: [String]
+    }
+
+    private static let boxId = try! NSRegularExpression(pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+    /// Host ids approved to hold this pool, in a stable order. A revoked
+    /// machine is not one, and an id the host cannot put in a user name is
+    /// left out rather than failing the whole choice. A machine expected to
+    /// vanish is still one: it holds the pool's token until it is gone, and
+    /// the next choice drops a user whose machine is no longer listed.
+    static func boxes(address: String, hosts: [ApprovedBox], grants: [PoolGrant]) -> [String] {
+        let shared = "hypervisor:\(address)"
+        var ids: [String] = []
+        for host in hosts where !host.revoked && boxId.firstMatch(in: host.id, range: NSRange(host.id.startIndex..., in: host.id)) != nil {
+            guard let grant = grants.first(where: { $0.label == host.id }) else { continue }
+            let own = "\(shared)+\(host.id)"
+            if grant.only.isEmpty || grant.only.contains(shared) || grant.only.contains(own) {
+                ids.append(host.id)
+            }
+        }
+        return Array(Set(ids)).sorted()
+    }
+
+    /// The shared item is dropped only once every named box already has its own.
+    static func withdrawShared(address: String, boxes: [String], items: [String]) -> Bool {
+        guard !boxes.isEmpty, items.contains("hypervisor:\(address)") else { return false }
+        return boxes.allSatisfy { items.contains("hypervisor:\(address)+\($0)") }
+    }
+
+    /// Which boxes this apply names, and whether it withdraws the shared item.
+    /// A vault or a host list that cannot be read names nobody: cannot tell
+    /// is not "no machines" (C-5), and naming nobody leaves the shared user.
+    static func poolPlan(settings: Settings, fleet: Fleet, address: String) async -> (boxes: [String], withdraw: Bool) {
+        do {
+            let contents = try await PhoneVault(settings: settings).list(fleet)
+            let hosts = try await fleet.enrolledHosts()
+            let boxes = boxes(address: address, hosts: hosts.map { ApprovedBox(id: $0.hostId, revoked: $0.isRevoked) }, grants: contents.grants.map { PoolGrant(label: $0.label, only: $0.only) })
+            return (boxes, withdrawShared(address: address, boxes: boxes, items: contents.items.map(\.name)))
+        } catch {
+            return ([], false)
+        }
+    }
+
     static let gib: Int64 = 1024 * 1024 * 1024
     /// The edge router's raw disk, OPNSENSE_IMAGE.rawSize in edge-router.js.
     static let edgeDiskBytes: Int64 = 3 * 1024 * 1024 * 1024
@@ -636,7 +691,7 @@ enum XOPolicy {
 
         /// What is sealed to the job's key: `checkPolicy`'s input exactly.
         /// Ids in the inventory's order, so the same choice is the same bytes.
-        func payload(in inv: Inventory, holderSecret: String? = nil) -> [String: Any] {
+        func payload(in inv: Inventory, holderSecret: String? = nil, boxes: [String] = [], retireShared: Bool = false) -> [String: Any] {
             let limits: [String: Any] = [
                 "cpus": cpus,
                 "memory": Int64(memoryGiB) * XOPolicy.gib,
@@ -688,6 +743,12 @@ enum XOPolicy {
             if edgeHaChoice, edge { out["edgeHa"] = edgeHa }
             // Only to a machine that reads it, and only with something to build.
             if edgeDiskChoice, edge || (imageChoice && wantsImage) || !rebuild.isEmpty { out["edgeSr"] = edgeDisk(in: inv).map { $0 as Any } ?? NSNull() }
+            // The machines approved for this pool, when this phone could read
+            // them. Absent, the shared user is what runs.
+            if !boxes.isEmpty {
+                out["boxes"] = boxes.sorted()
+                if retireShared { out["retireShared"] = true }
+            }
             return out
         }
     }

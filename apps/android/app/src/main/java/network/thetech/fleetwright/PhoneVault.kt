@@ -94,8 +94,9 @@ internal class PhoneVault(private val settings: Settings) {
      * in memory only (src/fleet/host/xo-pools.js), and make machines on the
      * pool with it.
      */
-    suspend fun keepHypervisor(fleet: Fleet, address: String, record: String): Result<String> = runCatching {
-        ask(fleet, "put", JSONObject().put("name", "hypervisor:$address").put("value", record)).first
+    suspend fun keepHypervisor(fleet: Fleet, address: String, record: String, box: String? = null): Result<String> = runCatching {
+        val name = if (box == null) "hypervisor:$address" else "hypervisor:$address+$box"
+        ask(fleet, "put", JSONObject().put("name", name).put("value", record)).first
     }
 
     suspend fun forget(fleet: Fleet, name: String): Result<String> = runCatching {

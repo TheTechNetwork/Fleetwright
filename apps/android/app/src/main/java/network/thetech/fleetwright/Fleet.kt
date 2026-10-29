@@ -992,6 +992,8 @@ class Fleet(
          * keeps no copy (XoHandoff).
          */
         val handoff: String? = null,
+        /** Once a policy job that named the boxes is done: each box's token, sealed as [handoff] is. */
+        val boxHandoff: String? = null,
         /** Once a policy job is done: the key the fleet reads the pool's edge routers with, sealed the same way (XoHandoff.keepEdgeKey). */
         val watch: String? = null,
         /**
@@ -2936,6 +2938,7 @@ class Fleet(
                             hostKey = s.optJSONObject("hostKey"),
                             fingerprint = s.optString("fingerprint").takeIf { it.isNotBlank() && it != "null" },
                             handoff = s.optString("handoff").takeIf { it.split(".").size == 3 },
+                            boxHandoff = s.optString("boxHandoff").takeIf { it.split(".").size == 3 },
                             watch = s.optString("watch").takeIf { it.split(".").size == 3 },
                             can = s.optJSONArray("can")?.let { a ->
                                 (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { it.isNotBlank() && !a.isNull(i) } }

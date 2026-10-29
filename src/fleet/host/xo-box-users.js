@@ -4,9 +4,11 @@
 // and vm.create gives that user admin on every machine any of them makes
 // (docs/hypervisors.md, measured on 5.211.0). A user per box keeps a machine
 // to the box that made it. This mints those users when a policy choice names
-// the boxes, and it does not retire the shared user: a phone that still keeps
-// the shared token can still reach the machines that user made. Phones do
-// not send the list yet, so a pool is unchanged until one does.
+// the boxes. The shared user is withdrawn only when the choice says so, which
+// a phone says once every named box already has a token of its own: the
+// machines still on that user are handed to the first box, and its token
+// stops being put in the vault. The user itself stays, because the phone
+// still signs in as it to look at the pool.
 //
 // A machine of a box that is not on the list is not left with nobody who can
 // reach it. One that has stopped, or run past its end, is removed by the
@@ -94,10 +96,11 @@ export function operates(record, vm) {
  * Give each named box a user and a token, and do not leave a gone box's
  * machines with nobody who can reach them.
  *
- * Nothing here is done unless `boxes` names someone. The shared user is not
- * deleted and its tokens are not deleted: retiring it before every phone
- * keeps the per-box tokens, and before the machines it made are tagged for
- * a box, is how a pool loses the only user that can still sweep them.
+ * Nothing here is done unless `boxes` names someone. `retireShared` hands
+ * every session machine that still has no box to the first named box and
+ * takes the shared user's access off those machines. It does not delete
+ * that user or its tokens: the phone keeps one, and a box is simply no
+ * longer given it.
  *
  * @param {{
  *   admin: { call: (method: string, params?: any) => Promise<any> },
@@ -105,10 +108,11 @@ export function operates(record, vm) {
  *   setId: string,
  *   boxes: string[],
  *   now: number,
+ *   retireShared?: boolean,
  *   signInAs: (email: string, password: string) => Promise<{ call: (method: string, params?: any) => Promise<any>, close: () => void }>,
  *   tokenLifetimeMs: number,
  * }} ask
- * @returns {Promise<{ text: string, handoff: { v: 1, boxTokens: Array<{ box: string, user: string, token: string, tokenExpires: string|null }> }|null }>}
+ * @returns {Promise<{ text: string, handoff: { v: 1, boxTokens: Array<{ box: string, user: string, token: string, tokenExpires: string|null }>, retiredShared?: boolean }|null }>}
  */
 export async function settleBoxUsers(ask) {
   const need = ['acl.add', 'acl.remove', 'tag.add', 'tag.remove', 'user.create', 'user.set', 'user.getAll', 'user.delete', 'resourceSet.addSubject', 'resourceSet.getAll', 'vm.delete', 'vm.stop', 'xo.getAllObjects'];
@@ -229,12 +233,37 @@ export async function settleBoxUsers(ask) {
     await ask.admin.call('user.delete', { id: user.id });
   }
 
+  let retiredShared = false;
+  /** @type {number} */
+  let fromShared = 0;
+  if (ask.retireShared && succ) {
+    const shared = users.find((/** @type {any} */ u) => u?.email === 'fleetwright');
+    const loose = vms.filter((v) => {
+      const tags = Array.isArray(v?.tags) ? v.tags : [];
+      return tags.includes(VM_IMAGE.sessionTag) && !boxOfTags(tags);
+    });
+    if (loose.some((v) => (Array.isArray(v.tags) ? v.tags : []).includes(BUSY_TAG))) {
+      staying.push('the shared user');
+    } else {
+      for (const vm of loose) {
+        await ask.admin.call('acl.add', { subject: succ.id, object: vm.id, action: 'admin' });
+        await ask.admin.call('tag.add', { id: vm.id, tag: boxTag(successor) });
+        if (shared?.id) await ask.admin.call('acl.remove', { subject: shared.id, object: vm.id, action: 'admin' });
+        fromShared += 1;
+      }
+      retiredShared = true;
+    }
+  }
+
   const names = live.join(' and ');
   const parts = [`${names} ${live.length === 1 ? 'has a user of its own' : 'each have a user of their own'} on this Xen Orchestra.`];
   if (handed) parts.push(`${handed === 1 ? 'One machine' : `${handed} machines`} a box that is gone had made ${handed === 1 ? 'was' : 'were'} handed to ${successor}.`);
+  if (fromShared) parts.push(`${fromShared === 1 ? 'One machine' : `${fromShared} machines`} still on the shared user ${fromShared === 1 ? 'was' : 'were'} handed to ${successor}.`);
   if (removed) parts.push(`${removed === 1 ? 'One machine' : `${removed} machines`} of a box that is gone ${removed === 1 ? 'was' : 'were'} removed, stopped or past ${removed === 1 ? 'its' : 'their'} end.`);
   if (staying.length) parts.push(`${staying.join(' and ')} ${staying.length === 1 ? 'is' : 'are'} in the middle of a resize, so that user stays until the machine is not.`);
   if (!handed && !removed && !staying.length) parts.push('No machine was left on a box that is gone.');
-  parts.push('The shared user was left as it was. These tokens reach a box only once a phone keeps each one for that box alone.');
-  return { text: parts.join(' '), handoff: { v: 1, boxTokens } };
+  parts.push(retiredShared
+    ? 'The shared user stays on this phone. Boxes stop being given its token once the phone drops it, and a machine that was still on it now belongs to ' + successor + '.'
+    : 'The shared user was left as it was. These tokens reach a box only once a phone keeps each one for that box alone.');
+  return { text: parts.join(' '), handoff: { v: 1, boxTokens, ...(retiredShared ? { retiredShared: true } : {}) } };
 }

@@ -1332,6 +1332,10 @@ struct Fleet {
         /// key this phone sent inside the sign-in, as epk.iv.ct. The machine
         /// keeps no copy (XOSetupHandoff).
         var handoff: String?
+        /// Once a policy job that named the boxes is done: each box's token,
+        /// sealed the same way as `handoff`, and whether the shared item
+        /// should now be dropped (XOSetupHandoff.keepBoxUsers).
+        var boxHandoff: String?
         /// Once a policy job is done: the key the fleet reads the pool's edge
         /// routers with, sealed the same way (XOSetupHandoff.keepEdgeKey).
         var watch: String?

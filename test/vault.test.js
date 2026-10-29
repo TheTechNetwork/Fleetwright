@@ -886,6 +886,7 @@ test('a hypervisor’s token is kept as its own kind, checked against its addres
   const given = await m.box(office);
   const item = given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'hypervisor:xo.lan');
   assert.equal(JSON.parse(item.value).token, 'xo-limited-token');
+  assert.ok(!given.answer.accounts[0].items.some((/** @type {any} */ i) => i.name === 'hypervisor:xo.lan+deb14'), 'a full grant is not another box’s user');
 
   // FORGOTTEN, it stops being handed out.
   assert.equal((await m.phone({ op: 'forget', name: 'hypervisor:xo.lan' })).ok, true);
@@ -917,9 +918,25 @@ test('a pool’s own machine approved for its pool is given that record and noth
   assert.deepEqual(given.answer.accounts[0].items.map((/** @type {any} */ i) => i.name), ['hypervisor:xo.lan'], 'not the Claude login, not a secret');
   assert.equal(JSON.parse(given.answer.accounts[0].items[0].value).token, 'xo-limited-token');
 
-  // Approved again without `only`, as an ordinary box is, it holds the vault.
+  // THE POOL'S OWN MACHINE gets its own user, and not a sibling's, because
+  // the grant names the shared item and the label is the machine.
+  const own = JSON.stringify({ ...JSON.parse(record), box: 'holder-0a0b0c', token: 'xo-holder-token' });
+  const other = JSON.stringify({ ...JSON.parse(record), box: 'deb14', token: 'xo-deb14-token' });
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan+holder-0a0b0c', value: own })).ok, true);
+  assert.equal((await m.phone({ op: 'put', name: 'hypervisor:xo.lan+deb14', value: other })).ok, true);
+  const scoped = (await m.box(holder)).answer.accounts[0].items.map((/** @type {any} */ i) => i.name).sort();
+  assert.deepEqual(scoped, ['hypervisor:xo.lan', 'hypervisor:xo.lan+holder-0a0b0c']);
+
+  // Approved again without `only`, as an ordinary box is, it holds the vault
+  // and still not the other box's user.
   assert.equal((await m.phone({ op: 'grant', hostKey: holder.publicJwk, label: 'holder-0a0b0c' })).ok, true);
-  assert.deepEqual((await m.box(holder)).answer.accounts[0].items.map((/** @type {any} */ i) => i.name).sort(), ['claude', 'hypervisor:xo.lan', 'secret:NPM_TOKEN']);
+  assert.deepEqual((await m.box(holder)).answer.accounts[0].items.map((/** @type {any} */ i) => i.name).sort(), ['claude', 'hypervisor:xo.lan', 'hypervisor:xo.lan+holder-0a0b0c', 'secret:NPM_TOKEN']);
+
+  // THE SHARED ITEM LEAVING does not take this machine's user with it. The
+  // approval was the shared name; the item itself is what the phone drops.
+  assert.equal((await m.phone({ op: 'forget', name: 'hypervisor:xo.lan' })).ok, true);
+  assert.equal((await m.phone({ op: 'grant', hostKey: holder.publicJwk, label: 'holder-0a0b0c', only: ['hypervisor:xo.lan'] })).ok, true);
+  assert.deepEqual((await m.box(holder)).answer.accounts[0].items.map((/** @type {any} */ i) => i.name), ['hypervisor:xo.lan+holder-0a0b0c']);
 });
 
 test('a phone lists its signing key under its own address, and a box is given the list signed by a key it pins from the fleet’s address', async (t) => {

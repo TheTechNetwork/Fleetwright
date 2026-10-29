@@ -747,7 +747,37 @@ internal object XoPolicy {
      * The choice as the machine reads it: ids in the order the pool listed
      * them, the way out or JSON null, and the limits in bytes.
      */
-    fun payload(inv: Inventory, c: Choice, holderSecret: String? = null): JSONObject =
+    /** Said above Apply, on both phones, in this one line. The same words as iOS. */
+    const val OWN_USERS = "Each machine you approved for this pool is given a user of its own. The user they share is withdrawn once each of them has its token, and a machine still on that user is handed to the first of them. If this phone cannot read which machines those are, they keep the shared user."
+
+    private val BOX_ID = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+    data class ApprovedBox(val id: String, val revoked: Boolean)
+    data class PoolGrant(val label: String, val only: List<String>)
+
+    /**
+     * Host ids approved to hold this pool, in a stable order. A revoked
+     * machine is not one, and an id the host cannot put in a user name is
+     * left out rather than failing the whole choice. A machine expected to
+     * vanish is still one: it holds the pool's token until it is gone, and
+     * the next choice drops a user whose machine is no longer listed.
+     */
+    fun boxes(address: String, hosts: List<ApprovedBox>, grants: List<PoolGrant>): List<String> {
+        val shared = "hypervisor:$address"
+        return hosts.filter { !it.revoked && BOX_ID.matches(it.id) }.mapNotNull { host ->
+            val grant = grants.find { it.label == host.id } ?: return@mapNotNull null
+            val own = "$shared+${host.id}"
+            if (grant.only.isEmpty() || shared in grant.only || own in grant.only) host.id else null
+        }.distinct().sorted()
+    }
+
+    /** The shared item is dropped only once every named box already has its own. */
+    fun withdrawShared(address: String, boxes: List<String>, items: List<String>): Boolean {
+        if (boxes.isEmpty() || "hypervisor:$address" !in items) return false
+        return boxes.all { "hypervisor:$address+$it" in items }
+    }
+
+    fun payload(inv: Inventory, c: Choice, holderSecret: String? = null, boxes: List<String> = emptyList(), retireShared: Boolean = false): JSONObject =
         JSONObject()
             .put("v", 1)
             .put("srs", JSONArray(inv.srs.map { it.id }.filter { it in c.srs }))
@@ -796,10 +826,16 @@ internal object XoPolicy {
             .apply { if (c.edgeBlockChoice && c.edge) put("edgeBlock", c.edgeBlock) }
             .apply { if (c.edgeHaChoice && c.edge) put("edgeHa", c.edgeHa) }
             .apply { if (c.edgeDiskChoice && (c.edge || (c.imageChoice && c.wantsImage) || imageKeys(inv, c, REBUILD).isNotEmpty())) put("edgeSr", edgeDisk(inv, c) ?: JSONObject.NULL) }
+            .apply {
+                if (boxes.isNotEmpty()) {
+                    put("boxes", JSONArray(boxes.sorted()))
+                    if (retireShared) put("retireShared", true)
+                }
+            }
 
     /** The choice, sealed to the job's key, as the one string `policy` carries. */
-    fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice, holderSecret: String? = null): String =
-        joined(Seal.seal(key, policyAad(job, address), payload(inv, c, holderSecret)))
+    fun sealChoice(key: String, job: String, address: String, inv: Inventory, c: Choice, holderSecret: String? = null, boxes: List<String> = emptyList(), retireShared: Boolean = false): String =
+        joined(Seal.seal(key, policyAad(job, address), payload(inv, c, holderSecret, boxes, retireShared)))
 
     /**
      * Apply makes a pool's own machine that asks to join: asked for, from a

@@ -611,4 +611,43 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(c.problem(in: inv), "Group networks are made in the way out’s pool: choose the way out. Nothing was changed.")
         XCTAssertNil(c.payload(in: inv)["groups"])
     }
+
+    // MARK: A user per box
+
+    func testAPoolNamesTheMachinesApprovedForItAndWithdrawsTheSharedTokenOnlyOnceEachHasItsOwn() {
+        let hosts = [
+            XOPolicy.ApprovedBox(id: "deb14", revoked: false),
+            XOPolicy.ApprovedBox(id: "gpu-1", revoked: false),
+            XOPolicy.ApprovedBox(id: "gone", revoked: true),
+            XOPolicy.ApprovedBox(id: "not a box", revoked: false),
+            XOPolicy.ApprovedBox(id: "holder", revoked: false),
+            XOPolicy.ApprovedBox(id: "other", revoked: false),
+        ]
+        let grants = [
+            XOPolicy.PoolGrant(label: "deb14", only: []),
+            XOPolicy.PoolGrant(label: "gpu-1", only: ["hypervisor:xo.lan"]),
+            XOPolicy.PoolGrant(label: "gone", only: []),
+            XOPolicy.PoolGrant(label: "not a box", only: []),
+            XOPolicy.PoolGrant(label: "holder", only: ["hypervisor:xo.lan+holder"]),
+            XOPolicy.PoolGrant(label: "other", only: ["hypervisor:elsewhere"]),
+        ]
+        let named = XOPolicy.boxes(address: "xo.lan", hosts: hosts, grants: grants)
+        XCTAssertEqual(named, ["deb14", "gpu-1", "holder"], "a revoked machine, a name that cannot be a user, and a grant for another pool are not this pool's")
+        XCTAssertFalse(XOPolicy.withdrawShared(address: "xo.lan", boxes: named, items: ["hypervisor:xo.lan", "hypervisor:xo.lan+deb14"]))
+        XCTAssertTrue(XOPolicy.withdrawShared(address: "xo.lan", boxes: named, items: ["hypervisor:xo.lan", "hypervisor:xo.lan+deb14", "hypervisor:xo.lan+gpu-1", "hypervisor:xo.lan+holder"]))
+        XCTAssertFalse(XOPolicy.withdrawShared(address: "xo.lan", boxes: [], items: ["hypervisor:xo.lan"]), "naming nobody leaves the shared user")
+        XCTAssertFalse(XOPolicy.withdrawShared(address: "xo.lan", boxes: named, items: ["hypervisor:xo.lan+deb14", "hypervisor:xo.lan+gpu-1", "hypervisor:xo.lan+holder"]), "the shared item already gone is not withdrawn again")
+    }
+
+    func testTheChoiceNamesThoseMachinesAndAsksToWithdrawOnlyWithThem() throws {
+        let inv = try inventory()
+        var c = XOPolicy.Choice.initial(for: inv)
+        XCTAssertNil(c.payload(in: inv)["boxes"], "a phone that could not read who was approved names nobody")
+        XCTAssertNil(c.payload(in: inv, retireShared: true)["boxes"], "withdrawing with nobody named is not a choice the machine would take")
+        XCTAssertNil(c.payload(in: inv, retireShared: true)["retireShared"])
+        let sent = c.payload(in: inv, boxes: ["gpu-1", "deb14"], retireShared: true)
+        XCTAssertEqual(sent["boxes"] as? [String], ["deb14", "gpu-1"])
+        XCTAssertEqual(sent["retireShared"] as? Bool, true)
+        XCTAssertNil(c.payload(in: inv, boxes: ["deb14"])["retireShared"], "the first apply mints the users and leaves the shared token")
+    }
 }
