@@ -2454,6 +2454,18 @@ struct Fleet {
         /// which is the normal case and also what a host too old to send this
         /// looks like; the screen says nothing for it rather than guessing.
         let houseRules: Int?
+        /// What a session started here with no mode does: "asks" before each
+        /// tool, or runs with permissions "bypassed" (FLEETWRIGHT_SKIP_PERMISSIONS
+        /// on the box, http.js #hostFacts). New session labels its "Box
+        /// default" choice from this, and offers "Permissions bypassed" only
+        /// where it is not "asks", because a box that asks refuses a start
+        /// from the fleet that asks to bypass (commands.js permissionCeiling).
+        ///
+        /// NIL IS CANNOT TELL: a box too old to say, and then the sheet says
+        /// nothing about which way the default goes. A `var` with a default,
+        /// so it is decoded like the rest and every rebuild below that does
+        /// not name it still compiles.
+        var permissions: String? = nil
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
@@ -2514,6 +2526,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                permissions: permissions,
             )
         }
 
@@ -2523,6 +2536,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
                 sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                permissions: permissions,
             )
         }
 
@@ -2536,6 +2550,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                permissions: permissions,
             )
         }
 
@@ -2551,6 +2566,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
+                permissions: permissions,
             )
         }
     }
