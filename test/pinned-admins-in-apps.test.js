@@ -63,7 +63,9 @@ test('iOS offers no first pin, and changes pins only as a pinned admin', () => {
 test('iOS draws Update, Upgrade, Reboot, the channel, the image and Restore only where the machine takes them from this person', () => {
   assert.match(IOS, /var takesFromYou: Bool \{ count == 0 \|\| \(you == true && left == nil\) \}/);
   assert.match(IOS, /var boxWideAllowed: Bool \{ admins\?\.takesFromYou \?\? true \}/);
-  assert.match(IOS, /boxWideAllowed \|\| \(admins\?\.count != nil && item\.isOwn\(me\)\)/);
+  // A person's own restore, unless the machine can check no signature.
+  assert.match(IOS, /boxWideAllowed \|\| \(admins\?\.checksSignatures == true && item\.isOwn\(me\)\)/);
+  assert.match(IOS, /var checksSignatures: Bool \{ count != nil && stranded != "unchecked" \}/);
   assert.match(IOS, /if entry\.restorable \{\s*Button\("Restore"\)/);
   assert.match(IOS, /restorable: host\.health\?\.mayRestore\(\$0, as: settings\.signedInAs\) \?\? true/);
 });

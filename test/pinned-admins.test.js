@@ -14,14 +14,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { chownSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync, rmSync } from 'node:fs';
+import fs, { chownSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync, rmSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
-import { adminCommand, seedPins } from '../src/fleet/host/pinned-admins.js';
+import { IntentKeys, KEY_LIST_MAX_AGE_MS } from '../src/fleet/host/intent-keys.js';
+import { adminCommand, rootRefusal, seedPins } from '../src/fleet/host/pinned-admins.js';
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
 import { PIN_SENTENCES, PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { startStubHub } from './helpers/stub-hub.js';
@@ -40,6 +42,26 @@ function tempDir(t) {
 const pinFile = (dir, record) => writeFileSync(path.join(dir, 'pinned-admins.json'), `${JSON.stringify(record)}\n`);
 /** @param {string} dir */
 const pins = (dir) => JSON.parse(readFileSync(path.join(dir, 'pinned-admins.json'), 'utf8'));
+
+/**
+ * Put `fn` in place of one of node:fs's functions for the rest of a test,
+ * where pinned-admins.js's own imports see it too (syncBuiltinESMExports).
+ *
+ * @param {import('node:test').TestContext} t
+ * @param {'statSync'|'lstatSync'} name
+ * @param {(real: Function, ...args: any[]) => unknown} fn
+ */
+function hookFs(t, name, fn) {
+  const real = fs[name];
+  // @ts-ignore  replaced for the test, and put back after it
+  fs[name] = (/** @type {any[]} */ ...args) => fn(real, ...args);
+  syncBuiltinESMExports();
+  t.after(() => {
+    // @ts-ignore
+    fs[name] = real;
+    syncBuiltinESMExports();
+  });
+}
 
 /**
  * A box, its hub, and what its signature check says about the next intent.
@@ -71,6 +93,7 @@ async function box(t, { dir, facts = {}, verdict = 'signed', record } = {}) {
     isSigner: () => true,
     problem: null,
     get directory() { return say.listed; },
+    get current() { return say.listed; },
     report: () => ({ keys: 1, keysAt: null, checked: {} }),
   });
   return { stub, sidecar, say, dir: /** @type {string} */ (stateDir) };
@@ -137,7 +160,9 @@ test('a delegation does not change who is pinned, even from a pinned admin', asy
 });
 
 test('a pinned admin adds and removes others with their own signature, and the last is removed only on the box', async (t) => {
-  const { sidecar, dir } = await box(t, { record: { admins: [ADA] } });
+  const { sidecar, say, dir } = await box(t, { record: { admins: [ADA] } });
+  // Both sign, so the minter lists both: a removal keeps somebody who can.
+  say.listed.add(ADA).add(BEA);
   const stranger = await pin(sidecar, 'cy@example.com', 'add', BEA);
   assert.equal(stranger.ok, false);
   assert.match(stranger.text, /bea@example.com is not a pinned admin on this machine/);
@@ -292,6 +317,37 @@ test('a mistyped pin is nobody who can sign, and the box says so rather than goi
   assert.equal((await only.sidecar.health()).admins.stranded, 'unlisted');
 });
 
+test('removing an admin from a phone keeps somebody who can sign, not just somebody on the list', async (t) => {
+  // Ada and a mistyped address are pinned. Ada, signed, removes herself: the
+  // typo would be all that is left, which nobody can sign as, and the box
+  // would be stranded from the wire, which is done only on the box.
+  const typo = 'bea@exmaple.com';
+  const { sidecar, say, dir } = await box(t, { record: { admins: [ADA, typo] } });
+  say.listed.add(ADA);
+  const r = await pin(sidecar, ADA, 'remove', ADA);
+  assert.equal(r.ok, false, r.text);
+  assert.match(r.text, /That is the last admin pinned on this machine who can sign/);
+  assert.deepEqual(pins(dir), { admins: [ADA, typo] });
+});
+
+test('a key list too old to check with strands the box, and its health says so', async (t) => {
+  // IntentKeys.check takes no signature against a list past twice its age,
+  // so the box refuses everybody; reported from the list it still held,
+  // health said it was not stranded and the phones drew the buttons.
+  const { sidecar } = await box(t, { record: { admins: [ADA] } });
+  let now = Date.now();
+  const keys = new IntentKeys({
+    origin: 'https://coord.example.workers.dev', dir: null, now: () => now,
+    hostKey: { publicJwk: { x: 'x', y: 'y' }, sign: async () => '' }, ask: async () => ({ ok: false }),
+  });
+  keys.directory = new Map([[ADA, []]]);
+  keys.listAt = now;
+  sidecar.intentKeys = keys;
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA] });
+  now += 2 * KEY_LIST_MAX_AGE_MS + 1;
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA], stranded: 'unchecked', left: PIN_SENTENCES.unchecked });
+});
+
 test('a box that can check no signature, and pins somebody, says it takes those verbs from nobody', async (t) => {
   const { sidecar } = await box(t, { record: { admins: [ADA] } });
   sidecar.intentKeys = null;
@@ -333,16 +389,48 @@ test('on a box that pins nobody, forgetting somebody needs no lock and no write'
   assert.equal(existsSync(path.join(dir, 'pinned-admins.json')), false);
 });
 
-test('a lock left by a change that died is broken, and only that lock', async (t) => {
+test('a lock left by a change that died is broken, and so is the break of a breaker that died', async (t) => {
+  const dir = tempDir(t);
+  const lockFile = path.join(dir, 'pinned-admins.lock');
+  writeFileSync(lockFile, 'a process that died');
+  writeFileSync(`${lockFile}.break`, '');
+  const old = (Date.now() - 60_000) / 1000;
+  utimesSync(lockFile, old, old);
+  utimesSync(`${lockFile}.break`, old, old);
+  assert.equal((await adminCommand(dir, 'pin-admin', [ADA])).code, 0);
+  assert.deepEqual(pins(dir), { admins: [ADA] });
+  // Nothing of either, or of the temp file, is left behind.
+  assert.deepEqual(readdirSync(dir), ['pinned-admins.json']);
+});
+
+test('a waiter that found a dead lock does not break the live one another waiter took in its place', async (t) => {
+  // Two changes meet a dead lock. This one looks and finds it stale; before
+  // it does anything else, the other breaks it and takes a fresh lock of its
+  // own. Breaking "the stale lock" now would remove the other's live one,
+  // and both changes would be inside at once.
   const dir = tempDir(t);
   const lockFile = path.join(dir, 'pinned-admins.lock');
   writeFileSync(lockFile, 'a process that died');
   const old = (Date.now() - 60_000) / 1000;
   utimesSync(lockFile, old, old);
-  assert.equal((await adminCommand(dir, 'pin-admin', [ADA])).code, 0);
+  let raced = false;
+  hookFs(t, 'statSync', (real, at, ...rest) => {
+    const st = real(at, ...rest);
+    if (!raced && at === lockFile) {
+      raced = true;
+      rmSync(lockFile);
+      writeFileSync(lockFile, 'the other change, alive');
+    }
+    return st;
+  });
+  const change = adminCommand(dir, 'pin-admin', [ADA]);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(raced, true, 'the waiter never looked at the lock');
+  assert.equal(existsSync(path.join(dir, 'pinned-admins.json')), false, 'a change went in while another held the lock');
+  assert.equal(readFileSync(lockFile, 'utf8'), 'the other change, alive', 'the live lock was broken');
+  rmSync(lockFile); // the other change is done
+  assert.equal((await change).code, 0);
   assert.deepEqual(pins(dir), { admins: [ADA] });
-  // Nothing of the lock, or of the temp file, is left behind.
-  assert.deepEqual(readdirSync(dir), ['pinned-admins.json']);
 });
 
 test('root does not write inside the sidecar’s own directory, and says which command does', async (t) => {
@@ -361,6 +449,34 @@ test('root does not write inside the sidecar’s own directory, and says which c
   assert.equal(existsSync(path.join(dir, 'pinned-admins.lock')), false);
   // Reading is not writing.
   assert.equal((await adminCommand(dir, 'admins', [])).code, 0);
+});
+
+test('root does not write where another account can change the way in, above the directory or through a link', async (t) => {
+  // Who owns each directory is pretended, so this runs the same as root and
+  // as anybody else: everything outside the test's own directory is root's
+  // and 0755, and inside it as listed. Links are real, and resolved for real.
+  const base = tempDir(t);
+  /** @type {Record<string, [number, number]>} uid and permission bits, by path under base */
+  const owners = { user: [1001, 0o755], link: [1001, 0o777], 'user/root': [0, 0o755], sticky: [0, 0o1777], 'sticky/root': [0, 0o755], shared: [0, 0o775], 'shared/root': [0, 0o755], root: [0, 0o700] };
+  for (const d of ['user/root', 'sticky/root', 'shared/root', 'root']) mkdirSync(path.join(base, d), { recursive: true });
+  symlinkSync(path.join(base, 'root'), path.join(base, 'link'));
+  hookFs(t, 'lstatSync', (real, at, ...rest) => {
+    const st = real(at, ...rest);
+    const rel = path.relative(base, String(at));
+    const [uid, bits] = rel.startsWith('..') ? [0, 0o755] : (owners[rel] ?? [0, 0o700]);
+    return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid, mode: (st.mode & 0o170000) | bits });
+  });
+  t.mock.method(process, 'getuid', () => 0);
+  const at = (/** @type {string} */ rel) => rootRefusal(path.join(base, rel), 'admins');
+
+  assert.match(at('link') ?? '', /belongs to \S+, .* sudo -u \S+ fleetwright-sidecar admins, or runuser -u \S+ -- fleetwright-sidecar admins/, 'a link the account owns, to root’s directory');
+  assert.match(at('user/root') ?? '', /leads through .*user, which belongs to/, 'root’s directory inside the account’s');
+  assert.match(at('user/not-yet') ?? '', /leads through .*user, which belongs to/, 'a directory root would make inside the account’s');
+  assert.match(at('shared/root') ?? '', /can be written by accounts other than root/, 'a directory others may write, without the sticky bit');
+  assert.match(at('sticky') ?? '', /can be written by accounts other than root/, 'a sticky directory as the record’s own');
+  assert.equal(at('sticky/root'), null, 'root’s directory inside a sticky one, as under /tmp');
+  assert.equal(at('root'), null);
+  assert.equal(at('root/not-yet'), null);
 });
 
 test('on the box, whoever runs it lists, pins, unpins and resets, the first and the last included', async (t) => {
