@@ -609,15 +609,18 @@ Fleetwright moves them. To keep a session, copy both of its volumes across
 before resuming it, for each session name:
 
 ```sh
-sudo podman volume export claude-<name> -o /tmp/claude-<name>.tar
-sudo chown fleetwright /tmp/claude-<name>.tar
+d=$(sudo mktemp -d)    # mode 0700: the export holds that session's Claude login
+sudo podman volume export claude-<name> -o "$d/claude-<name>.tar"
+sudo chown -R fleetwright "$d"
 sudo -u fleetwright podman volume create claude-<name>
-sudo -u fleetwright podman volume import claude-<name> /tmp/claude-<name>.tar
-sudo rm /tmp/claude-<name>.tar    # it holds that session's Claude login
+sudo -u fleetwright podman volume import claude-<name> "$d/claude-<name>.tar"
+sudo rm -r "$d"
 ```
 
 and the same for `work-<name>`, with the new service user in place of
-`fleetwright`. These are podman's own commands (`podman volume import` needs
+`fleetwright`. The export goes in a directory only root can open, and then
+only the new user, rather than straight into `/tmp`, where it would be
+readable by every account on the box while it is there. These are podman's own commands (`podman volume import` needs
 the volume to exist first), and nothing in this repository tests them. A
 session you do not need can be left to `/forget` instead.
 
