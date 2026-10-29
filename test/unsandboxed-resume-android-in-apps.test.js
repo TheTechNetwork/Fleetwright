@@ -24,6 +24,11 @@ const IOS = bare(iosSources());
 const KEPT = [
   ' runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there.',
   ' has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated.',
+  ' lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out.',
+  ' runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user.',
+  ' runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman.',
+  ' has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap.',
+  ' says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there.',
 ];
 const TITLES = ['Not started: only admins run sessions there', 'Not started: the machine needs an update'];
 
@@ -34,7 +39,9 @@ test('Android says why Resume is not offered, in the iPhone’s words and by the
   }
   // Read under the key the box sends, absent kept apart from false.
   assert.match(ANDROID, /sandboxed = health\?\.takeIf \{ it\.has\("sandboxed"\) && !it\.isNull\("sandboxed"\) \}\?\.optBoolean\("sandboxed"\)/);
-  assert.match(ANDROID, /val resumeKept: String\?\s*get\(\) = when \{\s*administers != false \|\| sandboxed == true -> null\s*sandboxed == false ->/);
+  assert.match(ANDROID, /val resumeKept: String\?\s*get\(\) = when \{\s*administers != false \|\| sandboxed == true -> null\s*sandboxed == false -> when \(sandboxedWhy \?: "off"\) \{/);
+  // Why not, read under the key the box sends; a box too old to say why is off.
+  assert.match(ANDROID, /sandboxedWhy = health\?\.optString\("sandboxedWhy"\)\?\.takeIf \{ it\.isNotBlank\(\) && it != "null" \},/);
 });
 
 test('Android: every Resume on a session gives way to the reason where the fleet would refuse it', () => {
