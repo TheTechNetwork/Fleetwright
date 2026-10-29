@@ -59,7 +59,10 @@ const KINDS = [
     // The old wording is kept rather than replaced. An older CLI is still a
     // CLI, and a matcher that only knows today's text is the thing that just
     // failed.
-    test: /Do you trust the files|Is this a project you created or one you trust/i,
+    // `directory` as well as `project`. CLI 2.1.308 carries both sentences, and
+    // a matcher that only knew `project` would miss the other one the same
+    // way the old "Do you trust the files" matcher missed the safety check.
+    test: /Do you trust the files|Is this a (?:project|directory) you created or one you trust/i,
     question: 'Do you trust the files in this folder?',
     // The dialog names the directory. The QUESTION above does not, and the
     // directory is not what we send.
