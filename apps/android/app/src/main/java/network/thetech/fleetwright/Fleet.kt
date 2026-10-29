@@ -3546,6 +3546,29 @@ class Settings(context: Context) {
         }.apply()
 
     /**
+     * What this phone knows about opening what is sealed to it
+     * (PushKeyRule.Evidence): written by PushKey after each registration and
+     * each sealed notification, read by You. Null until it has learnt
+     * anything. Not a secret: a word and a time.
+     */
+    internal var pushKeyEvidence: PushKeyRule.Evidence?
+        get() {
+            if (!prefs.contains("pushKeyEvidenceAt")) return null
+            val doubt = prefs.getString("pushKeyDoubt", null)
+                ?.let { name -> PushKeyRule.Doubt.entries.firstOrNull { it.name == name } }
+            return PushKeyRule.Evidence(doubt, prefs.getLong("pushKeyEvidenceAt", 0L))
+        }
+        set(value) = prefs.edit().apply {
+            if (value == null) {
+                remove("pushKeyEvidenceAt")
+                remove("pushKeyDoubt")
+            } else {
+                putLong("pushKeyEvidenceAt", value.at)
+                if (value.doubt == null) remove("pushKeyDoubt") else putString("pushKeyDoubt", value.doubt.name)
+            }
+        }.apply()
+
+    /**
      * When this phone last looked at each pool it manages directly, as Manage
      * writes it: a JSON object of address to epoch milliseconds. Not a secret;
      * it is what the screen says in place of a picture nobody is watching.

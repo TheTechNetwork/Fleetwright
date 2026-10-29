@@ -186,8 +186,10 @@ class PushCryptoTest {
      * A phone that has sent a key never registers without one: a key error
      * sends the last key sent, before the threshold and when the replacement
      * after it fails. Only a phone that has never sent one registers keyless,
-     * and at once. A second failure in the same launch does not count again.
-     * The same cases as PushCryptoTests.swift.
+     * and at once. A replacement that fails keeps the count, and no key at
+     * all with one sent is a failure like any other: only a key the phone
+     * holds clears the count. A second failure in the same moment does not
+     * count again. The same cases as PushCryptoTests.swift.
      */
     @Test
     fun aKeyErrorSendsTheLastKeySentAndNeverNone() {
@@ -210,23 +212,44 @@ class PushCryptoTest {
         assertNull(fresh.pushKey)
         assertEquals(1, fresh.failures?.count)
 
-        // A key this phone cannot make (a fresh one that failed its self-test
-        // and was dropped) is not a reason to stop sending the one it sent.
-        assertEquals("K1", choose(null, "K1", t0, { null }).pushKey)
+        // No key at all, with one sent: the alias was missing and none could
+        // be made, so the private half of K1 is gone. K1 still goes, sealed
+        // rather than plaintext, and it counts, so the replacement keeps
+        // being tried; a fresh key is what heals it.
+        val gone = choose(null, "K1", t0, { null })
+        assertEquals("K1", gone.pushKey)
+        assertFalse(gone.holds)
+        assertTrue(gone.failure != null)
+        assertEquals(PushKeyRule.Failures(1, t0), gone.failures)
 
         // Past the threshold the key is replaced; when that fails too, the
-        // last key sent still goes, and the count starts again.
+        // last key sent still goes, a key the phone no longer holds, and the
+        // count is kept, so the next registration tries again.
         val due = PushKeyRule.Failures(2, t0)
         val after = choose(due, "K1", t0 + day, broken)
         assertEquals(1, replaced)
         assertTrue(after.replaced)
         assertEquals("K1", after.pushKey)
-        assertNull(after.failures)
+        assertFalse(after.holds)
+        assertEquals(PushKeyRule.Failures(3, t0), after.failures)
+        // The same when nothing was there to read.
+        val goneDue = choose(due, "K1", t0 + day, { null })
+        assertEquals(2, replaced)
+        assertEquals("K1", goneDue.pushKey)
+        assertEquals(PushKeyRule.Failures(3, t0), goneDue.failures)
+        // None at all and none ever sent: keyless, with nothing to count.
+        val never = choose(null, null, t0, { null })
+        assertNull(never.pushKey)
+        assertNull(never.failures)
+        assertTrue(never.holds)
 
-        // A replacement that works sends the new key.
-        assertEquals("K2", choose(due, "K1", t0 + day, broken, { "K2" }).pushKey)
+        // A replacement that works sends the new key, and clears the count.
+        val renewed = choose(due, "K1", t0 + day, broken, { "K2" })
+        assertEquals("K2", renewed.pushKey)
+        assertTrue(renewed.holds)
+        assertNull(renewed.failures)
 
-        // A second failure in the same launch is the same bad moment.
+        // A second failure in the same moment is the same bad moment.
         val again = choose(due, "K1", t0 + day, broken, counted = true)
         assertEquals(due, again.failures)
         assertFalse(again.replaced)
@@ -236,6 +259,45 @@ class PushCryptoTest {
         assertEquals("K2", fine.pushKey)
         assertNull(fine.failures)
         assertNull(fine.failure)
-        assertEquals(1, replaced)
+        assertTrue(fine.holds)
+        assertEquals(2, replaced)
+    }
+
+    /**
+     * What You says rests on this: whether the phone knows it can open what
+     * is sealed to it. A key it could not use is doubt until a key it holds
+     * is sent or a seal opens; a seal that did not open is doubt until one
+     * opens or a new key is sent; and nothing older than what is known
+     * overrides it. The same cases as PushCryptoTests.swift.
+     */
+    @Test
+    fun thePhoneSaysWhenItDoesNotKnowItCanOpenItsNotifications() {
+        val t0 = 1_700_000_000_000L
+        val broken: () -> String? = { throw java.security.KeyStoreException("keystore did not answer") }
+        val none: () -> String? = { null }
+        val held = PushKeyRule.choose(null, "K1", t0, false, { "K1" }, none)
+        val unusable = PushKeyRule.choose(null, "K1", t0, false, broken, none)
+        val renewed = PushKeyRule.choose(null, "K1", t0, false, { "K2" }, none)
+        val keyless = PushKeyRule.choose(null, null, t0, false, broken, none)
+
+        // A key it could not use, and the same key read later.
+        val doubted = PushKeyRule.afterRegistration(null, unusable, "K1", t0)
+        assertEquals(PushKeyRule.Evidence(PushKeyRule.Doubt.KEY, t0), doubted)
+        assertNull(PushKeyRule.afterRegistration(doubted, held, "K1", t0 + 1)?.doubt)
+        // Keyless is plaintext, which this phone reads.
+        assertNull(PushKeyRule.afterRegistration(doubted, keyless, null, t0 + 1)?.doubt)
+
+        // A seal that did not open is not answered by reading the same key
+        // again. A seal that opens, or a new key, answers it.
+        val unopened = PushKeyRule.afterSeal(null, opened = false, at = t0 + 10)
+        assertEquals(PushKeyRule.Doubt.SEAL, unopened?.doubt)
+        assertEquals(unopened, PushKeyRule.afterRegistration(unopened, held, "K1", t0 + 20))
+        assertNull(PushKeyRule.afterSeal(unopened, opened = true, at = t0 + 30)?.doubt)
+        val fresh = PushKeyRule.afterRegistration(unopened, renewed, "K1", t0 + 20)
+        assertEquals(PushKeyRule.Evidence(null, t0 + 20), fresh)
+        // Anything older than what is known is old news.
+        assertEquals(fresh, PushKeyRule.afterSeal(fresh, opened = false, at = t0 + 10))
+        // Nothing learnt yet, and a held key: still nothing learnt.
+        assertNull(PushKeyRule.afterRegistration(null, held, "K1", t0 + 20))
     }
 }

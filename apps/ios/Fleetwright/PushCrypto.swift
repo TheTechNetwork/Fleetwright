@@ -212,7 +212,7 @@ enum PushKey {
     /// The key registration sends, or nil when this phone has never sent one
     /// and has none it can use now.
     ///
-    /// A PHONE THAT HAS SENT A KEY NEVER SENDS NONE AGAIN. The coordinator
+    /// A PHONE WITH A KEY SENT ON RECORD NEVER SENDS NONE. The coordinator
     /// keeps a key only when one is sent, so a registration without it puts
     /// this phone back on plaintext. The stored key is read and sealed to in
     /// software, and if it opens its own seal its public half is sent. If the
@@ -221,19 +221,33 @@ enum PushKey {
     /// APNs token is refreshed, the coordinator keeps sealing, and anything
     /// this phone cannot open shows the fallback sentence, which still wakes
     /// the person.
-    /// Only a phone that has never sent one registers without a key, and then
-    /// at once, because nothing was ever sealed to it and so nothing is lost.
-    /// (A reinstall starts with nothing sent, so a reinstalled app whose
-    /// first registration meets a keychain error is that phone too.)
+    ///
+    /// Only a phone with no key sent on record registers without one, and
+    /// then at once. That is a phone that never sent one, and nothing was
+    /// ever sealed to it; it is also a reinstalled app, because the record is
+    /// in defaults and a reinstall starts with none, while the keychain item
+    /// survives. A reinstall whose first registration meets a keychain error
+    /// therefore goes keyless: the coordinator drops the key it held and
+    /// records `device.plaintext`, and the next registration that reads the
+    /// key restores it. Skipping that one registration instead was weighed
+    /// and not done: a reinstall often comes with a new APNs token, that
+    /// registration is the only thing carrying it, and the next one is the
+    /// next launch, which can be days away. Plaintext for one launch, said on
+    /// the coordinator, beats no notifications at all, said nowhere.
     ///
     /// AN ERROR THAT DOES NOT GO AWAY IS NOT A HICCUP, and the fallback would
     /// leave every notification on the fallback sentence for good. So the
     /// failures are counted, with the time of the first, and after
     /// `PushKeyRule.attempts` of them in a row spread over at least a day the
-    /// key is replaced (`startOver`). A replacement that fails falls back to
-    /// the last key sent too. Any registration that gets as far as a key
-    /// clears the count. The rule is `PushKeyRule.choose`, the same as on
-    /// Android.
+    /// key is replaced (`startOver`). A replacement that fails sends the last
+    /// key sent too, a key this phone may no longer hold (`write` deleted it
+    /// first), and keeps the count, so the next registration tries again.
+    /// Only a key this phone holds clears it. The rule is
+    /// `PushKeyRule.choose`, the same as on Android.
+    ///
+    /// AND IT IS SAID. A key this phone could not use is kept as
+    /// `PushKeyRule.Evidence`, beside what the app sees of the notifications
+    /// themselves (`saw`), and You says so while it lasts.
     ///
     /// ONE AT A TIME. Two registrations at once on a phone with no key yet
     /// would each make one, and the second write would replace the key the
@@ -241,23 +255,28 @@ enum PushKey {
     static func registrationKey() -> String? {
         lock.lock()
         defer { lock.unlock() }
+        let sent = sentKey
+        let now = Date().timeIntervalSince1970
         let choice = PushKeyRule.choose(
             failures: storedFailures,
-            sent: sentKey,
-            now: Date().timeIntervalSince1970,
+            sent: sent,
+            now: now,
             read: { try readKey() },
             replace: { startOver() }
         )
         if let failure = choice.failure {
-            if choice.replaced {
+            if choice.replaced && choice.pushKey != sent {
                 print("push key: registrations have not been able to use it for a day or more, so it was replaced (\(failure))")
             } else if choice.pushKey == nil {
                 print("push key: could not use it, and none was ever sent, so this registration sends none (\(failure))")
+            } else if choice.replaced {
+                print("push key: it could not be replaced either, so this registration sends the last one sent and the next tries again (\(failure))")
             } else {
                 print("push key: could not use it this time, so this registration sends the last one sent (\(failure))")
             }
         }
         storedFailures = choice.failures
+        evidence = PushKeyRule.afterRegistration(evidence, choice: choice, sent: sent, now: now)
         // SAVED HERE, BEFORE THE POST, not after its answer: the caller posts
         // what this returns and nothing else. A post the coordinator took
         // whose answer was lost would otherwise leave this phone believing it
@@ -283,8 +302,10 @@ enum PushKey {
     /// NIL HERE IS THE PLATFORM SAYING NO, not a hiccup: the old key has
     /// failed for a day, and now a new one cannot be written either. The
     /// registration then sends the last key sent, or none on a phone that
-    /// has never sent one, and the next launch tries the keychain again from
-    /// the start.
+    /// has never sent one, and keeps the count, so the next registration
+    /// tries the keychain again from the start. `write` deletes before it
+    /// adds, so after a nil here the key sent may be one this phone no
+    /// longer holds; `PushKeyRule.Evidence` records that it could not use it.
     private static func startOver() -> String? {
         let key = P256.KeyAgreement.PrivateKey()
         guard (try? write(key.rawRepresentation)) != nil, opensItsOwnSeal(key) else { return nil }
@@ -295,6 +316,8 @@ enum PushKey {
     private static let failuresKey = "pushKeyFailures"
     private static let firstFailureKey = "pushKeyFirstFailure"
     private static let sentKeyKey = "pushKeySent"
+    private static let doubtKey = "pushKeyDoubt"
+    private static let evidenceAtKey = "pushKeyEvidenceAt"
 
     /// The public key the last registration with one sent, in the app's own
     /// defaults. Not a secret: it is the half the coordinator already holds.
@@ -325,6 +348,46 @@ enum PushKey {
                 UserDefaults.standard.removeObject(forKey: firstFailureKey)
             }
         }
+    }
+
+    /// What this phone knows about opening what is sealed to it
+    /// (`PushKeyRule.Evidence`), in the app's own defaults. Not a secret: a
+    /// word and a time. The extension never reads or writes it; it runs in a
+    /// process of its own with defaults of its own, so the app learns what the
+    /// extension did from the notifications it is shown (`saw`).
+    private static var evidence: PushKeyRule.Evidence? {
+        get {
+            guard let at = UserDefaults.standard.object(forKey: evidenceAtKey) as? Double else { return nil }
+            let doubt = UserDefaults.standard.string(forKey: doubtKey).flatMap(PushKeyRule.Doubt.init(rawValue:))
+            return PushKeyRule.Evidence(doubt: doubt, at: at)
+        }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue.at, forKey: evidenceAtKey)
+                UserDefaults.standard.set(newValue.doubt?.rawValue, forKey: doubtKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: evidenceAtKey)
+                UserDefaults.standard.removeObject(forKey: doubtKey)
+            }
+        }
+    }
+
+    /// Whether this phone does not know it can open what is sealed to it:
+    /// what the notifications section of You says while it is true.
+    static var inDoubt: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return evidence?.doubt != nil
+    }
+
+    /// One notification the app was shown, as the extension left it: on
+    /// screen while the app was open, tapped, or still in Notification
+    /// Center. One that was never sealed says nothing and changes nothing.
+    static func saw(userInfo: [AnyHashable: Any], at date: Date) {
+        guard let opened = PushKeyRule.sealOpened(userInfo) else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        evidence = PushKeyRule.afterSeal(evidence, opened: opened, at: date.timeIntervalSince1970)
     }
 
     /// Seal a probe to the key's public half and open it with the key.
@@ -402,6 +465,8 @@ enum PushKey {
 /// What a registration sends when the push key fails, and when a key that
 /// keeps failing is replaced, decided without the keychain so a test can
 /// hold it to the rule. `PushKey.registrationKey` does the keychain half.
+/// It also keeps what the phone knows about opening what is sealed to it
+/// (`Evidence`), which You shows.
 ///
 /// THREE REGISTRATIONS IN A ROW, THE FIRST A DAY OR MORE BEFORE THE LAST.
 /// Either alone is too little: three launches in a minute is one bad
@@ -412,7 +477,8 @@ enum PushKey {
 /// catch up.
 ///
 /// `PushKeyRule` in PushCrypto.kt is the same rule on Android, with the same
-/// numbers.
+/// numbers. `sealOpened` is iOS's alone: Android opens a notification in the
+/// app's own process and knows at once.
 enum PushKeyRule {
     static let attempts = 3
     static let span: TimeInterval = 24 * 3600
@@ -439,21 +505,39 @@ enum PushKeyRule {
     struct Choice {
         /// The key it sends: nil only on a phone that has never sent one.
         let pushKey: String?
-        /// The count to store, nil once a registration got as far as a key.
+        /// The count to store, nil once a registration got as far as a key
+        /// this phone holds.
         let failures: Failures?
         /// Why the stored key could not be used, when it could not.
         let failure: String?
-        /// Whether the stored key was replaced this time.
+        /// Whether this registration tried to replace the stored key.
+        /// `holds` says whether that worked.
         let replaced: Bool
+        /// Whether this phone has just shown it holds the private half of the
+        /// key it sends: it read the key and the key opened its own seal, or
+        /// it made one that did. True when it sends none, since nothing is
+        /// then sealed to it.
+        let holds: Bool
     }
 
     /// The key a registration sends.
     ///
-    /// `read` is the stored key's public half, and throws when it cannot be
-    /// used this time; `replace` makes a new one, or nil when it cannot;
-    /// `sent` is the last key a registration sent. A KEY ERROR NEVER MEANS NO
-    /// KEY once one has been sent: `sent` goes instead, before the threshold,
-    /// and after it when the replacement fails too.
+    /// `read` is the stored key's public half, nil when no key is stored and
+    /// none could be made, and throws when the key cannot be used this time;
+    /// `replace` makes a new one, or nil when it cannot; `sent` is the last
+    /// key a registration sent.
+    ///
+    /// A KEY ERROR NEVER MEANS NO KEY once one has been sent: `sent` goes
+    /// instead, before the threshold, and after it when the replacement fails
+    /// too. Sealed and unreadable is the trade for never going back to
+    /// plaintext, and the count is what gets this phone out of it.
+    ///
+    /// NO KEY AT ALL, WITH ONE SENT, IS A FAILURE TOO. `sent` then names a key
+    /// whose private half is known to be gone, so it is counted like any
+    /// other, and a replacement that fails keeps the count rather than
+    /// clearing it: only a key this phone holds clears it. (On iOS `read`
+    /// never answers nil, because `load` makes a key for "no such item" and
+    /// throws when it cannot write one; the rule is written for both phones.)
     static func choose(
         failures: Failures?,
         sent: String?,
@@ -461,15 +545,86 @@ enum PushKeyRule {
         read: () throws -> String?,
         replace: () -> String?
     ) -> Choice {
+        let failure: String
         do {
-            let key = try read()
-            return Choice(pushKey: key ?? sent, failures: nil, failure: nil, replaced: false)
-        } catch {
-            let after = failed(failures, now: now)
-            guard startOver(after, now: now) else {
-                return Choice(pushKey: sent, failures: after, failure: "\(error)", replaced: false)
+            if let key = try read() {
+                return Choice(pushKey: key, failures: nil, failure: nil, replaced: false, holds: true)
             }
-            return Choice(pushKey: replace() ?? sent, failures: nil, failure: "\(error)", replaced: true)
+            // Never sent one: nothing is sealed to this phone, so none is lost.
+            guard sent != nil else {
+                return Choice(pushKey: nil, failures: nil, failure: nil, replaced: false, holds: true)
+            }
+            failure = "no push key is stored and none could be made"
+        } catch {
+            failure = "\(error)"
         }
+        let after = failed(failures, now: now)
+        guard startOver(after, now: now) else {
+            return Choice(pushKey: sent, failures: after, failure: failure, replaced: false, holds: sent == nil)
+        }
+        if let fresh = replace() {
+            return Choice(pushKey: fresh, failures: nil, failure: failure, replaced: true, holds: true)
+        }
+        return Choice(pushKey: sent, failures: after, failure: failure, replaced: true, holds: sent == nil)
+    }
+
+    /// What this phone knows about opening what is sealed to it, and when it
+    /// learnt it. Nil until it has learnt anything.
+    ///
+    /// THE PHONE KNOWS, AND NOTHING ELSE DOES. A registration that sends a key
+    /// it could not use, or a notification it could not open, still reports
+    /// success everywhere: the coordinator seals to the key it was sent and
+    /// Apple delivers the fallback sentence. So this is kept, and the
+    /// notifications section of You says so while `doubt` is set.
+    struct Evidence: Equatable {
+        /// Why this phone does not know it can open what is sealed to it, or
+        /// nil when it does.
+        let doubt: Doubt?
+        /// When: a registration's clock, or a notification's date.
+        let at: TimeInterval
+    }
+
+    enum Doubt: String {
+        /// The last registration sent a key this phone could not use: the
+        /// keychain did not answer, the key failed its own seal, or it is gone.
+        case key
+        /// The last sealed notification this phone saw was not opened.
+        case seal
+    }
+
+    /// The evidence after one registration.
+    ///
+    /// A key this phone could not use is doubt. A key it holds that is not
+    /// the one it sent before (a new key), or no key at all, is a clean
+    /// start, and a notification older than it says nothing about it. The
+    /// same key, read and held, answers a doubt about the key and nothing
+    /// else: the extension opens notifications in a process of its own, and
+    /// the app reading the key does not show that the extension can.
+    static func afterRegistration(_ before: Evidence?, choice: Choice, sent: String?, now: TimeInterval) -> Evidence? {
+        guard choice.holds else { return Evidence(doubt: .key, at: now) }
+        if choice.pushKey == nil || choice.pushKey != sent { return Evidence(doubt: nil, at: now) }
+        if before?.doubt == .key { return Evidence(doubt: nil, at: now) }
+        return before
+    }
+
+    /// The evidence after seeing one sealed notification dated `at`, opened
+    /// or not. One older than what is known already changes nothing, so a
+    /// notification still in Notification Center is not read as news again.
+    static func afterSeal(_ before: Evidence?, opened: Bool, at: TimeInterval) -> Evidence? {
+        if let before, at < before.at { return before }
+        return Evidence(doubt: opened ? nil : .seal, at: at)
+    }
+
+    /// Whether a notification as the app sees it was sealed and opened (true),
+    /// sealed and not opened (false), or never sealed (nil).
+    ///
+    /// The extension drops `e` once it opens one (`PushCrypto.merged`) and
+    /// leaves it when it cannot or runs out of time. `mutable-content` is set
+    /// only on a sealed one (`src/fleet/push.js`), and the extension keeps
+    /// `aps`, so a sealed one it opened still says it was sealed.
+    static func sealOpened(_ userInfo: [AnyHashable: Any]) -> Bool? {
+        if userInfo["e"] != nil { return false }
+        let aps = userInfo["aps"] as? [String: Any]
+        return (aps?["mutable-content"] as? Int) == 1 ? true : nil
     }
 }

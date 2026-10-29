@@ -133,7 +133,10 @@ final class PushCryptoTests: XCTestCase {
     /// A phone that has sent a key never registers without one: a key error
     /// sends the last key sent, before the threshold and when the
     /// replacement after it fails. Only a phone that has never sent one
-    /// registers keyless, and at once. The same cases as `PushCryptoTest.kt`.
+    /// registers keyless, and at once. A replacement that fails keeps the
+    /// count, and no key at all with one sent is a failure like any other:
+    /// only a key the phone holds clears the count. The same cases as
+    /// `PushCryptoTest.kt`.
     func testAKeyErrorSendsTheLastKeySentAndNeverNone() {
         struct Locked: Error {}
         let t0: TimeInterval = 1_700_000_000
@@ -154,24 +157,94 @@ final class PushCryptoTests: XCTestCase {
         XCTAssertEqual(fresh.failures?.count, 1)
 
         // Past the threshold the key is replaced; when that fails too, the
-        // last key sent still goes, and the count starts again.
+        // last key sent still goes, a key the phone no longer holds, and the
+        // count is kept, so the next registration tries again.
         let due = PushKeyRule.Failures(count: 2, firstAt: t0)
         let after = PushKeyRule.choose(failures: due, sent: "K1", now: t0 + day, read: broken, replace: replaceFails)
         XCTAssertEqual(replaced, 1)
         XCTAssertTrue(after.replaced)
         XCTAssertEqual(after.pushKey, "K1")
-        XCTAssertNil(after.failures)
+        XCTAssertFalse(after.holds)
+        XCTAssertEqual(after.failures, PushKeyRule.Failures(count: 3, firstAt: t0))
 
-        // A replacement that works sends the new key.
+        // A replacement that works sends the new key, and clears the count.
         let renewed = PushKeyRule.choose(failures: due, sent: "K1", now: t0 + day, read: broken, replace: { "K2" })
         XCTAssertEqual(renewed.pushKey, "K2")
+        XCTAssertTrue(renewed.holds)
+        XCTAssertNil(renewed.failures)
+
+        // No key at all, with one sent: the one sent goes, sealed rather
+        // than plaintext, and it counts, since its private half is gone.
+        let gone = PushKeyRule.choose(failures: nil, sent: "K1", now: t0, read: { nil }, replace: replaceFails)
+        XCTAssertEqual(gone.pushKey, "K1")
+        XCTAssertFalse(gone.holds)
+        XCTAssertNotNil(gone.failure)
+        XCTAssertEqual(gone.failures, PushKeyRule.Failures(count: 1, firstAt: t0))
+        // And past the threshold it is a reason to make a new one, which is
+        // what heals it.
+        let goneDue = PushKeyRule.choose(failures: due, sent: "K1", now: t0 + day, read: { nil }, replace: replaceFails)
+        XCTAssertEqual(replaced, 2)
+        XCTAssertEqual(goneDue.pushKey, "K1")
+        XCTAssertEqual(goneDue.failures, PushKeyRule.Failures(count: 3, firstAt: t0))
+        // None at all and none ever sent: keyless, with nothing to count.
+        let never = PushKeyRule.choose(failures: nil, sent: nil, now: t0, read: { nil }, replace: replaceFails)
+        XCTAssertNil(never.pushKey)
+        XCTAssertNil(never.failures)
+        XCTAssertTrue(never.holds)
 
         // A key that reads clears the count and is what goes.
         let fine = PushKeyRule.choose(failures: due, sent: "K1", now: t0, read: { "K2" }, replace: replaceFails)
         XCTAssertEqual(fine.pushKey, "K2")
         XCTAssertNil(fine.failures)
         XCTAssertNil(fine.failure)
-        XCTAssertEqual(replaced, 1)
+        XCTAssertTrue(fine.holds)
+        XCTAssertEqual(replaced, 2)
+    }
+
+    /// What You says rests on this: whether the phone knows it can open what
+    /// is sealed to it. A key it could not use is doubt until a key it holds
+    /// is sent or a seal opens; a seal that did not open is doubt until one
+    /// opens or a new key is sent; and nothing older than what is known
+    /// overrides it. The same cases as `PushCryptoTest.kt`.
+    func testThePhoneSaysWhenItDoesNotKnowItCanOpenItsNotifications() {
+        struct Locked: Error {}
+        let t0: TimeInterval = 1_700_000_000
+        let broken: () throws -> String? = { throw Locked() }
+        let none: () -> String? = { nil }
+        let held = PushKeyRule.choose(failures: nil, sent: "K1", now: t0, read: { "K1" }, replace: none)
+        let unusable = PushKeyRule.choose(failures: nil, sent: "K1", now: t0, read: broken, replace: none)
+        let renewed = PushKeyRule.choose(failures: nil, sent: "K1", now: t0, read: { "K2" }, replace: none)
+        let keyless = PushKeyRule.choose(failures: nil, sent: nil, now: t0, read: broken, replace: none)
+
+        // A key it could not use, and the same key read later.
+        let doubted = PushKeyRule.afterRegistration(nil, choice: unusable, sent: "K1", now: t0)
+        XCTAssertEqual(doubted, PushKeyRule.Evidence(doubt: .key, at: t0))
+        XCTAssertNil(PushKeyRule.afterRegistration(doubted, choice: held, sent: "K1", now: t0 + 1)?.doubt)
+        // Keyless is plaintext, which this phone reads.
+        XCTAssertNil(PushKeyRule.afterRegistration(doubted, choice: keyless, sent: nil, now: t0 + 1)?.doubt)
+
+        // A seal that did not open is not answered by the app reading the
+        // key: the extension is another process. A seal that opens, or a
+        // new key, answers it.
+        let unopened = PushKeyRule.afterSeal(nil, opened: false, at: t0 + 10)
+        XCTAssertEqual(unopened?.doubt, .seal)
+        XCTAssertEqual(PushKeyRule.afterRegistration(unopened, choice: held, sent: "K1", now: t0 + 20), unopened)
+        XCTAssertNil(PushKeyRule.afterSeal(unopened, opened: true, at: t0 + 30)?.doubt)
+        let fresh = PushKeyRule.afterRegistration(unopened, choice: renewed, sent: "K1", now: t0 + 20)
+        XCTAssertEqual(fresh, PushKeyRule.Evidence(doubt: nil, at: t0 + 20))
+        // A notification from before the new key, still in Notification
+        // Center, is old news.
+        XCTAssertEqual(PushKeyRule.afterSeal(fresh, opened: false, at: t0 + 10), fresh)
+        // Nothing learnt yet, and a held key: still nothing learnt, so a
+        // notification the extension could not open before this launch
+        // still counts when You reads Notification Center.
+        XCTAssertNil(PushKeyRule.afterRegistration(nil, choice: held, sent: "K1", now: t0 + 20))
+
+        // What the app sees of one: `e` left means not opened, and
+        // `mutable-content` is only ever on a sealed one.
+        XCTAssertEqual(PushKeyRule.sealOpened(["e": "x", "aps": ["mutable-content": 1]]), false)
+        XCTAssertEqual(PushKeyRule.sealOpened(["aps": ["mutable-content": 1], "name": "s"]), true)
+        XCTAssertNil(PushKeyRule.sealOpened(["aps": ["alert": "a"], "name": "s"]))
     }
 
     /// The self-test registration runs before it sends a key.

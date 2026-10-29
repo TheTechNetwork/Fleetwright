@@ -2,6 +2,7 @@ import AppIntents
 import AuthenticationServices
 import SwiftUI
 import UIKit
+import UserNotifications
 
 /// The You tab: who you are on this fleet, what your sessions may use, how the
 /// app reaches you, and the setup that is done once.
@@ -22,6 +23,9 @@ struct YouView: View {
     @State private var signInResult = ""
     @State private var signingIn = false
     @State private var pushResult = ""
+    /// Whether this phone does not know it can open what is sealed to it
+    /// (PushKey.inDoubt), read when You appears.
+    @State private var pushInDoubt = false
     /// The temporary machines row's summary, once the fleet has said.
     @State private var runnersAnswered = false
     @State private var runnersSaved: String?
@@ -87,6 +91,20 @@ struct YouView: View {
                     if !pushResult.isBlank {
                         Text(pushResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
+                    // A KEY THIS PHONE COULD NOT USE, SAID WHERE NOTIFICATIONS
+                    // ARE. Nothing else would say it: the coordinator seals to
+                    // the key it was sent, Apple delivers, and the alert is the
+                    // fallback sentence with no buttons. "May": the phone
+                    // knows it could not use the key the last time it tried,
+                    // not that the next one will fail. Gone once a sealed
+                    // notification opens or a registration uses a key this
+                    // phone holds (PushKeyRule.Evidence). The same sentence as
+                    // Android.
+                    if pushInDoubt {
+                        Text("Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts.")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.attention)
+                    }
                 } header: {
                     sectionHead("Notifications")
                 }
@@ -105,6 +123,20 @@ struct YouView: View {
         .listRowBackground(Design.Palette.card)
         .navigationTitle("You")
         .task(id: settings.credential) { await loadRunners() }
+        .task { await readPushKeyDoubt() }
+    }
+
+    /// What the extension did with the notifications still in Notification
+    /// Center, oldest first so the newest has the last word, then whether
+    /// this phone is in doubt. It is the only place the app learns of one
+    /// the extension could not open that was never tapped.
+    private func readPushKeyDoubt() async {
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+        for note in delivered.sorted(by: { $0.date < $1.date }) {
+            PushKey.saw(userInfo: note.request.content.userInfo, at: note.date)
+        }
+        let doubt = PushKey.inDoubt
+        withAnimation(Design.Motion.change) { pushInDoubt = doubt }
     }
 
     // MARK: - the parts
