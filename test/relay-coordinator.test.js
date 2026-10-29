@@ -60,10 +60,11 @@ test('a phone with a key is sealed to before anything leaves for the relay', asy
   const [sealed, plain] = posted[0].body.items;
   assert.equal(sealed.wire.encrypted, true);
   assert.ok(!JSON.stringify(sealed).includes('Allow it?'), 'the relay was sent what the phone’s key was for');
-  assert.deepEqual(await openWith(phone.privateKey, phone.publicKey, sealed.wire.data.e), { title: 'build-server', body: 'Allow it?', data: { name: 'build-server', sentAt: '5' } });
+  assert.deepEqual(await openWith(phone.privateKey, phone.publicKey, sealed.wire.data.e), { title: 'build-server', body: 'Allow it?', data: { name: 'build-server', sentAt: '5', category: 'answer.yesno' } });
   // A phone that never registered a key gets what it would get from Apple or
   // Google anyway, and the category rides in the clear because iOS reads it
-  // before anything could be decrypted.
+  // before anything could be decrypted. It is sealed as well, above, so a
+  // phone that opens the envelope can tell when the clear one was changed.
   assert.equal(plain.wire.encrypted, false);
   assert.equal(posted[0].body.category, 'answer.yesno');
 });

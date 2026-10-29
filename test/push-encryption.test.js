@@ -139,8 +139,33 @@ test('what goes on the wire carries no detail, and still fits', async () => {
   assert.deepEqual(await openWith(alice.privateKey, alice.pushKey, wire.data.e), {
     title: message.title,
     body: message.body,
-    data: { ...message.data, sentAt: '1700000000000' },
+    data: { ...message.data, sentAt: '1700000000000', category: '' },
   });
+});
+
+test('the category is sealed beside the words, and stays in the clear for an older phone', async () => {
+  // The category picks the two words on the buttons; the digits they type are
+  // sealed. Left only in the clear, a provider or a relay that swapped it
+  // could put "Allow this once" on the button that types "Do not allow" — so
+  // the phone needs a copy nobody on the way could have changed. An empty one
+  // for a notification with nothing to answer, so a category added on the way
+  // has a sealed "none" to disagree with.
+  const alice = await phone();
+  const asking = {
+    title: 'cc-brave-otter on deb132',
+    body: 'Waiting: run npm install?',
+    category: 'fleet.prompt.permission',
+    data: { event: 'session.awaiting-input', name: 'cc-brave-otter', hostId: 'deb132', promptId: 'p-01J8', answers: 'a:1,b:3' },
+  };
+  const sealed = await envelopeFor({ pushKey: alice.pushKey }, asking, { now: () => 5 });
+  assert.equal((await openWith(alice.privateKey, alice.pushKey, sealed.data.e)).data.category, 'fleet.prompt.permission');
+
+  const told = await envelopeFor({ pushKey: alice.pushKey }, { title: 'deb132', body: 'offline', data: { event: 'host.offline', hostId: 'deb132' } });
+  assert.equal((await openWith(alice.privateKey, alice.pushKey, told.data.e)).data.category, '');
+
+  // A phone with no key opens nothing, and gets the category where it always
+  // did: beside the notification, from the sender (push.test.js).
+  assert.equal('category' in (await envelopeFor({}, asking)).data, false);
 });
 
 test('a phone that predates encryption still gets its notification', async () => {
