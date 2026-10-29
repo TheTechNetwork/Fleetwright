@@ -51,31 +51,45 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** @typedef {'off'|'unsafe_args'|'userns_root'|'userns_docker'|'userns_host'} UncontainedWhy */
 
 /**
- * Why a session on this box is not contained, or null when it is.
+ * Why a session on this box is not contained: every reason, or none when it is.
  *
- * The first reason that applies, in the order an operator would fix them: no
- * sandbox at all; a FLEETWRIGHT_SANDBOX_ARGS the operator let through that
- * ends it (sandbox-args.js), because a `--privileged` sandbox is not one; and
- * a sandbox in the host user namespace. Under `host` container root is this
+ * In the order an operator would fix them: no sandbox at all; a
+ * FLEETWRIGHT_SANDBOX_ARGS the operator let through that ends it
+ * (sandbox-args.js), because a `--privileged` sandbox is not one; and a
+ * sandbox in the host user namespace. Under `host` container root is this
  * process's uid, which owns the credentials and the loopback token, or is
- * real root on a root-run hub — config.js resolveUserns downgrades a root
+ * real root on a root-run hub. config.js resolveUserns downgrades a root
  * service and a docker engine to it, and an operator can ask for it. Which
- * of the three it was is kept apart because each is opened differently. A
- * namespace that is not `nomap`, set or not, has not said nomap, so it is
- * not contained either.
+ * it was is kept apart because each is opened differently. A namespace that
+ * is not `nomap`, set or not, has not said nomap, so it is not contained
+ * either.
+ *
+ * EVERY REASON, NOT THE FIRST. With one, the fleet told a root-run box with
+ * its sandbox off that turning it on would open it, and once on, the box
+ * said root. So the later reasons are read even while an earlier one holds:
+ * the arguments and the namespace are known with the sandbox off, and
+ * `host` asked for still meets whatever would downgrade nomap here
+ * (`sandboxUsernsBlockedBy`), so a root box that asked for `host` says both.
+ * The list is empty exactly when the box is contained, as before.
  *
  * @param {import('../config.js').Config} cfg
- * @returns {UncontainedWhy|null}
+ * @returns {UncontainedWhy[]}
  */
 function uncontained(cfg) {
-  if (!cfg.sandbox) return 'off';
-  if (unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length) return 'unsafe_args';
+  /** @type {UncontainedWhy[]} */
+  const why = [];
+  if (!cfg.sandbox) why.push('off');
+  if (unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length) why.push('unsafe_args');
   if (cfg.sandboxUserns !== 'nomap') {
-    if (cfg.sandboxUsernsForcedBy === 'root') return 'userns_root';
-    if (cfg.sandboxUsernsForcedBy === 'docker') return 'userns_docker';
-    return 'userns_host';
+    const forced = cfg.sandboxUsernsForcedBy ?? null;
+    // What forced it is always among them, so a config that carries only
+    // that still says not contained.
+    const blocked = new Set([...(cfg.sandboxUsernsBlockedBy ?? []), ...(forced ? [forced] : [])]);
+    if (!forced) why.push('userns_host');
+    if (blocked.has('root')) why.push('userns_root');
+    if (blocked.has('docker')) why.push('userns_docker');
   }
-  return null;
+  return why;
 }
 
 export class HttpAdapter {
@@ -690,10 +704,11 @@ export class HttpAdapter {
    * apps already render null as "not reported". Caught per field rather than
    * around the whole object so one bad file does not blank the others.
    *
-   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, sandboxedWhy: UncontainedWhy|null, houseRules: number|null }}
+   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, sandboxedWhy: UncontainedWhy|null, sandboxedAlso: UncontainedWhy[], houseRules: number|null }}
    */
   #hostFacts() {
     const cfg = this.cfg;
+    const why = uncontained(cfg);
     /** @template T @param {() => T} read @returns {T|null} */
     const tell = (read) => {
       try {
@@ -721,14 +736,18 @@ export class HttpAdapter {
       // uncontained(), above the class, is the list of what makes it not
       // so. Read from configuration that cannot fail, so it is a boolean and
       // never null.
-      sandboxed: uncontained(cfg) === null,
+      sandboxed: why.length === 0,
       // AND WHY NOT, beside a `false`: the way on is a different setting for
       // each, and a refusal that names the wrong one sent the operator of a
-      // root-run box to turn on a sandbox that was already on. Null beside
-      // `true`. Additive: a coordinator from before it reads `false` alone,
-      // and a newer one reads a box without it as `off` (scheduler.js
-      // NOT_CONTAINED).
-      sandboxedWhy: uncontained(cfg),
+      // root-run box to turn on a sandbox that was already on. The first
+      // reason, so a coordinator or phone that reads one still has the one
+      // to fix first, and null beside `true`. Additive: a coordinator from
+      // before it reads `false` alone, and a newer one reads a box without
+      // it as `off` (scheduler.js NOT_CONTAINED).
+      sandboxedWhy: why[0] ?? null,
+      // AND EVERY OTHER, in order, because when a box has two no one fix
+      // opens it. Empty when there is one reason or none.
+      sandboxedAlso: why.slice(1),
       // How many characters of house rules every session here is given, 0 when
       // the file exists and is refused (too big, not a file), null when there
       // is none — the shape the sidecar always sent, moved here unchanged.

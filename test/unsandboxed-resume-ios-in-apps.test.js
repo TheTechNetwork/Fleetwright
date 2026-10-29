@@ -48,8 +48,10 @@ test('iOS says why Resume is not offered, by the coordinator’s rule', () => {
   // What the box sends under that key is test/hub-host-routes.test.js's.
   assert.match(IOS, /struct HostHealth: Codable[\s\S]*?let sandboxed: Bool\?\s*let sandboxedWhy: String\?/);
   assert.match(IOS, /var resumeKept: String\? \{\s*guard administers == false, health\?\.sandboxed != true else \{ return nil \}\s*guard health\?\.sandboxed == false else \{/);
-  // Why not is read as the box sent it, and a box too old to say why is off.
-  assert.match(IOS, /switch health\?\.sandboxedWhy \?\? "off" \{/);
+  // Why not is read as the box sent it, every reason of it, and a box too
+  // old to say why is off.
+  assert.match(IOS, /let sandboxedWhy: String\?\s*let sandboxedAlso: \[String\]\?/);
+  assert.match(IOS, /var said = \["off"\]\s*if let first = health\?\.sandboxedWhy \{ said = \[first\] \+ \(health\?\.sandboxedAlso \?\? \[\]\) \}/);
 });
 
 test('iOS names why a machine does not contain a session in the words the coordinator refuses with', async () => {
@@ -80,6 +82,33 @@ test('iOS names why a machine does not contain a session in the words the coordi
     assert.ok(IOS.includes(`"\\(hostId) ${clause}, so only this fleet’s admin, or the one person it works for, can resume one there until ${phone}."`), `iOS does not say ${why} as the coordinator does`);
     // The same way on, said once as a step and once as a condition.
     assert.ok(fix.toLowerCase().split(/[ ,]+/).some((w) => w.length > 4 && phone.includes(w)), `${why}: "${fix}" and "${phone}" are not the same way on`);
+  }
+
+  // MORE THAN ONE: the coordinator joins each reason's short clause and
+  // says it takes all of their steps; the phone joins the same clauses from
+  // its table and says "until" every condition. Each reason with every
+  // other, so the table's words are the coordinator's for all five.
+  const codes = ['off', 'unsafe_args', 'userns_root', 'userns_docker', 'userns_host'];
+  /** The phone's condition, for each reason, beside the coordinator's step. */
+  const condition = {
+    off: 'its sandbox is on',
+    unsafe_args: 'the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out',
+    userns_root: 'fleetwright runs as its own user',
+    userns_docker: 'its sessions run under podman',
+    userns_host: 'FLEETWRIGHT_SANDBOX_USERNS is set back to nomap',
+  };
+  for (const [first, then] of codes.flatMap((a, i) => codes.slice(i + 1).map((b) => [a, b]))) {
+    core.registry.recordHealth('deb132', {
+      hostId: 'deb132', protocol: PROTOCOL_VERSION, hub: { reachable: true }, maxSessions: 5, running: 0, free: 5,
+      labels: [], loadavg: [0, 0, 0], claudeAccounts: 1, sessions: [], sandboxed: false, sandboxedWhy: first, sandboxedAlso: [then],
+    });
+    const r = await core.dispatch({ verb: 'start', params: { name: 'job', task: 'a job' }, actor: bob.email, requester: bob, preferHost: 'deb132' });
+    const [, a, b] = String(r.text).match(/^deb132 (.*) and (.*), so only this fleet’s admin can start work there\. It takes both/) ?? [];
+    assert.ok(a && b, `the coordinator said: ${r.text}`);
+    for (const [code, does] of [[first, a], [then, b]]) {
+      const row = `"${code}": ("${does}", "${condition[/** @type {keyof typeof condition} */ (code)]}")`;
+      assert.ok(IOS.includes(row), `iOS does not say ${code} as the coordinator does: ${row}`);
+    }
   }
 });
 
