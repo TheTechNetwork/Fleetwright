@@ -884,7 +884,9 @@ test('why a box does not contain a session rides the frame beside the false, and
   stub.setFacts({ sandboxed: true, sandboxedWhy: 'userns_root' });
   assert.equal((await frame('idem-why-0002')).sandboxedWhy, null, 'beside true');
   stub.setFacts({ sandboxed: false, sandboxedWhy: 'Turn the sandbox on.' });
-  assert.equal((await frame('idem-why-0003')).sandboxedWhy, null, 'a sentence is not a code');
+  // A sentence is not a code, and not a hub from before the field either:
+  // null would read as `off` and be told "turn its sandbox on".
+  assert.equal((await frame('idem-why-0003')).sandboxedWhy, 'unreadable', 'a sentence is not a code');
   stub.setFacts({ sandboxed: false, sandboxedWhy: undefined });
   assert.equal((await frame('idem-why-0004')).sandboxedWhy, null, 'a hub from before it');
 
