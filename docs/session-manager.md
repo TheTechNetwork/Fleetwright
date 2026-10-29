@@ -153,15 +153,18 @@ The choice is **recorded against the session**, so every later `/resume` and
 every boot restore runs it the same way. A session you deliberately started in
 safe mode never gets quietly promoted.
 
-**`FLEETWRIGHT_SKIP_PERMISSIONS=0` is a ceiling for the fleet.** On a box set to
-ask, a start that arrives from the fleet — a phone, Siri, an agent over MCP, a
+**`FLEETWRIGHT_SKIP_PERMISSIONS` turned off is a ceiling for the fleet.** Off is
+any value but `1`, `true`, `yes` or `on`. On a box set to ask, a start that arrives from the fleet — a phone, Siri, an agent over MCP, a
 held runner start — asking for `dangerous` is refused, with a sentence naming
 the setting, rather than quietly turned into a session that asks
 (`permissionCeiling` in `src/adapters/commands.js`). The operator's own
 `/new --dangerous` at the box still works. A start that names no mode, or
 `--safe`, is never refused for it. The box reports which way its default goes
 on health as `permissions: 'asks' | 'bypassed'`, which is what the phones'
-"Box default" choice is labelled from.
+"Box default" choice is labelled from, and the phones offer a bypass only where
+every machine a start could land on says `bypassed`. The ceiling holds the
+command-line flag only: a session's own `.claude/settings.json`, which
+`writefile` can put in its workspace, is not covered (SEC-INJECT-4).
 
 ### Choosing how to resume
 
