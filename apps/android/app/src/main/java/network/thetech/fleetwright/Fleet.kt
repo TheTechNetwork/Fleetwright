@@ -406,7 +406,29 @@ class Fleet(
      * does the arithmetic — "two days left" stays right while the screen is
      * open, and a server-rendered string would freeze the moment it was sent.
      */
-    data class Binned(val name: String, val title: String?, val expiresAt: Long) {
+    data class Binned(
+        val name: String,
+        val title: String?,
+        val expiresAt: Long,
+        /**
+         * Who forgot it, as the fleet believes the box: `fleet:<address>`.
+         * Read for one thing, whether a machine that pins its admins takes its
+         * restore from this person ([FleetHost.mayRestore]). Null from an older
+         * coordinator, and then it is nobody's as far as that goes.
+         */
+        val createdBy: String? = null,
+    ) {
+        /**
+         * Whether this person forgot it. The box reads `fleet:<address>` or a
+         * bare address as its owner (pinned-admins.js ownerOf), and so does
+         * this.
+         */
+        fun isOwn(me: String): Boolean {
+            val who = me.trim().lowercase()
+            val by = createdBy?.lowercase() ?: return false
+            return who.isNotEmpty() && (by == "fleet:$who" || by == who)
+        }
+
         val remaining: String?
             get() {
                 if (expiresAt <= 0L) return null
@@ -417,6 +439,23 @@ class Fleet(
                 val days = left / 86_400_000L
                 return "$days day${if (days == 1L) "" else "s"} left"
             }
+    }
+
+    /** A machine's pinned admins as this person may see them. Same fields as iOS's `HostHealth.Admins`. */
+    data class PinnedAdmins(
+        /** How many it pins. Zero is nobody: the fleet's word, as before. Null is a record the box cannot read, and then it takes those verbs from nobody. */
+        val count: Int?,
+        /** Whether this person is one of them. Null with [count]. */
+        val you: Boolean?,
+        /** Their addresses, sent only to somebody on the list and to the fleet's admin. */
+        val pinned: List<String>?,
+        /** The box's sentence when the only admin it pins has left the fleet. */
+        val left: String?,
+        /** The box's sentence when it cannot read its record. */
+        val problem: String?,
+    ) {
+        /** Whether the box takes those verbs from this person. */
+        val takesFromYou: Boolean get() = count == 0 || you == true
     }
 
     data class FleetHost(
@@ -615,7 +654,31 @@ class Fleet(
         val administers: Boolean? = null,
         /** A pool's own machine: it holds the pool and runs no sessions. */
         val holder: Boolean = false,
+        /**
+         * WHO THIS MACHINE TAKES UPDATE, UPGRADE, REBOOT AND RESTORING
+         * SOMEBODY ELSE'S WORK FROM, when it pins its own admins
+         * (src/fleet/host/pinned-admins.js, shaped per person by core.js
+         * adminsSeenBy). Null is a box that cannot pin, which is every box from
+         * before this: nothing about pins is drawn there, and the buttons are
+         * drawn as before.
+         */
+        val admins: PinnedAdmins? = null,
     ) {
+        /**
+         * Whether the box takes update, upgrade and reboot from this person as
+         * far as its pins go. True where it pins nobody or cannot pin, so only
+         * the coordinator's rule decides there, as before.
+         */
+        val boxWideAllowed: Boolean get() = admins?.takesFromYou ?: true
+
+        /**
+         * Whether the box takes this restore from this person: their own work
+         * on their signature, anybody's from a pinned admin, nothing while it
+         * cannot read its record.
+         */
+        fun mayRestore(item: Binned, me: String): Boolean =
+            boxWideAllowed || (admins?.count != null && item.isOwn(me))
+
         /**
          * Two separate answers, because they are two actions on two things.
          *
@@ -1596,6 +1659,16 @@ class Fleet(
             },
             host = host,
         )
+
+    /**
+     * Add or remove an admin this machine pins (`pinadmin`).
+     *
+     * Only an admin the machine already pins may, signed for this one request;
+     * the first is pinned on the machine itself, so a phone never offers it.
+     * Named for the host so the phone signs it for that box.
+     */
+    suspend fun pinAdmin(host: String, email: String, add: Boolean): Reply =
+        intent("pinadmin", mapOf("email" to email, "op" to if (add) "add" else "remove"), host = host)
 
     /**
      * The last lines of a session's pane — what it is actually doing.
@@ -3047,6 +3120,7 @@ class Fleet(
                                     name = n,
                                     title = b.optString("title").takeIf { it.isNotBlank() && it != "null" },
                                     expiresAt = b.optLong("expiresAt", 0L),
+                                    createdBy = b.optString("createdBy").takeIf { it.isNotBlank() && it != "null" },
                                 )
                             }
                         }
@@ -3075,6 +3149,21 @@ class Fleet(
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
                     administers = o.takeIf { it.has("administers") && !it.isNull("administers") }?.optBoolean("administers"),
                     holder = o.optBoolean("holder", false),
+                    // ABSENT STAYS NULL: a box that cannot pin. `has` first
+                    // inside it, for the reason everywhere else here: optInt
+                    // reads a JSON null as 0, which would turn a record the box
+                    // cannot read into nobody pinned.
+                    admins = health?.optJSONObject("admins")?.let { a ->
+                        PinnedAdmins(
+                            count = a.takeIf { it.has("count") && !it.isNull("count") }?.optInt("count"),
+                            you = a.takeIf { it.has("you") && !it.isNull("you") }?.optBoolean("you"),
+                            pinned = a.optJSONArray("pinned")?.let { arr ->
+                                (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
+                            },
+                            left = a.optString("left").takeIf { it.isNotBlank() && it != "null" },
+                            problem = a.optString("problem").takeIf { it.isNotBlank() && it != "null" },
+                        )
+                    },
                 )
             }
         }.getOrDefault(emptyList())
