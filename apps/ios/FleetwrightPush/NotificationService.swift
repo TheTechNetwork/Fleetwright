@@ -12,7 +12,8 @@ import UserNotifications
 /// button on a notification we could not open would answer a question we had
 /// not read. Clearing the category leaves the sentence and no buttons. The
 /// sentence itself is the one the coordinator already put on the alert; this
-/// does not have a copy of it.
+/// does not have a copy of it. Running out of time is the same failure, and
+/// clears it the same way.
 ///
 /// ON SUCCESS THE SEALED CATEGORY DECIDES the buttons, and a clear one that
 /// disagrees with it leaves none (`PushCrypto.category`).
@@ -27,33 +28,42 @@ final class NotificationService: UNNotificationServiceExtension {
         self.contentHandler = contentHandler
         original = request.content
         let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
-        if request.content.userInfo["e"] != nil {
-            if let envelope = request.content.userInfo["e"] as? String, let opened = PushKey.open(envelope) {
-                content.title = opened.title
-                content.body = opened.body
-                content.userInfo = PushCrypto.merged(userInfo: request.content.userInfo, opened: opened)
-                content.categoryIdentifier = PushCrypto.category(
-                    sealed: opened.data["category"],
-                    clear: request.content.categoryIdentifier
-                )
-            } else {
-                content.categoryIdentifier = ""
-            }
+        if let envelope = request.content.userInfo["e"] as? String, let opened = PushKey.open(envelope) {
+            content.title = opened.title
+            content.body = opened.body
+            content.userInfo = PushCrypto.merged(userInfo: request.content.userInfo, opened: opened)
+            content.categoryIdentifier = PushCrypto.category(
+                sealed: opened.data["category"],
+                clear: request.content.categoryIdentifier
+            )
+        } else {
+            content.categoryIdentifier = PushCrypto.categoryUnopened(
+                userInfo: request.content.userInfo,
+                clear: request.content.categoryIdentifier
+            )
         }
         finish(content)
     }
 
-    /// Out of time: the notification as it arrived.
+    /// Out of time: the notification as it arrived, without its buttons when
+    /// it was sealed.
     ///
-    /// That is the fallback sentence with the clear category, so the buttons
-    /// are drawn — and pressing one opens the app rather than answering,
-    /// because the prompt id and the digits are still sealed and
-    /// `NotificationAnswers.decide` answers nothing without them. Kept as it
-    /// arrived, rather than the copy `didReceive` is still writing to.
+    /// As it arrived it is the fallback sentence with the clear category, and
+    /// the buttons that category draws would do nothing. The prompt id and
+    /// the digits are still sealed, so `NotificationAnswers.decide` has
+    /// nothing to answer, and the answer actions do not bring the app
+    /// forward, so a press would leave the person where they were with the
+    /// question still waiting. The same rule as a seal that did not open
+    /// (`PushCrypto.categoryUnopened`). A copy of the original, rather than
+    /// the one `didReceive` is still writing to.
     override func serviceExtensionTimeWillExpire() {
-        if let original {
-            finish(original)
-        }
+        guard let original else { return }
+        let content = (original.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        content.categoryIdentifier = PushCrypto.categoryUnopened(
+            userInfo: original.userInfo,
+            clear: original.categoryIdentifier
+        )
+        finish(content)
     }
 
     private func finish(_ content: UNNotificationContent) {
