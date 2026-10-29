@@ -205,62 +205,86 @@ enum PushKey {
         case keychain(OSStatus)
         /// The extension found no key. It never makes one.
         case missing
+        /// The stored key did not open a probe sealed to its own public half.
+        case selfTest
     }
 
-    /// The key registration sends, or nil when this phone cannot open what
-    /// would be sealed to it.
+    /// The key registration sends, or nil when this phone has never sent one
+    /// and has none it can use now.
     ///
-    /// THREE ANSWERS, AND THE THIRD IS A THROW. A keychain error throws, and
-    /// `Fleet.registerDevice` then registers nothing this time: the
-    /// coordinator keeps a key only when one is sent, so a registration
-    /// without it would put this phone back on plaintext over a hiccup. The
-    /// next launch registers again. Nil is for a phone that cannot: the key
-    /// is made and read back, a test notification is sealed to it in
-    /// software, and if the key does not open that, sending it would only
-    /// buy the fallback sentence on every notification.
+    /// A PHONE THAT HAS SENT A KEY NEVER SENDS NONE AGAIN. The coordinator
+    /// keeps a key only when one is sent, so a registration without it puts
+    /// this phone back on plaintext. The stored key is read and sealed to in
+    /// software, and if it opens its own seal its public half is sent. If the
+    /// keychain errors, or the key fails that self-test, the registration
+    /// still goes, with the last key a registration sent (`sentKey`): the
+    /// APNs token is refreshed, the coordinator keeps sealing, and anything
+    /// this phone cannot open shows the fallback sentence, which still wakes
+    /// the person.
+    /// Only a phone that has never sent one registers without a key, and then
+    /// at once, because nothing was ever sealed to it and so nothing is lost.
+    /// (A reinstall starts with nothing sent, so a reinstalled app whose
+    /// first registration meets a keychain error is that phone too.)
     ///
-    /// AN ERROR THAT DOES NOT GO AWAY IS NOT A HICCUP, and the throw would
-    /// keep it quiet for good: no registration means a new APNs token is
-    /// never sent, and push stops with nothing on screen to say so. So the
+    /// AN ERROR THAT DOES NOT GO AWAY IS NOT A HICCUP, and the fallback would
+    /// leave every notification on the fallback sentence for good. So the
     /// failures are counted, with the time of the first, and after
     /// `PushKeyRule.attempts` of them in a row spread over at least a day the
-    /// key is replaced (`startOver`). Any registration that gets as far as
-    /// the key clears the count. The same rule as `PushKey.forRegistration`
-    /// in PushKey.kt.
+    /// key is replaced (`startOver`). A replacement that fails falls back to
+    /// the last key sent too. Any registration that gets as far as a key
+    /// clears the count. The rule is `PushKeyRule.choose`, the same as on
+    /// Android.
     ///
     /// ONE AT A TIME. Two registrations at once on a phone with no key yet
     /// would each make one, and the second write would replace the key the
     /// first had just sent.
-    static func registrationKey() throws -> String? {
+    static func registrationKey() -> String? {
         lock.lock()
         defer { lock.unlock() }
-        let key: P256.KeyAgreement.PrivateKey
-        do {
-            key = try load()
-        } catch {
-            let now = Date().timeIntervalSince1970
-            let failures = PushKeyRule.failed(storedFailures, now: now)
-            guard PushKeyRule.startOver(failures, now: now) else {
-                storedFailures = failures
-                throw error
+        let choice = PushKeyRule.choose(
+            failures: storedFailures,
+            sent: sentKey,
+            now: Date().timeIntervalSince1970,
+            read: { try readKey() },
+            replace: { startOver() }
+        )
+        if let failure = choice.failure {
+            if choice.replaced {
+                print("push key: registrations have not been able to use it for a day or more, so it was replaced (\(failure))")
+            } else if choice.pushKey == nil {
+                print("push key: could not use it, and none was ever sent, so this registration sends none (\(failure))")
+            } else {
+                print("push key: could not use it this time, so this registration sends the last one sent (\(failure))")
             }
-            print("push key: \(failures.count) registrations in a row could not use it, the first a day or more ago, so it is being replaced (\(error))")
-            storedFailures = nil
-            return startOver()
         }
-        storedFailures = nil
-        guard opensItsOwnSeal(key) else { return nil }
+        storedFailures = choice.failures
+        // SAVED HERE, BEFORE THE POST, not after its answer: the caller posts
+        // what this returns and nothing else. A post the coordinator took
+        // whose answer was lost would otherwise leave this phone believing it
+        // never sent a key, and free to register without one.
+        if let key = choice.pushKey { sentKey = key }
+        return choice.pushKey
+    }
+
+    /// The stored key's public half, once it has opened its own seal.
+    ///
+    /// A KEY THAT FAILS ITS SELF-TEST THROWS, and counts like a keychain
+    /// error: sending it would only buy the fallback sentence, and a key that
+    /// keeps failing is replaced like one the keychain keeps refusing.
+    private static func readKey() throws -> String {
+        let key = try load()
+        guard opensItsOwnSeal(key) else { throw Failure.selfTest }
         return PushCrypto.b64url(key.publicKey.x963Representation)
     }
 
-    /// A new key in place of one the keychain has refused for a day, or nil
-    /// when this phone cannot keep one. `write` removes the old item first.
+    /// A new key in place of one that has failed for a day, or nil when this
+    /// phone cannot keep one. `write` removes the old item first.
     ///
     /// NIL HERE IS THE PLATFORM SAYING NO, not a hiccup: the old key has
     /// failed for a day, and now a new one cannot be written either. The
-    /// phone then registers without a key, which keeps its notifications
-    /// coming in the clear rather than not at all, and the next launch tries
-    /// the keychain again from the start.
+    /// registration then sends the last key sent, or none on a phone that
+    /// has never sent one, and the next launch tries the keychain again from
+    /// the start.
     private static func startOver() -> String? {
         let key = P256.KeyAgreement.PrivateKey()
         guard (try? write(key.rawRepresentation)) != nil, opensItsOwnSeal(key) else { return nil }
@@ -270,9 +294,22 @@ enum PushKey {
     private static let lock = NSLock()
     private static let failuresKey = "pushKeyFailures"
     private static let firstFailureKey = "pushKeyFirstFailure"
+    private static let sentKeyKey = "pushKeySent"
 
-    /// Registrations in a row the keychain failed, and when the first was.
-    /// Not a secret: two numbers.
+    /// The public key the last registration with one sent, in the app's own
+    /// defaults. Not a secret: it is the half the coordinator already holds.
+    /// The extension never reads it.
+    ///
+    /// IT GOES WITH THE APP, AND THE KEYCHAIN ITEM DOES NOT. A reinstalled
+    /// app starts with none, reads the key the keychain kept, and sends that,
+    /// which saves it again.
+    private static var sentKey: String? {
+        get { UserDefaults.standard.string(forKey: sentKeyKey) }
+        set { UserDefaults.standard.set(newValue, forKey: sentKeyKey) }
+    }
+
+    /// Registrations in a row that could not use the key, and when the first
+    /// was. Not a secret: two numbers.
     private static var storedFailures: PushKeyRule.Failures? {
         get {
             let count = UserDefaults.standard.integer(forKey: failuresKey)
@@ -362,15 +399,17 @@ enum PushKey {
     }
 }
 
-/// When a push key that keeps failing is replaced, decided without the
-/// keychain so a test can hold it to the rule.
+/// What a registration sends when the push key fails, and when a key that
+/// keeps failing is replaced, decided without the keychain so a test can
+/// hold it to the rule. `PushKey.registrationKey` does the keychain half.
 ///
 /// THREE REGISTRATIONS IN A ROW, THE FIRST A DAY OR MORE BEFORE THE LAST.
 /// Either alone is too little: three launches in a minute is one bad
 /// moment, and one failure a day ago may have been the only launch since. A
 /// key that has failed on both counts is not coming back, and every day it
-/// stays is a day a new APNs token cannot be sent. A clock that has gone
-/// backwards starts the count again rather than waiting for it to catch up.
+/// stays is a day every notification is the fallback sentence. A clock that
+/// has gone backwards starts the count again rather than waiting for it to
+/// catch up.
 ///
 /// `PushKeyRule` in PushCrypto.kt is the same rule on Android, with the same
 /// numbers.
@@ -394,5 +433,43 @@ enum PushKeyRule {
     /// Whether the key goes and a new one is made.
     static func startOver(_ failures: Failures, now: TimeInterval) -> Bool {
         failures.count >= attempts && now - failures.firstAt >= span
+    }
+
+    /// What one registration decided.
+    struct Choice {
+        /// The key it sends: nil only on a phone that has never sent one.
+        let pushKey: String?
+        /// The count to store, nil once a registration got as far as a key.
+        let failures: Failures?
+        /// Why the stored key could not be used, when it could not.
+        let failure: String?
+        /// Whether the stored key was replaced this time.
+        let replaced: Bool
+    }
+
+    /// The key a registration sends.
+    ///
+    /// `read` is the stored key's public half, and throws when it cannot be
+    /// used this time; `replace` makes a new one, or nil when it cannot;
+    /// `sent` is the last key a registration sent. A KEY ERROR NEVER MEANS NO
+    /// KEY once one has been sent: `sent` goes instead, before the threshold,
+    /// and after it when the replacement fails too.
+    static func choose(
+        failures: Failures?,
+        sent: String?,
+        now: TimeInterval,
+        read: () throws -> String?,
+        replace: () -> String?
+    ) -> Choice {
+        do {
+            let key = try read()
+            return Choice(pushKey: key ?? sent, failures: nil, failure: nil, replaced: false)
+        } catch {
+            let after = failed(failures, now: now)
+            guard startOver(after, now: now) else {
+                return Choice(pushKey: sent, failures: after, failure: "\(error)", replaced: false)
+            }
+            return Choice(pushKey: replace() ?? sent, failures: nil, failure: "\(error)", replaced: true)
+        }
     }
 }

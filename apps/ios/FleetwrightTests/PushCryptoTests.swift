@@ -130,6 +130,50 @@ final class PushCryptoTests: XCTestCase {
         XCTAssertEqual(fail(quick, t0 - 1), PushKeyRule.Failures(count: 1, firstAt: t0 - 1))
     }
 
+    /// A phone that has sent a key never registers without one: a key error
+    /// sends the last key sent, before the threshold and when the
+    /// replacement after it fails. Only a phone that has never sent one
+    /// registers keyless, and at once. The same cases as `PushCryptoTest.kt`.
+    func testAKeyErrorSendsTheLastKeySentAndNeverNone() {
+        struct Locked: Error {}
+        let t0: TimeInterval = 1_700_000_000
+        let day = PushKeyRule.span
+        let broken: () throws -> String? = { throw Locked() }
+        var replaced = 0
+        let replaceFails: () -> String? = { replaced += 1; return nil }
+
+        // An error with a key already sent: that key goes, and the error counts.
+        let first = PushKeyRule.choose(failures: nil, sent: "K1", now: t0, read: broken, replace: replaceFails)
+        XCTAssertEqual(first.pushKey, "K1")
+        XCTAssertEqual(first.failures, PushKeyRule.Failures(count: 1, firstAt: t0))
+        XCTAssertFalse(first.replaced)
+
+        // Never sent one: keyless at once, with nothing to lose.
+        let fresh = PushKeyRule.choose(failures: nil, sent: nil, now: t0, read: broken, replace: replaceFails)
+        XCTAssertNil(fresh.pushKey)
+        XCTAssertEqual(fresh.failures?.count, 1)
+
+        // Past the threshold the key is replaced; when that fails too, the
+        // last key sent still goes, and the count starts again.
+        let due = PushKeyRule.Failures(count: 2, firstAt: t0)
+        let after = PushKeyRule.choose(failures: due, sent: "K1", now: t0 + day, read: broken, replace: replaceFails)
+        XCTAssertEqual(replaced, 1)
+        XCTAssertTrue(after.replaced)
+        XCTAssertEqual(after.pushKey, "K1")
+        XCTAssertNil(after.failures)
+
+        // A replacement that works sends the new key.
+        let renewed = PushKeyRule.choose(failures: due, sent: "K1", now: t0 + day, read: broken, replace: { "K2" })
+        XCTAssertEqual(renewed.pushKey, "K2")
+
+        // A key that reads clears the count and is what goes.
+        let fine = PushKeyRule.choose(failures: due, sent: "K1", now: t0, read: { "K2" }, replace: replaceFails)
+        XCTAssertEqual(fine.pushKey, "K2")
+        XCTAssertNil(fine.failures)
+        XCTAssertNil(fine.failure)
+        XCTAssertEqual(replaced, 1)
+    }
+
     /// The self-test registration runs before it sends a key.
     func testTheSelfTestOpensItsOwnSealAndNoOneElses() throws {
         let f = try fixture()
