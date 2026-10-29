@@ -597,7 +597,29 @@ user who ran it through `sudo`; from a root shell with none of those, that is
 root, so give it a user (`FLEETWRIGHT_USER=fleetwright`, created first) or run
 it with `sudo` from the account that should own the sessions. docker
 (`FLEETWRIGHT_PODMAN_BIN=docker`) and `FLEETWRIGHT_SANDBOX_USERNS=host` are
-refused the same way, each with its own reason.
+refused the same way, each with its own reason. A box with more than one
+reason, root with the sandbox off for instance, gives every one, and the
+refusal names each fix and says it takes all of them.
+
+**Moving a root-run box to its own user leaves its sessions' state behind.**
+The `claude-<name>` and `work-<name>` volumes are in root's podman store, and
+the new user's rootless store cannot see them, so a session resumed after the
+move starts with an empty conversation and an empty `/work`. Nothing in
+Fleetwright moves them. To keep a session, copy both of its volumes across
+before resuming it, for each session name:
+
+```sh
+sudo podman volume export claude-<name> -o /tmp/claude-<name>.tar
+sudo chown fleetwright /tmp/claude-<name>.tar
+sudo -u fleetwright podman volume create claude-<name>
+sudo -u fleetwright podman volume import claude-<name> /tmp/claude-<name>.tar
+sudo rm /tmp/claude-<name>.tar    # it holds that session's Claude login
+```
+
+and the same for `work-<name>`, with the new service user in place of
+`fleetwright`. These are podman's own commands (`podman volume import` needs
+the volume to exist first), and nothing in this repository tests them. A
+session you do not need can be left to `/forget` instead.
 
 Two things to know:
 
