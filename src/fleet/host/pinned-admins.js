@@ -17,31 +17,40 @@
 //
 // NOBODY PINNED IS THE BEHAVIOUR FROM BEFORE THIS: the coordinator's word
 // stands, so every box already deployed keeps working and nobody has to set
-// anything up. Once anybody is pinned, reboot, `upgrade apply`, update and a
-// restore of somebody else's work need a signature or a delegation from one of
-// them. An unsigned actor is the coordinator naming an admin, so the check
-// holds on a box that does not otherwise require signatures.
+// anything up. Once anybody is pinned, reboot, `upgrade apply`, update, a new
+// `channel` or `sandbox` image, and a restore of somebody else's work need a
+// signature or a delegation from one of them (isBoxWide). An unsigned actor is
+// the coordinator naming an admin, so the check holds on a box that does not
+// otherwise require signatures.
 //
 // WHEN AN ADMIN LEAVES THE FLEET, `forgetperson` drops their pin, unless they
-// are the last one. A last admin stays pinned and this box refuses those verbs
-// from everybody: their key stops being listed, so nobody can sign as them,
-// and dropping them would hand the box back to the coordinator's word, which
-// is the hole this closes. The box's health says so in a sentence, and the way
-// back is on the box: `fleetwright-sidecar pin-admin` somebody new.
+// are the last one who can still sign. That one stays pinned, recorded under
+// `left`, and this box refuses those verbs from everybody: their key stops
+// being listed, so nobody can sign as them, and dropping them would hand the
+// box back to the coordinator's word, which is the hole this closes. An admin
+// already under `left`, or one the minter lists no key for (a mistyped
+// address, somebody who never signed in on a phone), is not counted as the one
+// who stays, or the last who could sign would be dropped beside them. The
+// box's health says it is stranded, by a code the coordinator turns into a
+// sentence (pinReport), and the way back is on the box: `fleetwright-sidecar
+// pin-admin` somebody new, which also drops the admins who left.
 // `forgetperson` is the coordinator's alone (intent-signature.js), so a forged
 // one can drop a pin and never add one: denial of service, which the
 // coordinator could always do by not carrying the intents.
 //
-// The record is `pinned-admins.json` beside the host key. Written by rename,
-// one change at a time even when the sidecar and the command line race
-// (updatePins).
+// The record is `pinned-admins.json` beside the host key, in the sidecar
+// account's own directory. Written by rename, one change at a time even when
+// the sidecar and the command line race (updatePins), and only ever by that
+// account: root is refused (rootRefusal), because what root makes inside a
+// directory another account owns, that account can swap for a link before
+// root's next call (docs/security.md, G10).
 
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, chownSync } from 'node:fs';
+import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
 import { emailFromActor } from '../../core/accounts.js';
 import { actorEmail } from '../protocol/intent-signature.js';
-import { PIN_EMAIL_RE } from '../protocol/intents.js';
+import { PIN_EMAIL_RE, PIN_SENTENCES } from '../protocol/intents.js';
 
 /**
  * What the record says. `admins` lowercased, in the order they were pinned.
@@ -70,9 +79,7 @@ const NOWHERE = 'This machine has nowhere to keep a record of its admins, so not
 const NOT_SIGNED_PIN = 'Changing who is pinned on this machine takes the signature of a pinned admin, made for this request. This one was not signed, so nothing was changed.';
 const DELEGATED_PIN = 'Changing who is pinned on this machine takes the signature of a pinned admin, made for this request. A delegation does not carry it, so nothing was changed.';
 const FIRST_IS_LOCAL = 'Nobody is pinned on this machine yet, and the first admin is pinned on the machine itself, by whoever runs it: fleetwright-sidecar pin-admin with their address. Nothing was changed.';
-const LAST_IS_LOCAL = 'That is the last admin pinned on this machine. With none, it would take the fleet’s word again, so that is done on the machine itself: fleetwright-sidecar unpin-admin. Nothing was changed.';
-/** Health's sentence when the only admin pinned here has left. Names nobody, so it can go to anybody who sees the box. */
-export const LEFT = 'The only admin pinned on this machine has left the fleet, so it updates, upgrades and reboots for nobody. A new admin is pinned on the machine itself: fleetwright-sidecar pin-admin with their address.';
+const LAST_IS_LOCAL = 'That is the last admin pinned on this machine who has not left the fleet. Without them it would take the fleet’s word again, or nobody’s, so that is done on the machine itself: fleetwright-sidecar unpin-admin. Nothing was changed.';
 
 /**
  * @param {unknown} err
@@ -136,10 +143,14 @@ export function readPins(dir) {
 
 /**
  * Write the record whole, by rename, so a reader sees the old one or the new
- * one and never half of either. Readable by anyone on the box, like
- * `signers.json` beside it: addresses, and nothing that grants anything to a
- * reader. Run as root (`sudo fleetwright-sidecar pin-admin`), it gives the file
- * to whoever owns the directory, so the sidecar can still replace it.
+ * one and never half of either, and on disk before the rename, so a power cut
+ * leaves one of the two and not an empty file that reads as unreadable.
+ * Readable by anyone on the box, like `signers.json` beside it: addresses,
+ * and nothing that grants anything to a reader. Created exclusively, so a
+ * name planted in the directory is never written through.
+ *
+ * Only ever by the account that owns the directory (updatePins refuses
+ * root), so nothing here changes an owner by path.
  *
  * @param {string} dir
  * @param {{ admins: string[], left?: string[] }} record  already lowercased
@@ -148,14 +159,70 @@ export function writePins(dir, { admins, left = [] }) {
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, PIN_FILE);
   const tmp = path.join(dir, `.${PIN_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`);
-  writeFileSync(tmp, `${JSON.stringify({ admins, ...(left.length ? { left } : {}) }, null, 2)}\n`, { mode: 0o644 });
-  if (typeof process.getuid === 'function' && process.getuid() === 0) {
-    try {
-      const owner = statSync(dir);
-      chownSync(tmp, owner.uid, owner.gid);
-    } catch { /* left as root's, still readable */ }
+  const fd = openSync(tmp, 'wx', 0o644);
+  try {
+    writeSync(fd, `${JSON.stringify({ admins, ...(left.length ? { left } : {}) }, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
   renameSync(tmp, file);
+  // The rename itself, on disk. Not every filesystem lets a directory be
+  // synced, and the record is already whole either way.
+  try {
+    const d = openSync(dir, 'r');
+    try { fsyncSync(d); } finally { closeSync(d); }
+  } catch { /* best effort */ }
+}
+
+/**
+ * Who owns `dir`, or the nearest directory above it that exists: a uid, and a
+ * name `sudo -u` takes. `#1001` when the box has no name for it, which sudo
+ * takes too.
+ *
+ * @param {string} dir
+ * @returns {{ uid: number, name: string }}
+ */
+function dirOwner(dir) {
+  let at = path.resolve(dir);
+  for (;;) {
+    try {
+      const { uid } = statSync(at);
+      let name = `'#${uid}'`;
+      try {
+        const line = readFileSync('/etc/passwd', 'utf8').split('\n').find((l) => l.split(':')[2] === String(uid));
+        if (line) name = line.split(':')[0];
+      } catch { /* no passwd file to name it from */ }
+      return { uid, name };
+    } catch (err) {
+      const up = path.dirname(at);
+      if (codeOf(err) !== 'ENOENT' || up === at) throw err;
+      at = up;
+    }
+  }
+}
+
+/**
+ * Why this process may not change the record, or null when it may.
+ *
+ * ROOT MAY NOT, inside a directory another account owns. Everything root
+ * makes there (the lock, the temp file) sits where that account can replace
+ * it with a link between two of root's calls, and the next call then lands
+ * wherever the link points, `/etc/shadow` included (docs/security.md, G10).
+ * So it is refused, and the sentence names the form that runs as the owner
+ * instead, which needs nothing special: the record is that account's.
+ * A directory root owns itself (a sidecar that runs as root) is root's to
+ * change.
+ *
+ * @param {string} dir
+ * @param {string} [command]  what was typed, so the sentence can be pasted back
+ * @returns {string|null}
+ */
+export function rootRefusal(dir, command = 'pin-admin ADDRESS') {
+  if (typeof process.getuid !== 'function' || process.getuid() !== 0) return null;
+  const owner = dirOwner(dir);
+  if (owner.uid === 0) return null;
+  return `${dir} belongs to ${owner.name}, and root does not write inside another account’s directory, so nothing was changed. Run it as that account: sudo -u ${owner.name} fleetwright-sidecar ${command}`;
 }
 
 /** @type {Map<string, Promise<unknown>>} the change in flight in this process, per directory */
@@ -176,19 +243,60 @@ async function lock(dir) {
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, LOCK_FILE);
   const until = Date.now() + LOCK_WAIT_MS;
+  // WHOSE LOCK IT IS, written into it, so a release removes only its own: a
+  // change that outlived STALE_LOCK_MS and had its lock broken must not then
+  // remove the lock the next change took.
+  const token = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  /** @param {string} at */
+  const tokenAt = (at) => {
+    try { return readFileSync(at, 'utf8'); } catch { return null; }
+  };
   for (;;) {
     try {
-      closeSync(openSync(file, 'wx', 0o644));
-      return () => rmSync(file, { force: true });
+      const fd = openSync(file, 'wx', 0o644);
+      try { writeSync(fd, token); } finally { closeSync(fd); }
+      return () => {
+        if (tokenAt(file) === token) rmSync(file, { force: true });
+      };
     } catch (err) {
       if (codeOf(err) !== 'EEXIST') throw err;
-      try {
-        if (Date.now() - statSync(file).mtimeMs > STALE_LOCK_MS) rmSync(file, { force: true });
-      } catch { /* released between the two calls */ }
+      breakIfStale(file, tokenAt);
       if (Date.now() > until) throw new Error(`another change to who is pinned is holding ${file}`);
       await sleep(10 + Math.floor(Math.random() * 20));
     }
   }
+}
+
+/**
+ * Remove a lock left by a process that died holding it, and only that one.
+ *
+ * Two waiters can both see the same stale lock. Removing it by name would let
+ * the slower one remove the lock the faster one has just taken. So the stale
+ * one is moved aside under a name of this waiter's own, which only one of
+ * them can do, and checked there: a lock that is not the stale one this
+ * waiter saw is put back where it was.
+ *
+ * @param {string} file
+ * @param {(at: string) => string|null} tokenAt
+ */
+function breakIfStale(file, tokenAt) {
+  let seen;
+  try {
+    if (Date.now() - statSync(file).mtimeMs <= STALE_LOCK_MS) return;
+    seen = tokenAt(file);
+  } catch {
+    return; // released between the two calls
+  }
+  const aside = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+  try {
+    renameSync(file, aside);
+  } catch {
+    return; // somebody else moved it first
+  }
+  if (tokenAt(aside) !== seen) {
+    try { linkSync(aside, file); } catch { /* a newer lock is already there */ }
+  }
+  rmSync(aside, { force: true });
 }
 
 /**
@@ -205,6 +313,8 @@ async function lock(dir) {
 export function updatePins(dir, change) {
   const key = path.resolve(dir);
   const run = async () => {
+    const refused = rootRefusal(dir);
+    if (refused) throw new Error(refused);
     const release = await lock(dir);
     try {
       const decided = change(readPins(dir));
@@ -243,12 +353,19 @@ export function ownerOf(createdBy) {
 /**
  * Does this intent reach everybody's work on the box? `upgrade` only when it
  * applies: without `apply` it reports what is waiting, and the person who may
- * not install it may still be told.
+ * not install it may still be told. `channel` and `sandbox` the same, only
+ * with a `to`: the channel decides what code `update` installs, and the
+ * sandbox the image every next session here runs in, so changing either is
+ * as box-wide as an update, and asking which one it is reaches nobody.
+ *
+ * The coordinator's own gate for these is hosts.js administers, by the same
+ * names (scheduler.js); this narrows it on a box that pins its admins.
  *
  * @param {{ verb: string, params?: Record<string, unknown> }} intent
  */
 export function isBoxWide(intent) {
   if (intent.verb === 'upgrade') return intent.params?.apply === 'yes';
+  if (intent.verb === 'channel' || intent.verb === 'sandbox') return typeof intent.params?.to === 'string' && intent.params.to !== '';
   return intent.verb === 'reboot' || intent.verb === 'update' || intent.verb === 'restore';
 }
 
@@ -294,7 +411,7 @@ export function decideBoxWide(intent, pins, verdict, ownsSession = null) {
  * @param {{ actor?: string|null, params?: { email?: unknown, op?: unknown } }} intent
  * @param {PinFile} pins
  * @param {string|null} verdict
- * @returns {{ ok: true, text: string, write?: { admins: string[] } } | { ok: false, code: 'pinned_admins', text: string }}
+ * @returns {{ ok: true, text: string, write?: { admins: string[], left: string[] } } | { ok: false, code: 'pinned_admins', text: string }}
  */
 export function decidePin(intent, pins, verdict) {
   if (verdict === 'delegated') return { ok: false, code: 'pinned_admins', text: DELEGATED_PIN };
@@ -309,41 +426,69 @@ export function decidePin(intent, pins, verdict) {
   const email = pinnable(intent.params?.email);
   if (!email) return { ok: false, code: 'pinned_admins', text: 'This request does not name an address, so nothing was changed.' };
   const admins = pins.admins;
+  // WHO HAS LEFT STAYS NOTED, through every change made here, so the next
+  // forgetperson still counts them out (forgetPinned).
+  /** @param {string[]} next */
+  const leftOf = (next) => pins.left.filter((a) => next.includes(a));
   if (intent.params?.op === 'add') {
     if (admins.includes(email)) return { ok: true, text: `${email} is already pinned on this machine.` };
     if (admins.length >= MAX_PINNED) return { ok: false, code: 'pinned_admins', text: `This machine already pins ${MAX_PINNED} admins, so nothing was changed.` };
+    const next = [...admins, email];
     return {
       ok: true,
-      write: { admins: [...admins, email] },
-      text: `Pinned ${email}. This machine now takes reboot, upgrade, update and restoring somebody else’s work from them too.`,
+      write: { admins: next, left: leftOf(next) },
+      text: `Pinned ${email}. This machine now takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work from them too.`,
     };
   }
   if (intent.params?.op === 'remove') {
     if (!admins.includes(email)) return { ok: false, code: 'pinned_admins', text: `${email} is not pinned on this machine, so nothing was changed.` };
-    if (admins.length === 1) return { ok: false, code: 'pinned_admins', text: LAST_IS_LOCAL };
-    return { ok: true, write: { admins: admins.filter((a) => a !== email) }, text: `${email} is no longer pinned on this machine.` };
+    // The last who has not left, not the last on the list: removing them
+    // leaves only people nobody can sign as, which is the same box.
+    if (!admins.some((a) => a !== email && !pins.left.includes(a))) return { ok: false, code: 'pinned_admins', text: LAST_IS_LOCAL };
+    const next = admins.filter((a) => a !== email);
+    return { ok: true, write: { admins: next, left: leftOf(next) }, text: `${email} is no longer pinned on this machine.` };
   }
   return { ok: false, code: 'pinned_admins', text: 'This request does not say whether to add or remove, so nothing was changed.' };
 }
 
 /**
- * Somebody removed from the fleet (`forgetperson`): their pin goes, unless
- * they are the last admin, who stays pinned and is noted as left (top of
- * file).
+ * May this pinned admin still sign? Listed by the minter now, when this box
+ * has the list; without it, not noted as having left. A key that is listed
+ * again outranks the note: somebody let back into the fleet signs as
+ * themselves.
  *
  * @param {PinFile} pins
  * @param {string} email
+ * @param {{ has: (email: string) => boolean }|null} listed
+ */
+function canSign(pins, email, listed) {
+  return listed ? listed.has(email) : !pins.left.includes(email);
+}
+
+/**
+ * Somebody removed from the fleet (`forgetperson`): their pin goes, unless
+ * they are the last admin pinned here who can still sign, who stays pinned
+ * and is noted as left (top of file).
+ *
+ * THE LAST WHO CAN SIGN, not the last on the list. Counting an admin who left
+ * already, or an address no key is listed for, as somebody who stays drops
+ * the last real one and writes no `left`: the box then refuses everybody and
+ * says nothing about why.
+ *
+ * @param {PinFile} pins
+ * @param {string} email
+ * @param {{ has: (email: string) => boolean }|null} [listed]  the people the minter lists keys for now, or null when this box has no list yet
  * @returns {{ write?: { admins: string[], left: string[] }, result: string|null }}  the sentence to add to the reply, or null for nothing to say
  */
-export function forgetPinned(pins, email) {
+export function forgetPinned(pins, email, listed = null) {
   if (pins.absent || pins.unreadable || !pins.admins.includes(email)) return { result: null };
-  if (pins.admins.length > 1) {
+  if (pins.admins.some((a) => a !== email && canSign(pins, a, listed))) {
     const admins = pins.admins.filter((a) => a !== email);
     return { write: { admins, left: pins.left.filter((a) => admins.includes(a)) }, result: `${email} is no longer pinned as an admin here.` };
   }
   return {
-    write: { admins: pins.admins, left: [email] },
-    result: `${email} was the only admin pinned here and stays pinned, so this machine updates, upgrades and reboots for nobody until a new admin is pinned on it.`,
+    write: { admins: pins.admins, left: [...new Set([...pins.left, email])] },
+    result: `${email} was the last admin pinned here who could sign and stays pinned, so this machine takes its box-wide changes from nobody until a new admin is pinned on it.`,
   };
 }
 
@@ -351,20 +496,35 @@ export function forgetPinned(pins, email) {
  * What this box's health says about its pins, or null for a box with nowhere
  * to keep them, which offers nothing (core.js adminsSeenBy).
  *
- * `left` only while every admin pinned is one who left, and none of them is
- * on the key list again: somebody let back into the fleet has keys listed
- * once more and can sign as themselves, so the sentence would no longer be
- * true (C-5).
+ * STRANDED when it pins somebody and nobody pinned can sign, which refuses
+ * the box-wide verbs from everybody (C-5: a phone must not draw them, and
+ * the person must be told why). `stranded` is why, a code; the sentence
+ * beside it is intents.js PIN_SENTENCES, which is also what the coordinator
+ * shows in its place, so nothing the box writes reaches every viewer.
+ *
+ *  - `unchecked`: this box can check no signature at all (`checks` false).
+ *  - `left` or `unlisted`: none of the pinned is on the minter's list now,
+ *    `left` when every one of them is noted as having left. Somebody let
+ *    back in is listed again and can sign, so the box is not stranded.
+ *  - Without the list yet (`listed` null), the note alone: stranded while
+ *    every admin pinned is one who left.
  *
  * @param {PinFile} pins
  * @param {{ has: (email: string) => boolean }|null} [listed]  the people the minter lists keys for now, when this box has a list
- * @returns {{ pinned: string[]|null, left?: string, problem?: string }|null}
+ * @param {{ checks?: boolean }} [opts]  false on a box with no key of its own to fetch the list with
+ * @returns {{ pinned: string[]|null, stranded?: 'left'|'unlisted'|'unchecked', left?: string, problem?: string }|null}
  */
-export function pinReport(pins, listed = null) {
+export function pinReport(pins, listed = null, { checks = true } = {}) {
   if (pins.absent) return null;
-  if (pins.unreadable) return { pinned: null, problem: UNREADABLE };
-  const stranded = pins.admins.length > 0 && pins.admins.every((a) => pins.left.includes(a) && !listed?.has(a));
-  return { pinned: pins.admins, ...(stranded ? { left: LEFT } : {}) };
+  if (pins.unreadable) return { pinned: null, problem: PIN_SENTENCES.unreadable };
+  if (pins.admins.length === 0) return { pinned: pins.admins };
+  const allLeft = pins.admins.every((a) => pins.left.includes(a));
+  /** @type {'left'|'unlisted'|'unchecked'|null} */
+  let stranded = null;
+  if (!checks) stranded = 'unchecked';
+  else if (listed) stranded = pins.admins.some((a) => listed.has(a)) ? null : allLeft ? 'left' : 'unlisted';
+  else stranded = allLeft ? 'left' : null;
+  return { pinned: pins.admins, ...(stranded ? { stranded, left: PIN_SENTENCES[stranded] } : {}) };
 }
 
 /**
@@ -404,17 +564,32 @@ export function seedPins(dir, wanted) {
 export async function adminCommand(dir, sub, args, { envAdmins = [] } = {}) {
   const nobody = 'Nobody is pinned on this machine. It takes the fleet’s word for who is an admin, as every machine did before pinning.';
   /** @param {PinFile} pins */
-  const describe = (pins) =>
-    pins.admins.length === 0
-      ? nobody
-      : [`Pinned admins on this machine: ${pins.admins.join(', ')}.`, ...(pinReport(pins)?.left ? [LEFT] : [])].join('\n');
+  const describe = (pins) => {
+    if (pins.admins.length === 0) return nobody;
+    const left = pins.admins.filter((a) => pins.left.includes(a));
+    return [
+      `Pinned admins on this machine: ${pins.admins.join(', ')}.`,
+      ...(left.length ? [`Noted as having left the fleet: ${left.join(', ')}.`] : []),
+      ...(pinReport(pins)?.left ? [PIN_SENTENCES.left] : []),
+    ].join('\n');
+  };
+  /** What FLEETWRIGHT_ADMINS will do once nobody is pinned. */
+  const again = envAdmins.length
+    ? `\nFLEETWRIGHT_ADMINS in this machine’s env file pins ${envAdmins.join(', ')} again when the sidecar next starts.`
+    : '';
+  // ROOT IS TURNED AWAY BEFORE ANYTHING IS TOUCHED, with the command to run
+  // instead (rootRefusal). Reading the record is not refused.
+  if (sub === 'pin-admin' || sub === 'unpin-admin' || sub === 'reset-admins') {
+    const refused = rootRefusal(dir, [sub, ...args].join(' '));
+    if (refused) return { code: 1, text: refused };
+  }
 
   if (sub === 'admins') {
     const pins = readPins(dir);
     if (pins.unreadable) {
       return {
         code: 1,
-        text: `${path.join(dir, PIN_FILE)} cannot be read, so this machine refuses update, upgrade, reboot and restoring somebody else’s work from everybody. fleetwright-sidecar reset-admins replaces it with nobody pinned, and pin-admin pins somebody.`,
+        text: `${path.join(dir, PIN_FILE)} cannot be read, so this machine refuses updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work from everybody. fleetwright-sidecar reset-admins replaces it with nobody pinned, and pin-admin pins somebody.`,
       };
     }
     return { code: 0, text: describe(pins) };
@@ -428,10 +603,17 @@ export async function adminCommand(dir, sub, args, { envAdmins = [] } = {}) {
     return updatePins(dir, (pins) => {
       // A RECORD THAT WILL NOT READ IS REPLACED, by exactly what was asked
       // for: it is refusing everything until somebody here says who.
-      const before = pins.unreadable ? [] : pins.admins;
-      const admins = [...new Set([...before, ...emails])];
+      //
+      // AND THE ADMINS WHO LEFT GO, said in the reply. Somebody pinning a
+      // new admin here is replacing them; kept, they would sit beside the
+      // new one unable to sign. Named again here, one of them is pinned
+      // afresh and their note goes.
+      const kept = pins.unreadable ? [] : pins.admins.filter((a) => !pins.left.includes(a) || emails.includes(a));
+      const gone = pins.unreadable ? [] : pins.admins.filter((a) => !kept.includes(a));
+      const admins = [...new Set([...kept, ...emails])];
       if (admins.length > MAX_PINNED) return { result: { code: 1, text: `That would pin more than ${MAX_PINNED} admins, so nothing was changed.` } };
-      return { write: { admins }, result: { code: 0, text: describe({ ...pins, admins, left: [], unreadable: false }) } };
+      const text = [describe({ ...pins, admins, left: [], unreadable: false }), ...(gone.length ? [`No longer pinned, as they had left the fleet: ${gone.join(', ')}.`] : [])].join('\n');
+      return { write: { admins }, result: { code: 0, text } };
     });
   }
 
@@ -442,20 +624,13 @@ export async function adminCommand(dir, sub, args, { envAdmins = [] } = {}) {
       if (pins.unreadable) return { result: { code: 1, text: 'The record of who is pinned cannot be read. fleetwright-sidecar reset-admins replaces it.' } };
       if (!pins.admins.includes(email)) return { result: { code: 1, text: `${email} is not pinned on this machine.\n${describe(pins)}` } };
       const admins = pins.admins.filter((a) => a !== email);
-      return { write: { admins, left: pins.left.filter((a) => a !== email) }, result: { code: 0, text: describe({ ...pins, admins, left: [] }) } };
+      const left = pins.left.filter((a) => a !== email);
+      return { write: { admins, left }, result: { code: 0, text: `${describe({ ...pins, admins, left })}${admins.length ? '' : again}` } };
     });
   }
 
   if (sub === 'reset-admins') {
-    return updatePins(dir, () => ({
-      write: { admins: [] },
-      result: {
-        code: 0,
-        text: envAdmins.length
-          ? `${nobody}\nFLEETWRIGHT_ADMINS in this machine’s env file pins ${envAdmins.join(', ')} again when the sidecar next starts.`
-          : nobody,
-      },
-    }));
+    return updatePins(dir, () => ({ write: { admins: [] }, result: { code: 0, text: `${nobody}${again}` } }));
   }
 
   return { code: 2, text: `${sub} is not an admin command: admins, pin-admin, unpin-admin or reset-admins.` };

@@ -14,16 +14,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chownSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
-import { adminCommand, seedPins, LEFT } from '../src/fleet/host/pinned-admins.js';
+import { adminCommand, seedPins } from '../src/fleet/host/pinned-admins.js';
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
-import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { PIN_SENTENCES, PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { startStubHub } from './helpers/stub-hub.js';
 
 const ADA = 'ada@example.com';
@@ -201,7 +201,8 @@ test('a record that cannot be read refuses the box-wide verbs, is not written ov
 });
 
 test('somebody removed from the fleet loses their pin, unless they were the only admin', async (t) => {
-  const { sidecar, stub, dir } = await box(t, { record: { admins: [ADA, BEA] } });
+  const { sidecar, stub, say, dir } = await box(t, { record: { admins: [ADA, BEA] } });
+  say.listed.add(ADA);
   const r = await sidecar.handle(intent('forgetperson', {}, BEA));
   assert.equal(r.ok, true, r.text);
   assert.deepEqual(stub.forgotten, [BEA]);
@@ -216,7 +217,7 @@ test('the only admin leaving fails closed, and the box’s health says what to d
   const { sidecar, stub, say, dir } = await box(t, { record: { admins: [ADA] } });
   const r = await sidecar.handle(intent('forgetperson', {}, ADA));
   assert.equal(r.ok, true, r.text);
-  assert.match(r.text, /was the only admin pinned here and stays pinned/);
+  assert.match(r.text, /was the last admin pinned here who could sign and stays pinned/);
   assert.deepEqual(pins(dir), { admins: [ADA], left: [ADA] });
 
   // Their key is no longer listed, so nobody signs as them: everybody else,
@@ -227,13 +228,139 @@ test('the only admin leaving fails closed, and the box’s health says what to d
   assert.equal((await sidecar.handle(intent('reboot', {}, BEA))).ok, false);
   assert.deepEqual(stub.commands, []);
   const { admins } = await sidecar.health();
-  assert.deepEqual(admins, { pinned: [ADA], left: LEFT });
-  assert.match(LEFT, /^The only admin pinned on this machine has left the fleet, so it updates, upgrades and reboots for nobody\. A new admin is pinned on the machine itself: fleetwright-sidecar pin-admin/);
-  assert.doesNotMatch(LEFT, /@/, 'the sentence goes to members, who are not shown addresses');
+  assert.deepEqual(admins, { pinned: [ADA], stranded: 'left', left: PIN_SENTENCES.left });
+  assert.match(PIN_SENTENCES.left, /^Every admin pinned on this machine has left the fleet, so nobody can update, upgrade or reboot it, change its release channel or session image, or restore somebody else’s work on it\. A new admin is pinned on the machine itself: fleetwright-sidecar pin-admin/);
 
   // Let back in, their key is listed again and the sentence would be false.
   say.listed.add(ADA);
   assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA] });
+});
+
+test('an admin who left stays out of the count, so the next one to leave is kept and the box says why it refuses', async (t) => {
+  // The sequence that left a box with nobody able to sign and nothing said:
+  // Ada, the only admin, leaves and is kept as left; the operator pins Bea
+  // on the box; Bea leaves too. Counting Ada as an admin dropped Bea, wrote
+  // no `left`, and health went quiet while the box refused everybody.
+  const { sidecar, stub, say, dir } = await box(t, { record: { admins: [ADA] } });
+  say.listed.add(ADA);
+  await sidecar.handle(intent('forgetperson', {}, ADA));
+  say.listed.delete(ADA);
+  assert.deepEqual(pins(dir), { admins: [ADA], left: [ADA] });
+
+  const repinned = await adminCommand(dir, 'pin-admin', [BEA]);
+  assert.equal(repinned.code, 0, repinned.text);
+  assert.deepEqual(pins(dir), { admins: [BEA] }, 'the admin who left is still pinned beside the new one');
+  say.listed.add(BEA);
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [BEA] });
+
+  await sidecar.handle(intent('forgetperson', {}, BEA));
+  say.listed.delete(BEA);
+  assert.deepEqual(pins(dir), { admins: [BEA], left: [BEA] });
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [BEA], stranded: 'left', left: PIN_SENTENCES.left });
+  // Nobody fell back to the coordinator's word: an unsigned reboot, which is
+  // the fleet naming an admin, is still refused.
+  say.verdict = 'unsigned';
+  assert.equal((await sidecar.handle(intent('reboot', {}, 'admin@example.com'))).ok, false);
+  assert.deepEqual(stub.commands, []);
+});
+
+test('a pinned admin who cannot sign does not count as the one who stays', async (t) => {
+  // A record that still holds an admin who left beside a current one: the
+  // current one leaving is the last admin who can sign leaving.
+  const { sidecar, say, dir } = await box(t, { record: { admins: [ADA, BEA], left: [ADA] } });
+  say.listed.add(BEA);
+  await sidecar.handle(intent('forgetperson', {}, BEA));
+  assert.deepEqual(pins(dir), { admins: [ADA, BEA], left: [ADA, BEA] });
+});
+
+test('a mistyped pin is nobody who can sign, and the box says so rather than going quiet', async (t) => {
+  const typo = 'bea@exmaple.com';
+  const { sidecar, say, dir } = await box(t, { record: { admins: [ADA, typo] } });
+  say.listed.add(ADA);
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA, typo] });
+
+  // Ada leaving leaves only the typo, which no key is listed for: she is the
+  // last admin who can sign, so she stays, and the box refuses everybody.
+  await sidecar.handle(intent('forgetperson', {}, ADA));
+  say.listed.delete(ADA);
+  assert.deepEqual(pins(dir), { admins: [ADA, typo], left: [ADA] });
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA, typo], stranded: 'unlisted', left: PIN_SENTENCES.unlisted });
+
+  // The typo alone from the start says the same.
+  const only = await box(t, { record: { admins: [typo] } });
+  only.say.listed.add(ADA);
+  assert.equal((await only.sidecar.health()).admins.stranded, 'unlisted');
+});
+
+test('a box that can check no signature, and pins somebody, says it takes those verbs from nobody', async (t) => {
+  const { sidecar } = await box(t, { record: { admins: [ADA] } });
+  sidecar.intentKeys = null;
+  assert.equal((await sidecar.handle(intent('reboot'))).ok, false);
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA], stranded: 'unchecked', left: PIN_SENTENCES.unchecked });
+});
+
+test('the release channel and the session image are the pinned admins’, and asking which one is not', async (t) => {
+  // `channel` decides what code `update` installs, and `sandbox` the image
+  // every next session runs in: as box-wide as the update itself.
+  const { sidecar, stub } = await box(t, { record: { admins: [ADA] } });
+  for (const verb of ['channel', 'sandbox']) {
+    const to = verb === 'channel' ? 'rolling' : 'browser';
+    const r = await sidecar.handle(intent(verb, { to }, BEA));
+    assert.equal(r.ok, false, verb);
+    assert.match(r.text, /bea@example.com is not a pinned admin on this machine/, verb);
+    assert.equal((await sidecar.handle(intent(verb, {}, BEA))).ok, true, `asking ${verb}`);
+    assert.equal((await sidecar.handle(intent(verb, { to }, ADA))).ok, true, verb);
+  }
+  assert.deepEqual(stub.commands, ['/channel', '/channel rolling', '/sandbox', '/sandbox browser']);
+
+  // A box that pins nobody takes them as before.
+  const open = await box(t, { verdict: 'unsigned' });
+  assert.equal((await open.sidecar.handle(intent('channel', { to: 'rolling' }, BEA))).ok, true);
+});
+
+test('on a box that pins nobody, forgetting somebody needs no lock and no write', async (t) => {
+  // As on main: the reply is the hub's. A lock this process cannot take, held
+  // by a change that died or by a directory it cannot write, must not turn a
+  // forgetperson for somebody never pinned into a failure the coordinator
+  // retries forever.
+  const { sidecar, stub, dir } = await box(t);
+  writeFileSync(path.join(dir, 'pinned-admins.lock'), 'held');
+  const started = Date.now();
+  const r = await sidecar.handle(intent('forgetperson', {}, BEA));
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(stub.forgotten, [BEA]);
+  assert.ok(Date.now() - started < 2000, 'it waited for the lock');
+  assert.equal(existsSync(path.join(dir, 'pinned-admins.json')), false);
+});
+
+test('a lock left by a change that died is broken, and only that lock', async (t) => {
+  const dir = tempDir(t);
+  const lockFile = path.join(dir, 'pinned-admins.lock');
+  writeFileSync(lockFile, 'a process that died');
+  const old = (Date.now() - 60_000) / 1000;
+  utimesSync(lockFile, old, old);
+  assert.equal((await adminCommand(dir, 'pin-admin', [ADA])).code, 0);
+  assert.deepEqual(pins(dir), { admins: [ADA] });
+  // Nothing of the lock, or of the temp file, is left behind.
+  assert.deepEqual(readdirSync(dir), ['pinned-admins.json']);
+});
+
+test('root does not write inside the sidecar’s own directory, and says which command does', async (t) => {
+  // What root makes inside a directory another account owns, that account
+  // can swap for a link between root's calls (docs/security.md, G10). So the
+  // command line run as root refuses and names the form that runs as the
+  // owner, rather than writing and handing the file over.
+  const dir = tempDir(t);
+  if (process.getuid?.() === 0) chownSync(dir, 65534, 65534);
+  t.mock.method(process, 'getuid', () => 0);
+  assert.notEqual(statSync(dir).uid, 0);
+  const r = await adminCommand(dir, 'pin-admin', [ADA]);
+  assert.notEqual(r.code, 0);
+  assert.match(r.text, /sudo -u \S+ fleetwright-sidecar pin-admin ada@example\.com/);
+  assert.equal(existsSync(path.join(dir, 'pinned-admins.json')), false);
+  assert.equal(existsSync(path.join(dir, 'pinned-admins.lock')), false);
+  // Reading is not writing.
+  assert.equal((await adminCommand(dir, 'admins', [])).code, 0);
 });
 
 test('on the box, whoever runs it lists, pins, unpins and resets, the first and the last included', async (t) => {
@@ -246,14 +373,17 @@ test('on the box, whoever runs it lists, pins, unpins and resets, the first and 
   assert.equal((await adminCommand(dir, 'pin-admin', ['not an address'])).code, 2);
   assert.equal((await adminCommand(dir, 'unpin-admin', ['cy@example.com'])).code, 1);
   assert.equal((await adminCommand(dir, 'unpin-admin', [BEA])).code, 0);
-  assert.equal((await adminCommand(dir, 'unpin-admin', [ADA])).code, 0, 'the last admin is removed here');
+  const last = await adminCommand(dir, 'unpin-admin', [ADA], { envAdmins: [ADA] });
+  assert.equal(last.code, 0, 'the last admin is removed here');
+  assert.match(last.text, /FLEETWRIGHT_ADMINS in this machine’s env file pins ada@example.com again when the sidecar next starts/);
   assert.deepEqual(pins(dir), { admins: [] });
 
   // THE WAY BACK from an admin who left, and from a record that will not read.
   pinFile(dir, { admins: [ADA], left: [ADA] });
   assert.match((await adminCommand(dir, 'admins', [])).text, /has left the fleet/);
-  await adminCommand(dir, 'pin-admin', [BEA]);
-  assert.deepEqual(pins(dir), { admins: [ADA, BEA] });
+  const back = await adminCommand(dir, 'pin-admin', [BEA]);
+  assert.match(back.text, /No longer pinned, as they had left the fleet: ada@example\.com\./);
+  assert.deepEqual(pins(dir), { admins: [BEA] });
   writeFileSync(path.join(dir, 'pinned-admins.json'), 'not json');
   assert.equal((await adminCommand(dir, 'admins', [])).code, 1);
   const reset = await adminCommand(dir, 'reset-admins', [], { envAdmins: [ADA] });

@@ -69,14 +69,18 @@ function usage() {
                                  token admits the machine; CLAIM says whose runner it is.
   fleetwright-sidecar identity   print this box's key fingerprint
   fleetwright-sidecar doctor     check this box can drive its hub
-  fleetwright-sidecar admins     who this box takes update, upgrade, reboot and restoring
-                                 somebody else's work from (docs/signed-intents.md)
+  fleetwright-sidecar admins     who this box takes update, upgrade, reboot, a new channel
+                                 or sandbox image and restoring somebody else's work
+                                 from (docs/signed-intents.md)
   fleetwright-sidecar pin-admin ADDRESS...
-                                 pin them; the first admin is only ever pinned here
+                                 pin them; the first admin is only ever pinned here.
+                                 Drops the admins who left the fleet.
   fleetwright-sidecar unpin-admin ADDRESS
                                  unpin one, the last one included
   fleetwright-sidecar reset-admins
                                  pin nobody: the box takes the fleet's word again
+                                 These three run as the account that owns the box's
+                                 key, never as root: sudo -u <that account> ...
 
 Environment:
   FLEETWRIGHT_COORDINATOR_URL    required — the origin this sidecar pins
@@ -633,8 +637,12 @@ async function identity() {
 
 // WHO THIS BOX TAKES REBOOTS AND UPDATES FROM, read and changed here, on the
 // box, by whoever runs it (src/fleet/host/pinned-admins.js, adminCommand).
-// Run as the sidecar's user, beside whose key the record lives; the running
-// sidecar reads it on every request, so nothing needs restarting.
+// Run as the sidecar's user, beside whose key the record lives:
+// `sudo -u fleetwright-sidecar fleetwright-sidecar pin-admin ...` on Linux.
+// Run as root, a change is refused with that sentence, because root writing
+// inside another account's directory is a link that account can plant
+// (pinned-admins.js rootRefusal). The running sidecar reads the record on
+// every request, so nothing needs restarting.
 /** @param {string} sub @param {string[]} args */
 async function admins(sub, args) {
   try {
