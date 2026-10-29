@@ -26,6 +26,7 @@ import { writeVariant } from '../src/core/sandbox-variant.js';
 import { armConfirmation, evidencePath } from '../src/core/update-confirm.js';
 import { requestRestart } from '../src/core/restart-watch.js';
 import { defaultSocketDir } from '../src/core/hook-socket.js';
+import { resolveUserns } from '../src/config.js';
 
 /** @param {import('node:test').TestContext} t @param {Record<string, unknown>} [over] */
 async function hub(t, over = {}) {
@@ -122,20 +123,34 @@ test('a pin from the environment is reported as one, and no sandbox means no san
   assert.equal((await plain.state()).sandbox, null);
 });
 
-test('/api/state says whether a session here is contained, and says no when it is not', async (t) => {
+test('/api/state says whether a session here is contained, and why not when it is not', async (t) => {
   // The coordinator lets a member's session onto a box they do not administer
   // only on `sandboxed: true` (docs/security.md G8), so it is said only when it
-  // is so. A sandbox the operator let `--privileged` through is not one, and
-  // neither is `host`: container root is this process's uid, which is what a
-  // root-run hub and a docker engine are downgraded to (config.js
-  // resolveUserns). An unset namespace has not said nomap.
-  assert.equal((await (await hub(t)).state()).sandboxed, true);
-  assert.equal((await (await hub(t, { sandbox: false })).state()).sandboxed, false);
-  const opened = await hub(t, { sandboxExtraArgs: ['--privileged'], sandboxAllowUnsafeArgs: true });
-  assert.equal((await opened.state()).sandboxed, false);
-  assert.equal((await (await hub(t, { sandboxExtraArgs: ['--device=/dev/kvm'] })).state()).sandboxed, true, 'an extra arg that adjusts the sandbox is still one');
-  assert.equal((await (await hub(t, { sandboxUserns: 'host' })).state()).sandboxed, false, 'host user namespace: container root is the service uid');
-  assert.equal((await (await hub(t, { sandboxUserns: undefined })).state()).sandboxed, false, 'an unset namespace is not nomap');
+  // is so, and beside a `false` the box says why, because each reason is
+  // opened by a different setting (scheduler.js NOT_CONTAINED). A sandbox the
+  // operator let `--privileged` through is not one, and neither is the host
+  // user namespace: container root is this process's uid, or real root on a
+  // root-run hub. The namespace comes from resolveUserns as loadConfig takes
+  // it, so a root service and a docker engine are the downgrades it really
+  // makes. An unset namespace has not said nomap.
+  /** @param {ReturnType<typeof resolveUserns>} u */
+  const ns = (u) => ({ sandboxUserns: u.mode, sandboxUsernsForcedBy: u.forcedBy });
+  /** @type {Array<[string, Record<string, unknown>, boolean, string|null]>} */
+  const cases = [
+    ['contained', ns(resolveUserns('nomap', 'podman', { uid: 1000 })), true, null],
+    ['an extra arg that adjusts the sandbox is still one', { sandboxExtraArgs: ['--device=/dev/kvm'] }, true, null],
+    ['no sandbox', { sandbox: false }, false, 'off'],
+    ['--privileged let through', { sandboxExtraArgs: ['--privileged'], sandboxAllowUnsafeArgs: true }, false, 'unsafe_args'],
+    ['a root service, with the sandbox on', ns(resolveUserns('nomap', 'podman', { uid: 0 })), false, 'userns_root'],
+    ['a docker engine', ns(resolveUserns('nomap', 'docker', { uid: 1000 })), false, 'userns_docker'],
+    ['host asked for', ns(resolveUserns('host', 'podman', { uid: 1000 })), false, 'userns_host'],
+    ['an unset namespace', { sandboxUserns: undefined }, false, 'userns_host'],
+  ];
+  for (const [what, over, sandboxed, why] of cases) {
+    const state = await (await hub(t, over)).state();
+    assert.equal(state.sandboxed, sandboxed, what);
+    assert.equal(state.sandboxedWhy, why, what);
+  }
 });
 
 test('a reader that fails leaves a null, not a default', async (t) => {

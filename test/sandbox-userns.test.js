@@ -68,8 +68,8 @@ test('the operator refusal of --userns=host still stands beside the default', ()
 });
 
 test('resolveUserns: nomap on a non-root box with podman', () => {
-  assert.deepEqual(resolveUserns('nomap', 'podman', { uid: 1000 }), { mode: 'nomap', note: '' });
-  assert.deepEqual(resolveUserns('nomap', '/usr/bin/podman', { uid: 1000 }), { mode: 'nomap', note: '' });
+  assert.deepEqual(resolveUserns('nomap', 'podman', { uid: 1000 }), { mode: 'nomap', note: '', forcedBy: null });
+  assert.deepEqual(resolveUserns('nomap', '/usr/bin/podman', { uid: 1000 }), { mode: 'nomap', note: '', forcedBy: null });
 });
 
 test('resolveUserns: root cannot have nomap, and is told why', () => {
@@ -80,19 +80,41 @@ test('resolveUserns: root cannot have nomap, and is told why', () => {
   assert.equal(r.mode, 'host');
   assert.match(r.note, /non-root service user/);
   assert.match(r.note, /container root IS/);
+  // Which downgrade, because the box tells the fleet (http.js uncontained),
+  // and the way on is the operator's: install.sh keeps whoever ran it, so
+  // the note does not say the installer already made a user.
+  assert.equal(r.forcedBy, 'root');
+  assert.match(r.note, /its own non-root user/);
+  assert.match(r.note, /from a root shell is root/);
 });
 
 test('resolveUserns: docker has no nomap, and is told why', () => {
   const r = resolveUserns('nomap', 'docker', { uid: 1000 });
   assert.equal(r.mode, 'host');
   assert.match(r.note, /docker/);
+  assert.equal(r.forcedBy, 'docker');
   assert.equal(resolveUserns('nomap', '/usr/bin/docker', { uid: 1000 }).mode, 'host');
 });
 
 test('resolveUserns: host is honoured silently, nonsense is corrected loudly', () => {
-  assert.deepEqual(resolveUserns('host', 'podman', { uid: 1000 }), { mode: 'host', note: '' });
-  assert.deepEqual(resolveUserns('host', 'podman', { uid: 0 }), { mode: 'host', note: '' });
+  assert.deepEqual(resolveUserns('host', 'podman', { uid: 1000 }), { mode: 'host', note: '', forcedBy: null });
+  assert.deepEqual(resolveUserns('host', 'podman', { uid: 0 }), { mode: 'host', note: '', forcedBy: null });
   const r = resolveUserns('auto', 'podman', { uid: 1000 });
   assert.equal(r.mode, 'nomap');
   assert.match(r.note, /auto is not a mode/);
+});
+
+test('a box whose sessions run in the host namespace says on every start that members are refused there', async () => {
+  // It reports itself as not containing a session (http.js uncontained), so
+  // the fleet stops starting or resuming a member's session there; on a box
+  // that took everyone's work, that changed with an update and said nothing.
+  // Whether the namespace was asked for or fallen back to, the box says so.
+  const { loadConfig, validateConfig } = await import('../src/config.js');
+  const warned = (/** @type {Record<string, string>} */ env) =>
+    validateConfig(loadConfig({ PATH: process.env.PATH ?? '', ...env })).warnings.filter((w) => /refuses other members/.test(w));
+  assert.equal(warned({ FLEETWRIGHT_SANDBOX: '1', FLEETWRIGHT_SANDBOX_USERNS: 'host' }).length, 1);
+  assert.equal(warned({ FLEETWRIGHT_SANDBOX: '1', FLEETWRIGHT_PODMAN_BIN: 'docker' }).length, 1);
+  assert.match(warned({ FLEETWRIGHT_SANDBOX: '1', FLEETWRIGHT_SANDBOX_USERNS: 'host' })[0], /only for its admin, or the one person the box works for/);
+  // No sandbox is not this line's to say: that box was never contained.
+  assert.deepEqual(warned({ FLEETWRIGHT_SANDBOX_USERNS: 'host' }), []);
 });

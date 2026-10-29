@@ -86,6 +86,7 @@ const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {
  * @property {boolean|null} channelPinned
  * @property {{ variant: string, image: string, pinned: boolean }|null} sandbox
  * @property {boolean|null} sandboxed
+ * @property {string|null} sandboxedWhy
  * @property {number|null} houseRules
  */
 
@@ -114,6 +115,14 @@ export function factsFrom(state) {
         ? { variant: sandbox.variant, image: sandbox.image, pinned: sandbox.pinned }
         : null,
     sandboxed: typeof state?.sandboxed === 'boolean' ? state.sandboxed : null,
+    // Why not, and only beside a `false`: a reason next to `true` or next to
+    // cannot tell would be a reason for nothing. A short code and nothing
+    // else, because it is carried to the coordinator and read there as one
+    // (scheduler.js NOT_CONTAINED), never as prose.
+    sandboxedWhy:
+      state?.sandboxed === false && typeof state?.sandboxedWhy === 'string' && /^[a-z_]{1,32}$/.test(state.sandboxedWhy)
+        ? state.sandboxedWhy
+        : null,
     houseRules: typeof state?.houseRules === 'number' ? state.houseRules : null,
   };
 }
@@ -2210,6 +2219,12 @@ export class Sidecar {
         // (hosts.js runsSessionsFor, docs/security.md G8). Null from a hub
         // too old to say, which is cannot tell and is treated as not.
         sandboxed: this.facts?.sandboxed ?? null,
+        // AND WHY NOT, beside a `false` (http.js uncontained): the sandbox
+        // off, opened by FLEETWRIGHT_SANDBOX_ARGS, or in the host user
+        // namespace because the hub runs as root, runs docker, or was told
+        // to. The coordinator names the way on from it; null from a hub too
+        // old to say, which it reads as off.
+        sandboxedWhy: this.facts?.sandboxedWhy ?? null,
       };
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);

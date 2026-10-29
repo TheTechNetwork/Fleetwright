@@ -48,6 +48,36 @@ import { readMarker } from '../core/restart-watch.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+/** @typedef {'off'|'unsafe_args'|'userns_root'|'userns_docker'|'userns_host'} UncontainedWhy */
+
+/**
+ * Why a session on this box is not contained, or null when it is.
+ *
+ * The first reason that applies, in the order an operator would fix them: no
+ * sandbox at all; a FLEETWRIGHT_SANDBOX_ARGS the operator let through that
+ * ends it (sandbox-args.js), because a `--privileged` sandbox is not one; and
+ * a sandbox in the host user namespace. Under `host` container root is this
+ * process's uid, which owns the credentials and the loopback token, or is
+ * real root on a root-run hub — config.js resolveUserns downgrades a root
+ * service and a docker engine to it, and an operator can ask for it. Which
+ * of the three it was is kept apart because each is opened differently. A
+ * namespace that is not `nomap`, set or not, has not said nomap, so it is
+ * not contained either.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {UncontainedWhy|null}
+ */
+function uncontained(cfg) {
+  if (!cfg.sandbox) return 'off';
+  if (unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length) return 'unsafe_args';
+  if (cfg.sandboxUserns !== 'nomap') {
+    if (cfg.sandboxUsernsForcedBy === 'root') return 'userns_root';
+    if (cfg.sandboxUsernsForcedBy === 'docker') return 'userns_docker';
+    return 'userns_host';
+  }
+  return null;
+}
+
 export class HttpAdapter {
   /**
    * @param {import('../config.js').Config} cfg
@@ -660,7 +690,7 @@ export class HttpAdapter {
    * apps already render null as "not reported". Caught per field rather than
    * around the whole object so one bad file does not blank the others.
    *
-   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, houseRules: number|null }}
+   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, sandboxedWhy: UncontainedWhy|null, houseRules: number|null }}
    */
   #hostFacts() {
     const cfg = this.cfg;
@@ -685,19 +715,20 @@ export class HttpAdapter {
       // say: it is null for a box that could not read its variant too, and a
       // sidecar from before #681 sent one whether or not the box used it. The
       // coordinator lets a member's session onto a box they do not administer
-      // only on `true`, because without the sandbox a session is a pane under
-      // this account, which holds every person's credentials here and the
-      // loopback token (docs/security.md G8). So `true` is said only when it
-      // is so: the sandbox on, the user namespace `nomap` — container root is
-      // a subordinate uid, not this process — and no FLEETWRIGHT_SANDBOX_ARGS
-      // the operator let through that end containment (sandbox-args.js). A
-      // `--privileged` sandbox is not one. Neither is `host`: config.js
-      // downgrades a root-run hub and a docker engine to it, and under `host`
-      // container root IS the service uid, which owns the credentials and the
-      // loopback token. An unset namespace has not said `nomap`, so it is not
-      // contained either. Read from configuration that cannot fail, so it is
-      // a boolean and never null.
-      sandboxed: Boolean(cfg.sandbox) && cfg.sandboxUserns === 'nomap' && !unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length,
+      // only on `true`, because without containment a session holds what this
+      // account holds: every person's credentials here and the loopback token
+      // (docs/security.md G8). So `true` is said only when it is so, and
+      // uncontained(), above the class, is the list of what makes it not
+      // so. Read from configuration that cannot fail, so it is a boolean and
+      // never null.
+      sandboxed: uncontained(cfg) === null,
+      // AND WHY NOT, beside a `false`: the way on is a different setting for
+      // each, and a refusal that names the wrong one sent the operator of a
+      // root-run box to turn on a sandbox that was already on. Null beside
+      // `true`. Additive: a coordinator from before it reads `false` alone,
+      // and a newer one reads a box without it as `off` (scheduler.js
+      // NOT_CONTAINED).
+      sandboxedWhy: uncontained(cfg),
       // How many characters of house rules every session here is given, 0 when
       // the file exists and is refused (too big, not a file), null when there
       // is none — the shape the sidecar always sent, moved here unchanged.
