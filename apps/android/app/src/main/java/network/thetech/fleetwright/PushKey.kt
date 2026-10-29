@@ -32,30 +32,35 @@ internal object PushKey {
     private const val TAG = "Fleetwright"
 
     /**
-     * The key registration sends, or null when this phone cannot open what
-     * would be sealed to it. Throws when the keystore did not answer, and the
-     * caller then registers nothing this time.
+     * The key registration sends, or null when this phone has never sent one
+     * and has none it can use now. Never throws.
      *
-     * WHY A THROW AND NOT A NULL. The coordinator keeps a key only when the
-     * registration sends one (core.js, registerDevice), so a registration
-     * without it is a phone put back on plaintext until the next one. Over a
-     * hiccup that is the wrong trade; the next launch registers again.
+     * A PHONE THAT HAS SENT A KEY NEVER SENDS NONE AGAIN. The coordinator
+     * keeps a key only when the registration sends one (core.js,
+     * registerDevice), so a registration without it puts this phone back on
+     * plaintext. When the keystore does not answer, or a key from an earlier
+     * launch fails its self-test, the registration still goes, with the last
+     * key a registration sent ([Settings.pushKeySent]): the FCM address is
+     * refreshed, the coordinator keeps sealing, and anything this phone
+     * cannot open is the fallback sentence, which still wakes the person.
      *
-     * NULL ONLY FOR A PHONE THAT CANNOT: Android 11; a keystore that will not
-     * make an agreement key, which on a phone with no key yet leaves nothing
-     * at the coordinator to lose; or a key made in this call that fails the
-     * self-test, sealing a probe to it in software and opening it in the
-     * keystore. That key is deleted, so the next launch makes a fresh one
-     * rather than failing the same way for good.
+     * NULL ONLY ON A PHONE THAT HAS NEVER SENT ONE, and then for any of:
+     * Android 11; a keystore that will not make an agreement key; a key made
+     * in this call that fails the self-test, sealing a probe to it in
+     * software and opening it in the keystore (that key is deleted, so the
+     * next launch makes a fresh one rather than failing the same way for
+     * good); or a keystore error. Nothing was ever sealed to such a phone,
+     * so registering it without a key at once loses nothing.
      *
-     * AN ERROR THAT DOES NOT GO AWAY IS NOT A HICCUP, and the throw would
-     * keep it quiet for good: no registration means a new FCM address is
-     * never sent, and push stops with nothing on screen to say so. So the
-     * failures are counted in [settings], with the time of the first, and
-     * after [PushKeyRule.ATTEMPTS] of them in a row spread over at least a
-     * day the key is replaced ([startOver]). Any registration that gets as
-     * far as the key clears the count. The same rule as
-     * `PushKey.registrationKey` in PushCrypto.swift.
+     * AN ERROR THAT DOES NOT GO AWAY IS NOT A HICCUP, and the fallback would
+     * leave every notification on the fallback sentence for good. So the
+     * failures are counted in [settings], with the time of the first, at
+     * most one a launch, and after [PushKeyRule.ATTEMPTS] of them in a row
+     * spread over at least a day the key is replaced ([startOver]). A
+     * replacement that fails falls back to the last key sent too. Any
+     * registration that gets as far as a key clears the count. The rule is
+     * [PushKeyRule.choose], the same as `PushKeyRule.choose` in
+     * PushCrypto.swift.
      *
      * ONE AT A TIME. The first sign-in registers from MainActivity and from
      * Messaging.onRegistered at once, and on a phone with no key yet each
@@ -65,20 +70,37 @@ internal object PushKey {
     @Synchronized
     fun forRegistration(settings: Settings): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
-        return try {
-            fromKeystore().also { settings.pushKeyFailures = null }
-        } catch (e: Exception) {
-            val now = System.currentTimeMillis()
-            val failures = PushKeyRule.failed(settings.pushKeyFailures, now)
-            if (!PushKeyRule.startOver(failures, now)) {
-                settings.pushKeyFailures = failures
-                throw e
+        val choice = PushKeyRule.choose(
+            failures = settings.pushKeyFailures,
+            sent = settings.pushKeySent,
+            now = System.currentTimeMillis(),
+            countedThisLaunch = failedThisLaunch,
+            read = { fromKeystore() },
+            replace = { startOver() },
+        )
+        choice.failure?.let { e ->
+            when {
+                choice.replaced -> Log.w(TAG, "push key: registrations have not been able to use it for a day or more, so it was replaced (${e.message})")
+                choice.pushKey == null -> Log.w(TAG, "push key: could not use it, and none was ever sent, so this registration sends none (${e.message})")
+                else -> Log.w(TAG, "push key: could not use it this time, so this registration sends the last one sent (${e.message})")
             }
-            Log.w(TAG, "push key: ${failures.count} registrations in a row could not use it, the first a day or more ago, so it is being replaced (${e.message})")
-            settings.pushKeyFailures = null
-            startOver()
         }
+        failedThisLaunch = choice.failure != null
+        settings.pushKeyFailures = choice.failures
+        // SAVED HERE, BEFORE THE POST, not after its answer: registerDevice
+        // posts what this returns. A post the coordinator took whose answer
+        // was lost would otherwise leave this phone believing it never sent
+        // a key, and free to register without one.
+        choice.pushKey?.let { settings.pushKeySent = it }
+        return choice.pushKey
     }
+
+    /**
+     * Whether a registration in this process has already counted a failure.
+     * MainActivity and Messaging can both register in one launch, and two
+     * failures a second apart are one bad moment, not two.
+     */
+    private var failedThisLaunch = false
 
     private fun fromKeystore(): String? {
         val ks = keyStore()
@@ -103,9 +125,10 @@ internal object PushKey {
             }
         }
         // A KEY MADE JUST NOW HAS NEVER BEEN SENT, so nothing it fails at
-        // can cost a key the coordinator holds: it goes, and this phone
-        // registers without one. A key from an earlier launch that cannot be
-        // read this time is the hiccup the throw is for.
+        // can cost a key the coordinator holds: it goes, and this
+        // registration sends the last key sent, or none on a phone that has
+        // never sent one. A key from an earlier launch that cannot be read
+        // this time is the hiccup the throw is for.
         return try {
             checked(ks, fresh)
         } catch (e: Exception) {
@@ -141,9 +164,9 @@ internal object PushKey {
      *
      * NULL HERE IS THE PLATFORM SAYING NO, not a hiccup: the old key has
      * failed for a day, and now the keystore will not delete it, make a new
-     * one, or open a seal with the new one. The phone then registers without
-     * a key, which keeps its notifications coming in the clear rather than
-     * not at all, and the next launch tries the keystore again from the start.
+     * one, or open a seal with the new one. The registration then sends the
+     * last key sent, or none on a phone that has never sent one, and the next
+     * launch tries the keystore again from the start.
      */
     private fun startOver(): String? = try {
         keyStore().deleteEntry(ALIAS)

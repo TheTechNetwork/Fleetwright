@@ -276,9 +276,9 @@ internal object PushReveal {
 /**
  * What registration does when the push key fails, decided without the
  * keystore so the JVM test can hold it to the rule. PushKey does the keystore
- * half. `PushKeyRule` in PushCrypto.swift is the same replacement rule on
- * iOS, with the same numbers; iOS has no [afterSelfTest], because its
- * self-test runs in memory and has no daemon to miss.
+ * half. `PushKeyRule` in PushCrypto.swift is the same rule on iOS, with the
+ * same numbers; iOS has no [afterSelfTest], because its self-test runs in
+ * memory and has no daemon to miss, so any failure of it counts there.
  */
 internal object PushKeyRule {
     const val ATTEMPTS = 3
@@ -293,8 +293,9 @@ internal object PushKeyRule {
      * without one: it has never been sent, so nothing at the coordinator is
      * sealed to it.
      *
-     * A KEY FROM AN EARLIER LAUNCH THAT FAILS IS KEPT, and nothing is
-     * registered this time. It is the key the coordinator seals to, and
+     * A KEY FROM AN EARLIER LAUNCH THAT FAILS IS KEPT, and the registration
+     * sends the last key sent ([choose]). It is the key the coordinator
+     * seals to, and
      * "false" cannot tell a key the keystore will never agree with from a
      * keystore that did not answer: AOSP's keystore2 reports a daemon that
      * failed at KeyAgreement.init as an InvalidKeyException wrapping
@@ -329,8 +330,50 @@ internal object PushKeyRule {
      * a launch here can register twice, from MainActivity and from
      * Messaging), and one failure a day ago may have been the only launch
      * since. A key that has failed on both counts is not coming back, and
-     * every day it stays is a day a new FCM address cannot be sent.
+     * every day it stays is a day every notification is the fallback
+     * sentence.
      */
     fun startOver(failures: Failures, now: Long): Boolean =
         failures.count >= ATTEMPTS && now - failures.firstAt >= SPAN_MS
+
+    /** What one registration decided. */
+    class Choice(
+        /** The key it sends: null only on a phone that has never sent one. */
+        val pushKey: String?,
+        /** The count to store, null once a registration got as far as a key. */
+        val failures: Failures?,
+        /** Why the stored key could not be used, when it could not. */
+        val failure: Exception?,
+        /** Whether the stored key was replaced this time. */
+        val replaced: Boolean,
+    )
+
+    /**
+     * The key a registration sends.
+     *
+     * [read] is the stored key's public half, null when this phone cannot
+     * make one, and throws when the key cannot be used this time; [replace]
+     * makes a new one, or null when it cannot; [sent] is the last key a
+     * registration sent. A KEY ERROR NEVER MEANS NO KEY once one has been
+     * sent: [sent] goes instead, before the threshold, and after it when the
+     * replacement fails too. [countedThisLaunch] keeps a second failure in
+     * the same launch from counting again.
+     */
+    fun choose(
+        failures: Failures?,
+        sent: String?,
+        now: Long,
+        countedThisLaunch: Boolean,
+        read: () -> String?,
+        replace: () -> String?,
+    ): Choice {
+        val key = try {
+            read()
+        } catch (e: Exception) {
+            val after = if (countedThisLaunch && failures != null) failures else failed(failures, now)
+            if (!startOver(after, now)) return Choice(sent, after, e, replaced = false)
+            return Choice(replace() ?: sent, null, e, replaced = true)
+        }
+        return Choice(key ?: sent, null, null, replaced = false)
+    }
 }

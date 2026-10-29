@@ -2695,14 +2695,12 @@ class Fleet(
      */
     suspend fun registerDevice(token: String): Boolean = withContext(Dispatchers.IO) {
         // THE KEY THIS INSTALL OPENS WITH, so its notifications are sealed to
-        // it (docs/push-encryption.md). Asked first, outside the runCatching
-        // below: a keystore that did not answer throws out of here before
-        // anything is posted, because the coordinator keeps a key only when
-        // one is sent and a registration without it would put this phone back
-        // on plaintext. Both callers log the throw, and the next launch
-        // registers again; an error that lasts a day replaces the key rather
-        // than leaving this phone unregistered for good. Null only for a
-        // phone that cannot (PushKey).
+        // it (docs/push-encryption.md). A keystore that did not answer does
+        // not stop the registration: it goes with the last key this phone
+        // sent, because the coordinator keeps a key only when one is sent and
+        // this phone must never go back to plaintext, nor stop sending a new
+        // FCM address. Null only on a phone that has never sent a key and
+        // cannot use one now (PushKey.forRegistration).
         val pushKey = PushKey.forRegistration(settings)
         val body = JSONObject()
             .put("platform", "android")
@@ -3518,6 +3516,16 @@ class Settings(context: Context) {
     var xoVia: String
         get() = prefs.getString("xoVia", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoVia") else putString("xoVia", value) }.apply()
+
+    /**
+     * The public key the last registration with one sent
+     * (PushKey.forRegistration). Not a secret: it is the half the
+     * coordinator already holds. It goes with the app, as the Keystore entry
+     * does.
+     */
+    internal var pushKeySent: String?
+        get() = prefs.getString("pushKeySent", null)
+        set(value) = prefs.edit().apply { if (value == null) remove("pushKeySent") else putString("pushKeySent", value) }.apply()
 
     /**
      * Registrations in a row the push key failed, and when the first was
