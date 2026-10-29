@@ -967,6 +967,14 @@ struct SessionKindsView: View {
                             }
                             .fleetType(.label)
                         }
+                        Picker("Permissions", selection: Binding(
+                            get: { kind.mode == "safe" ? "safe" : "dangerous" },
+                            set: { kind.mode = $0 == "safe" ? "safe" : "dangerous" }
+                        )) {
+                            Text("Permissions bypassed").tag("dangerous")
+                            Text("Permission prompts on").tag("safe")
+                        }
+                        .fleetType(.label)
                     }
                 }
                 .onDelete { idx in
@@ -998,7 +1006,8 @@ struct SessionKindsView: View {
                 Say "start a dev session on my fleet". A new word can take a moment before \
                 Siri recognises it. A prefix groups sessions in the list: "dev: refactor auth". \
                 A task makes the word do something: spoken, that is the only way a session gets \
-                one, because there is no screen to drive it from afterwards.
+                one, because there is no screen to drive it from afterwards. \
+                Permissions bypassed is the usual start. Choose permission prompts on and a start of this kind asks first.
                 """)
             }
         }

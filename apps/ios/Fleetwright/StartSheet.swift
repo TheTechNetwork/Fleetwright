@@ -127,6 +127,10 @@ struct StartSheet: View {
     @State private var task = ""
     @State private var title = ""
     @State private var kind: SessionKind?
+    /// safe or dangerous. Dangerous is the fleet default and it is named,
+    /// because a start that omits the mode runs with permission checks off
+    /// and nothing on this sheet used to say so.
+    @State private var permission = "dangerous"
     @State private var host = ""
     @State private var hosts: [String] = []
     @State private var profiles: [Fleet.Profile] = []
@@ -331,6 +335,9 @@ struct StartSheet: View {
                         // the picker stays editable: the kind is a default, not
                         // a decision made last month that cannot be revisited.
                         .onChange(of: kind) { _, now in
+                            if now?.mode == "safe" || now?.mode == "dangerous", let mode = now?.mode {
+                                permission = mode
+                            }
                             if let kindHost = now?.host, !kindHost.isEmpty { host = kindHost }
                             // And a kind that names a task fills that too, on
                             // the same terms — but only if the fleet still has
@@ -479,6 +486,25 @@ struct StartSheet: View {
                             }
                         }
                     }
+                }
+
+                // ALWAYS SHOWN. Both modes exist on every box, and the one a
+                // start used to take without asking is the dangerous one.
+                // The sentence under the picker is the label: the control
+                // that is already selected still has to say what it does.
+                Section {
+                    Picker("Permissions", selection: $permission) {
+                        Text("Permissions bypassed").tag("dangerous")
+                        Text("Permission prompts on").tag("safe")
+                    }
+                } header: {
+                    Text("Permissions").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                } footer: {
+                    Text(permission == "safe"
+                         ? "Permission prompts are on for this session. It stops and asks before it runs a command."
+                         : "Permissions bypassed. This is the usual start: the session runs commands without asking.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
                 }
 
                 // ASKED WHERE IT MATTERS. A runner fetches its owner's Claude
@@ -636,7 +662,7 @@ struct StartSheet: View {
         onStart(StartRequest(
             title: finalTitle.isEmpty ? nil : finalTitle,
             brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
-            mode: kind?.mode,
+            mode: permission == "safe" ? "safe" : "dangerous",
             host: host.isEmpty || platform != nil ? nil : host,
             profile: profile.isEmpty || platform != nil || !trimmedTask.isEmpty ? nil : profile,
             task: trimmedTask.isEmpty ? nil : trimmedTask,

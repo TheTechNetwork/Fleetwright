@@ -3,6 +3,7 @@ package network.thetech.fleetwright
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
@@ -150,6 +151,14 @@ fun StartSheet(
     var titleUntouched by remember { mutableStateOf(true) }
     var kind by remember {
         mutableStateOf(preselectedKindId?.let { id -> kinds.firstOrNull { it.id == id } })
+    }
+    // safe or dangerous. Dangerous is the fleet default and it is named,
+    // because a start that omits the mode runs with permission checks off
+    // and nothing on this sheet used to say so. A shortcut's kind is applied
+    // here, before the first frame, so the sheet does not flash the other one.
+    var permission by remember {
+        val stored = kind?.mode
+        mutableStateOf(if (stored == "safe") "safe" else "dangerous")
     }
     var host by remember { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<String>()) }
@@ -386,6 +395,8 @@ fun StartSheet(
                                     // kind is a default, not a decision made
                                     // last month that cannot be revisited.
                                     kind?.let { chosen ->
+                                        val mode = chosen.mode
+                                        if (mode == "safe" || mode == "dangerous") permission = mode
                                         if (chosen.host.isNotBlank()) host = chosen.host
                                         // Only if the fleet still has it — a
                                         // kind naming a deleted profile would
@@ -591,6 +602,34 @@ fun StartSheet(
                         }
                     }
                 }
+                // ALWAYS SHOWN. Both modes exist on every box, and the one a
+                // start used to take without asking is the dangerous one.
+                // The sentence under the chips is the label: the control that
+                // is already selected still has to say what it does. 48dp is
+                // the thumb target; the two chips are a row with a gap so a
+                // press does not land on both.
+                Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                    Text("Permissions", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                        AssistChip(
+                            onClick = { permission = "dangerous" },
+                            label = { Text(if (permission == "dangerous") "Permissions bypassed \u2713" else "Permissions bypassed") },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        )
+                        AssistChip(
+                            onClick = { permission = "safe" },
+                            label = { Text(if (permission == "safe") "Permission prompts on \u2713" else "Permission prompts on") },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        )
+                    }
+                    Text(
+                        if (permission == "safe")
+                            "Permission prompts are on for this session. It stops and asks before it runs a command."
+                        else
+                            "Permissions bypassed. This is the usual start: the session runs commands without asking.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 // ASKED WHERE IT MATTERS: a runner fetches its owner's Claude
                 // login when it joins, and nothing said so until after it had.
                 if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
@@ -632,7 +671,7 @@ fun StartSheet(
                         StartRequest(
                             title = finalTitle.ifBlank { null },
                             brief = brief.trim().ifBlank { null },
-                            mode = kind?.mode,
+                            mode = if (permission == "safe") "safe" else "dangerous",
                             host = host.ifBlank { null }.takeIf { platform.isEmpty() },
                             profile = profile.ifBlank { null }.takeIf { platform.isEmpty() && task.isBlank() },
                             task = task.trim().ifBlank { null },

@@ -3,6 +3,7 @@ package network.thetech.fleetwright
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -61,7 +62,8 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                 Text(
                     "Say \"start a dev session\". A word here becomes a shortcut straight away — "
                         + "nothing else to set up. A task makes the word do something: spoken, that is the "
-                        + "only way a session gets one, because there is no screen to drive it from afterwards.",
+                        + "only way a session gets one, because there is no screen to drive it from afterwards. "
+                        + "Permissions bypassed is the usual start. Choose permission prompts on and a start of this kind asks first.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 kinds.forEachIndexed { i, k ->
@@ -93,6 +95,18 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                     // Only when the fleet has answered with something. A picker
                     // whose only entry is "Nothing" is furniture, and on a fleet
                     // with no profiles it would imply a broken feature.
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                        AssistChip(
+                            onClick = { kinds[i] = k.copy(mode = "dangerous") },
+                            label = { Text(if (k.mode != "safe") "Permissions bypassed \u2713" else "Permissions bypassed") },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        )
+                        AssistChip(
+                            onClick = { kinds[i] = k.copy(mode = "safe") },
+                            label = { Text(if (k.mode == "safe") "Permission prompts on \u2713" else "Permission prompts on") },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        )
+                    }
                     if (offered.isNotEmpty()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                             AssistChip(
