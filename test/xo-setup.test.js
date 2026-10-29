@@ -482,6 +482,51 @@ test('a policy is chosen on the phone from the pool it was shown, sealed both wa
   assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, false);
 });
 
+test('a policy that names the live boxes gives each a user, and does not leave a gone box’s machines with nobody', { skip }, async (t) => {
+  const later = Math.floor((Date.now() + 60 * 60_000) / 1000);
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    users: [
+      { id: 'u-shared', email: 'fleetwright', permission: 'none' },
+      { id: 'u-old', email: 'fleetwright-box-oldbox', permission: 'none' },
+    ],
+    vms: {
+      late: { id: 'late', type: 'VM', power_state: 'Running', tags: ['fleetwright-session', 'fleetwright-box:oldbox', `fleetwright-until:${later}`] },
+      dead: { id: 'dead', type: 'VM', power_state: 'Halted', tags: ['fleetwright-session', 'fleetwright-box:oldbox'] },
+      plain: { id: 'plain', type: 'VM', power_state: 'Halted', tags: ['fleetwright-session'] },
+    },
+  });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const { begun, reply } = await choosing(xo, setups, actor);
+  const job = begun.xosetup.job;
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab', 'net-dmz'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 }, boxes: ['gpu-1', 'deb14'] };
+  assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.match(end.text, /handed to deb14/);
+  assert.match(end.text, /removed/);
+  assert.match(end.text, /shared user was left as it was/);
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright'), 'the shared user stays');
+  assert.ok(!xo.users.some((u) => u.email === 'fleetwright-box-oldbox'), 'the gone box’s user is deleted only after its machines are handed on');
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright-box-deb14'));
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright-box-gpu-1'));
+  assert.equal(xo.vms.dead, undefined);
+  assert.ok(xo.vms.late);
+  assert.ok(xo.vms.plain, 'a machine with no box stays for the shared user');
+  const handed = xo.calls.find((c) => c.method === 'acl.add' && c.params.object === 'late');
+  assert.equal(handed?.params.action, 'admin');
+  assert.equal(handed?.params.subject, xo.users.find((u) => u.email === 'fleetwright-box-deb14')?.id);
+  assert.ok(!xo.calls.some((c) => c.method === 'acl.add' && c.params.object === 'plain'));
+  assert.ok(!xo.calls.some((c) => c.method === 'vm.delete' && c.params.id === 'plain'));
+  const [epk, iv, ct] = String(end.boxHandoff).split('.');
+  const kept = /** @type {any} */ (await open({ ...reply, aad: xosetupHandoffAad(job, xo.address), sealed: { epk, iv, ct } }));
+  assert.deepEqual(kept.boxTokens.map((/** @type {any} */ x) => x.box).sort(), ['deb14', 'gpu-1']);
+  assert.ok(kept.boxTokens.every((/** @type {any} */ x) => x.token.startsWith('tok-fleetwright-box-')));
+  assert.ok(!end.text.includes('tok-fleetwright'), 'the tokens are only in the seal');
+  assert.equal(end.handoff, undefined, 'this is not the shared token’s hand-off');
+});
+
 test('the machine image is built after the policy, on the way out’s pool, behind its router, and said in the end', { skip }, async (t) => {
   // ASKED FOR: "Still can't run sessions on it". The image sessions' machines
   // are cloned from is built by the job that already holds the admin sign-in.
@@ -784,6 +829,10 @@ test('a choice is held to what the pool has, and the way out to a network it lis
     assert.match(/** @type {any} */ (r).text, /** @type {RegExp} */ (words));
   }
   assert.equal(checkPolicy(ok, null).ok, false, 'nothing to check it against is a refusal');
+  assert.deepEqual(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['gpu-1', 'deb14', 'deb14'] }, choices)).policy.boxes, ['gpu-1', 'deb14']);
+  assert.equal(/** @type {any} */ (checkPolicy(ok, choices)).policy.boxes, undefined, 'a phone that names no boxes keeps the shared user');
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, boxes: [] }, choices)).text, /Name the boxes/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['not a box'] }, choices)).text, /Name the boxes/);
 
   // THE MACHINE IMAGE is built behind the edge router, on the way out's pool:
   // with the router asked for, or where that pool already has one.

@@ -49,9 +49,11 @@ import { HOLDER } from './xo-holder.js';
 import { seal, xolookAad, claudeBindingFor } from '../seal.js';
 import { xoActionArgs } from '../protocol/intents.js';
 import { machineGrantsOf } from '../../core/grants.js';
+import { HYPERVISOR_PREFIX as HYPERVISOR_ITEM, splitHypervisorItem } from '../protocol/hypervisor-name.js';
+import { boxTag, operates } from './xo-box-users.js';
 
 /** The prefix a pool's item carries in a vault answer. */
-export const HYPERVISOR_ITEM = 'hypervisor:';
+export { HYPERVISOR_ITEM };
 /** A Claude token's shape, as the vault keeps one. */
 const CLAUDE_RE = /^[A-Za-z0-9._~+/=-]{20,2048}$/;
 /** A dispatch ticket's shape (src/fleet/coordinator/runner-tickets.js). */
@@ -127,7 +129,7 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
 
 /**
  * @typedef {{ key: string, secret: string, pin: string, routers: Array<{ name: string, address: string|null }> }} EdgeKey
- * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, edge?: EdgeKey, grants?: { upgrades?: boolean, reboot?: boolean } }} PoolRecord
+ * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, box?: string, edge?: EdgeKey, grants?: { upgrades?: boolean, reboot?: boolean } }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null, perPerson?: number }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
@@ -372,8 +374,10 @@ export function poolRecord(name, value) {
   } catch {
     return null;
   }
-  const address = name.slice(HYPERVISOR_ITEM.length);
-  if (!r || typeof r !== 'object' || r.address !== address || typeof r.token !== 'string' || !r.token) return null;
+  const split = splitHypervisorItem(name);
+  if (!split || !r || typeof r !== 'object' || r.address !== split.address || typeof r.token !== 'string' || !r.token) return null;
+  if (split.box === null ? r.box != null : r.box !== split.box) return null;
+  const address = split.address;
   const plain = r.plain === true;
   const pin = typeof r.pin === 'string' && /^[0-9a-f]{64}$/.test(r.pin) ? r.pin : null;
   // A pinned connection needs its pin; only a person's acceptance of plain
@@ -381,7 +385,7 @@ export function poolRecord(name, value) {
   if (!plain && !pin) return null;
   const edge = edgeKey(r.edge);
   const grants = machineGrantsOf(r.grants);
-  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(edge ? { edge } : {}), ...(grants ? { grants } : {}) };
+  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(split.box ? { box: split.box } : {}), ...(edge ? { edge } : {}), ...(grants ? { grants } : {}) };
 }
 
 /**
@@ -410,15 +414,18 @@ export class XoPools {
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   holderFor?: string,
+   *   boxId?: string,
    * }} [opts]
    */
-  constructor({ connect = connectXo, connectPlain = connectXoPlain, now = () => Date.now(), log, holderFor = '' } = {}) {
+  constructor({ connect = connectXo, connectPlain = connectXoPlain, now = () => Date.now(), log, holderFor = '', boxId = '' } = {}) {
     /**
      * THE XEN ORCHESTRA THIS BOX WAS MADE TO HOLD, when it is a pool's own
      * machine (xo-holder.js), from FLEETWRIGHT_HOLDER_FOR. Its pool entry says
      * `holder`, and the coordinator asks it first. Empty everywhere else.
      */
     this.holderFor = String(holderFor || '');
+    /** This box, so a per-box token filed for it is the one it makes machines with. */
+    this.boxId = String(boxId || '');
     this.connect = connect;
     this.connectPlain = connectPlain;
     this.now = now;
@@ -477,7 +484,7 @@ export class XoPools {
         if (i?.name === 'claude' && typeof i.value === 'string' && CLAUDE_RE.test(i.value) && owner) claude.set(owner, i.value);
         if (i?.name === SSH_KEYS_ITEM && owner) ssh.set(owner, sshKeys(i.value));
         const record = owner ? poolRecord(String(i?.name || ''), i?.value) : null;
-        if (record) held.set(`${owner} ${record.address}`, { owner, record });
+        if (record) held.set(`${owner} ${record.address}${record.box ? ` ${record.box}` : ''}`, { owner, record });
       }
       return { ...a, items: items.filter((i) => !String(i?.name || '').startsWith(HYPERVISOR_ITEM)) };
     });
@@ -532,7 +539,7 @@ export class XoPools {
         const images = templates
           .filter((t) => t?.tags?.includes?.(VM_IMAGE.tag) && typeof t.id === 'string' && set.objects.has(t.id))
           .map((t) => ({ id: String(t.id), name: String(t.name_label || VM_IMAGE.name).slice(0, 80), pool: t.$pool ?? null, poolName: names.get(t.$pool) ?? null }));
-        await this.#sweep(rpc, set);
+        await this.#sweep(rpc, set, record);
         // THE NETWORKS A MACHINE CAN GO ON besides the uplink: the pool's that
         // the fleet may use (what is in its set), for a machine that
         // should be reachable from the person's own network; and the group
@@ -658,13 +665,13 @@ export class XoPools {
    * (fleetSetOf: the tag alone is anybody's); nothing else on the pool is
    * touched.
    *
-   * @param {any} rpc @param {{ ids: Set<string> }} set
+   * @param {any} rpc @param {{ ids: Set<string> }} set @param {PoolRecord} record
    */
-  async #sweep(rpc, set) {
+  async #sweep(rpc, set, record) {
     const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
     for (const vm of vms) {
       const tags = Array.isArray(vm?.tags) ? vm.tags : [];
-      if (!tags.includes(VM_IMAGE.sessionTag) || tags.includes(BUSY_TAG) || !inFleetSet(vm, set)) continue;
+      if (!tags.includes(VM_IMAGE.sessionTag) || tags.includes(BUSY_TAG) || !inFleetSet(vm, set) || !operates(record, vm)) continue;
       const until = Number(tags.find((/** @type {string} */ t) => t.startsWith(VM_IMAGE.untilPrefix))?.slice(VM_IMAGE.untilPrefix.length)) * 1000;
       const overdue = Number.isFinite(until) && this.now() > until + GRACE_MS;
       if (vm.power_state !== 'Halted' && !overdue) continue;
@@ -700,7 +707,11 @@ export class XoPools {
     // THE PERSON'S OWN POOL. The image must be one this box saw under a
     // token that person kept; the coordinator chose this box by the same
     // report, and is the party this project assumes may be lying.
-    const found = [...this.held.entries()].find(([k, h]) => h.owner === who && this.seen.get(k)?.images.some((i) => i.id === template));
+    const candidates = [...this.held.entries()].filter(([k, h]) => h.owner === who && this.seen.get(k)?.images.some((i) => i.id === template));
+    // THIS BOX'S USER, when it holds one, so the machine's admin ACL is that
+    // user's and not the shared user's. The shared token is the fallback a
+    // pool still has until a phone keeps a token per box.
+    const found = (this.boxId && candidates.find(([, h]) => h.record.box === this.boxId)) || candidates.find(([, h]) => !h.record.box);
     if (!found) return { ok: false, text: 'This box holds no pool of yours with that machine image.' };
     const [k, { record }] = found;
     const image = /** @type {Image} */ (this.seen.get(k)?.images.find((i) => i.id === template));
@@ -764,6 +775,7 @@ export class XoPools {
           ...(on ? [`${ON_PREFIX}${on.name}`] : []),
           ...(joined && groupNet ? [`${GROUP_TAG}${groupNet.name}`, `${GROUP_IP_TAG}${joined.address}`] : []),
           ...(labNet ? [`${LAB_TAG}${labNet.name}`] : []),
+          ...(record.box ? [boxTag(record.box)] : []),
         ],
         cloudConfig: machineCloudConfig({
           name,
@@ -950,6 +962,9 @@ export class XoPools {
         // MADE FOR SOMEBODY ELSE on the same Xen Orchestra is not there, as
         // far as this person is concerned.
         if (tagValue(vm, FOR_PREFIX) !== who) continue;
+        // Another box's machine, or a shared-token machine when this record
+        // is one box's: the coordinator asks the box that can.
+        if (!operates(record, vm)) continue;
         const r = await this.#work(rpc, vm, { action, minutes, cpus, memory });
         if (r.ok) void this.refresh().catch(() => {});
         return r;
