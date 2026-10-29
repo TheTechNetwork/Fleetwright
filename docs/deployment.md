@@ -582,9 +582,22 @@ is a pane under the service user, which holds everybody's credentials on the
 box, so the coordinator places a member's session only on a box that reports
 `sandboxed: true` or that acts for that member alone; on an operator's box
 running sessions directly, only an admin can start or resume one. The box
-reports `true` only with the sandbox on and no `FLEETWRIGHT_SANDBOX_ARGS` that
-end containment (`--privileged` among them), and a box too old to report it is
-treated as unsandboxed until it is updated ([security.md](./security.md) G8).
+reports `true` only with the sandbox on, no `FLEETWRIGHT_SANDBOX_ARGS` that
+end containment (`--privileged` among them), and sessions in the `nomap` user
+namespace, and a box too old to report it is treated as unsandboxed until it
+is updated ([security.md](./security.md) G8).
+
+**And it is not enough on a box whose service runs as root.** podman refuses
+`nomap` to root, so sessions there fall back to the host user namespace and
+root in a session is root on the machine: the box reports `false` with the
+reason `userns_root`, says on every start that members are refused, and a
+refused member is told to run fleetwright as its own user. `install.sh` runs
+the service as `FLEETWRIGHT_USER`, the user its unit already names, or the
+user who ran it through `sudo`; from a root shell with none of those, that is
+root, so give it a user (`FLEETWRIGHT_USER=fleetwright`, created first) or run
+it with `sudo` from the account that should own the sessions. docker
+(`FLEETWRIGHT_PODMAN_BIN=docker`) and `FLEETWRIGHT_SANDBOX_USERNS=host` are
+refused the same way, each with its own reason.
 
 Two things to know:
 
