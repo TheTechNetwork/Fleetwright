@@ -3,10 +3,14 @@ package network.thetech.fleetwright
 import org.json.JSONObject
 import java.math.BigInteger
 import java.security.AlgorithmParameters
+import java.security.GeneralSecurityException
 import java.security.KeyFactory
 import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.KeyStoreException
 import java.security.PrivateKey
 import java.security.PublicKey
+import java.security.SecureRandom
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECParameterSpec
@@ -32,7 +36,13 @@ import javax.crypto.spec.SecretKeySpec
  * `PushCryptoTests.swift`.
  *
  * java.security and javax.crypto only, so the JVM test runs it. The key the
- * app actually holds is the Android Keystore's (PushKey), and it never leaves.
+ * app actually holds is the Android Keystore's (PushKey), and it never leaves:
+ * the agreement is asked of the provider that holds it, named, rather than of
+ * whichever provider the platform would pick for a key it cannot read.
+ *
+ * IT SEALS AS WELL, for one reason: the self-test registration runs before
+ * it sends a key ([opensItsOwnSeal]). Nothing else on the phone seals a
+ * notification, and nothing should.
  */
 internal object PushCrypto {
     private val INFO_PREFIX = "fleetwright-push-v1".toByteArray(Charsets.UTF_8)
@@ -46,8 +56,15 @@ internal object PushCrypto {
         }
     }
 
-    /** Open one envelope. Throws on a bad envelope, a bad point, or a tag that does not match. */
-    fun open(privateKey: PrivateKey, recipientPublic: ByteArray, envelope: String): Opened {
+    /**
+     * Open one envelope. Throws on a bad envelope, a bad point, or a tag that
+     * does not match.
+     *
+     * @param provider the JCA provider that holds [privateKey]: "AndroidKeyStore"
+     *   for the app's key, null for a key in memory (the tests, the self-test's
+     *   own check that the scheme round-trips).
+     */
+    fun open(privateKey: PrivateKey, recipientPublic: ByteArray, envelope: String, provider: String? = null): Opened {
         val bytes = b64d(envelope)
         require(bytes.size >= 1 + 16 + 65 + 16) { "envelope is too short" }
         require(bytes[0] == 1.toByte()) { "unsupported push envelope version ${bytes[0]}" }
@@ -56,14 +73,9 @@ internal object PushCrypto {
         val sealed = bytes.copyOfRange(82, bytes.size)
         require(ephemeralRaw[0] == 4.toByte() && sealed.size > 16) { "envelope is too short" }
 
-        val shared = KeyAgreement.getInstance("ECDH").run {
-            init(privateKey)
-            doPhase(point(ephemeralRaw), true)
-            generateSecret()
-        }
-        val info = INFO_PREFIX + recipientPublic + ephemeralRaw
+        val shared = agree(privateKey, point(ephemeralRaw), provider)
         // ONE EXPAND, then split. Two derivations would not be the scheme.
-        val okm = hkdf(shared, salt, info, 44)
+        val okm = hkdf(shared, salt, INFO_PREFIX + recipientPublic + ephemeralRaw, 44)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(
             Cipher.DECRYPT_MODE,
@@ -83,6 +95,57 @@ internal object PushCrypto {
         return Opened(obj.getString("title"), obj.getString("body"), data)
     }
 
+    /**
+     * Seal a title and a body to a public key, as `sealTo` does: a fresh
+     * ephemeral key and a fresh salt every time, in software.
+     */
+    fun seal(recipientPublic: ByteArray, title: String, body: String): String {
+        val recipient = point(recipientPublic)
+        val ephemeral = KeyPairGenerator.getInstance("EC").run {
+            initialize(ECGenParameterSpec("secp256r1"))
+            generateKeyPair()
+        }
+        val ephemeralRaw = uncompressed(ephemeral.public as ECPublicKey)
+        val shared = agree(ephemeral.private, recipient, null)
+        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val okm = hkdf(shared, salt, INFO_PREFIX + recipientPublic + ephemeralRaw, 44)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            Cipher.ENCRYPT_MODE,
+            SecretKeySpec(okm.copyOf(32), "AES"),
+            GCMParameterSpec(128, okm.copyOfRange(32, 44)),
+        )
+        val clear = JSONObject().put("title", title).put("body", body).put("data", JSONObject()).toString()
+        return b64e(byteArrayOf(1) + salt + ephemeralRaw + cipher.doFinal(clear.toByteArray(Charsets.UTF_8)))
+    }
+
+    /**
+     * The self-test: seal a probe to [recipientPublic] in software, open it
+     * with [privateKey] through [provider].
+     *
+     * TRUE, FALSE, OR A THROW, and the difference is what registration does
+     * next (PushKey.forRegistration). False is "this phone cannot": no such
+     * algorithm or provider, a key the provider will not agree with, a tag
+     * that does not match, a probe that came back different. Sending the key
+     * then would buy the fallback sentence on every notification, so
+     * registration sends none. A throw is a keystore that did not answer
+     * this time (KeyStoreException, or a ProviderException from the daemon):
+     * no registration at all, and the next launch tries again.
+     */
+    fun opensItsOwnSeal(privateKey: PrivateKey, recipientPublic: ByteArray, provider: String?): Boolean {
+        val probe = "fleetwright-push-self-test"
+        return try {
+            val opened = open(privateKey, recipientPublic, seal(recipientPublic, probe, probe), provider)
+            opened.title == probe && opened.body == probe
+        } catch (e: KeyStoreException) {
+            throw e
+        } catch (_: GeneralSecurityException) {
+            false
+        } catch (_: UnsupportedOperationException) {
+            false
+        }
+    }
+
     /** A key pair from its JWK numbers. For the fixture: the app never imports a private key. */
     fun keyPairFromJwk(d: String, x: String, y: String): KeyPair {
         val factory = KeyFactory.getInstance("EC")
@@ -94,9 +157,19 @@ internal object PushCrypto {
     }
 
     /** Uncompressed point, base64url, the form `checkPublicKey` accepts. */
-    fun encode(public: PublicKey): String {
-        val w = (public as ECPublicKey).w
-        return b64e(byteArrayOf(4) + fixed32(w.affineX) + fixed32(w.affineY))
+    fun encode(public: PublicKey): String = b64e(uncompressed(public as ECPublicKey))
+
+    /** 0x04 || X || Y, each coordinate padded to 32 bytes. */
+    fun uncompressed(public: ECPublicKey): ByteArray {
+        val w = public.w
+        return byteArrayOf(4) + fixed32(w.affineX) + fixed32(w.affineY)
+    }
+
+    private fun agree(privateKey: PrivateKey, peer: PublicKey, provider: String?): ByteArray {
+        val agreement = if (provider == null) KeyAgreement.getInstance("ECDH") else KeyAgreement.getInstance("ECDH", provider)
+        agreement.init(privateKey)
+        agreement.doPhase(peer, true)
+        return agreement.generateSecret()
     }
 
     private fun point(raw: ByteArray): PublicKey {
@@ -147,9 +220,9 @@ internal object PushCrypto {
  *
  * A sealed message arrives as `e` and, when it is answerable, a `category` in
  * the clear — iOS reads the category before anything can be decrypted, and
- * Android is sent the same map. The title, the body and `kind` are inside.
- * Opening first is what keeps a setup update from being logged as a session
- * the app did not understand.
+ * Android is sent the same map. The title, the body, `kind` and a second copy
+ * of the category are inside. Opening first is what keeps a setup update from
+ * being logged as a session the app did not understand.
  *
  * A seal that does not open becomes the fallback sentence and nothing else.
  * There is no `kind` to misread, and no button to answer a question we did
@@ -169,9 +242,32 @@ internal object PushReveal {
         } ?: return mapOf("title" to FALLBACK_TITLE, "body" to FALLBACK_BODY)
         val merged = LinkedHashMap<String, String>()
         merged.putAll(opened.data)
-        outer["category"]?.let { if (!merged.containsKey("category")) merged["category"] = it }
+        merged.remove("category")
+        category(opened.data["category"], outer["category"].orEmpty())
+            .takeIf { it.isNotEmpty() }
+            ?.let { merged["category"] = it }
         merged["title"] = opened.title
         merged["body"] = opened.body
         return merged
+    }
+
+    /**
+     * Which buttons an opened notification gets: a category, or "" for none.
+     *
+     * THE SEALED ONE DECIDES. The clear one is what Google or a relay could
+     * have changed; the buttons' words come from the category and the digits
+     * they type from the envelope, so a changed one would label one answer as
+     * the other. When the clear one is there and disagrees, there are no
+     * buttons, and the notification is posted without them.
+     *
+     * [sealed] IS NULL ONLY FROM A COORDINATOR THAT PREDATES SEALING IT, and
+     * then the clear one is all there is, as it always was. A coordinator that
+     * seals it always writes it, "" when there is nothing to answer. The same
+     * rule as `PushCrypto.category` in PushCrypto.swift.
+     */
+    fun category(sealed: String?, clear: String): String {
+        if (sealed == null) return clear
+        if (clear.isNotEmpty() && clear != sealed) return ""
+        return sealed
     }
 }

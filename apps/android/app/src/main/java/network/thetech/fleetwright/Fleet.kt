@@ -2694,13 +2694,18 @@ class Fleet(
      * this is the single line that connects it once Firebase exists.
      */
     suspend fun registerDevice(token: String): Boolean = withContext(Dispatchers.IO) {
+        // THE KEY THIS INSTALL OPENS WITH, so its notifications are sealed to
+        // it (docs/push-encryption.md). Asked first, outside the runCatching
+        // below: a keystore that did not answer throws out of here before
+        // anything is posted, because the coordinator keeps a key only when
+        // one is sent and a registration without it would put this phone back
+        // on plaintext. Both callers log the throw, and the next launch
+        // registers again. Null only for a phone that cannot (PushKey).
+        val pushKey = PushKey.forRegistration()
         val body = JSONObject()
             .put("platform", "android")
             .put("token", token)
-        // The key this install can open. Absent when the keystore declines,
-        // and a registration without it is a notification in the clear rather
-        // than one sealed to a key nobody stored.
-        PushKey.publicKey()?.let { body.put("pushKey", it) }
+        pushKey?.let { body.put("pushKey", it) }
         runCatching { post("/api/devices", body).optBoolean("ok", false) }.getOrDefault(false)
     }
 

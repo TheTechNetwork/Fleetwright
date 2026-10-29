@@ -61,6 +61,11 @@ class Messaging : FirebaseMessagingService() {
      * the app builds them here. That is what buys the two buttons, and it costs
      * what the comment over there says it costs: a force-stopped app gets
      * nothing, and Doze may delay it.
+     *
+     * A SEALED NOTIFICATION IS THE THIRD, and on a phone with a push key
+     * (Android 12 and later, PushKey) that is every notification: the tray
+     * would draw ciphertext, so all of them arrive data-only, are opened
+     * here and posted here, at the same cost.
      */
     override fun onMessageReceived(message: RemoteMessage) {
         // A HYPERVISOR SETUP'S PROGRESS IS THE OTHER EXCEPTION: not a
@@ -72,7 +77,9 @@ class Messaging : FirebaseMessagingService() {
         // the envelope is open. Reading it before that logged every setup
         // update as a session this app did not understand. A seal that does
         // not open is the fallback sentence and no kind, which is the same
-        // sentence iOS leaves on the alert.
+        // sentence iOS leaves on the alert. The category, and so the buttons,
+        // is the sealed one, and none at all when the clear one disagrees
+        // with it (PushReveal.category).
         val sealed = message.data.containsKey("e")
         val data = PushReveal.fields(message.data) { PushKey.open(it) }
         if (data[XoSetupNotice.EXTRA_KIND] == XoSetupNotice.KIND) {
@@ -203,11 +210,23 @@ class Messaging : FirebaseMessagingService() {
          */
         private val FLAGS = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
-        /** Tapping the notification itself: open the app on that session. */
+        /**
+         * What a tap on a notification this app drew carries to MainActivity.
+         *
+         * THE SAME EXTRAS THE TRAY'S TAP CARRIES. A notification the tray drew
+         * hands its `data` to the launcher intent, and MainActivity routes on
+         * `event` (a session, or a machine for `host.*`), `name`, `hostId` and
+         * `kind` (`holder-join`). This carried `name` alone, so a tap on one
+         * the app drew — every answerable one, and once a phone has a push key
+         * every sealed one — opened the app on whatever it showed last.
+         */
+        private val OPEN_KEYS = listOf("event", "name", "hostId", "kind")
+
+        /** Tapping the notification itself: open the app where it is about. */
         fun openIntent(context: Context, data: Map<String, String>, id: Int): PendingIntent {
             val intent = Intent()
             intent.setClass(context, MainActivity::class.java)
-            data["name"]?.let { intent.putExtra("name", it) }
+            for (key in OPEN_KEYS) data[key]?.let { intent.putExtra(key, it) }
             return PendingIntent.getActivity(context, id * 31, intent, FLAGS)
         }
 
