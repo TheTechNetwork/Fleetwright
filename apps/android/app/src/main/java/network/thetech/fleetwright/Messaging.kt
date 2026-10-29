@@ -85,7 +85,9 @@ class Messaging : FirebaseMessagingService() {
         val data = PushReveal.fields(message.data) { envelope -> PushKey.open(envelope).also { opened = it != null } }
         // Whether it opened, for the line on You: nothing else would ever say
         // that this phone's notifications arrive as the fallback sentence.
-        if (sealed) PushKey.saw(Settings(applicationContext), opened)
+        // Dated by when it was sent, so a late one sealed to a key since
+        // replaced is older than the registration that replaced it.
+        if (sealed) PushKey.saw(Settings(applicationContext), opened, message.sentTime)
         if (data[XoSetupNotice.EXTRA_KIND] == XoSetupNotice.KIND) {
             XoSetupNotice.post(applicationContext, data)
             return
