@@ -140,7 +140,7 @@ const MINT_WINDOW_MS = 10 * 60_000;
  * sign-in ended at 18:19 is told by 18:35, against the hours it took a failed
  * session to say so; the minter refuses to ask more often than ten minutes.
  */
-const CLAUDE_CHECK_MS = 15 * 60_000;
+export const CLAUDE_CHECK_MS = 15 * 60_000;
 
 /**
  * How many times one runner may ask for its owner's Claude login in
