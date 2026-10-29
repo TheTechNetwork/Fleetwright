@@ -154,7 +154,8 @@ every boot restore runs it the same way. A session you deliberately started in
 safe mode never gets quietly promoted.
 
 **`FLEETWRIGHT_SKIP_PERMISSIONS` turned off is a ceiling for the fleet.** Off is
-any value but `1`, `true`, `yes` or `on`. On a box set to ask, a start that arrives from the fleet — a phone, Siri, an agent over MCP, a
+any non-empty value but `1`, `true`, `yes` or `on`, in any case; left empty or
+unset, it bypasses. On a box set to ask, a start that arrives from the fleet — a phone, Siri, an agent over MCP, a
 held runner start — asking for `dangerous` is refused, with a sentence naming
 the setting, rather than quietly turned into a session that asks
 (`permissionCeiling` in `src/adapters/commands.js`). The operator's own

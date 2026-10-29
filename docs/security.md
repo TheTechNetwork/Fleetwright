@@ -1272,11 +1272,13 @@ sidecar's token, when the sidecar marks it `via: fleet` (for a box whose
 sidecar still holds the operator's token, and an intent with no actor), or
 when its actor is `fleet:`. It is checked on the box, so a compromised
 coordinator cannot get `--dangerously-skip-permissions` past it, but that flag
-is all it holds; it is not a boundary on what a session may do. The phones
-offer "Permissions bypassed" only where every machine a start could land on
-reports `bypassed`, so an older box set to ask, which has no ceiling, is not
-handed one from a phone. The operator's own `/new --dangerous` at the box still
-works. What it does not cover:
+is all it holds; it is not a boundary on what a session may do. New session
+on the phones offers "Permissions bypassed" only where every machine a start
+could land on reports `bypassed`, so an older box set to ask, which has no
+ceiling, is not handed one from there. A Siri or launcher start still sends a
+kind's saved mode, and no editor can save one as bypass now, but a kind saved
+that way before would reach such a box. The operator's own `/new --dangerous`
+at the box still works. What it does not cover:
 - `resume`: a session's recorded mode is kept, so one started with bypass (by
   the operator, or before the box was set to ask) resumes with bypass from a
   phone too.
