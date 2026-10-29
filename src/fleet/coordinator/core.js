@@ -4424,6 +4424,29 @@ export class CoordinatorCore {
         if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in ${said}`, body: body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
     }
+    // REFUSED EVEN AFTER RENEWING (claude-login.js, checkClaude): renewing
+    // works, so it is not ended, and the minter has stopped renewing for it,
+    // since each renewal ends the token every box holds. The person is told
+    // once, and what would mend it is not known, so it is not promised.
+    for (const e of (Array.isArray(r.refused) ? r.refused : []).slice(0, 100)) {
+      const email = String(e?.email || '').trim().toLowerCase();
+      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      const at = Number(e.at);
+      const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
+      const cause = `Claude refused its access token${when}, after the fleet had renewed it, so renewing again will not mend it.`;
+      this.record({ event: 'claude.refused', actor: email, text: `${email}: ${cause}` });
+      told += 1;
+      if (!this.push) continue;
+      const devices = this.#devicesOf(email);
+      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
+      const admins = devices.filter((d) => !own.includes(d));
+      const body = `${cause} Sessions may be refused too. Signing in to Claude again from your phone or the signing page is the one thing left to try.`;
+      const data = { event: 'claude.refused', kind: 'claude-ended', name: '', hostId: '', url: '' };
+      try {
+        if (own.length) await this.push.send(own, { title: 'Claude refuses your sign-in', body, data });
+        if (admins.length) await this.push.send(admins, { title: `Claude refuses ${email}’s sign-in`, body: body.replace('from your phone', 'from their phone'), data });
+      } catch { /* recorded above */ }
+    }
     return told;
   }
 
