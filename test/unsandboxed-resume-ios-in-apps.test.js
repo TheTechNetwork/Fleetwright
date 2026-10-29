@@ -17,6 +17,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { admit, makeAdmin } from './helpers/enrolled-hosts.js';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 /** Code without its commentary, so a rule is never confused with a note about one. */
@@ -27,6 +30,13 @@ const IOS = bare(iosSources());
 const KEPT = [
   ' runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there.',
   ' has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated.',
+  // A box with its sandbox on that still does not contain a session says
+  // why (http.js uncontained), and is told by that reason and its way on.
+  ' lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out.',
+  ' runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user.',
+  ' runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman.',
+  ' has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap.',
+  ' says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there.',
 ];
 /** The titles over a refused start that is a setting on the machine. */
 const TITLES = ['Not started: only admins run sessions there', 'Not started: the machine needs an update'];
@@ -36,8 +46,41 @@ test('iOS says why Resume is not offered, by the coordinator’s rule', () => {
   // Read under the key the box sends, and the rule is runsSessionsFor: kept
   // only where this person does not administer it and it has not said true.
   // What the box sends under that key is test/hub-host-routes.test.js's.
-  assert.match(IOS, /struct HostHealth: Codable[\s\S]*?let sandboxed: Bool\?/);
-  assert.match(IOS, /var resumeKept: String\? \{\s*guard administers == false, health\?\.sandboxed != true else \{ return nil \}\s*return health\?\.sandboxed == false/);
+  assert.match(IOS, /struct HostHealth: Codable[\s\S]*?let sandboxed: Bool\?\s*let sandboxedWhy: String\?/);
+  assert.match(IOS, /var resumeKept: String\? \{\s*guard administers == false, health\?\.sandboxed != true else \{ return nil \}\s*guard health\?\.sandboxed == false else \{/);
+  // Why not is read as the box sent it, and a box too old to say why is off.
+  assert.match(IOS, /switch health\?\.sandboxedWhy \?\? "off" \{/);
+});
+
+test('iOS names why a machine does not contain a session in the words the coordinator refuses with', async () => {
+  // The refusal a member gets from the fleet and the line under a session on
+  // the phone are the same fact; a phone that said "without the sandbox" of a
+  // box the fleet called root would be the C-5 failure between them. So each
+  // reason the box can send is asked of the coordinator, and its clause and
+  // its way on must be the phone's.
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  await makeAdmin(core, 'admin@example.test');
+  await admit(core, 'deb132');
+  const bob = { email: 'bob@example.test', admin: false };
+  /** The phone's way on, for the coordinator's. */
+  const until = {
+    unsafe_args: 'that option is taken out',
+    userns_root: 'fleetwright runs as its own user',
+    userns_docker: 'its sessions run under podman',
+    userns_host: 'that is set back to nomap',
+  };
+  for (const [why, phone] of Object.entries(until)) {
+    core.registry.recordHealth('deb132', {
+      hostId: 'deb132', protocol: PROTOCOL_VERSION, hub: { reachable: true }, maxSessions: 5, running: 0, free: 5,
+      labels: [], loadavg: [0, 0, 0], claudeAccounts: 1, sessions: [], sandboxed: false, sandboxedWhy: why,
+    });
+    const r = await core.dispatch({ verb: 'start', params: { name: 'job', task: 'a job' }, actor: bob.email, requester: bob, preferHost: 'deb132' });
+    const [, clause, fix] = String(r.text).match(/^deb132 (.*), so only this fleet’s admin can start work there\. (.*) opens it to everyone it acts for\.$/) ?? [];
+    assert.ok(clause, `the coordinator said: ${r.text}`);
+    assert.ok(IOS.includes(`"\\(hostId) ${clause}, so only this fleet’s admin, or the one person it works for, can resume one there until ${phone}."`), `iOS does not say ${why} as the coordinator does`);
+    // The same way on, said once as a step and once as a condition.
+    assert.ok(fix.toLowerCase().split(/[ ,]+/).some((w) => w.length > 4 && phone.includes(w)), `${why}: "${fix}" and "${phone}" are not the same way on`);
+  }
 });
 
 test('iOS: every Resume on a session gives way to the reason where the fleet would refuse it', () => {

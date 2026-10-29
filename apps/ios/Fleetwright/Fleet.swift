@@ -449,8 +449,8 @@ struct Fleet {
 
         /// The title over a start the fleet refused. Two refusals are a setting
         /// on the machine and not a fault in the asking, and asking again
-        /// changes neither: `unsandboxed`, a machine that runs sessions without
-        /// the sandbox and so only for its admins (G8), and `host_outdated`, one
+        /// changes neither: `unsandboxed`, a machine that does not contain a
+        /// session and so runs them only for its admins (G8), and `host_outdated`, one
         /// too old to carry what was asked. Those are titled as the reason, and
         /// the coordinator's sentence beneath says which setting; anything else
         /// is a start that could not happen.
@@ -2424,6 +2424,13 @@ struct Fleet {
         /// they do not administer only on true (hosts.js runsSessionsFor), so
         /// nil, a box too old to say, is read the way it reads it: not.
         let sandboxed: Bool?
+        /// Why not, beside a false: `off`, `unsafe_args`, `userns_root`,
+        /// `userns_docker` or `userns_host` (http.js uncontained). A box can
+        /// have its sandbox on and still not contain a session, run as root,
+        /// so `resumeKept` names the reason and its way on from this rather
+        /// than saying the sandbox is off. Nil from a box too old to send it,
+        /// read as off, which is what such a box meant by false.
+        let sandboxedWhy: String?
         /// What `tag` matches on for this box: os, architecture, distribution,
         /// whether its image has a browser, plus anything set here or in
         /// FLEETWRIGHT_LABELS.
@@ -2513,7 +2520,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2522,7 +2529,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2535,7 +2542,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2550,7 +2557,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
             )
         }
     }
@@ -2598,11 +2605,32 @@ struct Fleet {
         /// that it is off (C-5). A coordinator too old to send `administers`
         /// is older than the rule too, so nil offers Resume as before, and a
         /// refusal still says why.
+        ///
+        /// WHY NOT IS THE BOX'S WORD TOO (`sandboxedWhy`). A box run as root
+        /// has its sandbox on and still does not contain a session, and
+        /// "without the sandbox" would send its operator to a switch that is
+        /// already on. So each reason is named with what opens it, in the
+        /// coordinator's words for the same refusal (scheduler.js
+        /// NOT_CONTAINED); a reason this app does not know is not guessed at.
         var resumeKept: String? {
             guard administers == false, health?.sandboxed != true else { return nil }
-            return health?.sandboxed == false
-                ? "\(hostId) runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
-                : "\(hostId) has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+            guard health?.sandboxed == false else {
+                return "\(hostId) has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+            }
+            switch health?.sandboxedWhy ?? "off" {
+            case "off":
+                return "\(hostId) runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+            case "unsafe_args":
+                return "\(hostId) lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out."
+            case "userns_root":
+                return "\(hostId) runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user."
+            case "userns_docker":
+                return "\(hostId) runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman."
+            case "userns_host":
+                return "\(hostId) has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap."
+            default:
+                return "\(hostId) says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+            }
         }
 
         /// Is there anything of ours to apply? Asked once, so the version line
