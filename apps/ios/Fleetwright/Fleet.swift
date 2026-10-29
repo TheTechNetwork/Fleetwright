@@ -2641,8 +2641,11 @@ struct Fleet {
         // anything is posted: the coordinator keeps a key only when one is
         // sent, so registering without it over a locked or busy keychain
         // would put this phone back on plaintext. The next launch registers
-        // again. Absent only when the key fails its own self-test, and then
-        // sending it would buy the fallback sentence on every notification.
+        // again, and an error that lasts a day replaces the key rather than
+        // leaving this phone unregistered for good (PushKey.registrationKey).
+        // Absent only when the key fails its own self-test, where sending it
+        // would buy the fallback sentence on every notification, or when no
+        // key can be kept at all.
         if let pushKey = try PushKey.registrationKey() {
             body["pushKey"] = pushKey
         }

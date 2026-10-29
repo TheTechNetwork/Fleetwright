@@ -2700,8 +2700,10 @@ class Fleet(
         // anything is posted, because the coordinator keeps a key only when
         // one is sent and a registration without it would put this phone back
         // on plaintext. Both callers log the throw, and the next launch
-        // registers again. Null only for a phone that cannot (PushKey).
-        val pushKey = PushKey.forRegistration()
+        // registers again; an error that lasts a day replaces the key rather
+        // than leaving this phone unregistered for good. Null only for a
+        // phone that cannot (PushKey).
+        val pushKey = PushKey.forRegistration(settings)
         val body = JSONObject()
             .put("platform", "android")
             .put("token", token)
@@ -3516,6 +3518,24 @@ class Settings(context: Context) {
     var xoVia: String
         get() = prefs.getString("xoVia", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoVia") else putString("xoVia", value) }.apply()
+
+    /**
+     * Registrations in a row the push key failed, and when the first was
+     * (PushKey.forRegistration, PushKeyRule). Null once one gets as far as
+     * the key. Not a secret: two numbers.
+     */
+    internal var pushKeyFailures: PushKeyRule.Failures?
+        get() = prefs.getInt("pushKeyFailures", 0).takeIf { it > 0 }
+            ?.let { PushKeyRule.Failures(it, prefs.getLong("pushKeyFirstFailure", 0L)) }
+        set(value) = prefs.edit().apply {
+            if (value == null) {
+                remove("pushKeyFailures")
+                remove("pushKeyFirstFailure")
+            } else {
+                putInt("pushKeyFailures", value.count)
+                putLong("pushKeyFirstFailure", value.firstAt)
+            }
+        }.apply()
 
     /**
      * When this phone last looked at each pool it manages directly, as Manage

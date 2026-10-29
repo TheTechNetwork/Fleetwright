@@ -95,6 +95,41 @@ final class PushCryptoTests: XCTestCase {
         XCTAssertEqual(PushCrypto.category(sealed: nil, clear: sealed), sealed)
     }
 
+    /// A seal that was not opened keeps no buttons, whether the key could
+    /// not open it or the extension ran out of time: what they would answer
+    /// is still sealed, and a press would do nothing. One that was never
+    /// sealed keeps its own.
+    func testASealThatWasNotOpenedDrawsNoButtons() throws {
+        let f = try fixture()
+        let clear = try XCTUnwrap(f.plaintext.data["category"])
+        XCTAssertEqual(PushCrypto.categoryUnopened(userInfo: ["e": f.envelope], clear: clear), "")
+        XCTAssertEqual(PushCrypto.categoryUnopened(userInfo: ["promptId": "p-01J8"], clear: clear), clear)
+    }
+
+    /// A key the keychain keeps refusing is replaced, so a phone does not
+    /// stop registering for good; and only after three failures in a row
+    /// with the first a day or more before. The same cases as
+    /// `PushCryptoTest.kt`.
+    func testAKeyIsReplacedOnlyAfterThreeFailuresOverADay() {
+        let t0: TimeInterval = 1_700_000_000
+        let day = PushKeyRule.span
+        let fail = { (before: PushKeyRule.Failures?, at: TimeInterval) in PushKeyRule.failed(before, now: at) }
+
+        // Three in two minutes is one bad moment.
+        let quick = fail(fail(fail(nil, t0), t0 + 60), t0 + 120)
+        XCTAssertFalse(PushKeyRule.startOver(quick, now: t0 + 120))
+        // The first is kept, so the next one a day on is enough.
+        XCTAssertTrue(PushKeyRule.startOver(fail(quick, t0 + day), now: t0 + day))
+
+        // A day apart, but only two.
+        XCTAssertFalse(PushKeyRule.startOver(fail(fail(nil, t0), t0 + day), now: t0 + day))
+        // Three, the last a day after the first.
+        XCTAssertTrue(PushKeyRule.startOver(fail(fail(fail(nil, t0), t0 + 3600), t0 + day), now: t0 + day))
+
+        // A clock that went backwards starts the count again.
+        XCTAssertEqual(fail(quick, t0 - 1), PushKeyRule.Failures(count: 1, firstAt: t0 - 1))
+    }
+
     /// The self-test registration runs before it sends a key.
     func testTheSelfTestOpensItsOwnSealAndNoOneElses() throws {
         let f = try fixture()

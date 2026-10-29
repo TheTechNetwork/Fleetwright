@@ -153,6 +153,20 @@ enum PushCrypto {
         return sealed
     }
 
+    /// Which buttons a notification gets when it was not opened: none if it
+    /// was sealed, its own if it never was.
+    ///
+    /// A SEALED ONE KEEPS NO BUTTONS, whether the key could not open it or
+    /// the extension ran out of time. Its clear category would still draw
+    /// them, but the prompt id and the digits they type are inside the
+    /// envelope, so `NotificationAnswers.decide` has nothing to answer, and
+    /// the answer actions do not bring the app forward: a press would do
+    /// nothing at all, which is worse than no button. The notification still
+    /// opens the app when it is tapped.
+    static func categoryUnopened(userInfo: [AnyHashable: Any], clear: String) -> String {
+        userInfo["e"] == nil ? clear : ""
+    }
+
     static func unb64(_ value: String) -> Data? {
         var text = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         let pad = (4 - (text.count % 4)) % 4
@@ -204,10 +218,76 @@ enum PushKey {
     /// is made and read back, a test notification is sealed to it in
     /// software, and if the key does not open that, sending it would only
     /// buy the fallback sentence on every notification.
+    ///
+    /// AN ERROR THAT DOES NOT GO AWAY IS NOT A HICCUP, and the throw would
+    /// keep it quiet for good: no registration means a new APNs token is
+    /// never sent, and push stops with nothing on screen to say so. So the
+    /// failures are counted, with the time of the first, and after
+    /// `PushKeyRule.attempts` of them in a row spread over at least a day the
+    /// key is replaced (`startOver`). Any registration that gets as far as
+    /// the key clears the count. The same rule as `PushKey.forRegistration`
+    /// in PushKey.kt.
+    ///
+    /// ONE AT A TIME. Two registrations at once on a phone with no key yet
+    /// would each make one, and the second write would replace the key the
+    /// first had just sent.
     static func registrationKey() throws -> String? {
-        let key = try load()
+        lock.lock()
+        defer { lock.unlock() }
+        let key: P256.KeyAgreement.PrivateKey
+        do {
+            key = try load()
+        } catch {
+            let now = Date().timeIntervalSince1970
+            let failures = PushKeyRule.failed(storedFailures, now: now)
+            guard PushKeyRule.startOver(failures, now: now) else {
+                storedFailures = failures
+                throw error
+            }
+            print("push key: \(failures.count) registrations in a row could not use it, the first a day or more ago, so it is being replaced (\(error))")
+            storedFailures = nil
+            return startOver()
+        }
+        storedFailures = nil
         guard opensItsOwnSeal(key) else { return nil }
         return PushCrypto.b64url(key.publicKey.x963Representation)
+    }
+
+    /// A new key in place of one the keychain has refused for a day, or nil
+    /// when this phone cannot keep one. `write` removes the old item first.
+    ///
+    /// NIL HERE IS THE PLATFORM SAYING NO, not a hiccup: the old key has
+    /// failed for a day, and now a new one cannot be written either. The
+    /// phone then registers without a key, which keeps its notifications
+    /// coming in the clear rather than not at all, and the next launch tries
+    /// the keychain again from the start.
+    private static func startOver() -> String? {
+        let key = P256.KeyAgreement.PrivateKey()
+        guard (try? write(key.rawRepresentation)) != nil, opensItsOwnSeal(key) else { return nil }
+        return PushCrypto.b64url(key.publicKey.x963Representation)
+    }
+
+    private static let lock = NSLock()
+    private static let failuresKey = "pushKeyFailures"
+    private static let firstFailureKey = "pushKeyFirstFailure"
+
+    /// Registrations in a row the keychain failed, and when the first was.
+    /// Not a secret: two numbers.
+    private static var storedFailures: PushKeyRule.Failures? {
+        get {
+            let count = UserDefaults.standard.integer(forKey: failuresKey)
+            guard count > 0 else { return nil }
+            return PushKeyRule.Failures(count: count, firstAt: UserDefaults.standard.double(forKey: firstFailureKey))
+        }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue.count, forKey: failuresKey)
+                UserDefaults.standard.set(newValue.firstAt, forKey: firstFailureKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: failuresKey)
+                UserDefaults.standard.removeObject(forKey: firstFailureKey)
+            }
+        }
     }
 
     /// Seal a probe to the key's public half and open it with the key.
@@ -279,5 +359,40 @@ enum PushKey {
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw Failure.keychain(status) }
+    }
+}
+
+/// When a push key that keeps failing is replaced, decided without the
+/// keychain so a test can hold it to the rule.
+///
+/// THREE REGISTRATIONS IN A ROW, THE FIRST A DAY OR MORE BEFORE THE LAST.
+/// Either alone is too little: three launches in a minute is one bad
+/// moment, and one failure a day ago may have been the only launch since. A
+/// key that has failed on both counts is not coming back, and every day it
+/// stays is a day a new APNs token cannot be sent. A clock that has gone
+/// backwards starts the count again rather than waiting for it to catch up.
+///
+/// `PushKeyRule` in PushCrypto.kt is the same rule on Android, with the same
+/// numbers.
+enum PushKeyRule {
+    static let attempts = 3
+    static let span: TimeInterval = 24 * 3600
+
+    struct Failures: Equatable {
+        let count: Int
+        let firstAt: TimeInterval
+    }
+
+    /// The count after one more failure at `now`.
+    static func failed(_ before: Failures?, now: TimeInterval) -> Failures {
+        guard let before, before.count > 0, now >= before.firstAt else {
+            return Failures(count: 1, firstAt: now)
+        }
+        return Failures(count: before.count + 1, firstAt: before.firstAt)
+    }
+
+    /// Whether the key goes and a new one is made.
+    static func startOver(_ failures: Failures, now: TimeInterval) -> Bool {
+        failures.count >= attempts && now - failures.firstAt >= span
     }
 }

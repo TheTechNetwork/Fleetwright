@@ -123,14 +123,15 @@ internal object PushCrypto {
      * The self-test: seal a probe to [recipientPublic] in software, open it
      * with [privateKey] through [provider].
      *
-     * TRUE, FALSE, OR A THROW, and the difference is what registration does
-     * next (PushKey.forRegistration). False is "this phone cannot": no such
+     * TRUE, FALSE, OR A THROW. False is "this key did not open it": no such
      * algorithm or provider, a key the provider will not agree with, a tag
-     * that does not match, a probe that came back different. Sending the key
-     * then would buy the fallback sentence on every notification, so
-     * registration sends none. A throw is a keystore that did not answer
-     * this time (KeyStoreException, or a ProviderException from the daemon):
-     * no registration at all, and the next launch tries again.
+     * that does not match, a probe that came back different. A throw is a
+     * keystore that did not answer this time (KeyStoreException, or a
+     * ProviderException from the daemon): no registration at all, and the
+     * next launch tries again.
+     *
+     * FALSE IS NOT ALWAYS "THIS PHONE CANNOT", and what registration does
+     * with it depends on how old the key is ([PushKeyRule.afterSelfTest]).
      */
     fun opensItsOwnSeal(privateKey: PrivateKey, recipientPublic: ByteArray, provider: String?): Boolean {
         val probe = "fleetwright-push-self-test"
@@ -270,4 +271,66 @@ internal object PushReveal {
         if (clear.isNotEmpty() && clear != sealed) return ""
         return sealed
     }
+}
+
+/**
+ * What registration does when the push key fails, decided without the
+ * keystore so the JVM test can hold it to the rule. PushKey does the keystore
+ * half. `PushKeyRule` in PushCrypto.swift is the same replacement rule on
+ * iOS, with the same numbers; iOS has no [afterSelfTest], because its
+ * self-test runs in memory and has no daemon to miss.
+ */
+internal object PushKeyRule {
+    const val ATTEMPTS = 3
+    const val SPAN_MS = 24L * 60 * 60 * 1000
+
+    enum class SelfTest { SEND, DROP, TRY_AGAIN }
+
+    /**
+     * What a self-test result costs.
+     *
+     * A KEY MADE IN THIS CALL that fails is dropped, and the phone registers
+     * without one: it has never been sent, so nothing at the coordinator is
+     * sealed to it.
+     *
+     * A KEY FROM AN EARLIER LAUNCH THAT FAILS IS KEPT, and nothing is
+     * registered this time. It is the key the coordinator seals to, and
+     * "false" cannot tell a key the keystore will never agree with from a
+     * keystore that did not answer: AOSP's keystore2 reports a daemon that
+     * failed at KeyAgreement.init as an InvalidKeyException wrapping
+     * android.security.KeyStoreException, which is a GeneralSecurityException
+     * like any refusal. Dropping it on that would register this phone
+     * without a key over one bad moment and orphan every notification sealed
+     * to it. One that really is broken fails every launch, and [startOver]
+     * replaces it.
+     */
+    fun afterSelfTest(opened: Boolean, madeThisCall: Boolean): SelfTest = when {
+        opened -> SelfTest.SEND
+        madeThisCall -> SelfTest.DROP
+        else -> SelfTest.TRY_AGAIN
+    }
+
+    /** Registrations in a row the key failed, and when the first was (epoch milliseconds). */
+    data class Failures(val count: Int, val firstAt: Long)
+
+    /**
+     * The count after one more failure at [now]. A clock that has gone
+     * backwards starts it again rather than waiting for it to catch up.
+     */
+    fun failed(before: Failures?, now: Long): Failures =
+        if (before == null || before.count <= 0 || now < before.firstAt) Failures(1, now)
+        else Failures(before.count + 1, before.firstAt)
+
+    /**
+     * Whether the key goes and a new one is made.
+     *
+     * THREE REGISTRATIONS IN A ROW, THE FIRST A DAY OR MORE BEFORE THE LAST.
+     * Either alone is too little: three in a minute is one bad moment (and
+     * a launch here can register twice, from MainActivity and from
+     * Messaging), and one failure a day ago may have been the only launch
+     * since. A key that has failed on both counts is not coming back, and
+     * every day it stays is a day a new FCM address cannot be sent.
+     */
+    fun startOver(failures: Failures, now: Long): Boolean =
+        failures.count >= ATTEMPTS && now - failures.firstAt >= SPAN_MS
 }
