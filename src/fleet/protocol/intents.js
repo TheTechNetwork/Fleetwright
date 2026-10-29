@@ -620,6 +620,34 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  * env setting refuse what the wire would. */
 export const PIN_EMAIL_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/;
 
+/** What a box that pins its admins will not take from anybody while it is stranded. */
+const PIN_GUARDED = 'update, upgrade or reboot it, change its release channel or session image, or restore somebody else’s work on it';
+
+/**
+ * What a person is told when a box that pins its admins takes those verbs from
+ * nobody (src/fleet/host/pinned-admins.js, pinReport), keyed by why.
+ *
+ * FIXED HERE, AND NOT THE BOX'S OWN WORDS. The coordinator shows these to
+ * everybody who sees the box, members who are not shown the addresses
+ * included, so a box's health carries a code and the coordinator says the
+ * sentence (core.js adminsSeenBy): a box cannot put an address, or anything
+ * else, in front of every viewer through this field. None of them names
+ * anybody.
+ *
+ *  - `left`: every admin pinned there left the fleet (forgetperson).
+ *  - `unlisted`: none of them has a key the minter lists, so none can sign: a
+ *    mistyped address, or somebody who never signed in on a phone.
+ *  - `unchecked`: the box has no key of its own to fetch the list with, so it
+ *    can check nobody's signature.
+ *  - `unreadable`: the record itself cannot be read.
+ */
+export const PIN_SENTENCES = Object.freeze({
+  left: `Every admin pinned on this machine has left the fleet, so nobody can ${PIN_GUARDED}. A new admin is pinned on the machine itself: fleetwright-sidecar pin-admin with their address.`,
+  unlisted: `None of the admins pinned on this machine has a signing key the fleet lists, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar admins shows who is pinned, and pin-admin pins somebody who can sign.`,
+  unchecked: `This machine pins its admins but has no key of its own to check their signatures with, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar reset-admins takes the fleet’s word again.`,
+  unreadable: `The record of who is pinned on this machine cannot be read, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar admins says what is wrong with it.`,
+});
+
 /**
  * @typedef {object} ParamSpec
  * @property {'name'|'enum'|'int'|'text'|'secret'|'raw'} type
@@ -1217,9 +1245,10 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Reboot one host. Two steps: ask, then send back the pin and the hostname.',
   },
-  // WHO ELSE THIS BOX TAKES REBOOT, UPGRADE, UPDATE AND A RESTORE OF
-  // SOMEBODY ELSE'S WORK FROM, recorded on the box (src/fleet/host/pinned-admins.js,
-  // docs/signed-intents.md "Pinned admins").
+  // WHO ELSE THIS BOX TAKES REBOOT, UPGRADE, UPDATE, A NEW CHANNEL OR
+  // SANDBOX IMAGE AND A RESTORE OF SOMEBODY ELSE'S WORK FROM, recorded on
+  // the box (src/fleet/host/pinned-admins.js, docs/signed-intents.md
+  // "Pinned admins").
   //
   // NEVER THE FIRST ONE. The first pinned admin is set on the box by whoever
   // runs it (FLEETWRIGHT_ADMINS, or `fleetwright-sidecar pin-admin`), because
@@ -1253,7 +1282,8 @@ export const VERBS = Object.freeze({
     },
     mutating: true,
     summary:
-      'Add or remove an admin this box pins for reboot, upgrade, update and restoring somebody else\u2019s work. ' +
+      'Add or remove an admin this box pins for reboot, upgrade, update, changing its release channel or session image, ' +
+      'and restoring somebody else\u2019s work. ' +
       'Only a pinned admin may, with their own signature; the first is pinned on the box by whoever runs it.',
   },
   answer: {
