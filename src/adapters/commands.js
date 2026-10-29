@@ -233,9 +233,10 @@ function fromFleet(ctx) {
  * THE OPERATOR'S "ASK FIRST" IS A CEILING FOR THE FLEET.
  *
  * FLEETWRIGHT_SKIP_PERMISSIONS turned off is somebody with a shell on this box
- * deciding that its sessions stop and ask before each tool. Off is any value
- * set but 1, true, yes or on (config.js `bool`), so the refusal says "turned
- * off" rather than quote a value the operator may never have written.
+ * deciding that its sessions stop and ask before each tool. Off is any
+ * non-empty value other than 1, true, yes or on, in any case (config.js
+ * `bool`; an empty one is unset, and unset bypasses), so the refusal says
+ * "turned off" rather than quote a value the operator may never have written.
  *
  * `start` has carried `mode` since protocol v1, and nothing held a fleet start to that decision: a phone,
  * Siri, an agent over MCP or a held runner start that asked for `dangerous`
