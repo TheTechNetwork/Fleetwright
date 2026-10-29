@@ -89,6 +89,7 @@ test('iOS draws bypassing only when every machine it could land on says it bypas
     assert.match(body, /allSatisfy|\.all \{/, `${guard[1]} is not about every machine`);
     assert.match(body, /!\w+\.isEmpty|\.isNotEmpty\(\)/, `${guard[1]} allows it with no machine to judge`);
     assert.doesNotMatch(body, /"asks"/, `${guard[1]} is "none asks", which lets cannot tell through`);
+    assert.doesNotMatch(body, /\?\?\s*"bypassed"/, `${guard[1]} reads a machine that has not said as one that bypasses`);
     // And the send holds to the same condition, so a choice made while it was
     // offered is not sent after it went.
     assert.match(IOS, new RegExp(`"dangerous" && ${guard[1]}\\)? \\? permission`), 'the send is not guarded');
