@@ -14,7 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
-import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { PIN_SENTENCES, PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { admit, makeAdmin } from './helpers/enrolled-hosts.js';
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
@@ -57,10 +57,22 @@ test('nobody pinned is an answer, a record the box cannot read is cannot tell, a
   assert.deepEqual(await seen(await fleet({ pinned: [] }), BEA), { count: 0, you: false });
 
   const unreadable = await fleet({ pinned: null, problem: 'The record of who is pinned on this machine cannot be read.' });
-  assert.deepEqual(await seen(unreadable, ADMIN), { count: null, you: null, problem: 'The record of who is pinned on this machine cannot be read.' });
+  assert.deepEqual(await seen(unreadable, ADMIN), { count: null, you: null, problem: PIN_SENTENCES.unreadable });
 
-  const left = 'The only admin pinned on this machine has left the fleet.';
-  assert.deepEqual(await seen(await fleet({ pinned: ['gone@example.test'], left }), BEA), { count: 1, you: false, left });
+  for (const code of ['left', 'unlisted', 'unchecked']) {
+    const stranded = await fleet({ pinned: ['gone@example.test'], stranded: code, left: 'whatever the box wrote' });
+    assert.deepEqual(await seen(stranded, BEA), { count: 1, you: false, left: PIN_SENTENCES[code] }, code);
+  }
+  for (const sentence of Object.values(PIN_SENTENCES)) assert.doesNotMatch(sentence, /@/);
+});
+
+test('what a box writes in its own sentences never reaches the people who see it', async () => {
+  // Every viewer of the box is shown these, members who are not shown the
+  // addresses included, so a box could otherwise hand all of them a list.
+  const core = await fleet({ pinned: ['ada@example.test'], left: 'Ask ada@example.test or carol@example.test.', stranded: 'carol@example.test' });
+  assert.deepEqual(await seen(core, BEA), { count: 1, you: false, left: PIN_SENTENCES.left });
+  const broken = await fleet({ pinned: null, problem: 'Ask carol@example.test to fix it.' });
+  assert.equal((await seen(broken, BEA)).problem, PIN_SENTENCES.unreadable);
 });
 
 test('a box that says nothing about pins, or says it in another shape, is shown as saying nothing', async () => {

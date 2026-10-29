@@ -76,11 +76,13 @@ export function runsNoSessions(hostId) {
  *   the sandbox. Absent from an older box, which has not said; only `true`
  *   lets a member's session onto a box they do not administer (hosts.js
  *   runsSessionsFor).
- * @property {{ pinned: string[]|null, left?: string, problem?: string }} [admins]
- *   the admins this box pins itself for reboot, upgrade, update and restoring
- *   somebody else's work (src/fleet/host/pinned-admins.js). Empty is nobody
- *   pinned, which is the coordinator's word as before; null is a record the
- *   box cannot read. Absent from a box that cannot pin, which is also how a
+ * @property {{ pinned: string[]|null, stranded?: string, left?: string, problem?: string }} [admins]
+ *   the admins this box pins itself for reboot, upgrade, update, its channel
+ *   and sandbox image, and restoring somebody else's work
+ *   (src/fleet/host/pinned-admins.js). Empty is nobody pinned, which is the
+ *   coordinator's word as before; null is a record the box cannot read.
+ *   `stranded` is why it takes those from nobody, a code and never shown as
+ *   sent: the sentence is the coordinator's (intents.js PIN_SENTENCES). Absent from a box that cannot pin, which is also how a
  *   phone knows not to offer `pinadmin` there. Never sent to a person as it
  *   is: core.js adminsSeenBy.
  */
