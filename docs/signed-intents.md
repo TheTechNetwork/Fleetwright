@@ -1,7 +1,9 @@
 # Signed intents: a box obeys a person, not the coordinator
 
 **Status: phases 1 and 2 built; phase 3's switch, delegations, signed
-sign-ins and the browser signing page built; pinned admins not yet.** This is
+sign-ins and the browser signing page built; pinned admins built, with the
+first admin set on each box by whoever runs it ([Pinned admins](#pinned-admins)).**
+This is
 SEC-COORD-2 in `docs/security.md` §4.1 and the third row of `docs/trust.md`'s
 table. Until phase 3 ships, no document may say the coordinator cannot forge an
 instruction, and none does.
@@ -169,7 +171,7 @@ with what a coordinator forging it could do:
 
 | Verb, and when the coordinator sends it | Forged, it could | Under enforcement |
 |---|---|---|
-| `forgetperson`, on removal | delete a person's sessions and sign-ins on a box | stays unsigned: it can only take away, which is denial of service |
+| `forgetperson`, on removal | delete a person's sessions and sign-ins on a box, and drop their pin as an admin there unless it is the last | stays unsigned: it can only take away, which is denial of service |
 | `vmlogin`, a machine asking for its owner's login | have a box hand a login to a machine that box made | stays unsigned; the box already checks the machine is one it made, running, and asked once (`XoPools#handLogin`) |
 | `mint`, a runner's token | ask a box to mint for a job | stays unsigned; the minter checks GitHub's own job token |
 | `exchange`, `link`, `renew`, finishing a sign-in | write a credential into a person's row | delegated: the phone signs a delegation when it finishes the sign-in, for one provider, that box and ten minutes, and the coordinator carries it to the box (built) |
@@ -202,10 +204,20 @@ that, and does not remove it:
   can only take away, as the members list already does for the vault.
 - **It could still say somebody is an admin.** So the verbs that reach every
   person on a box (`reboot`, `upgrade`, `update`, `restore` of somebody else's
-  work) are checked against **admins the box pins itself**: the person whose
-  signed approval enrolled it, and anybody they add by a signed intent. A box
-  enrolled before this has no pinned admin and keeps taking the coordinator's
-  word until somebody signs one.
+  work) are checked against **admins the box pins itself**: the first set on
+  the box by whoever runs it, and anybody a pinned admin adds by a signed
+  intent. A box nobody has pinned anyone on keeps taking the coordinator's
+  word, exactly as before ([Pinned admins](#pinned-admins)).
+
+  This said once that the first pin would be *the person whose signed
+  approval enrolled it*. Built, that would not have been a pin the
+  coordinator could not choose. Approving a box is a person adding its key to
+  their own vault, which anybody signed in to the minter can do for any box
+  key the coordinator shows them, and the answer that says who approved a box
+  is not signed by the minter. And the bullet above is the larger hole: a
+  coordinator that lists a throwaway account as a member gets that account's
+  key listed, so it signs as `signed`. A first pin anything on the wire can
+  make is a first pin the coordinator can make. So it is made on the box.
 
 ## Phases
 
@@ -227,7 +239,8 @@ that, and does not remove it:
    sign-in signatures above ship here. *The switch, its `signers` mode, the
    delegations and the signed sign-ins are built (below), and `signers` is the
    default, and the browser signs through a page of the minter's (below).*
-4. **Pinned admins** on each box.
+4. **Pinned admins** on each box. *Built: the first is set on the box, and a
+   pinned admin adds and removes the rest from their phone (below).*
 
 ## Phase 2, as built
 
@@ -330,6 +343,97 @@ neither a signature nor a delegation, the coordinator adds to the box's words
 what to do about it, as steps: open the app, go to You → Delegations, and under
 An MCP client tap Allow for a day or Allow for a week. The coordinator's own
 refusal ends the same way.
+
+## Pinned admins
+
+**What it guards.** `reboot`, `upgrade` with `apply`, `update`, and a
+`restore` of somebody else's binned session: the verbs that reach every
+person's work on a box (`src/fleet/host/pinned-admins.js`). `upgrade` without
+`apply` reports what is waiting and installs nothing, so it is not one of them.
+
+**While a box pins nobody** it behaves exactly as it did before pins existed:
+the coordinator's word for who is an admin is the only word there is. Every
+box already deployed keeps working, and nobody has to set anything up. Nothing
+changes until whoever runs a box pins somebody on it.
+
+**Once it pins somebody**, those verbs need a signature or a delegation from
+one of them, checked against the minter's key list as every signature is. The
+check holds on a box that does not otherwise require signatures (`off`): an
+unsigned actor is the coordinator naming an admin. A person restores their
+own binned session on their own signature, pinned or not; whose a session is
+comes from the hub's bin, and a session the box cannot attribute is refused,
+because a guess would restore somebody else's work. The coordinator still
+decides first who may administer a box (`hosts.js administers`), so pins can
+only narrow that, never widen it: a fleet admin a box never pinned is let
+through by the coordinator and refused by the box.
+
+**The first pin never comes over the wire.** Whoever runs the box sets it, in
+its own env file or at its own prompt, which is the same trust as everything
+else in that env file:
+
+- `FLEETWRIGHT_ADMINS=you@example.com,them@example.com` in
+  `/etc/fleetwright-sidecar.env`, read when the sidecar starts and nobody is
+  pinned yet. Once somebody is, the record is the box's word and the env line
+  does not overrule it, or a restart would undo every change since.
+- `fleetwright-sidecar pin-admin you@example.com`, run as the sidecar's user.
+
+Pin people who have already signed in on a phone, so their address is bound
+to their GitHub account at the minter (`address_taken`, above). An address
+nobody has filed a key under can be claimed first by whoever files one.
+
+**Over the wire**, `pinadmin` (`email`, `op`: `add` or `remove`) lets an admin
+the box already pins add another or remove one, signed for that request. A
+delegation is refused for it: a delegation is the coordinator holding a
+standing permission, and changing who may reboot the box is not one to hand
+it. It never makes the first pin, which a coordinator that lists a throwaway
+account could otherwise make, and never removes the last, which would hand the
+box back to the coordinator's word. The phones offer it only to a pinned
+admin, on a box that pins somebody; there is no "pin me".
+
+**When an admin leaves the fleet**, `forgetperson` drops their pin, unless they
+are the last one. A last admin who leaves stays pinned, and the box fails
+closed: their key is no longer listed, so nobody signs as them, and those
+verbs are refused from everybody. Its health says so in a sentence that names
+nobody, *"The only admin pinned on this machine has left the fleet, so it
+updates, upgrades and reboots for nobody. A new admin is pinned on the machine
+itself: fleetwright-sidecar pin-admin with their address."*, and stops saying
+it if they are let back in and their key is listed again. `forgetperson` is the
+coordinator's alone, so a forged one can drop a pin and never add one, which is
+denial of service, as the table above says.
+
+**The way back is on the box**, for every way the record can be wrong, so
+nobody edits the file by hand:
+
+```sh
+sudo -u fleetwright-sidecar fleetwright-sidecar admins          # who is pinned, and what is wrong
+sudo -u fleetwright-sidecar fleetwright-sidecar pin-admin ADDR  # pin somebody, the first included
+sudo -u fleetwright-sidecar fleetwright-sidecar unpin-admin ADDR  # unpin one, the last included
+sudo -u fleetwright-sidecar fleetwright-sidecar reset-admins    # nobody pinned: the coordinator's word again
+```
+
+The running sidecar reads the record on every request, so none of these needs
+a restart. A record that cannot be read refuses every guarded verb, from the
+wire and from everybody, until `pin-admin` or `reset-admins` replaces it.
+
+**The record.** `pinned-admins.json` beside the host key, addresses
+lowercased, readable by anyone on the box like `signers.json` beside it.
+Written whole by rename, one change at a time under a lock file, so a
+`pin-admin` typed on the box and a `pinadmin` from a phone never lose each
+other's change.
+
+**What a phone is shown.** A box's health carries whom it pins. Those are
+people's addresses, so the coordinator shapes the field for every reader
+(`core.js adminsSeenBy`): the fleet's admin and the people on the list see the
+list; anybody else sees how many and that they are not one. That is what a
+phone needs to draw Apply update, Apply upgrade, Reboot and another person's
+Restore only where the box will take them from the person holding it (C-2).
+A box that says nothing about pins, which is every box from before them, is
+drawn as before.
+
+**What it does not stop.** Whoever runs the box can change its pins, as they
+can change everything else on it. The coordinator can still drop or delay a
+pinned admin's intents, and can drop a pin with a forged `forgetperson`. A box
+whose operator pins nobody is where it was.
 
 ## Delegations
 

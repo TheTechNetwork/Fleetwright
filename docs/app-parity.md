@@ -234,6 +234,7 @@ says on health which journals a box has so the buttons are only ever live.)
 | journals and session output | Logs on the host page, Output on each session | Logs on the host sheet, Output on each session | ✅ |
 | update / upgrade a box | one tap | one tap | ✅ |
 | reboot a box | pin + typed hostname | pin + typed hostname | ✅ |
+| **who a box takes update and reboot from** (`pinadmin`, health `admins`) | The machine → Pinned admins, where it pins somebody: a pinned admin sees the list, adds by address and removes all but the last; anybody else is told they are not one, and Apply update, upgrade, Reboot and others' Restore are not drawn. No first pin, which is set on the box | the same section, the same words (`test/pinned-admins-in-apps.test.js`) | — (`fleetwright-sidecar admins` on the box) |
 | **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
 | **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
 | **grant a session a secret** (v4 `secret`) | picker on the start sheet | picker on the start sheet | `/new --secret=<name>` |

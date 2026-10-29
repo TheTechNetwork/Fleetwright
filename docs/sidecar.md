@@ -173,7 +173,7 @@ node bin/fleetwright-sidecar doctor       # check this box can drive its fleetwr
 node bin/fleetwright-sidecar              # run
 ```
 
-Every setting is in `src/fleet/host/config.js`. Four are worth calling out:
+Every setting is in `src/fleet/host/config.js`. Five are worth calling out:
 
 - **`FLEETWRIGHT_COORDINATOR_URL` is required.** §5: the agent pins the origin
   it will talk to. A transport that will talk to whoever answers is the same
@@ -195,6 +195,23 @@ Every setting is in `src/fleet/host/config.js`. Four are worth calling out:
   says how many unsigned and delegated intents the box has had, which is what
   turning it on would refuse. A value that is none of the three stops the
   sidecar starting rather than being read as `off`.
+- **`FLEETWRIGHT_ADMINS` names the first admins this box pins**
+  ([`signed-intents.md`](signed-intents.md#pinned-admins)), by fleet address,
+  comma-separated: the people it takes reboot, `upgrade apply`, update and
+  restoring somebody else's work from, whatever the coordinator says about who
+  is an admin. Read when the sidecar starts and nobody is pinned yet; after
+  that the record beside the host key (`pinned-admins.json`) is the box's
+  word, and these change it, run as the sidecar's user:
+
+  ```sh
+  fleetwright-sidecar admins                 # who is pinned, and anything wrong with the record
+  fleetwright-sidecar pin-admin you@example.com [more…]
+  fleetwright-sidecar unpin-admin them@example.com   # the last one too, here and only here
+  fleetwright-sidecar reset-admins           # nobody pinned: the coordinator's word again
+  ```
+
+  Unset, nobody is pinned and the box behaves as it always has. An address
+  that is not one stops the sidecar starting.
 - **`FLEETWRIGHT_IDLE_RESTART_MINUTES` defaults to 60, and 0 turns it off.** A
   session whose pane has not changed at all for that long is stopped and
   resumed. The useful case is one that wedged overnight, where the fix is

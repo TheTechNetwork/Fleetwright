@@ -124,6 +124,7 @@ and "dead host" is the one it retries.
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
+| `pinadmin` | `email`, `op` (`add`\|`remove`) | ✅ | sidecar-local — changes `pinned-admins.json` beside the host key, and only from an admin the box already pins, signed for this request (never a delegation). Never the first pin, which is set on the box (`FLEETWRIGHT_ADMINS`, `fleetwright-sidecar pin-admin`), and never the last removal. Not a shell command |
 | `updates` | — | | `/updates` |
 | `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
 | `sandbox` | `to?` (`minimal`\|`browser`) | ✅ | `/sandbox [minimal\|browser]` |
@@ -419,6 +420,21 @@ A boolean `confirm: true` would be one tap from a phone in a pocket, and a token
 the coordinator minted would let a compromised coordinator mint its own. The pin
 is issued by the **host**, which is the party that would be rebooted.
 
+**`pinadmin` changes who a box takes that from, and only a pinned admin may.**
+A box can pin its own admins (`src/fleet/host/pinned-admins.js`,
+`signed-intents.md` "Pinned admins"); while it pins nobody it takes the
+coordinator's word, exactly as before. Once it pins somebody, `reboot`,
+`upgrade apply=yes`, `update` and a `restore` of somebody else's work need one
+of them, signed or delegated. `pinadmin` itself takes `email` and `op` (`add`
+or `remove`) and needs the signature of an admin the box already pins, made for
+this request: a delegation is refused, because it is the coordinator holding a
+standing permission. The **first** pin never comes over the wire, since a
+coordinator can list a throwaway account as a member and the minter would list
+its key; whoever runs the box sets it there. Nor does the removal of the
+**last** one, which would hand the box back to the coordinator's word. A box
+says whom it pins in its health (`admins`), which is also how a phone knows the
+verb exists there; a box from before answers `unknown_verb`.
+
 **`updates` answers both questions at once, and that is the whole point of it.**
 `update` is this software; `upgrade` is the operating system. They are different
 subjects with different answers, and the app's Check button asked only the
@@ -537,9 +553,11 @@ host carrying it, which is what makes "per label" a real answer rather than a
 description of round-robin. `reachable()` and not `schedulable()`: a degraded box
 is exactly the one somebody wants to move off rolling.
 
-`reboot`, `upgrade`, `update` and `logs` deliberately do **not** fan out on a
-tag. "Reboot everything labelled prod" is a fleet-wide outage expressible in one
-line, and four apt runs merged into one reply answers nobody.
+`reboot`, `upgrade`, `update`, `pinadmin` and `logs` deliberately do **not**
+fan out on a tag. "Reboot everything labelled prod" is a fleet-wide outage
+expressible in one line, and four apt runs merged into one reply answers
+nobody. Changing who a box takes its reboots from is one box, said out loud,
+for the same reason.
 
 `browser` is an **auto label** (`src/fleet/host/auto-labels.js`), derived from
 the image the host actually resolves rather than from the one it was configured
