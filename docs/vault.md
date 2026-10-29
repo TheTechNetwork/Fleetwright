@@ -102,6 +102,11 @@ sign-in itself (`checkClaude` in `src/fleet/minter/claude-login.js`):
 - a renewal already refused, by a box, a runner or a test, is the answer;
 - otherwise its access token is tried at the usage address, which costs
   nothing, and a token refused there is renewed at once instead of when due;
+- once: when the token that renewal gave is refused too, renewing again will
+  not mend it, and each renewal ends the token every box holds, so it is not
+  renewed again until it is due, and its person is told once that Claude
+  refuses it though renewing works (the check's answer lists it as `refused`,
+  apart from `ended`);
 - a sign-in that is due is renewed, as a box asking would renew it;
 - nothing else is renewed.
 

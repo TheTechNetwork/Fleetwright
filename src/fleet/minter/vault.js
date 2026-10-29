@@ -313,7 +313,8 @@ export async function answerClaudeFresh(ask, config) {
  * ten minutes: the asking is done here, against Anthropic, so it cannot make
  * a sign-in look ended, and the answer is a fleet account, a GitHub login and
  * a time, which it already knows, and what Anthropic said, which holds no
- * token. Each ended sign-in is in one answer only.
+ * token. Each ended sign-in is in one answer only, and so is each one whose
+ * access token is refused even after renewing (`refused`).
  *
  * @param {unknown} _ask  nothing is read from it
  * @param {VaultConfig} config
@@ -325,22 +326,27 @@ export async function answerClaudeCheck(_ask, config) {
   if (!store.list) return refuse('no_store', 'This storage cannot list the sign-ins it keeps.');
   const { fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = config;
   const last = Number(await store.get(CHECKED_ROW)) || 0;
-  if (now() - last < CLAUDE_CHECK_MIN_MS) return { ok: true, ended: [], text: 'The sign-ins were asked after less than ten minutes ago.' };
+  if (now() - last < CLAUDE_CHECK_MIN_MS) return { ok: true, ended: [], refused: [], text: 'The sign-ins were asked after less than ten minutes ago.' };
   await store.put(CHECKED_ROW, now());
   const loaded = await loadKey(config);
   if (!loaded.ok) return /** @type {any} */ (loaded).refusal;
   const key = /** @type {any} */ (loaded).key;
   /** @type {import('./claude-login.js').ClaudeEnded[]} */
   const ended = [];
+  /** @type {import('./claude-login.js').ClaudeRefused[]} */
+  const refused = [];
   for (const k of (await store.list({ prefix: 'gh:' })).keys()) {
     const userId = k.slice(3);
     if (!/^[0-9]{1,20}$/.test(userId)) continue;
     // ONE AT A TIME, each under its person's lock: a check renewing alongside
     // a box renewing the same sign-in would rotate one refresh token twice.
     const one = await withLock(`row:${userId}`, () => checkClaude(store, key, userId, { fetchImpl, now })).catch(() => null);
-    if (one) ended.push(one);
+    if (one && 'refusedAccess' in one) refused.push(one);
+    else if (one) ended.push(one);
   }
-  return { ok: true, ended, text: '' };
+  // `refused` beside `ended`, not in it: a coordinator from before it would
+  // tell those people their sign-in was ended, and it was not.
+  return { ok: true, ended, refused, text: '' };
 }
 
 /** @param {VaultConfig} config */

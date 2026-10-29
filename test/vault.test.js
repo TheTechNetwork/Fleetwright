@@ -1692,6 +1692,40 @@ test('a refresh token a renewal gave back unchanged keeps its expiry, and is not
   assert.equal(notes.at(-1).refreshUntil, refreshUntil, 'the expiry of the refresh token it kept is still known');
 });
 
+test('an access token still refused after the renewal it forced is not renewed again, and its person is told once', async (t) => {
+  // A 403 that stayed forced a renewal at every check, and each one ended the
+  // token every box held, for nothing.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const made = claudeSignInFor('refused-twice');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** The check `minutes` after keeping, past the minter's own ten-minute floor. @param {number} minutes */
+  const checkAt = async (minutes) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  revokeClaude(made.oauth.accessToken);
+  const before = claudeRenewals.count;
+  const first = await checkAt(11);
+  assert.deepEqual([first.ended, first.refused], [[], []]);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed once, because its access token was refused');
+  revokeClaude(`sk-ant-oat01-renewed${claudeRenewals.count}-${'b'.repeat(40)}`);
+  const second = await checkAt(27);
+  assert.equal(claudeRenewals.count - before, 1, 'not renewed again: renewing did not mend it');
+  assert.deepEqual(second.ended, [], 'renewing works, so it is not ended');
+  assert.equal(second.refused.length, 1);
+  assert.equal(second.refused[0].email, 'eli@example.com', 'the fleet account it was kept from');
+  const third = await checkAt(43);
+  assert.deepEqual([third.ended, third.refused], [[], []], 'told once');
+  assert.equal(claudeRenewals.count - before, 1);
+});
+
 test('a refusal after the refresh token ran out by its own lifetime is this fleet being late, not anything outside it', () => {
   const kept = Date.parse('2026-10-25T18:19:00Z');
   const good = { at: Date.parse('2026-10-25T18:30:00Z'), by: 'a check', ok: true, until: Date.parse('2026-10-26T02:30:00Z'), refreshUntil: Date.parse('2026-10-26T00:30:00Z') };

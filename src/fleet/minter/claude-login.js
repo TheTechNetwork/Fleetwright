@@ -62,6 +62,13 @@ const RENEWALS_KEPT = 12;
 export const ENDED_PREFIX = 'claude-ended:';
 
 /**
+ * WHERE AN ACCESS TOKEN STILL REFUSED AFTER A RENEWAL IS NOTED as told, by
+ * the renewal it followed, so the person is told once and the check stops
+ * renewing for it (checkClaude).
+ */
+export const REFUSED_PREFIX = 'claude-refused:';
+
+/**
  * What a sign-in's access token is asked with to see whether it still works:
  * the address `/usage` reads (src/core/usage.js, USAGE_URL, which a test holds
  * this equal to). It costs nothing, unlike a message, and answers 401 to a
@@ -248,7 +255,7 @@ export async function freshClaude(store, key, userId, io) {
     // and the note left unsettled is how that is told from a sign-in
     // cancelled somewhere else.
     /** @type {ClaudeRenewal} */
-    const note = { at: io.now(), by: io.by ?? null, ok: false, pending: true };
+    const note = { at: io.now(), by: io.by ?? null, ok: false, pending: true, ...(io.force ? { forced: true } : {}) };
     await noteRenewal(store, userId, note);
     const r = await renewClaudeSignIn(oauth, io);
     delete note.pending;
@@ -288,6 +295,7 @@ export async function freshClaude(store, key, userId, io) {
  * @property {number} [until]     the new access token's expiry, when it worked
  * @property {number} [refreshUntil]  the refresh token's, when Anthropic said
  * @property {boolean} [rotated]  a new refresh token came back, when it worked
+ * @property {boolean} [forced]   renewed before it was due, because its access token was refused
  * @property {boolean} [refused]  Anthropic said no, which only signing in again mends
  * @property {string} [why]       what was said, when it did not work
  * @property {boolean} [dropped]  renewed while a new sign-in was being kept, so not written back
@@ -407,6 +415,16 @@ export function describeRenewals(list, keptAt, now) {
  */
 
 /**
+ * @typedef {object} ClaudeRefused  a sign-in whose access token Anthropic refuses even after renewing,
+ *   for the person to be told: renewing works, so it is not ended, but renewing again will not mend it
+ * @property {true} refusedAccess
+ * @property {string} userId
+ * @property {string|null} email
+ * @property {string} login
+ * @property {number} at          when the renewed access token was found refused, epoch ms
+ */
+
+/**
  * Whether a person's kept sign-in still works, and if Anthropic has ended it,
  * who to tell. Under the person's lock, as a renewal is (vault.js, withLock).
  *
@@ -422,6 +440,11 @@ export function describeRenewals(list, keptAt, now) {
  *    only that renewal being refused says the sign-in is over: an access
  *    token can be refused for reasons a refresh token survives, and Anthropic
  *    refusing the refresh token is the one thing only signing in again mends.
+ *  - ONCE PER RENEWAL. When the token that forced renewal gave is refused
+ *    too, renewing again will not mend it, and each renewal ends the token
+ *    every box holds: a 403 that stayed renewed every check. So it is not
+ *    renewed again, and its person is told once (ClaudeRefused) until the
+ *    next renewal that was due.
  *  - ONE THAT IS DUE is renewed, as a box asking would renew it, so a person
  *    with no box asking still has an answer.
  *  - NOTHING ELSE IS RENEWED. This renewed ten minutes after keeping and
@@ -440,7 +463,7 @@ export function describeRenewals(list, keptAt, now) {
  * @param {{ privateKey: CryptoKey, publicKey: string }} key
  * @param {string} userId
  * @param {{ fetchImpl: typeof fetch, now: () => number }} io
- * @returns {Promise<ClaudeEnded|null>}  null when it works, cannot tell, or was told already
+ * @returns {Promise<ClaudeEnded|ClaudeRefused|null>}  null when it works, cannot tell, or was told already
  */
 export async function checkClaude(store, key, userId, io) {
   const row = await store.get(`gh:${userId}`);
@@ -452,6 +475,19 @@ export async function checkClaude(store, key, userId, io) {
     const asked = { ...io, by: 'a check' };
     const { held } = await freshClaude(store, key, userId, asked);
     if (held?.kind === 'login' && (await accessRefused(held.bearer, io.fetchImpl))) {
+      const lastGood = [...(await claudeRenewals(store, userId, row.at))].reverse().find((n) => n.ok);
+      if (lastGood?.forced) {
+        const toldRefused = await store.get(`${REFUSED_PREFIX}${userId}`).catch(() => null);
+        if (Number(toldRefused?.renewedAt) === Number(lastGood.at)) return null;
+        await store.put(`${REFUSED_PREFIX}${userId}`, { renewedAt: Number(lastGood.at), at: io.now() });
+        return {
+          refusedAccess: true,
+          userId,
+          email: typeof row.email === 'string' && row.email ? row.email : null,
+          login: String(row.login || ''),
+          at: io.now(),
+        };
+      }
       await freshClaude(store, key, userId, { ...asked, force: true });
     }
     if (!(await refusedLast())) return null;
