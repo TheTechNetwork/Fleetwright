@@ -348,6 +348,20 @@ test('a key list too old to check with strands the box, and its health says so',
   assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA], stranded: 'unchecked', left: PIN_SENTENCES.unchecked });
 });
 
+test('with no list to check with, a box whose every admin left says it checks nobody, and says so when it refuses', async (t) => {
+  // Reported as `left`, the phones read it as a box that still checks
+  // signatures and drew Restore of the person's own work, which the box
+  // then refused as "not signed by one of them", a signature it never checked.
+  const { sidecar, say } = await box(t, { record: { admins: [ADA], left: [ADA] } });
+  // A list it last held, but none it may check with now.
+  sidecar.intentKeys = /** @type {any} */ ({ ...sidecar.intentKeys, directory: new Set(), current: null });
+  assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA], stranded: 'unchecked', left: PIN_SENTENCES.unchecked });
+  say.verdict = 'no-directory';
+  const r = await sidecar.handle(intent('reboot', {}, BEA));
+  assert.equal(r.ok, false);
+  assert.match(String(r.text), /cannot check anybody’s signature right now/);
+});
+
 test('a box that can check no signature, and pins somebody, says it takes those verbs from nobody', async (t) => {
   const { sidecar } = await box(t, { record: { admins: [ADA] } });
   sidecar.intentKeys = null;

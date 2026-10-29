@@ -74,6 +74,9 @@ export const MAX_PINNED = 64;
 
 const UNREADABLE = 'The record of who is pinned on this machine cannot be read, so nothing that reaches everybody’s work on it was done. On the machine, fleetwright-sidecar admins says what is wrong with it.';
 const UNSIGNED_ACT = 'This machine has pinned admins, and this request was not signed by one of them. Nothing was done.';
+// Not UNSIGNED_ACT: with no key list it may check with, the request may well
+// have been signed, and saying it was not would be a claim the box cannot make.
+const CANNOT_CHECK = 'This machine has pinned admins and cannot check anybody’s signature right now, so it cannot tell whether this request was signed by one of them. Nothing was done.';
 const NOBODY = 'This machine has pinned admins, and this request names nobody. Nothing was done.';
 const CANNOT_TELL = 'This machine cannot tell whose that session is, and only a pinned admin may restore somebody else’s work. Nothing was done.';
 const NOWHERE = 'This machine has nowhere to keep a record of its admins, so nothing was changed.';
@@ -452,6 +455,7 @@ function notPinned(who, verb) {
 export function decideBoxWide(intent, pins, verdict, ownsSession = null) {
   if (pins.unreadable) return { ok: false, code: 'pinned_admins', text: UNREADABLE };
   if (pins.absent || pins.admins.length === 0) return { ok: true };
+  if (verdict === null || verdict === 'no-directory') return { ok: false, code: 'pinned_admins', text: CANNOT_CHECK };
   if (verdict !== 'signed' && verdict !== 'delegated') return { ok: false, code: 'pinned_admins', text: UNSIGNED_ACT };
   const who = actorEmail(intent.actor);
   if (!who) return { ok: false, code: 'pinned_admins', text: NOBODY };
@@ -575,11 +579,13 @@ export function forgetPinned(pins, email, listed = null) {
  *    yet, or one older than IntentKeys.check takes (intent-keys.js
  *    `current`). It refuses every signature then, so it is stranded, even
  *    though the list it last had named somebody pinned.
+ *    That holds when every pin is noted as having left, too: the phones
+ *    read `left` as a box that still checks signatures and would draw
+ *    Restore of a person's own work, which this box refuses while it can
+ *    check nobody.
  *  - `left` or `unlisted`: none of the pinned is on the minter's list now,
- *    `left` when every one of them is noted as having left, which is also
- *    what is said without a list, being the more useful of the two there.
- *    Somebody let back in is listed again and can sign, so the box is not
- *    stranded.
+ *    `left` when every one of them is noted as having left. Somebody let
+ *    back in is listed again and can sign, so the box is not stranded.
  *
  * @param {PinFile} pins
  * @param {{ has: (email: string) => boolean }|null} [listed]  the people the minter lists keys for, from a list this box may still check with, or null
@@ -595,7 +601,7 @@ export function pinReport(pins, listed = null, { checks = true } = {}) {
   let stranded = null;
   if (!checks) stranded = 'unchecked';
   else if (listed) stranded = pins.admins.some((a) => listed.has(a)) ? null : allLeft ? 'left' : 'unlisted';
-  else stranded = allLeft ? 'left' : 'unchecked';
+  else stranded = 'unchecked';
   return { pinned: pins.admins, ...(stranded ? { stranded, left: PIN_SENTENCES[stranded] } : {}) };
 }
 
