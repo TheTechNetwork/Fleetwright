@@ -71,14 +71,15 @@ test('iOS draws Update, Upgrade, Reboot, the channel, the image and Restore only
 test('Android offers no first pin, and changes pins only as a pinned admin', () => {
   assert.doesNotMatch(ANDROID, /Pin me/, 'a first pin is the machine’s operator’s, never a phone’s');
   assert.match(ANDROID, /if \(administers && admins != null && admins\.count != 0\) \{/);
-  assert.match(ANDROID, /if \(admins\.you == true\) \{[\s\S]*?pinned\.forEach \{ email ->/);
+  assert.match(ANDROID, /if \(admins\.you == true && admins\.left == null\) \{[\s\S]*?pinned\.forEach \{ email ->/);
+  assert.match(ANDROID, /\} else if \(admins\.left == null && admins\.count != null\) \{/);
   assert.match(ANDROID, /if \(pinned\.size > 1\) \{\s*TextButton\([\s\S]{0,200}?run \{ it\.pinAdmin\(hostId, email, add = false\) \}/);
   assert.match(ANDROID, /run \{ it\.pinAdmin\(hostId, email, add = true\) \}/);
   assert.match(ANDROID, /intent\("pinadmin", mapOf\("email" to email, "op" to if \(add\) "add" else "remove"\), host = host\)/);
 });
 
-test('Android draws Update, Upgrade, Reboot and Restore only where the machine takes them from this person', () => {
-  assert.match(ANDROID, /val takesFromYou: Boolean get\(\) = count == 0 \|\| you == true/);
+test('Android draws Update, Upgrade, Reboot, the channel, the image and Restore only where the machine takes them from this person', () => {
+  assert.match(ANDROID, /val takesFromYou: Boolean get\(\) = count == 0 \|\| \(you == true && left == null\)/);
   assert.match(ANDROID, /val boxWideAllowed: Boolean get\(\) = admins\?\.takesFromYou \?: true/);
   assert.match(ANDROID, /boxWideAllowed \|\| \(admins\?\.count != null && item\.isOwn\(me\)\)/);
   // `has` first: optInt reads a JSON null as 0, which would make a record the

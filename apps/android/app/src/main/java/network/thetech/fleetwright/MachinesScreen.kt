@@ -678,10 +678,12 @@ private fun MachinePage(
         // explicit false hides them; null is a coordinator too old to say, and
         // draws them as before.
         val administers = h?.administers != false
-        // AND THEN THE MACHINE'S OWN RULE for update, upgrade and reboot, when
-        // it pins its admins and this person is not one (C-2). A machine that
-        // pins nobody, or cannot pin, leaves the coordinator's rule alone, as
-        // before. Same rule as iOS's `mayActOnBox`.
+        // AND THEN THE MACHINE'S OWN RULE for update, upgrade, reboot, the
+        // channel and the image, when it pins its admins and this person is
+        // not one, or nobody pinned can sign (C-2). A machine that pins
+        // nobody, or cannot pin, leaves the coordinator's rule alone, as
+        // before. Labels are the coordinator's alone and stay on
+        // `administers`. Same rule as iOS's `mayActOnBox`.
         val actsOnBox = administers && h?.boxWideAllowed != false
 
         if (h != null) {
@@ -722,14 +724,18 @@ private fun MachinePage(
             // admin is pinned on the machine by whoever runs it, never from a
             // phone. A pinned admin adds and removes the others here; the last
             // one is removed only on the machine, so its Remove is not drawn.
-            // Same words as iOS, held equal by test/pinned-admins-in-apps.test.js.
+            // While nobody pinned can sign (`left`), the machine's state is all
+            // there is to say: a Pin or Remove from here would be refused, and
+            // nobody is promised they can be added. Same words as iOS, held
+            // equal by test/pinned-admins-in-apps.test.js.
             val admins = h.admins
             if (administers && admins != null && admins.count != 0) {
                 SectionHead("Pinned admins")
-                // THE MACHINE'S OWN WORDS, when it has something wrong to say.
+                // WHAT IS WRONG, when something is: a record the machine cannot
+                // read, or nobody pinned who can sign. The coordinator's words.
                 admins.problem?.let { Hint(it, color = Design.Palette.attention.now) }
                 admins.left?.let { Hint(it, color = Design.Palette.attention.now) }
-                if (admins.you == true) {
+                if (admins.you == true && admins.left == null) {
                     val pinned = admins.pinned ?: emptyList()
                     pinned.forEach { email ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -767,9 +773,9 @@ private fun MachinePage(
                             },
                         ) { Text("Pin") }
                     }
-                    Hint("This machine takes updates, upgrades, reboots and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
-                } else if (admins.count != null) {
-                    Hint("This machine takes updates, upgrades and reboots only from the admins pinned on it, and you are not one of them. One of them can add you from their phone.")
+                    Hint("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
+                } else if (admins.left == null && admins.count != null) {
+                    Hint("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.")
                 }
             }
 
@@ -814,7 +820,7 @@ private fun MachinePage(
                 SectionHead("Releases")
                 if (h.channelPinned) {
                     Hint("$current, set on the box")
-                } else if (!administers) {
+                } else if (!actsOnBox) {
                     Hint(current)
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
@@ -845,7 +851,7 @@ private fun MachinePage(
                     color = Design.Palette.inkDim.now,
                 )
                 // The answer without the choice, for somebody who may not make it.
-                !administers -> Hint(if (v == "browser") "Browser" else "No browser")
+                !actsOnBox -> Hint(if (v == "browser") "Browser" else "No browser")
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     listOf("minimal" to "No browser", "browser" to "Browser").forEach { (value, label) ->
                         FilterChip(
