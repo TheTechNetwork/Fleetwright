@@ -138,6 +138,8 @@ test('a box that gives more than one reason is told every fix, and that it takes
   // One reason is still today's sentence, whether the list is empty or absent.
   assert.match(await said('userns_root', []), /Running fleetwright as its own user, not root, opens it to everyone it acts for\.$/);
   assert.match(await said('userns_root', undefined), /Running fleetwright as its own user, not root, opens it to everyone it acts for\.$/);
+  // A reason said twice is one fix, not "both" of the same one.
+  assert.equal(await said('userns_root', ['userns_root']), await said('userns_root', []));
 
   // A reason it cannot read makes the rest a partial list, and a partial list
   // of fixes is the false sentence: not contained, and no way on named. So is

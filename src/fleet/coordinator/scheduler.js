@@ -1050,8 +1050,9 @@ function notContained(h) {
   const first = h.health?.sandboxedWhy;
   if (first === undefined || first === null) return [NOT_CONTAINED.off];
   const also = Array.isArray(h.health?.sandboxedAlso) ? h.health.sandboxedAlso : [];
-  const said = [first, ...also].map((c) =>
-    Object.hasOwn(NOT_CONTAINED, String(c)) ? NOT_CONTAINED[/** @type {keyof typeof NOT_CONTAINED} */ (String(c))] : null,
+  // A reason said twice is one reason: its clause and its fix are said once.
+  const said = [...new Set([first, ...also].map(String))].map((c) =>
+    Object.hasOwn(NOT_CONTAINED, c) ? NOT_CONTAINED[/** @type {keyof typeof NOT_CONTAINED} */ (c)] : null,
   );
   return said.every(Boolean) ? /** @type {Array<(typeof NOT_CONTAINED)[keyof typeof NOT_CONTAINED]>} */ (said) : null;
 }
