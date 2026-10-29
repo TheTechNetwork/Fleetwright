@@ -372,12 +372,13 @@ enum PushKey {
         }
     }
 
-    /// Whether this phone does not know it can open what is sealed to it:
-    /// what the notifications section of You says while it is true.
-    static var inDoubt: Bool {
+    /// Why this phone does not know it can open what is sealed to it, or nil
+    /// when it does: what the notifications section of You says while it is
+    /// set, in a sentence for each kind.
+    static var doubt: PushKeyRule.Doubt? {
         lock.lock()
         defer { lock.unlock() }
-        return evidence?.doubt != nil
+        return evidence?.doubt
     }
 
     /// One notification the app was shown, as the extension left it: on
