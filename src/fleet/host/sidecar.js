@@ -983,7 +983,7 @@ export class Sidecar {
       // and in no other, which is why it has to travel.
       if (intent.verb === 'labels') meta.hostLabels = this.givenLabels.join(',');
       // FROM THE FLEET, said on every line built from an intent, so the hub
-      // holds a start to the operator's FLEETWRIGHT_SKIP_PERMISSIONS=0 even
+      // holds a start to the operator's FLEETWRIGHT_SKIP_PERMISSIONS off even
       // where this process still holds the operator's token, which the hub
       // cannot tell from the operator's own console (commands.js
       // permissionCeiling). It only ever takes something away.

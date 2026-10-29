@@ -214,11 +214,33 @@ struct StartSheet: View {
         return only
     }
 
-    /// Whether this start may ask to bypass permissions: not when a machine
-    /// it could land on is set to ask, because that box refuses the start
-    /// (C-2). A box too old to say is older than that refusal too.
+    /// Whether this start may ask to bypass permissions: only when every
+    /// machine it could land on has said it bypasses them. A machine set to
+    /// ask refuses the start (C-2), and one that has not said, because its
+    /// host is too old to or the list did not load, may be set to ask with no
+    /// refusal to stop it, so cannot tell is not taken as allowed (C-5). No
+    /// machine to judge, a new one or a kind's host that is not offered, is
+    /// the same. The box default covers all of these.
     private var bypassAllowed: Bool {
-        !reachableHosts.contains { $0.health?.permissions == "asks" }
+        !reachableHosts.isEmpty && reachableHosts.allSatisfy { $0.health?.permissions == "bypassed" }
+    }
+
+    /// Why "Permissions bypassed" is missing, said as what the machines told
+    /// us: one set to ask, or one that has not said. Empty when it is offered.
+    private var bypassMissingLine: String {
+        if bypassAllowed { return "" }
+        if reachableHosts.isEmpty {
+            return " Permissions bypassed is not offered: no machine this could start on has said what it allows."
+        }
+        let asks = reachableHosts.contains { $0.health?.permissions == "asks" }
+        if host.isEmpty {
+            return asks
+                ? " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
+                : " Permissions bypassed is not offered while the fleet picks the machine: one of them has not said what it allows."
+        }
+        return asks
+            ? " Permissions bypassed is not offered here: this machine is set to ask before each tool."
+            : " Permissions bypassed is not offered here: this machine has not said what it allows."
     }
 
     private var boxDefaultLabel: String {
@@ -232,7 +254,7 @@ struct StartSheet: View {
     /// The sentence under the choice. The selected one still has to say what
     /// it does, and the box default says it only when the box has said.
     private var permissionLine: String {
-        var line: String
+        let line: String
         switch permission {
         case "safe":
             line = "It stops and asks before each tool, whatever its machine is set to."
@@ -245,12 +267,7 @@ struct StartSheet: View {
             default: line = "It runs the way its machine is set."
             }
         }
-        if !bypassAllowed {
-            line += host.isEmpty
-                ? " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
-                : " Permissions bypassed is not offered here: this machine is set to ask before each tool."
-        }
-        return line
+        return line + bypassMissingLine
     }
 
     private var taskIsEmpty: Bool { task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -557,9 +574,10 @@ struct StartSheet: View {
                 // The box's own default comes first and is selected: it sends
                 // no mode, so the operator's setting decides, and it is named
                 // from what the machine reported, or not at all when it has
-                // not (C-5). Bypassing is offered only where no machine this
-                // could land on is set to ask, because there the box refuses
-                // it (C-2), and the sentence below says why it is missing.
+                // not (C-5). Bypassing is offered only where every machine
+                // this could land on has said it bypasses, because a box set
+                // to ask refuses it (C-2) and one that has not said may be set
+                // to ask (C-5), and the sentence below says why it is missing.
                 Section {
                     Picker("Permissions", selection: $permission) {
                         Text(boxDefaultLabel).tag("")

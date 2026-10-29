@@ -595,9 +595,10 @@ class Fleet(
          * What a session started here with no mode does: "asks" before each
          * tool, or runs with permissions "bypassed" (FLEETWRIGHT_SKIP_PERMISSIONS
          * on the box, http.js #hostFacts). New session labels its "Box default"
-         * choice from this, and offers "Permissions bypassed" only where it is
-         * not "asks", because a box that asks refuses a start from the fleet
-         * that asks to bypass (commands.js permissionCeiling).
+         * choice from this, and offers "Permissions bypassed" only where every
+         * machine it could land on says "bypassed", because a box that asks
+         * refuses a start from the fleet that asks to bypass (commands.js
+         * permissionCeiling), and null may be a box that asks.
          *
          * NULL IS CANNOT TELL: a box too old to say, and then the sheet says
          * nothing about which way the default goes.
