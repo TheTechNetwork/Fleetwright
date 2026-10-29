@@ -63,6 +63,7 @@ import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
+import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
@@ -155,6 +156,7 @@ const CAPABILITY_VERBS = new Set([
   'unlink',
   'renew',
   'forgetperson',
+  'pinadmin',
   'update',
   'upgrade',
   'start',
@@ -276,10 +278,11 @@ export class Sidecar {
     // process that loaded it (bin/fleetwright-sidecar). Null: no vault here.
     vaultKey = null,
     vaultIntervalMs = 10 * 60_000,
-    // THIS PROCESS'S OWN STATE DIRECTORY, the one beside its key, where the
-    // first version of hypervisor onboarding kept a pool's token. Nothing is
-    // kept there now (src/fleet/host/xo-setup.js, hand-off); it is only where
-    // a setup run again looks for that old file to remove it.
+    // THIS PROCESS'S OWN STATE DIRECTORY, the one beside its key. The admins
+    // this box pins are recorded there (pinned-admins.js), beside the
+    // minter's key and the signers (intent-keys.js). It is also where the
+    // first version of hypervisor onboarding kept a pool's token, which a
+    // setup run again looks for to remove (xo-setup.js, hand-off).
     xoStateDir = null,
     // THE HYPERVISORS THIS BOX CAN MAKE MACHINES ON, from its people's
     // vaults, in memory only (src/fleet/host/xo-pools.js). Made here for any
@@ -818,7 +821,7 @@ export class Sidecar {
       };
     }
 
-    if (!isMutating(intent.verb)) return this.#run(intent);
+    if (!isMutating(intent.verb)) return this.#run(intent, verdict);
 
     // Idempotency. The PROMISE is cached, not just the result, so a retry that
     // arrives while the first attempt is still in flight — which is exactly
@@ -829,7 +832,7 @@ export class Sidecar {
       this.log.info(`sidecar: ${intent.verb} ${intent.id} already handled — replaying the original reply`);
       return { ...(await cached), replayed: true };
     }
-    const pending = this.#run(intent);
+    const pending = this.#run(intent, verdict);
     this.#remember(intent.id, pending);
     // A VERB THAT CHANGES WHAT THIS HOST IS CAPABLE OF PUSHES HEALTH AT ONCE.
     //
@@ -849,15 +852,94 @@ export class Sidecar {
   }
 
   /**
+   * A `pinadmin` from the wire, decided against the record as it is now and
+   * written in the same step (pinned-admins.js, updatePins).
+   *
    * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} verdict
+   */
+  async #pinAdmin(intent, verdict) {
+    const dir = this.xoStateDir;
+    const decided = dir
+      ? await updatePins(dir, (pins) => {
+          const d = decidePin(intent, pins, verdict);
+          return { ...(d.ok && d.write ? { write: d.write } : {}), result: d };
+        })
+      : decidePin(intent, readPins(null), verdict);
+    if (!decided.ok) {
+      this.log.warn(`sidecar: refused pinadmin ${intent.id} from ${intent.actor ?? 'nobody'}: ${decided.text}`);
+      return { ok: false, text: decided.text, error: { code: decided.code } };
+    }
+    if (decided.write) this.log.info(`sidecar: ${intent.actor} changed who is pinned here: ${decided.write.admins.join(', ')}`);
+    return { ok: true, text: decided.text };
+  }
+
+  /**
+   * The refusal for a box-wide verb this box's pins do not allow, or null.
+   *
+   * A restore of the asker's own binned session goes through on their
+   * signature, pinned or not. Whose it is comes from the hub's bin; missing,
+   * unreadable, or with no owner is cannot tell, which refuses, because a
+   * guess would restore somebody else's work.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} verdict
+   * @returns {Promise<Record<string, unknown>|null>}
+   */
+  async #boxWide(intent, verdict) {
+    const pins = readPins(this.xoStateDir);
+    /** @type {boolean|null} */
+    let owns = null;
+    if (intent.verb === 'restore' && pins.admins.length > 0 && !pins.unreadable) owns = await this.#ownsBinned(intent);
+    const decided = decideBoxWide(intent, pins, verdict, owns);
+    if (decided.ok) return null;
+    this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'}: ${decided.text}`);
+    return { ok: false, text: decided.text, error: { code: decided.code } };
+  }
+
+  /**
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @returns {Promise<boolean|null>}
+   */
+  async #ownsBinned(intent) {
+    /** @type {any} */
+    let state;
+    try {
+      state = await this.hub.state();
+    } catch {
+      return null;
+    }
+    const bin = state?.bin;
+    if (!Array.isArray(bin)) return null;
+    const name = String(intent.params?.name ?? '');
+    const row = bin.find((/** @type {any} */ r) => r && r.name === name);
+    if (!row) return null;
+    const owner = ownerOf(row.createdBy);
+    const who = actorEmail(intent.actor);
+    if (!owner || !who) return null;
+    return owner === who;
+  }
+
+  /**
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} [verdict]  what the signature check said, null when this box could not check
    * @returns {Promise<Record<string, any>>}
    */
-  async #run(intent) {
+  async #run(intent, verdict = null) {
     /** @param {Record<string, unknown>} extra */
     const reply = (extra) => ({ v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ...extra });
     const actor = intent.actor ? `fleet:${intent.actor}` : 'fleet';
 
     try {
+      // WHO THIS BOX TAKES ITS REBOOTS FROM (pinned-admins.js). Before the
+      // command line: a reboot the pins refuse must not reach the hub, and
+      // `pinadmin` never becomes a command line at all.
+      if (intent.verb === 'pinadmin') return reply(await this.#pinAdmin(intent, verdict));
+      if (isBoxWide(intent)) {
+        const refused = await this.#boxWide(intent, verdict);
+        if (refused) return reply(refused);
+      }
+
       // Two verbs never reach the command registry, because they read host
       // state rather than acting on a session.
       if (intent.verb === 'health') return reply({ ok: true, text: 'ok', health: await this.health() });
@@ -898,10 +980,22 @@ export class Sidecar {
       // as `unlink` is. The hub does the forgetting, because every store
       // involved is its own (src/core/forget-person.js); the reply says what
       // it did, which is the only thing that settles it at the coordinator.
+      //
+      // AND THEIR PIN AS AN ADMIN HERE, unless they are the last one, who
+      // stays pinned so the box does not fall back to the coordinator's word
+      // (pinned-admins.js, forgetPinned). A pin that could not be changed
+      // fails the reply, so the coordinator asks again.
       if (intent.verb === 'forgetperson') {
         const who = emailFromActor(intent.actor ? `fleet:${intent.actor}` : null);
         if (!who) return reply({ ok: false, text: 'forgetperson names its person as the actor, and this one names nobody.' });
-        return reply(await this.hub.forgetPerson(who));
+        const forgot = await this.hub.forgetPerson(who);
+        if (!this.xoStateDir) return reply(forgot);
+        try {
+          const note = await updatePins(this.xoStateDir, (pins) => forgetPinned(pins, who));
+          return reply(note ? { ...forgot, text: [forgot.text, note].filter(Boolean).join(' ') } : forgot);
+        } catch (e) {
+          return reply({ ...forgot, ok: false, text: `${forgot.text ? `${forgot.text} ` : ''}Their pin as an admin here could not be changed: ${/** @type {Error} */ (e).message}` });
+        }
       }
 
       // ADDING A HYPERVISOR IS THIS PROCESS'S TOO. The setup key is signed
@@ -1913,6 +2007,17 @@ export class Sidecar {
     return [...new Set([...this.givenLabels, ...auto, ...set])].sort();
   }
 
+  /** The `admins` field of health, or nothing. Never throws: a frame is not lost to it. */
+  #adminsReport() {
+    try {
+      const report = pinReport(readPins(this.xoStateDir), this.intentKeys?.directory ?? null);
+      return report ? { admins: report } : {};
+    } catch (e) {
+      this.log.warn(`sidecar: could not read who is pinned here: ${/** @type {Error} */ (e).message}`);
+      return {};
+    }
+  }
+
   async health() {
     const [load1, load5, load15] = this.machine.loadavg();
     const cpus = this.machine.cpus();
@@ -1987,6 +2092,15 @@ export class Sidecar {
             },
           }
         : {}),
+      // WHO THIS BOX TAKES REBOOT, UPGRADE, UPDATE AND RESTORING SOMEBODY
+      // ELSE'S WORK FROM (pinned-admins.js), read from the record on every
+      // frame so a pin made at the box's own prompt shows without a restart.
+      // Empty is nobody pinned: the coordinator's word, as before. Present at
+      // all is how a phone knows `pinadmin` exists here; absent, from an older
+      // box or one with nowhere to keep a record, it offers nothing. The
+      // coordinator shapes it per person before anybody sees the addresses
+      // (core.js adminsSeenBy).
+      ...this.#adminsReport(),
       // WHICH SERVICE LOGS THIS BOX CAN READ, so a screen offers a button for
       // exactly those. The chat surface already checks — logButtons in
       // commands.js filters on unitInstalled, because "no log entries for

@@ -8,6 +8,7 @@
 
 import os from 'node:os';
 import { REPLAY_TTL_MS } from './sidecar.js';
+import { PIN_EMAIL_RE } from '../protocol/intents.js';
 import { readApiToken, readSidecarToken } from '../../core/api-token.js';
 import { adoptLegacyEnv } from '../legacy-names.js';
 import { preferExisting } from '../legacy-paths.js';
@@ -121,6 +122,17 @@ export function loadSidecarConfig(env = process.env) {
     // docs/signed-intents.md lists and the box's health counts.
     requireSigned: signedMode(str(env, 'FLEETWRIGHT_REQUIRE_SIGNED', 'signers')),
 
+    // WHO THIS BOX TAKES REBOOT, UPGRADE, UPDATE AND RESTORING SOMEBODY ELSE'S
+    // WORK FROM, by fleet address (src/fleet/host/pinned-admins.js). Pinned
+    // when the sidecar starts and NOBODY is pinned yet; after that the record
+    // beside the host key is the box's word, changed with `fleetwright-sidecar
+    // pin-admin` and `unpin-admin`, or by a pinned admin from their phone.
+    // Empty, the default, pins nobody, and the box takes the coordinator's
+    // word for who is an admin, as every box did before this. Here and not in
+    // anything the coordinator sends, because the first pin is the one a
+    // coordinator must never be able to choose.
+    admins: list(env, 'FLEETWRIGHT_ADMINS'),
+
     // May a notification quote the session — a path, a command line — or only
     // the question this fleet wrote? Off by default: the fuller form reaches a
     // lock screen through somebody else's servers, and the fleet may not belong
@@ -182,6 +194,12 @@ export function validateSidecarConfig(cfg) {
   }
   if (cfg.requireSigned === null) {
     errors.push('FLEETWRIGHT_REQUIRE_SIGNED is not one of off, signers or all. It is not read as off: see docs/sidecar.md.');
+  }
+  // Refused rather than skipped: a typo in the one setting that says who may
+  // reboot the box should not quietly pin fewer people than it names.
+  const unpinnable = cfg.admins.filter((a) => !PIN_EMAIL_RE.test(a.toLowerCase()));
+  if (unpinnable.length) {
+    errors.push(`FLEETWRIGHT_ADMINS names ${unpinnable.join(', ')}, which is not a fleet address. It takes the addresses of the people to pin, separated by commas.`);
   }
   if (cfg.maxSkewMs >= REPLAY_TTL_MS) {
     errors.push(
