@@ -83,7 +83,9 @@ test('Android offers no first pin, and changes pins only as a pinned admin', () 
 test('Android draws Update, Upgrade, Reboot, the channel, the image and Restore only where the machine takes them from this person', () => {
   assert.match(ANDROID, /val takesFromYou: Boolean get\(\) = count == 0 \|\| \(you == true && left == null\)/);
   assert.match(ANDROID, /val boxWideAllowed: Boolean get\(\) = admins\?\.takesFromYou \?: true/);
-  assert.match(ANDROID, /boxWideAllowed \|\| \(admins\?\.count != null && item\.isOwn\(me\)\)/);
+  assert.match(ANDROID, /boxWideAllowed \|\| \(admins\?\.checksSignatures == true && item\.isOwn\(me\)\)/);
+  assert.match(ANDROID, /val checksSignatures: Boolean get\(\) = count != null && stranded != "unchecked"/);
+  assert.match(ANDROID, /stranded = a\.optString\("stranded"\)/);
   // `has` first: optInt reads a JSON null as 0, which would make a record the
   // box cannot read into nobody pinned.
   assert.match(ANDROID, /count = a\.takeIf \{ it\.has\("count"\) && !it\.isNull\("count"\) \}\?\.optInt\("count"\)/);

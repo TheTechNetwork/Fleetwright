@@ -458,6 +458,12 @@ class Fleet(
         val left: String?,
         /** Said when the box cannot read its record. The coordinator's sentence too. */
         val problem: String?,
+        /**
+         * Why, beside [left]: `left`, `unlisted` or `unchecked`, always one of
+         * the coordinator's three. Null from a coordinator too old to send it,
+         * and then Restore is drawn as before.
+         */
+        val stranded: String? = null,
     ) {
         /**
          * Whether the box takes those verbs from this person. Not while it is
@@ -465,6 +471,14 @@ class Fleet(
          * list cannot sign either (C-2).
          */
         val takesFromYou: Boolean get() = count == 0 || (you == true && left == null)
+
+        /**
+         * Whether the box can check anybody's signature, which a person's
+         * restore of their own work needs. Not while it cannot read its
+         * record, and not on `unchecked`: it holds no key list to check with,
+         * so it refuses their own restore too.
+         */
+        val checksSignatures: Boolean get() = count != null && stranded != "unchecked"
     }
 
     data class FleetHost(
@@ -684,10 +698,10 @@ class Fleet(
         /**
          * Whether the box takes this restore from this person: their own work
          * on their signature, anybody's from a pinned admin, nothing while it
-         * cannot read its record.
+         * cannot read its record or check a signature.
          */
         fun mayRestore(item: Binned, me: String): Boolean =
-            boxWideAllowed || (admins?.count != null && item.isOwn(me))
+            boxWideAllowed || (admins?.checksSignatures == true && item.isOwn(me))
 
         /**
          * Two separate answers, because they are two actions on two things.
@@ -3172,6 +3186,7 @@ class Fleet(
                             },
                             left = a.optString("left").takeIf { it.isNotBlank() && it != "null" },
                             problem = a.optString("problem").takeIf { it.isNotBlank() && it != "null" },
+                            stranded = a.optString("stranded").takeIf { it.isNotBlank() && it != "null" },
                         )
                     },
                 )

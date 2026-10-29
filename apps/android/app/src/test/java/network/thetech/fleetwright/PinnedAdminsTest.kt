@@ -12,8 +12,9 @@ import org.junit.Test
  * buttons as they were; that one which pins somebody else takes those verbs
  * from them alone, and a person's own restore from that person; that one
  * nobody pinned can sign for takes them from nobody, its own pinned admin
- * included; and that a record the machine cannot read takes them from nobody
- * (C-5). Which controls
+ * included; that one which can check no signature takes not even a person's
+ * own restore; and that a record the machine cannot read takes them from
+ * nobody (C-5). Which controls
  * sit behind it is read by test/pinned-admins-in-apps.test.js.
  */
 class PinnedAdminsTest {
@@ -38,8 +39,8 @@ class PinnedAdminsTest {
             admins = admins,
         )
 
-    private fun admins(count: Int?, you: Boolean?, left: String? = null) =
-        Fleet.PinnedAdmins(count = count, you = you, pinned = null, left = left, problem = null)
+    private fun admins(count: Int?, you: Boolean?, left: String? = null, stranded: String? = null) =
+        Fleet.PinnedAdmins(count = count, you = you, pinned = null, left = left, problem = null, stranded = stranded)
 
     @Test
     fun aMachineThatCannotPinOrPinsNobodyIsAsBefore() {
@@ -65,6 +66,15 @@ class PinnedAdminsTest {
         val h = host(admins(1, true, left = "nobody can sign"))
         assertFalse(h.boxWideAllowed)
         assertFalse(h.mayRestore(theirs, "bea@example.com"))
+    }
+
+    @Test
+    fun aMachineThatCanCheckNoSignatureTakesNotEvenYourOwnRestore() {
+        // `unchecked`: no key list to check with, so the machine refuses a
+        // person's own restore like everything else. Another stranded machine
+        // still checks their signature on their own work.
+        assertFalse(host(admins(1, false, left = "cannot check", stranded = "unchecked")).mayRestore(mine, "bea@example.com"))
+        assertTrue(host(admins(1, false, left = "nobody can sign", stranded = "unlisted")).mayRestore(mine, "bea@example.com"))
     }
 
     @Test
