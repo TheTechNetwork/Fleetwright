@@ -297,9 +297,21 @@ jobs:
     name: analyze (swift)
     needs: changes
     if: github.event_name != 'pull_request' && needs.changes.outputs.swift == 'true'
-    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
-    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
-    runs-on: xcode-27
+    # NOT xcode-27. Apple stopped shipping the x86_64 slices CodeQL's tracer
+    # needs, and the CLI's own note (2.27.3, changelog 2026-10-19) says traced
+    # extraction is unavailable once Xcode 27 is installed, on any macOS. On
+    # that image the build dies resolving sentry-cocoa, `Bad CPU type in
+    # executable` for its package-manifest helper, and the job has been red
+    # on every push to main since the Duo move put it here. The app still
+    # ships from xcode-27 — ios.yml builds and tests on 27.1 and 27.2, which
+    # is what draws the Duo. This job only has to compile the same sources.
+    # They compile on Xcode 26: the Duo layout is NavigationSplitView and the
+    # iOS 18 tab APIs, and this job was green on that toolchain until 24 Oct.
+    # macos-26 does not have Xcode 27 installed, which is the condition the
+    # note names. The selector the shipping builds use is not called here: it
+    # refuses anything but 27.1 and 27.2, on purpose. test/codeql-swift-runner.test.js
+    # keeps this job on macos-26.
+    runs-on: macos-26
     permissions:
       security-events: write
       actions: read
@@ -307,9 +319,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Select Xcode
-        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
-        run: ./scripts/select-xcode.sh
+      - name: Refuse Xcode 27
+        # The image's default is 26. Selecting 27, or an image that has 27
+        # installed, is the build CodeQL cannot trace — fail here, in words,
+        # rather than twenty minutes into a spawn the kernel refuses.
+        run: |
+          set -euo pipefail
+          ver=$(xcodebuild -version | awk '/^Xcode / { print $2; exit }')
+          case "$ver" in
+            26.*) echo "using Xcode $ver" ;;
+            *) echo "::error::CodeQL Swift tracing needs Xcode 26. This runner has ${ver:-nothing}, and Xcode 27 cannot be traced."; exit 1 ;;
+          esac
 
       - name: Install XcodeGen
         # Without this, brew refreshes its entire formula index before
