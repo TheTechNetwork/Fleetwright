@@ -36,7 +36,7 @@ test('iOS says why Resume is not offered, by the coordinator’s rule', () => {
   // Read under the key the box sends, and the rule is runsSessionsFor: kept
   // only where this person does not administer it and it has not said true.
   assert.match(IOS, /struct HostHealth: Codable[\s\S]*?let sandboxed: Bool\?/);
-  assert.match(bare(read('src/adapters/http.js')), /\bsandboxed: Boolean\(cfg\.sandbox\)/);
+  assert.match(bare(read('src/adapters/http.js')), /\bsandboxed: Boolean\(cfg\.sandbox\) && cfg\.sandboxUserns === 'nomap'/);
   assert.match(IOS, /var resumeKept: String\? \{\s*guard administers == false, health\?\.sandboxed != true else \{ return nil \}\s*return health\?\.sandboxed == false/);
 });
 
