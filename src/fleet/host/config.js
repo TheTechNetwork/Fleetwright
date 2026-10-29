@@ -122,8 +122,8 @@ export function loadSidecarConfig(env = process.env) {
     // docs/signed-intents.md lists and the box's health counts.
     requireSigned: signedMode(str(env, 'FLEETWRIGHT_REQUIRE_SIGNED', 'signers')),
 
-    // WHO THIS BOX TAKES REBOOT, UPGRADE, UPDATE AND RESTORING SOMEBODY ELSE'S
-    // WORK FROM, by fleet address (src/fleet/host/pinned-admins.js). Pinned
+    // WHO THIS BOX TAKES REBOOT, UPGRADE, UPDATE, A NEW CHANNEL OR SANDBOX
+    // IMAGE AND RESTORING SOMEBODY ELSE'S WORK FROM, by fleet address (src/fleet/host/pinned-admins.js). Pinned
     // when the sidecar starts and NOBODY is pinned yet; after that the record
     // beside the host key is the box's word, changed with `fleetwright-sidecar
     // pin-admin` and `unpin-admin`, or by a pinned admin from their phone.

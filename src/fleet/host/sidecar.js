@@ -981,17 +981,27 @@ export class Sidecar {
       // involved is its own (src/core/forget-person.js); the reply says what
       // it did, which is the only thing that settles it at the coordinator.
       //
-      // AND THEIR PIN AS AN ADMIN HERE, unless they are the last one, who
-      // stays pinned so the box does not fall back to the coordinator's word
-      // (pinned-admins.js, forgetPinned). A pin that could not be changed
-      // fails the reply, so the coordinator asks again.
+      // AND THEIR PIN AS AN ADMIN HERE, unless they are the last one who can
+      // sign, who stays pinned so the box does not fall back to the
+      // coordinator's word (pinned-admins.js, forgetPinned). A pin that could
+      // not be changed fails the reply, so the coordinator asks again.
+      //
+      // SOMEBODY NOT PINNED HERE IS THE REPLY FROM BEFORE PINS, read without
+      // the lock: on a box that pins nobody, which is every box until
+      // somebody pins one, a lock that cannot be taken (a directory this
+      // account cannot write, one left by a change that died) must not turn
+      // a forgetperson into a failure the coordinator retries forever.
+      // updatePins reads again under the lock before it writes.
       if (intent.verb === 'forgetperson') {
         const who = emailFromActor(intent.actor ? `fleet:${intent.actor}` : null);
         if (!who) return reply({ ok: false, text: 'forgetperson names its person as the actor, and this one names nobody.' });
         const forgot = await this.hub.forgetPerson(who);
         if (!this.xoStateDir) return reply(forgot);
+        const now = readPins(this.xoStateDir);
+        if (now.unreadable || !now.admins.includes(who)) return reply(forgot);
+        const listed = this.intentKeys?.directory ?? null;
         try {
-          const note = await updatePins(this.xoStateDir, (pins) => forgetPinned(pins, who));
+          const note = await updatePins(this.xoStateDir, (pins) => forgetPinned(pins, who, listed));
           return reply(note ? { ...forgot, text: [forgot.text, note].filter(Boolean).join(' ') } : forgot);
         } catch (e) {
           return reply({ ...forgot, ok: false, text: `${forgot.text ? `${forgot.text} ` : ''}Their pin as an admin here could not be changed: ${/** @type {Error} */ (e).message}` });
@@ -2010,7 +2020,7 @@ export class Sidecar {
   /** The `admins` field of health, or nothing. Never throws: a frame is not lost to it. */
   #adminsReport() {
     try {
-      const report = pinReport(readPins(this.xoStateDir), this.intentKeys?.directory ?? null);
+      const report = pinReport(readPins(this.xoStateDir), this.intentKeys?.directory ?? null, { checks: Boolean(this.intentKeys) });
       return report ? { admins: report } : {};
     } catch (e) {
       this.log.warn(`sidecar: could not read who is pinned here: ${/** @type {Error} */ (e).message}`);
@@ -2092,9 +2102,11 @@ export class Sidecar {
             },
           }
         : {}),
-      // WHO THIS BOX TAKES REBOOT, UPGRADE, UPDATE AND RESTORING SOMEBODY
-      // ELSE'S WORK FROM (pinned-admins.js), read from the record on every
-      // frame so a pin made at the box's own prompt shows without a restart.
+      // WHO THIS BOX TAKES REBOOT, UPGRADE, UPDATE, A NEW CHANNEL OR SANDBOX
+      // IMAGE AND RESTORING SOMEBODY ELSE'S WORK FROM (pinned-admins.js),
+      // read from the record on every frame so a pin made at the box's own
+      // prompt shows without a restart. `stranded` when nobody pinned can
+      // sign, so a phone draws none of those for anybody.
       // Empty is nobody pinned: the coordinator's word, as before. Present at
       // all is how a phone knows `pinadmin` exists here; absent, from an older
       // box or one with nowhere to keep a record, it offers nothing. The

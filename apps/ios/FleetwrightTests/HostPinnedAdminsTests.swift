@@ -8,8 +8,10 @@ import XCTest
 ///
 /// WHAT IS PINNED: that a machine which cannot pin, or pins nobody, leaves the
 /// buttons as they were; that one which pins somebody else takes those verbs
-/// from them alone, and a person's own restore from that person; and that a
-/// record the machine cannot read takes them from nobody (C-5). Which controls
+/// from them alone, and a person's own restore from that person; that one
+/// nobody pinned can sign for takes them from nobody, its own pinned admin
+/// included; and that a record the machine cannot read takes them from
+/// nobody (C-5). Which controls
 /// sit behind it is read by test/pinned-admins-in-apps.test.js.
 final class HostPinnedAdminsTests: XCTestCase {
 
@@ -36,6 +38,14 @@ final class HostPinnedAdminsTests: XCTestCase {
         XCTAssertFalse(other.boxWideAllowed)
         XCTAssertTrue(other.mayRestore(other.bin![0], as: "Bea@Example.com"))
         XCTAssertFalse(other.mayRestore(other.bin![1], as: "bea@example.com"))
+    }
+
+    func testAMachineNobodyPinnedCanSignForTakesNothingFromAnybody() throws {
+        // Its own pinned admin included: their key is not listed, so the
+        // machine refuses their signature like everybody else's.
+        let h = try health(#"{"count":1,"you":true,"pinned":["bea@example.com"],"left":"nobody can sign"}"#)
+        XCTAssertFalse(h.boxWideAllowed)
+        XCTAssertFalse(h.mayRestore(h.bin![1], as: "bea@example.com"))
     }
 
     func testARecordTheMachineCannotReadTakesNothing() throws {

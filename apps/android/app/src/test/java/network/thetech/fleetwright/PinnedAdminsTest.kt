@@ -10,8 +10,10 @@ import org.junit.Test
  *
  * WHAT IS PINNED: that a machine which cannot pin, or pins nobody, leaves the
  * buttons as they were; that one which pins somebody else takes those verbs
- * from them alone, and a person's own restore from that person; and that a
- * record the machine cannot read takes them from nobody (C-5). Which controls
+ * from them alone, and a person's own restore from that person; that one
+ * nobody pinned can sign for takes them from nobody, its own pinned admin
+ * included; and that a record the machine cannot read takes them from nobody
+ * (C-5). Which controls
  * sit behind it is read by test/pinned-admins-in-apps.test.js.
  */
 class PinnedAdminsTest {
@@ -36,8 +38,8 @@ class PinnedAdminsTest {
             admins = admins,
         )
 
-    private fun admins(count: Int?, you: Boolean?) =
-        Fleet.PinnedAdmins(count = count, you = you, pinned = null, left = null, problem = null)
+    private fun admins(count: Int?, you: Boolean?, left: String? = null) =
+        Fleet.PinnedAdmins(count = count, you = you, pinned = null, left = left, problem = null)
 
     @Test
     fun aMachineThatCannotPinOrPinsNobodyIsAsBefore() {
@@ -54,6 +56,15 @@ class PinnedAdminsTest {
         assertFalse(other.boxWideAllowed)
         assertTrue(other.mayRestore(mine, "Bea@Example.com"))
         assertFalse(other.mayRestore(theirs, "bea@example.com"))
+    }
+
+    @Test
+    fun aMachineNobodyPinnedCanSignForTakesNothingFromAnybody() {
+        // Its own pinned admin included: their key is not listed, so the
+        // machine refuses their signature like everybody else's.
+        val h = host(admins(1, true, left = "nobody can sign"))
+        assertFalse(h.boxWideAllowed)
+        assertFalse(h.mayRestore(theirs, "bea@example.com"))
     }
 
     @Test
