@@ -1669,9 +1669,10 @@ export class Fleet {
    */
   async alarm() {
     // Temporary machines a deploy or an eviction dropped without a close
-    // (core.js retireStranded): first, and on every pass, so a runner that
-    // dropped while it was the fleet's only socket is retired at the second
-    // slow pass rather than whenever some other host next connects.
+    // (core.js retireStranded): first, and on every pass. Its clock of when
+    // each went missing lives in memory, so in a fleet with no socket left an
+    // object evicted between the slow passes starts it again, and a runner
+    // stranded there is retired once some host connects, as before.
     this.core.retireStranded();
     const sockets = this.state.getWebSockets();
     if (!sockets.length) {

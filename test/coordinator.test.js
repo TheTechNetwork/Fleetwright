@@ -1177,36 +1177,44 @@ test('a temporary host that drops and dials back is recorded both times, and its
   assert.equal(c.registry.recentlyDropped('gha-1'), null);
 });
 
-test('a sign-in Claude refuses even after renewing is told to its person once, and not as ended', async () => {
+test('a sign-in Claude refuses at the usage address is told to its person once, as seen, and not as ended', async () => {
   // The minter stops renewing for it (claude-login.js, checkClaude), since
   // each renewal ends the token every box holds; the person has to know.
   /** @type {any[]} */
   const sends = [];
-  let answer = { ok: true, ended: [], refused: [{ refusedAccess: true, userId: '7', email: 'eli@example.com', login: 'eli', at: Date.parse('2026-10-29T03:10:00Z') }] };
+  const at = Date.parse('2026-10-29T03:10:00Z');
+  /** @type {any} */
+  let answer = { ok: true, ended: [], refused: [
+    { refusedAccess: true, userId: '7', email: 'eli@example.com', login: 'eli', at, status: 401, renewed: true },
+    { refusedAccess: true, userId: '8', email: 'dana@example.com', login: 'dana', at, status: 403, renewed: false },
+  ] };
   const clock = { now: Date.now() };
   const core = new CoordinatorCore({
     minter: /** @type {any} */ ({ claude: async () => answer }),
     push: /** @type {any} */ ({ async send(/** @type {any[]} */ devices, /** @type {any} */ message) { sends.push({ to: devices.map((d) => d.actor), message }); return { sent: devices.length, dead: [] }; } }),
     now: () => clock.now,
   });
-  for (const [email, admin] of /** @type {const} */ ([['eli@example.com', false], ['ops@example.com', true]])) {
+  for (const [email, admin] of /** @type {const} */ ([['eli@example.com', false], ['dana@example.com', false], ['ops@example.com', true]])) {
     const { client } = /** @type {any} */ (await core.clients.issue(`phone (${email})`, { admin, email }));
-    await core.registerDevice({ platform: 'ios', token: (admin ? 'b' : 'a').repeat(64), clientId: client.id, actor: `fleet:${email}` });
+    await core.registerDevice({ platform: 'ios', token: (admin ? 'b' : email[0]).repeat(64), clientId: client.id, actor: `fleet:${email}` });
   }
-  assert.equal(await core.checkClaudeSignIns(), 1);
-  const mine = sends.find((s) => s.to.includes('fleet:eli@example.com'));
-  assert.equal(mine.message.title, 'Claude refuses your sign-in');
-  assert.equal(mine.message.body, 'Claude refused its access token at 03:10 UTC, after the fleet had renewed it, so renewing again will not mend it. Sessions may be refused too. Signing in to Claude again from your phone or the signing page is the one thing left to try.');
-  assert.equal(mine.message.data.kind, 'claude-ended', 'opens the same Claude setup an ended sign-in does');
-  const admin = sends.find((s) => s.to.includes('fleet:ops@example.com'));
-  assert.equal(admin.message.title, 'Claude refuses eli@example.com’s sign-in');
-  assert.match(admin.message.body, /from their phone/);
+  assert.equal(await core.checkClaudeSignIns(), 2);
+  const eli = sends.find((s) => s.to.includes('fleet:eli@example.com'));
+  assert.equal(eli.message.title, 'Claude refused your sign-in’s access token');
+  assert.equal(eli.message.body, 'Claude refused this sign-in’s access token at 03:10 UTC when the fleet asked for its usage (401), and again straight after the fleet renewed it, so the fleet has stopped renewing for it until it is due. Sessions may be refused too. Signing in to Claude again from your phone or the signing page may mend it.');
+  const dana = sends.find((s) => s.to.includes('fleet:dana@example.com'));
+  assert.match(dana.message.body, /\(403: not allowed, rather than run out\)\. Renewing does not change that, so the fleet is not renewing for it\. Sessions may still work\./);
+  assert.ok(!sends.some((s) => s.to.includes('fleet:dana@example.com') && /eli@/.test(JSON.stringify(s.message))), 'nobody is told about somebody else');
+  const admin = sends.filter((s) => s.to.includes('fleet:ops@example.com'));
+  assert.deepEqual(admin.map((s) => s.message.title).sort(), ['Claude refused dana@example.com’s access token', 'Claude refused eli@example.com’s access token']);
+  assert.match(admin[0].message.body, /from their phone/);
+  assert.equal(eli.message.data.kind, 'claude-ended', 'carries the kind an ended sign-in carries');
   assert.ok(core.events.some((e) => e.event === 'claude.refused' && e.actor === 'eli@example.com'));
   assert.ok(!core.events.some((e) => e.event === 'claude.ended'), 'not told it was ended');
   // The minter names each one once; an answer without the list is a minter
   // from before it, and says nothing.
-  answer = /** @type {any} */ ({ ok: true, ended: [] });
+  answer = { ok: true, ended: [] };
   clock.now += 16 * 60_000;
   assert.equal(await core.checkClaudeSignIns(), 0);
-  assert.equal(sends.length, 2);
+  assert.equal(sends.length, 4);
 });

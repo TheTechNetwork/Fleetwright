@@ -4385,7 +4385,11 @@ export class CoordinatorCore {
     if (!this.minter?.claude || now - this.#claudeCheckedAt < CLAUDE_CHECK_MS) return 0;
     this.#claudeCheckedAt = now;
     /** @type {any} */
-    const r = await this.minter.claude('check', {}).catch(() => null);
+    const r = await this.minter.claude('check', {}).catch((/** @type {any} */ e) => {
+      this.log.warn(`coordinator: could not ask the minter after the Claude sign-ins: ${e?.message || e}`);
+      return null;
+    });
+    if (r && !r.ok) this.log.warn(`coordinator: the minter would not say how the Claude sign-ins are: ${String(r.text || r.code || 'no reason given').slice(0, 200)}`);
     if (!r?.ok || !Array.isArray(r.ended)) return 0;
     let told = 0;
     for (const e of r.ended.slice(0, 100)) {
@@ -4424,27 +4428,31 @@ export class CoordinatorCore {
         if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in ${said}`, body: body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
     }
-    // REFUSED EVEN AFTER RENEWING (claude-login.js, checkClaude): renewing
-    // works, so it is not ended, and the minter has stopped renewing for it,
-    // since each renewal ends the token every box holds. The person is told
-    // once, and what would mend it is not known, so it is not promised.
+    // REFUSED AT THE USAGE ADDRESS (claude-login.js, checkClaude): renewing
+    // works, so it is not ended, and the minter is not renewing for it, since
+    // each renewal ends the token every box holds. Told once, saying only
+    // what was seen: where it was refused, with what, and whether renewing
+    // was tried. What would mend it is not known, so it is not promised.
     for (const e of (Array.isArray(r.refused) ? r.refused : []).slice(0, 100)) {
       const email = String(e?.email || '').trim().toLowerCase();
       if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
       const at = Number(e.at);
       const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
-      const cause = `Claude refused its access token${when}, after the fleet had renewed it, so renewing again will not mend it.`;
+      const status = e.status === 403 ? 403 : e.status === 401 ? 401 : null;
+      const cause = status === 403
+        ? `Claude refused this sign-in’s access token${when} when the fleet asked for its usage (403: not allowed, rather than run out). Renewing does not change that, so the fleet is not renewing for it. Sessions may still work.`
+        : `Claude refused this sign-in’s access token${when} when the fleet asked for its usage${status ? ` (${status})` : ''}, and again straight after the fleet renewed it, so the fleet has stopped renewing for it until it is due. Sessions may be refused too.`;
       this.record({ event: 'claude.refused', actor: email, text: `${email}: ${cause}` });
       told += 1;
       if (!this.push) continue;
       const devices = this.#devicesOf(email);
       const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
       const admins = devices.filter((d) => !own.includes(d));
-      const body = `${cause} Sessions may be refused too. Signing in to Claude again from your phone or the signing page is the one thing left to try.`;
+      const body = `${cause} Signing in to Claude again from your phone or the signing page may mend it.`;
       const data = { event: 'claude.refused', kind: 'claude-ended', name: '', hostId: '', url: '' };
       try {
-        if (own.length) await this.push.send(own, { title: 'Claude refuses your sign-in', body, data });
-        if (admins.length) await this.push.send(admins, { title: `Claude refuses ${email}’s sign-in`, body: body.replace('from your phone', 'from their phone'), data });
+        if (own.length) await this.push.send(own, { title: 'Claude refused your sign-in’s access token', body, data });
+        if (admins.length) await this.push.send(admins, { title: `Claude refused ${email}’s access token`, body: body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above */ }
     }
     return told;
