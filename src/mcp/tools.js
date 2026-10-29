@@ -60,6 +60,10 @@ export const DEFAULT_DENY = ([
   // two releases behind, refusing verbs, whose named fix required a shell the
   // product does not provide. A dead end rather than a policy.
   'reboot', 'upgrade', 'restore',
+  // Who a box takes its reboots from. An agent acts on a delegation, and a box
+  // refuses `pinadmin` on one whatever this list says: only a pinned admin's
+  // own signature changes the pins (src/fleet/host/pinned-admins.js).
+  'pinadmin',
   'connect', 'link', 'unlink', 'renew', 'answer',
   // A token that is a person's whole Claude subscription for a year. Made for
   // a phone to keep with the minter; an agent has no key to seal it to and no

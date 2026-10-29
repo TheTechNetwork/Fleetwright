@@ -613,6 +613,13 @@ const ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
  * rather than "anything", because this ends up in a state file and in logs. */
 const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
 
+/** An address a box pins as an admin (`pinadmin`, src/fleet/host/pinned-admins.js).
+ * Narrower than an actor: a pin is a fleet address, never `telegram:12345`,
+ * because the minter files signing keys under addresses and an admin is
+ * checked by the key that signed. Exported so the box's own command line and
+ * env setting refuse what the wire would. */
+export const PIN_EMAIL_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/;
+
 /**
  * @typedef {object} ParamSpec
  * @property {'name'|'enum'|'int'|'text'|'secret'|'raw'} type
@@ -1209,6 +1216,45 @@ export const VERBS = Object.freeze({
     },
     mutating: true,
     summary: 'Reboot one host. Two steps: ask, then send back the pin and the hostname.',
+  },
+  // WHO ELSE THIS BOX TAKES REBOOT, UPGRADE, UPDATE AND A RESTORE OF
+  // SOMEBODY ELSE'S WORK FROM, recorded on the box (src/fleet/host/pinned-admins.js,
+  // docs/signed-intents.md "Pinned admins").
+  //
+  // NEVER THE FIRST ONE. The first pinned admin is set on the box by whoever
+  // runs it (FLEETWRIGHT_ADMINS, or `fleetwright-sidecar pin-admin`), because
+  // anything that arrives over the wire arrived through the coordinator, and a
+  // coordinator that can list a member can list a throwaway account it signed
+  // up itself. Over the wire this only lets an admin the box already pins add
+  // or remove another, with their own signature: a delegation is the
+  // coordinator holding a standing permission, and this is not one to hold.
+  //
+  // A new verb, so an older host answers `unknown_verb`, and the phones offer
+  // it only on a box whose health carries `admins`. No version bump: the
+  // parameters are new on a new verb.
+  pinadmin: {
+    params: {
+      email: {
+        type: 'text',
+        required: true,
+        max: 128,
+        pattern: PIN_EMAIL_RE,
+        shapeName: 'an email address',
+        since: 16,
+        describe: 'Whose pin to add or remove: their fleet address. Only an admin this box already pins may change it.',
+      },
+      op: {
+        type: 'enum',
+        required: true,
+        values: ['add', 'remove'],
+        since: 16,
+        describe: 'add pins them; remove takes them off. The last pinned admin can be removed only on the box itself.',
+      },
+    },
+    mutating: true,
+    summary:
+      'Add or remove an admin this box pins for reboot, upgrade, update and restoring somebody else\u2019s work. ' +
+      'Only a pinned admin may, with their own signature; the first is pinned on the box by whoever runs it.',
   },
   answer: {
     params: {

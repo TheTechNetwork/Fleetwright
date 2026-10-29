@@ -516,6 +516,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     verb === 'update' ||
     verb === 'upgrade' ||
     verb === 'reboot' ||
+    verb === 'pinadmin' ||
     verb === 'connect' ||
     verb === 'link' ||
     verb === 'unlink'
@@ -538,16 +539,25 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // which is the stop this file refuses a member on anybody else's session;
     // `sandbox` changes the image everybody's next session runs in, `channel`
     // and `update` what code runs everybody's work, `upgrade` the system under
-    // it, and `labels` where other people's tag-placed work lands. Each went to
+    // it, `labels` where other people's tag-placed work lands, and `pinadmin`
+    // who the box itself takes the reboots and updates from. Each went to
     // any connected box a member named, the operator's included, and a tag
     // fanned the settings out to every box carrying it (sixth audit). A member
     // still administers a box that acts for them alone, which holds nobody's
     // work but theirs; the admin and the break-glass token, any box. The rule
     // is hosts.js administers, which the snapshot reads too, so a phone draws
     // these controls exactly where this lets them through.
+    //
+    // A BOX THAT PINS ITS ADMINS NARROWS THIS, never widens it. Passing here
+    // is the coordinator's word, and such a box also wants the signature of
+    // somebody it pinned itself (src/fleet/host/pinned-admins.js), for a
+    // `pinadmin` as for a reboot, so a fleet admin it never pinned is let
+    // through here and refused there.
     const journal = verb === 'logs' && Boolean(requester) && !requester?.admin;
     const administer =
-      (setting || verb === 'update' || verb === 'upgrade' || verb === 'reboot') && Boolean(requester) && !requester?.admin;
+      (setting || verb === 'update' || verb === 'upgrade' || verb === 'reboot' || verb === 'pinadmin') &&
+      Boolean(requester) &&
+      !requester?.admin;
     const ownOnly = journal || administer;
     const reachable = credential
       ? holders()
@@ -578,10 +588,10 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
             reason: `${preferHost} is not connected. Reachable: ${reachable.map((h) => h.hostId).join(', ')}.`,
           };
     }
-    // EVERY BOX CARRYING THE LABEL, for a setting. A tag on a reboot or an
-    // upgrade is deliberately NOT this: "reboot everything labelled prod" is a
-    // fleet-wide outage expressible in one line, and the refusal below names
-    // the boxes instead so somebody says which one out loud.
+    // EVERY BOX CARRYING THE LABEL, for a setting. A tag on a reboot, an
+    // upgrade, or pinning an admin is deliberately NOT this: "reboot everything
+    // labelled prod" is a fleet-wide outage expressible in one line, and the
+    // refusal below names the boxes instead so somebody says which one out loud.
     const wanted = setting ? normaliseLabels(preferLabels) : [];
     if (wanted.length) {
       const matching = reachable.filter((h) => wanted.every((l) => (h.health?.labels || []).includes(l)));

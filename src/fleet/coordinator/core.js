@@ -7845,6 +7845,57 @@ function takesSessions(host, requester, entry) {
   return mayActFor(entry, whose) && runsSessionsFor(entry, requester);
 }
 
+/** How many pinned admins a box's health may list. A box pins a few people; more is not a box's word. */
+const MAX_PINNED = 64;
+
+/**
+ * Who a box pins as its admins (`health.admins`, src/fleet/host/pinned-admins.js),
+ * as this person may see it, or undefined for a field that is not the shape a
+ * box sends.
+ *
+ * THE ADDRESSES ARE PEOPLE'S, so the list goes only to whoever already sees
+ * everybody (the admin, and the break-glass token) and to somebody on it, who
+ * administers the box with the others. Anybody else is told how many, and
+ * that they are not one: enough for a phone to draw Update and Reboot only
+ * where the box will take them from this person (C-2), and no list of whom
+ * to ask.
+ *
+ * `count` and `you` are null when the box said it cannot read its record,
+ * which is cannot tell (C-5): it refuses those verbs from everybody until it
+ * can, and its sentence says so. `left` is the box's sentence when the only
+ * admin it pins has left the fleet. Neither names anybody.
+ *
+ * @param {unknown} admins
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @returns {{ count: number|null, you: boolean|null, pinned?: string[], left?: string, problem?: string }|undefined}
+ */
+export function adminsSeenBy(admins, requester) {
+  if (!admins || typeof admins !== 'object' || Array.isArray(admins)) return undefined;
+  const a = /** @type {Record<string, unknown>} */ (admins);
+  const raw = a.pinned;
+  /** @type {string[]|null} */
+  let pinned = null;
+  if (Array.isArray(raw)) {
+    if (raw.length > MAX_PINNED || !raw.every((e) => typeof e === 'string' && e.length <= 254 && emailOf(e))) return undefined;
+    pinned = [...new Set(raw.map((e) => /** @type {string} */ (emailOf(e))))];
+  } else if (raw !== null) {
+    return undefined;
+  }
+  const sentence = (/** @type {unknown} */ v) => (typeof v === 'string' && v.length > 0 && v.length <= 400 ? v : null);
+  const left = sentence(a.left);
+  const problem = sentence(a.problem);
+  const email = emailOf(requester?.email ?? '');
+  const you = pinned ? Boolean(email) && pinned.includes(/** @type {string} */ (email)) : null;
+  const sees = !requester || Boolean(requester.admin) || you === true;
+  return {
+    count: pinned ? pinned.length : null,
+    you,
+    ...(sees && pinned ? { pinned } : {}),
+    ...(left ? { left } : {}),
+    ...(problem ? { problem } : {}),
+  };
+}
+
 /**
  * One host, with everything private to somebody else removed.
  *
@@ -7853,6 +7904,10 @@ function takesSessions(host, requester, entry) {
  * with it — a list of names somebody cannot act on is an existence oracle
  * wearing a convenience.
  *
+ * Its pinned admins are shaped for everybody, the admin included, because
+ * whether the asker is one of them (`you`) is the part a phone draws from
+ * (adminsSeenBy).
+ *
  * @param {any} host
  * @param {{ email?: string|null, admin?: boolean }|null} requester
  * @param {{ actsFor?: string|null }|null|undefined} entry  the host's registry
@@ -7860,6 +7915,11 @@ function takesSessions(host, requester, entry) {
  *   Without one no pool entry is believed.
  */
 function visibleHost(host, requester, entry) {
+  if (host?.health && 'admins' in host.health) {
+    const { admins, ...rest } = host.health;
+    const seen = adminsSeenBy(admins, requester);
+    host = { ...host, health: seen ? { ...rest, admins: seen } : rest };
+  }
   if (!requester || requester.admin || !host) return host;
   // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only
   // when it is theirs, as /api/hosts/enrolled already did (enrolledHostsFor).
