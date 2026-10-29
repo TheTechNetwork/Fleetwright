@@ -1,10 +1,15 @@
 # Signed intents: a box obeys a person, not the coordinator
 
-**Status: phases 1 and 2 built; phase 3's switch, delegations, signed
-sign-ins and the browser signing page built; pinned admins not yet.** This is
+**Status: phases 1–3 built (`signers` is the default; delegations, signed
+sign-ins and the browser signing page are built). Phase 4 is built on the box:
+reboot, upgrade, update and a restore of somebody else's work are checked
+against admins the machine pins in `pinned-admins.json`. A machine with nobody
+pinned still takes the coordinator's word. The phones can pin the signed-in
+person; they do not yet list who is pinned or remove them.** This is
 SEC-COORD-2 in `docs/security.md` §4.1 and the third row of `docs/trust.md`'s
-table. Until phase 3 ships, no document may say the coordinator cannot forge an
-instruction, and none does.
+table. A box with `signers` on, which is the default, refuses an intent a
+person did not sign. A box with nobody pinned still accepts the coordinator's
+word for who is an admin.
 
 ## What it changes
 
@@ -202,10 +207,11 @@ that, and does not remove it:
   can only take away, as the members list already does for the vault.
 - **It could still say somebody is an admin.** So the verbs that reach every
   person on a box (`reboot`, `upgrade`, `update`, `restore` of somebody else's
-  work) are checked against **admins the box pins itself**: the person whose
-  signed approval enrolled it, and anybody they add by a signed intent. A box
-  enrolled before this has no pinned admin and keeps taking the coordinator's
-  word until somebody signs one.
+  work) are checked against **admins the box pins itself**, by the `pinadmin`
+  intent. The first pin is the person who signs it, naming themselves; a
+  pinned admin adds the rest. Enrolment is a pin the coordinator minted, so it
+  is not one of these: a box with nobody pinned keeps taking the coordinator's
+  word until somebody signs one. See [Phase 4, as built](#phase-4-as-built).
 
 ## Phases
 
@@ -227,7 +233,7 @@ that, and does not remove it:
    sign-in signatures above ship here. *The switch, its `signers` mode, the
    delegations and the signed sign-ins are built (below), and `signers` is the
    default, and the browser signs through a page of the minter's (below).*
-4. **Pinned admins** on each box.
+4. **Pinned admins** on each box. *Built, below. The phone pins the signed-in person and does not yet list or remove.*
 
 ## Phase 2, as built
 
@@ -330,6 +336,42 @@ neither a signature nor a delegation, the coordinator adds to the box's words
 what to do about it, as steps: open the app, go to You → Delegations, and under
 An MCP client tap Allow for a day or Allow for a week. The coordinator's own
 refusal ends the same way.
+
+## Phase 4, as built
+
+**The record.** `pinned-admins.json` beside the host key (`xoStateDir`, the
+directory `bin/fleetwright-sidecar` already passes). Emails, lowercased, mode
+`0600`, written by rename. No directory is not a broken record: the box has
+nowhere to have pinned anyone, and box-wide verbs proceed. A missing file is
+nobody pinned. A file that cannot be read or parsed refuses every box-wide
+verb, because cannot tell is not "nobody".
+
+**While it is empty.** Reboot, upgrade, update and restore behave as they did:
+the coordinator's word for who is an admin is the only word there is. A box
+enrolled before anyone could pin keeps working.
+
+**Once anybody is pinned.** Those verbs need a verdict of `signed` or
+`delegated`, and the actor's address in the set. The check holds on a box
+that does not otherwise require signatures: an unsigned actor is the
+coordinator naming an admin. Restore of the asker's own binned session is
+allowed for a signed actor who is not pinned. Whose it is comes from the
+hub's bin (`createdBy`, `fleet:<email>` or a bare address). A bin the box
+cannot read, a session that is not in it, or a row with no owner refuses:
+cannot tell whose it is, and only a pinned admin may restore somebody else's.
+
+**`pinadmin`.** `email` and `op` (`add` or `remove`). It always needs a real
+signature or delegation. The first `add` must name the signer. After that a
+pinned admin adds or removes. The last pinned admin cannot be removed, which
+would open the box back up to the coordinator's word. Nothing is written on a
+refusal. The coordinator places it like reboot: one named box, an admin or
+the one person the box acts for, and a tag does not fan it out. It is not an
+MCP tool.
+
+**The phones.** "Pin me on this machine", on the machine's page, only when
+this person may administer it and the phone knows who they are signed in as.
+The host checks that the signed actor is that address, so a stale sign-in is
+refused. There is no list of who is pinned, and no remove, until the page can
+say who is there.
 
 ## Delegations
 

@@ -1099,6 +1099,16 @@ struct Fleet {
         if let confirm, !confirm.isEmpty { params["confirm"] = confirm }
         return try await intent("reboot", params: params, host: host)
     }
+
+    /// Pin the signed-in person as an admin of this machine.
+    ///
+    /// The first pin has to be the person who signs it. Until somebody is
+    /// pinned, the machine takes the fleet's word for who may reboot it.
+    /// The host checks the signed actor against `email`, so a stale sign-in
+    /// is refused rather than pinning whoever the phone last displayed.
+    func pinAdmin(host: String, email: String) async throws -> Reply {
+        try await intent("pinadmin", params: ["email": email, "op": "add"], host: host)
+    }
     /// What can be connected on this box, and what already is.
     ///
     /// One round trip: the catalogue and the current state arrive together, so

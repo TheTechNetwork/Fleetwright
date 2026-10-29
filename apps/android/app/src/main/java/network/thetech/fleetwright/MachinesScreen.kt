@@ -705,6 +705,19 @@ private fun MachinePage(
                 }
             }
 
+            // WHO THIS MACHINE WILL ACCEPT for the actions above, once somebody
+            // pins themselves. Hidden when this person may not administer it,
+            // and when the phone does not know who they are.
+            if (administers && settings.signedInAs.isNotBlank()) {
+                SectionHead("Pinned admins")
+                OutlinedButton(
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    onClick = { run { it.pinAdmin(hostId, settings.signedInAs) } },
+                ) { Text("Pin me on this machine") }
+                Hint("Until somebody is pinned here, this machine takes the fleet’s word for who may reboot it, upgrade it, update it, or restore somebody else’s work. Pinning yourself is the signed record this machine keeps, and only a pinned admin can add another.")
+            }
+
             // WHAT IT LOGGED, near the top. At night the order somebody asks is
             // what is it saying, what did it write down, and what can I do.
             SectionHead("Logs")

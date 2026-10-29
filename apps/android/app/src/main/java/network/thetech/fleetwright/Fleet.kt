@@ -1598,6 +1598,17 @@ class Fleet(
         )
 
     /**
+     * Pin the signed-in person as an admin of this machine.
+     *
+     * The first pin has to be the person who signs it. Until somebody is
+     * pinned, the machine takes the fleet's word for who may reboot it.
+     * The host checks the signed actor against [email], so a stale sign-in
+     * is refused rather than pinning whoever the phone last displayed.
+     */
+    suspend fun pinAdmin(host: String, email: String): Reply =
+        intent("pinadmin", mapOf("email" to email, "op" to "add"), host = host)
+
+    /**
      * The last lines of a session's pane — what it is actually doing.
      *
      * The verb that makes this more than a list of names. Everything else says

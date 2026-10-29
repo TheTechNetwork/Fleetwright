@@ -161,7 +161,12 @@ export async function startStubHub({
     renewals,
     sessions,
     panes,
-    close: () => new Promise((resolve) => server.close(() => resolve(null))),
+    // Drop idle keep-alive sockets first. A test that made more than one
+    // request otherwise waits out Node's keep-alive timeout inside close().
+    close: () => new Promise((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve(null));
+    }),
   };
 }
 

@@ -46,8 +46,9 @@ struct HostView: View {
     /// ONLY WHERE THEY WOULD DO SOMETHING (C-2). The coordinator refuses a
     /// member's channel, image, labels, update, upgrade and reboot on a
     /// machine that runs anybody's work but theirs, because each reaches that
-    /// work, so those controls are not drawn there; what each is set to still
-    /// is. As the list last said (Fleet.FleetHost.mayAdminister), and true
+    /// work, and pinning who may do them does too, so those controls are not
+    /// drawn there; what each is set to still is. As the list last said
+    /// (Fleet.FleetHost.mayAdminister), and true
     /// where it could not tell.
     var mayAdminister: Bool = true
     /// Called when this page changes something the list should know about.
@@ -137,6 +138,25 @@ struct HostView: View {
                 sectionHead("Software")
             }
             .listRowBackground(Design.Palette.card)
+
+            // WHO THIS MACHINE WILL ACCEPT for the actions above, once somebody
+            // pins themselves. Hidden when this person may not administer it,
+            // and when the phone does not know who they are: a button that
+            // cannot name them is the dead control C-2 names.
+            if mayAdminister && !settings.signedInAs.isEmpty {
+                Section {
+                    Button("Pin me on this machine") {
+                        let email = settings.signedInAs
+                        run { try await fleet.pinAdmin(host: hostId, email: email) }
+                    }
+                    Text("Until somebody is pinned here, this machine takes the fleet’s word for who may reboot it, upgrade it, update it, or restore somebody else’s work. Pinning yourself is the signed record this machine keeps, and only a pinned admin can add another.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                } header: {
+                    sectionHead("Pinned admins")
+                }
+                .listRowBackground(Design.Palette.card)
+            }
 
             allowedSection
 

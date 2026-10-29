@@ -613,6 +613,9 @@ const ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
  * rather than "anything", because this ends up in a state file and in logs. */
 const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
 
+/** An address a box pins as an admin. Narrower than an actor: a pin is an email, not `telegram:12345`. */
+const EMAIL_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/i;
+
 /**
  * @typedef {object} ParamSpec
  * @property {'name'|'enum'|'int'|'text'|'secret'|'raw'} type
@@ -1209,6 +1212,34 @@ export const VERBS = Object.freeze({
     },
     mutating: true,
     summary: 'Reboot one host. Two steps: ask, then send back the pin and the hostname.',
+  },
+  // WHO MAY DO THE BOX-WIDE VERBS, recorded on the box (pinned-admins.js).
+  //
+  // A new verb, so an older host answers `unknown_verb` and nothing already
+  // in flight changes meaning. No version bump: the parameters are new on a
+  // new verb. Once anybody is pinned, reboot, upgrade, update and a restore
+  // of somebody else's work require one of their signatures.
+  pinadmin: {
+    params: {
+      email: {
+        type: 'text',
+        required: true,
+        max: 128,
+        pattern: EMAIL_RE,
+        shapeName: 'an email address',
+        since: 16,
+        describe: 'Who to pin or unpin. The first pin must be the person who signs, naming themselves.',
+      },
+      op: {
+        type: 'enum',
+        required: true,
+        values: ['add', 'remove'],
+        since: 16,
+        describe: 'add pins them; remove takes them off. The last pinned admin cannot be removed.',
+      },
+    },
+    mutating: true,
+    summary: 'Pin or unpin an admin on this machine. Box-wide actions then require one of their signatures.',
   },
   answer: {
     params: {
