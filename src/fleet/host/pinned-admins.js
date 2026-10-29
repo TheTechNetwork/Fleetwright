@@ -12,7 +12,8 @@
 // with `fleetwright-sidecar pin-admin`, which is the same trust as everything
 // else in that env file. Over the wire, `pinadmin` lets an admin this box
 // already pins add or remove another, with their own signature for that one
-// request. A delegation does not do: it is the coordinator holding a standing
+// request, and never removes the last of them who can sign (decidePin). A
+// delegation does not do: it is the coordinator holding a standing
 // permission, and changing who may reboot is not one to hand it.
 //
 // NOBODY PINNED IS THE BEHAVIOUR FROM BEFORE THIS: the coordinator's word
@@ -41,11 +42,11 @@
 // The record is `pinned-admins.json` beside the host key, in the sidecar
 // account's own directory. Written by rename, one change at a time even when
 // the sidecar and the command line race (updatePins), and only ever by that
-// account: root is refused (rootRefusal), because what root makes inside a
-// directory another account owns, that account can swap for a link before
-// root's next call (docs/security.md, G10).
+// account: root is refused (rootRefusal) wherever another account could
+// change the way in, because what root makes there, that account can swap
+// for a link before root's next call (docs/security.md, G10).
 
-import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
 import { emailFromActor } from '../../core/accounts.js';
@@ -79,7 +80,7 @@ const NOWHERE = 'This machine has nowhere to keep a record of its admins, so not
 const NOT_SIGNED_PIN = 'Changing who is pinned on this machine takes the signature of a pinned admin, made for this request. This one was not signed, so nothing was changed.';
 const DELEGATED_PIN = 'Changing who is pinned on this machine takes the signature of a pinned admin, made for this request. A delegation does not carry it, so nothing was changed.';
 const FIRST_IS_LOCAL = 'Nobody is pinned on this machine yet, and the first admin is pinned on the machine itself, by whoever runs it: fleetwright-sidecar pin-admin with their address. Nothing was changed.';
-const LAST_IS_LOCAL = 'That is the last admin pinned on this machine who has not left the fleet. Without them it would take the fleet’s word again, or nobody’s, so that is done on the machine itself: fleetwright-sidecar unpin-admin. Nothing was changed.';
+const LAST_IS_LOCAL = 'That is the last admin pinned on this machine who can sign. Without them it would take the fleet’s word again, or nobody’s, so that is done on the machine itself: fleetwright-sidecar unpin-admin. Nothing was changed.';
 
 /**
  * @param {unknown} err
@@ -175,44 +176,56 @@ export function writePins(dir, { admins, left = [] }) {
   } catch { /* best effort */ }
 }
 
+/** @param {number} uid  a name `sudo -u` takes: the account's, or `#1001` when the box has none for it */
+function accountName(uid) {
+  try {
+    const line = readFileSync('/etc/passwd', 'utf8').split('\n').find((l) => l.split(':')[2] === String(uid));
+    if (line) return line.split(':')[0];
+  } catch { /* no passwd file to name it from */ }
+  return `'#${uid}'`;
+}
+
 /**
- * Who owns `dir`, or the nearest directory above it that exists: a uid, and a
- * name `sudo -u` takes. `#1001` when the box has no name for it, which sudo
- * takes too.
+ * The first entry on the way from `at` up to `/` that somebody other than
+ * root could change, or null when there is none. `at` exists.
  *
- * @param {string} dir
- * @returns {{ uid: number, name: string }}
+ * `at` itself must be root's and writable by root alone. Above it, a
+ * directory root owns that others may write to passes only with the sticky
+ * bit (`/tmp`): there nobody else can rename or remove what root put there,
+ * so the way down cannot be swapped. A link is judged by its owner, and its
+ * target is walked on its own (rootRefusal).
+ *
+ * @param {string} at
+ * @returns {{ path: string, uid: number }|null}
  */
-function dirOwner(dir) {
-  let at = path.resolve(dir);
-  for (;;) {
-    try {
-      const { uid } = statSync(at);
-      let name = `'#${uid}'`;
-      try {
-        const line = readFileSync('/etc/passwd', 'utf8').split('\n').find((l) => l.split(':')[2] === String(uid));
-        if (line) name = line.split(':')[0];
-      } catch { /* no passwd file to name it from */ }
-      return { uid, name };
-    } catch (err) {
-      const up = path.dirname(at);
-      if (codeOf(err) !== 'ENOENT' || up === at) throw err;
-      at = up;
-    }
+function changeableAlong(at) {
+  for (let leaf = true; ; leaf = false) {
+    const st = lstatSync(at);
+    const others = !st.isSymbolicLink() && (st.mode & 0o022) !== 0 && (leaf || (st.mode & 0o1000) === 0);
+    if (st.uid !== 0 || others) return { path: at, uid: st.uid };
+    const up = path.dirname(at);
+    if (up === at) return null;
+    at = up;
   }
 }
 
 /**
  * Why this process may not change the record, or null when it may.
  *
- * ROOT MAY NOT, inside a directory another account owns. Everything root
- * makes there (the lock, the temp file) sits where that account can replace
- * it with a link between two of root's calls, and the next call then lands
- * wherever the link points, `/etc/shadow` included (docs/security.md, G10).
- * So it is refused, and the sentence names the form that runs as the owner
- * instead, which needs nothing special: the record is that account's.
- * A directory root owns itself (a sidecar that runs as root) is root's to
- * change.
+ * ROOT MAY NOT, anywhere another account could change the way to it. What
+ * root makes there (the lock, the temp file) sits where that account can
+ * replace it, or a directory above it, with a link between two of root's
+ * calls, and the next call then lands wherever the link points,
+ * `/etc/shadow` included (docs/security.md, G10). Checking the directory's
+ * own owner was not enough: a link the account owns pointing at a directory
+ * root owns, or root's directory inside the account's, both passed. So the
+ * directory, or the nearest one above it that exists when it does not yet
+ * (root would make the rest), and every directory above that up to `/`,
+ * are root's and changeable by root alone, both as the path is written and
+ * as it resolves. Refused otherwise, and the sentence names the form that
+ * runs as the account instead, which needs nothing special: the record is
+ * that account's. A directory only root can reach (a sidecar that runs as
+ * root) is root's to change.
  *
  * @param {string} dir
  * @param {string} [command]  what was typed, so the sentence can be pasted back
@@ -220,9 +233,25 @@ function dirOwner(dir) {
  */
 export function rootRefusal(dir, command = 'pin-admin ADDRESS') {
   if (typeof process.getuid !== 'function' || process.getuid() !== 0) return null;
-  const owner = dirOwner(dir);
-  if (owner.uid === 0) return null;
-  return `${dir} belongs to ${owner.name}, and root does not write inside another account’s directory, so nothing was changed. Run it as that account: sudo -u ${owner.name} fleetwright-sidecar ${command}`;
+  let at = path.resolve(dir);
+  for (;;) {
+    try {
+      lstatSync(at);
+      break;
+    } catch (err) {
+      const up = path.dirname(at);
+      if (codeOf(err) !== 'ENOENT' || up === at) throw err;
+      at = up;
+    }
+  }
+  const bad = changeableAlong(at) ?? changeableAlong(realpathSync(at));
+  if (!bad) return null;
+  const where = bad.path === path.resolve(dir) ? dir : `${dir} leads through ${bad.path}, which`;
+  if (bad.uid !== 0) {
+    const name = accountName(bad.uid);
+    return `${where} belongs to ${name}, and root does not write where another account can change the way in, so nothing was changed. Run it as that account: sudo -u ${name} fleetwright-sidecar ${command}, or runuser -u ${name} -- fleetwright-sidecar ${command} where there is no sudo.`;
+  }
+  return `${where} can be written by accounts other than root, and root does not write where another account can change the way in, so nothing was changed. Run it as the account the sidecar runs as, or keep its directory where only root can write.`;
 }
 
 /** @type {Map<string, Promise<unknown>>} the change in flight in this process, per directory */
@@ -268,35 +297,68 @@ async function lock(dir) {
 }
 
 /**
- * Remove a lock left by a process that died holding it, and only that one.
+ * Remove a lock left by a process that died holding it, and nothing else.
  *
- * Two waiters can both see the same stale lock. Removing it by name would let
- * the slower one remove the lock the faster one has just taken. So the stale
- * one is moved aside under a name of this waiter's own, which only one of
- * them can do, and checked there: a lock that is not the stale one this
- * waiter saw is put back where it was.
+ * ONE BREAKER AT A TIME. Two waiters can both find the same dead lock, and
+ * the slower one must not then remove the lock the faster one has just
+ * taken: it found the lock stale before the faster one replaced it, so
+ * nothing it read before that tells it which lock is there now. So breaking
+ * is done under a second file, `pinned-admins.lock.break`, created
+ * exclusively, and under it the lock is read again: still stale, and still
+ * the token this waiter saw, or it is left alone. A lock is then only ever
+ * removed by its holder (lock's release, by its token) or by the one waiter
+ * holding the break file, and a fresh one has a fresh mtime, so no breaker
+ * takes it for the dead one.
+ *
+ * WHAT IS LEFT is a holder that is alive but held the lock past
+ * STALE_LOCK_MS, released it, and had a new one taken, all between the
+ * breaker's second read and its remove. A change holds the lock for
+ * milliseconds; that needs a process stopped for half a minute and then
+ * woken within microseconds of a breaker.
+ *
+ * A BREAKER THAT DIED leaves its file, and every waiter would then wait for a
+ * break that never comes. So a break file older than STALE_LOCK_MS is
+ * removed, by whoever finds it, and that waiter breaks nothing on that pass
+ * and goes round again. Holding it takes microseconds; half a minute is a
+ * breaker that is not coming back, and changes wait LOCK_WAIT_MS each, so
+ * the box is without changes for that half minute and no longer. Two waiters
+ * that find the same dead breaker can both remove its file, the second
+ * removing the first's new one; each still reads the lock again under its
+ * own before removing anything, so that needs both of them in the same
+ * microseconds as well.
  *
  * @param {string} file
  * @param {(at: string) => string|null} tokenAt
  */
 function breakIfStale(file, tokenAt) {
+  /** @param {string} at */
+  const stale = (at) => Date.now() - statSync(at).mtimeMs > STALE_LOCK_MS;
   let seen;
   try {
-    if (Date.now() - statSync(file).mtimeMs <= STALE_LOCK_MS) return;
+    if (!stale(file)) return;
     seen = tokenAt(file);
   } catch {
     return; // released between the two calls
   }
-  const aside = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+  const breaker = `${file}.break`;
+  let fd;
   try {
-    renameSync(file, aside);
+    fd = openSync(breaker, 'wx', 0o644);
+  } catch (err) {
+    if (codeOf(err) !== 'EEXIST') throw err;
+    try {
+      if (stale(breaker)) rmSync(breaker, { force: true });
+    } catch { /* the breaker finished between the two calls */ }
+    return;
+  }
+  try {
+    closeSync(fd);
+    if (seen !== null && stale(file) && tokenAt(file) === seen) rmSync(file, { force: true });
   } catch {
-    return; // somebody else moved it first
+    // Gone already, which is what this was for.
+  } finally {
+    rmSync(breaker, { force: true });
   }
-  if (tokenAt(aside) !== seen) {
-    try { linkSync(aside, file); } catch { /* a newer lock is already there */ }
-  }
-  rmSync(aside, { force: true });
 }
 
 /**
@@ -408,12 +470,18 @@ export function decideBoxWide(intent, pins, verdict, ownsSession = null) {
  * Never the first pin, never the last removal, and only from an admin this box
  * already pins, signed for this request.
  *
+ * THE LAST WHO CAN SIGN STAYS, by the rule forgetPinned keeps (canSign):
+ * a removal that leaves only addresses the minter lists no key for (a typo,
+ * somebody who never signed in on a phone) strands the box as surely as
+ * removing the last name, and it is done on the box or not at all.
+ *
  * @param {{ actor?: string|null, params?: { email?: unknown, op?: unknown } }} intent
  * @param {PinFile} pins
  * @param {string|null} verdict
+ * @param {{ has: (email: string) => boolean }|null} [listed]  the people the minter lists keys for now, or null when this box has no list
  * @returns {{ ok: true, text: string, write?: { admins: string[], left: string[] } } | { ok: false, code: 'pinned_admins', text: string }}
  */
-export function decidePin(intent, pins, verdict) {
+export function decidePin(intent, pins, verdict, listed = null) {
   if (verdict === 'delegated') return { ok: false, code: 'pinned_admins', text: DELEGATED_PIN };
   if (verdict !== 'signed') return { ok: false, code: 'pinned_admins', text: NOT_SIGNED_PIN };
   if (pins.absent) return { ok: false, code: 'pinned_admins', text: NOWHERE };
@@ -442,9 +510,9 @@ export function decidePin(intent, pins, verdict) {
   }
   if (intent.params?.op === 'remove') {
     if (!admins.includes(email)) return { ok: false, code: 'pinned_admins', text: `${email} is not pinned on this machine, so nothing was changed.` };
-    // The last who has not left, not the last on the list: removing them
-    // leaves only people nobody can sign as, which is the same box.
-    if (!admins.some((a) => a !== email && !pins.left.includes(a))) return { ok: false, code: 'pinned_admins', text: LAST_IS_LOCAL };
+    // The last who can sign, not the last on the list: removing them leaves
+    // only people nobody can sign as, which is the same box.
+    if (!admins.some((a) => a !== email && canSign(pins, a, listed))) return { ok: false, code: 'pinned_admins', text: LAST_IS_LOCAL };
     const next = admins.filter((a) => a !== email);
     return { ok: true, write: { admins: next, left: leftOf(next) }, text: `${email} is no longer pinned on this machine.` };
   }
@@ -502,15 +570,19 @@ export function forgetPinned(pins, email, listed = null) {
  * beside it is intents.js PIN_SENTENCES, which is also what the coordinator
  * shows in its place, so nothing the box writes reaches every viewer.
  *
- *  - `unchecked`: this box can check no signature at all (`checks` false).
+ *  - `unchecked`: this box can check no signature at all (`checks` false),
+ *    or holds no key list it may check with (`listed` null): none fetched
+ *    yet, or one older than IntentKeys.check takes (intent-keys.js
+ *    `current`). It refuses every signature then, so it is stranded, even
+ *    though the list it last had named somebody pinned.
  *  - `left` or `unlisted`: none of the pinned is on the minter's list now,
- *    `left` when every one of them is noted as having left. Somebody let
- *    back in is listed again and can sign, so the box is not stranded.
- *  - Without the list yet (`listed` null), the note alone: stranded while
- *    every admin pinned is one who left.
+ *    `left` when every one of them is noted as having left, which is also
+ *    what is said without a list, being the more useful of the two there.
+ *    Somebody let back in is listed again and can sign, so the box is not
+ *    stranded.
  *
  * @param {PinFile} pins
- * @param {{ has: (email: string) => boolean }|null} [listed]  the people the minter lists keys for now, when this box has a list
+ * @param {{ has: (email: string) => boolean }|null} [listed]  the people the minter lists keys for, from a list this box may still check with, or null
  * @param {{ checks?: boolean }} [opts]  false on a box with no key of its own to fetch the list with
  * @returns {{ pinned: string[]|null, stranded?: 'left'|'unlisted'|'unchecked', left?: string, problem?: string }|null}
  */
@@ -523,7 +595,7 @@ export function pinReport(pins, listed = null, { checks = true } = {}) {
   let stranded = null;
   if (!checks) stranded = 'unchecked';
   else if (listed) stranded = pins.admins.some((a) => listed.has(a)) ? null : allLeft ? 'left' : 'unlisted';
-  else stranded = allLeft ? 'left' : null;
+  else stranded = allLeft ? 'left' : 'unchecked';
   return { pinned: pins.admins, ...(stranded ? { stranded, left: PIN_SENTENCES[stranded] } : {}) };
 }
 
@@ -570,7 +642,8 @@ export async function adminCommand(dir, sub, args, { envAdmins = [] } = {}) {
     return [
       `Pinned admins on this machine: ${pins.admins.join(', ')}.`,
       ...(left.length ? [`Noted as having left the fleet: ${left.join(', ')}.`] : []),
-      ...(pinReport(pins)?.left ? [PIN_SENTENCES.left] : []),
+      // The command line holds no key list, so only the note is said here.
+      ...(pins.admins.every((a) => pins.left.includes(a)) ? [PIN_SENTENCES.left] : []),
     ].join('\n');
   };
   /** What FLEETWRIGHT_ADMINS will do once nobody is pinned. */

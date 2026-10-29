@@ -2501,6 +2501,10 @@ struct Fleet {
             /// sign, or it cannot check a signature. The coordinator's
             /// sentence, never the box's own (intents.js PIN_SENTENCES).
             let left: String?
+            /// Why, beside `left`: `left`, `unlisted` or `unchecked`, always
+            /// one of the coordinator's three. Nil from a coordinator too old
+            /// to send it, and then Restore is drawn as before.
+            let stranded: String?
             /// Said when the box cannot read its record. The coordinator's
             /// sentence too.
             let problem: String?
@@ -2509,6 +2513,12 @@ struct Fleet {
             /// it is stranded, from anybody: a pinned person whose key the
             /// fleet does not list cannot sign either (C-2).
             var takesFromYou: Bool { count == 0 || (you == true && left == nil) }
+
+            /// Whether the box can check anybody's signature, which a person's
+            /// restore of their own work needs. Not while it cannot read its
+            /// record, and not on `unchecked`: it holds no key list to check
+            /// with, so it refuses their own restore too.
+            var checksSignatures: Bool { count != nil && stranded != "unchecked" }
         }
 
         /// Whether the box takes update, upgrade, reboot, a new channel and a
@@ -2519,9 +2529,9 @@ struct Fleet {
 
         /// Whether the box takes this restore from this person: their own
         /// work on their signature, anybody's from a pinned admin, nothing
-        /// while it cannot read its record.
+        /// while it cannot read its record or check a signature.
         func mayRestore(_ item: Binned, as me: String) -> Bool {
-            boxWideAllowed || (admins?.count != nil && item.isOwn(me))
+            boxWideAllowed || (admins?.checksSignatures == true && item.isOwn(me))
         }
 
         /// Mirrors `waiting` in the host's `/updates` reply.

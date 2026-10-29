@@ -862,7 +862,7 @@ export class Sidecar {
     const dir = this.xoStateDir;
     const decided = dir
       ? await updatePins(dir, (pins) => {
-          const d = decidePin(intent, pins, verdict);
+          const d = decidePin(intent, pins, verdict, this.intentKeys?.directory ?? null);
           return { ...(d.ok && d.write ? { write: d.write } : {}), result: d };
         })
       : decidePin(intent, readPins(null), verdict);
@@ -2020,7 +2020,9 @@ export class Sidecar {
   /** The `admins` field of health, or nothing. Never throws: a frame is not lost to it. */
   #adminsReport() {
     try {
-      const report = pinReport(readPins(this.xoStateDir), this.intentKeys?.directory ?? null, { checks: Boolean(this.intentKeys) });
+      // The list check() would use, not whatever list is held: one past its
+      // age refuses every signature, and health must say so (C-5).
+      const report = pinReport(readPins(this.xoStateDir), this.intentKeys?.current ?? null, { checks: Boolean(this.intentKeys) });
       return report ? { admins: report } : {};
     } catch (e) {
       this.log.warn(`sidecar: could not read who is pinned here: ${/** @type {Error} */ (e).message}`);

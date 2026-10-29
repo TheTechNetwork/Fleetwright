@@ -637,14 +637,16 @@ const PIN_GUARDED = 'update, upgrade or reboot it, change its release channel or
  *  - `left`: every admin pinned there left the fleet (forgetperson).
  *  - `unlisted`: none of them has a key the minter lists, so none can sign: a
  *    mistyped address, or somebody who never signed in on a phone.
- *  - `unchecked`: the box has no key of its own to fetch the list with, so it
- *    can check nobody's signature.
+ *  - `unchecked`: the box holds no key list it may check with (intent-keys.js
+ *    check): it has no key of its own to fetch one with, it has
+ *    not fetched one yet, or the one it holds is older than it takes. Either
+ *    way it can check nobody's signature, a person's own restore included.
  *  - `unreadable`: the record itself cannot be read.
  */
 export const PIN_SENTENCES = Object.freeze({
   left: `Every admin pinned on this machine has left the fleet, so nobody can ${PIN_GUARDED}. A new admin is pinned on the machine itself: fleetwright-sidecar pin-admin with their address.`,
   unlisted: `None of the admins pinned on this machine has a signing key the fleet lists, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar admins shows who is pinned, and pin-admin pins somebody who can sign.`,
-  unchecked: `This machine pins its admins but has no key of its own to check their signatures with, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar reset-admins takes the fleet’s word again.`,
+  unchecked: `This machine pins its admins but holds no current list of the fleet’s signing keys, so it can check nobody’s signature and nobody can ${PIN_GUARDED}. A connected machine with a key of its own fetches the list every ten minutes; on the machine, fleetwright-sidecar reset-admins takes the fleet’s word instead.`,
   unreadable: `The record of who is pinned on this machine cannot be read, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar admins says what is wrong with it.`,
 });
 
