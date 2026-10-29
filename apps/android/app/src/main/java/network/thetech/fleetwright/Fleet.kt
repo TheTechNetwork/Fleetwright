@@ -563,6 +563,12 @@ class Fleet(
          */
         val sandboxedWhy: String? = null,
         /**
+         * And every reason after it, in the box's order, because a box can
+         * have two (root with its sandbox off) and fixing the first alone does
+         * not open it. Empty from a box that gives only the first.
+         */
+        val sandboxedAlso: List<String> = emptyList(),
+        /**
          * What `tag` matches on for this box: os, architecture, distribution,
          * whether its image has a browser, plus anything set from an app or in
          * FLEETWRIGHT_LABELS.
@@ -675,11 +681,26 @@ class Fleet(
          * coordinator's words for the same refusal (scheduler.js
          * NOT_CONTAINED), and the same words as iOS; a reason this app does
          * not know is not guessed at.
+         *
+         * AND EVERY ONE OF THEM when there are more ([sandboxedAlso]). A box
+         * run as root with its sandbox off would have read "until its sandbox
+         * is on", and with it on, still not taken the session. So two or more
+         * are named together with everything that has to change, from
+         * [NOT_CONTAINED]; one this app does not know makes the rest a partial
+         * list, and then the line says only "not contained".
          */
         val resumeKept: String?
             get() = when {
                 administers != false || sandboxed == true -> null
-                sandboxed == false -> when (sandboxedWhy ?: "off") {
+                sandboxed == false && saidWhy.size > 1 -> {
+                    val known = saidWhy.mapNotNull { NOT_CONTAINED[it] }
+                    if (known.size != saidWhy.size) {
+                        "$hostId says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+                    } else {
+                        "$hostId ${together(known.map { it.first })}, so only this fleet’s admin, or the one person it works for, can resume one there until ${together(known.map { it.second })}."
+                    }
+                }
+                sandboxed == false -> when (saidWhy[0]) {
                     "off" ->
                         "$hostId runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
                     "unsafe_args" ->
@@ -696,6 +717,31 @@ class Fleet(
                 else ->
                     "$hostId has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
             }
+
+        /** Every reason this box gave, in its order; a box too old to say why is off. */
+        private val saidWhy: List<String>
+            get() = sandboxedWhy?.let { listOf(it) + sandboxedAlso } ?: listOf("off")
+
+        private companion object {
+            /**
+             * Each reason a machine can give, as [resumeKept] joins two or
+             * more: what the machine does, in the coordinator's `short` words,
+             * and what has to be true before it takes the session, its `step`
+             * said as a condition (scheduler.js NOT_CONTAINED). Fleet.swift
+             * has the same table.
+             */
+            val NOT_CONTAINED = mapOf(
+                "off" to ("runs sessions without the sandbox" to "its sandbox is on"),
+                "unsafe_args" to ("lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox" to "the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out"),
+                "userns_root" to ("runs fleetwright as root" to "fleetwright runs as its own user"),
+                "userns_docker" to ("runs its sandbox with docker" to "its sessions run under podman"),
+                "userns_host" to ("has FLEETWRIGHT_SANDBOX_USERNS=host" to "FLEETWRIGHT_SANDBOX_USERNS is set back to nomap"),
+            )
+
+            /** Clauses as one, joined as the coordinator joins them: `a and b`, or `a, b, and c`. */
+            fun together(parts: List<String>): String =
+                if (parts.size < 3) parts.joinToString(" and ") else parts.dropLast(1).joinToString(", ") + ", and " + parts.last()
+        }
 
         val appPending: Boolean
             get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
@@ -3062,6 +3108,11 @@ class Fleet(
                     // and a box too old to say has not said it is off.
                     sandboxed = health?.takeIf { it.has("sandboxed") && !it.isNull("sandboxed") }?.optBoolean("sandboxed"),
                     sandboxedWhy = health?.optString("sandboxedWhy")?.takeIf { it.isNotBlank() && it != "null" },
+                    // Every entry kept: one dropped would leave a shorter list
+                    // read as complete, and the coordinator sends only codes.
+                    sandboxedAlso = health?.optJSONArray("sandboxedAlso")?.let { arr ->
+                        (0 until arr.length()).map { i -> arr.optString(i) }
+                    } ?: emptyList(),
                     labels = health?.optJSONArray("labels")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
                     } ?: emptyList(),

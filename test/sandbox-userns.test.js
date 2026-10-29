@@ -68,8 +68,8 @@ test('the operator refusal of --userns=host still stands beside the default', ()
 });
 
 test('resolveUserns: nomap on a non-root box with podman', () => {
-  assert.deepEqual(resolveUserns('nomap', 'podman', { uid: 1000 }), { mode: 'nomap', note: '', forcedBy: null });
-  assert.deepEqual(resolveUserns('nomap', '/usr/bin/podman', { uid: 1000 }), { mode: 'nomap', note: '', forcedBy: null });
+  assert.deepEqual(resolveUserns('nomap', 'podman', { uid: 1000 }), { mode: 'nomap', note: '', forcedBy: null, blockedBy: [] });
+  assert.deepEqual(resolveUserns('nomap', '/usr/bin/podman', { uid: 1000 }), { mode: 'nomap', note: '', forcedBy: null, blockedBy: [] });
 });
 
 test('resolveUserns: root cannot have nomap, and is told why', () => {
@@ -96,9 +96,23 @@ test('resolveUserns: docker has no nomap, and is told why', () => {
   assert.equal(resolveUserns('nomap', '/usr/bin/docker', { uid: 1000 }).mode, 'host');
 });
 
+test('resolveUserns: root with docker is forced by root, and docker is still there after', () => {
+  // Running fleetwright as its own user leaves docker downgrading nomap, so
+  // both are named, root first because it decided the mode.
+  const r = resolveUserns('nomap', 'docker', { uid: 0 });
+  assert.equal(r.mode, 'host');
+  assert.equal(r.forcedBy, 'root');
+  assert.deepEqual(r.blockedBy, ['root', 'docker']);
+  assert.match(r.note, /non-root service user/);
+  assert.match(r.note, /docker, which has no --userns=nomap/);
+});
+
 test('resolveUserns: host is honoured silently, nonsense is corrected loudly', () => {
-  assert.deepEqual(resolveUserns('host', 'podman', { uid: 1000 }), { mode: 'host', note: '', forcedBy: null });
-  assert.deepEqual(resolveUserns('host', 'podman', { uid: 0 }), { mode: 'host', note: '', forcedBy: null });
+  assert.deepEqual(resolveUserns('host', 'podman', { uid: 1000 }), { mode: 'host', note: '', forcedBy: null, blockedBy: [] });
+  // Honoured, and what nomap would meet here is still known: root, which
+  // setting nomap back runs into, and the box says both (http.js uncontained).
+  assert.deepEqual(resolveUserns('host', 'podman', { uid: 0 }), { mode: 'host', note: '', forcedBy: null, blockedBy: ['root'] });
+  assert.deepEqual(resolveUserns('host', 'docker', { uid: 1000 }).blockedBy, ['docker']);
   const r = resolveUserns('auto', 'podman', { uid: 1000 });
   assert.equal(r.mode, 'nomap');
   assert.match(r.note, /auto is not a mode/);

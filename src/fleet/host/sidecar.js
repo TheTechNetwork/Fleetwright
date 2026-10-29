@@ -87,8 +87,35 @@ const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {
  * @property {{ variant: string, image: string, pinned: boolean }|null} sandbox
  * @property {boolean|null} sandboxed
  * @property {string|null} sandboxedWhy
+ * @property {string[]} sandboxedAlso
  * @property {number|null} houseRules
  */
+
+/** What a reason the hub gives looks like: a short code (http.js uncontained). */
+const REASON_RE = /^[a-z_]{1,32}$/;
+
+/** More reasons than a hub has: it gives five at most. */
+const REASONS_MAX = 8;
+
+/**
+ * The reasons after the first, as the frame carries them.
+ *
+ * NOT FILTERED. A list with an entry dropped reads as complete, and the
+ * coordinator would name too few fixes and say they open the box, which is
+ * the false sentence this list exists to stop (scheduler.js NOT_CONTAINED).
+ * So an entry that is not a code, or a list longer than a hub sends, is
+ * carried as `unreadable`, a code nothing knows, and the fleet says only
+ * that the box is not contained. Absent, from a hub that gives one reason,
+ * is an empty list.
+ *
+ * @param {unknown} list
+ * @returns {string[]}
+ */
+function reasonsAfter(list) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list) || list.length > REASONS_MAX) return ['unreadable'];
+  return list.map((c) => (typeof c === 'string' && REASON_RE.test(c) ? c : 'unreadable'));
+}
 
 /**
  * The facts out of a /api/state reply, shape-checked.
@@ -106,6 +133,10 @@ export function factsFrom(state) {
   const labels = state?.labels;
   const strings = (/** @type {unknown} */ v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
   const sandbox = state?.sandbox;
+  const why =
+    state?.sandboxed === false && typeof state?.sandboxedWhy === 'string' && REASON_RE.test(state.sandboxedWhy)
+      ? state.sandboxedWhy
+      : null;
   return {
     labels: labels && strings(labels.auto) && strings(labels.set) ? { auto: labels.auto, set: labels.set } : null,
     channel: state?.channel === 'stable' || state?.channel === 'rolling' ? state.channel : null,
@@ -119,10 +150,9 @@ export function factsFrom(state) {
     // cannot tell would be a reason for nothing. A short code and nothing
     // else, because it is carried to the coordinator and read there as one
     // (scheduler.js NOT_CONTAINED), never as prose.
-    sandboxedWhy:
-      state?.sandboxed === false && typeof state?.sandboxedWhy === 'string' && /^[a-z_]{1,32}$/.test(state.sandboxedWhy)
-        ? state.sandboxedWhy
-        : null,
+    sandboxedWhy: why,
+    // And the rest, only beside a first (reasonsAfter).
+    sandboxedAlso: why === null ? [] : reasonsAfter(state?.sandboxedAlso),
     houseRules: typeof state?.houseRules === 'number' ? state.houseRules : null,
   };
 }
@@ -2225,6 +2255,10 @@ export class Sidecar {
         // to. The coordinator names the way on from it; null from a hub too
         // old to say, which it reads as off.
         sandboxedWhy: this.facts?.sandboxedWhy ?? null,
+        // AND EVERY REASON AFTER IT, because a box with two is not opened by
+        // fixing the first, and the coordinator names them all. Empty when
+        // there is one, or none.
+        sandboxedAlso: this.facts?.sandboxedAlso ?? [],
       };
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);

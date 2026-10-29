@@ -2431,6 +2431,11 @@ struct Fleet {
         /// than saying the sandbox is off. Nil from a box too old to send it,
         /// read as off, which is what such a box meant by false.
         let sandboxedWhy: String?
+        /// And every reason after it, in the box's order, because a box can
+        /// have two (root with its sandbox off) and fixing the first alone
+        /// does not open it. Nil from a box that gives only the first. The
+        /// coordinator holds both to codes, so neither can fail this decode.
+        let sandboxedAlso: [String]?
         /// What `tag` matches on for this box: os, architecture, distribution,
         /// whether its image has a browser, plus anything set here or in
         /// FLEETWRIGHT_LABELS.
@@ -2520,7 +2525,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2529,7 +2534,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
-                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2542,7 +2547,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -2557,7 +2562,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
             )
         }
     }
@@ -2612,12 +2617,28 @@ struct Fleet {
         /// already on. So each reason is named with what opens it, in the
         /// coordinator's words for the same refusal (scheduler.js
         /// NOT_CONTAINED); a reason this app does not know is not guessed at.
+        ///
+        /// AND EVERY ONE OF THEM when there are more (`sandboxedAlso`). A box
+        /// run as root with its sandbox off would have read "until its sandbox
+        /// is on", and with it on, still not taken the session. So two or more
+        /// are named together with everything that has to change, from
+        /// `notContained`; one this app does not know makes the rest a
+        /// partial list, and then the line says only "not contained".
         var resumeKept: String? {
             guard administers == false, health?.sandboxed != true else { return nil }
             guard health?.sandboxed == false else {
                 return "\(hostId) has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
             }
-            switch health?.sandboxedWhy ?? "off" {
+            var said = ["off"]
+            if let first = health?.sandboxedWhy { said = [first] + (health?.sandboxedAlso ?? []) }
+            if said.count > 1 {
+                let known = said.compactMap { Self.notContained[$0] }
+                guard known.count == said.count else {
+                    return "\(hostId) says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+                }
+                return "\(hostId) \(Self.together(known.map { $0.does })), so only this fleet’s admin, or the one person it works for, can resume one there until \(Self.together(known.map { $0.until }))."
+            }
+            switch said[0] {
             case "off":
                 return "\(hostId) runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
             case "unsafe_args":
@@ -2631,6 +2652,25 @@ struct Fleet {
             default:
                 return "\(hostId) says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
             }
+        }
+
+        /// Each reason a machine can give, as `resumeKept` joins two or more:
+        /// what the machine does, in the coordinator's `short` words, and what
+        /// has to be true before it takes the session, its `step` said as a
+        /// condition (scheduler.js NOT_CONTAINED). Fleet.kt has the same table.
+        private static let notContained: [String: (does: String, until: String)] = [
+            "off": ("runs sessions without the sandbox", "its sandbox is on"),
+            "unsafe_args": ("lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox", "the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out"),
+            "userns_root": ("runs fleetwright as root", "fleetwright runs as its own user"),
+            "userns_docker": ("runs its sandbox with docker", "its sessions run under podman"),
+            "userns_host": ("has FLEETWRIGHT_SANDBOX_USERNS=host", "FLEETWRIGHT_SANDBOX_USERNS is set back to nomap"),
+        ]
+
+        /// Clauses as one, joined as the coordinator joins them: `a and b`,
+        /// or `a, b, and c`.
+        private static func together(_ parts: [String]) -> String {
+            guard parts.count > 2 else { return parts.joined(separator: " and ") }
+            return parts.dropLast().joined(separator: ", ") + ", and " + parts[parts.count - 1]
         }
 
         /// Is there anything of ours to apply? Asked once, so the version line

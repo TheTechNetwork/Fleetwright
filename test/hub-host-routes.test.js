@@ -132,9 +132,11 @@ test('/api/state says whether a session here is contained, and why not when it i
   // user namespace: container root is this process's uid, or real root on a
   // root-run hub. The namespace comes from resolveUserns as loadConfig takes
   // it, so a root service and a docker engine are the downgrades it really
-  // makes. An unset namespace has not said nomap.
+  // makes. A box with two reasons gives both, and that is
+  // test/not-contained-end-to-end.test.js; each here gives one, and the
+  // rest of the list is empty.
   /** @param {ReturnType<typeof resolveUserns>} u */
-  const ns = (u) => ({ sandboxUserns: u.mode, sandboxUsernsForcedBy: u.forcedBy });
+  const ns = (u) => ({ sandboxUserns: u.mode, sandboxUsernsForcedBy: u.forcedBy, sandboxUsernsBlockedBy: u.blockedBy });
   /** @type {Array<[string, Record<string, unknown>, boolean, string|null]>} */
   const cases = [
     ['contained', ns(resolveUserns('nomap', 'podman', { uid: 1000 })), true, null],
@@ -144,12 +146,15 @@ test('/api/state says whether a session here is contained, and why not when it i
     ['a root service, with the sandbox on', ns(resolveUserns('nomap', 'podman', { uid: 0 })), false, 'userns_root'],
     ['a docker engine', ns(resolveUserns('nomap', 'docker', { uid: 1000 })), false, 'userns_docker'],
     ['host asked for', ns(resolveUserns('host', 'podman', { uid: 1000 })), false, 'userns_host'],
-    ['an unset namespace', { sandboxUserns: undefined }, false, 'userns_host'],
+    // loadConfig always sets one; a config built without it has not said
+    // nomap, and is not called contained.
+    ['a config that names no namespace', { sandboxUserns: undefined }, false, 'userns_host'],
   ];
   for (const [what, over, sandboxed, why] of cases) {
     const state = await (await hub(t, over)).state();
     assert.equal(state.sandboxed, sandboxed, what);
     assert.equal(state.sandboxedWhy, why, what);
+    assert.deepEqual(state.sandboxedAlso, [], what);
   }
 });
 

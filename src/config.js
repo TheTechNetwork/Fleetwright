@@ -61,11 +61,19 @@ function bool(name, fallback) {
  * own user, docker needs podman, and `host` asked for needs to be unasked.
  * Null when the mode is the one asked for.
  *
+ * AND EVERYTHING THAT WOULD, as `blockedBy`: root and docker, each that holds
+ * here, whether or not it decided the mode. A root box with docker is forced
+ * by root, and running it as its own user leaves docker forcing it still; a
+ * box that asked for `host` is forced by nothing, and setting nomap back
+ * meets whatever is here. The box tells the fleet all of it (http.js
+ * uncontained), so a refused member is not sent to fix one thing of two.
+ * Empty when nomap is what this box would get.
+ *
  * @param {string} requested
  * @param {string} podmanBin
  * @param {{ uid?: number|null }} [opts]  the uid this process runs as; exposed
  *   so the root downgrade is testable off a root box
- * @returns {{ mode: 'nomap'|'host', note: string, forcedBy: 'root'|'docker'|null }}
+ * @returns {{ mode: 'nomap'|'host', note: string, forcedBy: 'root'|'docker'|null, blockedBy: Array<'root'|'docker'> }}
  */
 export function resolveUserns(requested, podmanBin, { uid = typeof process.getuid === 'function' ? process.getuid() : null } = {}) {
   const wanted = requested === 'host' ? 'host' : 'nomap';
@@ -74,29 +82,30 @@ export function resolveUserns(requested, podmanBin, { uid = typeof process.getui
       mode: 'nomap',
       note: `FLEETWRIGHT_SANDBOX_USERNS=${requested} is not a mode this understands (nomap or host); using nomap.`,
       forcedBy: null,
+      blockedBy: [],
     };
   }
-  if (wanted === 'host') return { mode: 'host', note: '', forcedBy: null };
+  /** @type {Array<'root'|'docker'>} */
+  const blockedBy = [];
+  if (uid === 0) blockedBy.push('root');
+  if (path.basename(podmanBin) === 'docker') blockedBy.push('docker');
+  if (wanted === 'host') return { mode: 'host', note: '', forcedBy: null, blockedBy };
+  /** @type {string[]} */
+  const notes = [];
   if (uid === 0) {
-    return {
-      mode: 'host',
-      note:
-        'FLEETWRIGHT_SANDBOX_USERNS=nomap needs a non-root service user — podman refuses it for containers ' +
+    notes.push(
+      'FLEETWRIGHT_SANDBOX_USERNS=nomap needs a non-root service user — podman refuses it for containers ' +
         'created by root — so sessions run in the host user namespace: container root IS this process\'s uid. ' +
         'Run fleetwright as its own non-root user to get the separation back. install.sh does not create one for ' +
         'the hub: it runs the service as FLEETWRIGHT_USER, the account its unit already names, or whoever ran it ' +
         'through sudo, which from a root shell is root.',
-      forcedBy: 'root',
-    };
+    );
   }
   if (path.basename(podmanBin) === 'docker') {
-    return {
-      mode: 'host',
-      note: 'FLEETWRIGHT_PODMAN_BIN is docker, which has no --userns=nomap; sessions run in the host user namespace.',
-      forcedBy: 'docker',
-    };
+    notes.push('FLEETWRIGHT_PODMAN_BIN is docker, which has no --userns=nomap; sessions run in the host user namespace.');
   }
-  return { mode: 'nomap', note: '', forcedBy: null };
+  if (blockedBy.length) return { mode: 'host', note: notes.join(' '), forcedBy: blockedBy[0], blockedBy };
+  return { mode: 'nomap', note: '', forcedBy: null, blockedBy };
 }
 
 /** Comma/whitespace separated list → trimmed non-empty strings. */
@@ -330,6 +339,10 @@ export function loadConfig(env = process.env) {
     // is what was asked for: what the box tells the fleet about why its
     // sessions are not contained (http.js #hostFacts, `sandboxedWhy`).
     sandboxUsernsForcedBy: userns.forcedBy,
+    // And everything here that would put it there were nomap asked for, the
+    // one above included: what stands between this box and a contained
+    // session once the sandbox is on and `host` is not asked for.
+    sandboxUsernsBlockedBy: userns.blockedBy,
     // WHERE A SESSION MAY REACH. `open` (the default, and what every session
     // has had): anywhere. `allowlist`: only the hosts in core/egress.js plus
     // FLEETWRIGHT_SANDBOX_EGRESS_ALLOW, through a proxy container on an
@@ -568,11 +581,14 @@ export function validateConfig(cfg) {
     // it (hosts.js runsSessionsFor, docs/security.md G8). A box that took
     // everyone's work before an update takes only its admin's after it; this
     // is the line on that box that says so, whether the namespace was asked
-    // for or fallen back to.
+    // for or fallen back to. "If it is in a fleet", because the hub cannot
+    // tell from here whether it is (the sidecar holds that), and a hub on its
+    // own has nobody to refuse.
     if (cfg.sandboxUserns !== 'nomap') {
       warnings.push(
-        'Sessions here run in the host user namespace, so this box reports them as not contained: the fleet starts ' +
-          'or resumes sessions here only for its admin, or the one person the box works for, and refuses other members.',
+        'Sessions here run in the host user namespace, so this box reports them as not contained. If it is in a ' +
+          'fleet, the fleet starts or resumes sessions here only for its admin, or the one person the box works for, ' +
+          'and refuses other members.',
       );
     }
   }
