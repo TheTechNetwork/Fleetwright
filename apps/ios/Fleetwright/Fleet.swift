@@ -1099,6 +1099,16 @@ struct Fleet {
         if let confirm, !confirm.isEmpty { params["confirm"] = confirm }
         return try await intent("reboot", params: params, host: host)
     }
+
+    /// Add or remove an admin this machine pins (`pinadmin`).
+    ///
+    /// Only an admin the machine already pins may, signed for this one
+    /// request; the first is pinned on the machine itself, so a phone never
+    /// offers it. Named for the host so the phone signs it for that box.
+    func pinAdmin(host: String, email: String, add: Bool) async throws -> Reply {
+        try await intent("pinadmin", params: ["email": email, "op": add ? "add" : "remove"], host: host)
+    }
+
     /// What can be connected on this box, and what already is.
     ///
     /// One round trip: the catalogue and the current state arrive together, so
@@ -2218,7 +2228,21 @@ struct Fleet {
         /// open, and a server-rendered string would freeze the moment it was
         /// sent.
         let expiresAt: Double?
+        /// Who forgot it, as the fleet believes the box: `fleet:<address>`.
+        /// Read for one thing, whether a machine that pins its admins takes
+        /// its restore from this person (HostHealth.mayRestore). Nil from an
+        /// older coordinator, and then it is nobody's as far as that goes.
+        let createdBy: String?
         var id: String { name }
+
+        /// Whether this person forgot it. The box reads `fleet:<address>` or a
+        /// bare address as its owner (pinned-admins.js ownerOf), and so does
+        /// this.
+        func isOwn(_ me: String) -> Bool {
+            let who = me.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !who.isEmpty, let by = createdBy?.lowercased() else { return false }
+            return by == "fleet:\(who)" || by == who
+        }
 
         /// "2 days left", "5h left", or "goes within the hour".
         var remaining: String? {
@@ -2454,6 +2478,44 @@ struct Fleet {
         /// which is the normal case and also what a host too old to send this
         /// looks like; the screen says nothing for it rather than guessing.
         let houseRules: Int?
+        /// WHO THIS MACHINE TAKES UPDATE, UPGRADE, REBOOT AND RESTORING
+        /// SOMEBODY ELSE'S WORK FROM, when it pins its own admins
+        /// (src/fleet/host/pinned-admins.js, shaped per person by core.js
+        /// adminsSeenBy). Nil is a box that cannot pin, which is every box
+        /// from before this: nothing about pins is drawn there, and the
+        /// buttons are drawn as before.
+        let admins: Admins?
+
+        struct Admins: Codable, Hashable {
+            /// How many it pins. Zero is nobody, and the box takes the fleet's
+            /// word as before. Nil is a record the box cannot read, and then
+            /// it takes those verbs from nobody.
+            let count: Int?
+            /// Whether this person is one of them. Nil with `count`.
+            let you: Bool?
+            /// Their addresses, sent only to somebody on the list and to the
+            /// fleet's admin.
+            let pinned: [String]?
+            /// The box's sentence when the only admin it pins has left the fleet.
+            let left: String?
+            /// The box's sentence when it cannot read its record.
+            let problem: String?
+
+            /// Whether the box takes those verbs from this person.
+            var takesFromYou: Bool { count == 0 || you == true }
+        }
+
+        /// Whether the box takes update, upgrade and reboot from this person
+        /// as far as its pins go. True where it pins nobody or cannot pin, so
+        /// only the coordinator's rule decides there, as before.
+        var boxWideAllowed: Bool { admins?.takesFromYou ?? true }
+
+        /// Whether the box takes this restore from this person: their own
+        /// work on their signature, anybody's from a pinned admin, nothing
+        /// while it cannot read its record.
+        func mayRestore(_ item: Binned, as me: String) -> Bool {
+            boxWideAllowed || (admins?.count != nil && item.isOwn(me))
+        }
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
@@ -2513,7 +2575,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
             )
         }
 
@@ -2522,7 +2584,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
             )
         }
 
@@ -2535,7 +2597,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
             )
         }
 
@@ -2550,7 +2612,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, labels: all, setLabels: set, logs: logs, houseRules: houseRules, admins: admins,
             )
         }
     }

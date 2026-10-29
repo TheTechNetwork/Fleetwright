@@ -36,10 +36,13 @@ test('iOS reads `administers` off each snapshot host, and absent is not no', () 
 });
 
 test('iOS: Apply update and Apply system upgrade only where this person may', () => {
-  assert.match(PAGE, /if mayAdminister && health\?\.updates\?\.appUpdatePending == true \{\s*Button\("Apply update"\)/);
-  assert.match(PAGE, /if mayAdminister && health\?\.updates\?\.systemPending == true && health\?\.updates\?\.grants\?\.upgrades != false \{\s*Button\("Apply system upgrade"\)/);
+  // The coordinator's rule, and then the machine's own when it pins its
+  // admins (test/pinned-admins-in-apps.test.js): it can only take away.
+  assert.match(PAGE, /private var mayActOnBox: Bool \{ mayAdminister && \(health\?\.boxWideAllowed \?\? true\) \}/);
+  assert.match(PAGE, /if mayActOnBox && health\?\.updates\?\.appUpdatePending == true \{\s*Button\("Apply update"\)/);
+  assert.match(PAGE, /if mayActOnBox && health\?\.updates\?\.systemPending == true && health\?\.updates\?\.grants\?\.upgrades != false \{\s*Button\("Apply system upgrade"\)/);
   // Check stays: asking what is waiting changes nothing.
-  assert.match(PAGE, /Button\("Check for updates"\) \{ run \{ try await fleet\.updates\(host: hostId\) \} \}\s*if mayAdminister/);
+  assert.match(PAGE, /Button\("Check for updates"\) \{ run \{ try await fleet\.updates\(host: hostId\) \} \}\s*if mayActOnBox/);
   // Why the rest of the page reads as answers, said once.
   assert.match(PAGE, /if !mayAdminister \{\s*Text\("Only this fleet’s admin, or the one person this machine works for, can update it, reboot it or change how it is set up\."\)/);
 });
@@ -57,5 +60,5 @@ test('iOS: labels are listed for everyone, and added or removed only where this 
 });
 
 test('iOS: Reboot only where this person may, since it ends everybody’s sessions there', () => {
-  assert.match(PAGE, /case \.idle:\s*if !mayAdminister \{\s*EmptyView\(\)\s*\} else if health\?\.updates\?\.grants\?\.reboot == false \{/);
+  assert.match(PAGE, /case \.idle:\s*if !mayActOnBox \{\s*EmptyView\(\)\s*\} else if health\?\.updates\?\.grants\?\.reboot == false \{/);
 });
