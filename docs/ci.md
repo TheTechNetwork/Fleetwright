@@ -134,8 +134,10 @@ the JavaScript is plain text. No session, no login, no secret.
 `sandbox/Containerfile` pin, read with the patterns of the Renovate manager
 that bumps all three in one pull request. So a Claude Code bump is checked on
 its own pull request, and the check refuses if the three ever disagree. A
-host that installed Claude Code itself runs whatever it installed, and this
-says nothing about that box.
+Linux host that runs sessions without the sandbox is not held to it:
+`install/install.sh` installs the latest release with Claude's own installer,
+which updates itself, so such a box meets a reworded dialog before this check
+does. Only the session image turns the updater off.
 
 **What fails.** Each dialog in `DIALOGS` (`src/fleet/host/claude-dialogs.js`)
 is found by its title and read as a whole component, then held to three
@@ -162,7 +164,10 @@ What it cannot see is anything decided at run time. The Bash permission
 dialog draws no question in one of its layouts (the one the source calls
 "fitted"); a session waiting on that is noticed through its permission hook
 (`src/core/activity.js`) where the session reports hooks, and not from the
-pane.
+pane. The general permission dialog, unlike the Bash one, hides its numbers
+when its default is no, decided per request; then `readPrompt` finds no
+numbered options and offers no buttons, which is safe, and the check cannot
+see it.
 
 ## Testing the apps
 

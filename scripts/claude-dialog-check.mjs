@@ -88,9 +88,13 @@ function fetchBinary(version) {
   const dir = mkdtempSync(path.join(tmpdir(), 'claude-dialogs-'));
   process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
   const spec = `${PACKAGE}-linux-x64@${version}`;
+  // ITS OWN CACHE, inside the directory removed on exit: npm otherwise keeps
+  // the 126 MB tarball in ~/.npm, which setup-node's cache then saves and
+  // every job restores.
   const tarball = execFileSync('npm', ['pack', '--ignore-scripts', '--silent', '--pack-destination', dir, spec], {
     cwd: dir,
     encoding: 'utf8',
+    env: { ...process.env, npm_config_cache: path.join(dir, 'npm-cache') },
   })
     .trim()
     .split('\n')

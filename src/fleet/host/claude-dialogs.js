@@ -35,6 +35,8 @@ import { AWAITING_RE } from './watcher.js';
  *
  * `anchor` begins a string literal inside the component and nowhere else: the
  *   first place the check looks, and the only one it trusts to name the dialog.
+ * `exact` makes the anchor the whole literal, for a title as short as "Bash
+ *   command", which a log line elsewhere could begin with and turn every bump red.
  * `kind` is what readPrompt must make of it. null is "noticed, not described":
  *   AWAITING_RE still has to see it, and readPrompt must NOT read it as one of
  *   its questions, because then the phone is asked something else.
@@ -44,7 +46,7 @@ import { AWAITING_RE } from './watcher.js';
  * `unanswered` is the honest sentence for the rest, printed by the check and
  *   repeated in docs/ci.md.
  *
- * @type {{ name: string, anchor: string, kind: string|null, answered: boolean, unanswered?: string }[]}
+ * @type {{ name: string, anchor: string, exact?: boolean, kind: string|null, answered: boolean, unanswered?: string }[]}
  */
 export const DIALOGS = [
   {
@@ -86,6 +88,7 @@ export const DIALOGS = [
   {
     name: 'the Bash permission dialog',
     anchor: 'Bash command',
+    exact: true,
     kind: 'permission',
     answered: true,
   },
@@ -122,7 +125,7 @@ export function dialogProblems(source) {
   const known = new Set();
 
   for (const dialog of DIALOGS) {
-    const regions = componentsAt(source, dialog.anchor);
+    const regions = componentsAt(source, dialog.anchor, dialog.exact === true);
     if (!regions.length) {
       problems.push(
         `Cannot find ${dialog.name} (“${dialog.anchor}”). If Claude Code removed or retitled it, change DIALOGS in src/fleet/host/claude-dialogs.js; if not, this check can no longer read the binary.`,
@@ -180,11 +183,11 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
  * @param {string} source
  * @param {string} anchor
  */
-function componentsAt(source, anchor) {
+function componentsAt(source, anchor, exact = false) {
   /** @type {{ start: number, end: number }[]} */
   const out = [];
   for (const quote of ['"', "'", '`']) {
-    const needle = quote + anchor;
+    const needle = quote + anchor + (exact ? quote : '');
     for (let at = source.indexOf(needle); at >= 0; at = source.indexOf(needle, at + 1)) {
       const region = enclosingFunction(source, at);
       if (region && !out.some((r) => r.start === region.start)) out.push(region);
