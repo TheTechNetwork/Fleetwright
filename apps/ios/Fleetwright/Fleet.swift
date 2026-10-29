@@ -2641,8 +2641,12 @@ struct Fleet {
         // does not stop the registration: it goes with the last key this
         // phone sent, because the coordinator keeps a key only when one is
         // sent and this phone must never go back to plaintext, nor stop
-        // sending a new APNs token. Absent only on a phone that has never
-        // sent a key and cannot use one now (PushKey.registrationKey).
+        // sending a new APNs token. Absent only on a phone with no key sent on
+        // record that cannot use one now: one that has never sent a key, or a
+        // reinstalled app, whose record went with its defaults while the
+        // keychain item stayed, meeting a keychain error on its first
+        // registration. That one goes as plaintext until the next registration
+        // reads the key (PushKey.registrationKey).
         if let pushKey = PushKey.registrationKey() {
             body["pushKey"] = pushKey
         }

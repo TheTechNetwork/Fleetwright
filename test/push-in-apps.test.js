@@ -11,11 +11,11 @@
 // PushCryptoTest.kt and PushCryptoTests.swift; this is the part Kotlin unit
 // tests cannot reach, because Intent is a stub there.
 //
-// And the one line both phones show on You when they do not know they can
-// open what is sealed to them. When it is shown is PushKeyRule.Evidence, held
-// to its cases in those same unit tests; the words are here, because both
-// phones have to say the same sentence and only a read of both sources can
-// see that.
+// And the line both phones show on You when they do not know they can open
+// what is sealed to them, a sentence for each reason. When it is shown is
+// PushKeyRule.Evidence, held to its cases in those same unit tests; the words
+// are here, because both phones have to say the same sentences and only a
+// read of both sources can see that.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -62,20 +62,30 @@ test('a seal the phone cannot open says the sentence the coordinator put on the 
   assert.equal(reveal.match(/FALLBACK_BODY = "([^"]+)"/)?.[1], alert.body);
 });
 
-test('a phone that could not use its key says so on You, in the same words on both', () => {
+test('a phone that does not know it can open its notifications says why on You, in the same words on both', () => {
   // A key sent that the phone could not use, or a seal it could not open, was
   // silent everywhere: the coordinator seals to the key it was sent, delivery
   // succeeds, and every notification is the fallback sentence.
-  const said =
+  //
+  // A sentence for each kind of doubt, because only the key's has a cause
+  // the phone knows and a remedy that works. A seal that did not open may be
+  // an extension that ran out of time or a key since replaced, and a launch
+  // does not clear it; telling the person to restart had them restart and
+  // see the line stay.
+  const key =
     'Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts.';
+  const seal = 'The last notification sealed for this phone arrived without its words. This goes once one arrives with them.';
   const ios = iosSources();
   const android = androidSources();
-  assert.ok(ios.includes(said), 'iOS does not say it');
-  assert.ok(android.includes(said), 'Android does not say it');
+  // Each sentence on each phone, and for the same kind: one swapped would
+  // still pass a check that both phones say both.
+  assert.ok(ios.includes(`case .key: return "${key}"`), 'iOS does not say the key sentence for a key doubt');
+  assert.ok(ios.includes(`case .seal: return "${seal}"`), 'iOS does not say the seal sentence for a seal doubt');
+  assert.ok(android.includes(`Doubt.KEY -> "${key}"`), 'Android does not say the key sentence for a key doubt');
+  assert.ok(android.includes(`Doubt.SEAL -> "${seal}"`), 'Android does not say the seal sentence for a seal doubt');
   // Only while the phone is in doubt, and read from what it keeps.
-  assert.match(ios, /if pushInDoubt \{\s*Text\("Notifications sent to this phone/);
-  assert.match(ios, /pushInDoubt = doubt/);
-  assert.match(ios, /static var inDoubt: Bool \{[\s\S]{0,80}?return evidence\?\.doubt != nil/);
-  assert.match(android, /visible = pushInDoubt,[\s\S]{0,200}?"Notifications sent to this phone/);
-  assert.match(android, /pushInDoubt = settings\.pushKeyEvidence\?\.doubt != null/);
+  assert.match(ios, /if let pushDoubt \{\s*Text\(pushDoubtLine\(pushDoubt\)\)/);
+  assert.match(ios, /static var doubt: PushKeyRule\.Doubt\? \{[\s\S]{0,80}?return evidence\?\.doubt\n/);
+  assert.match(android, /visible = pushDoubt != null,/);
+  assert.match(android, /pushDoubt = settings\.pushKeyEvidence\?\.doubt\b/);
 });

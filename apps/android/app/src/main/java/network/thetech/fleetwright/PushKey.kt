@@ -130,12 +130,26 @@ internal object PushKey {
     private const val SAME_MOMENT_MS = 60_000L
 
     /**
-     * One sealed notification [Messaging] tried to open. What You says
-     * rests on it as well as on the registrations ([PushKeyRule.afterSeal]).
+     * One sealed notification [Messaging] tried to open, sent at [sentAt]
+     * (`RemoteMessage.sentTime`). What You says rests on it as well as on the
+     * registrations ([PushKeyRule.afterSeal]).
+     *
+     * DATED BY WHEN IT WAS SENT, NOT WHEN IT ARRIVED. FCM keeps a message up
+     * to an hour and Doze can hold it, so one sealed to the key a replacement
+     * has just taken the place of can arrive after the registration that sent
+     * the new key. Dated by its arrival it would be the newest evidence, and
+     * say this phone cannot open what it can; dated by its sending it is older
+     * than the registration and changes nothing, and messages held and let go
+     * together are read in the order they were sent. The sent time is FCM's
+     * clock and the registration's is this phone's, so a phone whose clock is
+     * minutes wrong orders the two by that much, and the next notification
+     * settles it. A message with no sent time is dated by its arrival, as
+     * before.
      */
     @Synchronized
-    fun saw(settings: Settings, opened: Boolean) {
-        settings.pushKeyEvidence = PushKeyRule.afterSeal(settings.pushKeyEvidence, opened, System.currentTimeMillis())
+    fun saw(settings: Settings, opened: Boolean, sentAt: Long) {
+        val at = if (sentAt > 0) sentAt else System.currentTimeMillis()
+        settings.pushKeyEvidence = PushKeyRule.afterSeal(settings.pushKeyEvidence, opened, at)
     }
 
     private fun fromKeystore(): String? {
