@@ -595,7 +595,7 @@ export class HttpAdapter {
       const actor = claimed || 'web';
 
       // FROM THE FLEET OR FROM THIS BOX, which decides whether the operator's
-      // FLEETWRIGHT_SKIP_PERMISSIONS=0 binds a start (commands.js
+      // FLEETWRIGHT_SKIP_PERMISSIONS off binds a start (commands.js
       // permissionCeiling). The sidecar's token says so on its own; the
       // sidecar also says so in a field, for a box where it still holds the
       // operator's token. A field that only ever takes something away needs
