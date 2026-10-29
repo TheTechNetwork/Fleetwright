@@ -456,7 +456,10 @@ export class Sidecar {
     /**
      * THE KEYS A PERSON'S SIGNATURE IS CHECKED WITH, from the minter and never
      * from the coordinator (intent-keys.js, docs/signed-intents.md). Every
-     * intent is checked and counted; none is refused for it yet.
+     * intent is checked and counted. `off` refuses nothing for that; `signers`,
+     * the default a deployed box reads, refuses a person this box has been
+     * shown a key for and anything that names nobody; `all` refuses every verb
+     * that needs a signature.
      * @type {IntentKeys|null}
      */
     this.intentKeys = vaultKey && transport?.origin
