@@ -179,7 +179,7 @@ the check is an allowlist of `1`, `true`, `yes`, `on`.
 | `pushKey` accepted and validated at registration | **done**, both coordinators |
 | Exercised end to end against the bytes a phone receives | **done**, `test/push-encryption.test.js` and `test/fixtures/parity/push-envelope.json` |
 | Key generation and storage | **done**. iOS Keychain, `AfterFirstUnlockThisDeviceOnly`, account `push-key`. Android Keystore, alias `fleetwright.push`, `PURPOSE_AGREE_KEY`, no user authentication, agreed with through the `AndroidKeyStore` provider by name |
-| Both phones register `pushKey` | **done**, after a self-test: a probe sealed to the key in software has to open with it, or the phone registers without one |
+| Both phones register `pushKey` | **done**, after a self-test: a probe sealed to the key in software has to open with it. A phone that cannot use its key sends the last one it sent, and registers without one only if it never has |
 | The category sealed beside the words | **done**. The coordinator writes it inside the envelope, empty when there is nothing to answer, and still in the clear for iOS and older phones. A phone that opens the envelope takes the sealed one, and draws no buttons when the clear one disagrees |
 | iOS Notification Service Extension | **done**, `network.thetech.fleetwright.Push`. It rewrites the alert and copies the sealed fields into `userInfo`. A seal it cannot open leaves the fallback sentence and clears the category, so a button is not offered for a question that was not read |
 | Android data-message decryption | **done**, Android 12 and later. `onMessageReceived` opens `e` before it reads `kind`, and posts the notification itself when the tray was not given one |
@@ -188,34 +188,48 @@ A phone installed before this, which registers no key, still gets the plaintext
 path. That is the point of the fallback being a first-class path rather than an
 error case.
 
-### A key is sent, withheld, or not sent at all
+### Which key a registration sends
 
 The coordinator keeps a key only when the registration sends one, so a phone
-that registers without its key is put back on plaintext until it registers
-again. That makes the phone's choice worth stating:
+that registers without one is put back on plaintext. **A phone that has sent a
+key never goes back to plaintext**: each phone remembers the public key it
+last sent (it is the half the coordinator already holds, so it is kept with
+the app's settings, not in the Keychain or the Keystore), saved as the
+registration is posted rather than after its answer. Every registration goes,
+whatever the key does, so a new APNs token or FCM address is always sent. What
+it carries:
 
 - **The key**, once it has passed the self-test.
-- **No key**, only for a phone that cannot open what would be sealed to it:
-  Android 11, where `PURPOSE_AGREE_KEY` does not exist yet; a keystore that
-  will not make an agreement key, on a phone that has never registered one;
-  or a key made in that same registration that fails the self-test, which
-  Android then deletes so the next launch starts fresh. A key that was sent
-  before is never dropped for failing it: Android's keystore reports a daemon
-  that did not answer the same way it reports a key it will not agree with,
-  so that failure is treated as the next case.
-- **No registration at all** when the Keychain or the Keystore did not answer
-  this time: locked before the first unlock, busy, a daemon that timed out.
-  The phone keeps the registration it has, the coordinator keeps sealing to
-  the key it has, and the next launch registers again. iOS makes a new key
-  only when the Keychain says there is none, never because a read failed.
-- **A new key** when that error does not go away. A phone that never
-  registers never sends a new APNs token or FCM address, and push stops with
-  nothing to say so. So each phone counts the registrations its key failed,
-  with the time of the first, and after three in a row spread over at least a
-  day it deletes the key and makes another, which goes through the self-test
-  like any new one. Only a phone that cannot keep or use the new one either
-  registers without a key. Any registration that gets as far as the key
-  clears the count.
+- **The last key sent**, when the key cannot be used this time: the Keychain
+  or the Keystore did not answer (locked before the first unlock, busy, a
+  daemon that timed out), a key from an earlier launch failed the self-test,
+  or a replacement (below) failed. The coordinator keeps sealing to it, and
+  anything the phone cannot open shows the fallback sentence, which still
+  wakes the person. Android's keystore reports a daemon that did not answer
+  the same way it reports a key it will not agree with, which is why a key
+  that was sent is never dropped for failing the self-test once. iOS makes a
+  new key only when the Keychain says there is none, never because a read
+  failed.
+- **No key**, only on a phone that has never sent one: Android 11, where
+  `PURPOSE_AGREE_KEY` does not exist yet; a keystore that will not make an
+  agreement key; a key made in that same registration that fails the
+  self-test, which Android then deletes so the next launch starts fresh; or a
+  Keychain or Keystore error. Nothing was ever sealed to such a phone, so it
+  registers without a key at once and loses nothing. A reinstalled app starts
+  with nothing sent, so on iOS, where the Keychain item outlives the app, a
+  reinstall whose first registration meets a Keychain error is one of these
+  too; the next registration that can read the item sends it again.
+- **A new key** when the key keeps failing, since sending the last key sent
+  for good would leave every notification on the fallback sentence. So each
+  phone counts the registrations its key failed, with the time of the first
+  (Android counts at most one a launch, because two parts of the app register
+  on start), and after three in a row spread over at least a day it deletes
+  the key and makes another, which goes through the self-test like any new
+  one. When that fails too, the registration sends the last key sent, not
+  none. Any registration that gets as far as a key clears the count.
+
+The rule is `PushKeyRule.choose` on both phones, tested without the Keychain
+or the Keystore in `PushCryptoTests.swift` and `PushCryptoTest.kt`.
 
 ### Android 12 and later, and what data-only costs there
 
