@@ -75,9 +75,9 @@ fun YouScreen(
     var signInResult by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var pushResult by rememberSaveable { mutableStateOf("") }
-    // Whether this phone does not know it can open what is sealed to it
-    // (PushKeyRule.Evidence), read when You appears.
-    var pushInDoubt by remember { mutableStateOf(false) }
+    // Why this phone does not know it can open what is sealed to it, or null
+    // when it does (PushKeyRule.Evidence), read when You appears.
+    var pushDoubt by remember { mutableStateOf<PushKeyRule.Doubt?>(null) }
     var runnersAnswered by remember { mutableStateOf(false) }
     var runnersSaved by remember { mutableStateOf<String?>(null) }
     var runnersFleet by remember { mutableStateOf<String?>(null) }
@@ -89,7 +89,7 @@ fun YouScreen(
     var buildTaps by remember { mutableIntStateOf(0) }
     val inDemo = signedIn && Demo.isActive(settings.coordinatorUrl)
 
-    LaunchedEffect(Unit) { pushInDoubt = settings.pushKeyEvidence?.doubt != null }
+    LaunchedEffect(Unit) { pushDoubt = settings.pushKeyEvidence?.doubt }
     LaunchedEffect(signedIn) {
         if (!signedIn) return@LaunchedEffect
         Fleet(settings).runnerRepoSetting().onSuccess { got ->
@@ -243,22 +243,18 @@ fun YouScreen(
                 },
             ) { Text("Send a test notification") }
             if (pushResult.isNotBlank()) Hint(pushResult)
-            // A KEY THIS PHONE COULD NOT USE, SAID WHERE NOTIFICATIONS ARE.
-            // Nothing else would say it: the coordinator seals to the key it
-            // was sent, FCM delivers, and the notification is the fallback
-            // sentence with no buttons. "May": the phone knows it could not
-            // use the key the last time it tried, not that the next one will
-            // fail. Gone once a sealed notification opens or a registration
-            // uses a key this phone holds. The same sentence as iOS.
+            // A KEY THIS PHONE COULD NOT USE, OR A SEAL IT DID NOT OPEN, SAID
+            // WHERE NOTIFICATIONS ARE. Nothing else would say it: the
+            // coordinator seals to the key it was sent, FCM delivers, and the
+            // notification is the fallback sentence with no buttons. Gone once
+            // a sealed notification opens or a registration uses a key this
+            // phone holds. The same sentences as iOS.
             AnimatedVisibility(
-                visible = pushInDoubt,
+                visible = pushDoubt != null,
                 enter = fadeIn(Design.Motion.change()),
                 exit = fadeOut(Design.Motion.change()),
             ) {
-                Hint(
-                    "Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts.",
-                    color = Design.Palette.attention.now,
-                )
+                pushDoubt?.let { Hint(describePushDoubt(it), color = Design.Palette.attention.now) }
             }
         }
 
@@ -516,6 +512,23 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
                 "Windows runners are written and not yet proven.",
         )
     }
+}
+
+/**
+ * One sentence for each kind of doubt, saying only what the phone knows.
+ *
+ * A KEY IT COULD NOT USE is "may": the phone knows the last registration
+ * could not use it, not that the next notification will fail, and a launch
+ * registers again, which is what clears it. A SEAL IT DID NOT OPEN is only
+ * that: it may have been sealed to a key this phone has since replaced, and
+ * the phone cannot tell. A launch does not clear it (the same key, read
+ * again, says nothing about a notification it could not open), so its
+ * sentence gives no cause and no remedy, only what makes it go. The same
+ * sentences as YouView.swift.
+ */
+internal fun describePushDoubt(doubt: PushKeyRule.Doubt): String = when (doubt) {
+    PushKeyRule.Doubt.KEY -> "Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts."
+    PushKeyRule.Doubt.SEAL -> "The last notification sealed for this phone arrived without its words. This goes once one arrives with them."
 }
 
 /** "from owner/repo", or how it is not set up, for the row under You. */
