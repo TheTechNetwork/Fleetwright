@@ -157,8 +157,11 @@ fun StartSheet(
     // only the box knows what it is, and a start that names no mode is never
     // refused for it. A shortcut's kind is applied here, before the first
     // frame, so the sheet does not open on one choice and jump to another.
+    // Only prompts on: bypassing is not offered until the machines have said
+    // they allow it, which they have not before the first frame, and where
+    // they do the box default already bypasses.
     var permission by remember {
-        mutableStateOf(kind?.mode?.takeIf { it == "safe" || it == "dangerous" }.orEmpty())
+        mutableStateOf(kind?.mode?.takeIf { it == "safe" }.orEmpty())
     }
     var host by remember { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<String>()) }
@@ -273,10 +276,14 @@ fun StartSheet(
     // way the default goes (C-5).
     val boxPermissions = reachableHosts.map { it.permissions.orEmpty() }.toSet().singleOrNull()
         ?.takeIf { it == "asks" || it == "bypassed" }
-    // Whether this start may ask to bypass permissions: not when a machine it
-    // could land on is set to ask, because that box refuses the start (C-2).
-    // A box too old to say is older than that refusal too.
-    val bypassAllowed = reachableHosts.none { it.permissions == "asks" }
+    // Whether this start may ask to bypass permissions: only when every
+    // machine it could land on has said it bypasses them. A machine set to ask
+    // refuses the start (C-2), and one that has not said, because its host is
+    // too old to or the list did not load, may be set to ask with no refusal
+    // to stop it, so cannot tell is not taken as allowed (C-5). No machine to
+    // judge, a new one or a kind's host that is not offered, is the same. The
+    // box default covers all of these.
+    val bypassAllowed = reachableHosts.isNotEmpty() && reachableHosts.all { it.permissions == "bypassed" }
     // A choice that vanished cannot stay chosen.
     LaunchedEffect(bypassAllowed) {
         if (!bypassAllowed && permission == "dangerous") permission = ""
@@ -635,9 +642,10 @@ fun StartSheet(
                 // The box's own default comes first and is selected: it sends
                 // no mode, so the operator's setting decides, and it is named
                 // from what the machine reported, or not at all when it has
-                // not (C-5). Bypassing is offered only where no machine this
-                // could land on is set to ask, because there the box refuses
-                // it (C-2), and the sentence below says why it is missing.
+                // not (C-5). Bypassing is offered only where every machine
+                // this could land on has said it bypasses, because a box set
+                // to ask refuses it (C-2) and one that has not said may be set
+                // to ask (C-5), and the sentence below says why it is missing.
                 Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                     Text("Permissions", style = MaterialTheme.typography.labelMedium)
                     val boxDefault = when (boxPermissions) {
@@ -660,7 +668,7 @@ fun StartSheet(
                         )
                     }
                     Text(
-                        permissionLine(permission, boxPermissions, bypassAllowed, fleetPicks = host.isEmpty()),
+                        permissionLine(permission, boxPermissions, bypassAllowed, reachableHosts, fleetPicks = host.isEmpty()),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -741,7 +749,13 @@ fun StartSheet(
  * The selected choice still has to say what it does, and the box default says
  * it only when the box has said.
  */
-private fun permissionLine(permission: String, boxPermissions: String?, bypassAllowed: Boolean, fleetPicks: Boolean): String {
+private fun permissionLine(
+    permission: String,
+    boxPermissions: String?,
+    bypassAllowed: Boolean,
+    reachableHosts: List<Fleet.FleetHost>,
+    fleetPicks: Boolean,
+): String {
     val line = when (permission) {
         "safe" -> "It stops and asks before each tool, whatever its machine is set to."
         "dangerous" -> "It runs each tool without asking first."
@@ -752,9 +766,18 @@ private fun permissionLine(permission: String, boxPermissions: String?, bypassAl
         }
     }
     if (bypassAllowed) return line
-    return line + if (fleetPicks) {
-        " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
-    } else {
-        " Permissions bypassed is not offered here: this machine is set to ask before each tool."
+    // Why it is missing, said as what the machines told us: one set to ask,
+    // or one that has not said.
+    if (reachableHosts.isEmpty()) {
+        return line + " Permissions bypassed is not offered: no machine this could start on has said what it allows."
+    }
+    val asks = reachableHosts.any { it.permissions == "asks" }
+    return line + when {
+        fleetPicks && asks ->
+            " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
+        fleetPicks ->
+            " Permissions bypassed is not offered while the fleet picks the machine: one of them has not said what it allows."
+        asks -> " Permissions bypassed is not offered here: this machine is set to ask before each tool."
+        else -> " Permissions bypassed is not offered here: this machine has not said what it allows."
     }
 }

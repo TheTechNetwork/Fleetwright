@@ -96,8 +96,10 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                     // refuses it. A kind saved with it before still shows it,
                     // so what it holds is never drawn as something else
                     // (C-5). Stacked rather than in a row, so a long label
-                    // wraps instead of running off a narrow dialog.
+                    // wraps instead of running off a narrow dialog, and named
+                    // the way New session names it, as iOS's picker is.
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                        Text("Permissions", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
                             onClick = { kinds[i] = k.copy(mode = null) },
                             label = { Text(if (k.mode == null) "Box default \u2713" else "Box default") },
