@@ -133,10 +133,17 @@ export function factsFrom(state) {
   const labels = state?.labels;
   const strings = (/** @type {unknown} */ v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
   const sandbox = state?.sandbox;
+  // A first reason that is there and is not a code is `unreadable`, as in
+  // reasonsAfter, not null: null beside a `false` is a hub from before the
+  // field, which the coordinator reads as `off` and answers with "turn its
+  // sandbox on", and that is not known to be the way on for this box.
+  const said = state?.sandboxedWhy;
   const why =
-    state?.sandboxed === false && typeof state?.sandboxedWhy === 'string' && REASON_RE.test(state.sandboxedWhy)
-      ? state.sandboxedWhy
-      : null;
+    state?.sandboxed !== false || said === undefined || said === null
+      ? null
+      : typeof said === 'string' && REASON_RE.test(said)
+        ? said
+        : 'unreadable';
   return {
     labels: labels && strings(labels.auto) && strings(labels.set) ? { auto: labels.auto, set: labels.set } : null,
     channel: state?.channel === 'stable' || state?.channel === 'rolling' ? state.channel : null,
