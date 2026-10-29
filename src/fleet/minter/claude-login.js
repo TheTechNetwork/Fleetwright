@@ -43,18 +43,6 @@ export const CLAUDE_SCOPES = ['user:profile', 'user:inference', 'user:sessions:c
 export const CLAUDE_REFRESH_AHEAD_MS = 30 * 60_000;
 
 /**
- * HOW SOON AFTER KEEPING, AND HOW OFTEN AFTER THAT, the check renews a
- * sign-in that is not due (checkClaude). Two sign-ins in a row were refused
- * at their first renewal, about 7.7 hours after they were kept, with nothing
- * in the fleet having used them and nobody signing in anywhere else. Renewing
- * soon after keeping says whether a sign-in arrived already broken; renewing
- * hourly after that says within the hour when one stopped working, and keeps
- * a refresh token that lasts fewer than eight hours from running out.
- */
-export const CLAUDE_FIRST_RENEWAL_MS = 10 * 60_000;
-export const CLAUDE_RENEW_EVERY_MS = 60 * 60_000;
-
-/**
  * WHERE EACH RENEWAL IS NOTED, beside the row it renewed, so a sign-in that
  * stops working can be told apart: renewed here, or cancelled from outside.
  * A sign-in on vnic-runner-oci was refused with "Refresh token not found or
@@ -179,10 +167,14 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
       refreshToken: typeof body.refresh_token === 'string' && body.refresh_token ? body.refresh_token : oauth.refreshToken,
       expiresAt: now() + Number(body.expires_in) * 1000,
       scopes: typeof body.scope === 'string' ? body.scope.split(' ').filter(Boolean) : oauth.scopes,
-      // AS CLAUDE CODE KEEPS IT: from the answer when it says, else what was known.
+      // FROM THE ANSWER OR NOT AT ALL, as Claude Code keeps it: an answer
+      // that does not say leaves it unknown. Carrying the old one over timed
+      // a rotated refresh token by the expiry of the one it replaced, and
+      // once that was inside CLAUDE_REFRESH_AHEAD_MS every check and every
+      // box's ask renewed again.
       refreshTokenExpiresAt: Number.isFinite(Number(body.refresh_token_expires_in)) && Number(body.refresh_token_expires_in) > 0
         ? now() + Number(body.refresh_token_expires_in) * 1000
-        : oauth.refreshTokenExpiresAt ?? null,
+        : null,
     },
   };
 }
@@ -416,9 +408,13 @@ export function describeRenewals(list, keptAt, now) {
  *    refusing the refresh token is the one thing only signing in again mends.
  *  - ONE THAT IS DUE is renewed, as a box asking would renew it, so a person
  *    with no box asking still has an answer.
- *  - ONE KEPT TEN MINUTES AGO AND NEVER RENEWED, or not renewed for an hour,
- *    is renewed anyway (CLAUDE_FIRST_RENEWAL_MS), which is the test of the
- *    refresh token that waiting for the access token to run out never made.
+ *  - NOTHING ELSE IS RENEWED. This renewed ten minutes after keeping and
+ *    hourly after that, to test the refresh token early. But a renewal here
+ *    ends the access token every box already holds: a session on another box
+ *    failed with "OAuth access token has been revoked" after one (vault.md,
+ *    "Renewing revokes the token every holder has"). Renewing hourly cut every
+ *    box off hourly. A refresh token is now tested when it is needed, and an
+ *    access token is tried every check, which costs nothing.
  *
  * Anything that is not Anthropic saying no to the refresh token is cannot
  * tell, and says nothing. A setup-token is not asked: it has no refresh token
@@ -437,16 +433,9 @@ export async function checkClaude(store, key, userId, io) {
   if (told && Number(told.keptAt) === Number(row.at)) return null;
   const refusedLast = async () => (await claudeRenewals(store, userId, row.at)).at(-1)?.refused === true;
   if (!(await refusedLast())) {
-    // SOON AFTER KEEPING, then HOURLY (CLAUDE_FIRST_RENEWAL_MS): renewed
-    // whether or not it is due, so a broken or short-lived refresh token is
-    // found at once rather than at the eight hours' end.
-    const list = await claudeRenewals(store, userId, row.at);
-    const lastGood = [...list].reverse().find((n) => n.ok);
-    const since = lastGood ? Number(lastGood.at) : Number(row.at);
-    const force = io.now() - since >= (lastGood ? CLAUDE_RENEW_EVERY_MS : CLAUDE_FIRST_RENEWAL_MS);
-    const asked = { ...io, by: 'a check', force };
+    const asked = { ...io, by: 'a check' };
     const { held } = await freshClaude(store, key, userId, asked);
-    if (!force && held?.kind === 'login' && (await accessRefused(held.bearer, io.fetchImpl))) {
+    if (held?.kind === 'login' && (await accessRefused(held.bearer, io.fetchImpl))) {
       await freshClaude(store, key, userId, { ...asked, force: true });
     }
     if (!(await refusedLast())) return null;

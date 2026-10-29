@@ -1622,41 +1622,50 @@ test('a refresh token that runs out before its access token is renewed before it
   }
 });
 
-test('the check renews a kept sign-in soon after keeping and hourly after, so a broken one is found in minutes', async (t) => {
+test('the check renews a kept sign-in only when it is due, so it never cuts off the token every box holds', async (t) => {
+  // It renewed ten minutes after keeping and hourly after that, and each of
+  // those renewals ended the access token every box held, outside the half
+  // hour in which the boxes change over together.
   const m = await minter();
   t.after(m.restore);
   const start = Date.now();
   assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: claudeSignInFor('early') })).ok, true);
-  /** `fn` at `minutes` after the first keeping. @template T @param {number} minutes @param {() => Promise<T>} fn */
-  const during = async (minutes, fn) => {
+  /** The check `minutes` after keeping, past the minter's own ten-minute floor. @param {number} minutes */
+  const checkAt = async (minutes) => {
     t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
     try {
-      return await fn();
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
     } finally {
       t.mock.timers.reset();
     }
   };
-  /** The check then, past the minter's own ten-minute floor. @param {number} minutes */
-  const checkAt = (minutes) => during(minutes, () => { m.rows.delete('claude-checked'); return m.binding.claude('check', {}); });
   const before = claudeRenewals.count;
-  assert.deepEqual((await checkAt(5)).ended, []);
-  assert.equal(claudeRenewals.count, before, 'not in the first ten minutes');
-  assert.deepEqual((await checkAt(11)).ended, []);
-  assert.equal(claudeRenewals.count - before, 1, 'renewed eleven minutes after keeping, with eight hours of access left');
-  await checkAt(40);
-  assert.equal(claudeRenewals.count - before, 1, 'not again within the hour');
-  await checkAt(72);
-  assert.equal(claudeRenewals.count - before, 2, 'and again an hour after the last');
+  for (const minutes of [11, 72, 200, 420]) {
+    assert.deepEqual((await checkAt(minutes)).ended, []);
+    assert.equal(claudeRenewals.count, before, `not renewed ${minutes} minutes after keeping, with its access token still good`);
+  }
+  // Inside the half hour before its eight hours run out, it is due.
+  assert.deepEqual((await checkAt(8 * 60 - 20)).ended, []);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed once it was due');
+});
 
-  // ONE THAT ARRIVED BROKEN is told at the first of those, not at the
-  // eight hours' end.
-  const broken = /** @type {any} */ (claudeSignInFor('broken'));
-  broken.oauth.refreshToken = `sk-ant-ort01-revoked-${'z'.repeat(40)}`;
-  assert.equal((await during(80, () => m.phone({ op: 'put', name: 'claude', signIn: broken }))).ok, true);
-  assert.deepEqual((await checkAt(85)).ended, [], 'not in its first ten minutes');
-  const told = await checkAt(91);
-  assert.equal(told.ended.length, 1);
-  assert.equal(told.ended[0].verdict.kind, 'outside');
+test('a renewal that does not say how long the new refresh token lasts is not timed by the old one', async (t) => {
+  // The old expiry was carried over onto the rotated token, so once it was
+  // inside the half hour every box's ask renewed again.
+  const m = await minter();
+  t.after(m.restore);
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('carried'));
+  made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  const before = claudeRenewals.count;
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed: its refresh token had twenty minutes');
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'the new refresh token is not due just because the old one was');
 });
 
 test('a refusal after the refresh token ran out by its own lifetime is this fleet being late, not anything outside it', () => {
