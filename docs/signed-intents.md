@@ -203,8 +203,8 @@ that, and does not remove it:
   it lists keys only for people the coordinator says are in the fleet, which
   can only take away, as the members list already does for the vault.
 - **It could still say somebody is an admin.** So the verbs that reach every
-  person on a box (`reboot`, `upgrade`, `update`, `restore` of somebody else's
-  work) are checked against **admins the box pins itself**: the first set on
+  person on a box (`reboot`, `upgrade`, `update`, a new `channel` or `sandbox`
+  image, `restore` of somebody else's work) are checked against **admins the box pins itself**: the first set on
   the box by whoever runs it, and anybody a pinned admin adds by a signed
   intent. A box nobody has pinned anyone on keeps taking the coordinator's
   word, exactly as before ([Pinned admins](#pinned-admins)).
@@ -346,10 +346,17 @@ refusal ends the same way.
 
 ## Pinned admins
 
-**What it guards.** `reboot`, `upgrade` with `apply`, `update`, and a
-`restore` of somebody else's binned session: the verbs that reach every
-person's work on a box (`src/fleet/host/pinned-admins.js`). `upgrade` without
-`apply` reports what is waiting and installs nothing, so it is not one of them.
+**What it guards.** `reboot`, `upgrade` with `apply`, `update`, `channel` and
+`sandbox` with a `to`, and a `restore` of somebody else's binned session: the
+verbs that reach every person's work on a box
+(`src/fleet/host/pinned-admins.js`, `isBoxWide`). The channel decides what
+code the next `update` installs, and the sandbox the image every next session
+there runs in, so changing either is as box-wide as the update. `upgrade`
+without `apply`, and `channel` or `sandbox` without `to`, report and change
+nothing, so they are not among them. The coordinator gates the same verbs,
+`restore` aside, by who may administer the box (`hosts.js administers`), and
+the phones gate the channel and image pickers exactly as they gate Apply
+update.
 
 **While a box pins nobody** it behaves exactly as it did before pins existed:
 the coordinator's word for who is an admin is the only word there is. Every
@@ -375,7 +382,11 @@ else in that env file:
   `/etc/fleetwright-sidecar.env`, read when the sidecar starts and nobody is
   pinned yet. Once somebody is, the record is the box's word and the env line
   does not overrule it, or a restart would undo every change since.
-- `fleetwright-sidecar pin-admin you@example.com`, run as the sidecar's user.
+- `fleetwright-sidecar pin-admin you@example.com`, run as the sidecar's user
+  (`sudo -u fleetwright-sidecar …` on Linux). Run as root it is refused, with
+  that command in the refusal: what root makes inside a directory another
+  account owns, that account can swap for a link between root's calls
+  ([`security.md`](security.md) G10), so root does not write there at all.
 
 Pin people who have already signed in on a phone, so their address is bound
 to their GitHub account at the minter (`address_taken`, above). An address
@@ -391,15 +402,29 @@ box back to the coordinator's word. The phones offer it only to a pinned
 admin, on a box that pins somebody; there is no "pin me".
 
 **When an admin leaves the fleet**, `forgetperson` drops their pin, unless they
-are the last one. A last admin who leaves stays pinned, and the box fails
-closed: their key is no longer listed, so nobody signs as them, and those
-verbs are refused from everybody. Its health says so in a sentence that names
-nobody, *"The only admin pinned on this machine has left the fleet, so it
-updates, upgrades and reboots for nobody. A new admin is pinned on the machine
-itself: fleetwright-sidecar pin-admin with their address."*, and stops saying
-it if they are let back in and their key is listed again. `forgetperson` is the
-coordinator's alone, so a forged one can drop a pin and never add one, which is
-denial of service, as the table above says.
+are the last pinned admin who can still sign. That one stays pinned, noted as
+having left, and the box fails closed: their key is no longer listed, so
+nobody signs as them, and those verbs are refused from everybody. *Can still
+sign* is the minter's list where the box has it, and otherwise not noted as
+having left: an admin who left earlier, or an address no key is filed under (a
+typo in `FLEETWRIGHT_ADMINS`, somebody who never signed in on a phone), is not
+counted as the one who stays. Counted, the last real admin would be dropped
+beside them and the box would refuse everybody with nothing said.
+
+**A stranded box says so.** Whenever it pins somebody and nobody it pins can
+sign, its health carries `stranded`: `left` when every admin it pins left the
+fleet, `unlisted` when none of them is on the minter's list for another
+reason, `unchecked` on a box with no key of its own to fetch the list with,
+which can check nobody's signature. The phones then draw none of those verbs
+for anybody, the box's own pinned admin included, and show one sentence. The
+sentence is the coordinator's (`PIN_SENTENCES` in
+`src/fleet/protocol/intents.js`), keyed by that code, never text the box
+wrote: it goes to everybody who sees the box, and a box's own words there
+could put the addresses in front of people who are not shown them. None of
+them names anybody. It stops when somebody pinned is listed again, as a
+person let back into the fleet is. `forgetperson` is the coordinator's alone,
+so a forged one can drop a pin and never add one, which is denial of service,
+as the table above says.
 
 **The way back is on the box**, for every way the record can be wrong, so
 nobody edits the file by hand:
@@ -411,29 +436,63 @@ sudo -u fleetwright-sidecar fleetwright-sidecar unpin-admin ADDR  # unpin one, t
 sudo -u fleetwright-sidecar fleetwright-sidecar reset-admins    # nobody pinned: the coordinator's word again
 ```
 
+`pin-admin` also drops the admins noted as having left, and says whom: the
+person pinning a new admin is replacing them, and kept, they would sit beside
+the new one unable to sign. Naming one of them again pins them afresh.
+Unpinning the last admin, or `reset-admins`, says when `FLEETWRIGHT_ADMINS`
+will pin its people again at the next start. All four change the record only
+as the account that owns it; as root they are refused with the `sudo -u` form
+to run instead, and `admins`, which only reads, is not.
+
 The running sidecar reads the record on every request, so none of these needs
 a restart. A record that cannot be read refuses every guarded verb, from the
 wire and from everybody, until `pin-admin` or `reset-admins` replaces it.
+Somebody leaving the fleet on a box that pins nobody, or does not pin them, is
+answered as it was before pins, without the lock, so a lock that cannot be
+taken there never fails the reply.
 
 **The record.** `pinned-admins.json` beside the host key, addresses
 lowercased, readable by anyone on the box like `signers.json` beside it.
-Written whole by rename, one change at a time under a lock file, so a
-`pin-admin` typed on the box and a `pinadmin` from a phone never lose each
-other's change.
+Written whole by rename, from a temp file created exclusively and synced
+first, one change at a time under a lock file, so a `pin-admin` typed on the
+box and a `pinadmin` from a phone never lose each other's change. The lock
+holds its owner's token: a release removes only its own, and a lock left by
+a process that died is moved aside before it is removed, so two changes
+breaking it at once cannot remove each other's.
 
 **What a phone is shown.** A box's health carries whom it pins. Those are
 people's addresses, so the coordinator shapes the field for every reader
 (`core.js adminsSeenBy`): the fleet's admin and the people on the list see the
 list; anybody else sees how many and that they are not one. That is what a
-phone needs to draw Apply update, Apply upgrade, Reboot and another person's
-Restore only where the box will take them from the person holding it (C-2).
-A box that says nothing about pins, which is every box from before them, is
-drawn as before.
+phone needs to draw Apply update, Apply upgrade, Reboot, the channel and
+image pickers and another person's Restore only where the box will take them
+from the person holding it (C-2). Somebody not pinned is told they are not
+one, and no more: nothing promises that somebody can pin them, which is not
+true on a stranded box, nor on an operator's box whose pinned admin the
+coordinator will not let administer it. A box that says nothing about pins,
+which is every box from before them, is drawn as before.
 
-**What it does not stop.** Whoever runs the box can change its pins, as they
-can change everything else on it. The coordinator can still drop or delay a
-pinned admin's intents, and can drop a pin with a forged `forgetperson`. A box
-whose operator pins nobody is where it was.
+**What it does not stop.**
+
+- Whoever runs the box can change its pins, as they can change everything
+  else on it.
+- **Pins hold only where the sidecar's account is not the session user's.**
+  On a packaged Linux box the record sits in the sidecar account's own `0700`
+  directory, which sessions and the hub cannot write. On a Mac, where the
+  sidecar runs as the person's own account (`SIDECAR_USER=$RUN_USER`) and
+  sessions run as that account too, outside any container; on a Linux box
+  where the installer could not create the sidecar's account and fell back to
+  the session user; and on a git checkout, a session runs as the account that
+  owns `pinned-admins.json`. It can run `fleetwright-sidecar reset-admins`, or
+  rewrite the file, and the pins are whatever it says. The record is the
+  operator's word there only as far as the sessions on that box are.
+- The coordinator can still drop or delay a pinned admin's intents, and can
+  drop a pin with a forged `forgetperson`.
+- A box that is itself a virtual machine can still be rebooted or deleted
+  from outside it: `vmctl` and `xoact` act through the hypervisor's token,
+  on the machine that holds it, and never reach this box's sidecar or its
+  pins.
+- A box whose operator pins nobody is where it was.
 
 ## Delegations
 

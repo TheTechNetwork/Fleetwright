@@ -424,8 +424,8 @@ is issued by the **host**, which is the party that would be rebooted.
 A box can pin its own admins (`src/fleet/host/pinned-admins.js`,
 `signed-intents.md` "Pinned admins"); while it pins nobody it takes the
 coordinator's word, exactly as before. Once it pins somebody, `reboot`,
-`upgrade apply=yes`, `update` and a `restore` of somebody else's work need one
-of them, signed or delegated. `pinadmin` itself takes `email` and `op` (`add`
+`upgrade apply=yes`, `update`, `channel` and `sandbox` with a `to`, and a
+`restore` of somebody else's work need one of them, signed or delegated. `pinadmin` itself takes `email` and `op` (`add`
 or `remove`) and needs the signature of an admin the box already pins, made for
 this request: a delegation is refused, because it is the coordinator holding a
 standing permission. The **first** pin never comes over the wire, since a
