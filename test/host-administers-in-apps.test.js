@@ -48,10 +48,13 @@ test('iOS: Apply update and Apply system upgrade only where this person may', ()
 });
 
 test('iOS: the channel and the image are said, not offered, where this person may not change them', () => {
-  assert.match(PAGE, /\} else if let now = channel, !mayAdminister \{\s*LabeledContent\("Channel"\) \{ Text\(now\)/);
+  // mayActOnBox: the coordinator's rule, and then a machine's that pins its
+  // admins, which takes a new channel or image from them alone
+  // (test/pinned-admins-in-apps.test.js).
+  assert.match(PAGE, /\} else if let now = channel, !mayActOnBox \{\s*LabeledContent\("Channel"\) \{ Text\(now\)/);
   const image = PAGE.slice(PAGE.indexOf('private var sandboxSection'), PAGE.indexOf('private var labelsSection'));
-  assert.ok(image.indexOf('} else if !mayAdminister {') > 0, 'no read-only image');
-  assert.ok(image.indexOf('} else if !mayAdminister {') < image.indexOf('Picker("Image"'), 'the picker is reachable without asking');
+  assert.ok(image.indexOf('} else if !mayActOnBox {') > 0, 'no read-only image');
+  assert.ok(image.indexOf('} else if !mayActOnBox {') < image.indexOf('Picker("Image"'), 'the picker is reachable without asking');
 });
 
 test('iOS: labels are listed for everyone, and added or removed only where this person may', () => {

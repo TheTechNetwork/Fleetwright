@@ -29,15 +29,20 @@ const ANDROID = bare(androidSources());
 const WORDS = [
   'Pinned admins',
   'Address to pin',
-  'This machine takes updates, upgrades, reboots and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.',
-  'This machine takes updates, upgrades and reboots only from the admins pinned on it, and you are not one of them. One of them can add you from their phone.',
+  'This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.',
+  'This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.',
 ];
+
+/** Nothing a phone says may promise that somebody can pin this person (C-5): on a stranded machine nobody can. */
+const PROMISES = /can add you|can pin you/;
 
 test('both phones say what a machine’s pins mean in the same words', () => {
   for (const words of WORDS) {
     assert.ok(IOS.includes(words), `iOS does not say: ${words}`);
     assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
   }
+  assert.doesNotMatch(IOS, PROMISES);
+  assert.doesNotMatch(ANDROID, PROMISES);
 });
 
 test('iOS offers no first pin, and changes pins only as a pinned admin', () => {
@@ -45,15 +50,18 @@ test('iOS offers no first pin, and changes pins only as a pinned admin', () => {
   // Only where the machine pins somebody (or cannot read its record), and
   // where the coordinator lets this person administer it at all.
   assert.match(IOS, /if mayAdminister, let admins = health\?\.admins, admins\.count != 0 \{/);
-  assert.match(IOS, /if admins\.you == true \{[\s\S]*?ForEach\(pinned, id: \\\.self\)/);
+  // Not while nobody pinned can sign: the machine would refuse a Pin or a
+  // Remove from here, and its sentence is all there is to say.
+  assert.match(IOS, /if admins\.you == true && admins\.left == nil \{[\s\S]*?ForEach\(pinned, id: \\\.self\)/);
+  assert.match(IOS, /\} else if admins\.left == nil && admins\.count != nil \{/);
   // The last admin is removed on the machine, so its Remove is not drawn.
   assert.match(IOS, /if pinned\.count > 1 \{\s*Button\("Remove", role: \.destructive\) \{\s*run \{ try await fleet\.pinAdmin\(host: hostId, email: email, add: false\) \}/);
   assert.match(IOS, /run \{ try await fleet\.pinAdmin\(host: hostId, email: email, add: true\) \}/);
   assert.match(IOS, /intent\("pinadmin", params: \["email": email, "op": add \? "add" : "remove"\], host: host\)/);
 });
 
-test('iOS draws Update, Upgrade, Reboot and Restore only where the machine takes them from this person', () => {
-  assert.match(IOS, /var takesFromYou: Bool \{ count == 0 \|\| you == true \}/);
+test('iOS draws Update, Upgrade, Reboot, the channel, the image and Restore only where the machine takes them from this person', () => {
+  assert.match(IOS, /var takesFromYou: Bool \{ count == 0 \|\| \(you == true && left == nil\) \}/);
   assert.match(IOS, /var boxWideAllowed: Bool \{ admins\?\.takesFromYou \?\? true \}/);
   assert.match(IOS, /boxWideAllowed \|\| \(admins\?\.count != nil && item\.isOwn\(me\)\)/);
   assert.match(IOS, /if entry\.restorable \{\s*Button\("Restore"\)/);

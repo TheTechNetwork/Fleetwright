@@ -23,7 +23,7 @@ import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -7862,8 +7862,15 @@ const MAX_PINNED = 64;
  *
  * `count` and `you` are null when the box said it cannot read its record,
  * which is cannot tell (C-5): it refuses those verbs from everybody until it
- * can, and its sentence says so. `left` is the box's sentence when the only
- * admin it pins has left the fleet. Neither names anybody.
+ * can, and `problem` says so. `left` is said when the box pins somebody and
+ * takes those verbs from nobody: every admin it pins left the fleet, none of
+ * them can sign, or it cannot check a signature at all (`stranded`).
+ *
+ * BOTH SENTENCES ARE THIS FILE'S, never the box's (intents.js
+ * PIN_SENTENCES). They go to everybody who sees the box, people not shown the
+ * addresses included, so a box's own text there would be a way to put an
+ * address, or anything else, in front of all of them. The box sends a code;
+ * one it does not name, or no code beside its own sentence, reads as `left`.
  *
  * @param {unknown} admins
  * @param {{ email?: string|null, admin?: boolean }|null} requester
@@ -7881,9 +7888,10 @@ export function adminsSeenBy(admins, requester) {
   } else if (raw !== null) {
     return undefined;
   }
-  const sentence = (/** @type {unknown} */ v) => (typeof v === 'string' && v.length > 0 && v.length <= 400 ? v : null);
-  const left = sentence(a.left);
-  const problem = sentence(a.problem);
+  const said = (/** @type {unknown} */ v) => typeof v === 'string' && v.length > 0;
+  const code = typeof a.stranded === 'string' && a.stranded !== 'unreadable' && Object.hasOwn(PIN_SENTENCES, a.stranded) ? a.stranded : null;
+  const left = pinned && pinned.length > 0 && (code || said(a.left)) ? PIN_SENTENCES[/** @type {keyof typeof PIN_SENTENCES} */ (code ?? 'left')] : null;
+  const problem = pinned === null ? PIN_SENTENCES.unreadable : null;
   const email = emailOf(requester?.email ?? '');
   const you = pinned ? Boolean(email) && pinned.includes(/** @type {string} */ (email)) : null;
   const sees = !requester || Boolean(requester.admin) || you === true;
