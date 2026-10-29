@@ -81,6 +81,11 @@ export function runsNoSessions(hostId) {
  *   #hostFacts). It changes only what a refusal says (scheduler.js
  *   NOT_CONTAINED), never whether a member's session goes there. Absent from
  *   an older box, which is read as `off`.
+ * @property {string[]} [sandboxedAlso]  the other reasons beside the first, in
+ *   the box's order, because no one fix opens a box that has two (a root-run
+ *   box with its sandbox off). Absent from a box that gives only the first.
+ *   Both are held to a short code here (attributed), and an entry that is
+ *   not one reads as a reason this fleet does not know.
  */
 
 /**
@@ -116,6 +121,15 @@ export function runsNoSessions(hostId) {
  * not one is dropped rather than repaired, as labels.js drops one, and no
  * more than LABELS_MAX are kept: `tag` can match nothing else.
  *
+ * AND WHY A BOX DOES NOT CONTAIN A SESSION HELD TO ITS SHAPE: a code, or a
+ * list of codes, because the phones decode `sandboxedWhy` as a string and
+ * `sandboxedAlso` as an array of them, strictly on iOS, and a box that sent
+ * a number there would blank the whole health report on every phone. An
+ * entry that is not a code is not dropped, which would leave a shorter list
+ * read as complete and a refusal naming too few fixes (scheduler.js
+ * NOT_CONTAINED): it becomes NOT_A_REASON, which nothing knows, and the
+ * refusal says only "not contained".
+ *
  * @param {{ actsFor?: string|null }} host
  * @param {HostHealth} health
  * @returns {HostHealth}
@@ -136,7 +150,28 @@ export function attributed(host, health) {
     ...('bin' in health ? { bin: each(health.bin) } : {}),
     ...('labels' in health ? { labels: labels(health.labels) } : {}),
     ...('setLabels' in health ? { setLabels: labels(/** @type {any} */ (health).setLabels) } : {}),
+    ...('sandboxedWhy' in health ? { sandboxedWhy: health.sandboxedWhy == null ? null : reason(health.sandboxedWhy) } : {}),
+    ...('sandboxedAlso' in health ? { sandboxedAlso: reasons(health.sandboxedAlso) } : {}),
   };
+}
+
+/** What a reason a box gives looks like: a short code (sidecar.js factsFrom). */
+const REASON_RE = /^[a-z_]{1,32}$/;
+
+/** More reasons than a box has (http.js uncontained gives five at most). */
+const REASONS_MAX = 8;
+
+/** The code a reason that is not one becomes: one nothing reads as a fix. */
+const NOT_A_REASON = 'unreadable';
+
+/** @param {unknown} c */
+const reason = (c) => (typeof c === 'string' && REASON_RE.test(c) ? c : NOT_A_REASON);
+
+/** @param {unknown} list */
+function reasons(list) {
+  if (!Array.isArray(list)) return list == null ? [] : [NOT_A_REASON];
+  if (list.length > REASONS_MAX) return [NOT_A_REASON];
+  return [...new Set(list.map(reason))];
 }
 
 /**
