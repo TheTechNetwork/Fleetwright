@@ -2496,18 +2496,25 @@ struct Fleet {
             /// Their addresses, sent only to somebody on the list and to the
             /// fleet's admin.
             let pinned: [String]?
-            /// The box's sentence when the only admin it pins has left the fleet.
+            /// Said when the box pins somebody and takes those verbs from
+            /// nobody: every admin it pins left the fleet, none of them can
+            /// sign, or it cannot check a signature. The coordinator's
+            /// sentence, never the box's own (intents.js PIN_SENTENCES).
             let left: String?
-            /// The box's sentence when it cannot read its record.
+            /// Said when the box cannot read its record. The coordinator's
+            /// sentence too.
             let problem: String?
 
-            /// Whether the box takes those verbs from this person.
-            var takesFromYou: Bool { count == 0 || you == true }
+            /// Whether the box takes those verbs from this person. Not while
+            /// it is stranded, from anybody: a pinned person whose key the
+            /// fleet does not list cannot sign either (C-2).
+            var takesFromYou: Bool { count == 0 || (you == true && left == nil) }
         }
 
-        /// Whether the box takes update, upgrade and reboot from this person
-        /// as far as its pins go. True where it pins nobody or cannot pin, so
-        /// only the coordinator's rule decides there, as before.
+        /// Whether the box takes update, upgrade, reboot, a new channel and a
+        /// new image from this person as far as its pins go. True where it
+        /// pins nobody or cannot pin, so only the coordinator's rule decides
+        /// there, as before.
         var boxWideAllowed: Bool { admins?.takesFromYou ?? true }
 
         /// Whether the box takes this restore from this person: their own

@@ -108,11 +108,13 @@ struct HostView: View {
     /// sent, as a label is.
     @State private var newAdmin = ""
 
-    /// UPDATE, UPGRADE AND REBOOT ONLY WHERE THE MACHINE WILL TAKE THEM FROM
-    /// THIS PERSON (C-2): the coordinator's rule (mayAdminister), and then the
-    /// machine's own, when it pins its admins and this person is not one
+    /// UPDATE, UPGRADE, REBOOT, THE CHANNEL AND THE IMAGE ONLY WHERE THE
+    /// MACHINE WILL TAKE THEM FROM THIS PERSON (C-2): the coordinator's rule
+    /// (mayAdminister), and then the machine's own, when it pins its admins
+    /// and this person is not one, or nobody pinned can sign
     /// (HostHealth.boxWideAllowed). A machine that pins nobody, or cannot pin,
-    /// leaves the first rule alone, as before.
+    /// leaves the first rule alone, as before. Labels are the coordinator's
+    /// alone and stay on mayAdminister.
     private var mayActOnBox: Bool { mayAdminister && (health?.boxWideAllowed ?? true) }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -299,7 +301,7 @@ struct HostView: View {
                 LabeledContent("Channel") {
                     Text("\(channel ?? "stable"), set on the box").fleetType(.label)
                 }
-            } else if let now = channel, !mayAdminister {
+            } else if let now = channel, !mayActOnBox {
                 LabeledContent("Channel") { Text(now).fleetType(.label) }
             } else if let now = channel {
                 Picker("Channel", selection: Binding(
@@ -342,7 +344,7 @@ struct HostView: View {
                             .foregroundStyle(Design.Palette.inkDim)
                             .textSelection(.enabled)
                     }
-                } else if !mayAdminister {
+                } else if !mayActOnBox {
                     LabeledContent("Image") {
                         Text(now.variant == "browser" ? "Browser" : "No browser").fleetType(.label)
                     }
@@ -554,20 +556,22 @@ struct HostView: View {
     /// whoever runs it, because anything a phone sends arrives through the
     /// coordinator. A pinned admin adds and removes the others from here, and
     /// the last one is removed only on the machine, so its Remove is not
-    /// drawn. Same words as Android, held equal by
-    /// test/pinned-admins-in-apps.test.js.
+    /// drawn. While nobody pinned can sign (`left`), the machine's state is
+    /// all there is to say: a Pin or Remove from here would be refused, and
+    /// nobody is promised they can be added. Same words as Android, held
+    /// equal by test/pinned-admins-in-apps.test.js.
     @ViewBuilder private var adminsSection: some View {
         if mayAdminister, let admins = health?.admins, admins.count != 0 {
             Section {
-                // THE MACHINE'S OWN WORDS, when it has something wrong to say:
-                // a record it cannot read, or an only admin who has left.
+                // WHAT IS WRONG, when something is: a record the machine cannot
+                // read, or nobody pinned who can sign. The coordinator's words.
                 if let problem = admins.problem {
                     Text(problem).fleetType(.label).foregroundStyle(Design.Palette.attention)
                 }
                 if let left = admins.left {
                     Text(left).fleetType(.label).foregroundStyle(Design.Palette.attention)
                 }
-                if admins.you == true {
+                if admins.you == true && admins.left == nil {
                     let pinned = admins.pinned ?? []
                     ForEach(pinned, id: \.self) { email in
                         HStack {
@@ -596,11 +600,11 @@ struct HostView: View {
                         }
                         .disabled(busy || !newAdmin.contains("@"))
                     }
-                    Text("This machine takes updates, upgrades, reboots and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
+                    Text("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
-                } else if admins.count != nil {
-                    Text("This machine takes updates, upgrades and reboots only from the admins pinned on it, and you are not one of them. One of them can add you from their phone.")
+                } else if admins.left == nil && admins.count != nil {
+                    Text("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
