@@ -873,8 +873,10 @@ itself. A box can therefore **pin its own admins** (`pinned-admins.js`,
 of somebody else's work need one of their signatures or delegations, whatever
 the coordinator says. The first pin is set on the box by its operator
 (`FLEETWRIGHT_ADMINS`, `fleetwright-sidecar pin-admin` as the sidecar's own
-account; root is refused, per G10), never over the wire, and over the wire
-only a pinned admin's own signature adds or removes one, never the last. A box
+account; root is refused wherever another account could change the way to
+the record, per G10), never over the wire, and over the wire only a pinned
+admin's own signature adds or removes one, and a removal always keeps somebody
+who can sign. A box
 that pins nobody is where it was: the coordinator's word decides those verbs.
 Pins hold only where the sidecar's account is not the session user's: on a
 Mac (`SIDECAR_USER=$RUN_USER`, sessions outside containers), on a Linux box
@@ -897,8 +899,13 @@ write nothing; on one that pins somebody, a delegated `pinadmin` and an
 unpinned person's `reboot` must be refused, and a `forgetperson` for the last
 admin must leave them pinned and the box refusing everybody, as must one for
 the last admin who can sign beside an admin who left or an address no key is
-listed for; `pin-admin` run as root must refuse and write nothing in the
-sidecar's directory (`test/pinned-admins.test.js` does).
+listed for; a signed removal that would leave only such an address must be
+refused; a box holding a key list past its age must report `unchecked`; a
+waiter that found a dead lock must not remove the live one another waiter took
+in its place; and `pin-admin` run as root must refuse and write nothing in the
+sidecar's directory, nor through a link that account owns, nor in a directory
+of root's under one another account can change (`test/pinned-admins.test.js`
+does).
 
 ### 4.2 Compromised host (root on the box)
 

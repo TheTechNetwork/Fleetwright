@@ -124,7 +124,7 @@ and "dead host" is the one it retries.
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
-| `pinadmin` | `email`, `op` (`add`\|`remove`) | ✅ | sidecar-local — changes `pinned-admins.json` beside the host key, and only from an admin the box already pins, signed for this request (never a delegation). Never the first pin, which is set on the box (`FLEETWRIGHT_ADMINS`, `fleetwright-sidecar pin-admin`), and never the last removal. Not a shell command |
+| `pinadmin` | `email`, `op` (`add`\|`remove`) | ✅ | sidecar-local — changes `pinned-admins.json` beside the host key, and only from an admin the box already pins, signed for this request (never a delegation). Never the first pin, which is set on the box (`FLEETWRIGHT_ADMINS`, `fleetwright-sidecar pin-admin`), and never a removal that leaves nobody who can sign. Not a shell command |
 | `updates` | — | | `/updates` |
 | `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
 | `sandbox` | `to?` (`minimal`\|`browser`) | ✅ | `/sandbox [minimal\|browser]` |
@@ -430,8 +430,10 @@ or `remove`) and needs the signature of an admin the box already pins, made for
 this request: a delegation is refused, because it is the coordinator holding a
 standing permission. The **first** pin never comes over the wire, since a
 coordinator can list a throwaway account as a member and the minter would list
-its key; whoever runs the box sets it there. Nor does the removal of the
-**last** one, which would hand the box back to the coordinator's word. A box
+its key; whoever runs the box sets it there. Nor does a removal that leaves
+nobody who **can sign**, the last name or the last whose key the minter lists,
+which would leave the box refusing everybody or hand it back to the
+coordinator's word. A box
 says whom it pins in its health (`admins`), which is also how a phone knows the
 verb exists there; a box from before answers `unknown_verb`.
 

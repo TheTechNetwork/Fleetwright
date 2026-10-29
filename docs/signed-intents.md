@@ -383,9 +383,14 @@ else in that env file:
   pinned yet. Once somebody is, the record is the box's word and the env line
   does not overrule it, or a restart would undo every change since.
 - `fleetwright-sidecar pin-admin you@example.com`, run as the sidecar's user
-  (`sudo -u fleetwright-sidecar …` on Linux). Run as root it is refused, with
-  that command in the refusal: what root makes inside a directory another
-  account owns, that account can swap for a link between root's calls
+  (`sudo -u fleetwright-sidecar …` on Linux, or `runuser -u` where there is
+  no sudo). Run as root it is refused, with that command in the refusal,
+  wherever another account could change the way to the record: the
+  directory, or the nearest one that exists, and every directory above it up
+  to `/`, as written and as links resolve, must be root's and writable by root
+  alone (a root-owned sticky directory such as `/tmp` above it passes, since
+  nobody else can rename what root put there). What root makes anywhere else,
+  that account can swap for a link between root's calls
   ([`security.md`](security.md) G10), so root does not write there at all.
 
 Pin people who have already signed in on a phone, so their address is bound
@@ -397,8 +402,11 @@ the box already pins add another or remove one, signed for that request. A
 delegation is refused for it: a delegation is the coordinator holding a
 standing permission, and changing who may reboot the box is not one to hand
 it. It never makes the first pin, which a coordinator that lists a throwaway
-account could otherwise make, and never removes the last, which would hand the
-box back to the coordinator's word. The phones offer it only to a pinned
+account could otherwise make, and a removal always keeps somebody who can sign:
+never the last name, and never one that would leave only addresses no key is
+listed for (a typo, somebody who never signed in on a phone), by the same rule
+as `forgetperson` below. Either would strand the box from a phone, and that is
+done on the box or not at all. The phones offer it only to a pinned
 admin, on a box that pins somebody; there is no "pin me".
 
 **When an admin leaves the fleet**, `forgetperson` drops their pin, unless they
@@ -414,9 +422,13 @@ beside them and the box would refuse everybody with nothing said.
 **A stranded box says so.** Whenever it pins somebody and nobody it pins can
 sign, its health carries `stranded`: `left` when every admin it pins left the
 fleet, `unlisted` when none of them is on the minter's list for another
-reason, `unchecked` on a box with no key of its own to fetch the list with,
-which can check nobody's signature. The phones then draw none of those verbs
-for anybody, the box's own pinned admin included, and show one sentence. The
+reason, and `unchecked` when the box holds no key list it may check with: it
+has no key of its own to fetch one, has not fetched one yet, or holds one older
+than the twenty minutes its signature check takes (`IntentKeys.current`), so
+it can check nobody's signature. The phones then draw none of those verbs for
+anybody, the box's own pinned admin included, and show one sentence; on
+`unchecked`, which the coordinator passes on beside the sentence, not even a
+person's Restore of their own work, which needs their signature checked too. The
 sentence is the coordinator's (`PIN_SENTENCES` in
 `src/fleet/protocol/intents.js`), keyed by that code, never text the box
 wrote: it goes to everybody who sees the box, and a box's own words there
@@ -441,8 +453,8 @@ person pinning a new admin is replacing them, and kept, they would sit beside
 the new one unable to sign. Naming one of them again pins them afresh.
 Unpinning the last admin, or `reset-admins`, says when `FLEETWRIGHT_ADMINS`
 will pin its people again at the next start. All four change the record only
-as the account that owns it; as root they are refused with the `sudo -u` form
-to run instead, and `admins`, which only reads, is not.
+as the account that owns it; as root they are refused with the `sudo -u` (or
+`runuser -u`) form to run instead, and `admins`, which only reads, is not.
 
 The running sidecar reads the record on every request, so none of these needs
 a restart. A record that cannot be read refuses every guarded verb, from the
@@ -456,9 +468,13 @@ lowercased, readable by anyone on the box like `signers.json` beside it.
 Written whole by rename, from a temp file created exclusively and synced
 first, one change at a time under a lock file, so a `pin-admin` typed on the
 box and a `pinadmin` from a phone never lose each other's change. The lock
-holds its owner's token: a release removes only its own, and a lock left by
-a process that died is moved aside before it is removed, so two changes
-breaking it at once cannot remove each other's.
+holds its owner's token: a release removes only its own. A lock older than
+thirty seconds was left by a process that died, and is broken by one waiter
+at a time, under `pinned-admins.lock.break` created exclusively, which reads
+the lock again first and removes it only if it is still stale and still the
+token it saw: a lock another waiter has just taken in its place is fresh, and
+is left alone. A break file a dead breaker left is removed after the same
+thirty seconds, so changes on the box stop for that half minute at most.
 
 **What a phone is shown.** A box's health carries whom it pins. Those are
 people's addresses, so the coordinator shapes the field for every reader

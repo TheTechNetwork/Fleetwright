@@ -212,9 +212,10 @@ Every setting is in `src/fleet/host/config.js`. Five are worth calling out:
   ```
 
   Not as root: `sudo fleetwright-sidecar pin-admin` is refused, and says the
-  `sudo -u` form, because root writing inside the sidecar account's own
-  directory is a link that account could plant
-  ([`security.md`](security.md) G10). On a Mac the sidecar is your own
+  `sudo -u` form (or `runuser -u`, for a box without sudo), because root
+  writing where another account can change the way to the record, the
+  sidecar account's own directory included, is a link that account could
+  plant ([`security.md`](security.md) G10). On a Mac the sidecar is your own
   account, so the same commands run without `sudo`. Unset, nobody is pinned
   and the box behaves as it always has. An address that is not one stops the
   sidecar starting. Pins hold only where the sidecar's account is not the one
