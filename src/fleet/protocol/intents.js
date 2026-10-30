@@ -1718,7 +1718,7 @@ export const VERBS = Object.freeze({
         type: 'enum',
         required: true,
         values: ['reboot', 'extend', 'resize', 'stop'],
-        describe: '`reboot` restarts it; `extend` gives it `minutes` longer, up to six hours from when it was made; `resize` gives it `cpus` and `memory` (GiB), which restarts it; `stop` removes it with everything on it.',
+        describe: '`reboot` restarts it; `extend` gives it `minutes` longer, up to 350 minutes from when it was made; `resize` gives it `cpus` and `memory` (GiB), which restarts it; `stop` removes it with everything on it.',
       },
       minutes: { type: 'int', required: false, min: 5, max: 350, describe: 'For `extend`: how many minutes longer.' },
       cpus: { type: 'int', required: false, min: 1, max: 64, describe: 'For `resize`: vCPUs.' },
@@ -1726,7 +1726,7 @@ export const VERBS = Object.freeze({
     },
     mutating: true,
     summary:
-      'Work a machine from your own hypervisor: reboot it, extend it (up to six hours from when it was made), resize ' +
+      'Work a machine from your own hypervisor: reboot it, extend it (up to 350 minutes from when it was made), resize ' +
       'it (vCPUs and memory, which restarts it), or stop it, which removes it and everything on it. Yours only.',
   },
 
