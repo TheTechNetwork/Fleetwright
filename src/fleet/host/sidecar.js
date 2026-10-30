@@ -89,6 +89,7 @@ const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {
  * @property {string|null} sandboxedWhy
  * @property {string[]} sandboxedAlso
  * @property {number|null} houseRules
+ * @property {'asks'|'bypassed'|null} permissions
  */
 
 /** What a reason the hub gives looks like: a short code (http.js uncontained). */
@@ -161,6 +162,7 @@ export function factsFrom(state) {
     // And the rest, only beside a first (reasonsAfter).
     sandboxedAlso: why === null ? [] : reasonsAfter(state?.sandboxedAlso),
     houseRules: typeof state?.houseRules === 'number' ? state.houseRules : null,
+    permissions: state?.permissions === 'asks' || state?.permissions === 'bypassed' ? state.permissions : null,
   };
 }
 
@@ -1026,6 +1028,12 @@ export class Sidecar {
       // app is displaying. FLEETWRIGHT_LABELS is in this process's environment
       // and in no other, which is why it has to travel.
       if (intent.verb === 'labels') meta.hostLabels = this.givenLabels.join(',');
+      // FROM THE FLEET, said on every line built from an intent, so the hub
+      // holds a start to the operator's FLEETWRIGHT_SKIP_PERMISSIONS off even
+      // where this process still holds the operator's token, which the hub
+      // cannot tell from the operator's own console (commands.js
+      // permissionCeiling). It only ever takes something away.
+      meta.via = 'fleet';
       if (intent.verb === 'provision') {
         // THE PERSON'S OWN REPOSITORY WHEN THE COORDINATOR NAMED ONE, and the
         // fleet's off the config frame otherwise. Both came from the
@@ -2266,6 +2274,16 @@ export class Sidecar {
         // fixing the first, and the coordinator names them all. Empty when
         // there is one, or none.
         sandboxedAlso: this.facts?.sandboxedAlso ?? [],
+        // WHAT A START WITH NO MODE DOES HERE: `asks` before each tool, or
+        // runs with permissions `bypassed` (http.js #hostFacts). A phone
+        // labels its "Box default" choice from this and offers "Permissions
+        // bypassed" only on a box that says `bypassed`, since on one that says
+        // `asks` the hub refuses a fleet start that asks for it. Null from a
+        // hub too old to say, which is cannot tell: a phone then says nothing
+        // about the mode rather than guessing at the usual one. Additive, so
+        // an older coordinator stores it with the rest and an older phone
+        // never reads it.
+        permissions: this.facts?.permissions ?? null,
       };
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);
