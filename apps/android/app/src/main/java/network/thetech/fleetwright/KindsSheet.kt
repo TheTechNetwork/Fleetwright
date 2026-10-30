@@ -61,7 +61,10 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                 Text(
                     "Say \"start a dev session\". A word here becomes a shortcut straight away — "
                         + "nothing else to set up. A task makes the word do something: spoken, that is the "
-                        + "only way a session gets one, because there is no screen to drive it from afterwards.",
+                        + "only way a session gets one, because there is no screen to drive it from afterwards. "
+                        + "Box default leaves permissions to the machine. Permission prompts on asks before "
+                        + "each tool wherever it starts. Bypassing them is chosen on New session, where each "
+                        + "machine's setting is shown.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 kinds.forEachIndexed { i, k ->
@@ -85,6 +88,33 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // HOW A START OF THIS KIND RUNS. Box default saves no
+                    // mode, so the machine's own setting decides; prompts on
+                    // asks for them wherever it starts. Bypassing is not
+                    // offered here: an Assistant start has no screen to show
+                    // the machine's setting on, and a machine set to ask
+                    // refuses it. A kind saved with it before still shows it,
+                    // so what it holds is never drawn as something else
+                    // (C-5). Stacked rather than in a row, so a long label
+                    // wraps instead of running off a narrow dialog, and named
+                    // the way New session names it, as iOS's picker is.
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                        Text("Permissions", style = MaterialTheme.typography.labelMedium)
+                        AssistChip(
+                            onClick = { kinds[i] = k.copy(mode = null) },
+                            label = { Text(if (k.mode == null) "Box default \u2713" else "Box default") },
+                        )
+                        AssistChip(
+                            onClick = { kinds[i] = k.copy(mode = "safe") },
+                            label = { Text(if (k.mode == "safe") "Permission prompts on \u2713" else "Permission prompts on") },
+                        )
+                        if (k.mode == "dangerous") {
+                            AssistChip(
+                                onClick = { kinds[i] = k.copy(mode = "dangerous") },
+                                label = { Text("Permissions bypassed \u2713") },
+                            )
+                        }
+                    }
                     // A TEXT FIELD WOULD HAVE BEEN SMALLER AND WRONG: a
                     // mistyped profile name saves fine, pre-fills nothing, and
                     // the kind quietly starts idle sessions forever — a setting

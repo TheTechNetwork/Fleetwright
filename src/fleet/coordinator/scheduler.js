@@ -987,11 +987,106 @@ function describeWhyNoHolders(registry) {
 }
 
 /**
- * Why a member's session will not go on these boxes: each runs its sessions
- * without the sandbox, or has not said whether it does (hosts.js
- * runsSessionsFor). Every box is named, because they are the fleet's own and
- * acting for anyone is what put them here, and the way on is a setting on
- * them that a person can change.
+ * Why a box does not contain a session, by the code it sends beside
+ * `sandboxed: false` (`sandboxedWhy`, http.js #hostFacts), and what opens it.
+ *
+ * THE SANDBOX BEING OFF IS ONE REASON OF SEVERAL. A box can have
+ * FLEETWRIGHT_SANDBOX=1 and still not contain a session: run as root, its
+ * sandbox shares the machine's user namespace (config.js resolveUserns), so
+ * root in a session is root on the box. This said "Turning its sandbox on
+ * opens it" to that box, which had it on, and gave the member and the
+ * operator nothing true to do. So each reason the box can name has its own
+ * clause and its own fix, and the sentence says only what the box said.
+ *
+ * `off` reads as this always did, and so does a box that sends no code at
+ * all: a hub from before the code reported false only with the sandbox off
+ * or opened by FLEETWRIGHT_SANDBOX_ARGS, and off is by far the commoner. A
+ * code this coordinator does not know is not guessed at (C-5): the box said
+ * not contained, and that is all that is repeated. The phones carry the same
+ * clauses and the same fixes (Fleet.swift and Fleet.kt, `resumeKept`).
+ *
+ * MORE THAN ONE CAN HOLD AT ONCE, and then no single fix is the way on. A
+ * root-run box with the sandbox off was told "Turning its sandbox on opens
+ * it"; after doing that it said root, and the sentence had been false from
+ * the start. So the box sends every reason, in order (`sandboxedWhy` the
+ * first, `sandboxedAlso` the rest), and the sentence names each with its
+ * `step` and says it takes all of them. `short` and `step` are the shapes
+ * that join; `why` and `fix` are the one-reason sentence, unchanged.
+ */
+const NOT_CONTAINED = {
+  off: {
+    why: 'runs sessions without the sandbox, as the account that holds everyone\u2019s credentials on it',
+    short: 'runs sessions without the sandbox',
+    fix: 'Turning its sandbox on (FLEETWRIGHT_SANDBOX=1)',
+    step: 'turning its sandbox on (FLEETWRIGHT_SANDBOX=1)',
+  },
+  unsafe_args: {
+    why: 'lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox',
+    short: 'lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox',
+    fix: 'Taking that option out',
+    step: 'taking out the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox',
+  },
+  userns_root: {
+    why: 'runs fleetwright as root, and root in a session is root on the machine',
+    short: 'runs fleetwright as root',
+    fix: 'Running fleetwright as its own user, not root,',
+    step: 'running fleetwright as its own user instead of root',
+  },
+  userns_docker: {
+    why: 'runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone\u2019s credentials',
+    short: 'runs its sandbox with docker',
+    fix: 'Running its sessions under podman',
+    step: 'running its sessions under podman',
+  },
+  userns_host: {
+    why: 'has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone\u2019s credentials',
+    short: 'has FLEETWRIGHT_SANDBOX_USERNS=host',
+    fix: 'Setting that back to nomap',
+    step: 'setting FLEETWRIGHT_SANDBOX_USERNS back to nomap',
+  },
+};
+
+/**
+ * What one box said about itself, as `NOT_CONTAINED` reads it: every reason
+ * it gave, in its order, or `[off]` for `false` with no code (a hub from
+ * before it), or null when any code is one this coordinator does not know.
+ * One unknown reason makes the rest a partial list, and a partial list of
+ * fixes is the false sentence this exists to stop. A box from before
+ * `sandboxedAlso` gave one reason, and is read as having given one.
+ *
+ * @param {import('./registry.js').HostEntry} h
+ */
+function notContained(h) {
+  const first = h.health?.sandboxedWhy;
+  if (first === undefined || first === null) return [NOT_CONTAINED.off];
+  const also = Array.isArray(h.health?.sandboxedAlso) ? h.health.sandboxedAlso : [];
+  // A reason said twice is one reason: its clause and its fix are said once.
+  const said = [...new Set([first, ...also].map(String))].map((c) =>
+    Object.hasOwn(NOT_CONTAINED, c) ? NOT_CONTAINED[/** @type {keyof typeof NOT_CONTAINED} */ (c)] : null,
+  );
+  return said.every(Boolean) ? /** @type {Array<(typeof NOT_CONTAINED)[keyof typeof NOT_CONTAINED]>} */ (said) : null;
+}
+
+/**
+ * Clauses as one: `a and b`, or `a, b, and c`.
+ *
+ * @param {string[]} parts
+ */
+function together(parts) {
+  return parts.length < 3 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
+/** How many fixes a box needs, said as a word: two is `both`. */
+function allOf(/** @type {number} */ n) {
+  return n === 2 ? 'both' : `all ${['three', 'four', 'five'][n - 3] ?? n}`;
+}
+
+/**
+ * Why a member's session will not go on these boxes: each does not contain
+ * one, or has not said whether it does (hosts.js runsSessionsFor). Every box
+ * is named, because they are the fleet's own and acting for anyone is what
+ * put them here, and the way on is a setting on them that a person can
+ * change, named from what the box said (NOT_CONTAINED).
  *
  * @param {Array<import('./registry.js').HostEntry>} hosts
  * @param {string} verb  `start` or `resume`
@@ -1001,25 +1096,59 @@ function unsandboxed(hosts, verb) {
   const doing = verb === 'resume' ? 'resume a session' : 'start work';
   if (hosts.length === 1) {
     const [h] = hosts;
+    if (h.health?.sandboxed !== false) {
+      return {
+        kind: 'refused',
+        code: 'unsandboxed',
+        reason:
+          `${h.hostId} has not said whether its sessions are sandboxed \u2014 it is older than that report \u2014 ` +
+          `so it is treated as running them without one, and only this fleet\u2019s admin can ${doing} there ` +
+          'until it is updated.',
+      };
+    }
+    const said = notContained(h);
+    const refused = `so only this fleet\u2019s admin can ${doing} there`;
+    let reason = `${h.hostId} says its sessions are not contained, ${refused}.`;
+    if (said?.length === 1) {
+      reason = `${h.hostId} ${said[0].why}, ${refused}. ${said[0].fix} opens it to everyone it acts for.`;
+    } else if (said) {
+      reason =
+        `${h.hostId} ${together(said.map((s) => s.short))}, ${refused}. It takes ${allOf(said.length)} to open it ` +
+        `to everyone it acts for: ${together(said.map((s) => s.step))}.`;
+    }
+    return { kind: 'refused', code: 'unsandboxed', reason };
+  }
+  // EVERY BOX IN TODAY'S SENTENCE while that sentence is true of each: off
+  // and nothing else, or not said. Once one names another reason, "turning a
+  // box's sandbox on" is no longer the way on for all of them, so each is
+  // named with what it said, and naming one gets its own fix (the one-box
+  // sentence above).
+  const plain = hosts.every((h) => {
+    if (h.health?.sandboxed !== false) return true;
+    const said = notContained(h);
+    return said?.length === 1 && said[0] === NOT_CONTAINED.off;
+  });
+  if (plain) {
     return {
       kind: 'refused',
       code: 'unsandboxed',
-      reason: h.health?.sandboxed === false
-        ? `${h.hostId} runs sessions without the sandbox, as the account that holds everyone\u2019s credentials on ` +
-          `it, so only this fleet\u2019s admin can ${doing} there. Turning its sandbox on (FLEETWRIGHT_SANDBOX=1) ` +
-          'opens it to everyone it acts for.'
-        : `${h.hostId} has not said whether its sessions are sandboxed \u2014 it is older than that report \u2014 ` +
-          `so it is treated as running them without one, and only this fleet\u2019s admin can ${doing} there ` +
-          'until it is updated.',
+      reason:
+        `Every machine that could take this runs sessions without the sandbox, or has not said whether it does: ` +
+        `${hosts.map((h) => h.hostId).join(', ')}. Only this fleet\u2019s admin can ${doing} on those. Turning a ` +
+        'box\u2019s sandbox on (FLEETWRIGHT_SANDBOX=1), or updating one that has not said, opens it to everyone it acts for.',
     };
   }
+  const each = hosts.map((h) => {
+    if (h.health?.sandboxed !== false) return `${h.hostId} has not said whether it is sandboxed`;
+    const said = notContained(h);
+    return `${h.hostId} ${said ? together(said.map((s) => s.short)) : 'says its sessions are not contained'}`;
+  });
   return {
     kind: 'refused',
     code: 'unsandboxed',
     reason:
-      `Every machine that could take this runs sessions without the sandbox, or has not said whether it does: ` +
-      `${hosts.map((h) => h.hostId).join(', ')}. Only this fleet\u2019s admin can ${doing} on those. Turning a ` +
-      'box\u2019s sandbox on (FLEETWRIGHT_SANDBOX=1), or updating one that has not said, opens it to everyone it acts for.',
+      `No machine that could take this would contain a member\u2019s session: ${each.join('; ')}. ` +
+      `Only this fleet\u2019s admin can ${doing} on those; naming one says what would open it to everyone it acts for.`,
   };
 }
 

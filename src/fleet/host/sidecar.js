@@ -86,8 +86,37 @@ const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {
  * @property {boolean|null} channelPinned
  * @property {{ variant: string, image: string, pinned: boolean }|null} sandbox
  * @property {boolean|null} sandboxed
+ * @property {string|null} sandboxedWhy
+ * @property {string[]} sandboxedAlso
  * @property {number|null} houseRules
+ * @property {'asks'|'bypassed'|null} permissions
  */
+
+/** What a reason the hub gives looks like: a short code (http.js uncontained). */
+const REASON_RE = /^[a-z_]{1,32}$/;
+
+/** More reasons than a hub has: it gives five at most. */
+const REASONS_MAX = 8;
+
+/**
+ * The reasons after the first, as the frame carries them.
+ *
+ * NOT FILTERED. A list with an entry dropped reads as complete, and the
+ * coordinator would name too few fixes and say they open the box, which is
+ * the false sentence this list exists to stop (scheduler.js NOT_CONTAINED).
+ * So an entry that is not a code, or a list longer than a hub sends, is
+ * carried as `unreadable`, a code nothing knows, and the fleet says only
+ * that the box is not contained. Absent, from a hub that gives one reason,
+ * is an empty list.
+ *
+ * @param {unknown} list
+ * @returns {string[]}
+ */
+function reasonsAfter(list) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list) || list.length > REASONS_MAX) return ['unreadable'];
+  return list.map((c) => (typeof c === 'string' && REASON_RE.test(c) ? c : 'unreadable'));
+}
 
 /**
  * The facts out of a /api/state reply, shape-checked.
@@ -105,6 +134,17 @@ export function factsFrom(state) {
   const labels = state?.labels;
   const strings = (/** @type {unknown} */ v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
   const sandbox = state?.sandbox;
+  // A first reason that is there and is not a code is `unreadable`, as in
+  // reasonsAfter, not null: null beside a `false` is a hub from before the
+  // field, which the coordinator reads as `off` and answers with "turn its
+  // sandbox on", and that is not known to be the way on for this box.
+  const said = state?.sandboxedWhy;
+  const why =
+    state?.sandboxed !== false || said === undefined || said === null
+      ? null
+      : typeof said === 'string' && REASON_RE.test(said)
+        ? said
+        : 'unreadable';
   return {
     labels: labels && strings(labels.auto) && strings(labels.set) ? { auto: labels.auto, set: labels.set } : null,
     channel: state?.channel === 'stable' || state?.channel === 'rolling' ? state.channel : null,
@@ -114,7 +154,15 @@ export function factsFrom(state) {
         ? { variant: sandbox.variant, image: sandbox.image, pinned: sandbox.pinned }
         : null,
     sandboxed: typeof state?.sandboxed === 'boolean' ? state.sandboxed : null,
+    // Why not, and only beside a `false`: a reason next to `true` or next to
+    // cannot tell would be a reason for nothing. A short code and nothing
+    // else, because it is carried to the coordinator and read there as one
+    // (scheduler.js NOT_CONTAINED), never as prose.
+    sandboxedWhy: why,
+    // And the rest, only beside a first (reasonsAfter).
+    sandboxedAlso: why === null ? [] : reasonsAfter(state?.sandboxedAlso),
     houseRules: typeof state?.houseRules === 'number' ? state.houseRules : null,
+    permissions: state?.permissions === 'asks' || state?.permissions === 'bypassed' ? state.permissions : null,
   };
 }
 
@@ -980,6 +1028,12 @@ export class Sidecar {
       // app is displaying. FLEETWRIGHT_LABELS is in this process's environment
       // and in no other, which is why it has to travel.
       if (intent.verb === 'labels') meta.hostLabels = this.givenLabels.join(',');
+      // FROM THE FLEET, said on every line built from an intent, so the hub
+      // holds a start to the operator's FLEETWRIGHT_SKIP_PERMISSIONS off even
+      // where this process still holds the operator's token, which the hub
+      // cannot tell from the operator's own console (commands.js
+      // permissionCeiling). It only ever takes something away.
+      meta.via = 'fleet';
       if (intent.verb === 'provision') {
         // THE PERSON'S OWN REPOSITORY WHEN THE COORDINATOR NAMED ONE, and the
         // fleet's off the config frame otherwise. Both came from the
@@ -2210,6 +2264,26 @@ export class Sidecar {
         // (hosts.js runsSessionsFor, docs/security.md G8). Null from a hub
         // too old to say, which is cannot tell and is treated as not.
         sandboxed: this.facts?.sandboxed ?? null,
+        // AND WHY NOT, beside a `false` (http.js uncontained): the sandbox
+        // off, opened by FLEETWRIGHT_SANDBOX_ARGS, or in the host user
+        // namespace because the hub runs as root, runs docker, or was told
+        // to. The coordinator names the way on from it; null from a hub too
+        // old to say, which it reads as off.
+        sandboxedWhy: this.facts?.sandboxedWhy ?? null,
+        // AND EVERY REASON AFTER IT, because a box with two is not opened by
+        // fixing the first, and the coordinator names them all. Empty when
+        // there is one, or none.
+        sandboxedAlso: this.facts?.sandboxedAlso ?? [],
+        // WHAT A START WITH NO MODE DOES HERE: `asks` before each tool, or
+        // runs with permissions `bypassed` (http.js #hostFacts). A phone
+        // labels its "Box default" choice from this and offers "Permissions
+        // bypassed" only on a box that says `bypassed`, since on one that says
+        // `asks` the hub refuses a fleet start that asks for it. Null from a
+        // hub too old to say, which is cannot tell: a phone then says nothing
+        // about the mode rather than guessing at the usual one. Additive, so
+        // an older coordinator stores it with the rest and an older phone
+        // never reads it.
+        permissions: this.facts?.permissions ?? null,
       };
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);
