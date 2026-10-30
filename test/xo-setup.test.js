@@ -347,6 +347,22 @@ test('a setup run again removes the tokens before it, and says when Xen Orchestr
   }
 });
 
+test('two runs of one job arriving together start it once', { skip }, async (t) => {
+  // Both passed "already been given its sign-in" while the first was still
+  // opening its seal, and both ran the steps: two admin sign-ins, two tokens.
+  const xo = await standIn(t);
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed } = await phone(begun, xo.address, xo.pin);
+  const twice = await Promise.all([setups.run({ job: begun.xosetup.job, sealed, actor }), setups.run({ job: begun.xosetup.job, sealed, actor })]);
+  assert.deepEqual(twice.map((r) => (r.ok ? 'started' : r.text)).sort(), ['That setup has already been given its sign-in.', 'started']);
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.equal(xo.calls.filter((c) => c.method === 'session.signIn' && c.params.email === 'admin@admin.net').length, 1, 'the steps ran once');
+  assert.equal(xo.calls.filter((c) => c.method === 'token.create').length, 1, 'one token');
+});
+
 test('a setup begun with nobody’s name on it is refused', async () => {
   const { setups } = await machine();
   assert.equal((await setups.begin({ address: 'xo.lan', pin: 'a'.repeat(64), actor: null })).ok, false);

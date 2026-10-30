@@ -778,13 +778,41 @@ export class XoSetups {
     // to know the job cannot open (seal.js).
     /** @type {'setup'|'reconnect'|'policy'} */
     let under = 'setup';
+    // ONE RUN AT A TIME, settled before the first await. Two runs of one
+    // job arriving together both passed the check above, because the first
+    // was still opening its seal when the second looked, and both ran the
+    // steps: two admin sign-ins, two tokens. So the key is taken and the job
+    // is running from here, and the second run is refused above as one that
+    // has its sign-in. A seal that does not open gives both back, so the
+    // phone can send the right one; a cancel that landed meanwhile stands.
+    // ONE USE: the key goes as soon as it has opened the one thing it exists
+    // for, which for a policy job is two things (below).
+    const jobKey = rec.key;
+    const waitingText = rec.text;
+    rec.key = null;
+    rec.state = 'running';
+    rec.text = 'Opening the sign-in.';
+    /** @param {string} text */
+    const notOpened = (text) => {
+      if (rec.cancelled) {
+        rec.state = 'cancelled';
+        rec.text = 'Cancelled before it started.';
+        this.#report(rec);
+        this.#ended(rec);
+      } else {
+        rec.key = jobKey;
+        rec.state = 'waiting';
+        rec.text = waitingText;
+      }
+      return { ok: false, text };
+    };
     /** @param {string} aad */
-    const tryOpen = (aad) => openSealed({ privateKey: rec.key.privateKey, publicKey: rec.key.publicKey, aad, sealed: box });
+    const tryOpen = (aad) => openSealed({ privateKey: jobKey.privateKey, publicKey: jobKey.publicKey, aad, sealed: box });
     try {
       inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : watchdog ? xowatchdogAad(job, rec.address) : xosetupAad(job, rec.address));
     } catch {
-      if (deploy) return { ok: false, text: 'The passwords did not open with this job’s key. Start again from the app.' };
-      if (watchdog) return { ok: false, text: 'The root password did not open with this job’s key. Start again from the app.' };
+      if (deploy) return notOpened('The passwords did not open with this job’s key. Start again from the app.');
+      if (watchdog) return notOpened('The root password did not open with this job’s key. Start again from the app.');
       for (const [name, aad] of /** @type {const} */ ([['reconnect', xosetupReconnectSigninAad(job, rec.address)], ['policy', xosetupPolicySigninAad(job, rec.address)]])) {
         try {
           inside = await tryOpen(aad);
@@ -792,12 +820,8 @@ export class XoSetups {
           break;
         } catch { /* the next name, or none */ }
       }
-      if (under === 'setup') return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
+      if (under === 'setup') return notOpened('The sign-in did not open with this setup’s key. Start again from the app.');
     }
-    // ONE USE: the key goes as soon as it has opened the one thing it exists
-    // for, which for a policy job is two things (below).
-    const jobKey = rec.key;
-    rec.key = null;
     // EACH JOB ONLY UNDER ITS OWN BINDING, and no purpose this machine does
     // not know taken for a whole setup. Under the reconnect's or the policy
     // change's name the phone asked for that and nothing else, so anything
