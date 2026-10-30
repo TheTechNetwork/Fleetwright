@@ -23,7 +23,7 @@ import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -7845,6 +7845,76 @@ function takesSessions(host, requester, entry) {
   return mayActFor(entry, whose) && runsSessionsFor(entry, requester);
 }
 
+/** How many pinned admins a box's health may list. A box pins a few people; more is not a box's word. */
+const MAX_PINNED = 64;
+
+/**
+ * Who a box pins as its admins (`health.admins`, src/fleet/host/pinned-admins.js),
+ * as this person may see it, or undefined for a field that is not the shape a
+ * box sends.
+ *
+ * THE ADDRESSES ARE PEOPLE'S, so the list goes only to whoever already sees
+ * everybody (the admin, and the break-glass token) and to somebody on it, who
+ * administers the box with the others. Anybody else is told how many, and
+ * that they are not one: enough for a phone to draw Update and Reboot only
+ * where the box will take them from this person (C-2), and no list of whom
+ * to ask.
+ *
+ * `count` and `you` are null when the box said it cannot read its record,
+ * which is cannot tell (C-5): it refuses those verbs from everybody until it
+ * can, and `problem` says so. `left` is said when the box pins somebody and
+ * takes those verbs from nobody: every admin it pins left the fleet, none of
+ * them can sign, or it cannot check a signature at all (`stranded`).
+ *
+ * BOTH SENTENCES ARE THIS FILE'S, never the box's (intents.js
+ * PIN_SENTENCES). They go to everybody who sees the box, people not shown the
+ * addresses included, so a box's own text there would be a way to put an
+ * address, or anything else, in front of all of them. The box sends a code;
+ * one it does not name, or no code beside its own sentence, reads as `left`.
+ *
+ * `stranded` goes with `left`, and only ever as one of the three codes this
+ * file names, never as the box sent it. A phone reads it for one thing: on
+ * `unchecked` the box can check nobody's signature, so it refuses even a
+ * person's restore of their own work, and the phone does not draw Restore.
+ *
+ * @param {unknown} admins
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @returns {{ count: number|null, you: boolean|null, pinned?: string[], left?: string, stranded?: 'left'|'unlisted'|'unchecked', problem?: string }|undefined}
+ */
+export function adminsSeenBy(admins, requester) {
+  if (!admins || typeof admins !== 'object' || Array.isArray(admins)) return undefined;
+  const a = /** @type {Record<string, unknown>} */ (admins);
+  const raw = a.pinned;
+  /** @type {string[]|null} */
+  let pinned = null;
+  if (Array.isArray(raw)) {
+    if (raw.length > MAX_PINNED || !raw.every((e) => typeof e === 'string' && e.length <= 254 && emailOf(e))) return undefined;
+    pinned = [...new Set(raw.map((e) => /** @type {string} */ (emailOf(e))))];
+  } else if (raw !== null) {
+    return undefined;
+  }
+  const said = (/** @type {unknown} */ v) => typeof v === 'string' && v.length > 0;
+  // ANY CODE AT ALL IS STRANDED. One this file does not name, from a newer box
+  // or a broken one, still means the box takes those verbs from nobody, and
+  // read as nothing it drew controls the box refuses; it reads as `left`.
+  /** @type {'left'|'unlisted'|'unchecked'|null} */
+  const code = said(a.stranded) || said(a.left)
+    ? (['unlisted', 'unchecked'].includes(/** @type {string} */ (a.stranded)) ? /** @type {'unlisted'|'unchecked'} */ (a.stranded) : 'left')
+    : null;
+  const left = pinned && pinned.length > 0 && code ? PIN_SENTENCES[code] : null;
+  const problem = pinned === null ? PIN_SENTENCES.unreadable : null;
+  const email = emailOf(requester?.email ?? '');
+  const you = pinned ? Boolean(email) && pinned.includes(/** @type {string} */ (email)) : null;
+  const sees = !requester || Boolean(requester.admin) || you === true;
+  return {
+    count: pinned ? pinned.length : null,
+    you,
+    ...(sees && pinned ? { pinned } : {}),
+    ...(left && code ? { left, stranded: code } : {}),
+    ...(problem ? { problem } : {}),
+  };
+}
+
 /**
  * One host, with everything private to somebody else removed.
  *
@@ -7853,6 +7923,10 @@ function takesSessions(host, requester, entry) {
  * with it — a list of names somebody cannot act on is an existence oracle
  * wearing a convenience.
  *
+ * Its pinned admins are shaped for everybody, the admin included, because
+ * whether the asker is one of them (`you`) is the part a phone draws from
+ * (adminsSeenBy).
+ *
  * @param {any} host
  * @param {{ email?: string|null, admin?: boolean }|null} requester
  * @param {{ actsFor?: string|null }|null|undefined} entry  the host's registry
@@ -7860,6 +7934,11 @@ function takesSessions(host, requester, entry) {
  *   Without one no pool entry is believed.
  */
 function visibleHost(host, requester, entry) {
+  if (host?.health && 'admins' in host.health) {
+    const { admins, ...rest } = host.health;
+    const seen = adminsSeenBy(admins, requester);
+    host = { ...host, health: seen ? { ...rest, admins: seen } : rest };
+  }
   if (!requester || requester.admin || !host) return host;
   // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only
   // when it is theirs, as /api/hosts/enrolled already did (enrolledHostsFor).
