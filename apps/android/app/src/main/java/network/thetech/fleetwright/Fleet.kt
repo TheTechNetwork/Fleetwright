@@ -592,6 +592,19 @@ class Fleet(
          */
         val houseRules: Int? = null,
         /**
+         * What a session started here with no mode does: "asks" before each
+         * tool, or runs with permissions "bypassed" (FLEETWRIGHT_SKIP_PERMISSIONS
+         * on the box, http.js #hostFacts). New session labels its "Box default"
+         * choice from this, and offers "Permissions bypassed" only where every
+         * machine it could land on says "bypassed", because a box that asks
+         * refuses a start from the fleet that asks to bypass (commands.js
+         * permissionCeiling), and null may be a box that asks.
+         *
+         * NULL IS CANNOT TELL: a box too old to say, and then the sheet says
+         * nothing about which way the default goes.
+         */
+        val permissions: String? = null,
+        /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
          * send it, and null from a host that could not find out.
@@ -3070,6 +3083,9 @@ class Fleet(
                     // collapse this field exists to prevent — "no file" drawn
                     // as "a file that is not in use".
                     houseRules = health?.takeIf { it.has("houseRules") && !it.isNull("houseRules") }?.optInt("houseRules"),
+                    // Only the two words the host uses; a missing field, and
+                    // the "null" optString makes of a JSON null, stay null.
+                    permissions = health?.optString("permissions")?.takeIf { it == "asks" || it == "bypassed" },
                     // `has` first, for the same reason as appPending: a
                     // coordinator too old to say is not one that said no.
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
