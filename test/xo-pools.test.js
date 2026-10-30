@@ -45,7 +45,7 @@ const record = (extra = {}) => JSON.stringify({ v: 1, address: 'xo.lan', pin: PI
  * `outside` names the objects in no set of the fleet's: what somebody else
  * made or was given, which Xen Orchestra shows the limited user all the same.
  *
- * @param {{ objects?: any[], fail?: Record<string, string>, stats?: Record<string, any>, methods?: string[], outside?: string[] }} [opts]
+ * @param {{ objects?: any[], fail?: Record<string, string|string[]>, stats?: Record<string, any>, methods?: string[], outside?: string[] }} [opts]
  */
 function xo({ objects = [], fail = {}, stats = {}, methods, outside = [] } = {}) {
   /** @type {Array<{ method: string, params: any }>} */
@@ -56,7 +56,11 @@ function xo({ objects = [], fail = {}, stats = {}, methods, outside = [] } = {})
     closed: false,
     async call(/** @type {string} */ method, /** @type {any} */ params = {}) {
       calls.push({ method, params });
-      if (fail[method]) throw new Error(fail[method]);
+      // `fail[method]` is why every call of it fails; a list is why each of
+      // the next calls fails in turn, and the calls after the list succeed,
+      // as a start that fails once does.
+      const why = Array.isArray(fail[method]) ? fail[method].shift() : fail[method];
+      if (why) throw new Error(why);
       // `vm.restart:clean` refuses only the clean one, as a machine without
       // its guest agent does.
       if (params?.force === false && fail[`${method}:clean`]) throw new Error(fail[`${method}:clean`]);
@@ -520,13 +524,13 @@ test('a pool that will not say what one machine did is cannot tell for that one,
 /**
  * A pool with one machine of Eli's on it, made `age` minutes ago and running
  * for `left` more, with its guest agent unless `agent` is false.
- * @param {{ age?: number, left?: number, state?: string, fail?: Record<string, string>, owner?: string, tags?: string[], agent?: boolean }} [o]
+ * @param {{ age?: number, left?: number, state?: string, fail?: Record<string, string|string[]>, owner?: string, tags?: string[], agent?: boolean }} [o]
  */
 function withMachine({ age = 10, left = 20, state = 'Running', fail = {}, owner = ELI, tags = [], agent = true } = {}) {
   const now = Date.parse('2026-10-06T12:00:00Z');
   const s = Math.floor(now / 1000);
   const vm = {
-    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: state, managementAgentDetected: agent,
+    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: state, managementAgentDetected: agent, CPUs: { number: 2 }, memory: { size: 4 * 1024 ** 3 },
     tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + left * 60}`, `fleetwright-made:${s - age * 60}`, `fleetwright-for:${owner}`, ...tags],
   };
   const stand = xo({ objects: [pool, image, vm], fail });
@@ -598,14 +602,15 @@ test('a machine is given longer up to its longest life from when it was made, an
 
 test('a resize stops the machine marked busy so the sweep leaves it, and starts it again whatever the pool said', async () => {
   let m = withMachine();
+  const busyTag = `fleetwright-busy:${m.s}`;
   const r = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', cpus: 4, memory: 8 });
   assert.equal(r.ok, true, r.text);
   assert.deepEqual(m.asked().slice(0, 5), [
-    ['tag.add', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+    ['tag.add', { id: 'vm-uuid', tag: busyTag }],
     ['vm.stop', { id: 'vm-uuid', force: false }],
     ['vm.set', { id: 'vm-uuid', CPUs: 4, memory: 8 * 1024 ** 3 }],
     ['vm.start', { id: 'vm-uuid' }],
-    ['tag.remove', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+    ['tag.remove', { id: 'vm-uuid', tag: busyTag }],
   ]);
   assert.match(r.text, /4 vCPUs and 8 GiB/);
 
@@ -614,12 +619,93 @@ test('a resize stops the machine marked busy so the sweep leaves it, and starts 
   assert.equal(refused.ok, false);
   assert.match(refused.text, /old size.*limit exceeded/);
   assert.ok(m.asked().some(([method]) => method === 'vm.start'), 'not left stopped');
-  assert.ok(m.asked().some(([method, p]) => method === 'tag.remove' && p.tag === 'fleetwright-busy'), 'not left marked busy');
+  assert.ok(m.asked().some(([method, p]) => method === 'tag.remove' && p.tag === busyTag), 'not left marked busy');
+});
 
-  // Busy is left alone by the sweep, though stopped.
-  const busy = withMachine({ state: 'Halted', tags: ['fleetwright-busy'] });
-  await busy.pools.refresh();
-  assert.ok(!busy.asked().some(([method]) => method === 'vm.delete'));
+test('a resize whose restart fails puts the old size back and starts again; failing that too, the machine is left stopped, marked, and said so', async () => {
+  // THE CHANGE TOOK AND THE MACHINE WOULD NOT START WITH IT (no host has
+  // that much memory free): the old size goes back and it is started again.
+  // This used to fall through to the sweep, which took the stop for done and
+  // removed the machine with its disk.
+  let m = withMachine({ fail: { 'vm.start': ['HOST_NOT_ENOUGH_FREE_MEMORY'] } });
+  const busyTag = `fleetwright-busy:${m.s}`;
+  const back = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', memory: 64 });
+  assert.equal(back.ok, false);
+  assert.match(back.text, /restarted at its old size.*HOST_NOT_ENOUGH_FREE_MEMORY/);
+  assert.deepEqual(m.asked().slice(2), [
+    ['vm.set', { id: 'vm-uuid', memory: 64 * 1024 ** 3 }],
+    ['vm.start', { id: 'vm-uuid' }],
+    ['vm.set', { id: 'vm-uuid', memory: 4 * 1024 ** 3 }],
+    ['vm.start', { id: 'vm-uuid' }],
+    ['tag.remove', { id: 'vm-uuid', tag: busyTag }],
+  ]);
+
+  // NOR AT ITS OLD SIZE: left stopped and still marked busy, so the sweep
+  // leaves it, and the person is told the state it is in.
+  m = withMachine({ fail: { 'vm.start': 'HOST_NOT_ENOUGH_FREE_MEMORY' } });
+  const stuck = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', memory: 64 });
+  assert.equal(stuck.ok, false);
+  assert.match(stuck.text, /^vm-111111111111 is stopped: it would not start with 64 GiB \(HOST_NOT_ENOUGH_FREE_MEMORY\), nor at its old size .*It was not removed/);
+  assert.ok(!m.asked().some(([method, p]) => method === 'tag.remove' && String(p.tag).startsWith('fleetwright-busy')), 'kept marked busy');
+});
+
+test('busy holds the sweep off for half an hour from the time in the mark, and no longer: a mark left behind is not a machine kept for ever', async () => {
+  // A sidecar that died between marking and unmarking left the bare tag on,
+  // and the machine with it: stopped, never swept, never started.
+  const S = Math.floor(Date.parse('2026-10-06T12:00:00Z') / 1000);
+  const fresh = withMachine({ state: 'Halted', left: -5, tags: [`fleetwright-busy:${S - 60}`] });
+  await fresh.pools.refresh();
+  assert.deepEqual(fresh.asked(), [], 'marked a minute ago: left as it is');
+
+  // A BARE MARK, from a box older than the time in it: dated from now, so
+  // it runs out like the rest, and honoured this pass.
+  const bare = withMachine({ state: 'Halted', left: -5, tags: ['fleetwright-busy'] });
+  await bare.pools.refresh();
+  assert.deepEqual(bare.asked(), [
+    ['tag.add', { id: 'vm-uuid', tag: `fleetwright-busy:${S}` }],
+    ['tag.remove', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+  ]);
+
+  // OLDER THAN A RESIZE TAKES: the mark comes off and the machine is swept
+  // by the rules, here stopped past its end.
+  const stale = withMachine({ state: 'Halted', left: -5, tags: [`fleetwright-busy:${S - 31 * 60}`] });
+  await stale.pools.refresh();
+  assert.deepEqual(stale.asked(), [
+    ['tag.remove', { id: 'vm-uuid', tag: `fleetwright-busy:${S - 31 * 60}` }],
+    ['vm.delete', { id: 'vm-uuid', deleteDisks: true }],
+  ]);
+});
+
+test('a stopped machine is removed only once it is old enough to have booted and past its end; stopped before its end, it is started again, once', async () => {
+  // vm.create clones and tags a machine before it boots, so a box looking
+  // in that window took it for a stopped one and removed it, disk and all,
+  // before it ran once; and a host reboot or an evacuation stops a machine
+  // mid-session, which went the same way, the session's work with it.
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const s = Math.floor(now / 1000);
+  /** @param {string} id @param {string} state @param {{ age: number, left: number, tags?: string[] }} o */
+  const vm = (id, state, { age, left, tags = [] }) => ({
+    type: 'VM', id, name_label: `vm-${id}`, power_state: state,
+    tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + left * 60}`, `fleetwright-made:${s - age * 60}`, `fleetwright-for:${ELI}`, ...tags],
+  });
+  const stand = xo({
+    objects: [
+      pool, image,
+      vm('young', 'Halted', { age: 1, left: 59 }),
+      vm('stopped', 'Halted', { age: 30, left: 30 }),
+      vm('twice', 'Halted', { age: 30, left: 30, tags: [`fleetwright-restarted:${s - 120}`] }),
+      vm('done', 'Halted', { age: 70, left: -10 }),
+      vm('overdue', 'Running', { age: 80, left: -20 }),
+    ],
+  });
+  const pools = holder(stand, () => now);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  const did = (/** @type {string} */ method) => stand.calls.filter((c) => c.method === method).map((c) => c.params.id);
+  assert.deepEqual(did('vm.delete'), ['done', 'overdue'], 'stopped past its end, or running past it: never one still booting, or stopped before its end');
+  assert.deepEqual(did('vm.stop'), ['overdue'], 'the running case as it was');
+  assert.deepEqual(did('vm.start'), ['stopped'], 'stopped before its end: started again, and not a second time');
+  assert.deepEqual(stand.calls.filter((c) => c.method === 'tag.add').map((c) => [c.params.id, c.params.tag]), [['stopped', `fleetwright-restarted:${s}`]]);
 });
 
 test('a machine is given its owner’s SSH keys and sudo when they keep some, and nothing when they do not', () => {
