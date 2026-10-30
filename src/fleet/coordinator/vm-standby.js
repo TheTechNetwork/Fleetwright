@@ -24,6 +24,20 @@
 // joined used to be forgotten in silence: the count went from "1 being made"
 // to "0 being made" and nothing said that it had failed, so a person looking
 // at the screen an hour later was told nothing was happening and not why.
+//
+// COUNTED UNTIL IT IS GONE, NOT UNTIL IT IS UNWELL. An enrolled machine used
+// to be forgotten the moment it could not take a session, and the count was
+// taken on every phone poll. A machine enrols at its HTTP POST, before its
+// socket is up, reports "unknown" for its first frames and "degraded" for as
+// long as the fleet holds no Claude login for it (registry.js), so the one
+// being kept fell out of the count while it ran on for its whole 350 minutes,
+// the next top-up made another, and Keep fewer could not end one it had
+// forgotten: two, three, four machines on a real pool for one kept ready.
+// Whether a machine can be CLAIMED (`claim`) and whether it is still COUNTED
+// (`tally`) are two questions now. One not yet fit for a session is "being
+// made"; what forgets it is only that it is gone (revoked, no longer the
+// person's, or past its end by the pool's last look), which the coordinator
+// decides, because it is the one that knows.
 
 /** The most machines one person may keep ready. Each costs a VM's worth of the pool, all the time. */
 export const MAX_READY = 3;
@@ -130,15 +144,17 @@ export class VmStandby {
 
   /**
    * When the oldest of this person's still being made was asked for, or null
-   * when none is. What "being made" is measured from on the phone.
+   * when none is. What "being made" is measured from on the phone. Being made
+   * is what `tally` counts as starting: not enrolled, or enrolled and not yet
+   * one `ready` accepts.
    *
-   * @param {string} owner
+   * @param {string} owner @param {(hostId: string) => boolean} [ready]
    */
-  makingSince(owner) {
+  makingSince(owner, ready = () => true) {
     const wish = this.wishes.get(owner);
-    const at = [...this.machines.values()]
-      .filter((m) => m.owner === owner && !m.enrolled && (!wish || (m.template === wish.template && m.network === wish.network)))
-      .map((m) => m.at);
+    const at = [...this.machines.entries()]
+      .filter(([id, m]) => m.owner === owner && !(m.enrolled && ready(id)) && (!wish || (m.template === wish.template && m.network === wish.network)))
+      .map(([, m]) => m.at);
     return at.length ? Math.min(...at) : null;
   }
 
@@ -149,18 +165,24 @@ export class VmStandby {
 
   /**
    * How many of this person's are ready and how many are being made, after
-   * forgetting the ones that are gone: an enrolled machine no longer live, or
-   * one asked for and never enrolled.
+   * forgetting the ones that are gone: one asked for and never enrolled, or
+   * an enrolled one `gone` says is no longer in the fleet.
    *
-   * @param {string} owner @param {(hostId: string) => boolean} isReady
+   * `ready` only sorts the ones kept into ready and starting; it never
+   * forgets one (the header says what it cost when it did). An enrolled
+   * machine that is not ready yet, or not any more, is starting: it exists,
+   * it is this person's, and it is what Keep fewer would end.
+   *
+   * @param {string} owner
+   * @param {{ gone: (hostId: string) => boolean, ready: (hostId: string) => boolean }} by
    */
-  tally(owner, isReady) {
-    let ready = 0;
+  tally(owner, { gone, ready }) {
+    let nReady = 0;
     let starting = 0;
     const wish = this.wishes.get(owner);
     for (const [id, m] of [...this.machines.entries()]) {
       if (m.owner !== owner) continue;
-      if (m.enrolled ? !isReady(id) : this.now() - m.at > PENDING_MS) {
+      if (m.enrolled ? gone(id) : this.now() - m.at > PENDING_MS) {
         this.machines.delete(id);
         if (!m.enrolled) {
           this.noteFailed(
@@ -172,10 +194,10 @@ export class VmStandby {
         continue;
       }
       if (wish && (m.template !== wish.template || m.network !== wish.network)) continue;
-      if (m.enrolled) ready++;
+      if (m.enrolled && ready(id)) nReady++;
       else starting++;
     }
-    return { ready, starting };
+    return { ready: nReady, starting };
   }
 
   /**

@@ -7163,6 +7163,11 @@ export class CoordinatorCore {
    * long still to run by its pool's last look (a machine whose end was not
    * reported is taken; the box sweeps it at its end either way).
    *
+   * THIS DECIDES WHO IS CLAIMED, NOT WHO IS COUNTED. It was also what
+   * `tally` forgot a machine by, and a kept machine is not healthy for a
+   * while after it enrols (vm-standby.js says what that cost); what forgets
+   * one is #standbyGone.
+   *
    * @param {string} owner @param {number} [minutes]
    * @returns {(hostId: string) => boolean}
    */
@@ -7176,6 +7181,33 @@ export class CoordinatorCore {
       const until = ends.get(hostId);
       return typeof until !== 'number' || until - this.now() >= minutes * 60_000;
     };
+  }
+
+  /**
+   * Whether an enrolled kept machine is no longer in the fleet, which is the
+   * only thing that forgets one: its enrolment revoked or gone (a box's
+   * goodbye and retireStranded both revoke a temporary host, the latter ten
+   * minutes after it was last connected, so a machine that dropped and may
+   * dial back is still counted), no longer this person's, or past its end
+   * by its pool's last look. Not connected, not healthy: still counted, as
+   * starting.
+   *
+   * @param {string} owner
+   * @returns {(hostId: string) => boolean}
+   */
+  #standbyGone(owner) {
+    const ends = new Map(this.vmMachinesFor({ email: owner }).map((m) => [m.name, m.until]));
+    return (hostId) => {
+      const enrolled = this.hostIds.get(hostId);
+      if (!enrolled || enrolled.revokedAt || String(enrolled.owner || '').toLowerCase() !== owner) return true;
+      const until = ends.get(hostId);
+      return typeof until === 'number' && until <= this.now();
+    };
+  }
+
+  /** Both questions `tally` asks about a kept machine, for one owner. @param {string} owner */
+  #standbyBy(owner) {
+    return { gone: this.#standbyGone(owner), ready: this.#standbyReady(owner) };
   }
 
   /**
@@ -7227,10 +7259,11 @@ export class CoordinatorCore {
     const owner = String(requester?.email || '').toLowerCase();
     const wish = owner ? this.vmStandby.wishFor(owner) : null;
     if (!wish) return null;
-    const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+    const by = this.#standbyBy(owner);
+    const { ready, starting } = this.vmStandby.tally(owner, by);
     // WHEN THE ONE BEING MADE WAS ASKED FOR, and why the last did not come:
     // "0 being made" said nothing about a machine that had just failed.
-    const since = this.vmStandby.makingSince(owner);
+    const since = this.vmStandby.makingSince(owner, by.ready);
     const failed = this.vmStandby.failureFor(owner);
     return { template: wish.template, count: wish.count, network: wish.network, ready, starting, ...(since === null ? {} : { since }), ...(failed ? { failed } : {}) };
   }
@@ -7345,7 +7378,7 @@ export class CoordinatorCore {
       // Keep button and a health frame, on a real pool) both found none
       // being made and asked for one each.
       if (this.#toppingUp.has(owner)) continue;
-      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyBy(owner));
       if (ready + starting >= wish.count) continue;
       this.#toppingUp.add(owner);
       try {
