@@ -27,8 +27,19 @@ const SHARED = [
   'Drop what the threat rules match',
   'On: Suricata drops it, and while it cannot inspect, nothing leaves.',
   'Off: Suricata logs it by machine and lets it through.',
-  ' Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up.',
 ];
+
+/**
+ * What the rebuild costs, as the box says it now that the new router is
+ * built beside the old one (ONE_BOOT in src/fleet/host/edge-router.js): the
+ * way out is gone for one boot, not for the whole build. iOS says so;
+ * Android still says the old sentence and is the next layer up
+ * (CONTRIBUTING.md), where this goes back into SHARED.
+ */
+const REBUILD = {
+  ios: ' Apply rebuilds the edge router to change this: machines behind it keep their way out while the new one is built, and have none while it starts.',
+  android: ' Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up.',
+};
 
 test('offered only by a machine whose `can` says so, and only with the router asked for', () => {
   assert.ok(HOST.includes("'edge-block'"), 'the machine does not say it can');
@@ -54,4 +65,7 @@ test('both phones say it in the same words', () => {
     assert.ok(I_FORM.includes(words), `iOS: ${words}`);
     assert.ok(A_FORM.includes(words), `Android: ${words}`);
   }
+  assert.ok(I_FORM.includes(REBUILD.ios), 'iOS: the rebuild still says the way out is gone for the whole build');
+  assert.ok(!I_FORM.includes('no way out until the new one is up'), 'iOS: the old sentence is still there');
+  assert.ok(A_FORM.includes(REBUILD.android), 'Android: the rebuild');
 });
