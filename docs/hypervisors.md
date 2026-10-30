@@ -1277,7 +1277,15 @@ torn down, and what was made is removed: the VM with its disk, the disk on
 its own, or a partial disk an upload left (attached to nothing, named for
 the router, on the storage it was going to; nothing else of that name is
 touched). The policy itself was already applied by then, and the job says
-so rather than that nothing changed.
+so rather than that nothing changed. One cancel is one signal for the whole
+job, handed to every build and every wait, so a cancel that lands between
+two images, or during a build that was ignoring it, does not let the next
+build start on a fresh signal and the job end `done` with "Stopping" the
+last thing on the screen. A cancelled policy job ends `cancelled`: during a
+build, with what that build undid; between two, naming what was built before
+it and that nothing more was started; as its last thing finished, saying so.
+The build's own last sentences still reach the screen after the cancel; its
+bar does not.
 
 A failure part-way deletes what it made. A pool with more than one host keeps
 labs on the edge's host, because a network with no interface is host-local
@@ -1612,8 +1620,17 @@ owner's: `xoprobe`, then `xosetup` on the machine the person picks.
    user (a password nobody sees) → its resource set (half of the pool's
    vCPUs, memory and default storage) → a token, minted signed in as that
    user for 180 days (under the half a year Xen Orchestra allows out of the
-   box; a server capped lower gives its own default) → updates → hand-off,
-   sealing the token back to the phone and keeping nothing.
+   box; a server capped lower gives its own default), **and the user's
+   earlier tokens removed**: `token.deleteAll`, asked as that user for all
+   but the one just made, so a setup run again for a lost phone closes the
+   token that phone held, which used to stay good for its 180 days. A Xen
+   Orchestra that does not list the method, or refuses it, still gets its
+   token, and the summary says the earlier ones stayed and why, never that
+   they went → updates, the one step that cannot stop the job: a failure
+   there is a warning the summary carries, with the token made all the same,
+   and whether Xen Orchestra updates itself is left to its own plugin page
+   to say → hand-off, sealing the token back to the phone and keeping
+   nothing.
 5. **Updates** come from [XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater)'s
    own `installer-updates` plugin when the pool has it: loaded, kept loaded,
    and set to update itself daily unless a person had switched that off, in
@@ -1770,9 +1787,12 @@ new password for Xen Orchestra's admin. In order:
 8. **The default admin password replaced** (`admin`). The installer leaves
    `admin@admin.net` / `admin`, and anybody on that network can sign in with it
    until it changes. The moment the script says Xen Orchestra is up, the
-   machine signs in with the default and sets the person's password. If the
-   default no longer works, somebody signed in first, and the job stops saying
-   so rather than going on. The admin stays `admin@admin.net`.
+   machine signs in with the default and sets the person's password. If Xen
+   Orchestra refuses the default (invalid credentials, and only that),
+   somebody signed in first, and the job stops saying so rather than going
+   on; a sign-in that times out or drops says the machine could not sign in
+   and why, and that the default stands unless somebody changed it. The
+   admin stays `admin@admin.net`.
 9. **Onboarding's own steps**, against the new Xen Orchestra, signing in with
    the new password, which is the proof it took. The hand-off record names the
    Xen Orchestra's address, with `poolMaster` beside it; the phone opens it
@@ -1798,8 +1818,12 @@ password stays locked. Xen Orchestra is how the VM is managed.
 **Cancel** stops the script where it is. Before the installer ran, nothing was
 made. While it ran, the script removes what it made if it is stopped before its
 VM starts and keeps the VM after, and the job says what to look for on the pool
-rather than claiming either. A failed install keeps its VM, as the script does,
-and the job names it.
+rather than claiming either. Once the installer has finished, every cancel,
+wherever it lands, says where Xen Orchestra is and which password it has:
+replaced with the one chosen, asked to be and not answered (the one case the
+job cannot settle, said as that), or still the default, with anybody on the
+network able to sign in until it is changed. A failed install keeps its VM, as
+the script does, and the job names it.
 
 **What it needs.** The machine needs the tools above, so a Mac needs GNU
 `getopt` (`brew install gnu-getopt`, first on PATH). The pool master downloads
