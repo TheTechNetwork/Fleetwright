@@ -188,6 +188,16 @@ export async function renewClaudeSignIn(oauth, { fetchImpl, now }) {
 }
 
 /**
+ * Whether two sealed values are the same sealing: seal() draws a fresh key and
+ * IV each time, so equal ciphertext is the same write.
+ *
+ * @param {any} a @param {any} b
+ */
+function sameSealed(a, b) {
+  return Boolean(a && b) && a.epk === b.epk && a.iv === b.iv && a.ct === b.ct;
+}
+
+/**
  * @typedef {object} HeldClaude
  * @property {'token'|'login'} kind
  * @property {string} bearer     what a session authenticates with: the setup-token, or the access token
@@ -251,8 +261,14 @@ export async function freshClaude(store, key, userId, io) {
       oauth = r.oauth;
       note.until = Number(oauth.expiresAt);
       if (oauth.refreshTokenExpiresAt) note.refreshUntil = Number(oauth.refreshTokenExpiresAt);
+      // THE SAME ROW BY WHAT IT HOLDS, not by being the same object: a
+      // Durable Object's storage gives a copy on every read, so the row read
+      // again is never the object read first. Compared that way, every
+      // renewal looked like one a deposit overtook, was not written back, and
+      // the sign-in died at the next renewal with "Refresh token not found
+      // or invalid", ten to twenty minutes after it was kept.
       const now = await store.get(`gh:${userId}`);
-      if (now && Number(now.at) === Number(row.at) && now.sealed === row.sealed) {
+      if (now && Number(now.at) === Number(row.at) && sameSealed(now.sealed, row.sealed)) {
         await store.put(`gh:${userId}`, { ...row, sealed: await seal({ to: key.publicKey, aad: atRestAad(userId), payload: { oauth, account } }) });
       } else {
         note.dropped = true;

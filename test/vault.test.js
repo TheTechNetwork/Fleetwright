@@ -11,11 +11,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
+import { newDepositKey, newSealKey, seal, open, atRestAad, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
-import { describeRenewals, renewalVerdict, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
+import { describeRenewals, renewalVerdict, freshClaude, claudeRenewals as renewalsKept, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
 import { USAGE_URL } from '../src/core/usage.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,8 +60,11 @@ async function minter(extra = {}) {
     FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: 'cf-secret',
     ...extra,
   };
+  // A COPY ON EVERY READ, as a Durable Object's storage gives: the same row
+  // read twice is two objects, so nothing here can compare rows by reference.
+  // The renewal did, and every renewal looked like one a deposit overtook.
   const storage = {
-    get: async (/** @type {string} */ k) => rows.get(k),
+    get: async (/** @type {string} */ k) => structuredClone(rows.get(k)),
     put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); },
     // As a Durable Object's storage lists, in key order.
     list: async (/** @type {{ prefix: string }} */ o) => new Map([...rows.entries()].filter(([k]) => k.startsWith(o.prefix)).sort(([a], [b]) => (a < b ? -1 : 1))),
@@ -1571,6 +1574,48 @@ test('the phone is told what the record says ended a sign-in, and a renewal this
   assert.equal(unsaid.title, 'Your Claude sign-in stopped working');
   assert.match(unsaid.body, /^Claude refused to renew it at 02:00 UTC\. Sessions cannot start with it\./);
   assert.ok(core.events.some((e) => e.event === 'claude.ended' && /cut off before its answer was kept/.test(e.text)), 'the event says the same');
+});
+
+// THE WRITE-BACK GUARD, on storage that gives a copy on every read, as a
+// Durable Object's does. Compared by reference, the row read again was never
+// the row read first, so every renewal was thrown away as overtaken and the
+// sign-in died at the next one: "Refresh token not found or invalid", ten to
+// twenty minutes after it was kept. Reported from a phone, twice in a day.
+test('a renewal is written back unless a new sign-in was kept while it was asked for', async () => {
+  const key = await newSealKey();
+  const rows = new Map();
+  const store = {
+    get: async (/** @type {string} */ k) => structuredClone(rows.get(k)),
+    put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); },
+  };
+  const now = Date.now();
+  /** @param {string} refresh @param {number} at */
+  const keep = async (refresh, at) => rows.set('gh:7', {
+    at, login: 'eli', kind: 'login',
+    sealed: await seal({ to: key.publicKey, aad: atRestAad('7'), payload: { oauth: { accessToken: 'sk-ant-oat01-old', refreshToken: refresh, expiresAt: now + 60_000, scopes: ['user:inference'] }, account: {} } }),
+  });
+  const kept = async () => (await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad('7'), sealed: rows.get('gh:7').sealed })).oauth;
+  /** @type {(() => Promise<void>)|null} */
+  let during = null;
+  const fetchImpl = /** @type {any} */ (async () => {
+    if (during) await during();
+    return new Response(JSON.stringify({ access_token: 'sk-ant-oat01-new', refresh_token: 'sk-ant-ort01-rotated', expires_in: 28_800 }), { status: 200 });
+  });
+
+  // NOTHING KEPT MEANWHILE: the rotated refresh token is what the row holds.
+  await keep('sk-ant-ort01-first', now - 1000);
+  const first = await freshClaude(store, key, '7', { fetchImpl, now: () => now, force: true });
+  assert.equal(first.held?.bearer, 'sk-ant-oat01-new');
+  assert.equal((await kept()).refreshToken, 'sk-ant-ort01-rotated', 'the renewal was not written back, so its refresh token was lost');
+  assert.equal((await renewalsKept(store, '7', now - 1000)).at(-1)?.dropped, undefined);
+
+  // A NEW SIGN-IN KEPT WHILE CLAUDE WAS ASKED: it stands, and the renewal is
+  // noted as the one that was not kept.
+  await keep('sk-ant-ort01-second', now - 500);
+  during = async () => { during = null; await keep('sk-ant-ort01-deposited', now); };
+  await freshClaude(store, key, '7', { fetchImpl, now: () => now, force: true });
+  assert.equal((await kept()).refreshToken, 'sk-ant-ort01-deposited', 'a renewal overwrote a sign-in kept while it was asked for');
+  assert.equal((await renewalsKept(store, '7', now - 500)).at(-1)?.dropped, true);
 });
 
 test('a refresh token that runs out before its access token is renewed before it does, and its lifetime is kept', async (t) => {
