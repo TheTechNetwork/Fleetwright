@@ -956,6 +956,22 @@ struct SessionKindsView: View {
                         TextField("Title prefix (optional)", text: $kind.titlePrefix)
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
+                        // HOW A START OF THIS KIND RUNS. Box default saves no
+                        // mode, so the machine's own setting decides; prompts
+                        // on asks for them wherever it starts. Bypassing is
+                        // not offered here: a spoken start has no screen to
+                        // show the machine's setting on, and a machine set to
+                        // ask refuses it. A kind saved with it before still
+                        // shows it, so what it holds is never drawn as
+                        // something else (C-5).
+                        Picker("Permissions", selection: $kind.mode) {
+                            Text("Box default").tag(String?.none)
+                            Text("Permission prompts on").tag(String?.some("safe"))
+                            if kind.mode == "dangerous" {
+                                Text("Permissions bypassed").tag(String?.some("dangerous"))
+                            }
+                        }
+                        .fleetType(.label)
                         // Only when the fleet has answered with something. A
                         // picker whose only entry is "Nothing" is furniture,
                         // and on a fleet with no profiles it would be furniture
@@ -998,7 +1014,10 @@ struct SessionKindsView: View {
                 Say "start a dev session on my fleet". A new word can take a moment before \
                 Siri recognises it. A prefix groups sessions in the list: "dev: refactor auth". \
                 A task makes the word do something: spoken, that is the only way a session gets \
-                one, because there is no screen to drive it from afterwards.
+                one, because there is no screen to drive it from afterwards. \
+                Box default leaves permissions to the machine. Permission prompts on asks before \
+                each tool wherever it starts. Bypassing them is chosen on New session, where each \
+                machine's setting is shown.
                 """)
             }
         }
