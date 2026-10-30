@@ -189,7 +189,9 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
         const refuse = (message, code = 1, data = undefined) => socket.write(frame(0x1, Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code, message, ...(data ? { data } : {}) } })), { mask: false }));
         const p = msg.params || {};
         const server = servers?.find((s) => s.id === p.id);
-        on[msg.method]?.(p);
+        // ONLY A HOOK A TEST GAVE, by its own name: the method name is off the
+        // wire, and an object's inherited names (`constructor`, say) are not hooks.
+        if (Object.hasOwn(on, msg.method)) on[msg.method](p);
         // A METHOD THE SERVER LISTS AND REFUSES, in the words a test gave it:
         // what a limited user gets for a call above its station, say.
         if (Object.hasOwn(refused, msg.method)) {
