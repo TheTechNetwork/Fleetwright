@@ -768,9 +768,13 @@ for nothing.
   `10.250.<n>.1/24` and its DHCP handing out `.100` to `.250`. The rules are
   written into the edge's configuration with the uplink's, so nothing in the
   fleet can change them, and changing the labs rebuilds the edge the way
-  blocking mode does: stopped, a new one built beside it, the old one removed
-  only once the new one is up, and how it filters kept as it was. The phone
-  says that before Apply.
+  blocking mode does: a new one built beside it while it runs, the old one
+  stopped only then and removed once the new one has run for two minutes,
+  and how it filters kept as it was. Machines behind it keep their way out
+  while the new one is built, and have none while it starts; the phone says
+  that before Apply. A rebuild for any other reason keeps the labs the edge
+  has, read back from its tag and its interfaces, so a block toggle or a key
+  rebuild takes no lab off it.
 - **What every lab gets**, the same three rules as the uplink: names only
   from the edge, never another resolver, so the threat blocklists apply; and nothing
   private, so not the uplink and its machines, not your LAN, not the pool's
@@ -1095,8 +1099,9 @@ changed. **Every machine behind it has no way out for those minutes.** It does
 not move to a new major release on its own.
 
 An edge built before this is **rebuilt once**, on the next Apply, because its
-configuration is fixed when it is built; the phone says so before it starts,
-and the machines behind it have no way out while it runs. A new edge is tagged
+configuration is fixed when it is built; the phone says so before it starts.
+Machines behind it keep their way out while the new one is built, and have
+none while it starts. A new edge is tagged
 `fleetwright-edge-updates`, which is how the next policy tells the two apart.
 **Not yet run** on a real pool: that the first update installs `os-xen` on the
 nano image, and that Xen Orchestra then reads the WAN address as interface 0's.
@@ -1138,10 +1143,15 @@ hands over. Going **from one to two** makes the second without starting it
 (the old router has the gateway address as its own), stops the old one,
 starts the second, and rebuilds the first beside it: the machines have no
 way out only while the second starts. If the first then fails to build, the
-second carries the machines alone and applying again finishes the pair.
-Going **back to one** removes the second and rebuilds the first on its own,
-and the machines have no way out until it is up. Before Apply, the phone
-says what going to two or back to one costs.
+second carries the machines alone, and applying again finishes the pair by
+building the first fresh beside the second, with the password the second
+carries the mark of; the old single router, if it is still there, is removed
+without being started, since started beside the second it would hold
+10.254.0.1 as its own address and hand out the whole range. Going **back to
+one** removes the second and rebuilds the first on its own while it still
+carries the machines: they keep their way out while the new one is built,
+and have none while it starts. Before Apply, the phone says what going to
+two or back to one costs.
 
 A phone that predates the switch sends nothing, and the edge is left as one
 or two as it is. Each router is tagged `fleetwright-edge-node:0` or `:1`.
@@ -1206,10 +1216,18 @@ would see the packet.
   so: *"while it cannot inspect, nothing leaves."*
 - **Changing it rebuilds the edge.** The edge has no login, so its
   configuration cannot be changed in place. An edge built the other way is
-  stopped, a new one is built beside it, and only then is the old one removed.
-  If the new one fails or is cancelled, it is removed and the old one is
-  started again, so the pool is never left with neither. The machines behind
-  it have no way out while that runs, and the screen says that before Apply.
+  replaced: a new one is built beside it while it runs, which is the slow
+  part (a download of up to 490 MB, then a disk of up to 3 GiB through Xen
+  Orchestra); then the old one is stopped, the new one started and watched in
+  Xen Orchestra for two minutes (`EDGE_SETTLE`), and only then is the old one
+  removed. A build that fails leaves the old one untouched; a new one that
+  stops again while it is watched, or is cancelled, is removed and the old
+  one started again, so the pool is never left with neither. Machines behind
+  it keep their way out while the new one is built, and have none while it
+  starts, and the screen says that before Apply. What the watch cannot tell
+  is whether the new router answers: it has no guest agent until its first
+  daily update, so running for the whole watch is said as not knowing, and
+  an address, when the agent is there, as the agent answering and no more.
   The edge is tagged `fleetwright-edge-blocks` when it drops, which is how the
   next policy knows which kind it has.
 - **A phone that predates the switch sends nothing**, and its edge is left as
