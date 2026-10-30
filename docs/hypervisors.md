@@ -1718,14 +1718,20 @@ new password for Xen Orchestra's admin. In order:
    its default storage, the network of the master's management interface, and
    whether an earlier install's VM (`fleetwright-xo`) is already there, which
    stops the job with what to do.
-6. **The installer** (`installer`), pinned: commit `f9b299f` of
+6. **The installer** (`installer`), pinned to one commit of
    [00o-sh/XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater),
    the fork the update plugin above comes from (ronivay's upstream does not
-   have the script). `xo-remote-deploy.sh`, `xo-install.sh` and the update
-   plugin's files are downloaded from that commit and each is checked against
-   its SHA-256 in `INSTALLER` (`src/fleet/host/xo-deploy.js`) before anything
-   runs. Moving the pin is reading the new script and changing the commit and
-   the hashes, as for OPNsense's image.
+   have the script). The commit lives in `INSTALLER` in
+   `src/fleet/host/xo-deploy.js` and nowhere else, so it is not repeated
+   here; `xo-remote-deploy.sh`, `xo-install.sh` and the update plugin's files
+   are downloaded from that commit and each is checked against the SHA-256
+   pinned beside it before anything runs. **Renovate moves the pin**: it
+   follows the fork's `master` by commit, and the pin workflow runs
+   `scripts/pin-xo-installer.mjs` on its pull request, which refuses a commit
+   younger than three days and writes the files' hashes for the one it
+   accepts (`renovate.json`, `test/pin-xo-installer.test.js`). The pull
+   request links what changed upstream, which is what to read before merging
+   it: the script runs as root in a VM made with the pool's admin sign-in.
 7. **The installer's six stages** (`network` to `build`), as the script prints
    them: the network, Debian 13's cloud image (checked by the script against
    the SHA512SUMS Debian publishes and cached on the storage), the VM, its
@@ -1734,9 +1740,11 @@ new password for Xen Orchestra's admin. In order:
    `BatchMode=yes` come first, and OpenSSH takes the first value it is given
    for each option, so every `ssh` the script makes rides the master and none
    can ask for a password. The download's percentage is the bar. The VM is
-   `fleetwright-xo`, 2 vCPUs, 4 GiB and 20 GiB, on the pool's default storage,
-   on the management network with an address from DHCP: the network the
-   machine reached the pool master on.
+   `fleetwright-xo`, on the pool's default storage, on the management network
+   with an address from DHCP: the network the machine reached the pool master
+   on. Its size is the script's own default, since Fleetwright passes none
+   (2 vCPUs, 4 GiB and 20 GiB at the commit pinned as this is written, and
+   the script prints what it made as it goes).
 8. **The default admin password replaced** (`admin`). The installer leaves
    `admin@admin.net` / `admin`, and anybody on that network can sign in with it
    until it changes. The moment the script says Xen Orchestra is up, the
