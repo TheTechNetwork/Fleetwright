@@ -51,7 +51,10 @@ What happens, from the phone to a session on a VM:
    mints a single-use ticket bound to you, holds the session, and asks a box
    that holds your pool with that image; one that cannot reach the pool hands
    on to the next, and a refusal from the pool itself (no room in its limits)
-   is the answer.
+   is the answer. A box whose last look at the pool failed is not asked, and
+   when it is the only one holding the pool the refusal names it and says to
+   check Xen Orchestra from its network, rather than that no box holds the
+   pool.
 5. **The box clones the image** onto the uplink, behind the edge router, or
    onto a network of the pool you chose (protocol 9, below), counted against
    the resource set, tagged `fleetwright-session`, with the time it must be
@@ -151,6 +154,14 @@ from "1 being made" to "0 being made" with nothing to say a machine had failed.
 A kept machine counts as being made from its ticket, before the box is asked,
 and one person's top-ups run one at a time: a real pool was asked for two
 machines for one kept ready, by the Keep button and a health frame at once.
+And a kept machine is counted until it is gone, not until it is unwell: one
+that has enrolled but cannot take a session yet (its socket not up, or no
+Claude login for it yet) counts as being made, and is forgotten only when
+its enrolment is revoked or missing, it is no longer the person's, or it is
+past its end by the pool's last look. It used to fall out of the count the
+moment it was not ready, so the next top-up made another and Keep fewer could
+not end one it had forgotten: two, three, four machines on a real pool for
+one kept ready.
 
 ## Machines that work together
 
@@ -232,7 +243,12 @@ each person their own as `vmMachines`.
 coordinator asks the boxes holding your pools in turn, the one that last saw
 the machine first, and the box signs in with your pool's token and works only
 a machine tagged as made for you (`fleetwright-for:`), since two people can
-hold the same Xen Orchestra.
+hold the same Xen Orchestra. A box too old for the verb is skipped, and when
+every box was, the answer is `host_outdated`: none was new enough to be
+asked, each named with what it needs, rather than that none could find the
+machine, which would send you looking for it. A pool's page from away
+(`xolook`, `xoact`, [`manage.md`](./manage.md)) answers the same way, rather
+than that none could reach the pool.
 
 | Action | What the box does |
 |---|---|
@@ -807,7 +823,11 @@ labs the pool has. The policy job keeps it as a tag on each lab network
 and reports it; the coordinator refuses a lab past it, saying the number. A
 pool whose policy predates the setting has no tag, which is no limit and
 never 0. The coordinator counts a person's labs on that Xen Orchestra: their
-machines seen in a lab there and the ones asked for and not yet seen.
+machines seen in a lab there and the ones asked for and not yet seen. The
+hold on a lab is taken before the coordinator waits on anything, a ticket or
+a box, so two asks arriving together cannot both pass the limit, and is let
+go on every refusal after it; it is named for the machine once there is a
+ticket and kept until a box has seen the machine on the lab.
 
 **A lab ends when its machine does**, the way every machine from the pool
 ends: at the end in its tag, which *Give it longer* moves to the same 350
