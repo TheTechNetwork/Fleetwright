@@ -79,11 +79,14 @@ What happens, from the phone to a session on a VM:
    for the next.
 8. **It ends on time.** The box holding the pool looks every two minutes,
    and removes, disks and all, every machine tagged `fleetwright-session`
-   that has stopped, and any still running a minute past the end in its tag.
-   The end is the box's to keep because a person can move it (Give it
-   longer, below); the machine's own power-off is a backstop thirty minutes
-   past the longest a machine can live, for a pool no box reaches any more.
-   Nothing else on the pool is touched.
+   that has stopped past the end in its tag, and any still running a minute
+   past it. One stopped before its end was not done: a host reboot or an
+   evacuation stopped it, and the box starts it again, once; stopped again
+   after that, it waits for its end. One made less than five minutes ago is
+   left to boot. The end is the box's to keep because a person can move it
+   (Give it longer, below); the machine's own power-off is a backstop thirty
+   minutes past the longest a machine can live, for a pool no box reaches
+   any more. Nothing else on the pool is touched.
 
 **What a session there runs on** is your own Claude login from your vault. A
 setup-token cannot open Remote Control, so, as on a runner, the
@@ -235,7 +238,7 @@ hold the same Xen Orchestra.
 |---|---|
 | **Restart** | `vm.restart`: clean where the machine reports its guest agent, hard where it does not or refuses the clean one (Xen Orchestra's clean reboot needs the guest agent, which every image carries: see "It carries the guest agent"). A session running on it ends; the machine is back in the fleet in a minute or so. |
 | **Give it longer** | Moves the end in its tag, never past 350 minutes from when it was made, so asking again and again does not keep a machine alive for ever. |
-| **Restart with this size** | Marks it busy so the sweep does not take the stop for done, stops it (clean or hard, as Restart), sets vCPUs and memory, and starts it again whatever the pool said. Xen Orchestra holds the size to the resource set; a refusal restarts it at its old size and says why. |
+| **Restart with this size** | Marks it busy (with the time: a mark older than half an hour is a sidecar that died mid-resize, and no longer holds the sweep off) so the sweep does not take the stop for done, stops it (clean or hard, as Restart), sets vCPUs and memory, and starts it again whatever the pool said. Xen Orchestra holds the size to the resource set; a refusal restarts it at its old size and says why. A machine that takes the size and then will not start with it (no host has that much memory free) is put back to its old size and started again; if it will not start at that either, it is left stopped and marked, not removed, and the reply says so. |
 | **End it now** | Force-stops it and removes it with its disk. |
 
 Each that interrupts a session asks first. None is held on the phone to be
