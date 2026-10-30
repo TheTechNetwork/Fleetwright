@@ -2144,6 +2144,12 @@ HAVE_PODMAN=0
 if [ "$PLATFORM" = macos ]; then
   warn "sandboxing is off — podman on macOS needs a Linux VM, which this does not set up"
   MISSING+=("sandboxed sessions: run 'podman machine init && podman machine start', then re-run this")
+# A box that is its own sandbox: the machine image a pool's sessions are
+# cloned from (src/fleet/host/vm-image.js) sets this, because the VM is the
+# sandbox there and FLEETWRIGHT_SANDBOX is never turned on in a clone. podman
+# and the session image were installed into every image and used by nothing.
+elif [ "${FLEETWRIGHT_NO_SANDBOX:-0}" = "1" ]; then
+  ok "sandboxing off — FLEETWRIGHT_NO_SANDBOX=1, so podman is not installed and sessions run directly on this box"
 elif ! command -v podman >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
   say "Installing podman (for sandboxed sessions)"
   if pkg_install podman && command -v podman >/dev/null; then
@@ -2153,7 +2159,7 @@ elif ! command -v podman >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
     warn "  install it yourself and re-run to build the sandbox image"
   fi
 fi
-if [ "$PLATFORM" = macos ]; then
+if [ "$PLATFORM" = macos ] || [ "${FLEETWRIGHT_NO_SANDBOX:-0}" = "1" ]; then
   : # already reported above; HAVE_PODMAN stays 0 so nothing downstream runs
 elif command -v podman >/dev/null; then
   ok "podman $(podman --version | awk '{print $3}') — the sandbox is available"
