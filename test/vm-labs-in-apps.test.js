@@ -31,6 +31,10 @@ const SHARED = [
   'Closed labs',
   ': each reaches the internet and nothing private',
   ': each reaches the fleet and Claude and nothing else',
+  // Changing the labs, as the box says its cost: the new router is built
+  // beside the old one (ONE_BOOT in src/fleet/host/edge-router.js), so the
+  // way out is gone for one boot and not for the whole build.
+  'Apply rebuilds the edge router to change the labs: machines behind it keep their way out while the new one is built, and have none while it starts.',
   'A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. ',
   'It costs no extra machine, only an interface on the router. Up to four in all.',
   'Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed.',
@@ -55,18 +59,6 @@ const SHARED = [
   'With no labs, labs per person is no limit. Nothing was changed.',
   ', the labs there are. Nothing was changed.',
 ];
-
-/**
- * What changing the labs costs, as the box says it now that the new router
- * is built beside the old one (ONE_BOOT in src/fleet/host/edge-router.js):
- * the way out is gone for one boot, not for the whole build. iOS says so;
- * Android still says the old sentence and is the next layer up
- * (CONTRIBUTING.md), where this goes back into SHARED.
- */
-const REBUILD = {
-  ios: 'Apply rebuilds the edge router to change the labs: machines behind it keep their way out while the new one is built, and have none while it starts.',
-  android: 'Apply rebuilds the edge router to change the labs: machines behind it have no way out until the new one is up.',
-};
 
 test('iOS: the policy holds the host’s numbers, starts from the edge’s labs, and sends labs only where there is a router', () => {
   assert.ok(I_POLICY.includes(`static let labPrefix = "${LAB.prefix}"`));
@@ -94,7 +86,7 @@ test('iOS: a lab is offered only by kind while one is free, rides in `network`, 
 test('iOS says it in the shared words', () => {
   const ios = [I_POLICY, I_FORM, I_FLEET, I_SHEET, I_PAGE].join('\n');
   for (const words of SHARED) assert.ok(ios.includes(words), words);
-  assert.ok(I_FORM.includes(REBUILD.ios), 'changing the labs still says the way out is gone for the whole build');
+  assert.ok(!I_FORM.includes('no way out until the new one is up'), 'changing the labs still says the way out is gone for the whole build');
   // A lab is free again when its machine ends: nothing ends one with its session.
   assert.ok(!/free again when its session ends|When the session ends/.test(ios), 'a lab still said to end with its session');
 });
@@ -148,7 +140,7 @@ test('Android: a lab is offered only by kind while one is free, rides in `networ
 test('Android says it in the shared words', () => {
   const android = [A_POLICY, A_FORM, A_SHEET_HV, A_FLEET, A_SHEET, A_PAGE].join('\n');
   for (const words of SHARED) assert.ok(android.includes(words), words);
-  assert.ok(A_FORM.includes(REBUILD.android), 'changing the labs');
+  assert.ok(!A_FORM.includes('no way out until the new one is up'), 'changing the labs still says the way out is gone for the whole build');
   // A lab is free again when its machine ends: nothing ends one with its session.
   assert.ok(!/free again when its session ends|When the session ends/.test(android), 'a lab still said to end with its session');
 });
