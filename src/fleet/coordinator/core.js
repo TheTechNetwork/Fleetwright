@@ -6665,11 +6665,13 @@ export class CoordinatorCore {
     this.record({ event: 'vm.control', actor: spec.actor ?? null, text: `${owner} asked to ${params.action} ${name}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         answer = explainUnknownVerb(await this.send(host, { ...spec, params }), host);
@@ -6684,6 +6686,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT FIND". When every holder was too old to be
+    // sent this, no box looked, and saying none could find the machine told
+    // the person to look for it (C-5). What is known is what each needs.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the boxes holding your pools is new enough to work ${name}, so none was asked: ${skipped.join(', ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'not_found' }, text: `No box holding your pools could find ${name}: ${skipped.join(', ')}.` };
   }
@@ -6726,11 +6738,13 @@ export class CoordinatorCore {
     if (spec.verb === 'xoact') this.record({ event: 'xo.act', actor: spec.actor ?? null, text: `${owner} asked for ${params.method} on ${address}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         // AS THE OWNER CHECKED ABOVE: the box picks the token by the actor,
@@ -6748,6 +6762,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT REACH": with every holder too old for the
+    // verb, none tried, and "could not reach" sent the person to check the
+    // pool's network (C-5). What is known is that the boxes need updating.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the machines holding your token for ${address} is new enough to show its page from away, so none was asked: ${skipped.join('; ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'unreachable' }, text: `None of the machines holding your token could reach ${address}: ${skipped.join('; ')}.` };
   }

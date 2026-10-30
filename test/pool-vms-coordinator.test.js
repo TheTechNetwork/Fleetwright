@@ -15,7 +15,9 @@ import assert from 'node:assert/strict';
 
 import { CoordinatorCore, MAX_NET_POINTS } from '../src/fleet/coordinator/core.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
-import { generateKeyPair } from '../src/fleet/crypto.js';
+import { generateKeyPair, sign } from '../src/fleet/crypto.js';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { delegationSigningInput, keyId } from '../src/fleet/protocol/intent-signature.js';
 
 const ELI = 'eli@example.com';
 const SAM = 'sam@example.com';
@@ -368,6 +370,16 @@ test('a machine is worked by its owner, through the box that last saw it first',
   );
   assert.equal((await moved.core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'stop' }, requester: eli })).ok, true);
   assert.deepEqual(moved.asked.map((x) => x.hostId), ['a', 'b']);
+});
+
+test('a machine whose boxes are all too old to work it is told that, not that none could find it', async () => {
+  // Every holder skipped as "needs updating" fell through to "No box holding
+  // your pools could find vm-…", when no box had looked (C-5).
+  const { core, asked } = fleet({ old: { xo: withMachine(ELI), protocol: 8 } });
+  const r = await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'stop' }, requester: eli });
+  assert.equal(r.error.code, 'host_outdated');
+  assert.equal(r.text, 'None of the boxes holding your pools is new enough to work vm-aaaaaaaaaaaa, so none was asked: old (needs updating). Update one and ask again.');
+  assert.equal(asked.length, 0);
 });
 
 test('somebody else’s machine, an unsigned caller, or an action without its numbers is refused before any box is asked', async () => {
