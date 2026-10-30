@@ -10,8 +10,8 @@ machine of its own** that holds it ("A machine of its own"), and **labs**: netwo
 own on the edge router, open or closed, a session's machine alone on one
 ("Labs"). **Not yet run:** a real XCP-ng pool behind Xen Orchestra, and the
 install on one. Seeing inside a lab is designed and not built ("Seeing what
-crossed a lab"). XCP-ng first, through Xen Orchestra; Proxmox second, behind
-the same interface.
+crossed a lab"). XCP-ng, through Xen Orchestra; Proxmox is a direction ("The
+interface", below) with nothing built for it.
 
 A session today runs in a container on a box, or on a GitHub Actions runner
 that is gone in six hours. Neither is a real machine on a network you own:
@@ -1478,7 +1478,14 @@ pool's own machine is asked for, since that machine is cloned from it. Asked
 for after the first three images were built with the install script that did
 not stop at a failed step: any of them may be one to replace.
 
-## The interface, so Proxmox is a second driver and not a second design
+## The interface, if Proxmox is ever a second driver
+
+**A direction, not a feature.** Nothing in `src/` speaks to Proxmox, and no
+interface of this shape exists in the code: `src/fleet/host/xo-pools.js` calls
+Xen Orchestra's own methods by name (`vm.create`, `vm.start`, `vm.delete`,
+`xo.getAllObjects`). What is written down here is the shape those calls have,
+so that a second hypervisor would be a second driver behind it and not a
+second design:
 
 ```
 create({ name, template, userData, networks, tags, expiresAt }) → { id }
@@ -1486,11 +1493,13 @@ start(id)  destroy(id, { disks: true })  list({ tag })  status(id)
 createNetwork(name) → { id }  destroyNetwork(id)
 ```
 
-**Xen Orchestra** maps onto it directly. **Proxmox** maps onto it as a clone
-of a template VM, user data through a cloud-init snippet, a VNet under SDN for
-a lab network, and a token whose role is granted on one resource pool. That
-is the same bound as the resource set, and the same reason. Template and lab
-files do not change between the two.
+**Xen Orchestra** maps onto it directly. **Proxmox** would map onto it as a
+clone of a template VM, user data through a cloud-init snippet, a VNet under
+SDN for a lab network, and a token whose role is granted on one resource
+pool, which is the same bound as the resource set, and the same reason.
+Template and lab files would not change between the two. Until somebody
+builds it, this section is the whole of Proxmox in Fleetwright, and
+`ROADMAP.md` carries it as asked for.
 
 ## Order of work
 
@@ -1498,11 +1507,14 @@ Following `CONTRIBUTING.md`, coordinator first. **Done:** protocol 8
 (`template` on `provision`), the VM ticket and `/api/enroll/vm`, placement
 onto a box that holds the pool, the vault's `hypervisor:` kind; on the host,
 the pool holder, the clone, the sweep, the join and the machine image; both
-phones; these docs; the pool's own machine (A machine of its own). **Next:** a network per machine and a group network for
-tests that need several machines to reach each other; machines kept booted
-and waiting so a session starts in seconds; DNS filtering and intrusion
-detection on the edge router. What each machine did on the network is built
-(What a machine did on the network). Labs are built ("Labs"); seeing what crossed one is designed and not built.
+phones; these docs; the pool's own machine ("A machine of its own"); group
+networks ("Machines that work together"); machines kept booted and waiting
+("Machines kept ready"); DNS filtering and intrusion detection on the edge
+router ("What the edge filters"); what each machine did on the network; labs
+("Labs"), and the edge routers watched from the phone. **Next:** seeing what
+crossed a lab, which is designed and not built; a pool's first machine image
+through the phone ("Next: a pool's first machine image"); and a second
+hypervisor, which is a direction (above).
 
 ## Onboarding: nothing made by hand
 
@@ -2333,9 +2345,11 @@ master opening a VM's disk, or a real pool being lost and found.
 
 ### Next: a pool's first machine image
 
-- **A pool without Xen Orchestra** is built ("A pool without Xen Orchestra").
-  The same image cache on the storage repository could build the templates
-  and the pool's own machine, which today download their own images.
+What is left here, with everything above it built:
+
+- **One image cache.** "A pool without Xen Orchestra" caches the cloud image
+  on the storage repository; the templates and the pool's own machine still
+  download their own. The same cache could serve all three.
 - **A pool's first machine image through the phone.** A pool that has none
   cannot be given its own machine through a relay, because the image is a
   disk of gigabytes. Xen Orchestra fetching the cloud image itself, or the
