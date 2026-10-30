@@ -924,12 +924,13 @@ test('a router that carries its key in the clear has it taken off by the next po
   // WHAT EVERY SIGNED-IN USER READS no longer holds any of it.
   const seen = JSON.stringify(vms);
   for (const value of [WATCH.key, WATCH.secret, WATCH.prv.split('\n')[1]]) assert.ok(!seen.includes(value), 'the key was left where everybody signed in reads it');
-  // AND THE ROUTER IS BUILT AGAIN with a key nobody saw: stopped to be
-  // replaced, which here goes no further than this stand-in has a template
-  // for, and started again as it was.
+  // AND THE ROUTER IS BUILT AGAIN with a key nobody saw: the new one first,
+  // while the old one runs, which here goes no further than this stand-in
+  // has a template for; the old one was never stopped for it, and the
+  // sentence says so rather than that it was started again.
   const order = xo.calls.filter((c) => (c.method === 'vm.stop' || c.method === 'vm.start') && c.params.id === 'edge').map((c) => c.method);
-  assert.deepEqual(order, ['vm.stop', 'vm.start'], end.text);
-  assert.match(end.text, /no built-in "Other install media" template/);
+  assert.deepEqual(order, [], end.text);
+  assert.match(end.text, /no built-in "Other install media" template[\s\S]*The edge router it was replacing was left running, as it was/);
 });
 
 test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves them as they are', () => {

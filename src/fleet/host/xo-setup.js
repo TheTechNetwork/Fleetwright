@@ -1785,6 +1785,8 @@ export class XoSetups {
       plain: rec.plain === true,
       imageDir: path.join(this.stateDir || '.', 'edge'),
       signal: rec.abort.signal,
+      // The clock a rebuilt router is watched by (edge-router.js, settled): this one's, so a test can hurry it.
+      sleep: this.sleep,
       say,
     });
   }
