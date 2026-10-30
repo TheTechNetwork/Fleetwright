@@ -27,9 +27,9 @@ normative.
 | **Host** | Debian box: fleetwright + sidecar + rootless podman | Be the sole authority on its own tmux, hold its own P-256 key, hold at rest the credentials of members who linked on it. | Speak for any host but itself (a reply is taken only for an intent sent to it); speak for, or be given the work or credentials of, a member it does not act for (`mayActFor`, `hosts.js`); hold a fleet-wide admin credential. |
 | **Session** | A Claude Code agent in a container, root inside, reading untrusted input, holding live credentials | Do the work it was asked to. Nothing else. It is the **least trusted component in the system**. | Be believed about who it is (it reports over a bind-mounted socket it cannot forge); hold anything whose leak must outlive it. |
 | **Phone app** | iOS/Android, App Store / Play, holds one per-device credential | Act as the member it was issued to, until revoked. | Contain any baked-in fleet secret (an IPA/APK is public). |
-| **Member** | A verified email on the allowlist | Drive their own sessions, see their own sessions, mint enrolment pins; administer a box that acts for them alone. | See or act on another member's sessions; link a Claude account for anyone but themselves; change the release channel, image or labels of, update, upgrade or reboot a box that does not act for them alone, since each reaches everybody's work on it and a reboot names and ends every session there (`place`, `scheduler.js`). |
+| **Member** | A verified email on the allowlist | Drive their own sessions, see their own sessions, mint enrolment pins; administer a box that acts for them alone. | See or act on another member's sessions; link a Claude account for anyone but themselves; change the release channel, image or labels of, update, upgrade or reboot a box that does not act for them alone, since each reaches everybody's work on it and a reboot names and ends every session there (`place`, `scheduler.js`); and on a box that pins its admins, update, upgrade, reboot, change its release channel or image, or restore somebody else's work unless pinned there (`pinned-admins.js`), which binds the admin as well. |
 | **Guest** | A member who brings their own Claude/GitHub/Cloudflare and has no shell on any box | Same as a member. Never inherits shared GitHub/Cloudflare credentials. | Inherit anyone's provider tokens; get OS-level isolation from other members on the same host. |
-| **Admin** | First verified member on a fresh fleet; the `admin` bit | Remove hosts and other people's devices; see every session; administer any box. | — (admin is the ceiling; there is no super-admin) |
+| **Admin** | First verified member on a fresh fleet; the `admin` bit | Remove hosts and other people's devices; see every session; administer any box. | Update, upgrade, reboot, change the release channel or image of, or restore somebody else's work on a box that pins its admins and not them (`pinned-admins.js`): the box's operator, not the fleet, decides who is pinned. Otherwise admin is the ceiling; there is no super-admin |
 | **Platform parties** | Cloudflare, Apple, Google, GitHub, Anthropic | Nobody chose them; everybody depends on them. Compromise or coercion of any is out of scope (§10). | — |
 
 **SEC-ACTOR-1** — Every component MUST be designed so that its own compromise
@@ -868,6 +868,27 @@ drop it, or offer a machine's key of its own to approve, which the page shows
 by a fingerprint to compare with what the machine prints. A key from either is listed by whoever
 finishes a GitHub sign-in as the person, so a coordinator that phishes that
 authorization gets a key listed, phone or browser alike.
+Who is an admin stays the coordinator's word, and so does who is a member,
+which is worse than it sounds: the minter lists keys for whoever the
+coordinator says is in the fleet, so a throwaway account it lists signs as
+itself. A box can therefore **pin its own admins** (`pinned-admins.js`,
+`signed-intents.md` "Pinned admins"): once it pins anybody, `reboot`,
+`upgrade apply`, `update`, a new `channel` or `sandbox` image and a `restore`
+of somebody else's work need one of their signatures or delegations, whatever
+the coordinator says. The first pin is set on the box by its operator
+(`FLEETWRIGHT_ADMINS`, `fleetwright-sidecar pin-admin` as the sidecar's own
+account; root is refused wherever another account could change the way to
+the record, per G10), never over the wire, and over the wire only a pinned
+admin's own signature adds or removes one, and a removal always keeps somebody
+who can sign. A box
+that pins nobody is where it was: the coordinator's word decides those verbs.
+Pins hold only where the sidecar's account is not the session user's: on a
+Mac (`SIDECAR_USER=$RUN_USER`, sessions outside containers), on a Linux box
+where the installer fell back to the session user for the sidecar, and on a
+git checkout, a session runs as the account that owns `pinned-admins.json`
+and can reset or rewrite it. And a box that is itself a virtual machine can
+still be rebooted or deleted through the hypervisor's token (`vmctl`,
+`xoact`), which never reaches its sidecar.
 *Falsify:* on a box with the switch set, send it an unsigned `start`, one signed
 by a key the minter does not list, one carrying a delegation that covers another
 session, or one carrying a delegation its maker revoked; `sidecar.js` must refuse
@@ -876,7 +897,19 @@ unsigned `start` naming nobody must be refused, and one naming a person whose ke
 the box has seen must stay refused after a restart and after a key list that
 leaves them out. On a box without the switch, nothing is refused for a
 signature. On the signing host, every POST route of the minter must 404 and the
-page must sign no verb outside the five (`test/sign-page.test.js`).
+page must sign no verb outside the five (`test/sign-page.test.js`). On a box
+that pins nobody, a signed `pinadmin` naming its own signer must be refused and
+write nothing; on one that pins somebody, a delegated `pinadmin` and an
+unpinned person's `reboot` must be refused, and a `forgetperson` for the last
+admin must leave them pinned and the box refusing everybody, as must one for
+the last admin who can sign beside an admin who left or an address no key is
+listed for; a signed removal that would leave only such an address must be
+refused; a box holding a key list past its age must report `unchecked`; a
+waiter that found a dead lock must not remove the live one another waiter took
+in its place; and `pin-admin` run as root must refuse and write nothing in the
+sidecar's directory, nor through a link that account owns, nor in a directory
+of root's under one another account can change (`test/pinned-admins.test.js`
+does).
 
 ### 4.2 Compromised host (root on the box)
 
