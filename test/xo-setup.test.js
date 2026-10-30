@@ -814,6 +814,96 @@ test('a policy job cancelled, or left, while it waits changes nothing', { skip }
   assert.ok(!xo.calls.some((c) => c.method === 'resourceSet.set' || c.method.startsWith('tag.')));
 });
 
+test('a cancel during the uplink, or between two images, ends the job cancelled and starts nothing further', { skip }, async (t) => {
+  // cancel() aborted whatever build was running, and each build made its own
+  // signal: a cancel during the uplink, the labs or between two images
+  // aborted nothing, the next build ran in full on a fresh signal, and the
+  // job ended `done`. One signal per job now, looked at between each thing.
+  const actor = 'eli@example.com';
+  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' };
+  const more = ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'vif.set'];
+  const limits = { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 };
+  await t.test('during the uplink, with an image asked for behind the edge already there', async () => {
+    const box = /** @type {{ cancel?: () => void }} */ ({});
+    const xo = await standIn(t, { sets: [chosenBefore()], more, vms: { edge }, on: { 'network.create': () => box.cancel?.() } });
+    /** @type {any[]} */
+    const asked = [];
+    const { setups } = await machine({ coordinatorUrl: 'https://fleet.test', buildImage: async (/** @type {any} */ o) => (asked.push(o), 'The machine image is ready on Home.') });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    box.cancel = () => setups.cancel({ job, actor });
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', image: true, limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.equal(asked.length, 0, 'no build began after the cancel');
+    assert.ok(xo.calls.some((c) => c.method === 'resourceSet.set'), 'the policy itself was applied before it');
+    assert.equal(end.text, 'Cancelled before it built anything. What the fleet may use was changed; the fleet’s own networks it had made by then are kept, and nothing was built.');
+  });
+  await t.test('between two images: the first finishes, the second is never begun, and the words keep moving', async () => {
+    // The first build takes the cancel and finishes all the same, as a build
+    // between two of its own checks does. The words keep moving while it
+    // winds down; the bar of bytes being thrown away does not.
+    const box = /** @type {{ cancel?: () => void, text?: () => string }} */ ({});
+    const xo = await standIn(t, { sets: [chosenBefore()], more, vms: { edge } });
+    /** @type {any[]} */
+    const asked = [];
+    /** @type {string[]} */
+    const texts = [];
+    const { setups } = await machine({
+      coordinatorUrl: 'https://fleet.test',
+      buildImage: async (/** @type {any} */ o) => {
+        asked.push(o);
+        box.cancel?.();
+        texts.push(box.text?.() ?? '');
+        assert.equal(o.signal.aborted, true, 'the cancel aborted this build’s signal');
+        o.say('Removing what was made of the machine image.');
+        texts.push(box.text?.() ?? '');
+        o.say('Writing Debian 13’s disk to Home: 700 of 2048 MB.', { stage: 2, stages: 4, fill: 300 });
+        texts.push(box.text?.() ?? '');
+        return 'The machine image is ready on Home.';
+      },
+    });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    box.cancel = () => setups.cancel({ job, actor });
+    box.text = () => setups.status({ job, actor }).text;
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', images: ['debian-13', 'ubuntu-24.04'], limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.deepEqual(asked.map((o) => o.image), ['debian-13'], 'the second image was never begun');
+    assert.deepEqual(texts, [
+      'Stopping the machine image’s build and removing what it made.',
+      'Removing what was made of the machine image.',
+      'Removing what was made of the machine image.',
+    ]);
+    assert.equal(end.text, 'Cancelled between the things you asked for. What the fleet may use was changed, and nothing more was started. Before it was cancelled: The machine image is ready on Home.');
+  });
+  await t.test('during the uplink, with the edge to be rebuilt: the rebuild never begins', async () => {
+    // Its key in the clear has it rebuilt (G14); the rebuild used to begin on
+    // a signal of its own and stop the router.
+    const box = /** @type {{ cancel?: () => void }} */ ({});
+    const vms = { edge: { ...edge, name_label: 'fleetwright-edge', tags: [...edge.tags, 'fleetwright-edge-watch'], xenStoreData: xenStoreAsXo({ 'fleetwright-watch': JSON.stringify(WATCH) }) } };
+    const xo = await standIn(t, {
+      sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab'] }],
+      more,
+      vms,
+      vifs: { w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' } },
+      on: { 'network.create': () => box.cancel?.() },
+    });
+    const { setups } = await machine({ coordinatorUrl: 'https://fleet.test' });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    box.cancel = () => setups.cancel({ job, actor });
+    const limitsOnly = { v: 1, srs: ['sr2'], networks: ['net-lab'], egress: 'net-dmz', limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, limitsOnly), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.ok(!xo.calls.some((c) => c.method === 'vm.stop'), 'the router was not stopped for a rebuild that never began');
+  });
+});
+
 test('a choice is held to what the pool has, and the way out to a network it listed', () => {
   const choices = {
     srs: new Map([['a', 100 * 1024 ** 3], ['b', 50 * 1024 ** 3]]),

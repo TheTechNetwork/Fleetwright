@@ -1014,19 +1014,21 @@ export class XoSetups {
       this.#ended(rec);
     } else if (rec.state === 'running') {
       // Between steps: a call already sent to Xen Orchestra is not unsent.
-      // The edge router's build is the exception, because it is minutes of
-      // bytes: its download and upload stop where they are (ensureEdge).
+      // A build is the exception, because it is minutes of bytes: its
+      // download and upload stop where they are (ensureEdge, ensureImage,
+      // the installer). THE JOB'S ONE SIGNAL is what they stop on (#execute):
+      // each build used to make its own, so a cancel during the uplink, the
+      // labs or between two images aborted nothing, the next build began on
+      // a fresh signal and ran in full, and the job ended `done`.
       rec.cancelled = true;
-      if (rec.abort) {
-        rec.abort.abort();
-        rec.text = rec.building === 'deploy'
-          ? 'Stopping the installer where it is.'
-          : rec.building === 'image'
-            ? 'Stopping the machine image’s build and removing what it made.'
-            : 'Stopping the edge router’s build and removing what it made.';
-      } else {
-        rec.text = 'Cancelling after this step.';
-      }
+      rec.abort?.abort();
+      rec.text = rec.building === 'deploy'
+        ? 'Stopping the installer where it is.'
+        : rec.building === 'image'
+          ? 'Stopping the machine image’s build and removing what it made.'
+          : rec.building === 'edge' || rec.building === 'edge-rebuild'
+            ? 'Stopping the edge router’s build and removing what it made.'
+            : 'Cancelling after this step.';
     } else if (rec.state === 'choosing') {
       // Nothing has been changed yet, so this is the whole of it.
       rec.cancelled = true;
@@ -1139,6 +1141,10 @@ export class XoSetups {
   async #execute(rec, creds) {
     /** @type {any} */
     const ctx = { rec, creds, admin: null, limited: null, notes: /** @type {string[]} */ ([]) };
+    // ONE SIGNAL FOR THE WHOLE JOB, made here and aborted by `cancel`, which
+    // every build and every wait is handed. It is not made again: a cancel
+    // is a cancel of the job, not of whichever build happened to be running.
+    rec.abort = new AbortController();
     // What an error message is scrubbed of, taken before the sign-in step
     // wipes the originals, and wiped with them at the end.
     const secrets = { password: creds.password, token: creds.token, root: creds.root, admin: creds.admin };
@@ -1204,10 +1210,21 @@ export class XoSetups {
       if (policy && ctx.rec.reply) await this.#handWatch(ctx).catch((e) => this.log.warn(`xosetup: ${rec.job} could not seal the routers' key: ${/** @type {Error} */ (e).message}`));
       rec.step = rec.of;
       rec.phase = 'done';
-      rec.state = 'done';
       rec.part = null;
       rec.text = [ctx.summary || (policy ? `${rec.address}: what the fleet may use is changed.` : `${rec.address} is in the fleet.`), ...ctx.notes].join(' ');
       if (watchdog) rec.text = ctx.summary;
+      // A CANCEL THAT LANDED DURING THE LAST THING A POLICY JOB DID, which
+      // took no signal (the pool's own machine) and finished: the job was
+      // cancelled and says so, with what it had done. Not for a setup or an
+      // install, whose last step seals the token to the phone: that token
+      // reaches the phone only from a job that is `done`, and a token made
+      // and handed to nobody would be the worse outcome.
+      if (policy && rec.cancelled) {
+        rec.state = 'cancelled';
+        rec.text = `Cancelled as it finished: everything you chose was applied before the cancel arrived. ${rec.text}`;
+      } else {
+        rec.state = 'done';
+      }
       this.#report(rec);
       this.log.info(`xosetup: ${rec.job} finished for ${rec.address}`);
     } catch (e) {
@@ -1238,18 +1255,31 @@ export class XoSetups {
       } else if (policy && rec.cancelled) {
         rec.state = 'cancelled';
         // Cancelled during the build, the policy was already in force: say
-        // so, rather than that nothing changed.
+        // so, rather than that nothing changed. BETWEEN TWO THINGS IT WAS
+        // ASKED FOR (`building` is cleared as each ends) nothing is half
+        // made: what was built stands and the next was not begun. And what
+        // was built before the cancel, in each case, so the person knows
+        // what they have rather than only what they do not.
+        const before = ctx.built?.length ? ` Before it was cancelled: ${ctx.built.join(' ')}` : '';
         rec.text = rec.phase !== 'apply'
           ? 'Cancelled before anything was changed.'
           : rec.building === 'holder'
-            ? 'Cancelled while making the pool’s own machine. What the fleet may use was changed, and whatever else you asked for was built.'
+            ? `Cancelled while making the pool’s own machine. What the fleet may use was changed, and whatever else you asked for was built.${before}`
             : rec.building === 'image' && rec.replacing
-            ? 'Cancelled while rebuilding the machine image. What the fleet may use was changed; the new image was not made, what was made of it was removed, and the one that was there is as it was.'
+            ? `Cancelled while rebuilding the machine image. What the fleet may use was changed; the new image was not made, what was made of it was removed, and the one that was there is as it was.${before}`
             : rec.building === 'image'
-            ? 'Cancelled while building the machine image. What the fleet may use was changed; the image was not made, and what was made of it was removed.'
+            ? `Cancelled while building the machine image. What the fleet may use was changed; the image was not made, and what was made of it was removed.${before}`
             : rec.building === 'edge-rebuild'
-            ? 'Cancelled while rebuilding the edge router. What the fleet may use was changed; the new router was removed and the one that was there was started again, as it was.'
-            : 'Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.';
+            ? `Cancelled while rebuilding the edge router. What the fleet may use was changed; the new router was removed and the one that was there was started again, as it was.${before}`
+            : rec.building === 'edge'
+            ? `Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.${before}`
+            : ctx.built?.length
+              ? `Cancelled between the things you asked for. What the fleet may use was changed, and nothing more was started.${before}`
+              : 'Cancelled before it built anything. What the fleet may use was changed; the fleet’s own networks it had made by then are kept, and nothing was built.';
+        // THE ROUTERS' KEY STILL GOES TO THE PHONE: a router built before
+        // the cancel was built with it, and a job that ended cancelled used
+        // to end `done` and hand it over (status reads it from either).
+        if (ctx.rec.reply) await this.#handWatch(ctx).catch((err) => this.log.warn(`xosetup: ${rec.job} could not seal the routers' key: ${/** @type {Error} */ (err).message}`));
       } else {
         rec.state = 'failed';
         rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
@@ -1435,8 +1465,18 @@ export class XoSetups {
         // The words every time, for the screen that asks; an event only when
         // the stage changes or the bar has moved a twentieth, so a Lock
         // Screen is not pushed to for every 16 MB.
+        // AFTER A CANCEL the words still flow: a build winding down says
+        // what it is removing, and the screen used to freeze on "Stopping"
+        // until the job ended. Its bar does not: the bytes it counts are
+        // being thrown away, and a count of them after "Stopping" would
+        // read as the build going on.
         const say = (/** @type {string} */ text, /** @type {any} */ part) => {
-          if (rec.cancelled) return;
+          if (rec.cancelled) {
+            if (part) return;
+            rec.text = text;
+            this.#report(rec);
+            return;
+          }
           rec.text = text;
           if (!part) return;
           const before = rec.part;
@@ -1447,6 +1487,7 @@ export class XoSetups {
         if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
         /** @type {string[]} */
         const built = [];
+        ctx.built = built;
         if (p.edge || rotate) {
           const missing = EDGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the edge router cannot be built. The policy was applied.`);
@@ -1472,7 +1513,12 @@ export class XoSetups {
           if (made.length) built.push(`Made ${made.length === 1 ? 'a group network' : `${made.length} group networks`} for machines that work together.`);
           if (!p.edge && !rotate && !p.image && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return built.join(' ') || undefined;
         }
+        // BETWEEN EACH THING IT WAS ASKED FOR, the cancel is looked for: the
+        // networks take no signal and are quick, and a cancel during one
+        // used to be found only by the next step, of which there is none.
+        stopIfCancelled(rec);
         const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
+        stopIfCancelled(rec);
         // LABS' NETWORKS, made before the edge is (re)built with an interface
         // on each: quick, and kept if the build fails, like group networks.
         /** @type {Array<{ id: string, open: boolean }>|null} */
@@ -1482,6 +1528,7 @@ export class XoSetups {
           labs = made.labs.map((l) => ({ id: l.id, open: l.open }));
           if (made.made.length) built.push(`Made ${made.made.length === 1 ? 'a lab network' : `${made.made.length} lab networks`}.`);
           if (p.labsEach !== undefined && labs.length) built.push(p.labsEach === null ? 'One person may hold any number of labs.' : `One person may hold ${p.labsEach === 1 ? 'one lab' : `${p.labsEach} labs`} at once.`);
+          stopIfCancelled(rec);
         }
         const edgeAsked = p.edge || labs !== null || rotate;
         if (rotate) built.push('The edge router’s key, and a pair’s shared password, were readable by everybody signed in to Xen Orchestra: they were taken off it, and it was built again with new ones.');
@@ -1491,11 +1538,11 @@ export class XoSetups {
         if (p.image || p.rebuild.length || p.remove.length) {
           const poolName = String((ctx.pools || []).find((/** @type {any} */ x) => x?.id === way.$pool)?.name_label || 'this pool').slice(0, 80);
           const image = async (/** @type {string} */ key, replace = false) => {
+            stopIfCancelled(rec);
             rec.building = 'image';
             rec.replacing = replace;
             rec.part = null;
-            rec.abort = new AbortController();
-            return this.buildImage({
+            const said = await this.buildImage({
               image: key,
               replace,
               channel: p.imageChannel,
@@ -1526,12 +1573,19 @@ export class XoSetups {
                 : null,
               vmReport: () => rec.vmReport ?? null,
             });
+            // Over, whichever way: a cancel between this and the next is
+            // between two things, not during this one (the catch reads it).
+            rec.building = null;
+            return said;
           };
           // ONE AFTER ANOTHER, router first: each image is built behind it.
           if (edgeAsked) built.push(await this.#edge(ctx, p, way, uplink, say, labs));
           // REMOVED FIRST, which frees their disks for what is built next;
           // then the new images, then the ones rebuilt.
-          for (const key of p.remove) built.push(await this.dropImage({ admin: ctx.admin, pool: way.$pool, poolName, image: key }));
+          for (const key of p.remove) {
+            stopIfCancelled(rec);
+            built.push(await this.dropImage({ admin: ctx.admin, pool: way.$pool, poolName, image: key }));
+          }
           for (const key of p.images) built.push(await image(key));
           for (const key of p.rebuild) built.push(await image(key, true));
         } else if (edgeAsked) {
@@ -1540,9 +1594,9 @@ export class XoSetups {
         // THE POOL'S OWN MACHINE, last: it is cloned from the image, which may
         // have been built a moment ago.
         if (p.holder) {
+          stopIfCancelled(rec);
           rec.building = 'holder';
           rec.part = null;
-          rec.abort = null;
           built.push(await ensureHolder({
             admin: ctx.admin,
             pool: way.$pool,
@@ -1586,7 +1640,6 @@ export class XoSetups {
       async (/** @type {any} */ ctx) => {
         const rec = ctx.rec;
         rec.building = 'deploy';
-        rec.abort = new AbortController();
         ctx.dir = jobDir();
         // The password moves into an object openPool wipes on every way out.
         ctx.root = { password: ctx.creds.root };
@@ -1634,7 +1687,6 @@ export class XoSetups {
         rec.xoAddress = found.address;
         rec.vm = found.vm;
         rec.building = null;
-        rec.abort = null;
         rec.part = null;
         // The pool master is not needed again: its connection goes now
         // rather than at the end of onboarding.
@@ -1682,7 +1734,6 @@ export class XoSetups {
       // reach
       async (/** @type {any} */ ctx) => {
         const rec = ctx.rec;
-        rec.abort = new AbortController();
         ctx.dir = jobDir();
         ctx.root = { password: ctx.creds.root };
         ctx.creds.root = undefined;
@@ -1780,9 +1831,9 @@ export class XoSetups {
    */
   async #edge(ctx, p, way, uplink, say, labs = null) {
     const rec = ctx.rec;
+    stopIfCancelled(rec);
     rec.building = 'edge';
     rec.part = null;
-    rec.abort = new AbortController();
     // THE KEY THE FLEET READS THE ROUTERS WITH (edge-credentials.js): the
     // one they were built with, so a rebuild keeps it and the person's vault
     // stays right, or a new one for routers that have none. Its logs go to
@@ -1816,6 +1867,9 @@ export class XoSetups {
       imageDir: path.join(this.stateDir || '.', 'edge'),
       signal: rec.abort.signal,
       say,
+    }).then((said) => {
+      rec.building = null;
+      return said;
     });
   }
 
@@ -2368,6 +2422,18 @@ export class XoSetups {
   }
 }
 
+/**
+ * Stop a step here if the job was cancelled: between two things a step does
+ * that take no signal, so a cancel that landed during one ends the job at
+ * its end rather than being found by a next step that never comes. The
+ * catch in #execute reads `rec.cancelled`, not these words.
+ *
+ * @param {any} rec
+ */
+function stopIfCancelled(rec) {
+  if (rec.cancelled) throw new Error('cancelled');
+}
+
 /** The words a job leaves on itself while it runs: the same keys the apps word. */
 export const STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
   connect: 'Reaching Xen Orchestra',
@@ -2878,8 +2944,9 @@ function status(rec) {
   // until the job is forgotten, because a phone that was closed at the end
   // collects it whenever it next looks.
   if (rec.state === 'done' && rec.handoff) return { ...s, handoff: rec.handoff };
-  // THE ROUTERS' KEY, SEALED the same way, once a policy job is done.
-  if (rec.state === 'done' && rec.watch) return { ...s, watch: rec.watch };
+  // THE ROUTERS' KEY, SEALED the same way, once a policy job is over: done,
+  // or cancelled after it built a router with that key.
+  if ((rec.state === 'done' || rec.state === 'cancelled') && rec.watch) return { ...s, watch: rec.watch };
   // THE POOL, SEALED, while the job waits on the person's choice.
   if (rec.state === 'choosing' && rec.inventory) return { ...s, inventory: rec.inventory };
   // WHAT A RECONNECT DID TO EACH SERVER, SEALED, once it has ended, which
