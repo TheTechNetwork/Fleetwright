@@ -1140,7 +1140,8 @@ test('a box run with FLEETWRIGHT_REQUIRE_SIGNED refuses what a person did not si
   assert.equal(await box.sidecar.intentKeys?.refresh(), false);
   const forged = await start({ key: mallet, keyId: malletId });
   assert.equal(forged.error?.code, 'signature_required');
-  assert.match(forged.text, /signed by a key the minter does not list for eli@example\.com/);
+  // Asked about again, and the list that came back is the coordinator's too.
+  assert.match(forged.text, /signed by a key the minter does not list for eli@example\.com, and this box could not ask the minter again just now \(the key list is not signed by the minter’s key[^)]*\)\. A phone added in the last few minutes can try again shortly\./);
   heal();
 
   // WHAT NEEDS NO SIGNATURE STILL WORKS: a read every box answers, and one of
@@ -1153,6 +1154,50 @@ test('a box run with FLEETWRIGHT_REQUIRE_SIGNED refuses what a person did not si
 
   const seen = /** @type {any} */ (await box.sidecar.health()).signatures;
   assert.equal(seen.enforcing, true, 'the box does not say it enforces');
+});
+
+// A NEW PHONE'S FIRST REQUEST. The phone signs only once the minter lists its
+// key, but the box took its list up to ten minutes before that, and refused
+// the phone until its next one: "signed by a key the minter does not list", on
+// a phone that had just been listed. Reported from a new iPhone.
+test('a box asks the minter again when a signature is by a key its list does not have, at most every two minutes', async (t) => {
+  const { m, core, box, start } = await signingFleet(t, { requireSigned: true });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  let asks = 0;
+  core.minter = /** @type {any} */ ({
+    vault: (/** @type {string} */ route, /** @type {any} */ ask) => {
+      if (route === 'keys') asks += 1;
+      return m.binding.vault(route, ask);
+    },
+  });
+
+  // LISTED AFTER THE BOX'S LIST: taken, on the list the box asks for then.
+  const iPad = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'devicekey', key: iPad.publicJwk, label: 'Eli’s iPad' })).ok, true);
+  const iPadId = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: iPad.publicJwk.x, y: iPad.publicJwk.y });
+  const first = await start({ key: iPad, keyId: iPadId });
+  assert.equal(first.ok, true, first.text);
+  assert.equal(asks, 1);
+
+  // A KEY THE MINTER DOES NOT HAVE, moments later: not asked about again, and
+  // the refusal says when asking again is worth it.
+  const stranger = await generateKeyPair();
+  const strangerId = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: stranger.publicJwk.x, y: stranger.publicJwk.y });
+  const held = await start({ key: stranger, keyId: strangerId });
+  assert.equal(held.error?.code, 'signature_required');
+  assert.match(held.text, /does not list for eli@example\.com, and this box asked the minter for a new list moments ago\. A phone added since then can try again in two minutes\. Nothing was done\./);
+  assert.equal(asks, 1, 'a second unknown key within two minutes asked the minter again');
+  assert.equal(/** @type {any} */ (await box.sidecar.health()).signatures.checked['unknown-key'], 1, 'an intent asked about again was counted twice');
+});
+
+test('a key still missing from the list the box asked for again is refused as one the minter does not have', async (t) => {
+  const { box, start } = await signingFleet(t, { requireSigned: true });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  const stranger = await generateKeyPair();
+  const strangerId = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: stranger.publicJwk.x, y: stranger.publicJwk.y });
+  const refused = await start({ key: stranger, keyId: strangerId });
+  assert.equal(refused.error?.code, 'signature_required');
+  assert.match(refused.text, /does not list for eli@example\.com, even on the list this box asked the minter for just now\. Nothing was done\./);
 });
 
 // WHAT THE FLEET SENDS IN SOMEBODY'S NAME WHILE THEY ARE AWAY, on a box that

@@ -849,9 +849,11 @@ export class Sidecar {
     // enforcement a coordinator can lapse by holding the list back.
     /** @type {string|null} */
     let verdict = null;
+    /** @type {'taken'|'failed'|'held'|undefined} */
+    let askedAgain;
     if (this.intentKeys) {
       try {
-        verdict = (await this.intentKeys.check(intent, this.hostId)).verdict;
+        ({ verdict, askedAgain } = await this.intentKeys.check(intent, this.hostId));
         if (verdict === 'bad-signature' || verdict === 'unknown-key' || verdict === 'revoked') {
           const what = intent.sig ? 'a signature' : 'a delegation';
           this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries ${what} that does not hold (${verdict})${this.requireSigned !== 'off' ? '' : '; not refused, as this box does not enforce'}`);
@@ -861,7 +863,7 @@ export class Sidecar {
       }
     }
     if (this.#enforces(intent) && verdict !== 'signed' && verdict !== 'delegated' && needsSignature(intent.verb)) {
-      const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null);
+      const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null, askedAgain);
       this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'}: ${why}`);
       return {
         v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'signature_required' },
@@ -3046,14 +3048,21 @@ export function commandMeta(verb, params = {}, actor = '') {
  *   could not check at all
  * @param {{ verb: string, actor?: string }} intent
  * @param {string|null} problem  what the box's key list is missing, if anything
+ * @param {'taken'|'failed'|'held'} [askedAgain]  for an unknown key, what asking
+ *   the minter again came to (IntentKeys#check): a phone added a moment ago is
+ *   the usual reason, and what the person can do about it depends on this
  */
-export function unsignedReason(verdict, intent, problem) {
+export function unsignedReason(verdict, intent, problem, askedAgain) {
   const who = intent.actor || 'nobody named';
   switch (verdict) {
     case 'unsigned':
       return `this ${intent.verb} from ${who} was not signed`;
     case 'unknown-key':
-      return `this ${intent.verb} is signed by a key the minter does not list for ${who}`;
+      return `this ${intent.verb} is signed by a key the minter does not list for ${who}${
+        askedAgain === 'taken' ? ', even on the list this box asked the minter for just now'
+          : askedAgain === 'failed' ? `, and this box could not ask the minter again just now${problem ? ` (${problem})` : ''}. A phone added in the last few minutes can try again shortly`
+            : askedAgain === 'held' ? ', and this box asked the minter for a new list moments ago. A phone added since then can try again in two minutes'
+              : ''}`;
     case 'bad-signature':
       return `the signature on this ${intent.verb} does not hold for what arrived, so it was changed after it was signed`;
     case 'no-directory':
