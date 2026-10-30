@@ -11,19 +11,26 @@
 // "Permissions bypassed" only when every machine the start could land on has
 // said it bypasses: a box set to ask refuses it (C-2), and one that has not
 // said may be set to ask with no refusal to stop it, so cannot tell is not
-// allowed (C-5). The Swift compiles only in CI, so this reads it as text: the
-// words a person sees, including why the choice is missing, and the condition
-// around the one choice that can be refused.
+// allowed (C-5). The same words on both phones. The Swift and the Kotlin
+// compile only in CI, so this reads them as text: the words a person sees,
+// including why the choice is missing, and the condition around the one
+// choice that can be refused.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
-const IOS = iosSources();
+const PHONES = { iOS: iosSources(), Android: androidSources() };
 
-/** Swift's multi-line string continuations joined, so a sentence reads as one. */
-const joined = (/** @type {string} */ src) => src.replace(/\\\n\s*/g, '');
+/**
+ * A sentence written across lines read as one: Swift's multi-line string
+ * continuations, and Kotlin's `"..." + "..."`.
+ *
+ * @param {string} src
+ */
+const joined = (src) => src.replace(/\\\n\s*/g, '').replace(/"\s*\+\s*"/g, '');
 
 const WORDS = [
   'Box default',
@@ -45,8 +52,10 @@ const WORDS = [
     "Bypassing them is chosen on New session, where each machine's setting is shown.",
 ];
 
-test('iOS says the permission mode in these words', () => {
-  for (const words of WORDS) assert.ok(joined(IOS).includes(words), `iOS does not say: ${words}`);
+test('both phones say the permission mode in the same words', () => {
+  for (const [phone, src] of Object.entries(PHONES)) {
+    for (const words of WORDS) assert.ok(joined(src).includes(words), `${phone} does not say: ${words}`);
+  }
 });
 
 /**
@@ -63,35 +72,40 @@ function definition(src, name) {
   return rest.slice(0, Math.min(...ends));
 }
 
-test('iOS draws bypassing only when every machine it could land on says it bypasses', () => {
-  // The health field, and the word that takes the choice away.
-  assert.match(IOS, /permissions == "asks"/);
-  // Every Permissions bypassed choice, the kinds editor's included (it shows
-  // one only for a kind already saved that way), is behind a condition.
-  const all = [...IOS.matchAll(/Text\("Permissions bypassed"\)/g)];
-  for (const m of all) {
-    const before = IOS.slice(Math.max(0, /** @type {number} */ (m.index) - 120), m.index);
-    assert.match(before, /\bif [^\n{]+\{\s*$/, 'a Permissions bypassed choice is drawn unconditionally');
-  }
-  // The one on New session, which sends the bypass with the start, is behind
-  // a condition that holds only when every machine has said it bypasses.
-  const choices = [...IOS.matchAll(/Text\("Permissions bypassed"\)\.tag\("dangerous"\)/g)];
-  assert.ok(choices.length > 0, 'no Permissions bypassed choice on New session');
-  for (const m of choices) {
-    const before = IOS.slice(Math.max(0, /** @type {number} */ (m.index) - 120), m.index);
-    const guard = before.match(/\bif \(?([A-Za-z_]\w*)\)? \{\s*$/);
-    assert.ok(guard, 'the Permissions bypassed choice is drawn without a plain condition around it');
-    const body = definition(IOS, guard[1]);
-    assert.ok(body, `no definition of ${guard[1]}`);
-    // Every machine, not "none of them asks": a machine that has not said, or
-    // no machine at all, must leave the choice out.
-    assert.match(body, /"bypassed"/, `${guard[1]} does not ask for "bypassed"`);
-    assert.match(body, /allSatisfy|\.all \{/, `${guard[1]} is not about every machine`);
-    assert.match(body, /!\w+\.isEmpty|\.isNotEmpty\(\)/, `${guard[1]} allows it with no machine to judge`);
-    assert.doesNotMatch(body, /"asks"/, `${guard[1]} is "none asks", which lets cannot tell through`);
-    assert.doesNotMatch(body, /\?\?\s*"bypassed"/, `${guard[1]} reads a machine that has not said as one that bypasses`);
-    // And the send holds to the same condition, so a choice made while it was
-    // offered is not sent after it went.
-    assert.match(IOS, new RegExp(`"dangerous" && ${guard[1]}\\)? \\? permission`), 'the send is not guarded');
+test('both phones draw bypassing only when every machine a start could land on says it bypasses', () => {
+  // Any Permissions bypassed choice, a picker row on iOS or a chip on Android;
+  // and the one on New session, which sends the bypass with the start. The
+  // kinds editors show one only for a kind already saved that way.
+  const ANY = { iOS: /Text\("Permissions bypassed"\)/g, Android: /AssistChip\(\s*onClick = \{[^}\n]*"dangerous"[^}\n]*\}/g };
+  const START = { iOS: /Text\("Permissions bypassed"\)\.tag\("dangerous"\)/g, Android: /AssistChip\(\s*onClick = \{ permission = "dangerous" \}/g };
+  const SEND = { iOS: (/** @type {string} */ g) => `"dangerous" && ${g}) ? permission`, Android: (/** @type {string} */ g) => `it == "dangerous" && ${g})` };
+  for (const [name, src] of Object.entries(PHONES)) {
+    const phone = /** @type {'iOS'|'Android'} */ (name);
+    // The health field, and the word that takes the choice away.
+    assert.match(src, /permissions == "asks"/, phone);
+    for (const m of src.matchAll(ANY[phone])) {
+      const before = src.slice(Math.max(0, /** @type {number} */ (m.index) - 120), m.index);
+      assert.match(before, /\bif [^\n{]+\{\s*$/, `${phone} draws a Permissions bypassed choice unconditionally`);
+    }
+    const choices = [...src.matchAll(START[phone])];
+    assert.ok(choices.length > 0, `${phone} has no Permissions bypassed choice on New session`);
+    for (const m of choices) {
+      const before = src.slice(Math.max(0, /** @type {number} */ (m.index) - 120), m.index);
+      const guard = before.match(/\bif \(?([A-Za-z_]\w*)\)? \{\s*$/);
+      assert.ok(guard, `${phone} draws the Permissions bypassed choice without a plain condition around it`);
+      const g = guard[1];
+      const body = definition(src, g);
+      assert.ok(body, `${phone} has no definition of ${g}`);
+      // Every machine, not "none of them asks": a machine that has not said,
+      // or no machine at all, must leave the choice out.
+      assert.match(body, /"bypassed"/, `${phone}: ${g} does not ask for "bypassed"`);
+      assert.match(body, /allSatisfy|\.all \{/, `${phone}: ${g} is not about every machine`);
+      assert.match(body, /!\w+\.isEmpty|\.isNotEmpty\(\)/, `${phone}: ${g} allows it with no machine to judge`);
+      assert.doesNotMatch(body, /"asks"/, `${phone}: ${g} is "none asks", which lets cannot tell through`);
+      assert.doesNotMatch(body, /\?\?\s*"bypassed"/, `${phone}: ${g} reads a machine that has not said as one that bypasses`);
+      // And the send holds to the same condition, so a choice made while it
+      // was offered is not sent after it went.
+      assert.ok(src.includes(SEND[phone](g)), `${phone} sends a bypass without checking ${g}`);
+    }
   }
 });
