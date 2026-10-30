@@ -2389,10 +2389,19 @@ export class XoSetups {
       // updates, and the reconnect watchdog
       async (/** @type {any} */ ctx) => {
         if (!Object.hasOwn(ctx.methods, 'plugin.get')) return 'This Xen Orchestra does not list its plugins; updates stay as they are.';
-        const plugins = (await ctx.admin.call('plugin.get')) || [];
-        const watchdog = await this.#loadPlugin(ctx, plugins, RECONNECT_PLUGIN_ID);
-        const after = watchdog ? ' It reconnects a pool it loses by itself.' : ' Fleetwright’s reconnect watchdog is not on it, so a pool it loses waits for Reconnect.';
-        return `${await this.#updates(ctx, plugins)}${after}`;
+        // A WARNING, NOT THE END OF THE JOB. The token was made a step ago;
+        // a failure here used to fail the whole setup and throw that token
+        // away unhanded, over the one step the pool can do without. What is
+        // said is what is known: the plugins' state after a call that failed
+        // part way is Xen Orchestra's to show, not this job's to guess.
+        try {
+          const plugins = (await ctx.admin.call('plugin.get')) || [];
+          const watchdog = await this.#loadPlugin(ctx, plugins, RECONNECT_PLUGIN_ID);
+          const after = watchdog ? ' It reconnects a pool it loses by itself.' : ' Fleetwright’s reconnect watchdog is not on it, so a pool it loses waits for Reconnect.';
+          return `${await this.#updates(ctx, plugins)}${after}`;
+        } catch (e) {
+          return `Updates were not turned on: ${scrub(/** @type {Error} */ (e).message, ctx.secrets ?? {})}. The token was made all the same; whether Xen Orchestra updates itself, and whether the reconnect watchdog is loaded, is for its Settings, Plugins to say.`;
+        }
       },
       // hand-off
       async (/** @type {any} */ ctx) => {

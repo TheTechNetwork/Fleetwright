@@ -232,6 +232,22 @@ test('automatic updates switched off by a person stay off', { skip }, async (t) 
   assert.match(end.text, /reconnect watchdog is not on it/);
 });
 
+test('updates that cannot be turned on are a warning in the summary, and the token still reaches the phone', { skip }, async (t) => {
+  // A failure in the updates step, after the token was made, failed the
+  // whole job and threw the token away unhanded.
+  const xo = await standIn(t, { refuse: { 'plugin.get': 'not enough permissions' } });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed, reply } = await phone(begun, xo.address, xo.pin);
+  await setups.run({ job: begun.xosetup.job, sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.equal((await collect(end, reply, xo.address)).token, 'tok-limited-123');
+  assert.match(end.text, /Updates were not turned on: not enough permissions\. The token was made all the same; whether Xen Orchestra updates itself, and whether the reconnect watchdog is loaded, is for its Settings, Plugins to say\./);
+  assert.doesNotMatch(end.text, /updates itself once a day|reconnects a pool it loses by itself/);
+});
+
 test('the reconnect watchdog a build carries is loaded and kept loading', { skip }, async (t) => {
   const xo = await standIn(t, { watchdog: { id: 'fleetwright-reconnect', loaded: false, autoload: false } });
   const { setups } = await machine();
