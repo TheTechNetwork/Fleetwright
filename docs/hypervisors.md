@@ -1303,7 +1303,17 @@ admin sign-in for as long as it runs:
   a VM that stays up, and its start time moving is read as the failure at
   once. The steps run in a subshell of their own, so the first one that fails
   stops the rest; they used to run where bash ignores `set -e`, and a broken
-  install could power off and become the template.
+  install could power off and become the template. **And stopped is not
+  done**: a build VM given a report token has to say `done` before it halts,
+  and the box waits half a minute past the halt for a late one. A VM that
+  stops without it, by a host rebooted for maintenance, a stop from Xen
+  Orchestra or an install cut off mid-step, is kept, stopped, as
+  `fleetwright-image-build (stopped before done)` and never made the
+  template, and the failure says what it last reported; any halt used to be
+  taken for success and cloned from. The VM says `done` up to six times, ten
+  seconds apart, until one gets through, since it is the one report that
+  decides the build. Without a token the power state is still all there is,
+  as before reports existed.
 
   **It carries the guest agent.** XCP-ng's `xen-guest-agent` 0.4.0,
   upstream's own release build, pinned by size and SHA-256 like the images:
@@ -1333,31 +1343,43 @@ admin sign-in for as long as it runs:
 
   **It says where it has got to.** The box running the job asks the
   coordinator for a report token for it, and the script posts each step to
-  `/api/xosetup/report` with it: started, packages, installer (Fleetwright),
-  image (the session image's pull, most of the time), cleaning, done. The
-  coordinator passes each step to the box, and the phone shows it in place
-  of a guess against time. **The pull is counted in bytes.** It runs inside
-  `apt-get install fleetwright`, so the script watches it from beside that
-  one command: it finds the `podman pull` among the VM's processes, asks the
-  image's registry for its size (the layers for the VM's architecture,
-  anonymously, as the pull does), and reports the bytes the VM has received
-  since, every 15 seconds, until the pull is gone. The phone reads "fetching
-  the session image: 131 of 262 MB", then that all of it is in and being
-  unpacked, which rootless podman does after the download and which nothing
-  counts; the bar moves by those bytes. A rebuild that starts from a kept
-  disk spends seconds on the disk, so it gives the disk 5% of the bar and
-  the install the rest, where it used to open at 45%. A VM that has said nothing after five minutes is named as the likely
-  problem: no network behind the edge router, or a start-up script that did
-  not run. Its screen shows its address, its route and a name looked up
-  first; a VM that cannot look up a name for half a minute stops there and
-  prints the servers DHCP told it to ask. Its reports still reach the
+  `/api/xosetup/report` with it: started, dns (its network answering a name,
+  below), packages, installer (Fleetwright), cleaning, done. The coordinator
+  passes each step to the box, and the phone shows it in place of a guess
+  against time. **And it says its step again every minute**, so that silence
+  means something: a box that has heard nothing for three minutes says what
+  the VM last said and how long ago ("its VM last said that installing
+  Fleetwright, 4 min ago, and nothing since"), where it used to repeat the
+  step as if it were news, and a phone showed "started, 12 min so far" with
+  no warning. **No container goes on the image.** The VM is the sandbox ("Inside the
+  VM"): `FLEETWRIGHT_SANDBOX` is off by default and nothing on a clone turns
+  it on, yet every image used to install podman, a Recommends of the
+  package, and pull the 293 MB session image, most of a build, for nothing.
+  The package is installed without its Recommends and the installer is told
+  `FLEETWRIGHT_NO_SANDBOX=1` and `FLEETWRIGHT_BUILD_IMAGE=0`, which
+  `install.sh` honours by installing no podman and building no sandbox
+  image. The `image` step, which counted that pull in bytes from beside
+  `apt-get` ("fetching the session image: 131 of 262 MB"), stays in the
+  script and reports only if a pull appears, so a build now goes from
+  installer to cleaning without it. A rebuild that starts from a kept disk
+  spends seconds on the disk, so it gives the disk 5% of the bar and the
+  install the rest. A VM that has said nothing after three minutes is named
+  as the likely problem: no network behind the edge router, or a start-up
+  script that did not run. Its screen shows its address, its route and a
+  name looked up first, and the looking is a step of its own, `dns`: fifteen
+  looks at most, each given two seconds for one answer (`RES_OPTIONS`), the
+  whole wait held to a minute, where the first run's fifteen unbounded
+  `getent` calls against a server that dropped queries took many minutes and
+  showed on the phone as a build frozen at "started"; a VM that gets no name
+  in that minute stops there and prints the servers DHCP told it to ask. Its reports still reach the
   coordinator then: the box writes the coordinator's addresses into the
   script, and a report that cannot go by name is sent to those under the
   same name, so TLS still checks the coordinator's certificate. A failure sends the end of the install log with it, which is the
   only way to read it, because the VM has no password. A failed build's VM is
-  kept, stopped, as `fleetwright-image-build (install failed)`, and one that
-  runs past 25 minutes as `fleetwright-image-build (install timed out)`;
-  applying again removes it. A good one is named Fleetwright Debian 13,
+  kept, stopped, as `fleetwright-image-build (install failed)`, one that
+  runs past 25 minutes as `fleetwright-image-build (install timed out)`, and
+  one that halted without saying done as `(stopped before done)`; applying
+  again removes it. A good one is named Fleetwright Debian 13,
   tagged `fleetwright-image`, converted to a template and put in the resource
   set.
 - **OPNsense, built and proved for the edge router.** Not from a second disk:
