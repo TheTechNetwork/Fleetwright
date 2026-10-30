@@ -1796,10 +1796,15 @@ export class XoSetups {
         await startXoVm(ctx.pool, ctx.vm.vm);
         ctx.stopped = false;
         ctx.vmState = 'Xen Orchestra’s VM was started again.';
+        // WHAT THE WAIT KNOWS is that the port took a connection
+        // (xo-watchdog.js, waitForXo): not that Xen Orchestra is up behind
+        // it, and not that it loaded the plugin, which this job, holding the
+        // pool master's root password and no Xen Orchestra sign-in, cannot
+        // ask. It used to say the plugin had loaded (C-5).
         const back = await this.waitXo(rec.xoAddress, { signal: rec.abort?.signal });
         ctx.summary = back
-          ? `The reconnect watchdog is in Xen Orchestra at ${rec.xoAddress}, and it is answering again. It loaded as Xen Orchestra started, and reconnects a pool it loses by itself from now on.`
-          : `The reconnect watchdog is in Xen Orchestra at ${rec.xoAddress}, and ${name} was started again, but Xen Orchestra had not answered after five minutes. Look at it in the pool; it may still be starting.`;
+          ? `The reconnect watchdog is on ${name}’s disk, and Xen Orchestra at ${rec.xoAddress} answers on its port again. Whether it loaded the plugin as it started was not checked from here: Settings, Plugins in Xen Orchestra lists it, and once loaded it reconnects a pool it loses by itself.`
+          : `The reconnect watchdog is on ${name}’s disk, and ${name} was started again, but nothing answered on Xen Orchestra’s port at ${rec.xoAddress} after five minutes. Look at it in the pool; it may still be starting.`;
       },
     ];
   }
