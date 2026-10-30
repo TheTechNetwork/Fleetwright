@@ -594,6 +594,18 @@ export class HttpAdapter {
       }
       const actor = claimed || 'web';
 
+      // FROM THE FLEET OR FROM THIS BOX, which decides whether the operator's
+      // FLEETWRIGHT_SKIP_PERMISSIONS off binds a start (commands.js
+      // permissionCeiling). The sidecar's token says so on its own; the
+      // sidecar also says so in a field, for a box where it still holds the
+      // operator's token. A field that only ever takes something away needs
+      // no more trust than the token it arrives with, so it is accepted from
+      // either — and anything but the one word is refused, not ignored.
+      if (body.via !== undefined && body.via !== null && body.via !== 'fleet') {
+        return json(res, 400, { ok: false, text: 'via is not in the form this accepts' });
+      }
+      const via = principal === 'sidecar' || body.via === 'fleet' ? 'fleet' : undefined;
+
       // THE SIDECAR'S TOKEN RUNS THE SIDECAR'S COMMANDS. Judged on the same
       // canonical word dispatch will run, so an alias is not a way round, and
       // on the sub-form for the two words that cover both a person's action
@@ -613,7 +625,7 @@ export class HttpAdapter {
       const reply = await dispatch(
         // Split back into a list here, so a command reads labels and never a
         // string it has to remember to parse.
-        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, usage: this.usage, ...meta,
+        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, usage: this.usage, ...meta, ...(via ? { via } : {}),
           ...(meta.hostLabels ? { hostLabels: String(meta.hostLabels).split(',').filter(Boolean) } : {}) },
         line,
       );
@@ -660,7 +672,7 @@ export class HttpAdapter {
    * apps already render null as "not reported". Caught per field rather than
    * around the whole object so one bad file does not blank the others.
    *
-   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, houseRules: number|null }}
+   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, houseRules: number|null, permissions: 'asks'|'bypassed' }}
    */
   #hostFacts() {
     const cfg = this.cfg;
@@ -701,6 +713,15 @@ export class HttpAdapter {
         if (!rules) return null;
         return rules.ok ? rules.chars : 0;
       }),
+      // WHAT A SESSION STARTED WITH NO MODE DOES HERE: `asks` before each
+      // tool, or runs with permissions `bypassed` (FLEETWRIGHT_SKIP_PERMISSIONS,
+      // on unless the operator turned it off). A phone labels its "Box default"
+      // choice from this, and offers "Permissions bypassed" only on a box that
+      // says `bypassed`, because on one that says `asks` a start from the fleet
+      // asking for it is refused (commands.js permissionCeiling). Read from
+      // configuration that cannot fail, so it is never null here; a hub too
+      // old to send it is the sidecar's null, which is cannot tell.
+      permissions: cfg.skipPermissions ? 'bypassed' : 'asks',
     };
   }
 
