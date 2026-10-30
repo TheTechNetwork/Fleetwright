@@ -1043,9 +1043,12 @@ out, a machine that can build it offers *Build the edge router on it*
    It also filters what the machines behind it do ("What the edge filters",
    below).
    It hands out 10.254.0.100–250 and answers DNS with Unbound. It has **no
-   login** (root's password is `*`) and no anti-lockout rule, because the only
-   thing that could reach it is a lab, and it is not tagged `fleetwright`, so
-   the fleet's token cannot touch the fleet's own way out.
+   login** (root's password is `*`) and no anti-lockout rule: from inside,
+   what reaches it is a lab or the uplink, and from the way out only the
+   watch key's HTTPS ("Watching the edge routers"), which reads its status
+   pages and cannot change its configuration (what it can do is in
+   `security.md`). It is not tagged `fleetwright`, so the fleet's token
+   cannot touch the fleet's own way out.
 3. When it is already there, moves its WAN if the way out changed and starts
    it if it was stopped, and says the WAN address Xen Orchestra has for it,
    or that Xen Orchestra does not know it, which is not the same as it having

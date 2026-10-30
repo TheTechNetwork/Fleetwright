@@ -712,9 +712,14 @@ machine of the fleet, through the coordinator.
   which is what they could ask for themselves; it cannot change a lab's
   rules. The admin's limit on how many labs one person may hold is the
   coordinator's to keep, so a compromised one can ignore it: that costs
-  other people a free lab, not anyone's isolation. Seeing inside a lab would need a way into the edge, and none exists:
-  the design for one keeps its key on the pool's own machine, never with a
-  session, and is not built.
+  other people a free lab, not anyone's isolation. Seeing inside a lab would
+  need a way into the edge, and the one that exists is the routers' watch key
+  (the edge key bullet above): status pages and `user-config-readonly`, no
+  log pages, held by the boxes the person approved for the pool and never by
+  a session. So it cannot read a lab's firewall log, and nothing a session
+  holds reaches the router at all. Handing a lab's log to its session is
+  designed and not built (`docs/hypervisors.md`, "Seeing what crossed a
+  lab").
 - **SSH keys** are public keys, kept as the named secret
   `SSH_AUTHORIZED_KEYS` and checked on the phone and on the box to be public
   keys and nothing else. They go on the machine's cloud-init drive beside
@@ -1750,7 +1755,8 @@ own properties"), get `[]` from the REST API's `/rest/v0/users` and 403 from
 `/rest/v0/users/<id>`, and none of `xo.getAllObjects`, `group.getAll`,
 `acl.getCurrentPermissions`, `resourceSet.getAll`, `cloudConfig.getAll` or
 `user.getAuthenticationTokens` carried the value. A router now carries only a
-SHA-256 of the password under a label of its own and the pin of its
+mark of the password (scrypt under a fixed salt, `markCarp` in
+`edge-credentials.js`) under a label of its own and the pin of its
 certificate (`fleetwright-carp-mark`, `fleetwright-watch-pin`), enough for the
 job to tell that what it kept is what the router has. The repo's own
 functions were run against that Xen Orchestra: the fleet's token and the plain
