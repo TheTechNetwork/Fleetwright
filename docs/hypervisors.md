@@ -1649,10 +1649,18 @@ otherwise cancels the job and names the machine to update. Seen: a box with
 the new release on disk and a sidecar still running the old one, which
 `/update --restart` now fixes ([`packaging.md`](./packaging.md)). Losing
 the phone loses the token, not the pool: running the setup again finds the
-user and its resource set and makes a new token. This is the phone-direct
-model [`manage.md`](./manage.md) sets out for managing the pool; holding the
-token on a fleet machine as well, so the pool can be acted on with the app
-closed, is the opt-in route that page describes, not the default.
+user and its resource set, makes a new token and removes the old ones
+(above). This is the phone-direct model [`manage.md`](./manage.md) sets out
+for managing the pool. **The phone also keeps the record in your vault**, as
+`hypervisor:<address>`, the moment it has collected a token
+(`XOSetupHandoff.collectAndKeep` on iOS, `XoHandoff.collectAndKeep` on
+Android), so the boxes you approved can make machines on the pool
+("Machines from your pool"); a phone not signed in to GitHub is told to sign
+in first, since the vault is kept under that account, and says when the
+fleet refused. That is the default, not a choice: the switch a pool set up
+before it offers (Machines › the pool › Keep its token in the fleet) is for
+catching up, and nothing on either phone keeps a token out of the vault
+except not being signed in.
 
 Run against a real Xen Orchestra over HTTPS and plain HTTP: the phone's key
 opened the token, the token signed in as the limited user and an admin call
