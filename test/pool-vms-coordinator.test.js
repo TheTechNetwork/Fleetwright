@@ -562,6 +562,45 @@ test('removing a person stops the fleet making machines in their name and takes 
   assert.equal(asked.filter((x) => x.spec.verb === 'provision').length, 0, 'a machine was asked for in the name of somebody with no credential');
 });
 
+test('removing a person ends their kept machines with the delegation they signed for it, on every box the stop reaches', async () => {
+  // #forgetPerson sent the stops and forgot the delegation in the same
+  // breath. `send` covers an intent as it goes out, so the first box was sent
+  // it; a box answering "not on these pools" moved the stop to the next,
+  // which was sent it bare, and a box that takes only signed requests
+  // refused it, leaving the machine running. Over the sockets themselves,
+  // because that is where the delegation is attached.
+  const core = new CoordinatorCore({ intentTimeoutMs: 2_000, logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  /** @type {Record<string, any[]>} */
+  const frames = { aaa: [], bbb: [] };
+  for (const id of Object.keys(frames)) {
+    core.hostConnected(id, (/** @type {any} */ msg) => {
+      frames[id].push(msg);
+      if (msg.kind !== 'intent') return;
+      const answer = msg.verb === 'vmctl' && id === 'aaa' ? { ok: false, notHere: true, text: 'not on these pools' } : { ok: true, text: 'done' };
+      queueMicrotask(() => void core.onHostMessage(id, { v: PROTOCOL_VERSION, kind: 'reply', id: msg.id, ...answer }));
+    });
+    await core.onHostMessage(id, { v: PROTOCOL_VERSION, kind: 'health', hostId: id, health: { hostId: id, protocol: 9, labels: [], maxSessions: 5, running: 0, free: 5, sessions: [], loadavg: [0, 0, 0], claudeAccounts: 1, hub: { reachable: true }, xo: holding(SAM) } });
+  }
+  const signedIn = /** @type {any} */ (await core.issueClient({ email: SAM }, 'sam phone'));
+  const { publicJwk, privateJwk } = await generateKeyPair();
+  const kid = await keyId({ kty: 'EC', crv: 'P-256', x: String(publicJwk.x), y: String(publicJwk.y) });
+  const now = Date.now();
+  // What the phone signs when it keeps machines ready (Fleet.swift): the fleet may end them.
+  const grant = { v: 1, id: 'end-kept-machines-0001', actor: SAM, verbs: ['vmctl'], hosts: ['*'], match: { action: 'stop' }, issuedAt: now, expires: now + 3_600_000 };
+  const delegation = { grant, sig: await sign(privateJwk, delegationSigningInput(grant)), kid };
+  const set = await core.setVmStandby(sam, { template: DEBIAN, count: 1, delegations: [delegation] });
+  assert.equal(set.ok, true, set.text);
+  const intents = (/** @type {string} */ verb) => [...frames.aaa, ...frames.bbb].filter((m) => m.kind === 'intent' && m.verb === verb);
+  await until(() => core.vmStandby.machines.size > 0 && intents('provision').length === 1, 'a kept machine to be asked for');
+
+  core.revokeClient(signedIn.client.id);
+  await until(() => frames.bbb.some((m) => m.kind === 'intent' && m.verb === 'vmctl'), 'the stop to move on to the second box');
+  const stops = intents('vmctl');
+  assert.deepEqual(stops.map((m) => m.params.action), ['stop', 'stop']);
+  assert.ok(stops.every((m) => m.delegation?.grant?.id === grant.id), 'a box after the first was sent the stop without the delegation');
+  await until(() => core.delegationsFor({ email: SAM }).length === 0, 'the delegation to be forgotten once the stops had settled');
+});
+
 test('what is kept ready survives a restart, and a machine that never joined is forgotten in time', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
   await core.setVmStandby(eli, { template: DEBIAN, count: 2 });

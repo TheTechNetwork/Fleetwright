@@ -2717,9 +2717,7 @@ export class CoordinatorCore {
     // and its ownership check runs before its first await, so before the
     // hosts are revoked below.
     const person = { email: address, admin: false };
-    for (const name of extra) {
-      void this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {});
-    }
+    const stops = extra.map((name) => this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {}));
     /** @type {string[]} */
     const hosts = [];
     for (const h of this.hostIds.list()) {
@@ -2742,8 +2740,18 @@ export class CoordinatorCore {
       }
     }
     // What they signed for the fleet to do in their name: it is not theirs to
-    // ask any more, so it is not carried.
-    if (this.delegations.forget(address)) changed = true;
+    // ask any more, so it is not carried. ONCE THE STOPS ABOVE HAVE SETTLED,
+    // when there are any: `send` covers an intent with a delegation as it
+    // goes out, and a stop that moves on from a box answering "not on these
+    // pools" is sent to the next box then. Forgotten in the same breath the
+    // stops were sent, only the first box was sent what the person signed to
+    // let the fleet end their machines, and a box that takes only signed
+    // requests refused the rest, leaving their machines running.
+    if (stops.length) {
+      void Promise.allSettled(stops).then(() => {
+        if (this.delegations.forget(address)) this.onStateChanged?.();
+      });
+    } else if (this.delegations.forget(address)) changed = true;
     for (const [code, p] of this.enrollment.pending) {
       if (emailOf(p.actor) === address) {
         this.enrollment.pending.delete(code);
