@@ -324,6 +324,20 @@ lists for them. The refusal is `signature_required`, with the reason in words:
 The last one refuses on purpose. Enforcement that lapsed while the list was
 late would be enforcement a coordinator could lapse by holding the list back.
 
+**A key the list does not have is asked about again, once.** A box takes the
+list every ten minutes, and a phone signs as soon as the minter lists its key,
+so a phone added in between was refused on its first request: signed by a key
+the minter does not list, about a key the minter had just listed. Now a box
+that finds a key it does not have asks for the list again before it answers,
+and checks again with what comes back. The list is taken or not on the same
+terms as every list, so this changes when a box asks and nothing about what it
+believes. It asks this way at most every two minutes (`MISS_REFRESH_MS` in
+`intent-keys.js`): the coordinator allows a box twelve asks in ten minutes, and
+a stream of strange keys must not spend the ones the regular refresh needs.
+The refusal says which happened: the key is missing even from the list just
+asked for; the box could not ask again (and why); or it asked moments ago, and
+a phone added since then can try again in two minutes.
+
 **What it still takes unsigned.** The verbs whose answers a box reports by
 itself (`list`, `status`, `health`, `updates`, `profiles`), and the three the
 coordinator says alone in the table above (`forgetperson`, `vmlogin`, `mint`).
