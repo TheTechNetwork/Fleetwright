@@ -459,6 +459,15 @@ export class XoPools {
      * @type {Map<string, { vm: string, owner: string, at: number }>}
      */
     this.made = new Map();
+    /**
+     * THE MACHINES BEING HANDED THEIR LOGIN THIS MOMENT, by name: taken out
+     * of `made` before `handLogin` first waits on anything, and put back if
+     * the hand-over does not happen. Two asks for one machine at once (the
+     * machine's and a copy's, or the coordinator's twice) both read `made`
+     * before either had deleted from it, and both were handed the login.
+     * @type {Set<string>}
+     */
+    this.handing = new Set();
     /** @type {Map<string, Seen>} what the last look found, keyed as `held` */
     this.seen = new Map();
     /**
@@ -939,16 +948,43 @@ export class XoPools {
    * `notHere` when this box did not make it, so the coordinator asks the
    * next; after a restart this box made nothing, as far as it knows.
    *
+   * ONCE MEANS ONE ASK AT A TIME TOO. The machine is taken out of `made` and
+   * put in `handing` before the first wait on Xen Orchestra, so a second ask
+   * arriving while the first is out finds nothing to hand and says the
+   * first has it; two asks at once used to both read `made` and both be
+   * handed the login. The entry goes back (`keep`) when the hand-over did
+   * not happen for a reason that may pass: the machine not running yet, a
+   * pool that would not say or could not be reached. It stays gone when
+   * the machine is not the one made here, or is on no pool that answered.
+   *
+   * A POOL THAT COULD NOT BE REACHED MAY BE THE ONE IT IS ON. With two
+   * pools, one down and the other without the machine, this used to answer
+   * "not on any of your pools any more", with neither `unreachable` nor
+   * `notHere`, so the coordinator stopped there and the machine never got
+   * its login. Now any pool unreached with the machine found nowhere is
+   * `unreachable`, and the entry is kept for the next ask.
+   *
    * @param {{ owner: string, name: string, key: string }} ask
    * @returns {Promise<{ ok: boolean, text: string, sealed?: any, notHere?: boolean, unreachable?: boolean }>}
    */
   async handLogin({ owner, name, key }) {
     const who = String(owner || '').toLowerCase();
     const made = this.made.get(String(name));
-    if (!made || made.owner !== who) return { ok: false, notHere: true, text: `${name} was not made by this box for ${who}, as far as it knows.` };
+    if (!made || made.owner !== who) {
+      if (!made && this.handing.has(String(name))) return { ok: false, text: `${name} is being handed its login already, so this ask is handed nothing.` };
+      return { ok: false, notHere: true, text: `${name} was not made by this box for ${who}, as far as it knows.` };
+    }
     const token = this.claude.get(who);
     if (!token) return { ok: false, text: `This box holds no Claude login of ${who}\u2019s to hand ${name}. Keep one in your vault (claude setup-token), then ask for the machine again.` };
     const mine = [...this.held.values()].filter((h) => h.owner === who);
+    // CLAIMED, before anything is waited on.
+    this.made.delete(String(name));
+    this.handing.add(String(name));
+    const keep = () => {
+      this.handing.delete(String(name));
+      if (!this.made.has(String(name))) this.made.set(String(name), made);
+    };
+    const spent = () => this.handing.delete(String(name));
     /** @type {string[]} */
     const unreachable = [];
     for (const { record } of mine) {
@@ -966,15 +1002,19 @@ export class XoPools {
         if (!vm) continue;
         const set = await fleetSetOf(rpc);
         if (vm.name_label !== name || tagValue(vm, FOR_PREFIX) !== who || !inFleetSet(vm, set)) {
-          this.made.delete(String(name));
+          spent();
           return { ok: false, text: `${name} is not the machine this box made any more, so it is handed nothing.` };
         }
-        if (vm.power_state !== 'Running') return { ok: false, text: `${name} is ${String(vm.power_state || 'not running').toLowerCase()}, so it is handed nothing.` };
-        this.made.delete(String(name));
+        if (vm.power_state !== 'Running') {
+          keep();
+          return { ok: false, text: `${name} is ${String(vm.power_state || 'not running').toLowerCase()}, so it is handed nothing.` };
+        }
         const sealed = await seal({ to: key, aad: await claudeBindingFor(key), payload: { token } });
+        spent();
         this.log.info(`sidecar: handed ${name} ${who}\u2019s Claude login`);
         return { ok: true, text: `Handed ${name} your Claude login.`, sealed };
       } catch (e) {
+        keep();
         return { ok: false, text: `${record.address} would not say whether ${name} is the machine made here: ${/** @type {Error} */ (e).message}` };
       } finally {
         try {
@@ -984,8 +1024,18 @@ export class XoPools {
         }
       }
     }
-    if (mine.length && unreachable.length === mine.length) return { ok: false, unreachable: true, text: `Your pools could not be reached from here: ${unreachable.join('; ')}` };
-    this.made.delete(String(name));
+    if (unreachable.length) {
+      keep();
+      return {
+        ok: false,
+        unreachable: true,
+        text:
+          unreachable.length === mine.length
+            ? `Your pools could not be reached from here: ${unreachable.join('; ')}`
+            : `${name} is not on the pools of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}`,
+      };
+    }
+    spent();
     return { ok: false, text: `${name} is not on any of your pools any more, so it is handed nothing.` };
   }
 
@@ -1041,7 +1091,19 @@ export class XoPools {
         }
       }
     }
-    if (unreachable.length === mine.length) return { ok: false, unreachable: true, text: `Your pools could not be reached from here: ${unreachable.join('; ')}` };
+    // NOT FOUND ON THE POOLS THAT ANSWERED is not "not on any of your pools"
+    // while one did not answer: it may well be on that one (handLogin says
+    // the same of a login).
+    if (unreachable.length) {
+      return {
+        ok: false,
+        unreachable: true,
+        text:
+          unreachable.length === mine.length
+            ? `Your pools could not be reached from here: ${unreachable.join('; ')}`
+            : `${name} is not on the pools of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}`,
+      };
+    }
     return { ok: false, notHere: true, text: `${name} is not on any of your pools this box holds.` };
   }
 

@@ -708,6 +708,59 @@ test('a stopped machine is removed only once it is old enough to have booted and
   assert.deepEqual(stand.calls.filter((c) => c.method === 'tag.add').map((c) => [c.params.id, c.params.tag]), [['stopped', `fleetwright-restarted:${s}`]]);
 });
 
+test('two asks for one machine’s login at once: one is handed it and the other is handed nothing', async () => {
+  // Both used to read the machine from `made` before either had taken it
+  // out, and both were handed the login.
+  const m = withMachine();
+  m.pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  m.pools.made.set('vm-111111111111', { vm: 'vm-uuid', owner: ELI, at: Date.now() });
+  const key = await newSealKey();
+  const ask = () => m.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  const [a, b] = await Promise.all([ask(), ask()]);
+  assert.equal([a, b].filter((r) => r.ok).length, 1, `${a.text} / ${b.text}`);
+  const other = /** @type {any} */ ([a, b].find((r) => !r.ok));
+  assert.match(other.text, /is being handed its login already/);
+  assert.equal(other.notHere, undefined, 'this box made it: the coordinator is not sent to the next');
+  assert.equal(m.pools.made.has('vm-111111111111'), false);
+  assert.equal(m.pools.handing.size, 0);
+
+  // A NO THAT MAY PASS keeps the machine for its next ask: not running yet.
+  const paused = withMachine({ state: 'Paused' });
+  paused.pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  paused.pools.made.set('vm-111111111111', { vm: 'vm-uuid', owner: ELI, at: Date.now() });
+  const later = await paused.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(later.ok, false);
+  assert.match(later.text, /is paused/);
+  assert.equal(paused.pools.made.has('vm-111111111111'), true, 'asked again once running, it is handed');
+  assert.equal(paused.pools.handing.size, 0);
+});
+
+test('a machine not found on the pools that answered, with another unreached, is said to be so and kept for the next ask', async () => {
+  // One of two pools down and the machine not on the other used to answer
+  // "not on any of your pools any more", with neither `unreachable` nor
+  // `notHere`: the coordinator stopped there, the entry was gone, and the
+  // machine never got its login.
+  const stand = xo({ objects: [pool, image] });
+  const connect = /** @type {any} */ (async ({ address }) => {
+    if (address === 'other.lan') throw new Error('connect ETIMEDOUT');
+    return stand.rpc;
+  });
+  const pools = new XoPools({ connect, connectPlain: connect });
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'hypervisor:other.lan', value: record({ address: 'other.lan' }) }, { name: 'claude', value: CLAUDE }] }]);
+  pools.made.set('vm-111111111111', { vm: 'vm-uuid', owner: ELI, at: Date.now() });
+  const key = await newSealKey();
+  const r = await pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(r.ok, false);
+  assert.equal(r.unreachable, true, r.text);
+  assert.match(r.text, /pools of yours that answered.*other\.lan: connect ETIMEDOUT/);
+  assert.ok(pools.made.has('vm-111111111111'), 'kept for the next ask');
+  // The same of working it.
+  const c = await pools.control({ owner: ELI, name: 'vm-111111111111', action: 'reboot' });
+  assert.equal(c.unreachable, true, c.text);
+  assert.equal(c.notHere, undefined);
+  assert.match(c.text, /pools of yours that answered.*other\.lan: connect ETIMEDOUT/);
+});
+
 test('a machine is given its owner’s SSH keys and sudo when they keep some, and nothing when they do not', () => {
   const key = `ssh-ed25519 ${'A'.repeat(68)} eli@laptop`;
   const pools = holder(xo());
