@@ -1183,7 +1183,13 @@ export class XoSetups {
         if (rec.cancelled) {
           if (reconnect) await this.#sealReconnect(ctx);
           rec.state = 'cancelled';
-          rec.text = `Cancelled before ${STEP_WORDS[keys[i]] ?? `step ${i + 1}`}.${policy || (reconnect && !ctx.outcomes) ? ' Nothing was changed.' : ''}`;
+          // AN INSTALL SAYS WHAT IS ON THE POOL, not which step was next:
+          // "Cancelled before Reaching Xen Orchestra" after the installer had
+          // finished hid that fleetwright-xo now exists, with the password
+          // the person chose or the default (deployCancelled, C-5).
+          rec.text = deploy
+            ? deployCancelled(rec.phase, ctx)
+            : `Cancelled before ${STEP_WORDS[keys[i]] ?? `step ${i + 1}`}.${policy || (reconnect && !ctx.outcomes) ? ' Nothing was changed.' : ''}`;
           if (watchdog) {
             await this.#restoreXoVm(ctx);
             rec.text = `${rec.text} ${ctx.vmState ?? 'Xen Orchestra’s VM was not touched.'}`;
@@ -1234,7 +1240,7 @@ export class XoSetups {
       if (reconnect) await this.#sealReconnect(ctx);
       if (deploy && rec.cancelled) {
         rec.state = 'cancelled';
-        rec.text = deployCancelled(rec.phase);
+        rec.text = deployCancelled(rec.phase, ctx);
       } else if (watchdog) {
         // WHAT IS TRUE OF THE VM NOW, which the restore below settles: it is
         // started again before these words are final (#restoreXoVm).
@@ -1706,11 +1712,27 @@ export class XoSetups {
           let user;
           try {
             user = await admin.call('session.signIn', { email: DEFAULT_ADMIN.email, password: DEFAULT_ADMIN.password });
-          } catch {
-            throw new Error(`Xen Orchestra at ${rec.xoAddress} no longer takes its default admin password, so somebody signed in to it and changed it before this machine could. Nothing more was done; look at it in Xen Orchestra before adding it.`);
+          } catch (e) {
+            // ONLY A REFUSAL MEANS SOMEBODY CHANGED IT. Xen Orchestra turns a
+            // wrong password down as `invalid credentials` (xo-common's
+            // api-errors, code 3). A call that timed out or a connection that
+            // dropped says nothing about the password, and used to be put
+            // down to somebody else's doing (C-5): it is said as what it was,
+            // with the default still to be changed by hand.
+            const err = /** @type {Error & { code?: unknown }} */ (e);
+            if (err.code === 3 || /invalid credentials/i.test(err.message)) {
+              throw new Error(`Xen Orchestra at ${rec.xoAddress} no longer takes its default admin password, so somebody signed in to it and changed it before this machine could. Nothing more was done; look at it in Xen Orchestra before adding it.`);
+            }
+            // Short, with the reason bounded: a failure's words are cut at
+            // 300 (scrub) and what to do has to be inside them.
+            throw new Error(`this machine could not sign in to Xen Orchestra at ${rec.xoAddress} to replace the default admin password (${scrub(err.message, ctx.secrets ?? {}).slice(0, 60)}). Unless somebody changed it, it is still ${DEFAULT_ADMIN.email} / ${DEFAULT_ADMIN.password}: change it, then add it from the app.`);
           }
           if (!user?.id) throw new Error('Xen Orchestra signed its default admin in and did not say which user that is, so its password was not changed.');
+          // WHAT A CANCEL FROM HERE ON CAN SAY (deployCancelled): the change
+          // was asked for, and then that it took.
+          ctx.adminTried = true;
           await admin.call('user.set', { id: user.id, password: ctx.creds.admin });
+          ctx.adminChanged = true;
         } finally {
           admin.close();
         }
@@ -2472,16 +2494,26 @@ export const STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
  * the installer ran, nothing was made. While it ran, it removes what it made
  * if it is stopped before its VM starts and keeps the VM after, and which of
  * those happened is the installer's to know, so the sentence names what to
- * look for rather than claiming either (C-5).
+ * look for rather than claiming either (C-5). Once it has finished
+ * (`rec.xoAddress` is where it said Xen Orchestra is) the VM exists, and
+ * what its admin password is comes from the admin step: replaced with the
+ * person's (`adminChanged`), asked to be and not answered (`adminTried`,
+ * which is the one case this cannot settle), or still the default.
  *
  * @param {string} phase
+ * @param {{ rec: { xoAddress?: string|null }, adminTried?: boolean, adminChanged?: boolean }} ctx
  */
-function deployCancelled(phase) {
+function deployCancelled(phase, ctx) {
   if (phase === 'reach' || phase === 'installer') return 'Cancelled before anything was made on the pool.';
-  if (STAGES.includes(phase)) {
+  if (!ctx.rec.xoAddress) {
     return 'Cancelled while the installer ran. Anything it had made may still be on the pool: a VM named fleetwright-xo, and disks named for it.';
   }
-  return 'Cancelled after Xen Orchestra was installed, as fleetwright-xo on the pool, before it was added. If this got past replacing its admin password, the password is the one you chose; add it from the app with its address.';
+  const installed = `Cancelled after Xen Orchestra was installed at ${ctx.rec.xoAddress}, as fleetwright-xo on the pool`;
+  if (ctx.adminChanged) return `${installed}, and its admin password was replaced with the one you chose, before it was added to the fleet. Add it from the app with that address.`;
+  if (ctx.adminTried) {
+    return `${installed}, while its default admin password was being replaced. Whether that went through is not known from here: sign in to it as ${DEFAULT_ADMIN.email} with the password you chose, or with ${DEFAULT_ADMIN.password} if yours is refused, change it if it is still ${DEFAULT_ADMIN.password}, then add it from the app with that address.`;
+  }
+  return `${installed}, before its default admin password was replaced: it is ${DEFAULT_ADMIN.email} with the password ${DEFAULT_ADMIN.password}, and anybody on its network can sign in with it until that is changed. Change it now, then add it from the app with that address.`;
 }
 
 /**
