@@ -306,6 +306,47 @@ test('a server that caps tokens lower still gets one, at its own default length'
   assert.deepEqual({ trusted: kept.certificate.trusted, accepted: kept.certificate.accepted }, { trusted: false, accepted: true });
 });
 
+test('a setup run again removes the tokens before it, and says when Xen Orchestra would not', { skip }, async (t) => {
+  // Every run minted a token and left the earlier ones valid for their 180
+  // days, so a setup run again for a lost phone left that phone's token
+  // opening the pool. The limited user removes its own, all but the new one.
+  const actor = 'eli@example.com';
+  const onboard = async (/** @type {any} */ xo, /** @type {XoSetups} */ setups) => {
+    const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+    const { sealed, reply } = await phone(begun, xo.address, xo.pin);
+    assert.equal((await setups.run({ job: begun.xosetup.job, sealed, actor })).ok, true);
+    const end = await finished(setups, begun.xosetup.job, actor);
+    assert.equal(end.state, 'done', end.text);
+    return { end, kept: await collect(end, reply, xo.address) };
+  };
+  const xo = await standIn(t);
+  const { setups } = await machine();
+  const first = await onboard(xo, setups);
+  assert.equal(first.kept.token, 'tok-limited-123');
+  const second = await onboard(xo, setups);
+  assert.equal(second.kept.token, 'tok-limited-124', 'a new token each run');
+  assert.deepEqual(xo.tokens.get(FLEET_USER), ['tok-limited-124'], 'the first is gone and the new one kept');
+  assert.deepEqual(
+    xo.calls.filter((c) => c.method === 'token.deleteAll').map((c) => [c.as, c.params.except]),
+    [[FLEET_USER, 'tok-limited-123'], [FLEET_USER, 'tok-limited-124']],
+    'asked as the limited user, for all but the one just made',
+  );
+  assert.match(second.end.text, /Any token the fleetwright user had from before was removed, so only this one opens the pool\./);
+
+  // A Xen Orchestra without the method, and one that refuses it: the token
+  // is made all the same, and the summary says the old ones stayed (C-5).
+  for (const [opts, said] of /** @type {const} */ ([
+    [{ drop: ['token.deleteAll'] }, /This Xen Orchestra does not offer token\.deleteAll, so any token the fleetwright user had from before still opens the pool until it expires\./],
+    [{ refuse: { 'token.deleteAll': 'not enough permissions' } }, /This Xen Orchestra refused to remove the fleetwright user’s earlier tokens \(not enough permissions\), so any token the fleetwright user had from before still opens the pool until it expires\./],
+  ])) {
+    const other = await standIn(t, opts);
+    const { end, kept } = await onboard(other, (await machine()).setups);
+    assert.equal(kept.token, 'tok-limited-123');
+    assert.match(end.text, said);
+    assert.doesNotMatch(end.text, /was removed/);
+  }
+});
+
 test('a setup begun with nobody’s name on it is refused', async () => {
   const { setups } = await machine();
   assert.equal((await setups.begin({ address: 'xo.lan', pin: 'a'.repeat(64), actor: null })).ok, false);

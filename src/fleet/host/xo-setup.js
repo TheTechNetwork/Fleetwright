@@ -19,7 +19,8 @@
 //           same seal, a key the phone made for the token to come back to.
 //
 // THE STEPS (XOSETUP_STEPS) make the limited `fleetwright` user, the resource
-// set that bounds it, and a token for it; turn on the installer's own update
+// set that bounds it, and a token for it, removing the tokens earlier runs
+// made (a lost phone's among them); turn on the installer's own update
 // plugin when the pool has it (github.com/00o-sh/XenOrchestraInstallerUpdater);
 // and hand the token back. The admin sign-in is never written anywhere.
 //
@@ -136,7 +137,12 @@ export const UPDATES_PLUGIN = 'installer-updates';
 /** Fleetwright's reconnect watchdog, by the same rule: xo-server-fleetwright-reconnect. */
 export const RECONNECT_PLUGIN_ID = 'fleetwright-reconnect';
 
-/** What `inventory` checks the server offers before anything is changed. */
+/**
+ * What `inventory` checks the server offers before anything is changed.
+ * `token.deleteAll`, which the token step asks for as the limited user, is
+ * not here on purpose: a server without it still gets its token, and the
+ * summary says the earlier tokens stayed (#revokeOlderTokens).
+ */
 export const REQUIRED_METHODS = Object.freeze([
   'session.signIn',
   'system.getMethodsInfo',
@@ -2132,6 +2138,27 @@ export class XoSetups {
     return 'Xen Orchestra already updates itself.';
   }
 
+  /**
+   * Remove the limited user's tokens from earlier runs, signed in as it,
+   * keeping the one this run made. Never throws; what it says is what is
+   * true of the old tokens now: gone, or still valid and why (C-5).
+   *
+   * @param {any} ctx with `limited` signed in as FLEET_USER and `token` just made
+   * @returns {Promise<{ removed: boolean, text: string }>}
+   */
+  async #revokeOlderTokens(ctx) {
+    const stayed = 'so any token the fleetwright user had from before still opens the pool until it expires.';
+    if (!Object.hasOwn(ctx.methods, 'token.deleteAll')) {
+      return { removed: false, text: `This Xen Orchestra does not offer token.deleteAll, ${stayed}` };
+    }
+    try {
+      await ctx.limited.call('token.deleteAll', { except: ctx.token });
+      return { removed: true, text: 'Any token the fleetwright user had from before was removed, so only this one opens the pool.' };
+    } catch (e) {
+      return { removed: false, text: `This Xen Orchestra refused to remove the fleetwright user’s earlier tokens (${scrub(/** @type {Error} */ (e).message, ctx.secrets ?? {})}), ${stayed}` };
+    }
+  }
+
   /** The steps, in XOSETUP_STEPS order. Each may return the sentence it leaves on the job. */
   #steps() {
     return [
@@ -2240,9 +2267,19 @@ export class XoSetups {
           ctx.tokenExpires = null;
         }
         if (typeof ctx.token !== 'string' || !ctx.token) throw new Error('Xen Orchestra did not hand back a token.');
+        // THE TOKENS BEFORE THIS ONE GO. Every run minted a token and left
+        // the earlier ones valid for their 180 days, so a setup run again
+        // for a lost phone left that phone's token opening the pool. Xen
+        // Orchestra's `token.deleteAll` removes the signed-in user's tokens
+        // but the one named, so it is asked as the limited user, for all but
+        // the one just made. Not in REQUIRED_METHODS: a server without it
+        // still gets its token, and the summary says the old ones stayed
+        // rather than that they went (C-5).
+        ctx.tokensRevoked = await this.#revokeOlderTokens(ctx);
         ctx.limited.close();
         ctx.limited = null;
         ctx.password = undefined;
+        return ctx.tokensRevoked.text;
       },
       // updates, and the reconnect watchdog
       async (/** @type {any} */ ctx) => {
