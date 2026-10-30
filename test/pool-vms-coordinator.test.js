@@ -125,6 +125,20 @@ test('nobody holding the pool, an unsigned caller or no image is a refusal that 
   assert.equal(asked.length, 0);
 });
 
+test('a box that holds the pool and could not reach it is said to be that, not that nobody holds it', async () => {
+  // The refusal said "No connected box holds a token for a pool with that
+  // machine image ... approve a box that can reach it" to a person whose
+  // approved box held it and had found Xen Orchestra down (C-5).
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI).map((e) => ({ ...e, reachable: false })) }, rpi: { xo: holding(SAM) } });
+  const r = await core.dispatch(ask(eli));
+  assert.equal(r.error.code, 'unreachable');
+  assert.match(r.text, /^The box holding your token for the pool with that machine image \(deb14\) could not reach Xen Orchestra the last time it looked/);
+  assert.doesNotMatch(r.text, /No connected box holds/);
+  assert.equal(asked.length, 0, 'a box that could not reach the pool was asked');
+  // Nobody holding it at all still says so.
+  assert.equal((await core.dispatch(ask(sam, { template: OTHER }))).error.code, 'no_hosts');
+});
+
 test('a box that cannot reach the pool hands on to the next, and one too old is not asked', async () => {
   const { core, asked } = fleet(
     { a: { xo: holding(ELI) }, b: { xo: holding(ELI), protocol: 7 }, c: { xo: holding(ELI) } },
@@ -793,6 +807,28 @@ test('labs per person: no limit unless the policy sets one, and past one that is
   assert.equal(third.error.code, 'too_many_labs');
   assert.match(third.text, /lets one person hold 2 labs at once, and you hold 2\./);
   assert.equal(capped.asked.length, 1);
+});
+
+test('labs per person holds against two asks at once, and a lab the box would not fill is let go', async () => {
+  // The hold on a lab was written once the box had answered, and two asks
+  // run through the same awaits (the ticket, the box): with a limit of one
+  // and two free labs, each counted none held and both were sent.
+  const limitOne = [{ ...withLabs(ELI)[0], networks: withLabs(ELI)[0].networks.map((n) => ({ ...n, perPerson: 1 })) }];
+  const { core, asked } = fleet({ deb14: { xo: limitOne, protocol: 10 } });
+  const both = await Promise.all([core.dispatch(inLab(eli, { network: LAB1 })), core.dispatch(inLab(eli, { network: LAB2 }))]);
+  assert.deepEqual(both.map((r) => r.ok).sort(), [false, true], JSON.stringify(both.map((r) => r.text)));
+  assert.equal(both.find((r) => !r.ok).error.code, 'too_many_labs');
+  assert.equal(asked.length, 1, 'both were sent');
+
+  // AND A REFUSAL HOLDS NOTHING: the hold is taken before the box is asked
+  // now, so the box saying no has to let it go, or the lab stays taken and
+  // the person stays at their limit for a machine that was never made.
+  const refused = fleet({ deb14: { xo: limitOne, protocol: 10 } }, () => ({ ok: false, text: 'The pool’s limits have no room for another machine.' }));
+  assert.equal((await refused.core.dispatch(inLab(eli, { network: LAB1 }))).ok, false);
+  assert.equal(refused.core.snapshot(eli).vmImages[0].labs.find((/** @type {any} */ l) => l.id === LAB1).free, true, 'the lab stayed held');
+  const again = await refused.core.dispatch(inLab(eli, { network: LAB2 }));
+  assert.notEqual(again.error?.code, 'too_many_labs', 'a machine the box would not make still counted against the limit');
+  assert.equal(refused.asked.length, 2);
 });
 
 test('a machine says which lab it is in and whether it is open, and anything else is no lab', () => {
