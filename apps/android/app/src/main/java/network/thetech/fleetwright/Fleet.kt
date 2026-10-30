@@ -616,6 +616,21 @@ class Fleet(
          */
         val sandboxed: Boolean? = null,
         /**
+         * Why not, beside a false: `off`, `unsafe_args`, `userns_root`,
+         * `userns_docker` or `userns_host` (http.js uncontained). A box can
+         * have its sandbox on and still not contain a session, run as root,
+         * so [resumeKept] names the reason and its way on from this rather
+         * than saying the sandbox is off. Null from a box too old to send it,
+         * read as off, which is what such a box meant by false.
+         */
+        val sandboxedWhy: String? = null,
+        /**
+         * And every reason after it, in the box's order, because a box can
+         * have two (root with its sandbox off) and fixing the first alone does
+         * not open it. Empty from a box that gives only the first.
+         */
+        val sandboxedAlso: List<String> = emptyList(),
+        /**
          * What `tag` matches on for this box: os, architecture, distribution,
          * whether its image has a browser, plus anything set from an app or in
          * FLEETWRIGHT_LABELS.
@@ -653,6 +668,19 @@ class Fleet(
          * nothing for it rather than guessing.
          */
         val houseRules: Int? = null,
+        /**
+         * What a session started here with no mode does: "asks" before each
+         * tool, or runs with permissions "bypassed" (FLEETWRIGHT_SKIP_PERMISSIONS
+         * on the box, http.js #hostFacts). New session labels its "Box default"
+         * choice from this, and offers "Permissions bypassed" only where every
+         * machine it could land on says "bypassed", because a box that asks
+         * refuses a start from the fleet that asks to bypass (commands.js
+         * permissionCeiling), and null may be a box that asks.
+         *
+         * NULL IS CANNOT TELL: a box too old to say, and then the sheet says
+         * nothing about which way the default goes.
+         */
+        val permissions: String? = null,
         /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
@@ -745,15 +773,75 @@ class Fleet(
          * (C-5). A coordinator too old to send [administers] is older than
          * the rule too, so null offers Resume as before, and a refusal still
          * says why.
+         *
+         * WHY NOT IS THE BOX'S WORD TOO ([sandboxedWhy]). A box run as root
+         * has its sandbox on and still does not contain a session, and
+         * "without the sandbox" would send its operator to a switch that is
+         * already on. So each reason is named with what opens it, in the
+         * coordinator's words for the same refusal (scheduler.js
+         * NOT_CONTAINED), and the same words as iOS; a reason this app does
+         * not know is not guessed at.
+         *
+         * AND EVERY ONE OF THEM when there are more ([sandboxedAlso]). A box
+         * run as root with its sandbox off would have read "until its sandbox
+         * is on", and with it on, still not taken the session. So two or more
+         * are named together with everything that has to change, from
+         * [NOT_CONTAINED]; one this app does not know makes the rest a partial
+         * list, and then the line says only "not contained".
          */
         val resumeKept: String?
             get() = when {
                 administers != false || sandboxed == true -> null
-                sandboxed == false ->
-                    "$hostId runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+                sandboxed == false && saidWhy.size > 1 -> {
+                    val known = saidWhy.mapNotNull { NOT_CONTAINED[it] }
+                    if (known.size != saidWhy.size) {
+                        "$hostId says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+                    } else {
+                        "$hostId ${together(known.map { it.first })}, so only this fleet’s admin, or the one person it works for, can resume one there until ${together(known.map { it.second })}."
+                    }
+                }
+                sandboxed == false -> when (saidWhy[0]) {
+                    "off" ->
+                        "$hostId runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+                    "unsafe_args" ->
+                        "$hostId lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out."
+                    "userns_root" ->
+                        "$hostId runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user."
+                    "userns_docker" ->
+                        "$hostId runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman."
+                    "userns_host" ->
+                        "$hostId has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap."
+                    else ->
+                        "$hostId says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+                }
                 else ->
                     "$hostId has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
             }
+
+        /** Every reason this box gave, in its order; a box too old to say why is off. */
+        private val saidWhy: List<String>
+            get() = sandboxedWhy?.let { listOf(it) + sandboxedAlso } ?: listOf("off")
+
+        private companion object {
+            /**
+             * Each reason a machine can give, as [resumeKept] joins two or
+             * more: what the machine does, in the coordinator's `short` words,
+             * and what has to be true before it takes the session, its `step`
+             * said as a condition (scheduler.js NOT_CONTAINED). Fleet.swift
+             * has the same table.
+             */
+            val NOT_CONTAINED = mapOf(
+                "off" to ("runs sessions without the sandbox" to "its sandbox is on"),
+                "unsafe_args" to ("lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox" to "the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out"),
+                "userns_root" to ("runs fleetwright as root" to "fleetwright runs as its own user"),
+                "userns_docker" to ("runs its sandbox with docker" to "its sessions run under podman"),
+                "userns_host" to ("has FLEETWRIGHT_SANDBOX_USERNS=host" to "FLEETWRIGHT_SANDBOX_USERNS is set back to nomap"),
+            )
+
+            /** Clauses as one, joined as the coordinator joins them: `a and b`, or `a, b, and c`. */
+            fun together(parts: List<String>): String =
+                if (parts.size < 3) parts.joinToString(" and ") else parts.dropLast(1).joinToString(", ") + ", and " + parts.last()
+        }
 
         val appPending: Boolean
             get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
@@ -962,8 +1050,8 @@ class Fleet(
         /**
          * The title over a start the fleet refused. Two refusals are a
          * setting on the machine and not a fault in the asking, and asking
-         * again changes neither: `unsandboxed`, a machine that runs sessions
-         * without the sandbox and so only for its admins (G8), and
+         * again changes neither: `unsandboxed`, a machine that does not
+         * contain a session and so runs them only for its admins (G8), and
          * `host_outdated`, one too old to carry what was asked. Those are
          * titled as the reason, and the coordinator's sentence beneath says
          * which setting; anything else is a start that could not happen.
@@ -3129,6 +3217,12 @@ class Fleet(
                     // `has` first: optBoolean turns a missing answer into false,
                     // and a box too old to say has not said it is off.
                     sandboxed = health?.takeIf { it.has("sandboxed") && !it.isNull("sandboxed") }?.optBoolean("sandboxed"),
+                    sandboxedWhy = health?.optString("sandboxedWhy")?.takeIf { it.isNotBlank() && it != "null" },
+                    // Every entry kept: one dropped would leave a shorter list
+                    // read as complete, and the coordinator sends only codes.
+                    sandboxedAlso = health?.optJSONArray("sandboxedAlso")?.let { arr ->
+                        (0 until arr.length()).map { i -> arr.optString(i) }
+                    } ?: emptyList(),
                     labels = health?.optJSONArray("labels")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
                     } ?: emptyList(),
@@ -3168,6 +3262,9 @@ class Fleet(
                     // collapse this field exists to prevent — "no file" drawn
                     // as "a file that is not in use".
                     houseRules = health?.takeIf { it.has("houseRules") && !it.isNull("houseRules") }?.optInt("houseRules"),
+                    // Only the two words the host uses; a missing field, and
+                    // the "null" optString makes of a JSON null, stay null.
+                    permissions = health?.optString("permissions")?.takeIf { it == "asks" || it == "bypassed" },
                     // `has` first, for the same reason as appPending: a
                     // coordinator too old to say is not one that said no.
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),

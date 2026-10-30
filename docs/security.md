@@ -155,7 +155,11 @@ gained in v2. Concretely it can:
 - deposit renewal material (`renew`), and forge the `actor` on any intent, so
   attribution is worthless under this compromise;
 - `start` a dangerous session as any member and `peek` its pane, reading the
-  member's seeded Claude/provider credentials out of it;
+  member's seeded Claude/provider credentials out of it — on a box whose
+  operator left `FLEETWRIGHT_SKIP_PERMISSIONS` on. On a box set to ask, the hub
+  refuses a fleet start that asks to bypass (SEC-INJECT-4), though a coordinator
+  can still write the session's own `.claude/settings.json` with `writefile`,
+  or send `answer` to say yes to each of its prompts;
 - **write that session's instructions** (`start.task`, protocol 7), on any host,
   permanent boxes included. Until v7 it could only name a profile a person
   with a shell had put on the box, so what an unattended session was told to
@@ -1281,7 +1285,55 @@ over open egress. Any surface that offers "start a session" on an arbitrary repo
 MUST make that mode legible (`psychology.md §5`: word + symbol, not colour), and
 SHOULD make safe mode reachable without editing host config.
 *Falsify:* `start` carries `mode`; the apps render it. Check that a per-session
-`--safe` is offered, since the box default is dangerous.
+`--safe` is offered, since the box default is dangerous. Both phones' New
+session offers "Permission prompts on" beside a "Box default" choice that
+sends no mode and is named from the box's own `permissions` health field, and
+never claims which way the default goes when the box has not said
+(`test/permission-mode-in-apps.test.js`).
+
+**SEC-INJECT-4** — An operator's `FLEETWRIGHT_SKIP_PERMISSIONS`, turned off, is
+a ceiling on the bypass flag for every start that arrives from the fleet.
+Phones, Siri, agents over MCP and held runner starts all reach the box as
+`start` intents, and `mode` has been a v1 enum, so before this a fleet start asking `dangerous` ran
+`--dangerously-skip-permissions` on a box whose operator had turned it off —
+and #1408, which made both start sheets always send `safe` or `dangerous`
+starting on bypass, would have done it for every phone start. The hub now
+refuses such a start, naming the setting, rather than downgrading it to a
+session that hangs at its first tool unwatched (`permissionCeiling` in
+`src/adapters/commands.js`). A line is the fleet's when it carries the
+sidecar's token, when the sidecar marks it `via: fleet` (for a box whose
+sidecar still holds the operator's token, and an intent with no actor), or
+when its actor is `fleet:`. It is checked on the box, so a compromised
+coordinator cannot get `--dangerously-skip-permissions` past it, but that flag
+is all it holds; it is not a boundary on what a session may do. New session
+on the phones offers "Permissions bypassed" only where every machine a start
+could land on reports `bypassed`, so an older box set to ask, which has no
+ceiling, is not handed one from there. A Siri or launcher start still sends a
+kind's saved mode, and no editor can save one as bypass now, but a kind saved
+that way before would reach such a box. The operator's own `/new --dangerous`
+at the box still works. What it does not cover:
+- `resume`: a session's recorded mode is kept, so one started with bypass (by
+  the operator, or before the box was set to ask) resumes with bypass from a
+  phone too.
+- The session's own settings. `writefile` and `copyfile` can put a
+  `.claude/settings.json` into a session's workspace (sessions run with
+  `-w /work`, `src/core/claude.js`) holding allow-all permission rules or
+  `defaultMode: bypassPermissions`, and Claude Code reads it without asking,
+  because the workspace's trust is answered ahead of time (the image
+  for a sandboxed session, `direct-config.js` for a direct one). On a direct
+  box the working directory may be shared, so one such file reaches every
+  session started there. Refusing `writefile` and `copyfile` under `.claude/`
+  on a box set to ask is a possible follow-up; nothing does it today.
+- `answer`, which can say yes to each prompt a session that asks puts up
+  (SEC-PROTO-4).
+
+*Falsify:* `test/fleet-permission-ceiling.test.js` drives the real sidecar,
+hub client, HTTP adapter, dispatch and `buildCommand`: a fleet `start` with
+`mode: dangerous` on a box with `skipPermissions: false` must reach no session
+manager, on the sidecar's token and on the operator's, with an actor and with
+none, and a `via` other than `fleet` or absent must be refused.
+`test/permission-mode-in-apps.test.js` holds both phones to drawing the bypass
+choice only when every machine reports `bypassed`.
 
 **What a box says reaches an agent as the box's, never as the fleet's.** The
 other direction of the same problem: an agent holding an admin's credential
@@ -1426,11 +1478,28 @@ migrate helper (`hardening.md`). **Decided: refused, with no per-box opt-in.**
 A member's `start` and `resume` go only to a box whose health says
 `sandboxed: true`, or to one they administer, which for a member is a box that
 acts for them alone (`runsSessionsFor`, `hosts.js`). The hub says `true` only
-with the sandbox on and no `FLEETWRIGHT_SANDBOX_ARGS` let through that end
-containment, `--privileged` among them (`#hostFacts`, `http.js`;
-`unsafeSandboxArgs`); the `sandbox` field beside it could not answer the
-question, because a sidecar from before #681 sent a variant whether or not the
-box used it. A box too old to send `sandboxed` has not said, which is cannot
+with the sandbox on, no `FLEETWRIGHT_SANDBOX_ARGS` let through that end
+containment, `--privileged` among them (`unsafeSandboxArgs`), and the session
+user namespace `nomap` (`uncontained`, `http.js`). Under `host` container root
+is the service uid, or real root on a box whose service runs as root, which is
+G4's fallback: `resolveUserns` turns `nomap` into `host` for a root service and
+for a docker engine, and an operator can ask for `host`. Each of those says
+`false`. The `sandbox` field beside it could not answer the question, because
+a sidecar from before #681 sent a variant whether or not the box used it.
+**Beside a `false` the box says why**, as `sandboxedWhy`: `off`, `unsafe_args`,
+`userns_root`, `userns_docker` or `userns_host`. The way on is a different
+setting for each, and a refusal that knew only `false` told the operator of a
+root-run box to turn on a sandbox that was already on. **And every reason, not
+the first:** the rest go in `sandboxedAlso`, because a root-run box with the
+sandbox off was told that turning it on would open it, and then said root.
+The coordinator's refusal names each reason and what opens it, and with more
+than one says it takes all of them (`NOT_CONTAINED`, `scheduler.js`); both
+phones' Resume line says the same. A box that sends no reason gets the
+sentence for `off`, and a reason the reader does not know, anywhere in the
+list, leaves only "not contained", because a partial list of fixes is the
+false sentence again (`test/not-contained-end-to-end.test.js`). It changes the words, never the placement. A box in the host
+namespace also says on every start that the fleet refuses members there
+(`validateConfig`). A box too old to send `sandboxed` has not said, which is cannot
 tell (C-5), and is treated as unsandboxed. A tag pick leaves such boxes out for
 a member rather than landing on one, and is refused with code `unsandboxed` and
 every box named only when nothing else will do (`scheduler.js`); a resume is
@@ -1444,11 +1513,14 @@ draw Resume by the same rule and say why in its place where they do not.
 `test/unsandboxed-resume-android-in-apps.test.js`. **Not fixed, and stated:** a
 member's session already running on a direct box keeps running, and the box's
 boot restore brings it back, because the rule is placement's and the hub
-restores its own; an operator should stop those. `sandboxed` does not account
-for G4's fallback to `--userns=host` on a box whose service runs as root, so
-such a box says `true` where G4's mapping does not hold. And until each box is
-updated none reports `sandboxed`, so for that window a member starts and
-resumes only on boxes they administer.
+restores its own; an operator should stop those. A box whose service runs as
+root said `true` until the hub that reports the user namespace, and members
+it took then lose start and resume there when it updates; it warns on every
+start, and the way back is a dedicated service user, which `install.sh` does
+not make when run from a root shell (it keeps `FLEETWRIGHT_USER`, the unit's
+user, or the user behind `sudo`). And until each box is updated none reports
+`sandboxed`, so for that window a member starts and resumes only on boxes they
+administer.
 
 **G9 — Sessions on the egress allowlist share one network.** *Narrows
 SEC-INJECT-2.* `agent-egress` is one `--internal` network per box, so a session
@@ -1797,7 +1869,7 @@ surfaced later; what each leaves behind is in its status row.
 | **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
-| **G8** | **decided and fixed: refused, with no per-box opt-in.** A member's start or resume goes only to a box that reports `sandboxed: true` (the sandbox on, and no `FLEETWRIGHT_SANDBOX_ARGS` that end containment) or that they administer (`runsSessionsFor`); a box that has not said is treated as unsandboxed, a tag pick leaves such boxes out, and nothing else doing is refused `unsandboxed` with every box named. The snapshot's `takesSessions` and both phones' Resume follow the same rule and say why where they do not. Members' sessions already running on a direct box keep running and come back on boot until an operator stops them; `sandboxed` does not account for G4's `--userns=host` fallback; and until hosts update, members start and resume only on boxes they administer. The migrate helper's root path it compounded is closed (`install-root-sources.test.js`). `test/unsandboxed-hosts.test.js`, `test/unsandboxed-resume-ios-in-apps.test.js`, `test/unsandboxed-resume-android-in-apps.test.js`. |
+| **G8** | **decided and fixed: refused, with no per-box opt-in.** A member's start or resume goes only to a box that reports `sandboxed: true` (the sandbox on, no `FLEETWRIGHT_SANDBOX_ARGS` that end containment, and the `nomap` user namespace, so G4's `--userns=host` fallback for a root service or docker says `false`) or that they administer (`runsSessionsFor`); a box that has not said is treated as unsandboxed, a tag pick leaves such boxes out, and nothing else doing is refused `unsandboxed` with every box named. Beside a `false` the box sends every reason (`sandboxedWhy`, then `sandboxedAlso`), and the refusal and both phones name each and what opens it rather than "turn the sandbox on". The snapshot's `takesSessions` and both phones' Resume follow the same rule and say why where they do not. Members' sessions already running on a direct box keep running and come back on boot until an operator stops them; a root-run box that took members' work stops on update and warns on start; and until hosts update, members start and resume only on boxes they administer. The migrate helper's root path it compounded is closed (`install-root-sources.test.js`). `test/unsandboxed-hosts.test.js`, `test/unsandboxed-resume-ios-in-apps.test.js`, `test/unsandboxed-resume-android-in-apps.test.js`. |
 | **G9** | **fixed, and measured as root; rootless not yet.** Each person's sessions join `agent-egress-<hash of their email>`, keyed as their download cache is, on a subnet counted up from `FLEETWRIGHT_SANDBOX_EGRESS_SUBNET` that podman agrees is free; the proxy is on every one of them at that subnet's second address, joined to a new one with `podman network connect` so nobody's tunnels drop, and started with `net.ipv4.ip_forward=0`. A box with the old `agent-egress` keeps it and stops putting sessions on it. Measured on podman 4.9.3 (netavark 1.4.0) as root, with `ensureEgress` and `buildCommand` run for alice@ and bob@ through a `podman` that recorded each call: two networks, `10.89.201.0/24` and `10.89.202.0/24`, the proxy on both at `.2`, the second joined with `network connect` and nothing restarted, and each session line put its session on its owner's network told `HTTPS_PROXY=http://10.89.20x.2:3128`. From alice's session, bob's by address: `Network unreachable`; by name: `NXDOMAIN`; and the same the other way. Her own proxy answered: `CONNECT example.com:443` `403 Filtered`, `CONNECT <bob's address>:8080` `403 Access violation`. The proxy's address on bob's network and on the default one, `1.1.1.1:443`, and a container on the default network: `Network unreachable`; her one route is `10.89.201.0/24 dev eth0`, and `ip route add` through the proxy is `Operation not permitted`. The proxy reads `ip_forward=0`, where a container started without the flag reads `1`; two lab containers given `NET_ADMIN` and routes through it reached each other only while it was switched to `1`. Before, on the old single `agent-egress`, alice reached bob by address and by name; after the upgrade her new session did not reach his new one or his old one. Measuring found the proxy had never started (the `Filter` line, SEC-INJECT-2), fixed alongside. Not measured: rootless, which is how a box runs it, because that lab container cannot start a rootless network. `test/egress.test.js`, "two people's sessions go on two networks, each told a proxy on its own, and joining the second restarts nothing (G9)". |
 | **G10** | **fixed on packaged Linux, stated elsewhere.** Root's `fleetwright` runs root's store or refuses; the heal refuses a node or a payload the service user controls; the hook, the sidecar token and `uninstall.sh`'s settings edit run as the service user; the lay-out never copies from inside the release tree; `apt purge` no longer falls back to `current`'s uninstaller; the stale-helper advice names a verified installer, not a copy out of the tree; and what root makes, copies or removes inside a directory the service user (or the sidecar's account) owns, it does as that account; and the one-liner as root uses only a checkout root owns, so its repair advice fetches the release on a converted box; and the migrate helper takes the manifest address from a file root owns, not the service user's env file; and the sudoers answers `--repair` acts on, and every seed of root's records, come from root's own files; and root's CLI runs nothing from the service user's env file as root, chowns to no name in it, and hands its variables to no child. A checkout (where the one-liner as root now refuses and names the two ways on), a Mac, and a person-run install on a box whose only node 24+ is in the service user's home (run as root, with a warning; the heal refuses) are the remaining cases, each said by the installer or the one-liner. `install-root-sources.test.js`, `bootstrap.test.js`, `doctor.test.js`, `migrate.test.js`, `migration-end-to-end.test.js`, `sidecar-store.test.js`, `reclaim.test.js`, `grants.test.js`, `xo-pools.test.js`, `xo-holder.test.js`. **Measured on a box**, not only in temporary directories: Debian 13 under podman with systemd as PID 1, installed by `bootstrap.sh` from a release tarball and a loopback manifest, with a dedicated service user. With `FLEETWRIGHT_RELEASE_MANIFEST` pointed at a decoy in the service user's env file, `sudo -n fleetwright-migrate` printed `fetching http://127.0.0.1:8099/manifest.json` (root's file) and the decoy's log showed no request from root; with root's file missing, mode 664 or 646, owned by the service user, or empty, it refused and fetched nothing; `sudo -n FLEETWRIGHT_BASE=… fleetwright-migrate` got `sudo: sorry, you are not allowed to set the following environment variables`; a `release-channel` linked to `/etc/shadow` put none of it in the output; `fleetwright-reclaim` removed `releases/.stale-*` only, leaving a decoy base the env file named; root's `fleetwright doctor --repair` ran root's `systemctl` with root's environment (`uid=0 leak=`) and asked their `claude` as them (`uid=996`), never the `FLEETWRIGHT_SYSTEMCTL_BIN` their file named; and `--repair` with `FLEETWRIGHT_SYSTEM_UPGRADE=yes` in their file wrote no upgrades rule. The same run found four places the box disagreed with the installer, fixed with tests in `install-on-a-box.test.js` and `doctor.test.js`: the migrate and reclaim rules matched any arguments (`sudo -l fleetwright-migrate --some-arg` said yes; they now end in `""`); root's doctor described root's own store and said `ok updates can be applied without root` over a release tree the service user could not write, so the `sudo fleetwright doctor --repair` the service user's doctor advised repaired nothing (it now asks as the owner, about the hub's tree, and its repair hands the tree back); the commit-confirm timer was armed only by the wizard, so a `--no-wizard` install, every heal and an update left it disabled; and `uninstall.sh --purge` exited 1 after removing everything. And one the run confirmed from reading: `fleetwright-reclaim` globbed through `releases`, which sits in the service user's base, so a `releases` they replaced with a link to `/srv/rootdir` had root print `reclaimed .stale-precious` and remove root's directory. It now refuses a base or `releases` that is a link (`refusing: … is a symbolic link … nothing reclaimed`, exit 1), compares the physical path after changing into it, and removes only a directory or a link (`reclaim.test.js`). |
 | **G11** | **decided and fixed.** Operator boxes are outside a member's vault boundary. The coordinator remembers the SHA-256 of every GitHub code it hands a box (ten minutes, in Durable Object storage key `boxSignIns`, at most 64) and lists them beside each device's sign-in; the minter refuses a listed code before GitHub is asked (`box_sign_in`), so a sign-in started for a box never becomes a device's. A sign-in recorded before the fix could not be told from a phone's, so every one was ended: records now carry a version (`SIGNIN_VERSION`), one without it is no device's and renews into none, and each member's phone signs in to GitHub once more after the deploy. Vault items and approvals were not touched; an approval a forged sign-in made stays until its person removes it, and shows in their vault list with the fleet account that made it. A compromised coordinator can still begin its own flow or leave a code off the list, and an old coordinator sends no list and is served as before. `test/vault.test.js` (two G11 tests). |
@@ -1930,6 +2002,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-INJECT-1 | No defence against a session misusing what it holds |
 | SEC-INJECT-2 | (Aspirational) default-deny egress bounds misuse |
 | SEC-INJECT-3 | Dangerous mode on an untrusted repo is arbitrary execution |
+| SEC-INJECT-4 | An operator's ask-first is a ceiling on the bypass flag for every fleet start |
 | SEC-LOG-1 | One redaction table; new secret commands added to it |
 | SEC-BUILD-1 | Security-relevant dependencies pinned |
 

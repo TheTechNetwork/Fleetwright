@@ -151,8 +151,24 @@ fun StartSheet(
     var kind by remember {
         mutableStateOf(preselectedKindId?.let { id -> kinds.firstOrNull { it.id == id } })
     }
+    // The permission mode this start asks for: "" is the box's own default
+    // and sends no mode at all, "safe" keeps permission prompts on, and
+    // "dangerous" bypasses them. The box default is selected first because
+    // only the box knows what it is, and a start that names no mode is never
+    // refused for it. A shortcut's kind is applied here, before the first
+    // frame, so the sheet does not open on one choice and jump to another.
+    // Only prompts on: bypassing is not offered until the machines have said
+    // they allow it, which they have not before the first frame, and where
+    // they do the box default already bypasses.
+    var permission by remember {
+        mutableStateOf(kind?.mode?.takeIf { it == "safe" }.orEmpty())
+    }
     var host by remember { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<String>()) }
+    // The same machines as `hosts`, with what each last reported, so the
+    // permission choice can say what the box default is and offer bypassing
+    // only where the box allows it.
+    var offeredHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
     // NULL UNTIL THE FLEET ANSWERS, and that is the whole reason it is nullable
     // rather than an empty list. Rendering a picker while the request is in
     // flight offers "Nothing yet" as if it were the fleet's answer, and
@@ -227,9 +243,9 @@ fun StartSheet(
         // coordinator too old to say takesSessions leaves it null, and then
         // healthy is the rule placement used. Loaded here so the sheet works
         // from every entry point, launcher shortcuts included.
-        hosts = Fleet(settings).fleetHosts()
+        offeredHosts = Fleet(settings).fleetHosts()
             .filter { !it.holder && (it.takesSessions ?: (it.state == "healthy")) }
-            .map { it.hostId }
+        hosts = offeredHosts.map { it.hostId }
         // Nullable all the way through: Fleet.profiles() answers null when
         // nobody could say — an old coordinator, or hosts that refuse the verb
         // by name — and that is not the same as a fleet with no profiles.
@@ -245,6 +261,32 @@ fun StartSheet(
         images = Fleet(settings).vmImages().getOrDefault(emptyList())
         standby = Fleet(settings).vmStandby().getOrNull()
         if (canStartMachine || images.isNotEmpty()) claude = claudeKept(settings)
+    }
+
+    // The machines this start could land on, as the snapshot has them: the
+    // one chosen, or every one offered while the fleet picks. None for a new
+    // machine, which has not reported anything yet.
+    val reachableHosts = when {
+        platform.isNotEmpty() -> emptyList<Fleet.FleetHost>()
+        host.isEmpty() -> offeredHosts
+        else -> offeredHosts.filter { it.hostId == host }
+    }
+    // What the box default is, when every machine this could land on says the
+    // same thing. Null otherwise, and then nothing on this sheet says which
+    // way the default goes (C-5).
+    val boxPermissions = reachableHosts.map { it.permissions.orEmpty() }.toSet().singleOrNull()
+        ?.takeIf { it == "asks" || it == "bypassed" }
+    // Whether this start may ask to bypass permissions: only when every
+    // machine it could land on has said it bypasses them. A machine set to ask
+    // refuses the start (C-2), and one that has not said, because its host is
+    // too old to or the list did not load, may be set to ask with no refusal
+    // to stop it, so cannot tell is not taken as allowed (C-5). No machine to
+    // judge, a new one or a kind's host that is not offered, is the same. The
+    // box default covers all of these.
+    val bypassAllowed = reachableHosts.isNotEmpty() && reachableHosts.all { it.permissions == "bypassed" }
+    // A choice that vanished cannot stay chosen.
+    LaunchedEffect(bypassAllowed) {
+        if (!bypassAllowed && permission == "dangerous") permission = ""
     }
 
     AlertDialog(
@@ -387,6 +429,11 @@ fun StartSheet(
                                     // last month that cannot be revisited.
                                     kind?.let { chosen ->
                                         if (chosen.host.isNotBlank()) host = chosen.host
+                                        // A kind that saved a mode fills that
+                                        // too. One that saved none leaves the
+                                        // choice where it is, which is the box
+                                        // default unless somebody moved it.
+                                        chosen.mode?.takeIf { it == "safe" || (it == "dangerous" && bypassAllowed) }?.let { permission = it }
                                         // Only if the fleet still has it — a
                                         // kind naming a deleted profile would
                                         // otherwise pre-fill a refused start.
@@ -591,6 +638,40 @@ fun StartSheet(
                         }
                     }
                 }
+                // HOW IT RUNS, after Where because the answer depends on it.
+                // The box's own default comes first and is selected: it sends
+                // no mode, so the operator's setting decides, and it is named
+                // from what the machine reported, or not at all when it has
+                // not (C-5). Bypassing is offered only where every machine
+                // this could land on has said it bypasses, because a box set
+                // to ask refuses it (C-2) and one that has not said may be set
+                // to ask (C-5), and the sentence below says why it is missing.
+                Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                    Text("Permissions", style = MaterialTheme.typography.labelMedium)
+                    val boxDefault = when (boxPermissions) {
+                        "asks" -> "Box default — asks before each tool"
+                        "bypassed" -> "Box default — permissions bypassed"
+                        else -> "Box default"
+                    }
+                    AssistChip(
+                        onClick = { permission = "" },
+                        label = { Text(if (permission.isEmpty()) "$boxDefault \u2713" else boxDefault) },
+                    )
+                    AssistChip(
+                        onClick = { permission = "safe" },
+                        label = { Text(if (permission == "safe") "Permission prompts on \u2713" else "Permission prompts on") },
+                    )
+                    if (bypassAllowed) {
+                        AssistChip(
+                            onClick = { permission = "dangerous" },
+                            label = { Text(if (permission == "dangerous") "Permissions bypassed \u2713" else "Permissions bypassed") },
+                        )
+                    }
+                    Text(
+                        permissionLine(permission, boxPermissions, bypassAllowed, reachableHosts, fleetPicks = host.isEmpty()),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 // ASKED WHERE IT MATTERS: a runner fetches its owner's Claude
                 // login when it joins, and nothing said so until after it had.
                 if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
@@ -632,7 +713,10 @@ fun StartSheet(
                         StartRequest(
                             title = finalTitle.ifBlank { null },
                             brief = brief.trim().ifBlank { null },
-                            mode = kind?.mode,
+                            // NO MODE FOR THE BOX DEFAULT, so the box's own
+                            // setting decides, and never a bypass the box
+                            // would refuse.
+                            mode = permission.takeIf { it == "safe" || (it == "dangerous" && bypassAllowed) },
                             host = host.ifBlank { null }.takeIf { platform.isEmpty() },
                             profile = profile.ifBlank { null }.takeIf { platform.isEmpty() && task.isBlank() },
                             task = task.trim().ifBlank { null },
@@ -658,4 +742,42 @@ fun StartSheet(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * The sentence under the permission choice, the same words as the iOS sheet.
+ * The selected choice still has to say what it does, and the box default says
+ * it only when the box has said.
+ */
+private fun permissionLine(
+    permission: String,
+    boxPermissions: String?,
+    bypassAllowed: Boolean,
+    reachableHosts: List<Fleet.FleetHost>,
+    fleetPicks: Boolean,
+): String {
+    val line = when (permission) {
+        "safe" -> "It stops and asks before each tool, whatever its machine is set to."
+        "dangerous" -> "It runs each tool without asking first."
+        else -> when (boxPermissions) {
+            "asks" -> "It asks before each tool, because that is how its machine is set."
+            "bypassed" -> "It runs each tool without asking, because that is how its machine is set."
+            else -> "It runs the way its machine is set."
+        }
+    }
+    if (bypassAllowed) return line
+    // Why it is missing, said as what the machines told us: one set to ask,
+    // or one that has not said.
+    if (reachableHosts.isEmpty()) {
+        return line + " Permissions bypassed is not offered: no machine this could start on has said what it allows."
+    }
+    val asks = reachableHosts.any { it.permissions == "asks" }
+    return line + when {
+        fleetPicks && asks ->
+            " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
+        fleetPicks ->
+            " Permissions bypassed is not offered while the fleet picks the machine: one of them has not said what it allows."
+        asks -> " Permissions bypassed is not offered here: this machine is set to ask before each tool."
+        else -> " Permissions bypassed is not offered here: this machine has not said what it allows."
+    }
 }
