@@ -57,6 +57,8 @@ export async function startStubHub({
   /** The secrets of every renewal request — what the sidecar holds in memory
    * and hands over for one call. @type {Array<Record<string, string>>} */
   const renewals = [];
+  /** Who the sidecar asked this hub to forget. @type {string[]} */
+  const forgotten = [];
   // What the hub says about the box: labels, channel, sandbox, house rules.
   // Mutable so a test can change a label and see the next frame say so.
   let hostFacts = facts;
@@ -112,6 +114,13 @@ export async function startStubHub({
       return json(200, { ok: true, results: renewResults });
     }
 
+    // Somebody removed from the fleet (src/core/forget-person.js): the hub
+    // forgets them and says so. Recorded, so a test can see it was asked.
+    if (p === '/api/forget-person' && req.method === 'POST') {
+      forgotten.push(String(body.email || ''));
+      return json(200, { ok: true, text: `Forgot ${body.email} on this box.` });
+    }
+
     if (p === '/api/command' && req.method === 'POST') {
       const line = String(body.command || '');
       commands.push(line);
@@ -159,9 +168,15 @@ export async function startStubHub({
     bodies,
     evidence,
     renewals,
+    forgotten,
     sessions,
     panes,
-    close: () => new Promise((resolve) => server.close(() => resolve(null))),
+    // Drop idle keep-alive sockets first. A test that made more than one
+    // request otherwise waits out Node's keep-alive timeout inside close().
+    close: () => new Promise((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve(null));
+    }),
   };
 }
 
