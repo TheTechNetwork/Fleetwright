@@ -104,6 +104,18 @@ struct HostView: View {
     @State private var rebootConfirm = ""
     @State private var confirmingRevoke = false
     @State private var pin = ""
+    /// The address being typed to pin as an admin here. Cleared when it is
+    /// sent, as a label is.
+    @State private var newAdmin = ""
+
+    /// UPDATE, UPGRADE, REBOOT, THE CHANNEL AND THE IMAGE ONLY WHERE THE
+    /// MACHINE WILL TAKE THEM FROM THIS PERSON (C-2): the coordinator's rule
+    /// (mayAdminister), and then the machine's own, when it pins its admins
+    /// and this person is not one, or nobody pinned can sign
+    /// (HostHealth.boxWideAllowed). A machine that pins nobody, or cannot pin,
+    /// leaves the first rule alone, as before. Labels are the coordinator's
+    /// alone and stay on mayAdminister.
+    private var mayActOnBox: Bool { mayAdminister && (health?.boxWideAllowed ?? true) }
 
     private var fleet: Fleet { Fleet(settings: settings) }
 
@@ -116,14 +128,14 @@ struct HostView: View {
 
             Section {
                 Button("Check for updates") { run { try await fleet.updates(host: hostId) } }
-                if mayAdminister && health?.updates?.appUpdatePending == true {
+                if mayActOnBox && health?.updates?.appUpdatePending == true {
                     Button("Apply update") { run { try await fleet.update(host: hostId, restart: true) } }
                 }
                 // ONLY WHERE IT WOULD WORK. A box that has not granted the
                 // upgrade refuses it with a paragraph; the button that earns
                 // that paragraph is the fault C-2 names. Nil is cannot tell
                 // (an older host) and keeps the button — the refusal explains.
-                if mayAdminister && health?.updates?.systemPending == true && health?.updates?.grants?.upgrades != false {
+                if mayActOnBox && health?.updates?.systemPending == true && health?.updates?.grants?.upgrades != false {
                     Button("Apply system upgrade") { run { try await fleet.upgrade(host: hostId, apply: true) } }
                 }
                 // Said once, at the top, so the settings further down read as
@@ -137,6 +149,10 @@ struct HostView: View {
                 sectionHead("Software")
             }
             .listRowBackground(Design.Palette.card)
+
+            // BESIDE THE BUTTONS IT DECIDES, so a missing Apply update reads
+            // as this machine's rule and not as a fault.
+            adminsSection
 
             allowedSection
 
@@ -285,7 +301,7 @@ struct HostView: View {
                 LabeledContent("Channel") {
                     Text("\(channel ?? "stable"), set on the box").fleetType(.label)
                 }
-            } else if let now = channel, !mayAdminister {
+            } else if let now = channel, !mayActOnBox {
                 LabeledContent("Channel") { Text(now).fleetType(.label) }
             } else if let now = channel {
                 Picker("Channel", selection: Binding(
@@ -328,7 +344,7 @@ struct HostView: View {
                             .foregroundStyle(Design.Palette.inkDim)
                             .textSelection(.enabled)
                     }
-                } else if !mayAdminister {
+                } else if !mayActOnBox {
                     LabeledContent("Image") {
                         Text(now.variant == "browser" ? "Browser" : "No browser").fleetType(.label)
                     }
@@ -529,6 +545,76 @@ struct HostView: View {
         .padding(.vertical, Design.Space.hair)
     }
 
+    /// WHO THIS MACHINE TAKES ITS UPDATES AND REBOOTS FROM, when it pins its
+    /// own admins (src/fleet/host/pinned-admins.js). Drawn only where it pins
+    /// somebody, or cannot read its record: a machine that pins nobody takes
+    /// the fleet's word as it always has, and has nothing to say here. Not
+    /// for somebody the coordinator would not let administer it anyway; the
+    /// Software section already told them.
+    ///
+    /// NO "PIN ME". The first admin is pinned on the machine itself, by
+    /// whoever runs it, because anything a phone sends arrives through the
+    /// coordinator. A pinned admin adds and removes the others from here, and
+    /// the last one is removed only on the machine, so its Remove is not
+    /// drawn. While nobody pinned can sign (`left`), the machine's state is
+    /// all there is to say: a Pin or Remove from here would be refused, and
+    /// nobody is promised they can be added. Same words as Android, held
+    /// equal by test/pinned-admins-in-apps.test.js.
+    @ViewBuilder private var adminsSection: some View {
+        if mayAdminister, let admins = health?.admins, admins.count != 0 {
+            Section {
+                // WHAT IS WRONG, when something is: a record the machine cannot
+                // read, or nobody pinned who can sign. The coordinator's words.
+                if let problem = admins.problem {
+                    Text(problem).fleetType(.label).foregroundStyle(Design.Palette.attention)
+                }
+                if let left = admins.left {
+                    Text(left).fleetType(.label).foregroundStyle(Design.Palette.attention)
+                }
+                if admins.you == true && admins.left == nil {
+                    let pinned = admins.pinned ?? []
+                    ForEach(pinned, id: \.self) { email in
+                        HStack {
+                            Text(email).fleetType(.label).foregroundStyle(Design.Palette.ink)
+                            Spacer(minLength: 0)
+                            if pinned.count > 1 {
+                                Button("Remove", role: .destructive) {
+                                    run { try await fleet.pinAdmin(host: hostId, email: email, add: false) }
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Remove \(email)")
+                                .disabled(busy)
+                            }
+                        }
+                    }
+                    HStack {
+                        TextField("Address to pin", text: $newAdmin)
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .fleetType(.label)
+                        Button("Pin") {
+                            let email = newAdmin.trimmingCharacters(in: .whitespacesAndNewlines)
+                            newAdmin = ""
+                            run { try await fleet.pinAdmin(host: hostId, email: email, add: true) }
+                        }
+                        .disabled(busy || !newAdmin.contains("@"))
+                    }
+                    Text("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                } else if admins.left == nil && admins.count != nil {
+                    Text("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+            } header: {
+                sectionHead("Pinned admins")
+            }
+            .listRowBackground(Design.Palette.card)
+        }
+    }
+
     /// WHAT THIS BOX ALLOWS FROM THE APP, said before a button is pressed.
     ///
     /// Two rows, the same shape, one per grant, and only when the host said —
@@ -587,10 +673,10 @@ struct HostView: View {
             // phone can ask it.
             switch rebootStage {
             case .idle:
-                if !mayAdminister {
+                if !mayActOnBox {
                     // Nothing: a reboot ends everybody's sessions here, which
-                    // is why it is not this person's, and the Software section
-                    // already said so.
+                    // is why it is not this person's, and the Software or
+                    // Pinned admins section already said so.
                     EmptyView()
                 } else if health?.updates?.grants?.reboot == false {
                     // NO BUTTON FOR A THING THE BOX REFUSES. The grant is a
