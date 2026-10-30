@@ -155,7 +155,11 @@ gained in v2. Concretely it can:
 - deposit renewal material (`renew`), and forge the `actor` on any intent, so
   attribution is worthless under this compromise;
 - `start` a dangerous session as any member and `peek` its pane, reading the
-  member's seeded Claude/provider credentials out of it;
+  member's seeded Claude/provider credentials out of it — on a box whose
+  operator left `FLEETWRIGHT_SKIP_PERMISSIONS` on. On a box set to ask, the hub
+  refuses a fleet start that asks to bypass (SEC-INJECT-4), though a coordinator
+  can still write the session's own `.claude/settings.json` with `writefile`,
+  or send `answer` to say yes to each of its prompts;
 - **write that session's instructions** (`start.task`, protocol 7), on any host,
   permanent boxes included. Until v7 it could only name a profile a person
   with a shell had put on the box, so what an unattended session was told to
@@ -1248,7 +1252,55 @@ over open egress. Any surface that offers "start a session" on an arbitrary repo
 MUST make that mode legible (`psychology.md §5`: word + symbol, not colour), and
 SHOULD make safe mode reachable without editing host config.
 *Falsify:* `start` carries `mode`; the apps render it. Check that a per-session
-`--safe` is offered, since the box default is dangerous.
+`--safe` is offered, since the box default is dangerous. Both phones' New
+session offers "Permission prompts on" beside a "Box default" choice that
+sends no mode and is named from the box's own `permissions` health field, and
+never claims which way the default goes when the box has not said
+(`test/permission-mode-in-apps.test.js`).
+
+**SEC-INJECT-4** — An operator's `FLEETWRIGHT_SKIP_PERMISSIONS`, turned off, is
+a ceiling on the bypass flag for every start that arrives from the fleet.
+Phones, Siri, agents over MCP and held runner starts all reach the box as
+`start` intents, and `mode` has been a v1 enum, so before this a fleet start asking `dangerous` ran
+`--dangerously-skip-permissions` on a box whose operator had turned it off —
+and #1408, which made both start sheets always send `safe` or `dangerous`
+starting on bypass, would have done it for every phone start. The hub now
+refuses such a start, naming the setting, rather than downgrading it to a
+session that hangs at its first tool unwatched (`permissionCeiling` in
+`src/adapters/commands.js`). A line is the fleet's when it carries the
+sidecar's token, when the sidecar marks it `via: fleet` (for a box whose
+sidecar still holds the operator's token, and an intent with no actor), or
+when its actor is `fleet:`. It is checked on the box, so a compromised
+coordinator cannot get `--dangerously-skip-permissions` past it, but that flag
+is all it holds; it is not a boundary on what a session may do. New session
+on the phones offers "Permissions bypassed" only where every machine a start
+could land on reports `bypassed`, so an older box set to ask, which has no
+ceiling, is not handed one from there. A Siri or launcher start still sends a
+kind's saved mode, and no editor can save one as bypass now, but a kind saved
+that way before would reach such a box. The operator's own `/new --dangerous`
+at the box still works. What it does not cover:
+- `resume`: a session's recorded mode is kept, so one started with bypass (by
+  the operator, or before the box was set to ask) resumes with bypass from a
+  phone too.
+- The session's own settings. `writefile` and `copyfile` can put a
+  `.claude/settings.json` into a session's workspace (sessions run with
+  `-w /work`, `src/core/claude.js`) holding allow-all permission rules or
+  `defaultMode: bypassPermissions`, and Claude Code reads it without asking,
+  because the workspace's trust is answered ahead of time (the image
+  for a sandboxed session, `direct-config.js` for a direct one). On a direct
+  box the working directory may be shared, so one such file reaches every
+  session started there. Refusing `writefile` and `copyfile` under `.claude/`
+  on a box set to ask is a possible follow-up; nothing does it today.
+- `answer`, which can say yes to each prompt a session that asks puts up
+  (SEC-PROTO-4).
+
+*Falsify:* `test/fleet-permission-ceiling.test.js` drives the real sidecar,
+hub client, HTTP adapter, dispatch and `buildCommand`: a fleet `start` with
+`mode: dangerous` on a box with `skipPermissions: false` must reach no session
+manager, on the sidecar's token and on the operator's, with an actor and with
+none, and a `via` other than `fleet` or absent must be refused.
+`test/permission-mode-in-apps.test.js` holds both phones to drawing the bypass
+choice only when every machine reports `bypassed`.
 
 **What a box says reaches an agent as the box's, never as the fleet's.** The
 other direction of the same problem: an agent holding an admin's credential
@@ -1917,6 +1969,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-INJECT-1 | No defence against a session misusing what it holds |
 | SEC-INJECT-2 | (Aspirational) default-deny egress bounds misuse |
 | SEC-INJECT-3 | Dangerous mode on an untrusted repo is arbitrary execution |
+| SEC-INJECT-4 | An operator's ask-first is a ceiling on the bypass flag for every fleet start |
 | SEC-LOG-1 | One redaction table; new secret commands added to it |
 | SEC-BUILD-1 | Security-relevant dependencies pinned |
 
