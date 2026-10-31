@@ -9,9 +9,11 @@ the Fleetwright app does by hand.
 - **A server left "disconnected"** for three minutes is connected. On a Xen
   Orchestra new enough to retry by itself, that retry usually gets there
   first.
+- **A second server for a pool another server holds stands by**, and is
+  connected once that server drops. A pool master that answers on two
+  addresses by turns can be listed twice, and is reached on whichever is up.
 - **A server someone turned off stays off.** One whose pool master refuses
-  its password, or whose pool is already connected through another server,
-  is named once in xo-server's log and left for a person.
+  its password is named once in xo-server's log and left for a person.
 - **It backs off**, waiting twice as long after each try, up to half an hour.
 
 It runs inside Xen Orchestra, so it holds no token or password, and it has no
