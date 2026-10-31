@@ -298,6 +298,20 @@ jobs:
       - name: Pinned Claude Code dialogs
         run: node scripts/claude-dialog-check.mjs
 
+      # AND THE DIALOGS NOBODY LISTED, read by the decision model
+      # (docs/decide.md). Advisory: warning annotations and a job summary, never
+      # a red build, because a model's label is a claim. Not a PR comment: this
+      # workflow's token is contents: read on purpose, and an advisory note is
+      # not a reason to widen it. Without the two secrets, as on a fork's pull
+      # request, it prints a notice and does nothing; Renovate's Claude Code
+      # bumps are in-repository and get it.
+      - name: Unlisted Claude Code dialogs (advisory)
+        continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_AI_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
+        run: node scripts/claude-dialog-drift.mjs
+
   # THE TESTS ONLY ROOT CAN RUN, as root.
   #
   # Twenty-four tests skip unless they run as root: root's doctor reaching

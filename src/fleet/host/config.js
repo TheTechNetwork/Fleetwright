@@ -139,6 +139,13 @@ export function loadSidecarConfig(env = process.env) {
     // to the person holding the phone. See src/fleet/host/prompt.js.
     promptText: str(env, 'FLEETWRIGHT_PROMPT_TEXT', '0') === '1',
 
+    // May a still pane that no matcher can read be sent, MASKED, to the
+    // coordinator to ask a model whether a person is being asked something?
+    // Off by default, exactly "1" to turn on, and the coordinator must have it
+    // on too. What leaves is src/core/mask-pane.js's output and nothing else.
+    // See docs/decide.md.
+    decide: str(env, 'FLEETWRIGHT_DECIDE', '0') === '1',
+
     // How long a session's pane may sit completely unchanged before it is
     // stopped and resumed. 0 turns it off.
     //

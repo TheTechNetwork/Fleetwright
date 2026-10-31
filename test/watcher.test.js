@@ -771,3 +771,136 @@ test('since when it has waited: the hook\'s moment when it said one, the first t
   await watcher.tick();
   assert.equal(watcher.awaitingSince('job'), 5000);
 });
+
+// THE DECISION MODEL, the last-resort reader (docs/decide.md). A dialog no
+// matcher knows, on a still pane, may be asked about once; only a confident
+// yes acts, and all it can do is mark the pane waiting with no question.
+
+const UNKNOWN_DIALOG = [
+  '────────────────────────────────────────────────────────────────────────────────',
+  ' Opening a workspace:',
+  '',
+  ' /work/app',
+  '',
+  ' Before we start: did you make this project yourself, or does it come from somewhere you rely on?',
+  '',
+  ' ❯ 1. Yes, continue in this folder',
+  '   2. No, quit',
+].join('\n');
+
+/**
+ * A watcher with a decision model that answers `p` and records what it was sent.
+ *
+ * @param {import('node:test').TestContext} t @param {object} hubOpts @param {number} p
+ */
+async function decidingWatcherFor(t, hubOpts, p) {
+  const stub = await startStubHub(hubOpts);
+  t.after(() => stub.close());
+  /** @type {Record<string, any>[]} */
+  const events = [];
+  /** @type {Array<{ name: string, hash: string, state: string }>} */
+  const asks = [];
+  const watcher = new SessionWatcher({
+    hub: new HubClient({ baseUrl: stub.baseUrl, readTimeoutMs: 2000 }),
+    emit: (e) => events.push(e),
+    idleRestartMs: 60 * 60_000,
+    decide: async (ask) => (asks.push(ask), { ok: true, asked: p >= 0.5, p, dialog: 'trust', confidence: 0.4 }),
+  });
+  /** Let the un-awaited ask settle. */
+  const settle = () => new Promise((r) => setImmediate(r));
+  return { stub, watcher, events, asks, settle };
+}
+
+test('a still dialog nothing can read, read as waiting by the model: one event, no question, no restart', async (t) => {
+  const { stub, watcher, events, asks, settle } = await decidingWatcherFor(
+    t,
+    { sessions: [sessionRecord('stuck', { status: 'running' })], panes: { stuck: UNKNOWN_DIALOG } },
+    0.97,
+  );
+  await watcher.tick({ quiet: true });
+  await watcher.tick();
+  assert.equal(asks.length, 0, 'asked about a pane that had not been still for long');
+
+  // Still for longer than DECIDE_AFTER_MS, well inside the restart window.
+  frozenFor(watcher, 'stuck', 2 * 60_000);
+  await watcher.tick();
+  await settle();
+  assert.equal(asks.length, 1);
+  assert.ok(!asks[0].state.includes('/work/app'), 'the pane left the host unmasked');
+  assert.ok(asks[0].state.includes('1. Yes, continue in this folder'));
+
+  await watcher.tick();
+  // And then frozen past the restart window, which is the incident this
+  // exists for: a dialog nobody could read, restarted back onto itself.
+  frozenFor(watcher, 'stuck', 2 * 60 * 60_000);
+  await watcher.tick();
+  const waiting = events.filter((e) => e.event === 'session.awaiting-input');
+  assert.equal(waiting.length, 1, 'fired on the state, not on the transition');
+  assert.equal(waiting[0].text, 'is waiting for you; the fleet could not read what it is asking, open it to see');
+  assert.equal(waiting[0].prompt, undefined, 'a model-read wait carried a prompt, which a phone could answer');
+  assert.ok(watcher.awaitingSince('stuck'));
+  assert.deepEqual(stub.commands, [], 'a session read as waiting was restarted onto its own dialog');
+  assert.equal(asks.length, 1, 'the same pane was asked about twice');
+
+  // The pane moves on: the claim goes with its evidence.
+  stub.panes.stuck = 'Working on it now';
+  await watcher.tick();
+  assert.equal(watcher.awaitingSince('stuck'), null);
+});
+
+test('a model that is not confident enough changes nothing, and the pane is not asked about again', async (t) => {
+  const { stub, watcher, events, asks, settle } = await decidingWatcherFor(
+    t,
+    { sessions: [sessionRecord('stuck', { status: 'running' })], panes: { stuck: UNKNOWN_DIALOG } },
+    0.85,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'stuck', 30 * 60_000);
+  await watcher.tick();
+  await settle();
+  await watcher.tick();
+  assert.equal(asks.length, 1);
+  assert.equal(events.filter((e) => e.event === 'session.awaiting-input').length, 0);
+  assert.equal(watcher.awaitingSince('stuck'), null, 'below the threshold read as waiting');
+  void stub;
+});
+
+test('a Stop hook that fired before the watcher noticed the pane is not second-guessed', async (t) => {
+  // The hook is stamped when Claude finishes. The watcher stamps the pane
+  // when it next reads it, one tick later. A finished session must not be
+  // sent to the model after 90s of that stillness.
+  const rec = sessionRecord('job', { status: 'running', activity: { phase: 'ready', event: 'Stop', detail: null, at: 1 } });
+  const { stub, watcher, asks, settle } = await decidingWatcherFor(t, { sessions: [rec], panes: { job: UNKNOWN_DIALOG } }, 0.99);
+  await watcher.tick({ quiet: true });
+  const noticed = Date.now() - 95_000;
+  stub.sessions[0].activity.at = noticed - 5_000;
+  watcher.idle.get('job').since = noticed;
+  await watcher.tick();
+  await settle();
+  assert.equal(asks.length, 0, 'a finished session was sent to the model after its Stop hook');
+});
+
+test('a dialog that appears well after the last ready hook is still asked about', async (t) => {
+  const rec = sessionRecord('job', { status: 'running', activity: { phase: 'ready', event: 'Stop', detail: null, at: 1 } });
+  const { stub, watcher, asks, settle } = await decidingWatcherFor(t, { sessions: [rec], panes: { job: UNKNOWN_DIALOG } }, 0.99);
+  await watcher.tick({ quiet: true });
+  const noticed = Date.now() - 95_000;
+  stub.sessions[0].activity.at = noticed - 60_000;
+  watcher.idle.get('job').since = noticed;
+  await watcher.tick();
+  await settle();
+  assert.equal(asks.length, 1, 'a dialog painted long after the last hook was left unasked');
+});
+
+test('two sessions showing the same pane are each asked once', async (t) => {
+  const { watcher, asks, settle } = await decidingWatcherFor(t, {
+    sessions: [sessionRecord('one', { status: 'running' }), sessionRecord('two', { status: 'running' })],
+    panes: { one: UNKNOWN_DIALOG, two: UNKNOWN_DIALOG },
+  }, 0.97);
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'one', 2 * 60_000);
+  frozenFor(watcher, 'two', 2 * 60_000);
+  await watcher.tick();
+  await settle();
+  assert.deepEqual(asks.map((a) => a.name).sort(), ['one', 'two']);
+});

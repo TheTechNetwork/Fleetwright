@@ -270,6 +270,7 @@ const sidecar = new Sidecar({
     // FLEETWRIGHT_REQUIRE_SIGNED, from this box's own env file only.
     requireSigned: cfg.requireSigned,
     promptText: cfg.promptText,
+    decide: cfg.decide,
     idleRestartMs: cfg.idleRestartMs,
     // fleetwright's configuration as this process sees it — the defaults, since
     // /etc/fleetwright.env is root's. Used to find systemctl and nothing else
