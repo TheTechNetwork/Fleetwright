@@ -38,7 +38,13 @@
 //     first one", "put WAN as second one"). QEMU's two virtio NICs are
 //     vtnet0 and vtnet1 in command-line order, so the second gets the
 //     user-mode network with a DHCP server and a way out, and the first is
-//     user-mode with `restrict=on`, which is a wire nobody is on.
+//     user-mode with `restrict=on`, which is a wire nobody is on;
+//   - a typed line, sentinel included, is short. The third CI run typed one
+//     of 507 characters and the shell never answered it, with nothing on
+//     the console for ten minutes; every line under a hundred had been
+//     answered. FreeBSD's sys/syslimits.h puts MAX_INPUT, the most a
+//     terminal line may hold, at 255. console.mjs refuses a line over
+//     LINE_MAX before it is sent, and INSIDE below is written to fit.
 //
 // Nothing is typed until a prompt asks for it. The boot loader's countdown
 // takes any key as "stop and give me a prompt", so typing early would hang
@@ -165,12 +171,21 @@ export const INSIDE = Object.freeze({
    * configuration would be ignored in favour of the build VM's. The upstream
    * image has no /conf/config.xml; neither does this one, and FORGET_HOOK
    * above says why it cannot simply be removed from here.
+   *
+   * Written in four short lines, each its own command with its own
+   * sentinel, because the one long line it used to be never arrived: the
+   * third CI run typed it, 507 characters with the sentinel, and the shell
+   * said nothing for ten minutes, not even a prompt. Every line that had
+   * been answered was under a hundred (LINE_MAX in console.mjs). The path
+   * is set once as `h` and read back in each line, which is what keeps them
+   * short; the same login shell runs all four.
    */
   forget: [
-    `printf '%s\\n' '#!/bin/sh' '# Fleetwright image build: the last stop hook, after 99-config has put the factory configuration back. Gone with this shutdown.' 'rm -f /conf/config.xml /conf/event_config_changed.json /.probe.for.readonly' 'rm -rf /conf/backup/*' 'rm -f "$0"' 'sync; sync' > ${FORGET_HOOK}`,
-    `chmod 755 ${FORGET_HOOK}`,
-    `sh -n ${FORGET_HOOK}`,
-  ].join(' && '),
+    `h=${FORGET_HOOK}`,
+    `printf '%s\\n' '#!/bin/sh' '# Fleetwright image build: gone with this shutdown' > "$h"`,
+    `printf '%s\\n' 'rm -f /conf/config.xml /conf/event_config_changed.json /.probe.for.readonly' >> "$h"`,
+    `printf '%s\\n' 'rm -rf /conf/backup/*' 'rm -f "$0"' 'sync; sync' >> "$h" && chmod 755 "$h" && sh -n "$h"`,
+  ],
   poweroff: 'shutdown -p now',
   /**
    * The shell made quiet before the first sentinel: no line editor and no
@@ -422,7 +437,7 @@ export async function main(argv, { out = process.stdout } = {}) {
     say('facts');
     await gather(c, facts);
     say('forgetting this boot');
-    await c.must(INSIDE.forget, { timeout: WAITS.command, label: 'forgetting this boot' });
+    for (const line of INSIDE.forget) await c.must(line, { timeout: WAITS.command, label: 'forgetting this boot' });
     say('power off');
     const code = await poweroff(c, qemu);
     facts['qemu-exit'] = String(code);

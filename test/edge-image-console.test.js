@@ -103,3 +103,14 @@ test('a secret is sent as typed, and the log says only what it was', () => {
   assert.equal(logged.join(''), '\n>>> [the root password]\n');
   assert.ok(!logged.join('').includes('opnsense'));
 });
+
+test('a line longer than the console takes is refused before it is sent', () => {
+  /** @type {string[]} */
+  const sent = [];
+  const c = new Console({ send: (t) => sent.push(t) });
+  c.type('x'.repeat(Console.LINE_MAX));
+  assert.equal(sent.length, 1, 'a line at the limit is sent');
+  assert.throws(() => c.type('x'.repeat(Console.LINE_MAX + 1)), /more than the console takes/);
+  assert.throws(() => c.typeSecret('x'.repeat(Console.LINE_MAX + 1), 'a secret'), /more than the console takes/);
+  assert.equal(sent.length, 1, 'the long lines were sent anyway');
+});

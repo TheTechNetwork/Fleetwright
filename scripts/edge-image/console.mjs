@@ -140,8 +140,24 @@ export class Console {
     });
   }
 
+  /**
+   * A line longer than this is refused before it is sent. A terminal line
+   * has a size, MAX_INPUT, which FreeBSD's sys/syslimits.h puts at 255; a
+   * line past it is not answered, not even with a prompt, and the driver
+   * waited ten minutes on one of 507 characters before this existed. Two
+   * hundred leaves room for the sentinel and for being wrong about the
+   * exact number by a little.
+   */
+  static LINE_MAX = 200;
+
+  /** @param {string} text  a line about to be sent, sentinel included */
+  #fits(text) {
+    if (text.length > Console.LINE_MAX) throw new Error(`a line of ${text.length} characters is more than the console takes (${Console.LINE_MAX}), so it was not sent: ${text.slice(0, 60)}…`);
+  }
+
   /** Type a line, carriage return and all, as a terminal would. @param {string} text */
   type(text) {
+    this.#fits(text);
     this.log(`\n>>> ${text}\n`);
     this.send(`${text}\r`);
   }
@@ -155,6 +171,7 @@ export class Console {
    * @param {string} text @param {string} label  what the log says instead
    */
   typeSecret(text, label) {
+    this.#fits(text);
     this.log(`\n>>> [${label}]\n`);
     this.send(`${text}\r`);
   }

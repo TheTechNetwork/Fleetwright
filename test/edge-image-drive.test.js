@@ -124,13 +124,18 @@ test('the driver logs in, updates, reboots and logs in again, installs the agent
   assert.ok(lastCleanup > agent[2]);
   assert.ok(at('stat -f %i /usr/local/etc/config.xml') > lastCleanup, 'facts are read before cleanup is done');
   assert.equal(typed.at(-1), 'shutdown -p now');
-  assert.equal(typed.at(-2), INSIDE.forget, 'the last command before power-off is not forgetting this boot');
+  assert.deepEqual(typed.slice(-1 - INSIDE.forget.length, -1), INSIDE.forget, 'the last commands before power-off are not forgetting this boot');
   // Forgotten by a stop hook that runs AFTER OPNsense's 99-config, which puts
   // the factory configuration back when it finds none (see FORGET_HOOK).
   assert.ok(path.basename(FORGET_HOOK) > '99-config', `${FORGET_HOOK} does not sort after 99-config`);
-  assert.match(INSIDE.forget, /rm -f \/conf\/config\.xml/);
-  assert.match(INSIDE.forget, /rm -f "\$0"/, 'the hook does not remove itself');
-  assert.ok(INSIDE.forget.includes(`> ${FORGET_HOOK} && chmod 755 ${FORGET_HOOK}`), 'the hook is not written where rc.syshook stop looks');
+  const hook = INSIDE.forget.join('\n');
+  assert.equal(INSIDE.forget[0], `h=${FORGET_HOOK}`, 'the hook is not written where rc.syshook stop looks');
+  assert.match(hook, /rm -f \/conf\/config\.xml/);
+  assert.match(hook, /rm -f "\$0"/, 'the hook does not remove itself');
+  assert.match(hook, /chmod 755 "\$h" && sh -n "\$h"/, 'the hook is not made runnable and read back');
+  // Every line went through the real Console, which refuses one over
+  // LINE_MAX before sending it; the fake answers them all, so reaching here
+  // is the proof that each fits (the long hook line of the third run did not).
   // The shell is made quiet before the first sentinel, and never before.
   assert.ok(at('exec /bin/sh') < typed.findIndex((l) => l.startsWith('set +o emacs')) && typed.findIndex((l) => l.startsWith('set +o emacs')) < at('true'));
 
