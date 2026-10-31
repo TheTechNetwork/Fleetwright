@@ -112,7 +112,7 @@ jobs:
           token: ${{ secrets.RENOVATE_PIN_TOKEN }}
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '24.22.2'
+          node-version: '26.12.1'
           cache: npm
       # The scripts import the modules they pin, and those import their
       # neighbours in src/; the same install CI's test job does.
