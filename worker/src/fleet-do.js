@@ -212,6 +212,11 @@ export class Fleet {
         // them: allowances that were per rebuild while they lived in memory
         // (core.js serialisePushLimits).
         this.state.storage.put('pushLimits', this.core.serialisePushLimits()),
+        // Whether each person's Xen Orchestra has the reconnect watchdog, as
+        // the setup that learned it said: a fact that outlives the setup and
+        // the hour, read by the push about a pool it loses (core.js
+        // serialiseXoWatchdogs).
+        this.state.storage.put('xoWatchdogs', this.core.serialiseXoWatchdogs()),
         // GitHub codes handed to boxes, as hashes, for ten minutes: the list
         // the minter refuses a device's sign-in from, which a box waiting out
         // an eviction would otherwise find empty (core.js #rememberBoxSignIn).
@@ -293,6 +298,7 @@ export class Fleet {
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
       this.core.restoreHolderJoins(await this.state.storage.get('holderJoins'));
       this.core.restorePushLimits(await this.state.storage.get('pushLimits'));
+      this.core.restoreXoWatchdogs(await this.state.storage.get('xoWatchdogs'));
       this.core.restoreBoxSignIns(await this.state.storage.get('boxSignIns'));
       this.core.restoreRemovals(await this.state.storage.get('removals'));
       this.core.delegations.restore(await this.state.storage.get('delegations'));

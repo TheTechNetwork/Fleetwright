@@ -2332,6 +2332,21 @@ password. The push above still comes when a pool stays gone for five
 minutes; with the watchdog that mostly means one of those, or a master that
 is down.
 
+**The push says which case it is, and where the answer came from.** The
+box that sees a pool go holds the fleet's limited token and cannot list
+plugins, but setup, signed in as admin for a minute, learns whether the
+watchdog is on that Xen Orchestra and the Add-watchdog job knows it put it
+on the disk, so each says so in its status (`watchdog`: `loaded`, `absent`
+or `added`) and the coordinator keeps the answer by owner and address, in
+storage of its own because it outlives both the setup and the hour. Where
+setup loaded it or the job added it, the push adds that the watchdog should
+bring the pool back by itself within a few minutes and what it is when that
+does not happen; where setup found none, that nothing will try on its own
+and that Reconnect and Add the reconnect watchdog are both on the pool's
+page; and where no job has looked, the sentence it always had, with
+"should" for `added` as for `loaded` because the job never saw the plugin
+load and setup saw it the day it ran.
+
 **Built into every Xen Orchestra Fleetwright installs.** The deploy puts the
 plugin beside the installer's own update plugin and names both in
 `BUNDLED_PLUGINS` (`installerConfig` in `src/fleet/host/xo-deploy.js`), so
