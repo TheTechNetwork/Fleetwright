@@ -128,11 +128,16 @@ test('a plan is refused against bytes that are not what it says, and an image th
   /** @type {any} */ (sbEdit).becomes = Buffer.from('0400000000000000', 'hex').toString('hex');
   assert.throws(() => checkRoom(reader(buf), off), /superblock’s totals would disagree/);
   assert.throws(() => planRoom(reader(image({ wrongCount: true })), { inode: INODE, room: 4096 }), /group 2’s summaries disagree with its bitmaps already/);
-  assert.throws(() => planRoom(reader(image({ flags: 2 })), { inode: INODE, room: 4096 }), /flags set \(0x2: soft updates\)/);
-  // A built image came back with flags the upstream image lacks, and the
-  // refusal has to say which: every known bit by name, and the rest as a
-  // number rather than a shrug.
+  // Soft updates alone change nothing on disk, and the image CI builds has
+  // them on where the upstream image does not (OPNsense turns them on at
+  // first boot): the plan is the same plan, byte for byte.
+  assert.deepEqual(planRoom(reader(image({ flags: 2 })), { inode: INODE, room: 4096 }), plan);
+  // Anything else is refused, and the refusal says what it saw: every known
+  // bit by name, the rest as a number rather than a shrug, and which it
+  // would have let pass.
+  assert.throws(() => planRoom(reader(image({ flags: 0x3 })), { inode: INODE, room: 4096 }), /flags set \(0x3: unclean, soft updates\), and this accounts only for soft updates/);
   assert.throws(() => planRoom(reader(image({ flags: 0x201 })), { inode: INODE, room: 4096 }), /flags set \(0x201: unclean, metadata check hashes\)/);
+  assert.throws(() => planRoom(reader(image({ flags: 0xa })), { inode: INODE, room: 4096 }), /flags set \(0xa: soft updates, journaled soft updates\)/);
   assert.throws(() => planRoom(reader(image({ flags: 0x1800 })), { inode: INODE, room: 4096 }), /flags set \(0x1800: 0x1800 unknown to this\)/);
   assert.throws(() => planRoom(reader(buf), { inode: INODE, room: 8192 }), /room is one block here, 4096 bytes/);
 });
